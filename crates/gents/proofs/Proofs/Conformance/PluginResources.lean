@@ -121,30 +121,41 @@ private def callAccessJson : Json := toJson <| [PluginAccess.read, .readWrite].f
     ("call", toJson (pluginCallAccess declared writeFields setsWriteField).spelling),
     ("admitted", toJson (pluginCallAdmitted declared granted writeFields setsWriteField))]
 
-private def invocationJson : Json :=
-  let original : PluginInvocation.Record := ⟨"artifact", "sealed", "original", "original"⟩
-  toJson <| ["same", "removed", "replaced", "grant", "declaration", "binding"].flatMap fun change =>
+deriving instance ToJson for PluginInvocation.Record
+
+structure InvocationInput where
+  current : Option PluginInvocation.Record
+  restart : Bool
+  bound : Bool
+  deriving ToJson
+
+structure InvocationOutput where
+  admitted : Bool
+  reusable : Bool
+  deriving ToJson
+
+private def originalInvocation : PluginInvocation.Record :=
+  ⟨"artifact", "sealed", "original", "original"⟩
+
+@[conformance_family]
+def invocations : Family InvocationInput InvocationOutput where
+  inputs := ["same", "removed", "replaced", "grant", "declaration", "binding"].flatMap fun change =>
     [false, true].flatMap fun restart =>
     [false, true].map fun bound =>
       let current : Option PluginInvocation.Record := match change with
         | "removed" => none
-        | "replaced" => some { original with digest := "replacement" }
-        | "grant" => some { original with grant := "changed" }
-        | "declaration" => some { original with declaration := "changed" }
-        | "binding" => some { original with binding := "changed" }
-        | _ => some original
-      Json.mkObj [
-        ("current", match current with
-          | none => Json.null
-          | some record => Json.mkObj [("digest", toJson record.digest),
-              ("grant", toJson record.grant), ("declaration", toJson record.declaration),
-              ("binding", toJson record.binding)]),
-        ("restart", toJson restart), ("bound", toJson bound),
-        ("admitted", toJson (PluginInvocation.admitted current original.digest
-          (if bound then some original else none))),
-        ("reusable", toJson (!restart && match current with
-          | none => false
-          | some current => PluginInvocation.reusable original current))]
+        | "replaced" => some { originalInvocation with digest := "replacement" }
+        | "grant" => some { originalInvocation with grant := "changed" }
+        | "declaration" => some { originalInvocation with declaration := "changed" }
+        | "binding" => some { originalInvocation with binding := "changed" }
+        | _ => some originalInvocation
+      { current, restart, bound }
+  model := fun i =>
+    { admitted := PluginInvocation.admitted i.current originalInvocation.digest
+        (if i.bound then some originalInvocation else none)
+      reusable := !i.restart && match i.current with
+        | none => false
+        | some current => PluginInvocation.reusable originalInvocation current }
 
 section ToolCalls
 open PluginCalls
@@ -647,9 +658,6 @@ def pluginResourceNetworkCasesJson : String :=
 
 def pluginResourceCallAccessCasesJson : String :=
   callAccessJson.compress
-
-def pluginResourceInvocationCasesJson : String :=
-  invocationJson.compress
 
 def pluginResourceReceiptCasesJson : String :=
   Conformance.PluginReceipt.casesJson.compress

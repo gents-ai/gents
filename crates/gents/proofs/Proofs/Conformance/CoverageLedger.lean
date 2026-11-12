@@ -1639,8 +1639,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginCallAccessCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_invocation_cases"
-      "PluginInvocationCases")
+      "family"
+      "plugin_resources_invocations")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_publication_cases"
