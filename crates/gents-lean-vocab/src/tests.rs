@@ -66,7 +66,6 @@ fn runtime_reconcile_state_machine_contract_is_complete() {
 const IDENTITY_PERMISSION_POLICY_ID: &str = "identity-permission-cases";
 const IDENTITY_PERMISSION_RESOURCE_NAME: &str = "row";
 
-
 async fn build_local_acp_from_lean_case(
     case: &LeanIdentityPermissionCase,
 ) -> anyhow::Result<LocalDocumentACP> {
