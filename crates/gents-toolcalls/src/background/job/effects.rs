@@ -502,7 +502,8 @@ mod tests {
 
     use defra_node::Node as EmbeddedNode;
 
-    use super::{interrupt_slots, spawn_cwd, write_scratch};
+    use super::{admit_scratch, interrupt_slots, spawn_cwd, write_scratch};
+    use gents_lean_vocab::lean_plugin_scratch_cases;
     use gents_protocol::job::JobScratch;
     use gents_protocol::session::SessionScope;
     use gents_store::config_client::ConfigAccess;
@@ -1319,5 +1320,30 @@ mod tests {
         .await;
         assert_eq!(input_of(&rows[0])["cwd"], "/work/review_seeded_bug");
         harness.close().await;
+    }
+
+    /// Lean `scratchAdmitted` through the scratch admission
+    /// `plugin_job::effects::admit_scratch`.
+    #[test]
+    fn generated_plugin_job_resource_cases_drive_scratch() {
+        let scratch = lean_plugin_scratch_cases();
+        assert_eq!(scratch.len(), 13, "Lean scratch rows drifted");
+        for (index, row) in scratch.iter().enumerate() {
+            let allowed = row.cwd_allowed;
+            assert_eq!(
+                admit_scratch(
+                    &row.cwd,
+                    &|_path: &str| allowed,
+                    &row.tool_call_id,
+                    &row.name,
+                    row.size,
+                    row.count,
+                ),
+                row.expected,
+                "scratch {index}: {}/{}",
+                row.tool_call_id,
+                row.name
+            );
+        }
     }
 }
