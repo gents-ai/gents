@@ -117,54 +117,66 @@ async fn generated_startup_demotions_release_only_durable_current_obligations() 
 }
 
 #[tokio::test]
-async fn aborted_staged_generation_does_not_release_active_startup_obligation() {
-    let node_db = gents_inference::test_support::test_db(
-        "aborted-staged-generation-does-not-relea",
-        gents_automation::lifecycle_hooks::composition(),
-    )
-    .await;
-    let node = node_db.node.clone();
-    gents_store::schema::ensure_runtime_schemas(node.as_ref())
-        .await
-        .unwrap();
-    let node_did = node
-        .node_identity_did()
-        .expect("fixture node has an identity")
-        .to_owned();
-    gents_documents::test_support::ensure_test_node(&node, &node_did).await;
-    let (status_owner, runtime_status) = RuntimeStatusHandle::start(node.clone(), node_did);
-    runtime_status.initialize_startup("general").await.unwrap();
-    let barrier = Arc::new(StartupBarrier::ready_for_test());
-    let (fatal_error, _fatal_errors) = mpsc::unbounded_channel();
-    let policy = StartupSlotFailurePolicy {
-        barrier: barrier.clone(),
-        runtime_status,
-        admission_gate: super::super::router::RuntimeAdmissionGate::closed(),
-        runtime_cancel: CancellationToken::new(),
-        fatal_error,
-        observer: None,
-        budget: 1,
-    };
-
-    policy.on_slot_created("general", 1).await.unwrap();
-    policy.on_slot_created("general", 2).await.unwrap();
-    assert!(barrier.is_pending("general", 1).await);
-    assert!(barrier.is_pending("general", 2).await);
-
-    policy.on_slot_retired("general", 2, true).await;
-    assert!(barrier.is_pending("general", 1).await);
-    assert!(!barrier.is_pending("general", 2).await);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(20), barrier.wait_ready())
+async fn startup_generation_trace_matches_the_lean_model() {
+    let cases = gents_lean_vocab::families::startup_readiness_generation_trace::cases::<String>();
+    for (index, case) in cases.into_iter().enumerate() {
+        let node_db = gents_inference::test_support::test_db(
+            &format!("startup-generation-trace-{index}"),
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        gents_store::schema::ensure_runtime_schemas(node.as_ref())
             .await
-            .is_err(),
-        "aborting staged generation two released unresolved generation one"
-    );
+            .unwrap();
+        let node_did = node
+            .node_identity_did()
+            .expect("fixture node has an identity")
+            .to_owned();
+        gents_documents::test_support::ensure_test_node(&node, &node_did).await;
+        let (status_owner, runtime_status) = RuntimeStatusHandle::start(node.clone(), node_did);
+        runtime_status.initialize_startup("general").await.unwrap();
+        let barrier = Arc::new(StartupBarrier::ready_for_test());
+        let (fatal_error, _fatal_errors) = mpsc::unbounded_channel();
+        let policy = StartupSlotFailurePolicy {
+            barrier: barrier.clone(),
+            runtime_status,
+            admission_gate: super::super::router::RuntimeAdmissionGate::closed(),
+            runtime_cancel: CancellationToken::new(),
+            fatal_error,
+            observer: None,
+            budget: 1,
+        };
 
-    policy.on_slot_retired("general", 1, true).await;
-    tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
-        .await
-        .expect("exact generation-one retirement should release the final obligation");
-    status_owner.close().await.unwrap();
-    node.shutdown().await.expect("node shutdown");
+        let mut observations = Vec::new();
+        for step in &case.input.steps {
+            match step.kind.as_str() {
+                "register" => policy
+                    .on_slot_created("general", step.generation)
+                    .await
+                    .unwrap(),
+                "retire" => {
+                    policy
+                        .on_slot_retired("general", step.generation, true)
+                        .await
+                }
+                other => panic!("unmodeled generation step {other:?}"),
+            }
+            observations.push(
+                gents_lean_vocab::families::startup_readiness_generation_trace::GenerationObservation {
+                    generation_one_pending: barrier.is_pending("general", 1).await,
+                    generation_two_pending: barrier.is_pending("general", 2).await,
+                    ready: tokio::time::timeout(
+                        std::time::Duration::from_millis(20),
+                        barrier.wait_ready(),
+                    )
+                    .await
+                    .is_ok(),
+                },
+            );
+        }
+        case.check(observations);
+        status_owner.close().await.unwrap();
+        node.shutdown().await.expect("node shutdown");
+    }
 }
