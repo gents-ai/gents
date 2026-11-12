@@ -234,14 +234,12 @@ impl ClientCore {
 mod tests {
     use super::*;
     use gents_protocol::goal_control::ObservedGoal;
-    use serde_json::{json, Value};
+    use serde_json::json;
 
-    fn reference(value: &Value) -> Option<GoalAssignmentInput> {
-        (!value.is_null()).then(|| GoalAssignmentInput {
-            goal_id: format!("goal:{}", value["goal"].as_u64().unwrap()),
-            root_request_doc_id: value["root"]
-                .as_u64()
-                .map(|root| format!("request-document:{root}")),
+    fn reference(value: Option<(u64, Option<u64>)>) -> Option<GoalAssignmentInput> {
+        value.map(|(goal, root)| GoalAssignmentInput {
+            goal_id: format!("goal:{goal}"),
+            root_request_doc_id: root.map(|root| format!("request-document:{root}")),
         })
     }
 
@@ -276,8 +274,7 @@ mod tests {
 
     #[test]
     fn generated_goal_input_bindings_wait_for_verified_source_state() {
-        let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = contracts["goal_input_binding_cases"].as_array().unwrap();
+        let cases = &gents_lean_vocab::lean_contract_snapshot().goal_input_binding_cases;
         assert_eq!(cases.len(), 12);
         for case in cases {
             let mut input: RequestInput = serde_json::from_value(json!({
@@ -287,30 +284,36 @@ mod tests {
                     "unsaved":true, "range":null, "content":"private unsaved capture"}]
             }))
             .unwrap();
-            input.goal_assignment = reference(&case["captured"]);
+            input.goal_assignment =
+                reference(case.captured.as_ref().map(|value| (value.goal, value.root)));
             let original = input.clone();
-            let state = if !case["session_readable"].as_bool().unwrap() {
+            let state = if !case.session_readable {
                 SessionGoalObservationState::NoReadableSession
-            } else if !case["observation_verified"].as_bool().unwrap() {
+            } else if !case.observation_verified {
                 SessionGoalObservationState::Unknown(
                     gents_automation::goal::SessionGoalUnknownCause::ProjectionUnverified,
                 )
             } else {
                 SessionGoalObservationState::Observed(Box::new(observation(reference(
-                    &case["observed"],
+                    case.observed.as_ref().map(|value| (value.goal, value.root)),
                 ))))
             };
             let actual = bind_goal_input(input, state);
-            if case["expected"]["kind"] == "pending" {
+            if case.expected.kind == "pending" {
                 assert_eq!(
                     actual.unwrap_err(),
                     gents_automation::goal::GoalInputRefused::ProjectionUnverified,
-                    "{case}"
+                    "{case:?}"
                 );
             } else {
                 let mut expected = original;
-                expected.goal_assignment = reference(&case["expected"]["reference"]);
-                assert_eq!(actual.unwrap(), expected, "{case}");
+                expected.goal_assignment = reference(
+                    case.expected
+                        .reference
+                        .as_ref()
+                        .map(|value| (value.goal, value.root)),
+                );
+                assert_eq!(actual.unwrap(), expected, "{case:?}");
             }
         }
     }
