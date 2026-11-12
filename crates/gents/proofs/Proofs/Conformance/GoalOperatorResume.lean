@@ -6,14 +6,27 @@ import Proofs.Conformance.Family
 namespace Conformance.GoalOperatorResumeContracts
 open GoalAutomation.OperatorResume Conformance.Contracts
 
-def publicationCasesJson : String :=
-  let cases : List (String × Bool × Bool × Bool) :=
-    [("pending-failed", true, true, false), ("pending-completed", true, true, true),
-     ("completed-no-replay", false, true, false)]
-  (Lean.toJson (cases.map fun (name, pending, authorized, granted) => Lean.Json.mkObj
-    [("name", Lean.toJson name), ("pending", Lean.toJson pending),
-     ("authorized", Lean.toJson authorized), ("granted", Lean.toJson granted),
-     ("expected_pending", Lean.toJson (publicationPending pending authorized granted))])).compress
+structure PublicationInput where
+  name : String
+  pending : Bool
+  authorized : Bool
+  granted : Bool
+  deriving Lean.ToJson
+
+structure PublicationOutput where
+  pending : Bool
+  deriving Lean.ToJson
+
+/-- One client resume on one served goal: its relationships first fail to
+publish, a later resume completes them, and a resume after the relationships
+are revoked must not replay them. -/
+@[conformance_family]
+def publication : Family PublicationInput PublicationOutput where
+  inputs :=
+    [ { name := "pending-failed", pending := true, authorized := true, granted := false }
+    , { name := "pending-completed", pending := true, authorized := true, granted := true }
+    , { name := "completed-no-replay", pending := false, authorized := true, granted := false } ]
+  model := fun i => { pending := publicationPending i.pending i.authorized i.granted }
 
 def parentBinding : Binding :=
   ⟨1, "owner", "session", 10, 100, some "graph-correlation", some "source",

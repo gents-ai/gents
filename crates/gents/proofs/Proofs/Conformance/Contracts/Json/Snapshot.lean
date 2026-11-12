@@ -502,7 +502,6 @@ def snapshotGoalMutationCasesJson : String :=
       ++ Conformance.GoalClaimedPublicationContracts.identityCasesJson ++ ","
     ++ "\"goal_claimed_target_cases\":"
       ++ Conformance.GoalClaimedPublicationContracts.targetCasesJson ++ ","
-    ++ "\"goal_resume_publication_cases\":" ++ Conformance.GoalOperatorResumeContracts.publicationCasesJson ++ ","
     ++ "\"goal_operator_resume_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
     ++ "\"goal_operator_resume_on_cases\":"

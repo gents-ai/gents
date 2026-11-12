@@ -192,7 +192,10 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
                 assert_eq!(case.expected.wrapup_requested, case.before.wrapup_requested);
                 assert_eq!(case.expected.wrapup_completed, case.before.wrapup_completed);
                 assert_eq!(case.expected.sequence, case.before.sequence);
-                assert_eq!(case.expected.last_continued_from, case.before.last_continued_from);
+                assert_eq!(
+                    case.expected.last_continued_from,
+                    case.before.last_continued_from
+                );
                 assert_eq!(case.expected.latest_request, case.before.latest_request);
                 assert_eq!(case.expected.tokens_used, case.before.tokens_used);
                 assert_eq!(case.expected.token_budget, case.before.token_budget);
@@ -382,23 +385,8 @@ async fn resume_on_covers_limits_only() {
     assert!(limited.children().await.is_empty());
 }
 
-#[derive(serde::Deserialize)]
-struct PublicationContracts {
-    goal_resume_publication_cases: Vec<serde_json::Value>,
-}
-
 #[tokio::test]
 async fn client_resume_recovers_pending_relationships_without_replaying_revocations() {
-    let cases: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    let expected = |name: &str| {
-        cases
-            .goal_resume_publication_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()["expected_pending"]
-            .as_bool()
-            .unwrap()
-    };
     let fixture = Fixture::new(&json!({
         "status": "paused", "sequence": 0, "blocked_audits": 0,
         "wrapup_requested": false, "wrapup_completed": false,
@@ -444,10 +432,9 @@ async fn client_resume_recovers_pending_relationships_without_replaying_revocati
         escape_graphql_string(&staged.doc_id)
     );
     let pending = user.execute(&query).await.unwrap();
-    assert_eq!(
-        pending["data"]["AgentRequest"][0]["relationships_pending"],
-        expected("pending-failed")
-    );
+    let pending_failed = pending["data"]["AgentRequest"][0]["relationships_pending"]
+        .as_bool()
+        .expect("staged request records its relationship publication");
     assert_eq!(
         pending["data"]["AgentRequest"][0]["admission_kind"],
         "client"
@@ -479,10 +466,9 @@ async fn client_resume_recovers_pending_relationships_without_replaying_revocati
         published["data"]["AgentRequest"].as_array().unwrap().len(),
         1
     );
-    assert_eq!(
-        published["data"]["AgentRequest"][0]["relationships_pending"],
-        expected("pending-completed")
-    );
+    let pending_completed = published["data"]["AgentRequest"][0]["relationships_pending"]
+        .as_bool()
+        .expect("recovered request records its relationship publication");
 
     user.delete_actor_relationship(
         "AgentRequest",
@@ -518,15 +504,28 @@ async fn client_resume_recovers_pending_relationships_without_replaying_revocati
     .unwrap();
     assert!(!again.created);
     assert_eq!(again.doc_id, staged.doc_id);
-    assert_eq!(
-        user.execute(&query).await.unwrap()["data"]["AgentRequest"][0]["relationships_pending"],
-        expected("completed-no-replay")
-    );
+    let completed_no_replay = user.execute(&query).await.unwrap()["data"]["AgentRequest"][0]
+        ["relationships_pending"]
+        .as_bool()
+        .expect("revoked request records its relationship publication");
     assert!(
         fixture.agent_access().execute(&query).await.unwrap()["data"]["AgentRequest"]
             .as_array()
             .unwrap()
             .is_empty()
     );
+    for case in gents_lean_vocab::families::goal_operator_resume_contracts_publication::cases() {
+        let pending = match case.input.name.as_str() {
+            "pending-failed" => pending_failed,
+            "pending-completed" => pending_completed,
+            "completed-no-replay" => completed_no_replay,
+            other => panic!("the client resume scenario has no step {other}"),
+        };
+        case.check(
+            gents_lean_vocab::families::goal_operator_resume_contracts_publication::PublicationOutput {
+                pending,
+            },
+        );
+    }
     fixture.node.shutdown().await.unwrap();
 }
