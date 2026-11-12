@@ -508,38 +508,35 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
 fn generated_reply_cases_drive_claim_validation() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_reply_cases;
     assert!(!cases.is_empty());
-    assert!(cases
-        .iter()
-        .any(|case| case["variant"] == "expired-deadline"
-            && case["status"] == "acted"
-            && case["resolved_doc_id"] == "request-doc"
-            && case["accepted"] == true));
+    assert!(cases.iter().any(|case| case.variant == "expired-deadline"
+        && case.status == "acted"
+        && case.resolved_doc_id == "request-doc"
+        && case.accepted));
     for case in cases {
-        let text = |key: &str| case[key].as_str().unwrap();
         let item: MailboxItem = serde_json::from_value(json!({
-            "_docID": text("mailbox_doc_id"), "item_key": "notice",
-            "requester_did": "owner", "node_did": "agent", "status": text("status"),
-            "kind": "gate", "action": text("handling"), "title": "Repair",
+            "_docID": case.mailbox_doc_id, "item_key": "notice",
+            "requester_did": "owner", "node_did": "agent", "status": case.status,
+            "kind": "gate", "action": case.handling, "title": "Repair",
             "source_kind": "session", "source_id": "source",
-            "target_node_did": text("target_node_did"),
-            "target_agent_did": text("target_agent_did"),
-            "session_id": case["bound_session_id"],
-            "resolved_doc_id": text("resolved_doc_id"), "created_at": "2026-01-01T00:00:00Z"
+            "target_node_did": case.target_node_did,
+            "target_agent_did": case.target_agent_did,
+            "session_id": case.bound_session_id,
+            "resolved_doc_id": case.resolved_doc_id, "created_at": "2026-01-01T00:00:00Z"
         }))
         .unwrap();
         let mut request = AgentRequest::try_from(
             serde_json::from_value::<gents_protocol::row::AgentRequestRow>(json!({
-                "_docID": text("request_doc_id"), "request_id": "request",
+                "_docID": case.request_doc_id, "request_id": "request",
                 "purpose": "normal",
-                "node_did": text("node_did"), "requester_did": text("requester_did"),
-                "agent_did": text("agent_did"), "session_id": text("session_id"),
-                "caused_by_source_doc_id": text("source_doc_id"),
-                "execution_origin": if case["interactive"] == true { "interactive" } else { "event" },
+                "node_did": case.node_did, "requester_did": case.requester_did,
+                "agent_did": case.agent_did, "session_id": case.session_id,
+                "caused_by_source_doc_id": case.source_doc_id,
+                "execution_origin": if case.interactive { "interactive" } else { "event" },
                 "content": "Approved", "created_at": "2026-01-01T00:00:00Z"
             })).unwrap()
         ).unwrap();
-        request.requester_did = Some(text("requester_did").into());
-        if case["question_current"] == false {
+        request.requester_did = Some(case.requester_did.clone());
+        if !case.question_current {
             request.input.question_reply =
                 Some(gents_protocol::mailbox_question::MailboxQuestionReply {
                     question_version: None,
@@ -551,18 +548,17 @@ fn generated_reply_cases_drive_claim_validation() {
         let result = reply::validate_reply_claim(
             &item,
             &request,
-            case["authenticated"].as_bool().unwrap(),
-            case["recipient_authorized"].as_bool().unwrap(),
-            case["deadline_valid"].as_bool().unwrap(),
+            case.authenticated,
+            case.recipient_authorized,
+            case.deadline_valid,
         );
-        assert_eq!(
-            result.is_ok(),
-            case["accepted"].as_bool().unwrap(),
-            "{case}"
-        );
+        assert_eq!(result.is_ok(), case.accepted, "{case:?}");
         if result.is_ok() {
-            assert_eq!(case["post_status"], "acted");
-            assert_eq!(case["post_resolved_doc_id"], request.doc_id);
+            assert_eq!(case.post_status.as_deref(), Some("acted"));
+            assert_eq!(
+                case.post_resolved_doc_id.as_deref(),
+                Some(request.doc_id.as_str())
+            );
         }
     }
 }
