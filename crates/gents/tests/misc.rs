@@ -17,6 +17,3 @@ mod startup_readiness_barrier;
 
 #[path = "misc/ordered_read_plans.rs"]
 mod ordered_read_plans;
-
-#[path = "misc/watchdog_evidence.rs"]
-mod watchdog_evidence;

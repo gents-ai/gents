@@ -519,3 +519,6 @@ async fn redrive_mutation(
         fields = gents_protocol::row::AGENT_REQUEST_FIELDS,
     ))
 }
+
+#[cfg(test)]
+mod pushdown_tests;
