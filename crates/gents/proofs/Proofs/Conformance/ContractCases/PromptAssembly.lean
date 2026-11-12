@@ -193,18 +193,6 @@ structure PromptAssemblyCompactionTriggerCase where
   admission : Option PromptAssembly.ContextCalibration.Admission
   deriving Repr
 
-structure PromptAssemblyRetentionCase where
-  name : String
-  configuredKeepRecent : Nat
-  effectiveInputBudget : Nat
-  fixedInput : Nat
-  availableInput : Nat
-  retentionTarget : Nat
-  summaryMaxOutput : Nat
-  effectiveSummaryOutput : Nat
-  rollingSummaryInputBudget : Nat
-  deriving Repr
-
 private def itemCase : Item → PromptAssemblyItemCase
   | .text index => { item := "text", value := index }
   | .other index => { item := "other", value := index }
@@ -794,66 +782,6 @@ private def triggerCase (witness : TriggerWitness) : PromptAssemblyCompactionTri
 
 def promptAssemblyCompactionTriggerCases : List PromptAssemblyCompactionTriggerCase :=
   triggerWitnesses.map triggerCase
-
-private structure RetentionWitness where
-  name : String
-  configuredKeepRecent : Nat
-  effectiveInputBudget : Nat
-  fixedInput : Nat
-  summaryMaxOutput : Nat
-
-private def retentionWitnesses : List RetentionWitness :=
-  [ { name := "zero-capacity", configuredKeepRecent := 0
-    , effectiveInputBudget := 0, fixedInput := 0, summaryMaxOutput := 0 }
-  , { name := "one-token-capacity", configuredKeepRecent := 1
-    , effectiveInputBudget := 1, fixedInput := 0, summaryMaxOutput := 1 }
-  , { name := "configured-cap-wins", configuredKeepRecent := 2
-    , effectiveInputBudget := 100, fixedInput := 0, summaryMaxOutput := 2 }
-  , { name := "fifth-boundary-minus-one", configuredKeepRecent := 100
-    , effectiveInputBudget := 4, fixedInput := 0, summaryMaxOutput := 1 }
-  , { name := "fifth-boundary-exact", configuredKeepRecent := 100
-    , effectiveInputBudget := 5, fixedInput := 0, summaryMaxOutput := 5 }
-  , { name := "fifth-boundary-one-over", configuredKeepRecent := 100
-    , effectiveInputBudget := 6, fixedInput := 0, summaryMaxOutput := 6 }
-  , { name := "fixed-input-leaves-one", configuredKeepRecent := 100
-    , effectiveInputBudget := 100, fixedInput := 99, summaryMaxOutput := 25 }
-  , { name := "fixed-input-consumes-capacity", configuredKeepRecent := 100
-    , effectiveInputBudget := 100, fixedInput := 100, summaryMaxOutput := 100 }
-  , { name := "fixed-input-exceeds-capacity", configuredKeepRecent := 100
-    , effectiveInputBudget := 100, fixedInput := 101, summaryMaxOutput := 101 }
-  , { name := "large-uncapped-json-safe", configuredKeepRecent := 200000
-    , effectiveInputBudget := 200000, fixedInput := 1, summaryMaxOutput := 32768 }
-  , { name := "large-configured-cap", configuredKeepRecent := 20000
-    , effectiveInputBudget := 200000, fixedInput := 58000, summaryMaxOutput := 200000 }
-  , { name := "small-context-large-summary-ceiling", configuredKeepRecent := 20
-    , effectiveInputBudget := 2000, fixedInput := 0, summaryMaxOutput := 32768 }
-  , { name := "summary-ceiling-smaller-than-fifth", configuredKeepRecent := 20
-    , effectiveInputBudget := 6000, fixedInput := 0, summaryMaxOutput := 512 }
-  , { name := "recovery-band-750k-budget", configuredKeepRecent := 1000000
-    , effectiveInputBudget := 750000, fixedInput := 50000, summaryMaxOutput := 32000 }
-  , { name := "summary-reserve-exhausts-band", configuredKeepRecent := 1000000
-    , effectiveInputBudget := 1000, fixedInput := 500, summaryMaxOutput := 300 }
-  ]
-
-private def retentionCase (witness : RetentionWitness) : PromptAssemblyRetentionCase :=
-  let summaryOutput := PromptAssembly.Budget.summaryOutputCeiling
-    witness.summaryMaxOutput witness.effectiveInputBudget
-  { name := witness.name
-  , configuredKeepRecent := witness.configuredKeepRecent
-  , effectiveInputBudget := witness.effectiveInputBudget
-  , fixedInput := witness.fixedInput
-  , availableInput := witness.effectiveInputBudget - witness.fixedInput
-  , retentionTarget := PromptAssembly.Budget.compactionRetentionTarget
-      witness.configuredKeepRecent witness.effectiveInputBudget witness.fixedInput
-      summaryOutput
-  , summaryMaxOutput := witness.summaryMaxOutput
-  , effectiveSummaryOutput := summaryOutput
-  , rollingSummaryInputBudget := PromptAssembly.Budget.rollingSummaryInputBudget
-      witness.effectiveInputBudget summaryOutput
-  }
-
-def promptAssemblyRetentionCases : List PromptAssemblyRetentionCase :=
-  retentionWitnesses.map retentionCase
 
 structure PromptAssemblyClaudeMapCase where
   name : String

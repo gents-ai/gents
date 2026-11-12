@@ -505,10 +505,6 @@ pub fn lean_prompt_assembly_responses_storage_cases() -> &'static [LeanPromptAss
     &lean_contract_snapshot().prompt_assembly_responses_storage_cases
 }
 
-pub fn lean_prompt_assembly_retention_cases() -> &'static [LeanPromptAssemblyRetentionCase] {
-    &lean_contract_snapshot().prompt_assembly_retention_cases
-}
-
 pub fn lean_prompt_assembly_sanitize_cases() -> &'static [LeanPromptAssemblySanitizeCase] {
     &lean_contract_snapshot().prompt_assembly_sanitize_cases
 }
@@ -2479,37 +2475,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +3000,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3362,7 +3326,6 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
     pub prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
     pub prompt_assembly_turn_budget_cases: Vec<LeanPromptAssemblyTurnBudgetCase>,
-    pub prompt_assembly_retention_cases: Vec<LeanPromptAssemblyRetentionCase>,
     pub prompt_assembly_compaction_trigger_cases: Vec<
         LeanPromptAssemblyCompactionTriggerCase,
     >,
@@ -9630,19 +9593,6 @@ pub struct LeanPromptAssemblyResponsesStorageCase {
     #[serde(deserialize_with = "required_nullable")]
     pub store: Option<bool>,
     pub encrypted_include: bool,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanPromptAssemblyRetentionCase {
-    pub name: String,
-    pub configured_keep_recent: usize,
-    pub effective_input_budget: usize,
-    pub fixed_input: usize,
-    pub available_input: usize,
-    pub retention_target: usize,
-    pub summary_max_output: usize,
-    pub effective_summary_output: usize,
-    pub rolling_summary_input_budget: usize,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

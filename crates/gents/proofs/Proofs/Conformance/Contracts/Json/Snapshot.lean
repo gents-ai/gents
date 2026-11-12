@@ -162,6 +162,7 @@ import Proofs.Conformance.ProviderUsage
 import Proofs.Conformance.TitleAdmission
 import Proofs.Conformance.TitleText
 import Proofs.Conformance.Contracts.Json.PromptAssembly
+import Proofs.Conformance.PromptAssemblyBudget
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
@@ -271,8 +272,6 @@ def scopeTemplateCasesJson : String :=
 within Lean's interpreter recursion limit. -/
 def snapshotPromptTailJson : String :=
   ""
-    ++ "\"prompt_assembly_retention_cases\":"
-      ++ promptAssemblyRetentionCasesJson ++ ","
     ++ "\"prompt_assembly_compaction_trigger_cases\":"
       ++ promptAssemblyCompactionTriggerCasesJson ++ ","
     ++ "\"prompt_assembly_claude_map_cases\":"

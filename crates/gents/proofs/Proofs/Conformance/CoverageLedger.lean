@@ -2300,8 +2300,8 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyCompactionTriggerCases")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "prompt_assembly_retention_cases"
-      "PromptAssemblyRetentionCases")
+      "family"
+      "prompt_assembly_budget_retention")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_claude_map_cases"

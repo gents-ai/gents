@@ -221,63 +221,49 @@ fn seeded_observations_share_the_window_with_new_ones() {
 }
 
 #[test]
-fn generated_retention_cases_drive_production_compaction_target() {
-    let cases = gents_lean_vocab::lean_prompt_assembly_retention_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no PromptAssembly retention cases"
-    );
-
-    for case in cases {
-        assert_eq!(
-            case.effective_input_budget.saturating_sub(case.fixed_input),
-            case.available_input,
-            "{}: available input drifted from Lean natural subtraction",
-            case.name
-        );
-        let actual = crate::provider_input::budget::compaction_retention_target(
-            case.configured_keep_recent,
-            case.effective_input_budget,
-            case.fixed_input,
-            case.effective_summary_output,
-        );
-        assert_eq!(
-            actual, case.retention_target,
-            "{}: production retention target drifted from Lean",
-            case.name
-        );
-        assert!(actual <= case.configured_keep_recent, "{}", case.name);
-        assert!(actual <= case.available_input, "{}", case.name);
-        let band = crate::provider_input::budget::recovery_band_budget(case.effective_input_budget);
-        let reserved = case.fixed_input + case.effective_summary_output;
-        if reserved <= band {
-            assert!(
-                reserved + actual <= band,
-                "{}: the post-compaction request left the recovery band",
-                case.name
+fn production_compaction_retention_follows_the_lean_budget_model() {
+    use crate::provider_input::budget;
+    use gents_lean_vocab::families::prompt_assembly_budget_retention::{
+        RetentionInput, RetentionOutput,
+    };
+    gents_lean_vocab::families::prompt_assembly_budget_retention::replay(
+        |input: &RetentionInput| {
+            let configured_keep_recent = input.configured_keep_recent as usize;
+            let effective_input_budget = input.effective_input_budget as usize;
+            let fixed_input = input.fixed_input as usize;
+            let effective_summary_output = budget::summary_output_ceiling(
+                input.summary_max_output as usize,
+                effective_input_budget,
             );
-        } else {
-            assert_eq!(actual, 0, "{}: no band left for a tail", case.name);
-        }
-        assert_eq!(
-            crate::provider_input::budget::summary_output_ceiling(
-                case.summary_max_output,
-                case.effective_input_budget,
-            ),
-            case.effective_summary_output,
-            "{}: bounded summary output ceiling drifted from Lean",
-            case.name
-        );
-        assert_eq!(
-            crate::provider_input::budget::rolling_summary_input_budget(
-                case.effective_input_budget,
-                case.effective_summary_output,
-            ),
-            case.rolling_summary_input_budget,
-            "{}: rolling summary input budget drifted from Lean",
-            case.name
-        );
-    }
+            let retention_target = budget::compaction_retention_target(
+                configured_keep_recent,
+                effective_input_budget,
+                fixed_input,
+                effective_summary_output,
+            );
+            let recovery_band = budget::recovery_band_budget(effective_input_budget);
+            assert!(retention_target <= configured_keep_recent, "{input:?}");
+            assert!(
+                retention_target as u64 <= input.available_input,
+                "{input:?}"
+            );
+            let reserved = fixed_input + effective_summary_output;
+            if reserved <= recovery_band {
+                assert!(reserved + retention_target <= recovery_band, "{input:?}");
+            } else {
+                assert_eq!(retention_target, 0, "{input:?}");
+            }
+            RetentionOutput {
+                effective_summary_output: effective_summary_output as u64,
+                recovery_band: recovery_band as u64,
+                retention_target: retention_target as u64,
+                rolling_summary_input_budget: budget::rolling_summary_input_budget(
+                    effective_input_budget,
+                    effective_summary_output,
+                ) as u64,
+            }
+        },
+    );
 }
 
 #[test]
