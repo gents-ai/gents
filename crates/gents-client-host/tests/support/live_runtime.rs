@@ -19,6 +19,10 @@ use support::Attachment;
 mod live_delivery;
 #[path = "live_file_actions.rs"]
 mod live_file_actions;
+#[path = "live_gate.rs"]
+mod live_gate;
+#[path = "live_goals.rs"]
+mod live_goals;
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -33,6 +37,7 @@ pub async fn exercise_editor(root: &Path, scenario: &str) -> Result<()> {
 
 async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
     let target = live_target().await;
+    let gates = live_goals::gates(root, editor).await?;
     let root_owned = root.to_owned();
     let (binary, homes) = tokio::task::spawn_blocking(move || {
         Ok::<_, anyhow::Error>((
@@ -159,7 +164,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         let agent = deployment["client"]["deployments"].as_array().unwrap().iter()
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
-        configure(&mut client, &mut id, node, &agent, &target, goal).await?;
+        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor).await?;
         let opening = if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools." } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools." };
         let receipt = client.try_call(id, "desktop_chat_send", json!({"request": {
             "nodeDid": node, "agentDid": agent,
@@ -216,6 +221,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == resumed_request && value["turnState"] == "completed").await?;
         }
         if let Some(scenario) = editor {
+            live_goals::prepare(root, scenario, &gates).await?;
             if scenario == "live-review" {
                 live_file_actions::prepare_review(root).await?;
             }
@@ -232,7 +238,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
                 tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
             }
             super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), scenario).await?;
-            if scenario == "live-review" {
+            if matches!(scenario, "live-goal-removal" | "live-goal-replacement" | "live-goal-delivery") {
+                live_goals::verify(&access, root, node, &client_did, scenario).await?;
+                projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
+            } else if scenario == "live-review" {
                 let evidence = live_file_actions::verify_review(&mut client, &mut id, &access, root, node, session, &client_did).await?;
                 tokio::fs::write(root.join("editor-review-canonical.json"), serde_json::to_vec(&evidence)?).await?;
                 projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
@@ -322,6 +331,8 @@ async fn configure(
     agent: &str,
     target: &InferenceTarget,
     goal: bool,
+    gates: &[live_gate::HeldTool],
+    editor: Option<&str>,
 ) -> Result<()> {
     let setup = client
         .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
@@ -344,6 +355,23 @@ async fn configure(
     }
     if let Some(sampling) = target.sampling(node) {
         document["inference_sampling"] = json!([sampling]);
+    }
+    for gate in gates {
+        gate.configure(&mut document, node);
+    }
+    if !gates.is_empty() {
+        let instruction = if editor == Some("live-goal-delivery") {
+            "For a Goal opening, run its held tool and then answer without completing the Goal. On a resumed Goal continuation after the opening completes, call update_goal with status complete."
+        } else {
+            "For a Goal opening, run its held tool and then answer without changing the Goal status. If the current user input is Complete the second goal from this follow-up, call update_goal with status complete. For other ordinary messages, answer briefly without changing the Goal."
+        };
+        for context in document["contexts"]
+            .as_array_mut()
+            .context("held tool contexts")?
+        {
+            let previous = context["system_prompt"].as_str().unwrap_or_default();
+            context["system_prompt"] = json!(format!("{previous}\n{instruction}"));
+        }
     }
     client
         .try_call(
