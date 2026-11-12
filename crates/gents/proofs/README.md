@@ -1165,6 +1165,13 @@ The key guarantees are:
 - accepted request identities are monotone and cannot be admitted twice
 - publication is separate from resolution
 - a generation is not retired while in-flight work still depends on it
+- acceptance binds the request to the settings the observed generation holds
+  for the chosen agent (`accept_step_binds_generation_settings`)
+- no step rewrites an in-flight request's settings
+  (`settings_stable_while_inFlight`)
+- an unaccepted request has no settings in any reachable state, so a
+  projection cannot present a configured selection as an effective one
+  (`pending_request_has_no_settings`)
 - coherent snapshots stay coherent across transitions
 
 This is the formal reason Rust separates resolved snapshots from active

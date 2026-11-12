@@ -1,9 +1,24 @@
 import Proofs.Basic
 import Proofs.Process
+import Proofs.Configuration
+import Proofs.PromptAssembly.ServiceTier
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 
 abbrev Generation := Nat
+
+/-- The inference settings one generation binds to one agent.
+
+`Configuration.SelectedModel` is the backend, model and effort produced by the
+only legal selection path; the service tier is owned separately by
+`PromptAssembly.ServiceTier`, because its legality is a provider capability
+rather than a selection field. Joining them here keeps a single settings
+vocabulary: the tier is not redeclared, and the selection does not gain a tier
+field whose capability rule would then have to be restated in two places. -/
+structure EffectiveSettings where
+  selected : Configuration.SelectedModel
+  tier : Option PromptAssembly.ServiceTier.Tier
+  deriving DecidableEq, Repr
 
 inductive ReconcilePhase where
   | idle
@@ -182,6 +197,14 @@ structure RuntimeState where
   requestSession : RequestId → SessionId
   requestAgent : RequestId → AgentDid
   sessionAgent : SessionId → Option AgentDid
+  /-- The settings a generation's slot holds for an agent. A slot is built once
+  per generation and keeps one immutable resolved configuration for its whole
+  life, so this is a property of the generation, not of any request. -/
+  generationSettings : Generation → AgentDid → Option EffectiveSettings
+  /-- The settings a request's execution is bound to, recorded when the router
+  hands the request to a slot. `none` is first class and means not yet bound:
+  the request has no effective settings and will bind at its own dispatch. -/
+  requestSettings : RequestId → Option EffectiveSettings
 
 namespace RuntimeState
 
@@ -547,7 +570,22 @@ def bootState (resolved : ResolvedSnapshot) : RuntimeState :=
   , requestSession := fun _ => 0
   , requestAgent := fun _ => resolved.defaultAgent
   , sessionAgent := fun _ => none
+  , generationSettings := fun _ _ => none
+  , requestSettings := fun _ => none
   }
+
+/-- No unaccepted request carries settings. This is what forbids a projection
+from presenting an agent's configured selection as a pending or queued
+request's effective settings: until the request is accepted the model has no
+such fact to report. -/
+def settingsOnlyWhenAccepted (s : RuntimeState) : Prop :=
+  ∀ rid, rid ∉ s.accepted → s.requestSettings rid = none
+
+theorem bootState_settingsOnlyWhenAccepted
+    (resolved : ResolvedSnapshot) :
+    (bootState resolved).settingsOnlyWhenAccepted := by
+  intro _ _
+  rfl
 
 theorem bootState_coherent
     {resolved : ResolvedSnapshot}

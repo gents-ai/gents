@@ -67,6 +67,8 @@ inductive Transition : RuntimeState → RuntimeState → Prop where
         , requestSession := Function.update pre.requestSession requestId sessionId
         , requestAgent := Function.update pre.requestAgent requestId requested
         , sessionAgent := pre.bindSessionIfNeeded sessionId requested
+        , requestSettings := Function.update pre.requestSettings requestId
+            (pre.generationSettings pre.routerObservedGeneration requested)
         } →
       Transition pre post
   | finish_request {pre post : RuntimeState} (requestId : RequestId) :
