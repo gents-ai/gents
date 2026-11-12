@@ -269,22 +269,22 @@ async fn generated_tool_control_receipts_require_selected_agent_and_exact_intent
     assert!(!cases.is_empty());
     for case in cases {
         let mut receipt = expected.clone();
-        receipt.intent_doc_id = case["intent_doc"].as_str().unwrap().into();
-        receipt.client_did = case["author"].as_str().unwrap().into();
-        receipt.agent_did = if case["agent"] == "agent" {
+        receipt.intent_doc_id = case.intent_doc.clone();
+        receipt.client_did = case.author.clone();
+        receipt.agent_did = if case.agent == "agent" {
             agent.did()
         } else {
             other.did()
         }
         .into();
-        receipt.tool_call_id = case["call"].as_str().unwrap().into();
-        receipt.tool_call_doc_id = case["document"].as_str().unwrap().into();
-        let signer = if case["agent"] == "agent" {
+        receipt.tool_call_id = case.call.clone();
+        receipt.tool_call_doc_id = case.document.clone();
+        let signer = if case.agent == "agent" {
             &agent
         } else {
             &other
         };
-        let outcome = |result: &serde_json::Value| {
+        let outcome = |result: &str| {
             if result == "applied" {
                 ToolControlReceiptOutcome::Process(ProcessControlOutcome::Cancelled {
                     live_execution_cancelled: false,
@@ -293,13 +293,13 @@ async fn generated_tool_control_receipts_require_selected_agent_and_exact_intent
                 ToolControlReceiptOutcome::Unconfirmed
             }
         };
-        receipt.outcome = outcome(&case["signed_result"]);
+        receipt.outcome = outcome(&case.signed_result);
         receipt.signature = signer
             .sign(&receipt.signing_payload().unwrap())
             .await
             .unwrap();
-        receipt.outcome = outcome(&case["observed_result"]);
-        if case["signature_valid"] == false {
+        receipt.outcome = outcome(&case.observed_result);
+        if !case.signature_valid {
             receipt.signature[0] ^= 1;
         }
         let accepted = receipt.validate_for(&expected).is_ok()
@@ -311,7 +311,7 @@ async fn generated_tool_control_receipts_require_selected_agent_and_exact_intent
                 )
                 .await
                 .unwrap_or(false);
-        assert_eq!(accepted, case["expected"].as_bool().unwrap(), "{case}");
+        assert_eq!(accepted, case.expected, "{case:?}");
     }
     let mut signed = expected.clone();
     signed.signature = agent
