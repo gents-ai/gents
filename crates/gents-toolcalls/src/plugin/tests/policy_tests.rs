@@ -3,8 +3,8 @@
 //! rule decides every change; these tests assert the receipts and refusals
 //! the command reports around those decisions.
 
-use super::*;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
+use serde_json::{json, Value};
 
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use gents_tools::surface::SelfConfigToolConfig;
 /// come from its published document; every other node permission is granted
 /// here by the runtime owner, as a User's init would.
 struct PolicyFixture {
-    db: crate::support::TestDb,
+    db: gents_inference::test_support::TestDb,
     user_access: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,
     agent_did: String,
@@ -29,8 +29,11 @@ struct PolicyFixture {
 
 impl PolicyFixture {
     async fn new(name: &str) -> Self {
-        let (db, _user, user_access, binding) =
-            crate::test_support::root::signed_test_node(name).await;
+        let (db, _user, user_access, binding) = gents_inference::test_support::signed_test_node(
+            name,
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("fixture Agent is derived from the held runtime");
@@ -74,7 +77,13 @@ impl PolicyFixture {
     /// Grants the Engineer its modeled default-Agent sets, as init does, then
     /// each extra permission as the runtime owner.
     async fn grant_engineer_sets(&self, extra: &[NodePermission]) {
-        super::tests::grant_modeled_direct_sets(&self.db, "default-agent", &self.agent_did).await;
+        crate::test_support::grant_modeled_direct_sets(
+            &self.db.node,
+            self.db.node_identity.did(),
+            "default-agent",
+            &self.agent_did,
+        )
+        .await;
         self.grant_engineer(extra).await;
     }
 
@@ -132,7 +141,7 @@ impl PolicyFixture {
             Some(self.agent.clone()),
             Some(self.db.node_identity.clone()),
             &config,
-            Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default()),
+            Arc::new(crate::plugin::executor::PluginExecutor::default()),
             Arc::new(gents_tools::task_run::NoTaskRunService),
             Some(self.node_binding.clone()),
         )

@@ -361,3 +361,38 @@ pub async fn enable_agents_tools_with_access(
     )
     .await;
 }
+
+/// Grants `subject` the direct sets Lean `Identity.GrantSets.directSets` gives
+/// `recipient`, as the runtime owner does at init. The fixture Agent is its
+/// Node's default Agent, so it holds the modeled default-Agent sets.
+pub async fn grant_modeled_direct_sets(
+    node: &std::sync::Arc<defra_node::Node>,
+    runtime_did: &str,
+    recipient: &str,
+    subject: &str,
+) {
+    use gents_store::identity::GrantSet;
+    let wanted = recipient.to_owned();
+    let case = tokio::task::spawn_blocking(move || {
+        gents_lean_vocab::lean_contract_snapshot()
+            .identity_grant_recipient_cases
+            .iter()
+            .find(|case| case.recipient == wanted)
+            .cloned()
+    })
+    .await
+    .unwrap()
+    .unwrap_or_else(|| panic!("Lean recipient {recipient:?}"));
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(runtime_did).unwrap(),
+    );
+    let subject = identity::Did::new(subject).unwrap();
+    for name in &case.direct {
+        let set = GrantSet::ALL
+            .into_iter()
+            .find(|set| set.name() == name)
+            .unwrap_or_else(|| panic!("Lean grant set {name:?} has no Rust owner"));
+        set.grant(&admin, &subject).await.unwrap();
+    }
+}

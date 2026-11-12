@@ -17,6 +17,5 @@ use gents_tools::builtin::self_config::{agent_management, command};
 
 mod agent_creation_native_tests;
 mod agent_operation_text_tests;
-mod policy_tests;
 mod tests;
 mod text_tests;
