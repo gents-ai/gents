@@ -21,6 +21,7 @@ mod tests {
             let result = parse_aggregate_token_limit(input.limit);
             family::Outcome {
                 accepted: result.is_ok(),
+                error: result.as_ref().err().map(ToString::to_string),
                 limit: result.ok().flatten(),
             }
         });
