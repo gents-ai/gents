@@ -453,4 +453,129 @@ def wireStart : Conformance.Family StartInput StartOutcome where
   model := fun i =>
     StartOutcome.ofModel (PromptAssembly.ClaudeWire.evaluate i.toStart (i.later.map StartEvent.toModel))
 
+open Conformance.ContractCases in
+def bodyCase? {α : Type} [ToJson α] (key : PromptAssemblyClaudeBodyCase → α) (i : α) :
+    Option PromptAssemblyClaudeBodyCase :=
+  promptAssemblyClaudeBodyCases.find? fun c => toJson (key c) == toJson i
+
+open Conformance.ContractCases in
+example : promptAssemblyClaudeBodyCases.all (fun c =>
+    c.system.head? == some c.attribution &&
+      c.system[1]? == some (PromptAssembly.ClaudeOrigin.identity c.origin)) := by
+  native_decide
+
+structure BodySystemInput where
+  attribution : String
+  preamble : Option String
+  rows : List String
+  deriving ToJson
+
+structure BodySystem where
+  system : List String
+  systemMarked : List Bool
+  deriving ToJson
+
+open Conformance.ContractCases in
+def BodySystemInput.ofCase (c : PromptAssemblyClaudeBodyCase) : BodySystemInput :=
+  { attribution := c.attribution, preamble := c.preamble, rows := c.rows }
+
+/-- The system blocks the attribution header, the identity, the preamble and the
+system rows split into. -/
+@[conformance_family]
+def bodySystem : Conformance.Family BodySystemInput BodySystem where
+  inputs := Conformance.ContractCases.promptAssemblyClaudeBodyCases.map BodySystemInput.ofCase
+  model := fun i => match bodyCase? BodySystemInput.ofCase i with
+    | some c => { system := c.system, systemMarked := c.systemMarked }
+    | none => { system := [], systemMarked := [] }
+
+structure BodyEffortInput where
+  model : String
+  supportedEfforts : Option (List String)
+  effort : Option String
+  deriving ToJson
+
+structure BodyEffort where
+  bodyEffort : Option String
+  deriving ToJson
+
+open Conformance.ContractCases in
+def BodyEffortInput.ofCase (c : PromptAssemblyClaudeBodyCase) : BodyEffortInput :=
+  { model := c.model, supportedEfforts := c.supportedEfforts, effort := c.effort }
+
+@[conformance_family]
+def bodyEffort : Conformance.Family BodyEffortInput BodyEffort where
+  inputs := Conformance.ContractCases.promptAssemblyClaudeBodyCases.map BodyEffortInput.ofCase
+  model := fun i => { bodyEffort := (bodyCase? BodyEffortInput.ofCase i).bind (·.decision.effort) }
+
+structure BodyPlanInput where
+  model : String
+  firstUserText : String
+  fingerprintPlaceholder : String
+  promptId : String
+  preamble : Option String
+  rows : List String
+  tools : List String
+  supportedEfforts : Option (List String)
+  effort : Option String
+  /-- The request fields the model evaluates; the plan derives them from the same session. -/
+  request : FieldRequest
+  deriving ToJson
+
+structure BodyThinking where
+  kind : String
+  budget : Option Nat
+  updates : Bool
+  deriving ToJson
+
+structure BodyPlan where
+  system : List String
+  systemMarked : List Bool
+  toolsPresent : Bool
+  facts : PromptAssembly.ClaudeBody.ModelFacts
+  maxTokens : Nat
+  thinking : BodyThinking
+  temperature : Option Nat
+  contextManagement : Bool
+  bodyEffort : Option String
+  diagnostics : FieldDiagnostics
+  perTurnEffort : Option String
+  deriving ToJson
+
+def BodyThinking.ofModel : Option PromptAssembly.ClaudeBody.Thinking → BodyThinking
+  | none => { kind := "none", budget := none, updates := false }
+  | some .disabled => { kind := "disabled", budget := none, updates := false }
+  | some (.adaptive updates) => { kind := "adaptive", budget := none, updates }
+  | some (.enabled budget updates) => { kind := "enabled", budget := some budget, updates }
+
+open Conformance.ContractCases in
+def BodyPlanInput.ofCase (c : PromptAssemblyClaudeBodyCase) : BodyPlanInput :=
+  { model := c.model, firstUserText := c.firstUserText
+    fingerprintPlaceholder := claudeFingerprintPlaceholder, promptId := c.promptId
+    preamble := c.preamble, rows := c.rows, tools := c.tools
+    supportedEfforts := c.supportedEfforts, effort := c.effort
+    request := FieldRequest.ofModel c.request }
+
+open Conformance.ContractCases in
+def BodyPlan.ofCase (c : PromptAssemblyClaudeBodyCase) : BodyPlan :=
+  { system := c.system, systemMarked := c.systemMarked, toolsPresent := c.toolsPresent
+    facts := c.facts, maxTokens := c.decision.maxTokens
+    thinking := BodyThinking.ofModel c.decision.thinking
+    temperature := c.decision.temperature
+    contextManagement := c.decision.contextManagement
+    bodyEffort := c.decision.effort
+    diagnostics := FieldDiagnostics.ofModel c.decision.diagnostics
+    perTurnEffort := c.decision.perTurnEffort }
+
+/-- The whole Messages request plan for an interactive first-party turn. -/
+@[conformance_family]
+def bodyPlan : Conformance.Family BodyPlanInput BodyPlan where
+  inputs := Conformance.ContractCases.promptAssemblyClaudeBodyCases.map BodyPlanInput.ofCase
+  model := fun i => match bodyCase? BodyPlanInput.ofCase i with
+    | some c => BodyPlan.ofCase c
+    | none =>
+      { system := [], systemMarked := [], toolsPresent := false
+        facts := PromptAssembly.ClaudeBody.sonnet5, maxTokens := 0
+        thinking := BodyThinking.ofModel none, temperature := none, contextManagement := false
+        bodyEffort := none, diagnostics := FieldDiagnostics.ofModel none, perTurnEffort := none }
+
 end Conformance.ClaudePromptAssembly

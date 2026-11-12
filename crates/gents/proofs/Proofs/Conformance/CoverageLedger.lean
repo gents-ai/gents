@@ -2320,8 +2320,16 @@ def caseCoverage : List CoverageEntry :=
       "contracts_claude_map")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_body_cases"
-      "PromptAssemblyClaudeBodyCases")
+      "family"
+      "claude_prompt_assembly_body_system")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "claude_prompt_assembly_body_effort")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "claude_prompt_assembly_body_plan")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

@@ -437,10 +437,6 @@ pub fn lean_prompt_assembly_budget_cases() -> &'static [LeanPromptAssemblyBudget
     &lean_contract_snapshot().prompt_assembly_budget_cases
 }
 
-pub fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAssemblyClaudeBodyCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_body_cases
-}
-
 pub fn lean_prompt_assembly_claude_checkpoint_cases() -> &'static [LeanPromptAssemblyClaudeCheckpointCase] {
     &lean_contract_snapshot().prompt_assembly_claude_checkpoint_cases
 }
@@ -3235,7 +3231,6 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_compaction_trigger_cases: Vec<
         LeanPromptAssemblyCompactionTriggerCase,
     >,
-    pub prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
     pub prompt_assembly_responses_storage_cases: Vec<
         LeanPromptAssemblyResponsesStorageCase,
     >,
@@ -9242,34 +9237,6 @@ pub struct LeanPromptAssemblyBudgetCase {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyClaudeBodyCase {
-    pub name: String,
-    pub model: String,
-    pub first_user_text: String,
-    pub fingerprint_placeholder: String,
-    pub prompt_id: String,
-    pub attribution: String,
-    pub preamble: Option<String>,
-    pub rows: Vec<String>,
-    pub tools: Vec<String>,
-    pub system: Vec<String>,
-    pub system_marked: Vec<bool>,
-    pub tools_present: bool,
-    pub supported_efforts: Option<Vec<String>>,
-    pub effort: Option<String>,
-    pub selected_effort: Option<String>,
-    pub facts: LeanPromptAssemblyClaudeFieldFacts,
-    pub request: LeanPromptAssemblyClaudeFieldRequest,
-    pub max_tokens: u64,
-    pub thinking: LeanPromptAssemblyClaudeFieldThinking,
-    pub temperature: Option<u64>,
-    pub context_management: bool,
-    pub body_effort: Option<String>,
-    pub diagnostics: LeanPromptAssemblyClaudeFieldDiagnostics,
-    pub per_turn_effort: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPromptAssemblyClaudeCheckpointCase {
     pub name: String,
@@ -9282,64 +9249,6 @@ pub struct LeanPromptAssemblyClaudeCheckpointCase {
     pub prefix_rows: Vec<LeanClaudeTaggedReplayRow>,
     pub retained: Vec<LeanClaudeTaggedReplayRow>,
     pub replay: Vec<Vec<LeanClaudeReplayBlock>>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeFieldDiagnostics {
-    pub present: bool,
-    pub previous_message_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeFieldFacts {
-    pub adaptive: bool,
-    pub always_thinks: bool,
-    pub thinking_supported: bool,
-    pub rejects_disabled: bool,
-    pub accepts_temperature: bool,
-    pub effort_capable: bool,
-    pub max_effort: bool,
-    pub xhigh_effort: bool,
-    pub caps_effort_when_disabled: bool,
-    pub per_turn_effort: bool,
-    pub output_default: u64,
-    pub output_upper: u64,
-    pub default_effort: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeFieldRequest {
-    pub thinking: LeanPromptAssemblyClaudeFieldThinkingConfig,
-    pub max_tokens_override: Option<u64>,
-    pub requested_effort: Option<String>,
-    pub first_party: bool,
-    pub first_party_default_url: bool,
-    pub experimental_betas_disabled: bool,
-    pub agentic: bool,
-    pub fork: bool,
-    pub display_updates: bool,
-    pub context_management_beta: bool,
-    pub per_turn_control_beta: bool,
-    pub previous_message_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeFieldThinking {
-    pub kind: String,
-    pub budget: Option<u64>,
-    pub updates: bool,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeFieldThinkingConfig {
-    pub kind: String,
-    pub mechanical: bool,
-    pub budget: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

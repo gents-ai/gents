@@ -5,11 +5,9 @@ use crate::llm::message::AssistantContent;
 use crate::llm::message::Message;
 use crate::llm::message::Reasoning;
 use gents_claude::attribution;
-use gents_claude::body::Effort;
 use gents_claude::body::ModelFacts;
 use gents_claude::catalog;
 use gents_claude::profile;
-use gents_lean_vocab::lean_prompt_assembly_claude_body_cases;
 use gents_loop::claude_messages_body::plan_with_ids;
 use gents_loop::claude_messages_body::ClaudeAccountContext;
 use gents_loop::claude_messages_body::ClaudeRequestContext;
@@ -169,27 +167,6 @@ fn claude_thinking_events_as_sse(
     events: &[gents_lean_vocab::families::contracts_claude_thinking_stream::ClaudeStreamEventWire],
 ) -> String {
     claude_thinking_sse_events(events).concat()
-}
-
-fn lean_facts(facts: &gents_lean_vocab::LeanPromptAssemblyClaudeFieldFacts) -> ModelFacts {
-    ModelFacts {
-        adaptive: facts.adaptive,
-        always_thinks: facts.always_thinks,
-        thinking_supported: facts.thinking_supported,
-        rejects_disabled: facts.rejects_disabled,
-        accepts_temperature: facts.accepts_temperature,
-        effort_capable: facts.effort_capable,
-        max_effort: facts.max_effort,
-        xhigh_effort: facts.xhigh_effort,
-        caps_effort_when_disabled: facts.caps_effort_when_disabled,
-        per_turn_effort: facts.per_turn_effort,
-        output_default: facts.output_default,
-        output_upper: facts.output_upper,
-        default_effort: facts
-            .default_effort
-            .as_deref()
-            .map(|name| Effort::parse(name).expect("a Lean effort name")),
-    }
 }
 
 fn claude_request(
@@ -507,15 +484,13 @@ fn claude_thinking_seal_follows_the_lean_model() {
 }
 
 #[test]
-fn generated_claude_body_cases_drive_the_body_builder() {
-    let cases = lean_prompt_assembly_claude_body_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no PromptAssembly Claude body cases"
-    );
+fn body_plan_follows_the_lean_model() {
+    use gents_lean_vocab::families::claude_prompt_assembly_body_plan::{
+        BodyPlan, BodyThinking, FieldDiagnostics,
+    };
     let account = ClaudeAccountContext::projection();
-    for case in cases {
-        let history: Vec<Message> = case
+    gents_lean_vocab::families::claude_prompt_assembly_body_plan::replay::<String>(|input| {
+        let history: Vec<Message> = input
             .rows
             .iter()
             .map(|row| {
@@ -526,11 +501,11 @@ fn generated_claude_body_cases_drive_the_body_builder() {
                 } else if row == "other:assistant" {
                     Message::assistant("ok")
                 } else {
-                    Message::user(case.first_user_text.clone())
+                    Message::user(input.first_user_text.clone())
                 }
             })
             .collect();
-        let tools: Vec<rig::completion::ToolDefinition> = case
+        let tools: Vec<rig::completion::ToolDefinition> = input
             .tools
             .iter()
             .map(|name| rig::completion::ToolDefinition {
@@ -539,111 +514,25 @@ fn generated_claude_body_cases_drive_the_body_builder() {
                 parameters: serde_json::json!({"type": "object"}),
             })
             .collect();
-        let mut request = claude_request(case.preamble.as_deref(), &history, tools);
+        let mut request = claude_request(input.preamble.as_deref(), &history, tools);
         request.additional_params = Some(serde_json::json!({
-            (crate::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): case.supported_efforts,
-            "output_config": {"effort": case.effort}
+            (crate::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): input.supported_efforts,
+            "output_config": {"effort": input.effort}
         }));
         let context = ClaudeRequestContext::client_turn("conformance-session");
         let ids = ClaudeRequestIds {
             session: context.ids().session,
-            prompt: case.prompt_id.clone(),
+            prompt: input.prompt_id.clone(),
         };
-        let plan = plan_with_ids(&case.model, &request, &account, &context, &ids)
-            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
-
-        let fingerprint = attribution::fingerprint(&case.first_user_text, profile::VERSION);
-        let expected = |text: &String| text.replace(&case.fingerprint_placeholder, &fingerprint);
-        assert_eq!(
-            expected(&case.system[0]),
-            expected(&case.attribution),
-            "{}",
-            case.name
-        );
-        let system: Vec<String> = plan
-            .body
-            .system
-            .iter()
-            .map(|block| block.text.clone())
-            .collect();
-        assert_eq!(
-            system,
-            case.system.iter().map(expected).collect::<Vec<_>>(),
-            "system blocks ({})",
-            case.name
-        );
-        assert_eq!(
-            plan.body
-                .system
-                .iter()
-                .map(|block| block.cache_control.is_some())
-                .collect::<Vec<_>>(),
-            case.system_marked,
-            "system markers ({})",
-            case.name
-        );
+        let plan = plan_with_ids(&input.model, &request, &account, &context, &ids)
+            .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             plan.body.tools.as_ref().map(Vec::len),
-            Some(case.tools.len()),
-            "tools key ({})",
-            case.name
+            Some(input.tools.len())
         );
-        assert!(case.tools_present, "{}", case.name);
 
-        let catalog_facts = ModelFacts::of(catalog::find(&case.model).expect("a catalog model"));
-        assert_eq!(
-            catalog_facts,
-            lean_facts(&case.facts),
-            "facts ({})",
-            case.name
-        );
+        let fingerprint = attribution::fingerprint(&input.first_user_text, profile::VERSION);
         let body = serde_json::to_value(&plan.body).expect("body JSON");
-        assert_eq!(body["max_tokens"], case.max_tokens, "{}", case.name);
-        assert_eq!(
-            body["temperature"].as_u64(),
-            case.temperature,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            body.get("context_management").is_some(),
-            case.context_management,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            body["output_config"]["effort"].as_str(),
-            case.body_effort.as_deref(),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            body.get("diagnostics").is_some(),
-            case.diagnostics.present,
-            "{}",
-            case.name
-        );
-        let thinking = &body["thinking"];
-        match case.thinking.kind.as_str() {
-            "none" => assert!(thinking.is_null(), "{}", case.name),
-            "disabled" => assert_eq!(thinking["type"], "disabled", "{}", case.name),
-            "adaptive" => {
-                assert_eq!(thinking["type"], "adaptive", "{}", case.name);
-                assert_eq!(
-                    thinking["display"].as_str() == Some("updates"),
-                    case.thinking.updates,
-                    "{}",
-                    case.name
-                );
-            }
-            "enabled" => assert_eq!(
-                thinking["budget_tokens"].as_u64(),
-                case.thinking.budget,
-                "{}",
-                case.name
-            ),
-            other => panic!("unknown thinking kind {other}"),
-        }
         let leaked = body["messages"]
             .as_array()
             .expect("messages")
@@ -657,10 +546,79 @@ fn generated_claude_body_cases_drive_the_body_builder() {
                     })
                 })
             });
-        assert!(
-            !leaked,
-            "System row leaked into messages ({}): {body}",
-            case.name
-        );
-    }
+        assert!(!leaked, "System row leaked into messages: {body}");
+        let facts = ModelFacts::of(catalog::find(&input.model).expect("a catalog model"));
+        let thinking = &body["thinking"];
+        let display_updates = thinking["display"].as_str() == Some("updates");
+        BodyPlan {
+            system: plan
+                .body
+                .system
+                .iter()
+                .map(|block| {
+                    block
+                        .text
+                        .replace(&fingerprint, &input.fingerprint_placeholder)
+                })
+                .collect(),
+            system_marked: plan
+                .body
+                .system
+                .iter()
+                .map(|block| block.cache_control.is_some())
+                .collect(),
+            tools_present: plan.body.tools.is_some(),
+            facts: gents_lean_vocab::families::claude_prompt_assembly_body_plan::ModelFacts {
+                adaptive: facts.adaptive,
+                always_thinks: facts.always_thinks,
+                thinking_supported: facts.thinking_supported,
+                rejects_disabled: facts.rejects_disabled,
+                accepts_temperature: facts.accepts_temperature,
+                effort_capable: facts.effort_capable,
+                max_effort: facts.max_effort,
+                xhigh_effort: facts.xhigh_effort,
+                caps_effort_when_disabled: facts.caps_effort_when_disabled,
+                per_turn_effort: facts.per_turn_effort,
+                output_default: facts.output_default,
+                output_upper: facts.output_upper,
+                default_effort: facts
+                    .default_effort
+                    .map(|effort| effort.as_str().to_owned()),
+            },
+            max_tokens: body["max_tokens"].as_u64().expect("max_tokens"),
+            thinking: match thinking["type"].as_str() {
+                None => BodyThinking {
+                    kind: "none".to_owned(),
+                    budget: None,
+                    updates: false,
+                },
+                Some("disabled") => BodyThinking {
+                    kind: "disabled".to_owned(),
+                    budget: None,
+                    updates: display_updates,
+                },
+                Some(kind) => BodyThinking {
+                    kind: kind.to_owned(),
+                    budget: thinking["budget_tokens"].as_u64(),
+                    updates: display_updates,
+                },
+            },
+            temperature: body["temperature"].as_u64(),
+            context_management: body.get("context_management").is_some(),
+            body_effort: body["output_config"]["effort"].as_str().map(str::to_owned),
+            diagnostics: FieldDiagnostics {
+                present: body.get("diagnostics").is_some(),
+                previous_message_id: body["diagnostics"]["previous_message_id"]
+                    .as_str()
+                    .map(str::to_owned),
+            },
+            per_turn_effort: body["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .find(|message| message["role"] == "system")
+                .and_then(|message| message["output_config"]["effort"].as_str())
+                .map(str::to_owned),
+        }
+    });
 }

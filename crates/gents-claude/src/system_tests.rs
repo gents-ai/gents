@@ -1,5 +1,3 @@
-use serde_json::Value;
-
 use super::*;
 
 fn cc() -> Option<CacheControl> {
@@ -9,39 +7,22 @@ fn cc() -> Option<CacheControl> {
 const ATTR: &str = "x-anthropic-billing-header: cc_version=2.1.311;";
 
 #[test]
-fn generated_body_cases_split_the_system() {
-    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["prompt_assembly_claude_body_cases"]
-        .as_array()
-        .unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let mut strings = vec![case["attribution"].as_str().unwrap(), CLI_IDENTITY];
-        strings.extend(case["preamble"].as_str());
-        for row in case["rows"].as_array().unwrap() {
-            strings.extend(row.as_str().unwrap().strip_prefix("system:"));
+fn body_system_follows_the_lean_model() {
+    gents_lean_vocab::families::claude_prompt_assembly_body_system::replay(|input| {
+        let mut strings = vec![input.attribution.as_str(), CLI_IDENTITY];
+        strings.extend(input.preamble.as_deref());
+        for row in &input.rows {
+            strings.extend(row.strip_prefix("system:"));
         }
         let blocks = system_blocks(strings, cc());
-        let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
-        let want: Vec<&str> = case["system"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        let marked: Vec<bool> = blocks.iter().map(|b| b.cache_control.is_some()).collect();
-        let want_marked: Vec<bool> = case["system_marked"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_bool().unwrap())
-            .collect();
-        assert_eq!(texts, want, "{}", case["name"]);
-        assert_eq!(marked, want_marked, "{}", case["name"]);
         assert!(blocks
             .iter()
             .all(|b| b.cache_control.is_none() || b.cache_control == cc()));
-    }
+        gents_lean_vocab::families::claude_prompt_assembly_body_system::BodySystem {
+            system: blocks.iter().map(|b| b.text.clone()).collect(),
+            system_marked: blocks.iter().map(|b| b.cache_control.is_some()).collect(),
+        }
+    });
 }
 
 #[test]
