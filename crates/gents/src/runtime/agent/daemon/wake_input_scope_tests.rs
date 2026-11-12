@@ -7,6 +7,10 @@ use gents_protocol::row::AgentRequestRow;
 use gents_session::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome,
 };
+use gents_lean_vocab::{
+    LeanGoalWakeReceiptCaseClaimScope, LeanGoalWakeReceiptCaseNotificationsItem,
+    LeanGoalWakeReceiptCaseNotificationsItemScope, LeanGoalWakeReceiptCasePriorItemClaimScope,
+};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -145,17 +149,50 @@ async fn terminal_source(fixture: &ScopeFixture, row: &AgentRequestRow) {
         .unwrap();
 }
 
+struct ClaimScope<'a> {
+    kind: &'a str,
+    goal: Option<u64>,
+    root: Option<u64>,
+}
+
+impl<'a> From<&'a LeanGoalWakeReceiptCaseClaimScope> for ClaimScope<'a> {
+    fn from(scope: &'a LeanGoalWakeReceiptCaseClaimScope) -> Self {
+        Self {
+            kind: &scope.kind,
+            goal: scope.goal,
+            root: scope.root,
+        }
+    }
+}
+
+impl<'a> From<&'a LeanGoalWakeReceiptCaseNotificationsItemScope> for ClaimScope<'a> {
+    fn from(scope: &'a LeanGoalWakeReceiptCaseNotificationsItemScope) -> Self {
+        Self {
+            kind: &scope.kind,
+            goal: scope.goal,
+            root: scope.root,
+        }
+    }
+}
+
+impl<'a> From<&'a LeanGoalWakeReceiptCasePriorItemClaimScope> for ClaimScope<'a> {
+    fn from(scope: &'a LeanGoalWakeReceiptCasePriorItemClaimScope) -> Self {
+        Self {
+            kind: &scope.kind,
+            goal: scope.goal,
+            root: scope.root,
+        }
+    }
+}
+
 fn reference(
-    scope: &Value,
+    scope: &ClaimScope<'_>,
     roots: &BTreeMap<(u64, u64), AgentRequestRow>,
 ) -> Option<GoalAssignmentInput> {
-    (scope["kind"] == "referenced").then(|| GoalAssignmentInput {
-        goal_id: goal(scope["goal"].as_u64().unwrap()),
+    (scope.kind == "referenced").then(|| GoalAssignmentInput {
+        goal_id: goal(scope.goal.unwrap()),
         root_request_doc_id: Some(
-            roots[&(
-                scope["goal"].as_u64().unwrap(),
-                scope["root"].as_u64().unwrap(),
-            )]
+            roots[&(scope.goal.unwrap(), scope.root.unwrap())]
                 .doc_id
                 .clone()
                 .unwrap(),
@@ -166,25 +203,22 @@ fn reference(
 async fn wake(
     fixture: &ScopeFixture,
     session: &str,
-    claim: &Value,
+    wake: u64,
+    scope: &ClaimScope<'_>,
     roots: &BTreeMap<(u64, u64), AgentRequestRow>,
     unassigned_parent: &AgentRequestRow,
     retry_parent: Option<&AgentRequestRow>,
 ) -> crate::AgentRequest {
-    let scope = &claim["scope"];
     let parent = if let Some(parent) = retry_parent {
         parent
-    } else if scope["kind"] == "referenced" {
-        &roots[&(
-            scope["goal"].as_u64().unwrap(),
-            scope["root"].as_u64().unwrap(),
-        )]
+    } else if scope.kind == "referenced" {
+        &roots[&(scope.goal.unwrap(), scope.root.unwrap())]
     } else {
         unassigned_parent
     };
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
-        format!("wake-{}", claim["wake"]),
+        format!("wake-{wake}"),
         fixture.db.node_identity.did(),
         fixture.user.did(),
         fixture.agent.did(),
@@ -279,7 +313,7 @@ async fn wake(
 async fn append_through(
     fixture: &ScopeFixture,
     session: &str,
-    notifications: &[Value],
+    notifications: &[LeanGoalWakeReceiptCaseNotificationsItem],
     sources: &BTreeMap<u64, AgentRequestRow>,
     appended: &mut u64,
     cutoff: u64,
@@ -292,11 +326,11 @@ async fn append_through(
         output_segment_bound_variables, transcript_message_bound_variables,
     };
     for row in notifications {
-        let sequence = row["sequence"].as_u64().unwrap();
+        let sequence = row.sequence;
         if sequence <= *appended || sequence > cutoff {
             continue;
         }
-        let id = row["message"].as_u64().unwrap();
+        let id = row.message;
         let text = format!("Notification {id}");
         let message_key = key(id);
         let request_doc = sources[&id].doc_id.as_ref().unwrap();
@@ -425,12 +459,11 @@ async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestL
 
 #[tokio::test]
 async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
-    let snapshot = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
-    let cases = snapshot["goal_wake_receipt_cases"].as_array().unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_wake_receipt_cases;
     assert_eq!(cases.len(), 11);
     let mut conflicting_history_cases = 0;
     for case in cases {
-        let name = case["name"].as_str().unwrap();
+        let name = case.name.as_str();
         let fixture = ScopeFixture::new(&format!("goal-wake-scope-{name}")).await;
         let node = fixture.db.node.clone();
         let access = &fixture.access;
@@ -451,21 +484,18 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         };
         let parent = write_request(&fixture, make("unassigned-parent".into())).await;
         terminal_source(&fixture, &parent).await;
-        let notifications = case["notifications"].as_array().unwrap();
+        let notifications = &case.notifications;
         let mut roots = BTreeMap::new();
-        for scope in notifications.iter().map(|row| &row["scope"]).chain(
-            case["retry_parent"]
-                .is_null()
-                .then_some(&case["claim"]["scope"])
-                .into_iter(),
-        ) {
-            if scope["kind"] != "referenced" {
+        let claim_scope = case.retry_parent.is_none().then(|| ClaimScope::from(&case.claim.scope));
+        for scope in notifications
+            .iter()
+            .map(|row| ClaimScope::from(&row.scope))
+            .chain(claim_scope)
+        {
+            if scope.kind != "referenced" {
                 continue;
             }
-            let pair = (
-                scope["goal"].as_u64().unwrap(),
-                scope["root"].as_u64().unwrap(),
-            );
+            let pair = (scope.goal.unwrap(), scope.root.unwrap());
             if roots.contains_key(&pair) {
                 continue;
             }
@@ -480,11 +510,12 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         }
         let mut sources = BTreeMap::new();
         for notification in notifications {
-            let id = notification["message"].as_u64().unwrap();
+            let id = notification.message;
             let mut create = make(format!("source-{id}"));
-            create.input.goal_assignment = reference(&notification["scope"], &roots);
+            create.input.goal_assignment =
+                reference(&ClaimScope::from(&notification.scope), &roots);
             let row = write_request(&fixture, create.clone()).await;
-            if case["superseded_origins"] == true {
+            if case.superseded_origins {
                 create.request_id = format!("source-{id}-replacement");
                 let replacement = write_request(&fixture, create).await;
                 let mutation = gents_session::request::lifecycle::queue::supersede_pending_mutation(
@@ -511,12 +542,12 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             }
             sources.insert(id, row);
         }
-        if case["prior"].as_array().unwrap().is_empty()
-            && case["retry_parent"].is_null()
-            && case["claim"]["scope"]["kind"] == "referenced"
+        if case.prior.is_empty()
+            && case.retry_parent.is_none()
+            && case.claim.scope.kind == "referenced"
             && notifications
                 .iter()
-                .all(|notice| notice["scope"]["kind"] == "referenced")
+                .all(|notice| notice.scope.kind == "referenced")
         {
             let opening = roots.values().next().unwrap().doc_id.as_deref().unwrap();
             access.transact_write("test.unrelated_goal_opening", |txn| {
@@ -545,12 +576,12 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             .unwrap();
             conflicting_history_cases += 1;
         }
-        if case["prior"].as_array().unwrap().is_empty()
-            && case["retry_parent"].is_null()
-            && case["claim"]["scope"]["kind"] == "referenced"
+        if case.prior.is_empty()
+            && case.retry_parent.is_none()
+            && case.claim.scope.kind == "referenced"
             && notifications
                 .iter()
-                .all(|notice| notice["scope"]["kind"] == "referenced")
+                .all(|notice| notice.scope.kind == "referenced")
         {
             assert!(gents_automation::goal::load_request_assignment(
                 access,
@@ -561,21 +592,30 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         }
         let mut appended = 0;
         let mut retry_parent = None;
-        for prior in case["prior"].as_array().unwrap() {
-            let prior_claim = &prior["claim"];
+        for prior in &case.prior {
+            let prior_claim = &prior.claim;
             append_through(
                 &fixture,
                 &session,
                 notifications,
                 &sources,
                 &mut appended,
-                prior_claim["cutoff"].as_u64().unwrap(),
+                prior_claim.cutoff,
             )
             .await;
-            let request = wake(&fixture, &session, prior_claim, &roots, &parent, None).await;
+            let request = wake(
+                &fixture,
+                &session,
+                prior_claim.wake,
+                &ClaimScope::from(&prior_claim.scope),
+                &roots,
+                &parent,
+                None,
+            )
+            .await;
             let doc = request.doc_id.clone();
             let mut lifecycle = claim(&fixture, request).await;
-            if prior["create_goal"] == true {
+            if prior.create_goal {
                 let response = access
                     .execute(&format!(
                         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
@@ -600,7 +640,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     Some(doc.as_str())
                 );
             }
-            let outcome = match prior["state"].as_str().unwrap() {
+            let outcome = match prior.state.as_str() {
                 "completed" => RequestTerminalOutcome::Completed,
                 "failed" => RequestTerminalOutcome::Failed,
                 "interrupted" => RequestTerminalOutcome::Interrupted,
@@ -615,7 +655,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 .await
                 .unwrap();
             drop(lifecycle);
-            if case["retry_parent"] == prior_claim["wake"] {
+            if case.retry_parent == Some(prior_claim.wake) {
                 let response = access
                     .execute(&format!(
                         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
@@ -632,20 +672,21 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 );
             }
         }
-        let current_claim = &case["claim"];
+        let current_claim = &case.claim;
         append_through(
             &fixture,
             &session,
             notifications,
             &sources,
             &mut appended,
-            current_claim["cutoff"].as_u64().unwrap(),
+            current_claim.cutoff,
         )
         .await;
         let request = wake(
             &fixture,
             &session,
-            current_claim,
+            current_claim.wake,
+            &ClaimScope::from(&current_claim.scope),
             &roots,
             &parent,
             retry_parent.as_ref(),
@@ -659,17 +700,10 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 .unwrap(),
         )
         .unwrap();
-        let expected = |field: &str| {
-            case[field]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|id| key(id.as_u64().unwrap()))
-                .collect::<Vec<_>>()
-        };
+        let expected = |ids: &[u64]| ids.iter().map(|id| key(*id)).collect::<Vec<_>>();
         assert_eq!(
             captured,
-            expected("captured"),
+            expected(&case.captured),
             "{name}: claim admitted another assignment's notification"
         );
         append_through(
@@ -692,11 +726,10 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             .iter()
             .map(|row| row.message.rag_text().expect("notification user text"))
             .collect::<Vec<_>>();
-        let expected_content = case["current"]
-            .as_array()
-            .unwrap()
+        let expected_content = case
+            .current
             .iter()
-            .map(|id| format!("Notification {}", id.as_u64().unwrap()))
+            .map(|id| format!("Notification {id}"))
             .collect::<Vec<_>>();
         assert_eq!(
             actual, expected_content,
