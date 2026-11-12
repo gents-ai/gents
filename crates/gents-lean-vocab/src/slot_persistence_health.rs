@@ -251,20 +251,3 @@ pub struct LeanBackendHealthCase {
     pub blocks_routing: bool,
     pub readiness_reason: Option<String>,
 }
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendProbeConfiguration {
-    pub backend_id: u32,
-    pub revision: u32,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendProbeScheduleCase {
-    pub name: String,
-    pub known: Vec<LeanBackendProbeConfiguration>,
-    pub current: Vec<LeanBackendProbeConfiguration>,
-    pub periodic: bool,
-    pub due: Vec<u32>,
-    pub observed: Vec<LeanBackendProbeConfiguration>,
-}

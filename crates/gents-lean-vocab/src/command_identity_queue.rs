@@ -828,23 +828,6 @@ pub enum LeanIdentityAction {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityDerivationInput {
-    pub node_key: String,
-    pub creation_nonce: String,
-    pub label: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityDerivationCase {
-    pub name: String,
-    pub left: LeanIdentityDerivationInput,
-    pub right: LeanIdentityDerivationInput,
-    pub expected_same_did: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPackIdentityBinding {

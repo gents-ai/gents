@@ -124,13 +124,15 @@ fn main() {
 
     let mut deleted = 0;
     let mut emptied = Vec::new();
+    let none = BTreeSet::new();
     for (path, ranges) in &output.removals {
         deleted += ranges.iter().map(|(start, end)| end - start + 1).sum::<usize>();
         if !write {
             continue;
         }
+        let moved = if path == "lib.rs" { &none } else { &output.names };
         let text = &sources.iter().find(|source| &source.path == path).unwrap().text;
-        match generator::prune(text, ranges, path != "lib.rs") {
+        match generator::prune(text, ranges, moved) {
             Some(text) => fs::write(src.join(path), text).unwrap(),
             None => {
                 fs::remove_file(src.join(path)).unwrap();

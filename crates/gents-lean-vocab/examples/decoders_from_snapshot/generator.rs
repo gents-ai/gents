@@ -17,6 +17,7 @@ pub struct Source {
 pub struct Output {
     pub generated: String,
     pub removals: BTreeMap<String, Vec<(usize, usize)>>,
+    pub names: BTreeSet<String>,
     pub report: Value,
 }
 
@@ -1221,6 +1222,7 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         }
     }
 
+    let items_emitted = emitted.len();
     let mut loaders = Vec::new();
     for (name, loader) in &oracle.loaders {
         if !only.is_none_or(|only| only.contains(&loader.field))
@@ -1234,7 +1236,7 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         if path != GENERATED {
             removals.entry(path.clone()).or_default().push(loader.lines);
         }
-        let _ = name;
+        emitted.insert(name.clone());
     }
     let loaders_emitted = loaders.len();
     for file in origin_files {
@@ -1296,7 +1298,7 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         "untyped_positions": untyped.len(),
         "untyped_structs_inferable": untyped_inference.structs.len(),
         "decoder_types": oracle.decoders.len(),
-        "types_emitted": emitted.len(),
+        "types_emitted": items_emitted,
         "loaders_emitted": loaders_emitted,
         "fields_checked": fields_total,
         "fields_agree": fields_agree,
@@ -1306,10 +1308,10 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         "not_covered": not_covered,
         "external_types": external,
     });
-    Output { generated: text, removals, report }
+    Output { generated: text, removals, names: emitted, report }
 }
 
-pub fn prune(text: &str, ranges: &[(usize, usize)], reexport: bool) -> Option<String> {
+pub fn prune(text: &str, ranges: &[(usize, usize)], moved: &BTreeSet<String>) -> Option<String> {
     let mut drop = BTreeSet::new();
     for (start, end) in ranges {
         drop.extend(*start..=*end);
@@ -1328,12 +1330,17 @@ pub fn prune(text: &str, ranges: &[(usize, usize)], reexport: bool) -> Option<St
     if rest.items.iter().all(|item| matches!(item, Item::Use(_))) {
         return None;
     }
-    if reexport {
+    let globbed = out.iter().any(|line| ["use super::*;", "use crate::*;"].contains(line));
+    let refers = out.iter().any(|line| {
+        line.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .any(|word| moved.contains(word))
+    });
+    if refers && !globbed {
         let at = out
             .iter()
             .rposition(|line| line.starts_with("use ") && line.ends_with(';'))
             .map_or(0, |index| index + 1);
-        out.insert(at, "pub use crate::generated::*;");
+        out.insert(at, "use crate::generated::*;");
     }
     Some(out.join("\n") + "\n")
 }
