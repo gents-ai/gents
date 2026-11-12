@@ -514,6 +514,14 @@ theorem recoverySweepCases_registered_sweeps :
       (witness.sweepId, witness.collection) ∈ registeredRecoverySweepContracts := by
   native_decide
 
+/-- Every registered sweep is exercised by at least one emitted case, so a
+replay that drives every case drives every sweep; the Rust coverage check
+reads the registry from the snapshot instead of keeping a case count. -/
+theorem recoverySweepCases_cover_registered_sweeps :
+    ∀ sweepId ∈ registeredRecoverySweepIds,
+      ∃ witness ∈ recoverySweepCases, witness.sweepId = sweepId := by
+  native_decide
+
 theorem recoverySweepCases_decrease_or_defer :
     ∀ witness,
       witness ∈ recoverySweepCases →

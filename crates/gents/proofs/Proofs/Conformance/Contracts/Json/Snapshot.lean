@@ -962,6 +962,8 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
+    ++ "\"recovery_sweep_ids\":"
+      ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
     ++ "\"session_message_kill_cases\":"
       ++ jsonArray (Recovery.killCases.map fun (observation, action) =>
         "{\"observation\":" ++ jsonString observation.toContract

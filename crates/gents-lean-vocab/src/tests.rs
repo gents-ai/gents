@@ -449,7 +449,24 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 52);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 18);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 55);
+    let sweep_ids = &lean_contract_snapshot().recovery_sweep_ids;
+    assert!(!sweep_ids.is_empty(), "the model registers recovery sweeps");
+    for sweep_id in sweep_ids {
+        assert!(
+            lean_recovery_sweep_cases()
+                .iter()
+                .any(|case| &case.sweep_id == sweep_id),
+            "registered recovery sweep {sweep_id} has no emitted case"
+        );
+    }
+    for case in lean_recovery_sweep_cases() {
+        assert!(
+            sweep_ids.contains(&case.sweep_id),
+            "recovery sweep case {} names an unregistered sweep {}",
+            case.name,
+            case.sweep_id
+        );
+    }
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
