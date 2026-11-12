@@ -2904,7 +2904,9 @@ mod tests {
         let home = temp.path().join("home");
         fs::create_dir_all(&home).unwrap();
         fs::write(home.join(BOOTSTRAP_CONSUMED_FILE_NAME), b"").unwrap();
-        let aside = crate::repair::home::set_aside_home(&home).await.unwrap();
+        let aside = gents_service::repair::home::set_aside_home(&home)
+            .await
+            .unwrap();
         assert!(aside.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
         initialize_disposable_home(&home, false).await.unwrap();
     }

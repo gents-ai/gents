@@ -344,7 +344,7 @@ mod no_model {
         // The marker init leaves while it provisions the home.
         fs::write(
             home.home
-                .join(gents::store::local::home::INIT_PENDING_FILE_NAME),
+                .join(gents_store::local::home::INIT_PENDING_FILE_NAME),
             "",
         )?;
 
@@ -383,7 +383,7 @@ mod no_model {
         let backend = answering_backend()?;
         let live = LiveBox::new()?;
         let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
-        fs::remove_file(gents::store::local::store_key::home_key_file(&home.home))?;
+        fs::remove_file(gents_store::local::store_key::home_key_file(&home.home))?;
 
         is_set_aside_and_set_up_again(
             &live,
@@ -421,7 +421,7 @@ mod no_model {
         // With its bootstrap marker kept, a home without settings reads as a stopped setup.
         fs::remove_file(
             home.home
-                .join(gents::store::local::home::BOOTSTRAP_CONSUMED_FILE_NAME),
+                .join(gents_store::local::home::BOOTSTRAP_CONSUMED_FILE_NAME),
         )?;
 
         is_set_aside_and_set_up_again(

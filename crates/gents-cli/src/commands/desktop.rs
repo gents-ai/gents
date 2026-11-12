@@ -234,7 +234,7 @@ async fn wait_for_exit(pid: u32) -> Result<()> {
         if i32::try_from(pid).map_or(true, |pid| pid <= 0) {
             bail!("invalid desktop process ID");
         }
-        if !crate::native_service::wait_for_process_exit(pid, DESKTOP_EXIT_TIMEOUT).await {
+        if !gents_service::native_service::wait_for_process_exit(pid, DESKTOP_EXIT_TIMEOUT).await {
             bail!("desktop process {pid} did not exit");
         }
         Ok(())

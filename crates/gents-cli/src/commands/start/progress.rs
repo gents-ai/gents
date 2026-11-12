@@ -1,6 +1,7 @@
+use gents_protocol::operations::install_repair::{Finding, RepairStep};
 use std::io::{IsTerminal as _, Write as _};
 
-use crate::repair::{Finding, Progress, RepairStep};
+use gents_service::repair::Progress;
 
 pub(super) fn bar(done: usize, total: usize, width: usize) -> String {
     let filled = (done * width)
@@ -49,7 +50,7 @@ impl TerminalProgress {
             return (step == RepairStep::WaitForNode).then(|| {
                 format!(
                     "Waiting for this home's runtime to answer (up to {} s).\n",
-                    crate::repair::ENDPOINT_WAIT.as_secs()
+                    gents_service::repair::ENDPOINT_WAIT.as_secs()
                 )
             });
         }

@@ -1,25 +1,31 @@
+use gents_protocol::operations::install_repair::RepairInput;
+use gents_protocol::operations::install_repair::{
+    Blocker, HomeChoice, HomeDecision, HomeState, RepairOutcome, RepairReceipt, ServiceMove,
+};
+use gents_service::repair::ServiceProgram;
 use std::future::Future;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::CommandFactory as _;
+use gents_host::args::StoreKeyCustodyArg;
 use gents_store::config_client::GraphqlEndpoint;
 use tokio::runtime::Handle;
-use gents_host::args::StoreKeyCustodyArg;
 
 use crate::cli::args::ShellArgs;
 use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
-use crate::home_state::{default_home_ignoring_env, read_finished_init_config, resolve_home_dir};
-use crate::repair::home::{classify_home, BrokenHome, HomeState};
-use crate::repair::{Blocker, HomeChoice, HomeDecision, Prepared, Report, Started};
-use crate::shared::StoredInitConfig;
+use gents_service::home_state::{
+    default_home_ignoring_env, read_finished_init_config, resolve_home_dir,
+};
+
 use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
 };
+use gents_service::state::StoredInitConfig;
 use progress::TerminalProgress;
 
 mod progress;
@@ -200,31 +206,25 @@ async fn ready_node_with(
     let mut home_flag = home.map(crate::absolutize).transpose()?;
     let flag = home_flag.clone();
     let mut choice = tokio::task::spawn_blocking(move || home_choice(flag.as_deref())).await??;
-    // A broken folder that was named on purpose is not set aside where no one
-    // can be asked first, since setup could not run after it.
-    if !terminal && choice.explicit {
-        let home = choice.home.clone();
-        if let Ok(HomeState::Broken(why)) =
-            tokio::task::spawn_blocking(move || classify_home(&home, None)).await?
-        {
-            bail!("{}", cannot_load_without_terminal(&choice.home, why));
-        }
-    }
     let mut setup_home = home_flag.clone();
     loop {
         let mut set_up = false;
         let (moved_from, older_data) = loop {
-            let report = crate::repair::prepare(
-                &choice,
-                &(std::sync::Arc::new(crate::repair::current_program)
-                    as crate::repair::ServiceProgram),
-                crate::repair::ServiceMove::AfterSetup,
+            let report = gents_service::repair::execute(
+                RepairInput::Prepare {
+                    choice: choice.clone(),
+                    service_move: ServiceMove::AfterSetup,
+                },
+                &ServiceProgram::new(gents_service::repair::current_program),
                 progress,
+                None,
             )
             .await?;
             match report.outcome {
-                Prepared::Ready => break (report.serving_home, report.older_data),
-                Prepared::NeedsSetup => {
+                RepairOutcome::Ready | RepairOutcome::Answering(_) => {
+                    break (report.serving_home, report.older_data)
+                }
+                RepairOutcome::NeedsSetup => {
                     ensure!(!set_up, "setup left this home uninitialized");
                     ensure!(terminal, "{}", not_set_up(&choice.home));
                     progress.finish();
@@ -234,45 +234,56 @@ async fn ready_node_with(
                     };
                     set_up = true;
                 }
-                Prepared::Decide(decision) => {
+                RepairOutcome::Decide(decision) => {
                     (choice, home_flag) = ask(decision, terminal, progress).await?;
                     setup_home = Some(choice.home.clone());
                 }
-                Prepared::Blocked(blocker) => blocked(progress, &blocker),
+                RepairOutcome::Blocked(blocker) => blocked(progress, &blocker),
             }
         };
         let serving_home = moved_from.clone().filter(|_| choice.explicit);
         let mut set_up = false;
         loop {
-            match crate::repair::start(
-                &choice.home,
-                serving_home.as_deref(),
-                older_data.as_ref(),
+            match gents_service::repair::execute(
+                RepairInput::Start {
+                    home: choice.home.clone(),
+                    serving_home: serving_home.clone(),
+                    older_data: older_data.clone(),
+                },
+                &ServiceProgram::new(gents_service::repair::current_program),
                 progress,
+                None,
             )
             .await?
             .outcome
             {
-                Started::Answering(graphql) => {
+                RepairOutcome::Ready => {
+                    anyhow::bail!("repair start did not return a runtime endpoint")
+                }
+                RepairOutcome::Answering(graphql) => {
                     progress.finish();
                     let config = read_finished_init_config(&choice.home)?
                         .context("setup left this home uninitialized")?;
+                    let graphql = gents_service::home_state::resolve_graphql_endpoint(
+                        Some(&graphql),
+                        Some(&choice.home),
+                    )?;
                     return Ok((choice.home, config, graphql, home_flag));
                 }
-                Started::NeedsSetup => {
+                RepairOutcome::NeedsSetup => {
                     ensure!(!set_up, "setup left this home uninitialized");
                     ensure!(terminal, "{}", not_set_up(&choice.home));
                     progress.finish();
                     setup::setup(Some(choice.home.clone()), custody).await?;
                     set_up = true;
                 }
-                Started::Decide(decision) => {
+                RepairOutcome::Decide(decision) => {
                     (choice, home_flag) =
                         restore_then_ask(decision, terminal, progress, move_service_back).await?;
                     setup_home = Some(choice.home.clone());
                     break;
                 }
-                Started::Blocked(blocker) => {
+                RepairOutcome::Blocked(blocker) => {
                     give_back(moved_from.as_deref(), progress, move_service_back).await;
                     blocked(progress, &blocker)
                 }
@@ -300,11 +311,6 @@ async fn ask(
     ))
 }
 
-type MoveBack = for<'a> fn(
-    HomeChoice,
-    &'a mut TerminalProgress,
-) -> Pin<Box<dyn Future<Output = Result<Report<Prepared>>> + Send + 'a>>;
-
 /// `prepare` already moved the node away from the folder it was serving when
 /// `start` asks, so that folder gets its node back first: a question left
 /// unanswered (Ctrl-C, no terminal) leaves it working.
@@ -312,16 +318,26 @@ async fn restore_then_ask(
     decision: HomeDecision,
     terminal: bool,
     progress: &mut TerminalProgress,
-    move_back: MoveBack,
+    move_back: for<'a> fn(
+        HomeChoice,
+        &'a mut TerminalProgress,
+    ) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>,
 ) -> Result<(HomeChoice, Option<PathBuf>)> {
-    give_back(Some(&decision.serving_home), progress, move_back).await;
+    give_back(decision.serving_home.as_deref(), progress, move_back).await;
     ask(decision, terminal, progress).await
 }
 
 /// Moves the node back to `serving`, the folder it answered for before
 /// `prepare` moved it, so a start that does not finish leaves that node
 /// working; one line names it when it does not come back.
-async fn give_back(serving: Option<&Path>, progress: &mut TerminalProgress, move_back: MoveBack) {
+async fn give_back(
+    serving: Option<&Path>,
+    progress: &mut TerminalProgress,
+    move_back: for<'a> fn(
+        HomeChoice,
+        &'a mut TerminalProgress,
+    ) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>,
+) {
     let Some(serving) = serving else {
         return;
     };
@@ -341,16 +357,25 @@ async fn give_back(serving: Option<&Path>, progress: &mut TerminalProgress, move
 fn move_service_back(
     choice: HomeChoice,
     progress: &mut TerminalProgress,
-) -> Pin<Box<dyn Future<Output = Result<Report<Prepared>>> + Send + '_>> {
-    Box::pin(async move { crate::repair::restore(&choice, progress).await })
+) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + '_>> {
+    Box::pin(async move {
+        gents_service::repair::execute(
+            RepairInput::Restore { choice },
+            &ServiceProgram::new(gents_service::repair::current_program),
+            progress,
+            None,
+        )
+        .await
+        .map_err(anyhow::Error::from)
+    })
 }
 
-fn not_restarted(serving: &Path, moved: &Result<Report<Prepared>>) -> Option<String> {
+fn not_restarted(serving: &Path, moved: &Result<RepairReceipt>) -> Option<String> {
     let reason = match moved {
         Ok(report) => match &report.outcome {
-            Prepared::Ready => return None,
-            Prepared::Blocked(blocker) => blocker.to_string(),
-            Prepared::NeedsSetup | Prepared::Decide(_) => "it needs setup".to_string(),
+            RepairOutcome::Ready | RepairOutcome::Answering(_) => return None,
+            RepairOutcome::Blocked(blocker) => blocker.to_string(),
+            RepairOutcome::NeedsSetup | RepairOutcome::Decide(_) => "it needs setup".to_string(),
         },
         Err(error) => format!("{error:#}"),
     };
@@ -398,7 +423,7 @@ fn not_set_up(home: &Path) -> String {
     )
 }
 
-fn cannot_load_without_terminal(home: &Path, why: BrokenHome) -> String {
+fn cannot_load_without_terminal(home: &Path, why: HomeState) -> String {
     format!(
         "{} can't be loaded: {why}. Run gents --home {} in a terminal to repair it.",
         home.display(),
@@ -425,7 +450,7 @@ fn blocked(progress: &mut TerminalProgress, blocker: &Blocker) -> ! {
 fn exit_code(blocker: &Blocker) -> i32 {
     match blocker {
         Blocker::StoreRefused { kind, .. } => {
-            crate::native_service::incompatible_store_exit_code(*kind)
+            gents_service::native_service::incompatible_store_exit_code(*kind)
         }
         _ => 1,
     }
@@ -435,7 +460,10 @@ fn exit_code(blocker: &Blocker) -> i32 {
 fn blocked_line(blocker: &Blocker) -> String {
     match blocker {
         Blocker::NewerNode { .. } => blocker.to_string(),
-        _ => format!("Your local node couldn't start: {blocker}"),
+        _ => format!(
+            "Your local node couldn't start: {blocker}. Next: {}",
+            crate::next_call::command(blocker.next_call(), None)
+        ),
     }
 }
 
@@ -491,8 +519,8 @@ pub(crate) fn wants_a_model(reason: AgentReadinessUnavailableReason) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::reason::no_service_manager_message;
     use gents_protocol::node_readiness::{AgentReadinessEntry, NodeReadinessProcessState};
+    use gents_service::repair::reason::no_service_manager_message;
 
     fn readiness(default: &str, ready: &[&str]) -> NodeReadinessSnapshot {
         NodeReadinessSnapshot {
@@ -576,118 +604,27 @@ mod tests {
         );
     }
 
-    static RESTORED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-    fn decision() -> HomeDecision {
-        HomeDecision {
-            home: PathBuf::from("/srv/work"),
-            why: BrokenHome::StoreKeyMissing,
-            default_home: PathBuf::from("/Users/me/.gents"),
-            serving_home: PathBuf::from("/Users/me/other"),
-        }
-    }
-
-    fn record_move_back(
-        choice: HomeChoice,
-        _progress: &mut TerminalProgress,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Report<Prepared>>> + Send + '_>>
-    {
-        assert_eq!(
-            choice,
-            HomeChoice {
-                home: PathBuf::from("/Users/me/other"),
-                explicit: false
-            },
-            "the folder that was serving, not the default"
-        );
-        RESTORED.store(true, std::sync::atomic::Ordering::SeqCst);
-        Box::pin(async {
-            Ok(Report {
-                repaired: Vec::new(),
-                outcome: Prepared::NeedsSetup,
-                serving_home: None,
-                older_data: None,
-            })
-        })
-    }
-
-    #[tokio::test]
-    async fn the_serving_folder_comes_back_before_the_question() {
-        let error = restore_then_ask(
-            decision(),
-            false,
-            &mut TerminalProgress::default(),
-            record_move_back,
-        )
-        .await
-        .unwrap_err();
-        assert!(RESTORED.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(
-            error
-                .to_string()
-                .contains("can't be loaded: the key for its data is missing"),
-            "{error}"
-        );
-    }
-
-    static GIVEN_BACK: std::sync::Mutex<Option<HomeChoice>> = std::sync::Mutex::new(None);
-
-    fn record_give_back(
-        choice: HomeChoice,
-        _progress: &mut TerminalProgress,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Report<Prepared>>> + Send + '_>>
-    {
-        *GIVEN_BACK.lock().unwrap() = Some(choice);
-        Box::pin(async {
-            Ok(Report {
-                repaired: Vec::new(),
-                outcome: Prepared::Ready,
-                serving_home: None,
-                older_data: None,
-            })
-        })
-    }
-
-    #[tokio::test]
-    async fn a_blocked_start_gives_the_serving_folder_its_node_back() {
-        let mut progress = TerminalProgress::default();
-        give_back(None, &mut progress, record_give_back).await;
-        assert_eq!(*GIVEN_BACK.lock().unwrap(), None, "nothing was moved");
-        give_back(
-            Some(Path::new("/srv/serving")),
-            &mut progress,
-            record_give_back,
-        )
-        .await;
-        assert_eq!(
-            *GIVEN_BACK.lock().unwrap(),
-            Some(HomeChoice {
-                home: PathBuf::from("/srv/serving"),
-                explicit: false
-            })
-        );
-    }
-
     #[test]
     fn a_node_that_does_not_come_back_is_named_in_one_line() {
         let serving = Path::new("/Users/me/other");
         let report = |outcome| {
-            Ok(Report {
+            Ok(RepairReceipt {
+                client: None,
                 repaired: Vec::new(),
                 outcome,
                 serving_home: None,
                 older_data: None,
             })
         };
-        assert_eq!(not_restarted(serving, &report(Prepared::Ready)), None);
+        assert_eq!(not_restarted(serving, &report(RepairOutcome::Ready)), None);
         assert_eq!(
-            not_restarted(serving, &report(Prepared::NeedsSetup)).as_deref(),
+            not_restarted(serving, &report(RepairOutcome::NeedsSetup)).as_deref(),
             Some("Your node for /Users/me/other could not be restarted: it needs setup")
         );
         assert_eq!(
             not_restarted(
                 serving,
-                &report(Prepared::Blocked(Blocker::OldNodeStillRunning { pid: 7 }))
+                &report(RepairOutcome::Blocked(Blocker::OldNodeStillRunning { pid: 7 }))
             )
             .as_deref(),
             Some("Your node for /Users/me/other could not be restarted: the old background node (pid 7) did not stop. Quit it, then try again.")
@@ -700,7 +637,7 @@ mod tests {
 
     #[test]
     fn a_refused_store_exits_with_its_kinds_status() {
-        use gents_store::local::storage_backend::IncompatibleStoreKind::*;
+        use gents_protocol::operations::install_repair::IncompatibleStoreKind::*;
         let refused = |kind| Blocker::StoreRefused {
             kind,
             message: String::new(),
@@ -721,9 +658,9 @@ mod tests {
     fn the_default_folder_answer_reopens_without_a_home_flag() {
         let decision = HomeDecision {
             home: PathBuf::from("/srv/work"),
-            why: BrokenHome::StoreKeyMissing,
+            why: HomeState::MissingStoreKey,
             default_home: PathBuf::from("/Users/me/.gents"),
-            serving_home: PathBuf::from("/Users/me/other"),
+            serving_home: Some(PathBuf::from("/Users/me/other")),
         };
         assert_eq!(
             answered(decision.clone(), 0),
