@@ -537,47 +537,6 @@ fn sse_tool_use_with_no_input_at_all_is_empty_object() {
 }
 
 #[test]
-fn sse_tool_use_with_unparseable_input_fails_closed() {
-    let sse = sse_fixture_tool_use("toolu_1", "echo", "{\"text\":");
-    let surface = RapidHashSet::from_iter(["echo".to_string()]);
-    let err = parse_messages_sse(&sse, &surface).expect_err("truncated json");
-    assert!(
-        err.to_string().contains("fail-closed: malformed tool_use"),
-        "{err}"
-    );
-}
-
-#[test]
-fn sse_message_stop_flushes_pending_tool_before_final() {
-    let surface = RapidHashSet::from_iter(["echo".to_string()]);
-    let mut state = MessagesSseState::new(surface);
-    let mut events = Vec::new();
-    let block = sse_tool_use_block("toolu_1", "echo", "{}", &["{\"text\":\"hi\"}"]);
-    let without_stop = block
-        .split_once("event: content_block_stop")
-        .expect("block ends with content_block_stop")
-        .0
-        .to_string();
-    for line in without_stop.lines() {
-        events.extend(state.push_line(line).expect("push"));
-    }
-    assert!(events.is_empty(), "{events:?}");
-    for line in "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".lines() {
-        events.extend(state.push_line(line).expect("push"));
-    }
-    assert!(
-        matches!(
-            &events[..],
-            [RawStreamingChoice::ToolCall(call), RawStreamingChoice::FinalResponse(_)]
-                if call.arguments == json!({"text": "hi"})
-        ),
-        "{events:?}"
-    );
-    let trailing = state.finish().expect("finish");
-    assert!(trailing.is_empty(), "no second FinalResponse: {trailing:?}");
-}
-
-#[test]
 fn push_line_yields_text_before_the_body_ends() {
     let mut state = MessagesSseState::new(RapidHashSet::new());
     assert!(state
@@ -805,34 +764,175 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
 }
 
 #[test]
-fn thinking_start_emits_ordered_audit_observations() {
-    use gents_loop::provider_audit::ClaudeAuditEvent;
+fn claude_sse_dispatch_cases_drive_the_stream_state() {
+    use gents_lean_vocab::families::claude_prompt_assembly_sse_dispatch as sse;
+    use gents_loop::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
 
-    let mut state = MessagesSseState::new(RapidHashSet::new());
-    state
-        .push_line(
-            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"start\",\"signature\":\"initial\"}}",
-        )
-        .unwrap();
-    state.push_line("").unwrap();
-    assert!(matches!(
-        state.take_audit_events().as_slice(),
-        [
-            ClaudeAuditEvent::BlockStart { index: 0, .. },
-            ClaudeAuditEvent::ThinkingText { index: 0, fragment: text },
-            ClaudeAuditEvent::Signature { index: 0, fragment: signature },
-        ] if text == "start" && signature == "initial"
-    ));
-    state
-        .push_line(
-            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"-delta\"}}",
-        )
-        .unwrap();
-    state.push_line("").unwrap();
-    assert!(matches!(
-        state.take_audit_events().as_slice(),
-        [ClaudeAuditEvent::Signature { fragment, .. }] if fragment == "-delta"
-    ));
+    fn tool_number(id: &str) -> u64 {
+        id.strip_prefix("toolu_")
+            .and_then(|number| number.parse().ok())
+            .unwrap_or_else(|| panic!("unmodeled tool id {id}"))
+    }
+
+    fn payload(p: &sse::SsePayload<String>) -> Value {
+        let text = p.text.clone();
+        match p.kind.as_str() {
+            "tool_start" => json!({"type":"content_block_start","index":p.index,"content_block":{
+                "type":"tool_use",
+                "id":format!("toolu_{}", p.id.expect("modeled tool id")),
+                "name":p.name,
+                "input":serde_json::from_str::<Value>(text.as_deref().expect("modeled input")).expect("modeled input object"),
+            }}),
+            "input_delta" => json!({"type":"content_block_delta","index":p.index,
+                "delta":{"type":"input_json_delta","partial_json":text}}),
+            "thinking_start" => json!({"type":"content_block_start","index":p.index,
+                "content_block":{"type":"thinking","thinking":text,"signature":p.signature}}),
+            "thinking_delta" => json!({"type":"content_block_delta","index":p.index,
+                "delta":{"type":"thinking_delta","thinking":text}}),
+            "signature_delta" => json!({"type":"content_block_delta","index":p.index,
+                "delta":{"type":"signature_delta","signature":text}}),
+            "block_stop" => json!({"type":"content_block_stop","index":p.index}),
+            "stop_reason" => json!({"type":"message_delta","delta":{"stop_reason":text},
+                "usage":{"output_tokens":0}}),
+            "message_stop" => json!({"type":"message_stop"}),
+            other => panic!("unmodeled payload {other}"),
+        }
+    }
+
+    fn emitted(event: &RawStreamingChoice<ClaudeStreamResponse>) -> sse::SseEmitted {
+        let base = |kind: &str| sse::SseEmitted {
+            kind: kind.into(),
+            text: None,
+            signature: None,
+            id: None,
+            name: None,
+            arguments: None,
+        };
+        match event {
+            RawStreamingChoice::Message(text) => sse::SseEmitted {
+                text: Some(text.clone()),
+                ..base("message")
+            },
+            RawStreamingChoice::ReasoningDelta { reasoning, .. } => sse::SseEmitted {
+                text: Some(reasoning.clone()),
+                ..base("reasoning_delta")
+            },
+            RawStreamingChoice::Reasoning { content, .. } => {
+                match crate::llm::rig_compat::from_rig_reasoning_part(content) {
+                    ReasoningContent::Text { text, signature } => sse::SseEmitted {
+                        text: Some(text),
+                        signature,
+                        ..base("reasoning")
+                    },
+                    other => panic!("unmodeled reasoning {other:?}"),
+                }
+            }
+            RawStreamingChoice::ToolCall(call) => sse::SseEmitted {
+                id: Some(tool_number(&call.id)),
+                name: Some(call.name.clone()),
+                arguments: Some(call.arguments.to_string()),
+                ..base("tool_call")
+            },
+            RawStreamingChoice::FinalResponse(_) => base("final"),
+            other => panic!("unmodeled stream item {other:?}"),
+        }
+    }
+
+    fn audit(event: &ClaudeAuditEvent) -> sse::SseAudit {
+        let (kind, index, fragment, block) = match event {
+            ClaudeAuditEvent::BlockStart { index, kind } => (
+                "block_start",
+                index,
+                None,
+                Some(match kind {
+                    ClaudeBlockKind::Thinking => "thinking",
+                    ClaudeBlockKind::ToolUse { .. } => "tool_use",
+                    other => panic!("unmodeled block {other:?}"),
+                }),
+            ),
+            ClaudeAuditEvent::ThinkingText { index, fragment } => {
+                ("thinking_text", index, Some(fragment.clone()), None)
+            }
+            ClaudeAuditEvent::Signature { index, fragment } => {
+                ("signature", index, Some(fragment.clone()), None)
+            }
+            ClaudeAuditEvent::BlockStop { index } => ("block_stop", index, None, None),
+            other => panic!("unmodeled audit {other:?}"),
+        };
+        sse::SseAudit {
+            kind: kind.into(),
+            index: u64::from(*index),
+            fragment,
+            block: block.map(str::to_owned),
+        }
+    }
+
+    fn failure(error: &MessagesParseError) -> String {
+        match error {
+            MessagesParseError::ToolUse { .. } => "tool_use".into(),
+            MessagesParseError::DuplicateToolUseId { id } => {
+                format!("duplicate_tool_use_id:{}", tool_number(id))
+            }
+            MessagesParseError::OverlappingToolUse { id } => {
+                format!("overlapping_tool_use:{}", tool_number(id))
+            }
+            MessagesParseError::MalformedToolUse { .. } => "malformed_tool_use".into(),
+            MessagesParseError::MalformedThinking { cause } => format!(
+                "malformed_thinking:{}",
+                match cause {
+                    ThinkingParseCause::WrongBlock => "wrongBlock".to_owned(),
+                    ThinkingParseCause::WrongIndex(index) => format!("wrongIndex:{index}"),
+                    ThinkingParseCause::IncompleteBlock => "incompleteBlock".to_owned(),
+                    ThinkingParseCause::SignatureOrder => "signatureOrder".to_owned(),
+                    ThinkingParseCause::MissingSignature => "missingSignature".to_owned(),
+                    ThinkingParseCause::Malformed(text) => panic!("unmodeled cause {text}"),
+                }
+            ),
+            MessagesParseError::ProviderRefusal { request_id } => format!("refusal:{request_id}"),
+            other => panic!("unmodeled failure {other}"),
+        }
+    }
+
+    gents_lean_vocab::families::claude_prompt_assembly_sse_dispatch::replay::<String>(
+        |i: &sse::SseInput<String>| {
+            let mut state = MessagesSseState::new(i.surface.iter().cloned().collect())
+                .with_request_id(i.request_id.clone());
+            let mut steps = Vec::new();
+            for p in &i.payloads {
+                let dispatched = state
+                    .push_line_typed(&format!("data: {}", payload(p)))
+                    .and_then(|mut events| {
+                        events.extend(state.push_line_typed("")?);
+                        Ok(events)
+                    });
+                match dispatched {
+                    Ok(events) => steps.push(sse::SseStep {
+                        emitted: events.iter().map(emitted).collect(),
+                        audits: state.take_audit_events().iter().map(audit).collect(),
+                    }),
+                    Err(error) => {
+                        return sse::SseOutcome {
+                            steps,
+                            finish: Vec::new(),
+                            failure: Some(failure(&error)),
+                        }
+                    }
+                }
+            }
+            match state.finish_typed() {
+                Ok(events) => sse::SseOutcome {
+                    steps,
+                    finish: events.iter().map(emitted).collect(),
+                    failure: None,
+                },
+                Err(error) => sse::SseOutcome {
+                    steps,
+                    finish: Vec::new(),
+                    failure: Some(failure(&error)),
+                },
+            }
+        },
+    );
 }
 
 #[test]
@@ -1186,48 +1286,41 @@ fn a_main_turn_sends_claude_codes_header_set() {
 }
 
 #[test]
-fn a_subagent_turn_adds_the_agent_headers() {
+fn claude_agent_header_cases_drive_the_sent_request() {
+    use gents_claude::origin::{Cause, Kind};
+    use gents_lean_vocab::families::claude_prompt_assembly_agent_header_set as headers;
+
     let bearer = crate::clients::claude_subscription::StaticBearer::new("access");
-    let context = context_of(gents_claude::origin::Cause::AgentNew, true, false);
-    let request = captured_request(&test_account(), &bearer, &request_with_context(&context));
-    let mut expected: Vec<&str> = MAIN_HEADER_NAMES.to_vec();
-    let at = expected
-        .iter()
-        .position(|name| *name == "x-claude-code-session-id")
-        .unwrap()
-        + 1;
-    expected.splice(
-        at..at,
-        ["x-claude-code-agent-did", "x-claude-code-parent-agent-did"],
+    gents_lean_vocab::families::claude_prompt_assembly_agent_header_set::replay::<Cause, Kind>(
+        |i: &headers::AgentHeaderInput<Cause, Kind>| {
+            let mut context = context_of(Cause::Client, true, false);
+            context.origin = gents_lean_vocab::family::recode(&i.origin);
+            if !i.has_parent {
+                if let Some(agent) = context.agent.as_mut() {
+                    agent.parent_agent_did = None;
+                }
+            }
+            let request =
+                captured_request(&test_account(), &bearer, &request_with_context(&context));
+            let identity = context.agent.as_ref().expect("fixture agent identity");
+            let agent_did = header_value(&request, "x-claude-code-agent-did");
+            let parent = header_value(&request, "x-claude-code-parent-agent-did");
+            assert!(agent_did
+                .as_ref()
+                .is_none_or(|did| *did == identity.agent_did));
+            assert!(parent
+                .as_ref()
+                .is_none_or(|did| Some(did) == identity.parent_agent_did.as_ref()));
+            headers::AgentHeaderObservation {
+                agent_did: agent_did.is_some(),
+                parent_agent_did: parent.is_some(),
+                agent_type: header_value(&request, "x-claude-code-agent-type"),
+                request_class: header_value(&request, "x-claude-code-request-class")
+                    .expect("first-party request class"),
+                app: header_value(&request, "x-app").expect("x-app"),
+            }
+        },
     );
-    let class = expected
-        .iter()
-        .position(|name| *name == "x-claude-code-request-class")
-        .unwrap()
-        + 1;
-    expected.insert(class, "x-claude-code-agent-type");
-    assert_eq!(
-        claude_code_header_names(&request),
-        sorted(expected),
-        "{request}"
-    );
-    assert_eq!(
-        header_value(&request, "x-claude-code-agent-type").as_deref(),
-        Some("custom")
-    );
-    assert_eq!(
-        header_value(&request, "x-claude-code-agent-did").as_deref(),
-        Some("worker")
-    );
-    assert_eq!(
-        header_value(&request, "x-claude-code-parent-agent-did").as_deref(),
-        Some("lead")
-    );
-    assert_eq!(
-        header_value(&request, "x-claude-code-request-class").as_deref(),
-        Some("subagent")
-    );
-    assert_eq!(header_value(&request, "x-app").as_deref(), Some("cli"));
 }
 
 #[test]
@@ -1305,45 +1398,6 @@ fn a_scheduled_task_turn_is_a_background_print_session() {
     assert_eq!(
         header_value(&request, "x-claude-code-request-class").as_deref(),
         Some("main")
-    );
-}
-
-#[test]
-fn refusal_stop_reason_surfaces_as_a_distinct_error() {
-    // Recorded Claude Messages SSE for a content-free refusal: the model reads
-    // the prompt (message_start usage), opens no content block, and closes the
-    // turn with stop_reason "refusal" and zero output tokens. Without explicit
-    // handling the owned loop would see an empty turn and resample until its
-    // transport budget was spent, reporting an opaque "no visible output".
-    let sse = concat!(
-        "event: message_start\n",
-        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_refusal\",",
-        "\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[],",
-        "\"stop_reason\":null,\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}}\n\n",
-        "event: message_delta\n",
-        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",",
-        "\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n",
-        "event: message_stop\n",
-        "data: {\"type\":\"message_stop\"}\n\n",
-    );
-
-    let parsed = parse_messages_sse_typed(sse, &RapidHashSet::new());
-    match parsed {
-        Err(MessagesParseError::ProviderRefusal { request_id }) => {
-            assert_eq!(request_id, "-", "no request-id header in this fixture");
-        }
-        other => panic!("expected a ProviderRefusal error, got {other:?}"),
-    }
-
-    // The refusal is surfaced to the loop as a provider error whose text the
-    // retry classifier recognizes as permanent, so it is not resampled.
-    let rendered = CompletionError::from(MessagesParseError::ProviderRefusal {
-        request_id: "-".into(),
-    })
-    .to_string();
-    assert!(
-        rendered.contains("stop_reason: refusal"),
-        "provider error text carries the refusal marker: {rendered}"
     );
 }
 
