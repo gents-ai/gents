@@ -227,6 +227,11 @@ fn workspace_creation_matches_the_lean_provision_model() {
             ),
         };
         let stored = docs.load_isolated_workspace("ws-provision").unwrap();
+        assert_eq!(
+            docs.workspaces.len(),
+            usize::from(stored.is_some()),
+            "creation stores no workspace row other than its own"
+        );
         let readme = fs::read_to_string(dest.join("README.md")).ok();
         let keep = fs::read_to_string(dest.join("keep-me.txt")).ok();
         let target = match (readme.as_deref(), keep.as_deref()) {
