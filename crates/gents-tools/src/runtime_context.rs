@@ -211,11 +211,11 @@ mod invocation_correlation_tests {
         for case in &snapshot.invocation_correlation_cases {
             assert_eq!(
                 gents_loop::tool_call_lifecycle::runtime::invocation_correlation(
-                    case["request"].as_str(),
-                    case["supplied"].as_str(),
+                    case.request.as_deref(),
+                    case.supplied.as_deref(),
                 ),
-                case["expected"].as_str(),
-                "{case}"
+                case.expected.as_deref(),
+                "{case:?}"
             );
         }
     }
