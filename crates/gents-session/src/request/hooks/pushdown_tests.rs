@@ -16,19 +16,20 @@ use crate::request::hooks::stage::{
     gate, owed, stage, stage_dropping, ApplyFailure, HookError, Host, Plugin, Staged,
 };
 use gents_lean_vocab::families::hooks_contracts_delivery_step::{self as delivery_step};
+use gents_lean_vocab::families::hooks_contracts_effect_commit::{self as effect_commit};
 use gents_lean_vocab::families::hooks_contracts_owed_derive::{self as owed_derive};
 use gents_lean_vocab::families::hooks_contracts_owed_prune::{self as owed_prune};
 use gents_lean_vocab::families::hooks_contracts_owed_trace::{self as owed_trace};
 use gents_lean_vocab::families::hooks_contracts_prepared_admission::{self as admission};
 use gents_lean_vocab::families::hooks_contracts_verdict_combination::{self as combination};
 use gents_lean_vocab::{
-    lean_lifecycle_hook_effect_cases,
+    
     lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_grant_cases,
     lean_lifecycle_hook_must_commit_cases,
     lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
     LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
     LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
-    LeanLifecycleHookManifest, LeanLifecycleHookPartition,
+    LeanLifecycleHookPartition,
     LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRef,
     LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
     LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookStageResult,
@@ -61,10 +62,6 @@ fn manifest(name: &str, owns: &[String], bound: usize) -> Manifest {
         bound,
         history: Vec::new(),
     }
-}
-
-fn manifest_of(lean: &LeanLifecycleHookManifest) -> Manifest {
-    manifest(&lean.name, &lean.owns, lean.bound)
 }
 
 fn access(lean: LeanLifecycleHookAccess) -> Access {
@@ -164,6 +161,28 @@ struct StoreDouble {
 }
 
 impl StoreDouble {
+    fn of_wire(world: &effect_commit::WorldWire, core: Vec<String>, unreadable: &[String]) -> Self {
+        Self {
+            state: Mutex::new(Snapshot {
+                core,
+                rows: world.rows.iter().map(row_of).collect(),
+            }),
+            denied: world
+                .denied
+                .iter()
+                .map(|denial| {
+                    (
+                        access_of(&denial.access),
+                        DocRef::new(&denial.collection, &denial.doc),
+                    )
+                })
+                .collect(),
+            failing_ops: world.failing_ops.clone(),
+            unreadable: unreadable.to_vec(),
+            failed_operation: Mutex::new(None),
+        }
+    }
+
     fn new(world: &LeanLifecycleHookWorld, core: Vec<String>, unreadable: &[String]) -> Self {
         Self {
             state: Mutex::new(Snapshot {
@@ -441,35 +460,108 @@ fn string_plugins(scripts: &[LeanLifecycleHookScript<String>]) -> Vec<Plugin<(),
         .collect()
 }
 
+fn effect_of(wire: &effect_commit::EffectWire) -> Effect {
+    let doc = || {
+        DocRef::new(
+            wire.collection.as_deref().expect("a write names its collection"),
+            wire.doc.as_deref().expect("a write names its document"),
+        )
+    };
+    let value = || Value::String(wire.value.clone().expect("the write carries its value"));
+    let expected = || wire.expected.expect("the write names the revision it was shown");
+    match wire.kind.as_str() {
+        "create" => Effect::Write(Write::Create {
+            doc: doc(),
+            value: value(),
+            grants: Vec::new(),
+        }),
+        "update" => Effect::Write(Write::Update {
+            doc: doc(),
+            expected: expected(),
+            value: value(),
+            conflict: None,
+        }),
+        "delete" => Effect::Write(Write::Delete {
+            doc: doc(),
+            expected: expected(),
+            conflict: None,
+        }),
+        "core" => Effect::Core(CoreOp::new(
+            wire.op.as_deref().expect("a core effect names its operation"),
+            Value::Null,
+        )),
+        other => panic!("the model has no effect {other}"),
+    }
+}
+
+fn row_of(wire: &effect_commit::RowWire) -> Row {
+    Row {
+        doc: DocRef::new(&wire.collection, &wire.doc),
+        revision: wire.revision,
+        value: Value::String(wire.value.clone()),
+    }
+}
+
+fn row_wire(row: &Row) -> effect_commit::RowWire {
+    effect_commit::RowWire {
+        collection: row.doc.collection.clone(),
+        doc: row.doc.doc_id.clone(),
+        revision: row.revision,
+        value: row
+            .value
+            .as_str()
+            .expect("a modeled row holds a string")
+            .to_owned(),
+    }
+}
+
+fn state_wire(snapshot: &Snapshot) -> effect_commit::StateWire {
+    effect_commit::StateWire {
+        core: snapshot.core.clone(),
+        rows: snapshot.rows.iter().map(row_wire).collect(),
+    }
+}
+
+fn access_of(wire: &str) -> Access {
+    match wire {
+        "create" => Access::Create,
+        "update" => Access::Update,
+        "delete" => Access::Delete,
+        other => panic!("the model has no access {other}"),
+    }
+}
+
+fn bound_of(bound: u64) -> usize {
+    usize::try_from(bound).expect("a modeled bound fits")
+}
+
 #[tokio::test]
-async fn generated_lifecycle_hook_effect_cases_drive_validation_and_application() {
-    let cases = lean_lifecycle_hook_effect_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let host = StoreDouble::of(&case.world);
-        let manifest = manifest_of(&case.manifest);
-        let effects = effects(&case.effects);
+async fn effect_validation_and_application_follow_the_lean_model() {
+    for case in gents_lean_vocab::families::hooks_contracts_effect_commit::cases() {
+        let input = &case.input;
+        let host = StoreDouble::of_wire(&input.world, input.world.core.clone(), &[]);
+        let manifest = manifest(
+            &input.manifest.name,
+            &input.manifest.owns,
+            bound_of(input.manifest.bound),
+        );
+        let effects: Vec<Effect> = input.effects.iter().map(effect_of).collect();
         let valid = validate(
             &manifest,
             &effects,
             |access, doc| host.permits(access, doc),
             &Named::default(),
-        );
-        assert_eq!(valid.is_ok(), case.valid, "{}: {valid:?}", case.name);
-        let committed = match valid {
-            Ok(()) => host
-                .apply(&manifest, &effects)
+        )
+        .is_ok();
+        let committed = if valid {
+            host.apply(&manifest, &effects)
                 .await
                 .ok()
-                .map(|()| host.snapshot()),
-            Err(_) => None,
+                .map(|()| state_wire(&host.snapshot()))
+        } else {
+            None
         };
-        assert_eq!(
-            committed,
-            case.committed.as_ref().map(snapshot_of),
-            "{}",
-            case.name
-        );
+        case.check(effect_commit::EffectOutput { valid, committed });
     }
 }
 

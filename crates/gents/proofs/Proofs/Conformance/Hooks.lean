@@ -253,15 +253,116 @@ def effectCases : List EffectCase :=
   , { name := "one_stale_write_among_distinct_documents_misses", world := effectWorld
     , manifest := notes, effects := [create "Note" "n2" "c", update "Note" "n1" 1 "b"] } ]
 
-private def effectCaseJson (c : EffectCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"world\":" ++ worldJson c.world ++
-    ",\"manifest\":" ++ manifestJson c.manifest ++
-    ",\"effects\":" ++ effectsJson c.effects ++
-    ",\"valid\":" ++ boolJson c.accepted ++
-    ",\"committed\":" ++ ((c.committed.map stateJson).getD "null") ++ "}"
+structure RowWire where
+  collection : String
+  doc : String
+  revision : Nat
+  value : String
+  deriving ToJson
 
-def effectCasesJson : String := jsonArray (effectCases.map effectCaseJson)
+def RowWire.ofModel (entry : HookRow) : RowWire :=
+  ⟨entry.ref.collection, entry.ref.doc, entry.revision, entry.value⟩
+
+def RowWire.toModel (wire : RowWire) : HookRow :=
+  row wire.collection wire.doc wire.revision wire.value
+
+structure EffectWire where
+  kind : String
+  collection : Option String
+  doc : Option String
+  expected : Option Nat
+  value : Option String
+  op : Option String
+  deriving ToJson
+
+def EffectWire.ofModel : HookEffect → EffectWire
+  | .write (.create target value) =>
+      ⟨"create", some target.collection, some target.doc, none, some value, none⟩
+  | .write (.update target expected value) =>
+      ⟨"update", some target.collection, some target.doc, some expected, some value, none⟩
+  | .write (.delete target expected) =>
+      ⟨"delete", some target.collection, some target.doc, some expected, none, none⟩
+  | .core op => ⟨"core", none, none, none, none, some op⟩
+
+def EffectWire.toModel (wire : EffectWire) : HookEffect :=
+  let target := ref (wire.collection.getD "") (wire.doc.getD "")
+  match wire.kind with
+  | "core" => .core (wire.op.getD "")
+  | "create" => .write (.create target (wire.value.getD ""))
+  | "update" => .write (.update target (wire.expected.getD 0) (wire.value.getD ""))
+  | _ => .write (.delete target (wire.expected.getD 0))
+
+def accessOf : String → Access
+  | "update" => .update
+  | "delete" => .delete
+  | _ => .create
+
+structure DenialWire where
+  access : String
+  collection : String
+  doc : String
+  deriving ToJson
+
+structure WorldWire where
+  rows : List RowWire
+  core : List String
+  denied : List DenialWire
+  failingOps : List String
+  deriving ToJson
+
+def WorldWire.ofModel (world : World) : WorldWire :=
+  { rows := world.rows.map RowWire.ofModel, core := world.core
+  , denied := world.denied.map fun entry =>
+      ⟨accessString entry.1, entry.2.collection, entry.2.doc⟩
+  , failingOps := world.failingOps }
+
+def WorldWire.toModel (wire : WorldWire) : World :=
+  { rows := wire.rows.map RowWire.toModel, core := wire.core
+  , denied := wire.denied.map fun entry => (accessOf entry.access, ref entry.collection entry.doc)
+  , failingOps := wire.failingOps }
+
+structure StateWire where
+  core : List String
+  rows : List RowWire
+  deriving ToJson
+
+def StateWire.ofModel (state : HookState) : StateWire :=
+  ⟨state.core, state.docs.map RowWire.ofModel⟩
+
+structure ManifestWire where
+  name : String
+  owns : List String
+  bound : Nat
+  deriving ToJson
+
+def ManifestWire.ofModel (manifest : Manifest) : ManifestWire :=
+  ⟨manifest.name, manifest.owns, manifest.bound⟩
+
+def ManifestWire.toModel (wire : ManifestWire) : Manifest :=
+  ⟨wire.name, wire.owns, wire.bound⟩
+
+structure EffectInput where
+  name : String
+  world : WorldWire
+  manifest : ManifestWire
+  effects : List EffectWire
+  deriving ToJson
+
+structure EffectOutput where
+  valid : Bool
+  committed : Option StateWire
+  deriving ToJson
+
+@[conformance_family]
+def effectCommit : Family EffectInput EffectOutput where
+  inputs := effectCases.map fun c =>
+    { name := c.name, world := WorldWire.ofModel c.world
+    , manifest := ManifestWire.ofModel c.manifest, effects := c.effects.map EffectWire.ofModel }
+  model := fun i =>
+    let c : EffectCase :=
+      { name := i.name, world := i.world.toModel, manifest := i.manifest.toModel
+      , effects := i.effects.map EffectWire.toModel }
+    { valid := c.accepted, committed := c.committed.map StateWire.ofModel }
 
 /-! Create grants: `Hooks.grantsValid` (decision 2026-11-11, maintainer-approved). -/
 

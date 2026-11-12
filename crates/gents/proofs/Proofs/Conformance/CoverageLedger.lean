@@ -1279,8 +1279,8 @@ def caseCoverage : List CoverageEntry :=
       "SessionControlCases")
       "session-control" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_effect_cases"
-      "LifecycleHookEffectCases"
+      "family"
+      "hooks_contracts_effect_commit"
       "Production validate decides every case; application runs through the conformance test's in-memory Host, whose all-or-none apply mirrors Hooks.applyEffects. The DefraDB transaction host (request::hooks::native) is crate-private and is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage

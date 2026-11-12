@@ -265,10 +265,6 @@ pub fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] {
     &lean_contract_snapshot().interrupt_queue_cases
 }
 
-pub fn lean_lifecycle_hook_effect_cases() -> &'static [LeanLifecycleHookEffectCase] {
-    &lean_contract_snapshot().lifecycle_hook_effect_cases
-}
-
 pub fn lean_lifecycle_hook_gate_cases() -> &'static [LeanLifecycleHookGateCase] {
     &lean_contract_snapshot().lifecycle_hook_gate_cases
 }
@@ -3359,7 +3355,6 @@ pub struct LeanContractSnapshot {
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
-    pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
     pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
     pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
     pub lifecycle_hook_rerun_cases: Vec<LeanLifecycleHookRerunCase>,
@@ -6776,17 +6771,6 @@ pub enum LeanLifecycleHookEffect {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookEffectCase {
-    pub name: String,
-    pub world: LeanLifecycleHookWorld,
-    pub manifest: LeanLifecycleHookManifest,
-    pub effects: Vec<LeanLifecycleHookEffect>,
-    pub valid: bool,
-    pub committed: Option<LeanLifecycleHookState>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookGateCase {
     pub name: String,
     pub world: LeanLifecycleHookWorld,
@@ -6864,14 +6848,6 @@ pub struct LeanLifecycleHookHistoryCase {
     pub named: Vec<LeanLifecycleHookRef>,
     pub read: LeanHistoryRead,
     pub permitted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookManifest {
-    pub name: String,
-    pub owns: Vec<String>,
-    pub bound: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
