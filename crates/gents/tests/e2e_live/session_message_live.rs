@@ -2962,14 +2962,6 @@ async fn fetch_caused_requests(node: &LiveUser, parent_request_id: &str) -> Vec<
     caused_request_rows(&node.execute(&query).await)
 }
 
-async fn requests_caused_by_row(node: &LiveUser, tool_call_doc_id: &str) -> Vec<CausedRequestRow> {
-    let escaped = escape_graphql_string(tool_call_doc_id);
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{escaped}" }} }}) {{ {CAUSED_REQUEST_FIELDS} }} }}"#
-    );
-    caused_request_rows(&node.execute(&query).await)
-}
-
 async fn wait_for_caused_request(
     node: &LiveUser,
     parent_request_id: &str,
@@ -3157,14 +3149,11 @@ struct SessionRequestRow {
     #[serde(rename = "_docID")]
     doc_id: String,
     request_id: String,
-    session_id: String,
     lifecycle_state: Option<String>,
     request_hop: Option<i64>,
     failure_reason: Option<String>,
     input: Option<RequestInput>,
     caused_by_parent_request_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_parent_tool_call_doc_id: Option<String>,
     caused_by_trigger_kind: Option<String>,
     purpose: Option<String>,
     created_at: Option<String>,
