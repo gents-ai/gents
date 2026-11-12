@@ -8,13 +8,6 @@ use crate::commands::config::task_run::{config_task_run, resolve_task_id_for};
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access};
 
-const TASK_FIELDS: &str = "task_id node_did display_name description agent_did prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
-const BEHAVIOR_FIELDS: &str = "agent_did: agent_did node_did display_name description context_id inference_profile_id enabled tags created_at updated_at";
-const TRIGGER_FIELDS: &str = "trigger_id node_did display_name description task_id source session_id_template create_session max_fires_per_hour enabled concurrency next_run_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at tags";
-const SCHEDULE_FIELDS: &str =
-    "schedule_id node_did display_name cadence created_at updated_at tags";
-const EVENT_SOURCE_FIELDS: &str = "event_source_id node_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
-
 pub(crate) async fn dispatch(command: TaskCommand) -> Result<()> {
     match command {
         TaskCommand::List(args) => task_list(args).await,
@@ -110,14 +103,11 @@ impl TaskInventory {
     }
 
     fn triggers_for_task(&self, task_id: &str) -> Vec<Value> {
-        let mut rows = self
-            .triggers
+        self.triggers
             .iter()
             .filter(|row| string_field(row, "task_id").as_deref() == Some(task_id))
             .map(|row| self.enrich_trigger(row))
-            .collect::<Vec<_>>();
-        sort_rows_by_string_field(&mut rows, "trigger_id");
-        rows
+            .collect::<Vec<_>>()
     }
 
     fn enrich_trigger(&self, row: &Value) -> Value {
@@ -147,32 +137,64 @@ pub(crate) async fn load_task_inventory(
     access: &ConfigAccess,
     task_id_filter: Option<&str>,
 ) -> Result<TaskInventory> {
-    let rendered = task_inventory_query(task_id_filter);
-    let response = access.read(&rendered).await?;
-    ensure_no_graphql_errors(&response, "query task inventory")?;
-
-    let mut tasks = rows(&response, "Task");
-    sort_rows_by_string_field(&mut tasks, "task_id");
-
-    let agents_by_id = rows(&response, "Agent")
-        .into_iter()
-        .filter_map(|row| {
-            let key = string_field(&row, "node_did").zip(string_field(&row, "agent_did"))?;
-            Some((key, row))
+    let node_did = crate::commands::config::binding::resolve_target_node_did(
+        None,
+        Some(crate::cli::ManifestNodeDidBindingArg::Live),
+        None,
+        None,
+        Some(access),
+    )
+    .await?;
+    let inventory = access
+        .transact_readonly("task.inventory", |txn| {
+            let node_did = &node_did;
+            Box::pin(async move {
+                gents_documents::views::tasks::inventory(txn, node_did, false, task_id_filter)
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
         })
-        .collect::<BTreeMap<_, _>>();
-
-    let mut triggers = rows(&response, "Trigger");
-    sort_rows_by_string_field(&mut triggers, "trigger_id");
-    let schedules_by_id = rows(&response, "Schedule")
-        .into_iter()
-        .filter_map(|row| string_field(&row, "schedule_id").map(|id| (id, row)))
-        .collect();
-    let event_sources_by_id = rows(&response, "EventSource")
-        .into_iter()
-        .filter_map(|row| string_field(&row, "event_source_id").map(|id| (id, row)))
-        .collect();
-
+        .await?;
+    let tasks = inventory
+        .tasks
+        .iter()
+        .map(|row| enabled_document(&row.task, row.task.enabled))
+        .collect::<Result<Vec<_>>>()?;
+    let agents_by_id = inventory
+        .agents
+        .iter()
+        .map(|row| {
+            Ok((
+                (row.agent.node_did.clone(), row.agent.agent_did.clone()),
+                enabled_document(&row.agent, row.agent.enabled)?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let triggers = inventory
+        .triggers
+        .iter()
+        .map(|row| enabled_document(row, row.trigger.enabled))
+        .collect::<Result<Vec<_>>>()?;
+    let schedules_by_id = inventory
+        .schedules
+        .iter()
+        .map(|row| {
+            Ok((
+                row.schedule.schedule_id.clone(),
+                serde_json::to_value(&row.schedule)?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let event_sources_by_id = inventory
+        .event_sources
+        .iter()
+        .map(|row| {
+            Ok((
+                row.event_source.event_source_id.clone(),
+                serde_json::to_value(&row.event_source)?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
     Ok(TaskInventory {
         tasks,
         agents_by_id,
@@ -182,47 +204,13 @@ pub(crate) async fn load_task_inventory(
     })
 }
 
-fn task_inventory_query(task_id_filter: Option<&str>) -> gents_protocol::document_query::Rendered {
-    use gents_protocol::document_query::{
-        fields::{agent, event_source, schedule, task, trigger},
-        Filter, Query, QuerySet, Selection,
-    };
-    let mut tasks = Query::<task::Doc>::select(Selection::owned(TASK_FIELDS));
-    let mut triggers = Query::<trigger::Doc>::select(Selection::owned(TRIGGER_FIELDS));
-    if let Some(task_id) = task_id_filter {
-        tasks = tasks.filter(Filter::eq(task::TASK_ID, task_id)).limit(1);
-        triggers = triggers.filter(Filter::eq(trigger::TASK_ID, task_id));
-    }
-    let agents = Query::<agent::Doc>::select(Selection::owned(BEHAVIOR_FIELDS));
-    let schedules = Query::<schedule::Doc>::select(Selection::owned(SCHEDULE_FIELDS));
-    let event_sources = Query::<event_source::Doc>::select(Selection::owned(EVENT_SOURCE_FIELDS));
-    QuerySet::new()
-        .plain(&tasks)
-        .plain(&agents)
-        .plain(&triggers)
-        .plain(&schedules)
-        .plain(&event_sources)
-        .render()
-}
-
-fn ensure_no_graphql_errors(response: &Value, context: &str) -> Result<()> {
-    if let Some(errors) = response
-        .get("errors")
-        .and_then(Value::as_array)
-        .filter(|errors| !errors.is_empty())
-    {
-        anyhow::bail!("{context} failed: {errors:?}");
-    }
-    Ok(())
-}
-
-fn rows(response: &Value, collection: &str) -> Vec<Value> {
-    response
-        .get("data")
-        .and_then(|data| data.get(collection))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
+fn enabled_document<T>(document: &T, enabled: bool) -> Result<Value>
+where
+    T: serde::Serialize,
+{
+    let mut value = serde_json::to_value(document)?;
+    value["enabled"] = json!(enabled);
+    Ok(value)
 }
 
 fn string_field(row: &Value, field: &str) -> Option<String> {
@@ -234,14 +222,6 @@ fn string_field(row: &Value, field: &str) -> Option<String> {
 
 fn bool_field(row: &Value, field: &str) -> Option<bool> {
     row.get(field).and_then(Value::as_bool)
-}
-
-fn sort_rows_by_string_field(rows: &mut [Value], field: &str) {
-    rows.sort_by(|left, right| {
-        string_field(left, field)
-            .unwrap_or_default()
-            .cmp(&string_field(right, field).unwrap_or_default())
-    });
 }
 
 fn agent_summary(agent: &Value) -> Option<Value> {

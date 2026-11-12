@@ -20,6 +20,12 @@ impl<'a> MeasuredRead<'a> {
         }
     }
 
+    fn record_input(&self, bytes: usize) {
+        self.queries.fetch_add(1, Ordering::Relaxed);
+        self.max_bytes.fetch_max(bytes, Ordering::Relaxed);
+        self.total_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
     fn snapshot(&self) -> Value {
         json!({
             "queries": self.queries.load(Ordering::Relaxed),
@@ -35,11 +41,23 @@ impl gents_store::config_client::ConfigRead for MeasuredRead<'_> {
         &self,
         document: &str,
     ) -> Result<Value, gents_store::config_client::ConfigClientError> {
-        self.queries.fetch_add(1, Ordering::Relaxed);
-        self.max_bytes.fetch_max(document.len(), Ordering::Relaxed);
-        self.total_bytes
-            .fetch_add(document.len(), Ordering::Relaxed);
+        self.record_input(document.len());
         self.access.execute(document).await
+    }
+
+    fn reader_did(&self) -> Option<String> {
+        self.access.actor_did()
+    }
+
+    async fn execute_read_with_variables(
+        &self,
+        document: &str,
+        variables: &Value,
+    ) -> Result<Value, gents_store::config_client::ConfigClientError> {
+        self.record_input(document.len() + variables.to_string().len());
+        self.access
+            .execute_with_variables(document, variables)
+            .await
     }
 }
 
@@ -79,7 +97,10 @@ async fn query_inputs_do_not_grow_with_unrelated_completed_requests() {
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let access = gents_store::config_client::ConfigAccess::local(db.node.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        db.node_identity.did().parse().unwrap(),
+    );
     let own = request(&access, "session", None, "2026-10-01T00:00:00Z").await;
     for i in 0..CONTEXT_CALL_LIMIT {
         call(

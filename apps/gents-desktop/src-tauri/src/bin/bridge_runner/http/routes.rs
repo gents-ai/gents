@@ -431,7 +431,11 @@ pub(super) async fn handle_request(
                 .find(|record| record.peer_id == request.peer_id)
                 .map(|record| record.addr)
                 .with_context(|| format!("saved peer {} was not found", request.peer_id))?;
-            let payload = fetch_runtime_connection_payload(&address).await?;
+            let payload = fetch_runtime_connection_payload(
+                &address,
+                Some(fixture.desktop_core().node_identity()),
+            )
+            .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&payload)?))
         }
         ("POST", "/desktop/peer/enroll-status") => {
@@ -439,7 +443,11 @@ pub(super) async fn handle_request(
                 &request.body,
                 "decoding enrollment status request",
             )?;
-            let payload = fetch_runtime_connection_payload(&request.server_address).await?;
+            let payload = fetch_runtime_connection_payload(
+                &request.server_address,
+                Some(fixture.desktop_core().node_identity()),
+            )
+            .await?;
             let enrollment = fixture
                 .desktop_core()
                 .request_status_enrollment(&payload)

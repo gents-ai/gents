@@ -145,7 +145,9 @@ async fn session_history_snapshot_reports_recent_agent_sessions() {
         .unwrap(),
     );
 
-    let snapshot = load_session_history_snapshot(&tool.node, &tool.node_did, Some(2))
+    let access =
+        gents_store::config_client::ConfigAccess::local_as(tool.node.clone(), tool.actor.clone());
+    let snapshot = load_session_history_snapshot_with_access(&access, &tool.node_did, Some(2))
         .await
         .unwrap();
 

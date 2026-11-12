@@ -7,6 +7,7 @@ pub mod session;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
 pub mod tool_call;
+pub mod views;
 pub mod workspace;
 
 #[cfg(test)]

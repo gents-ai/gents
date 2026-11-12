@@ -14,26 +14,11 @@ pub async fn load_node_readiness(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Option<NodeReadinessRow>> {
-    use gents_protocol::document_query::{
-        fields::node_readiness as fields, Filter, Query, Selection,
-    };
-    let rendered = Query::select(
-        Selection::new()
-            .field(fields::NODE_DID)
-            .field(fields::SNAPSHOT_JSON)
-            .field(fields::UPDATED_AT),
-    )
-    .filter(Filter::eq(fields::NODE_DID, node_did))
-    .limit(1)
-    .render();
-    gents_protocol::graphql::graphql_rows_from_response(
-        &access.read(&rendered).await?,
-        "NodeReadiness",
-    )
-    .into_iter()
-    .next()
-    .map(|row| serde_json::from_value(row).context("decoding node readiness row"))
-    .transpose()
+    Ok(access
+        .read_view(&gents_store::views::runtime::NodeReadinessList::new(node_did).limit(1))
+        .await?
+        .into_iter()
+        .next())
 }
 
 /// A local operator control must not follow a status endpoint to another host

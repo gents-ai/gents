@@ -63,37 +63,13 @@ pub(crate) async fn load_runtime_status_output(
                 BTreeMap::new(),
             ),
         };
-    let rendered = {
-        use gents_protocol::document_query::{
-            fields::node_runtime as fields, Filter, Query, Selection,
-        };
-        Query::select(
-            Selection::new()
-                .field(fields::NODE_DID)
-                .field(fields::RECONCILE_PHASE)
-                .field(fields::AGENT_EXECUTOR_CAPACITY)
-                .field(fields::AGENT_EXECUTOR_QUEUE_DEPTH)
-                .field(fields::AGENT_EXECUTOR_STATUS_JSON)
-                .field(fields::LAST_RECONCILE_RESULT)
-                .field(fields::LAST_RECONCILE_ERROR)
-                .field(fields::LAST_RECONCILE_COMPLETED_AT)
-                .field(fields::UPDATED_AT),
-        )
-        .filter(Filter::eq(fields::NODE_DID, node_did))
-        .limit(1)
-        .render()
-    };
-    let response = gents_store::config_client::post_graphql_with_variables(
-        graphql,
-        &rendered.document,
-        &rendered.variables,
-    )
-    .await?;
-    let runtime_row = response
-        .pointer("/data/NodeRuntime")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
+    let runtime_row = ConfigAccess::Graphql(graphql.clone())
+        .read_view(&gents_store::views::runtime::NodeRuntimeList::new(node_did).limit(1))
+        .await?
+        .into_iter()
+        .next()
+        .map(serde_json::to_value)
+        .transpose()?
         .unwrap_or(Value::Null);
     let runtime_status = fetch_runtime_status(graphql, RUNTIME_STATUS_TIMEOUT)
         .await

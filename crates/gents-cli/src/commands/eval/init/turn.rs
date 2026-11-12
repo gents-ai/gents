@@ -3,9 +3,7 @@ use anyhow::{Context, Result};
 use gents_protocol::operations::request::MessageSendInput;
 use gents_store::config_client::ConfigAccess;
 
-use crate::commands::chat::{
-    chat_turn_text_content, load_existing_tool_call_keys, stream_turn_progress,
-};
+use crate::commands::chat::{chat_turn_text_content, stream_turn_progress};
 use crate::operation_failure::OperationFailure;
 use crate::request_helpers::{client_signer, request_ref, wait_for_request};
 
@@ -55,7 +53,20 @@ impl Turn for LiveTurn {
             )
             .await?
         } else {
-            let known = load_existing_tool_call_keys(&self.graphql, &self.session_id).await?;
+            let known = access
+                .read_view(&gents_session::views::transcript::ToolCallRows::new(
+                    gents_session::views::transcript::Scope::Session(
+                        gents_protocol::session::SessionScope {
+                            node_did: submitted.node_did.clone(),
+                            session_id: submitted.session_id.clone(),
+                            requester_did: submitted.requester_did.clone(),
+                        },
+                    ),
+                ))
+                .await?
+                .into_iter()
+                .map(|row| (row.tool_call_key, row.status.unwrap_or_default()))
+                .collect();
             stream_turn_progress(
                 &access,
                 &submitted,

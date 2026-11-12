@@ -1,15 +1,13 @@
 use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
 use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
-use gents_store::graphql::escape_graphql_string;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use gents_store::config_client::post_graphql;
+use gents_store::config_client::ConfigAccess;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct McpPoolSnapshot {
@@ -70,8 +68,43 @@ pub async fn load_mcp_pool_snapshot(
     node_did: &str,
 ) -> Result<McpPoolSnapshot> {
     let generated_at = Utc::now();
-    let response = post_graphql(graphql, &mcp_pool_query(node_did)).await?;
-    let envelope = decode_mcp_pool_response(response)?;
+    let access = ConfigAccess::Graphql(graphql.clone());
+    let (registry, health) = access
+        .read_views(&(
+            gents_tools::mcp::views::ServiceInventory {
+                node_did,
+                service_id: None,
+                enabled_only: false,
+            },
+            gents_tools::mcp::views::Health { node_did },
+        ))
+        .await?;
+    let envelope = McpPoolEnvelope {
+        registry: registry
+            .into_iter()
+            .map(|row| {
+                let config = row.config;
+                ToolServiceRegistryRow {
+                    service_id: config.service_id,
+                    enabled: Some(config.enabled),
+                    display_name: config.display_name,
+                    description: config.description,
+                    hostname: config.hostname,
+                    tailscale_ip: config.tailscale_ip,
+                    lan_ip: config.lan_ip,
+                    mcp_port: config.mcp_port,
+                    mcp_path: config.mcp_path,
+                    endpoint_url: config.endpoint_url,
+                    send_node_did: config.send_node_did,
+                    tools: Vec::new(),
+                    status: row.status,
+                    version: row.version,
+                    updated_at: row.updated_at,
+                }
+            })
+            .collect(),
+        health,
+    };
     Ok(build_mcp_pool_snapshot(
         generated_at,
         node_did.to_string(),
@@ -79,64 +112,11 @@ pub async fn load_mcp_pool_snapshot(
     ))
 }
 
-fn mcp_pool_query(node_did: &str) -> String {
-    let node_did = escape_graphql_string(node_did);
-    format!(
-        r#"{{
-            ToolServiceRegistry(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ service_id: ASC }}) {{
-                service_id
-                enabled
-                display_name
-                description
-                hostname
-                tailscale_ip
-                lan_ip
-                mcp_port
-                mcp_path
-                endpoint_url
-                send_node_did
-                status
-                version
-                updated_at
-            }}
-            ToolServiceHealthState(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                order: [{{ service_id: ASC }}, {{ updated_at: DESC }}, {{ _docID: ASC }}]
-            ) {{
-                service_id
-                node_did
-                endpoint
-                status
-                tool_count
-                failure_count
-                k_max
-                backoff_until
-                last_probe_at
-                last_seen
-                last_error_class
-                last_error_message
-                updated_at
-            }}
-        }}"#
-    )
-}
-
-fn decode_mcp_pool_response(response: Value) -> Result<McpPoolEnvelope> {
-    let data = response
-        .get("data")
-        .filter(|data| data.is_object())
-        .cloned()
-        .with_context(|| format!("mcp pool query response missing object data: {response}"))?;
-    serde_json::from_value(data).context("decoding mcp pool query response")
-}
-
 fn build_mcp_pool_snapshot(
     generated_at: DateTime<Utc>,
     node_did: String,
     envelope: McpPoolEnvelope,
 ) -> McpPoolSnapshot {
-    // Twins of one service are not schema-unique; the query order puts the
-    // health checker's chosen row first.
     let mut health_by_service = BTreeMap::new();
     for row in envelope.health {
         health_by_service
@@ -244,10 +224,6 @@ mod tests {
             Some("healthy")
         );
         assert_eq!(snapshot.totals.online, 1);
-        assert!(mcp_pool_query("did:key:zAgent")
-            .contains("[{ service_id: ASC }, { updated_at: DESC }, { _docID: ASC }]"));
-        assert!(mcp_pool_query("did:key:zAgent")
-            .contains("ToolServiceRegistry(filter: { node_did: { _eq: \"did:key:zAgent\" } }"));
     }
 
     #[test]

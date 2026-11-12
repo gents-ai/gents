@@ -1,10 +1,9 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use gents_session::views::bindings::SessionRequestBindings;
 
 use super::{clean, context_calls};
-use gents_store::graphql::escape_graphql_string;
 
 pub(super) enum RequestBindings<'a> {
     Physical(&'a [String]),
@@ -22,69 +21,37 @@ pub(super) async fn load_session_request_bindings(
         !node_did.trim().is_empty() && !session_id.trim().is_empty(),
         "session request selection requires a node and session"
     );
-    let requester = requester_did
-        .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
-        .unwrap_or_else(|| "null".into());
-    let (physical_filter, limit) = match selection {
+    let mut view = SessionRequestBindings::new(
+        node_did.trim(),
+        requester_did.map(str::to_owned),
+        session_id.trim(),
+    );
+    view = match selection {
         RequestBindings::Physical(ids) => {
             if ids.is_empty() {
                 return Ok(BTreeMap::new());
             }
-            let ids = ids
-                .iter()
-                .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            (format!("_docID: {{_in: [{ids}]}},"), None)
+            view.physical(ids.to_vec())
         }
-        RequestBindings::Page(after) => (
-            after
-                .map(|id| format!(r#"_docID: {{_gt: "{}"}},"#, escape_graphql_string(id)))
-                .unwrap_or_default(),
-            Some(context_calls::PAGE_SIZE),
-        ),
+        RequestBindings::Page(after) => {
+            view = view.limit(context_calls::PAGE_SIZE as u64);
+            if let Some(after) = after {
+                view = view.after(after);
+            }
+            view
+        }
     };
-    let filter = format!(
-        r#"
-                {physical_filter}
-                purpose: {{_eq: "normal"}},
-                node_did: {{_eq: "{}"}},
-                session_id: {{_eq: "{}"}},
-                requester_did: {{_eq: {requester}}}
-            "#,
-        escape_graphql_string(node_did.trim()),
-        escape_graphql_string(session_id.trim())
-    );
-    let query = match limit {
-        Some(limit) => format!("{{ AgentRequest(filter: {{{filter}}}, order: {{_docID: ASC}}, limit: {limit}) {{ _docID request_id }} }}"),
-        None => format!("{{ AgentRequest(filter: {{{filter}}}) {{ _docID request_id }} }}"),
-    };
-    let data = access
-        .execute_read(&query)
+    gents_store::views::read_view(access, &view)
         .await
-        .context("session accounting ownership")?;
-    let requests: Vec<PhysicalRequestDocIdRow> = serde_json::from_value(
-        data.pointer("/data/AgentRequest")
-            .cloned()
-            .context("missing accounting request rows")?,
-    )?;
-    requests
+        .context("session accounting ownership")?
         .into_iter()
         .map(|request| {
             Ok((
-                clean(request.doc_id.as_ref())
+                clean(Some(&request.doc_id))
                     .context("accounting request lacks physical identity")?,
-                clean(request.request_id.as_ref())
+                clean(Some(&request.request_id))
                     .context("accounting request lacks logical identity")?,
             ))
         })
         .collect()
-}
-
-#[derive(Debug, Deserialize)]
-struct PhysicalRequestDocIdRow {
-    #[serde(rename = "_docID", default)]
-    doc_id: Option<String>,
-    #[serde(default)]
-    request_id: Option<String>,
 }

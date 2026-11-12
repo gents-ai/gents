@@ -298,28 +298,30 @@ pub async fn message_attachments(
     }
     let scope = transcript_read_scope(core, session_id, node_did)?;
     let access = scope.operator_access;
-    let escape = gents_store::graphql::escape_graphql_string;
-    let requester = scope
-        .requester_scope
-        .as_deref()
-        .map(|did| format!(", requester_did: {{ _eq: \"{}\" }}", escape(did)))
-        .unwrap_or_default();
-    let query = format!("{{ AgentMessage(filter: {{ session_id: {{ _eq: \"{}\" }}, node_did: {{ _eq: \"{}\" }}, message_key: {{ _eq: \"{}\" }}{requester} }}, limit: 2) {{ _docID }} }}", escape(session_id), escape(node_did), escape(message_key));
+    let view_scope = match &scope.requester_scope {
+        Some(requester_did) => gents_session::views::transcript::Scope::Session(
+            gents_protocol::session::SessionScope {
+                node_did: node_did.to_owned(),
+                session_id: session_id.to_owned(),
+                requester_did: Some(requester_did.clone()),
+            },
+        ),
+        None => gents_session::views::transcript::Scope::Node(node_did.to_owned()),
+    };
+    let mut view = gents_session::views::transcript::MessageRows::new(view_scope);
+    view.session_id = Some(session_id.to_owned());
+    view.message_key = Some(message_key.to_owned());
+    view.limit = Some(2);
     let rows = access
-        .execute(&query)
+        .read_view(&gents_session::views::transcript::MessageIdentities(view))
         .await
         .map_err(|error| BridgeError::classify_transport_error(error.into()))?;
-    let rows = rows["data"]["AgentMessage"]
-        .as_array()
-        .ok_or_else(|| BridgeError::untyped("Message attachments are unavailable"))?;
     if rows.len() != 1 {
         return Err(BridgeError::untyped(
             "The attachment message is missing or ambiguous",
         ));
     }
-    let doc_id = rows[0]["_docID"]
-        .as_str()
-        .ok_or_else(|| BridgeError::untyped("The attachment message has no identity"))?;
+    let doc_id = &rows[0].doc_id;
     let (header, message) = gents_session::session::load_canonical_message(
         &access,
         doc_id,

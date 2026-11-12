@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, Result};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::ToolServiceHealthStateRow;
 use gents_protocol::tool_service_health::ToolServiceHealthState;
-use gents_store::graphql::escape_graphql_string;
 use gents_tools::mcp::pool::McpPool;
+use gents_tools::mcp::views::Health;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
@@ -22,47 +22,10 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
     core: &ClientCore,
     node_did: &str,
 ) -> Result<Vec<MCPServiceHealthView>> {
-    let escaped_node = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            ToolServiceHealthState(
-                filter: {{ node_did: {{ _eq: "{escaped_node}" }} }},
-                order: [{{ service_id: ASC }}, {{ updated_at: DESC }}, {{ _docID: ASC }}]
-            ) {{
-                service_id
-                node_did
-                endpoint
-                status
-                tool_count
-                failure_count
-                k_max
-                backoff_until
-                last_probe_at
-                last_seen
-                last_error_class
-                last_error_message
-                updated_at
-            }}
-        }}"#
-    );
-
-    let response = core.operator_access(node_did)?.execute(&query).await?;
-
-    let raw = response
-        .pointer("/data/ToolServiceHealthState")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let mut rows: Vec<ToolServiceHealthStateRow> = raw
-        .into_iter()
-        .map(serde_json::from_value)
-        .collect::<std::result::Result<_, _>>()
-        .map_err(|error| anyhow!("parsing ToolServiceHealthState rows: {error}"))?;
-    // Twins of one service are not schema-unique; the order puts the
-    // health checker's chosen row first.
-    rows.dedup_by(|later, first| later.service_id == first.service_id);
-
+    let rows = core
+        .operator_access(node_did)?
+        .read_view(&Health { node_did })
+        .await?;
     rows.into_iter().map(view_from_row).collect()
 }
 

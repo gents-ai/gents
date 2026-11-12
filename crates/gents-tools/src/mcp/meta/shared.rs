@@ -345,16 +345,34 @@ pub(super) async fn lookup_service(
                 let documents = &selection.documents;
                 anyhow::ensure!(documents.len() == 3, "MCP configuration chain is unavailable");
                 let mut rows = Vec::with_capacity(3);
-                for (document, (collection, fields)) in documents.iter().zip([
-                    (gents_store::collection::Collection::Agent, "node_did agent_did context_id"),
-                    (gents_store::collection::Collection::AgentContext, "node_did context_id tools_id"),
-                    (gents_store::collection::Collection::Tools, "node_did tools_id remote"),
+                for (document, collection) in documents.iter().zip([
+                    gents_store::collection::Collection::Agent,
+                    gents_store::collection::Collection::AgentContext,
+                    gents_store::collection::Collection::Tools,
                 ]) {
                     anyhow::ensure!(document.collection == collection && !document.doc_id.is_empty(), "MCP configuration chain is invalid");
-                    let name = collection.graphql_type();
-                    let doc = gents_store::graphql::escape_graphql_string(&document.doc_id);
-                    let response = txn.execute(&format!(r#"{{ {name}(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ _docID {fields} }} }}"#)).await?;
-                    let values = response["data"][name].as_array().ok_or_else(|| anyhow!("MCP configuration query failed"))?;
+                    macro_rules! read {
+                        ($view:expr) => {
+                            txn.read_view(&$view).await?.into_iter()
+                                .map(serde_json::to_value)
+                                .collect::<std::result::Result<Vec<_>, _>>()?
+                        };
+                    }
+                    let values = match collection {
+                        gents_store::collection::Collection::Agent => read!(
+                            gents_documents::views::agents::AgentList::new(&ctx.node_did)
+                                .doc_ids(vec![document.doc_id.clone()])
+                        ),
+                        gents_store::collection::Collection::AgentContext => read!(
+                            gents_documents::views::config::AgentContextList::new(&ctx.node_did)
+                                .doc_ids(vec![document.doc_id.clone()])
+                        ),
+                        gents_store::collection::Collection::Tools => read!(
+                            gents_documents::views::config::ToolsList::new(&ctx.node_did)
+                                .doc_ids(vec![document.doc_id.clone()])
+                        ),
+                        _ => unreachable!("MCP configuration chain collections are fixed"),
+                    };
                     anyhow::ensure!(matches!(values.as_slice(), [row] if row["_docID"].as_str() == Some(document.doc_id.as_str())), "MCP configuration is unavailable");
                     rows.push(values[0].clone());
                 }
@@ -377,13 +395,17 @@ pub(super) async fn lookup_service(
                 };
                 anyhow::ensure!(remote == ctx.remote_tools, "MCP tool selection changed");
             }
-            let query = crate::mcp::registry::services_query(&ctx.node_did)?;
-            let response = txn.execute(&query).await?;
-            crate::mcp::registry::parse_services(response.get("data"), &ctx.node_did)
+            let services = txn.read_view(&crate::mcp::views::Services {
+                node_did: &ctx.node_did,
+                service_id: Some(service_id),
+                enabled_only: true,
+            }).await?;
+            crate::mcp::registry::validate_services(&services, &ctx.node_did)?;
+            Ok::<_, anyhow::Error>(services)
         })
     }).await?
     .into_iter()
-    .find(|service| service.service_id == service_id && service.enabled)
+    .next()
     .ok_or_else(|| anyhow!("service '{service_id}' is not configured or enabled for this node"))?;
     resolve_service(&entry, &ctx.local_hostname, ctx.local_subnet.as_deref())
 }

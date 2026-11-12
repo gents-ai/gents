@@ -26,7 +26,7 @@ pub async fn request_status_enrollment(
     if address.is_empty() {
         return Err(BridgeError::untyped("server_address is required"));
     }
-    let status = fetch_runtime_connection_payload(address)
+    let status = fetch_runtime_connection_payload(address, Some(core.node_identity()))
         .await
         .map_err(BridgeError::classify_transport_error)?;
     let server_label = status

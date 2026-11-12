@@ -374,12 +374,36 @@ pub enum ConfigAccess {
 #[async_trait::async_trait]
 pub trait ConfigRead: Send + Sync {
     async fn execute_read(&self, document: &str) -> Result<Value>;
+
+    fn reader_did(&self) -> Option<String> {
+        None
+    }
+
+    async fn execute_read_with_variables(
+        &self,
+        _document: &str,
+        _variables: &Value,
+    ) -> Result<Value> {
+        Err(ConfigClientError::ReadVariablesUnsupported)
+    }
 }
 
 #[async_trait::async_trait]
 impl ConfigRead for ConfigAccess {
     async fn execute_read(&self, document: &str) -> Result<Value> {
         self.execute(document).await
+    }
+
+    fn reader_did(&self) -> Option<String> {
+        self.actor_did()
+    }
+
+    async fn execute_read_with_variables(
+        &self,
+        document: &str,
+        variables: &Value,
+    ) -> Result<Value> {
+        self.execute_with_variables(document, variables).await
     }
 }
 
@@ -388,6 +412,19 @@ impl ConfigRead for ConfigApplyTxn<'_> {
     async fn execute_read(&self, document: &str) -> Result<Value> {
         graphql::ensure_query_document(document)?;
         self.execute(document).await
+    }
+
+    fn reader_did(&self) -> Option<String> {
+        self.actor_did().map(str::to_owned)
+    }
+
+    async fn execute_read_with_variables(
+        &self,
+        document: &str,
+        variables: &Value,
+    ) -> Result<Value> {
+        graphql::ensure_query_document(document)?;
+        self.execute_with_variables(document, variables).await
     }
 }
 

@@ -17,9 +17,20 @@ use crate::http::self_view::{load_self_view, ContextBudget, SelfAgent};
 use crate::http::sessions::{load_session_history_snapshot, SessionHistoryParams};
 use crate::http::version::version_response;
 
-pub(super) async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
+pub(super) async fn self_handler(
+    State(state): State<RuntimeHttpState>,
+    identity: defra_http::ExtractIdentity,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let reader =
+        match crate::http::private_reader::authorize_private_reader(&state, &identity, &headers)
+            .await
+        {
+            Ok(reader) => reader,
+            Err(refused) => return *refused,
+        };
     let (health, runtime, readiness, status_code) =
-        match load_metrics_query_data(&state.p2p_graphql, &state.node_did).await {
+        match load_metrics_query_data(&reader, &state.node_did).await {
             Ok(data) => {
                 let data = with_local_native_executors(data);
                 let health = render_healthz_payload(&state, Some(&data), None);
@@ -46,7 +57,7 @@ pub(super) async fn self_handler(State(state): State<RuntimeHttpState>) -> Respo
             }
         };
 
-    match load_self_view(&state.p2p_graphql, &state.node_did).await {
+    match load_self_view(&reader, &state.node_did).await {
         Ok((agents, context_budget, _context_indicator)) => {
             let body = render_self_payload(
                 &state,
@@ -88,8 +99,17 @@ pub(super) async fn self_handler(State(state): State<RuntimeHttpState>) -> Respo
 pub(super) async fn sessions_handler(
     State(state): State<RuntimeHttpState>,
     Query(query): Query<SessionHistoryParams>,
+    identity: defra_http::ExtractIdentity,
+    headers: axum::http::HeaderMap,
 ) -> Response {
-    match load_session_history_snapshot(&state.p2p_graphql, &state.node_did, query.limit).await {
+    let reader =
+        match crate::http::private_reader::authorize_private_reader(&state, &identity, &headers)
+            .await
+        {
+            Ok(reader) => reader,
+            Err(refused) => return *refused,
+        };
+    match load_session_history_snapshot(&reader, &state.node_did, query.limit).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -158,8 +178,19 @@ fn render_self_agent(agent_config: &SelfAgent) -> Value {
     })
 }
 
-pub(super) async fn fleet_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_fleet_snapshot(&state.p2p_graphql).await {
+pub(super) async fn fleet_handler(
+    State(state): State<RuntimeHttpState>,
+    identity: defra_http::ExtractIdentity,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let reader =
+        match crate::http::private_reader::authorize_private_reader(&state, &identity, &headers)
+            .await
+        {
+            Ok(reader) => reader,
+            Err(refused) => return *refused,
+        };
+    match load_fleet_snapshot(&reader).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -199,8 +230,19 @@ async fn fleet_slots_response(reader: &gents_store::config_client::GraphqlEndpoi
     }
 }
 
-pub(super) async fn mcp_pool_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_mcp_pool_snapshot(&state.p2p_graphql, &state.node_did).await {
+pub(super) async fn mcp_pool_handler(
+    State(state): State<RuntimeHttpState>,
+    identity: defra_http::ExtractIdentity,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let reader =
+        match crate::http::private_reader::authorize_private_reader(&state, &identity, &headers)
+            .await
+        {
+            Ok(reader) => reader,
+            Err(refused) => return *refused,
+        };
+    match load_mcp_pool_snapshot(&reader, &state.node_did).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,

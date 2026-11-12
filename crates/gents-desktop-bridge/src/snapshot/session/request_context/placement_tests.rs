@@ -61,7 +61,10 @@ async fn a_start_of_request_compaction_reads_one_first_message_per_request() {
     gents_store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
-    let access = ConfigAccess::local(node.clone());
+    let access = ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    );
     let mut messages = placement_messages("reader", "earlier", 1..3);
     /* another requester's copy of the request is outside the read's scope */
     messages.extend(placement_messages("other", "long", 3..4));

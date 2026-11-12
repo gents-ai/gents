@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
+use gents_documents::views::agents::AgentList;
+use gents_documents::views::config::{AgentContextList, DatastoreToolSurfaceList, ToolsList};
 use gents_documents::Agent;
+use gents_inference::views::profiles::ProfileList;
 use gents_protocol::agent_identity::AgentIdentityBinding;
+use gents_protocol::document_query::fields;
 use gents_protocol::operations::agent::{
     AgentCreateInput, AgentCreateOperation, AgentOperationError,
 };
@@ -10,7 +14,6 @@ use gents_protocol::operations::permission::{
 use gents_protocol::operations::NextCall;
 use gents_protocol::operations::StringUpdate;
 use gents_store::collection::Collection;
-use gents_store::graphql::escape_graphql_string;
 use gents_tools::surface::presets;
 use serde_json::{json, Value};
 
@@ -18,7 +21,7 @@ use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
-use crate::{graphql_rows, print_json, resolve_config_access};
+use crate::{print_json, resolve_config_access};
 use gents_service::home_state::read_init_config;
 use gents_service::home_state::resolve_home_dir;
 
@@ -31,18 +34,18 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
             let row = access
                 .transact_readonly("cli.agent.identity", |txn| {
                     Box::pin(async move {
-                        gents_documents::read_desired_state_record_in_txn(
-                            txn,
+                        scoped_row(
+                            txn.read_view(&AgentList::new(owner).agent_did(agent_did))
+                                .await?,
                             Collection::Agent,
                             owner,
                             agent_did,
                         )
-                        .await
                     })
                 })
                 .await?
                 .context("Agent DID does not exist; omit --agent-did to provision a new agent")?;
-            let mut agent = serde_json::from_value::<Agent>(row.1)?;
+            let mut agent = row.agent;
             if args.display_name.is_some() {
                 agent.display_name = args.display_name.clone();
             }
@@ -314,27 +317,7 @@ pub(super) async fn agent_default(args: AgentDefaultArgs) -> Result<()> {
     print_json(&serde_json::to_value(receipt)?)
 }
 
-/// The row of `id` that `owner` holds. A caller that has only the ID resolves
-/// its owner first through `gents_documents::operations::owner`.
-async fn load_document(
-    access: &ConfigAccess,
-    collection: Collection,
-    fields: &str,
-    owner: &str,
-    id: &str,
-) -> Result<Option<Value>> {
-    let query = format!(
-        r#"{{
-            {collection_type}(filter: {{ node_did: {{ _eq: "{owner}" }}, {unique_field}: {{ _eq: "{id}" }} }}) {{
-                {fields} node_did
-            }}
-        }}"#,
-        collection_type = collection.graphql_type(),
-        owner = escape_graphql_string(owner),
-        unique_field = collection.unique_field(),
-        id = escape_graphql_string(id),
-    );
-    let rows = graphql_rows(access, collection.graphql_type(), &query).await?;
+fn scoped_row<T>(rows: Vec<T>, collection: Collection, owner: &str, id: &str) -> Result<Option<T>> {
     anyhow::ensure!(
         rows.len() <= 1,
         "ambiguous {} {id:?}: {} live rows of {owner} resolve this logical id",
@@ -344,36 +327,49 @@ async fn load_document(
     Ok(rows.into_iter().next())
 }
 
-async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<&'static str>> {
-    use gents_documents::{merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools};
+fn document_value<T>(document: &T, fields: &[&str]) -> Result<Value>
+where
+    T: serde::Serialize,
+{
+    let mut value = serde_json::to_value(document)?;
+    let object = value
+        .as_object_mut()
+        .context("configuration document must be an object")?;
+    for field in fields {
+        object.entry((*field).to_owned()).or_insert(Value::Null);
+    }
+    Ok(value)
+}
+
+async fn classify_preset<R>(access: &R, value: &Value) -> Result<Option<&'static str>>
+where
+    R: gents_store::config_client::ConfigRead + ?Sized,
+{
+    use gents_documents::{merge_datastore_tool_surfaces, Tools};
     let tools: Tools = serde_json::from_value(value.clone())?;
     tools.validate()?;
-    let mut surfaces = Vec::<DatastoreToolSurfaceDocument>::new();
-    for id in tools
+    let ids = tools
         .datastore
         .as_ref()
-        .and_then(|d| d.datastore_tool_surface_ids.as_ref())
+        .and_then(|datastore| datastore.datastore_tool_surface_ids.as_deref())
+        .unwrap_or_default();
+    let views = ids
+        .iter()
+        .map(|id| DatastoreToolSurfaceList::new(&tools.node_did).id(id))
+        .collect::<Vec<_>>();
+    let rows = gents_store::views::read_views(access, views.as_slice()).await?;
+    let surfaces = rows
         .into_iter()
-        .flatten()
-    {
-        let row = load_document(
-            access,
-            Collection::DatastoreToolSurface,
-            "surface_id node_did display_name enabled entries created_at tags",
-            &tools.node_did,
-            id,
-        )
-        .await?
-        .with_context(|| format!("missing selected datastore surface {id:?}"))?;
-        surfaces.push(serde_json::from_value(row)?);
-    }
+        .zip(ids)
+        .map(|(rows, id)| {
+            scoped_row(rows, Collection::DatastoreToolSurface, &tools.node_did, id)?
+                .map(|row| row.document)
+                .with_context(|| format!("missing selected datastore surface {id:?}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let merged = merge_datastore_tool_surfaces(&tools, &surfaces)?;
     presets::classify_tools(&tools, &merged)
 }
-
-const CANONICAL_AGENT_SHOW_FIELDS: &str = "agent_did creation_nonce node_did display_name description context_id inference_profile_id enabled tags created_at";
-
-const CANONICAL_PROFILE_SHOW_FIELDS: &str = "profile_id display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";
 
 pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
     let AgentShowArgs {
@@ -395,104 +391,61 @@ pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
                 anyhow::Error::new(error).context(message)
             })?;
 
-    let mut row = load_document(
-        &access,
-        Collection::Agent,
-        CANONICAL_AGENT_SHOW_FIELDS,
-        &owner,
-        &id,
-    )
-    .await?
-    .ok_or_else(|| {
-        anyhow::anyhow!("not found: no Agent document with agent_did {id} on {owner}")
-    })?;
+    let row = access.transact_readonly("cli.agent.show", |txn| {
+        let owner = &owner;
+        let id = &id;
+        Box::pin(async move {
+            let agent = scoped_row(
+                txn.read_view(&AgentList::new(owner).agent_did(id)).await?,
+                Collection::Agent,
+                owner,
+                id,
+            )?.ok_or_else(|| anyhow::anyhow!("not found: no Agent document with agent_did {id} on {owner}"))?.agent;
+            let context = match agent.context_id.as_deref().filter(|id| !id.trim().is_empty()) {
+                Some(id) => scoped_row(txn.read_view(&AgentContextList::new(owner).id(id)).await?,
+                    Collection::AgentContext, owner, id)?.map(|row| row.document),
+                None => None,
+            };
+            let tools = match context.as_ref().and_then(|context| context.tools_id.as_deref())
+                .filter(|id| !id.trim().is_empty()) {
+                Some(id) => scoped_row(txn.read_view(&ToolsList::new(owner).id(id)).await?,
+                    Collection::Tools, owner, id)?.map(|row| row.document),
+                None => None,
+            };
+            let profile = if agent.inference_profile_id.trim().is_empty() {
+                None
+            } else {
+                scoped_row(txn.read_view(&ProfileList::new(owner).profile_id(&agent.inference_profile_id)).await?,
+                    Collection::InferenceProfile, owner, &agent.inference_profile_id)?.map(|row| row.profile)
+            };
+            let tools = tools.as_ref().map(|tools| document_value(tools, fields::tools::FIELD_NAMES)).transpose()?;
+            let preset_name = match tools.as_ref() {
+                Some(tools) => Some(classify_preset(txn, tools).await?.unwrap_or("custom")),
+                None => None,
+            };
+            let root = tools.as_ref().and_then(|tools| tools.pointer("/host/root")).cloned()
+                .unwrap_or(Value::Null);
+            let mut row = document_value(&agent, fields::agent::FIELD_NAMES)?;
+            let object = row.as_object_mut().context("agent document must be an object")?;
+            object.remove(fields::agent::UPDATED_AT.name());
+            object.insert(fields::agent::ENABLED.name().to_owned(), json!(agent.enabled));
+            object.insert("resolved".to_owned(), json!({
+                "root": root,
+                "preset_name": preset_name,
+                "profile": profile.as_ref().map(|profile| document_value(profile, fields::inference_profile::FIELD_NAMES)).transpose()?,
+                "context": context.as_ref().map(|context| document_value(context, fields::agent_context::FIELD_NAMES)).transpose()?,
+                "tools": tools,
+            }));
+            Ok::<_, anyhow::Error>(row)
+        })
+    }).await?;
 
-    let node_did = row
-        .get("node_did")
-        .and_then(Value::as_str)
-        .context("Agent is missing its owner DID")?
-        .to_string();
-    let context_id = row
-        .get("context_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
-    let profile_id = row
-        .get("inference_profile_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
-
-    let context = match context_id.as_deref() {
-        Some(context_id) => {
-            load_document(
-                &access,
-                Collection::AgentContext,
-                "context_id node_did display_name description system_prompt tools_id compaction_id skill_ids tags",
-                &node_did,
-                context_id,
-            )
-            .await?
-        }
-        None => None,
-    };
-    let tools = match context
-        .as_ref()
-        .and_then(|context| context.get("tools_id"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        Some(tools_id) => {
-            load_document(
-                &access,
-                Collection::Tools,
-                "tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags",
-                &node_did,
-                tools_id,
-            )
-            .await?
-        }
-        None => None,
-    };
-    let profile = match profile_id.as_deref() {
-        Some(profile_id) => {
-            load_document(
-                &access,
-                Collection::InferenceProfile,
-                CANONICAL_PROFILE_SHOW_FIELDS,
-                &node_did,
-                profile_id,
-            )
-            .await?
-        }
-        None => None,
-    };
-    let preset_name = match tools.as_ref() {
-        Some(tools) => Some(classify_preset(&access, tools).await?.unwrap_or("custom")),
-        None => None,
-    };
-    let root = tools
-        .as_ref()
-        .and_then(|tools| tools.get("host"))
-        .and_then(|host| host.get("root"))
-        .cloned()
-        .unwrap_or(Value::Null);
-
-    let resolved = json!({
-        "root": root,
-        "preset_name": preset_name,
-        "profile": profile,
-        "context": context,
-        "tools": tools,
-    });
-    if let Value::Object(ref mut map) = row {
-        map.insert("resolved".to_string(), resolved);
-    }
     print_json(&row)
 }
 
 #[cfg(test)]
 mod tests {
+    use gents_store::graphql::escape_graphql_string;
     use gents_store::identity::NodeIdentity as _;
 
     use defra_node::Node as EmbeddedNode;
@@ -674,24 +627,14 @@ mod tests {
             cloned_tools_id, tools_id,
             "clone must not mutate the shared source tools"
         );
-        assert!(load_document(
-            &access,
-            Collection::Agent,
-            "agent_did creation_nonce node_did",
-            "did:key:foreign",
-            agent_did
-        )
-        .await?
-        .is_none());
-        assert!(load_document(
-            &access,
-            Collection::Agent,
-            "agent_did creation_nonce node_did",
-            owner,
-            agent_did
-        )
-        .await?
-        .is_some());
+        assert!(access
+            .read_view(&AgentList::new("did:key:foreign").agent_did(agent_did))
+            .await?
+            .is_empty());
+        assert!(!access
+            .read_view(&AgentList::new(owner).agent_did(agent_did))
+            .await?
+            .is_empty());
         let preset = classify_preset(&access, &tools_row).await?;
         assert_eq!(preset, Some("write"));
         let source_tools = read_canonical(&node, "Tools", "tools_id", owner, &tools_id, "host")

@@ -256,8 +256,11 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
 async fn default_port_payload(
     config: &gents_service::server_host::ServerConfig,
 ) -> Result<Option<serde_json::Value>, BridgeError> {
-    match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&config.status_url())
-        .await
+    match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
+        &config.status_url(),
+        None,
+    )
+    .await
     {
         Ok(payload) => Ok(Some(payload)),
         Err(_) => Ok(None),

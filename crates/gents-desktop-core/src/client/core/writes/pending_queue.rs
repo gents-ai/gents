@@ -30,7 +30,7 @@ async fn merge_accepted_edit_projection(
             return anyhow::Result::<()>::Ok(());
         }
         let captured = store.capture_read();
-        let rows = crate::client::load_request_documents_on(access, &doc_ids).await?;
+        let rows = crate::client::load_request_documents_on(access, node_did, &doc_ids).await?;
         for row in &rows {
             anyhow::ensure!(
                 row.node_did.as_deref() == Some(node_did)

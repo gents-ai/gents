@@ -53,64 +53,46 @@ pub(super) async fn agent_list(
         (1..=50).contains(&limit),
         "--limit must be between 1 and 50"
     );
-    let catalog = load_agent_catalog(core).await?;
-    let default_agent_did = node_default_agent(core).await?;
-    let total = catalog.agents.len();
-    let selected = catalog
+    let catalog = gents_inference::views::agents::read_agent_catalog(
+        &core.access()?,
+        core.node_did(),
+        cursor,
+        limit,
+    )
+    .await?;
+    let default_agent_did = catalog.default_agent_did;
+    let agents = catalog
         .agents
         .iter()
-        .filter(|(agent_did, _)| cursor.is_none_or(|cursor| agent_did.as_str() > cursor))
-        .take(limit + 1)
-        .collect::<Vec<_>>();
-    let truncated = selected.len() > limit;
-    let mut agents = Vec::new();
-    for (agent_did, reference) in selected.into_iter().take(limit) {
-        let snapshot = match agent_snapshot(core, agent_did, default_agent_did.as_deref()).await {
-            Ok(snapshot) => {
-                let effective = &snapshot["effective_config"];
-                json!({
-                    "agent_did": agent_did,
-                    "display_name": effective.pointer("/agent/display_name"),
-                    "description": effective.pointer("/agent/description"),
-                    "enabled": *reference,
-                    "is_default": default_agent_did.as_deref() == Some(agent_did.as_str()),
-                    "context_id": effective.pointer("/agent/context_id"),
-                    "profile_id": effective.pointer("/agent/inference_profile_id"),
-                    "backend_id": effective.pointer("/inference_profile/backend_id"),
-                    "model_name": effective.pointer("/inference_profile/model_name"),
-                    "reasoning_effort": effective.pointer("/inference_profile/reasoning_effort"),
-                    "service_tier": effective.pointer("/inference_profile/service_tier"),
-                })
-            }
-            Err(error) => json!({
-                "agent_did": agent_did,
-                "enabled": *reference,
-                "is_default": default_agent_did.as_deref() == Some(agent_did.as_str()),
-                "configuration_error": format!("{error:#}"),
-            }),
-        };
-        agents.push(snapshot);
-    }
-    let next_cursor = truncated
-        .then(|| {
-            agents
-                .last()?
-                .get("agent_did")?
-                .as_str()
-                .map(ToOwned::to_owned)
+        .map(|row| {
+            let agent = &row.agent.agent;
+            let profile = row.profile.as_ref().map(|row| &row.profile);
+            json!({
+                "agent_did": agent.agent_did,
+                "display_name": agent.display_name,
+                "description": agent.description,
+                "enabled": agent.enabled,
+                "is_default": default_agent_did.as_deref() == Some(agent.agent_did.as_str()),
+                "context_id": agent.context_id,
+                "profile_id": agent.inference_profile_id,
+                "backend_id": profile.map(|profile| &profile.backend_id),
+                "model_name": profile.map(|profile| &profile.model_name),
+                "reasoning_effort": profile.and_then(|profile| profile.reasoning_effort.as_ref()),
+                "service_tier": profile.and_then(|profile| profile.service_tier.as_ref()),
+            })
         })
-        .flatten();
+        .collect::<Vec<_>>();
     let snapshot = json!({
         "page": {
             "limit": limit,
-            "total": total,
+            "total": catalog.total,
             "returned": agents.len(),
-            "truncated": truncated,
-            "next_cursor": next_cursor,
+            "truncated": catalog.truncated,
+            "next_cursor": catalog.next_cursor,
         },
         "process_ceiling": core.process_ceiling(),
         "permission_presets": builtin_preset_names(),
-        "available_profile_ids": catalog.published_profiles,
+        "available_profile_ids": catalog.profile_ids,
         "default_agent_did": default_agent_did,
         "agents": agents,
     });

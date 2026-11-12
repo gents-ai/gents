@@ -294,14 +294,6 @@ struct ShareableAddressResponse {
     address: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GraphqlResponse {
-    #[serde(default)]
-    data: Option<Value>,
-    #[serde(default)]
-    errors: Option<Value>,
-}
-
 pub fn default_node_home() -> Result<PathBuf> {
     Ok(gents_store::local::home::default_home_dir()?)
 }
@@ -556,19 +548,24 @@ async fn read_runtime_status(
     ))
 }
 
-pub async fn fetch_runtime_connection_payload(endpoint: &str) -> Result<Value> {
+pub async fn fetch_runtime_connection_payload(
+    endpoint: &str,
+    reader: Option<&dyn gents_store::identity::NodeIdentity>,
+) -> Result<Value> {
     let client = runtime_http_client()
         .await
         .context("building runtime discovery HTTP client")?;
-    fetch_runtime_connection_payload_with_client(client, endpoint).await
+    fetch_runtime_connection_payload_with_client(client, endpoint, reader).await
 }
 
 pub async fn fetch_runtime_connection_payload_with_client(
     client: &reqwest::Client,
     endpoint: &str,
+    reader: Option<&dyn gents_store::identity::NodeIdentity>,
 ) -> Result<Value> {
     if let Ok(graphql) = runtime_graphql_url(endpoint) {
-        return fetch_graphql_runtime_connection_payload(client, &graphql).await;
+        let reader = reader.ok_or(gents_store::views::ViewError::ActorRequired)?;
+        return fetch_graphql_runtime_connection_payload(client, &graphql, reader).await;
     }
 
     let status_url = runtime_status_url(endpoint)?;
@@ -817,6 +814,7 @@ Next:
 async fn fetch_graphql_runtime_connection_payload(
     client: &reqwest::Client,
     graphql: &str,
+    reader: &dyn gents_store::identity::NodeIdentity,
 ) -> Result<Value> {
     let api_base = p2p_api_base(graphql)?;
     let shareable_address: ShareableAddressResponse =
@@ -839,7 +837,7 @@ async fn fetch_graphql_runtime_connection_payload(
         None,
     )
     .context("runtime reported a shareable P2P address but no usable peer id")?;
-    let (node_did, node_name) = fetch_graphql_node_identity(client, graphql).await?;
+    let (node_did, node_name) = fetch_graphql_node_identity(graphql, reader).await?;
 
     Ok(json!({
         "status": "ok",
@@ -862,80 +860,30 @@ async fn fetch_graphql_runtime_connection_payload(
 }
 
 async fn fetch_graphql_node_identity(
-    client: &reqwest::Client,
     graphql: &str,
+    reader: &dyn gents_store::identity::NodeIdentity,
 ) -> Result<(String, String)> {
-    let query = r#"
-        query DesktopRuntimeIdentity {
-            Node { node_did display_name enabled }
-        }
-    "#;
-    let response = client
-        .post(graphql)
-        .json(&json!({ "query": query }))
-        .send()
-        .await
-        .map_err(|error| {
-            crate::error::BridgeError::runtime_http_error(
-                error,
-                format!("sending GraphQL identity query to {graphql}"),
-            )
-        })?;
-    let status = response.status();
-    let body = response.bytes().await.map_err(|error| {
-        crate::error::BridgeError::runtime_http_error(
-            error,
-            format!("reading GraphQL identity response from {graphql}"),
-        )
-    })?;
-    if !status.is_success() {
-        anyhow::bail!(
-            "GraphQL identity query to {graphql} failed with {status}: {}",
-            String::from_utf8_lossy(&body)
-        );
-    }
-    let response: GraphqlResponse = serde_json::from_slice(&body)
-        .with_context(|| format!("decoding GraphQL identity response from {graphql}"))?;
-    if let Some(errors) = response
-        .errors
-        .as_ref()
-        .filter(|errors| !errors_is_empty(errors))
-    {
-        anyhow::bail!("GraphQL identity query returned errors: {errors}");
-    }
-    let data = response
-        .data
-        .context("GraphQL identity query returned no data")?;
-    let nodes = data
-        .get("Node")
-        .and_then(Value::as_array)
-        .context("GraphQL identity query returned no Node rows")?;
-    let enabled = nodes
-        .iter()
-        .filter(|row| row.get("enabled").and_then(Value::as_bool) == Some(true))
-        .collect::<Vec<_>>();
-    let [node] = enabled.as_slice() else {
+    let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(graphql, reader.did())
+        .with_client_signing_capability(reader.client_signing_capability()?)?;
+    let nodes = gents_store::config_client::ConfigAccess::Graphql(endpoint)
+        .read_view(&gents_documents::views::config::VisibleNodes::new().enabled_only())
+        .await?;
+    let [row] = nodes.as_slice() else {
         anyhow::bail!(
             "GraphQL identity query must return exactly one enabled Node, found {}",
-            enabled.len()
+            nodes.len()
         );
     };
-    let node_did = string_at(node, "/node_did")
-        .context("enabled Node has no node_did")?
-        .to_string();
-    let node_name = string_at(node, "/display_name")
-        .context("enabled Node has no display_name")?
-        .to_string();
-
-    Ok((node_did, node_name))
-}
-
-fn errors_is_empty(errors: &Value) -> bool {
-    match errors {
-        Value::Null => true,
-        Value::Array(errors) => errors.is_empty(),
-        _ => false,
-    }
+    let node_did = row.document.node_did.trim();
+    anyhow::ensure!(!node_did.is_empty(), "enabled Node has no node_did");
+    let node_name = row
+        .document
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .context("enabled Node has no display_name")?;
+    Ok((node_did.to_owned(), node_name.to_owned()))
 }
 
 fn string_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {

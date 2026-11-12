@@ -2,7 +2,6 @@ use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use super::{
@@ -10,25 +9,6 @@ use super::{
     SessionHistorySnapshot, SessionRow,
 };
 use gents_store::graphql::escape_graphql_string;
-
-pub async fn load_session_history_snapshot(
-    node: &std::sync::Arc<EmbeddedNode>,
-    node_did: &str,
-    limit: Option<usize>,
-) -> Result<SessionHistorySnapshot> {
-    let agent = node_did.trim().to_owned();
-    anyhow::ensure!(!agent.is_empty(), "session history requires a node DID");
-    gents_store::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        None,
-        "session.history",
-        move |txn| {
-            let agent = agent.clone();
-            Box::pin(async move { load_session_history_in_txn(txn, &agent, limit).await })
-        },
-    )
-    .await
-}
 
 pub async fn load_session_history_snapshot_with_access(
     access: &gents_store::config_client::ConfigAccess,
@@ -51,19 +31,41 @@ async fn load_session_history_in_txn(
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
     let limit = clamp_limit(limit);
-    let response = txn.execute(&session_index_query(node_did, limit)).await?;
-    let envelope: SessionIndexEnvelope = decode(response.get("data"), "session index")?;
-    let ids = envelope
-        .sessions
-        .into_iter()
-        .map(|row| row.session_id)
+    let listed = txn
+        .read_view(&gents_session::views::SessionPage {
+            input: gents_protocol::operations::session::SessionListInput {
+                node_did: Some(node_did.to_owned()),
+                ..Default::default()
+            },
+            limit: Some(limit as u64),
+            ..Default::default()
+        })
+        .await?;
+    let ids = listed
+        .iter()
+        .map(|row| row.session.session_id.clone())
         .collect::<Vec<_>>();
     let sessions = if ids.is_empty() {
         Vec::new()
     } else {
         let response = txn.execute(&session_detail_query(node_did, &ids)).await?;
-        let envelope: SessionDetailEnvelope =
+        let mut envelope: SessionDetailEnvelope =
             decode(response.get("data"), "session history details")?;
+        envelope.sessions = listed
+            .into_iter()
+            .map(|row| {
+                let session = row.session;
+                SessionRow {
+                    session_id: session.session_id,
+                    agent_did: Some(session.agent_did),
+                    title: session.title,
+                    tags: session.tags,
+                    created_at: Some(session.created_at),
+                    closed_at: session.closed_at,
+                    observation: session.observation,
+                }
+            })
+            .collect();
         let request_doc_ids = envelope
             .sessions
             .iter()
@@ -100,30 +102,11 @@ async fn load_session_history_in_txn(
     })
 }
 
-fn session_index_query(node_did: &str, limit: usize) -> String {
-    format!(
-        r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}}}, order: [{{created_at: DESC}},{{session_id: DESC}}], limit: {limit}) {{session_id}}}}"#,
-        escape_graphql_string(node_did)
-    )
-}
-
 fn session_detail_query(node_did: &str, session_ids: &[String]) -> String {
     let node_did = escape_graphql_string(node_did);
     let list = quoted_graphql_list(session_ids);
     format!(
         r#"{{
-            AgentSession(filter: {{ _and: [
-                {{ node_did: {{ _eq: "{node_did}" }} }},
-                {{ session_id: {{ _in: [{list}] }} }}
-            ] }}) {{
-                session_id
-                agent_did
-                title
-                tags
-                created_at
-                closed_at
-                observation
-            }}
             AgentRequest(
                 filter: {{ _and: [
                     {{ purpose: {{ _eq: "normal" }} }},
@@ -342,12 +325,6 @@ fn aggregate_by_session(
     }
 
     Ok(aggregates)
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionIndexEnvelope {
-    #[serde(rename = "AgentSession", default)]
-    sessions: Vec<SessionRow>,
 }
 
 #[derive(Debug, Deserialize)]

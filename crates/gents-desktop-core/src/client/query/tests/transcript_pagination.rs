@@ -2,6 +2,13 @@ use super::super::*;
 use crate::client::schema::ensure_runtime_schemas;
 use std::sync::Arc;
 
+fn fixture_view_access(node: &Arc<EmbeddedNode>) -> gents_store::config_client::ConfigAccess {
+    gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    )
+}
+
 fn canonical_header(
     alias: &str,
     key: &str,
@@ -51,9 +58,16 @@ async fn transcript_pages_bound_canonical_headers_and_keep_stable_cursors() {
     let response = node.execute(&format!("mutation {{ {headers} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let tip = load_session_transcript_page(node.as_ref(), "paged", None, None, None, Some(10))
-        .await
-        .expect("tip page");
+    let tip = load_session_transcript_page_on(
+        &fixture_view_access(&node),
+        "paged",
+        Some("did:test:node"),
+        None,
+        None,
+        Some(10),
+    )
+    .await
+    .expect("tip page");
     assert_eq!(tip.query_count, 1);
     assert_eq!(tip.message_query_limit, 11);
     assert_eq!(tip.queried_rows, 11);
@@ -66,10 +80,10 @@ async fn transcript_pages_bound_canonical_headers_and_keep_stable_cursors() {
     assert_eq!(sequences.iter().copied().min(), Some(91));
     assert_eq!(sequences.iter().copied().max(), Some(100));
 
-    let older = load_session_transcript_page(
-        node.as_ref(),
+    let older = load_session_transcript_page_on(
+        &fixture_view_access(&node),
         "paged",
-        None,
+        Some("did:test:node"),
         None,
         Some("paged:91"),
         Some(10),
@@ -115,10 +129,10 @@ async fn transcript_windows_read_either_way_from_a_message_number() {
     let read = |window| {
         let node = node.clone();
         async move {
-            let page = load_session_transcript_window(
-                node.as_ref(),
+            let page = load_session_transcript_window_on(
+                &fixture_view_access(&node),
                 "windowed",
-                None,
+                Some("did:test:node"),
                 None,
                 window,
                 Some(10),
@@ -254,8 +268,8 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
     .join("\n");
     let response = node.execute(&format!("mutation {{ {headers} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let page = load_session_transcript_page(
-        node.as_ref(),
+    let page = load_session_transcript_page_on(
+        &fixture_view_access(&node),
         "shared",
         Some("did:test:selected"),
         Some("did:test:local"),
@@ -278,9 +292,16 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
     .join("\n");
     let response = node.execute(&format!("mutation {{ {equal} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let page = load_session_transcript_page(node.as_ref(), "equal", None, None, None, Some(2))
-        .await
-        .expect("newest sequence page");
+    let page = load_session_transcript_page_on(
+        &fixture_view_access(&node),
+        "equal",
+        Some("did:test:node"),
+        None,
+        None,
+        Some(2),
+    )
+    .await
+    .expect("newest sequence page");
     assert_eq!(page.store.transcript_messages.len(), 2);
     let mut sequences = page
         .store
@@ -291,10 +312,16 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
     sequences.sort_unstable();
     assert_eq!(sequences, vec![2, 3]);
 
-    let older =
-        load_session_transcript_page(node.as_ref(), "equal", None, None, Some("equal:b"), Some(2))
-            .await
-            .expect("older sequence page");
+    let older = load_session_transcript_page_on(
+        &fixture_view_access(&node),
+        "equal",
+        Some("did:test:node"),
+        None,
+        Some("equal:b"),
+        Some(2),
+    )
+    .await
+    .expect("older sequence page");
     assert_eq!(older.store.transcript_messages.len(), 1);
     assert_eq!(older.store.transcript_messages[0].message.sequence, 1);
 }
@@ -357,10 +384,16 @@ async fn transcript_pages_bound_tool_groups_without_reintroducing_response_rows(
     let response = node.execute(&format!("mutation {{ {tools} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let page =
-        load_session_transcript_page(node.as_ref(), "tool-heavy", None, None, None, Some(40))
-            .await
-            .expect("bounded tool page");
+    let page = load_session_transcript_page_on(
+        &fixture_view_access(&node),
+        "tool-heavy",
+        Some("did:test:node"),
+        None,
+        None,
+        Some(40),
+    )
+    .await
+    .expect("bounded tool page");
     assert_eq!(page.store.tool_calls.len(), 320);
     assert_eq!(page.queried_rows, 321);
     assert!(!page.source_exhausted);
@@ -395,8 +428,8 @@ async fn operator_reads_a_local_child_session_under_its_own_scope() {
     let response = node.execute(&format!("mutation {{ {headers} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let desktop_page = load_session_transcript_page(
-        node.as_ref(),
+    let desktop_page = load_session_transcript_page_on(
+        &fixture_view_access(&node),
         "child",
         Some(node_did),
         Some(desktop),
@@ -410,8 +443,8 @@ async fn operator_reads_a_local_child_session_under_its_own_scope() {
         "the desktop scope cannot see a LocalChild transcript"
     );
 
-    let page = load_session_transcript_page(
-        node.as_ref(),
+    let page = load_session_transcript_page_on(
+        &fixture_view_access(&node),
         "child",
         Some(node_did),
         Some(node_did),
@@ -464,8 +497,8 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
         create_AgentOutputSegment(input: {node_did:"node", requester_did:"reader", session_id:"paged-payload",
             request_doc_id:"request-40", source:{kind:"authored", key:"unreferenced"}, payload:"must not read"}) { _docID }
     }"#).await.expect("unrelated history");
-    let page = load_session_transcript_page(
-        &node,
+    let page = load_session_transcript_page_on(
+        &fixture_view_access(&node),
         "paged-payload",
         Some("node"),
         Some("reader"),
@@ -495,8 +528,8 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
             CanonicalMessageProjection::Ready(_)
         ));
     }
-    let other = load_session_transcript_page(
-        &node,
+    let other = load_session_transcript_page_on(
+        &fixture_view_access(&node),
         "paged-payload",
         Some("node"),
         Some("other-reader"),
@@ -559,10 +592,10 @@ async fn a_window_brings_results_delivered_after_its_cut_but_not_as_rows() {
     let response = node.execute(&format!("mutation {{ {messages} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let cut = load_session_transcript_window(
-        node.as_ref(),
+    let cut = load_session_transcript_window_on(
+        &fixture_view_access(&node),
         "results",
-        None,
+        Some("did:test:node"),
         None,
         TranscriptWindow::Before(3),
         Some(10),
@@ -585,10 +618,10 @@ async fn a_window_brings_results_delivered_after_its_cut_but_not_as_rows() {
         ["results:delivery"]
     );
 
-    let whole = load_session_transcript_window(
-        node.as_ref(),
+    let whole = load_session_transcript_window_on(
+        &fixture_view_access(&node),
         "results",
-        None,
+        Some("did:test:node"),
         None,
         TranscriptWindow::Tip,
         Some(10),
@@ -641,8 +674,8 @@ async fn running_tool_pages_read_only_their_open_output_source() {
             }}) {{ _docID }}
         }}"#, escape_graphql_string(owner), escape_graphql_string(reader), escape_graphql_string(source), escape_graphql_string(source))).await.unwrap();
     }
-    let page = load_session_transcript_page(
-        &node,
+    let page = load_session_transcript_page_on(
+        &fixture_view_access(&node),
         "live-page",
         Some("node"),
         Some("reader"),
@@ -700,8 +733,8 @@ async fn running_tool_pages_read_only_their_open_output_source() {
             created_at:"2026-10-03T00:00:01Z"
         }}) {{ _docID }}
     }}"#)).await.unwrap();
-    let retained = load_session_transcript_page(
-        &node,
+    let retained = load_session_transcript_page_on(
+        &fixture_view_access(&node),
         "live-page",
         Some("node"),
         Some("reader"),

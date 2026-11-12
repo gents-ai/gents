@@ -8,6 +8,7 @@ pub mod client_media;
 pub mod client_protocol;
 pub mod database_error;
 pub mod document_query;
+pub mod views;
 pub mod enrollment;
 pub mod error_chain;
 pub mod event_delivery;

@@ -21,13 +21,15 @@ use gents_p2p::p2p_reconcile::enrollment_projection::{
     project_desktop_approval, ApprovedStatusEnrollment, DesktopApprovalProjection,
 };
 use gents_p2p::p2p_reconcile::enrollment_rows::{
-    EnrollmentRevisionRow, EnrollmentRouteReceiptRow, STATUS_ENROLLMENT_QUERY,
+    EnrollmentDecisionRow, EnrollmentRevisionRow, EnrollmentRouteReceiptRow,
+    STATUS_ENROLLMENT_QUERY,
 };
 use gents_protocol::enrollment::derive_enrollment_id;
 use gents_protocol::enrollment::{
     AuthorizationRevisionKind, AuthorizationRevisionRecord, EnrollmentDecisionRecord,
     EnrollmentRouteReceiptDirection, EnrollmentRouteReceiptRecord, ENROLLMENT_PROTOCOL_VERSION,
 };
+use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use p2p::iroh::parse_public_peer_addr;
 use serde_json::json;
 use std::collections::BTreeSet;

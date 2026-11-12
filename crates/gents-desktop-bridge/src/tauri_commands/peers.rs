@@ -30,7 +30,7 @@ pub async fn desktop_peer_status_fetch(
         .find(|peer| peer.peer_id == peer_id)
         .map(|peer| peer.addr)
         .ok_or_else(|| format!("saved peer {peer_id} was not found"))?;
-    fetch_runtime_connection_payload(&addr)
+    fetch_runtime_connection_payload(&addr, Some(core.node_identity()))
         .await
         .map_err(BridgeError::classify_transport_error)
 }

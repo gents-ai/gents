@@ -1,9 +1,7 @@
 use super::ops::{read_owned_doc, AgentAnchor, SelfConfigCore, EFFECT_TIMING_NOTE};
 use anyhow::{Context, Result};
-use gents_documents::config_projection;
 use gents_documents::patch::SelfConfigTarget;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
-use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -192,80 +190,14 @@ impl SelfConfigCore {
                 }
             }
         }
-        let mut automation = serde_json::Map::new();
-        let mut task_ids = BTreeSet::new();
-        let mut schedule_ids = BTreeSet::new();
-        let mut event_source_ids = BTreeSet::new();
-        for target in [
-            SelfConfigTarget::Task,
-            SelfConfigTarget::Trigger,
-            SelfConfigTarget::Schedule,
-            SelfConfigTarget::EventSource,
-        ] {
-            let (fields, _) = config_projection(target.collection(), None)?;
-            let owner = escape_graphql_string(self.node_did());
-            let response = txn
-                .execute(&format!(
-                    "{{ {}(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{ {} }} }}",
-                    target.collection_name(),
-                    fields.join(" "),
-                ))
-                .await?;
-            let rows = response
-                .get("data")
-                .and_then(|data| data.get(target.collection_name()))
-                .and_then(Value::as_array)
-                .context("configuration query missing rows")?;
-            let mut selected = Vec::new();
-            let mut identities = BTreeSet::new();
-            for row in rows {
-                let id = row
-                    .get(target.unique_field())
-                    .and_then(Value::as_str)
-                    .context("configuration ID missing")?;
-                anyhow::ensure!(
-                    identities.insert(id),
-                    "ambiguous scoped configuration identity"
-                );
-                let include = match target {
-                    SelfConfigTarget::Task => {
-                        let owned =
-                            row.get("agent_did").and_then(Value::as_str) == Some(self.agent_did());
-                        if owned {
-                            task_ids.insert(id.to_owned());
-                        }
-                        owned
-                    }
-                    SelfConfigTarget::Trigger => {
-                        let owned = row
-                            .get("task_id")
-                            .and_then(Value::as_str)
-                            .is_some_and(|id| task_ids.contains(id));
-                        if owned {
-                            if let Some(source) = row.get("source") {
-                                if let Some(id) = source.get("schedule_id").and_then(Value::as_str)
-                                {
-                                    schedule_ids.insert(id.to_owned());
-                                }
-                                if let Some(id) =
-                                    source.get("event_source_id").and_then(Value::as_str)
-                                {
-                                    event_source_ids.insert(id.to_owned());
-                                }
-                            }
-                        }
-                        owned
-                    }
-                    SelfConfigTarget::Schedule => schedule_ids.contains(id),
-                    SelfConfigTarget::EventSource => event_source_ids.contains(id),
-                    _ => unreachable!("automation target"),
-                };
-                if include {
-                    selected.push(row.clone());
-                }
-            }
-            automation.insert(target.collection_name().into(), Value::Array(selected));
-        }
+        let inventory =
+            gents_documents::views::tasks::inventory(txn, self.node_did(), true, None).await?;
+        let automation = json!({
+            "Task": inventory.tasks,
+            "Trigger": inventory.triggers,
+            "Schedule": inventory.schedules,
+            "EventSource": inventory.event_sources,
+        });
         let mut effective = json!({
             "node_did": self.node_did(), "agent_did": self.agent_did(),
             "agent": anchor.doc, "context": anchor.context, "inference_profile": anchor.profile,
