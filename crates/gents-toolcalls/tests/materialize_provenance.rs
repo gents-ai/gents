@@ -9,7 +9,7 @@ async fn pending_receipt_lookup_uses_the_selected_agent() {
 
     let (admission, parent) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "pending-receipt-agent".into(),
-        composition: gents_automation::lifecycle_hooks::composition(),
+        composition: gents_session::test_support::no_lifecycle_plugins(),
         ..Default::default()
     })
     .await

@@ -16,7 +16,7 @@ async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
     use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
     let (message, caller, _) = gents_toolcalls::call::lifecycle::admission_fixture::started(
         "agent-session-inspection",
-        gents_automation::lifecycle_hooks::composition(),
+        gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
     let node = message.admission.node.clone();

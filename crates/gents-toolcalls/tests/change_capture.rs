@@ -54,7 +54,7 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
         real_identity: true,
         tool_name: Some("read_file".into()),
         paired_client: true,
-        composition: gents_automation::lifecycle_hooks::composition(),
+        composition: gents_session::test_support::no_lifecycle_plugins(),
         ..Default::default()
     })
     .await
@@ -127,7 +127,7 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
         real_identity: true,
         tool_name: Some("write_file".into()),
         paired_client: true,
-        composition: gents_automation::lifecycle_hooks::composition(),
+        composition: gents_session::test_support::no_lifecycle_plugins(),
         ..Default::default()
     })
     .await
@@ -185,7 +185,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
         name: "file-change-failed-terminal".into(),
         real_identity: true,
         tool_name: Some("write_file".into()),
-        composition: gents_automation::lifecycle_hooks::composition(),
+        composition: gents_session::test_support::no_lifecycle_plugins(),
         ..Default::default()
     })
     .await
