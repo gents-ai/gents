@@ -209,7 +209,9 @@ impl Processes {
 
     async fn output(&self, call: &Value, marker: &str) -> String {
         let deadline = tokio::time::Instant::now() + WAIT;
-        let mut changes = self.live.subscribe_changes("AgentOutputSegment").await;
+        let mut segments = self.live.subscribe_changes("AgentOutputSegment").await;
+        let mut messages = self.live.subscribe_changes("AgentMessage").await;
+        let mut calls = self.live.subscribe_changes("AgentToolCall").await;
         loop {
             let output = gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
                 &self.live.access,
@@ -222,9 +224,15 @@ impl Processes {
             if output.contains(marker) {
                 return output;
             }
-            tokio::time::timeout_at(deadline, changes.recv())
-                .await
-                .expect("process output deadline");
+            tokio::time::timeout_at(deadline, async {
+                tokio::select! {
+                    _ = segments.recv() => (),
+                    _ = messages.recv() => (),
+                    _ = calls.recv() => (),
+                }
+            })
+            .await
+            .expect("process output deadline");
         }
     }
 
@@ -298,7 +306,7 @@ impl Processes {
         .unwrap();
     }
 
-    async fn result(&self, call: &Value) -> Value {
+    async fn result_text(&self, call: &Value) -> String {
         let result = gents_session::tool_call::query::result::load_tool_call_result(
             &self.live.access,
             call["_docID"].as_str().unwrap(),
@@ -308,7 +316,11 @@ impl Processes {
         )
         .await
         .unwrap();
-        let text = gents_session::tool_call::query::result::render_tool_result(&result).unwrap();
+        gents_session::tool_call::query::result::render_tool_result(&result).unwrap()
+    }
+
+    async fn result(&self, call: &Value) -> Value {
+        let text = self.result_text(call).await;
         serde_json::from_str(&text)
             .unwrap_or_else(|_| panic!("expected structured process result: {text}"))
     }
@@ -465,9 +477,20 @@ async fn background_tool_rejects_not_allowlisted_target() {
         wait_for_request_terminal(&p.live, "denied", WAIT).await,
         "completed"
     );
-    let result = p.result(&p.call("denied", "spawn_process").await).await;
-    assert_eq!(result["failure_class"], "tool_not_allowed");
-    assert_eq!(result["requested_tool_name"], "other_tool");
+    let calls = p
+        .live
+        .read_data(&Processes::call_query("denied", "spawn_process"))
+        .await;
+    let mut refused = false;
+    for call in calls["AgentToolCall"].as_array().unwrap() {
+        let result = serde_json::from_str::<Value>(&p.result_text(call).await).unwrap_or_default();
+        refused |= result["failure_class"] == "tool_not_allowed"
+            && result["requested_tool_name"] == "other_tool";
+    }
+    assert!(
+        refused,
+        "no spawn_process call was refused for other_tool: {calls}"
+    );
     p.stop().await;
 }
 
