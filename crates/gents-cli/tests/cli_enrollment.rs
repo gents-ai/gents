@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
+use gents::support::snapshots::{SnapshotChanges, SnapshotReader};
 use gents_desktop_core::client::canonical_output::{
     project_canonical_message, CanonicalMessageProjection,
 };
@@ -32,9 +33,10 @@ use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::output::{MessageRole, TerminalOutput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::time::{sleep, Instant};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 static ENROLLMENT_E2E_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -433,6 +435,11 @@ async fn resolve_live_inference() -> Result<(String, String)> {
 
 async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&format!(
+        "{}/graphql",
+        status_url.trim_end_matches('/')
+    )));
+    let mut changes = observed_changes(&access, &["NodeRuntime", "NodeReadiness"]).await;
     loop {
         match fetch_runtime_connection_payload(status_url).await {
             Ok(status) => {
@@ -455,12 +462,14 @@ async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> 
                 }
             }
         }
-        sleep(Duration::from_millis(200)).await;
+        observe_change_until(&mut changes, deadline).await;
     }
 }
 
 async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(&access, &["NetworkEnrollmentRequest"]).await;
     loop {
         let response =
             graphql_query(graphql, r#"{ NetworkEnrollmentRequest { request_id } }"#).await?;
@@ -478,7 +487,7 @@ async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) ->
                 "timed out waiting for runtime to observe enrollment request {request_id}; last={response}"
             );
         }
-        sleep(Duration::from_millis(200)).await;
+        observe_change_until(&mut changes, deadline).await;
     }
 }
 
@@ -489,6 +498,8 @@ async fn wait_for_runtime_agent_request(
     content: &str,
 ) -> Result<(String, String, String)> {
     let deadline = Instant::now() + Duration::from_secs(60);
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(&access, &["AgentRequest"]).await;
     loop {
         match graphql_query(
             graphql,
@@ -539,9 +550,12 @@ async fn wait_for_runtime_agent_request(
             }
         }
         if Instant::now() >= deadline {
-            let client_requests = client_node
-                .execute("{ AgentRequest { request_id node_did content requester_did } }")
-                .await;
+            let client_requests = gents_store::graphql::graphql_with_transaction_retry(
+                client_node,
+                "{ AgentRequest { request_id node_did content requester_did } }",
+                "test.enrollment.diagnostic",
+            )
+            .await?;
             let runtime_all = graphql_query(
                 graphql,
                 "{ AgentRequest { request_id node_did content requester_did } }",
@@ -554,7 +568,7 @@ async fn wait_for_runtime_agent_request(
                 client_requests.data
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        observe_change_until(&mut changes, deadline).await;
     }
 }
 
@@ -578,6 +592,11 @@ async fn wait_for_complete_agent_response_with_access(
 ) -> Result<RuntimeTerminalReply> {
     let deadline = Instant::now() + timeout;
     let mut empty_terminal_since = None::<Instant>;
+    let mut changes = observed_changes(
+        access,
+        &["AgentRequest", "AgentMessage", "AgentOutputSegment"],
+    )
+    .await;
     loop {
         let response = access
             .execute(&format!(
@@ -676,7 +695,10 @@ async fn wait_for_complete_agent_response_with_access(
                 "timed out waiting for canonical terminal output with visible text for {request_id}; last={response}"
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        let until = empty_terminal_since
+            .map(|seen| deadline.min(seen + Duration::from_secs(15)))
+            .unwrap_or(deadline);
+        observe_change_until(&mut changes, until).await;
     }
 }
 
@@ -723,7 +745,9 @@ async fn wait_for_client_complete_response(
     runtime_reply: &RuntimeTerminalReply,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
+    let mut changes = core.store_change_updates();
     loop {
+        changes.borrow_and_update();
         let page = gents_desktop_core::client::load_session_transcript_page_on(
             &core.operator_access(node_did)?,
             session_id,
@@ -776,7 +800,7 @@ async fn wait_for_client_complete_response(
                 snapshot.transcript_messages
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.changed()).await;
     }
 }
 
@@ -854,13 +878,29 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
     }
 }
 
+async fn observed_changes(access: &ConfigAccess, collections: &[&str]) -> Vec<SnapshotChanges> {
+    let mut changes = Vec::with_capacity(collections.len());
+    for collection in collections {
+        changes.push(access.subscribe_changes(collection).await);
+    }
+    changes
+}
+
+async fn observe_change_until(changes: &mut [SnapshotChanges], deadline: Instant) {
+    let futures = changes.iter_mut().map(|change| Box::pin(change.recv()));
+    let _ = tokio::time::timeout_at(deadline, futures::future::select_all(futures)).await;
+}
+
 async fn query_collection_dids(
     node: &gents::defra_node::Node,
     collection: &str,
 ) -> Result<Vec<String>> {
-    let response = node
-        .execute(&format!("{{ {collection} {{ node_did }} }}"))
-        .await;
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        &format!("{{ {collection} {{ node_did }} }}"),
+        "test.enrollment.collection_ids",
+    )
+    .await?;
     if response.has_errors() {
         bail!("query {collection} failed: {:?}", response.errors);
     }

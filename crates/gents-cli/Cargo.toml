@@ -19,7 +19,7 @@ path = "src/main.rs"
 # Gates the live-inference test binary out of default builds: every test in
 # cli_live_suite is #[ignore]d behind env gates, so default runs paid a
 # full gents+defradb+iroh link to execute nothing.
-live-e2e = ["gents/test-fixtures"]
+live-e2e = []
 # Debug native desktop acceptance must never address the user's daily service.
 native-e2e = ["gents-service/native-e2e"]
 heap-profiling = ["dep:tikv-jemallocator"]
@@ -158,7 +158,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 gents-automation = { workspace = true, features = ["test-fixtures"] }
 gents-eval = { workspace = true, features = ["test-fixtures"] }
 jsonschema = { version = "0.46.5", default-features = false }
-gents = { path = "../gents", features = ["test-home-guard"] }
+gents = { path = "../gents", features = ["test-fixtures"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
 gents-host = { workspace = true, features = ["test-fixtures"] }
 gents-session = { workspace = true, features = ["test-fixtures"] }
