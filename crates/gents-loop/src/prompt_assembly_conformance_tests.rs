@@ -302,3 +302,79 @@ fn generated_sanitize_cases_drive_the_production_sanitizer() {
         )))
     });
 }
+
+fn physical_replay_tag(row: usize) -> crate::claude_messages_body::ReplayTag {
+    crate::claude_messages_body::ReplayTag {
+        request_doc_id: "request-doc".to_string(),
+        source: gents_protocol::output::OutputSource::ProviderTurn {
+            scope: "inference.1".parse().expect("modeled provider scope"),
+            turn_index: row.try_into().expect("witness row fits"),
+            attempt: 0,
+        },
+    }
+}
+
+#[test]
+fn generated_mode_sanitize_cases_bind_composed_provider_view() {
+    use crate::compaction::sanitize_history_for_provider;
+    use crate::loop_stream::{
+        provider_messages, provider_view_tagged, sanitize_tagged_history, TaggedMessage,
+    };
+    use gents_lean_vocab::families::contracts_prompt_assembly_mode_sanitize as family;
+    family::replay::<String>(|case| {
+        let profile = profile_of_order(&case.order_mode);
+        let input = recode::<_, Vec<Row>>(&case.input);
+        let once = sanitize_history_for_provider(profile, messages_of(&input));
+        let twice = sanitize_history_for_provider(profile, once.clone());
+
+        let tagged = messages_of(&input)
+            .into_iter()
+            .enumerate()
+            .map(|(row, message)| match &message {
+                Message::Assistant { content, .. } => TaggedMessage {
+                    block_indices: (0..content.len()).collect(),
+                    source: Some(physical_replay_tag(row)),
+                    physical_header: Some(format!("header-{row}")),
+                    message,
+                },
+                _ => TaggedMessage::unassociated(message),
+            })
+            .collect::<Vec<_>>();
+        let daemon = provider_view_tagged(tagged)
+            .unwrap_or_else(|error| panic!("{}: daemon projection: {error}", case.name));
+        let entry = sanitize_tagged_history(daemon.clone())
+            .unwrap_or_else(|error| panic!("{}: loop entry projection: {error}", case.name));
+        assert_eq!(entry, daemon, "{}: second tagged pass", case.name);
+        assert!(
+            entry
+                .iter()
+                .all(|row| row.source.is_some() == matches!(row.message, Message::Assistant { .. })),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            rows_of(&provider_messages(profile, &entry)),
+            rows_of(&once),
+            "{}: the tagged provider view and the sanitizer must agree",
+            case.name
+        );
+        let native = entry
+            .iter()
+            .map(|row| row.message.clone())
+            .collect::<Vec<_>>();
+        family::ModeSanitizeOutput {
+            expected: recode(&rows_of(&once)),
+            twice: recode(&rows_of(&twice)),
+            association: recode(&rows_of(&native)),
+            association_indices: entry
+                .iter()
+                .map(|row| {
+                    row.block_indices
+                        .iter()
+                        .map(|index| u64::try_from(*index).expect("block index fits"))
+                        .collect()
+                })
+                .collect(),
+        }
+    });
+}

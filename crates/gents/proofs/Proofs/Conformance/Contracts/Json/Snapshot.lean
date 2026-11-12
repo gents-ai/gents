@@ -1155,8 +1155,6 @@ def snapshotFileCasesJson : String :=
     ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
     ++ "\"provider_tool_identity_cases\":" ++ providerToolIdentityCasesJson ++ ","
 
-    ++ "\"prompt_assembly_mode_sanitize_cases\":"
-      ++ promptAssemblyModeSanitizeCasesJson ++ ","
     ++ "\"prompt_assembly_layer_cases\":"
       ++ promptAssemblyLayerCasesJson ++ ","
     ++ "\"prompt_assembly_repair_cases\":"

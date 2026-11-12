@@ -473,10 +473,6 @@ pub fn lean_prompt_assembly_layer_cases() -> &'static [LeanPromptAssemblyLayerCa
     &lean_contract_snapshot().prompt_assembly_layer_cases
 }
 
-pub fn lean_prompt_assembly_mode_sanitize_cases() -> &'static [LeanPromptAssemblyModeSanitizeCase] {
-    &lean_contract_snapshot().prompt_assembly_mode_sanitize_cases
-}
-
 pub fn lean_prompt_assembly_reasoning_suffix_cases() -> &'static [LeanPromptAssemblyReasoningSuffixCase] {
     &lean_contract_snapshot().prompt_assembly_reasoning_suffix_cases
 }
@@ -1024,13 +1020,6 @@ pub struct LeanApplicationWriteCase {
     pub preview: bool,
     pub protected: bool,
     pub targets: u64,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum LeanAssistantOrderMode {
-    Grouped,
-    NativePreserved,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -3301,7 +3290,6 @@ pub struct LeanContractSnapshot {
     pub compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub provider_tool_identity_cases: Vec<serde_json::Value>,
-    pub prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
     pub routing_affinity_cases: Vec<LeanRoutingAffinityCase>,
     pub current_input_cases: Vec<LeanCurrentInputCase>,
     pub wake_input_cases: Vec<LeanWakeInputCase>,
@@ -9460,12 +9448,6 @@ pub struct LeanPromptAssemblyCompactionTriggerCase {
     pub admission: Option<LeanReductionAdmission>,
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyItem {
-    pub item: String,
-    pub value: u64,
-}
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct LeanPromptAssemblyLayerCase {
     pub name: String,
@@ -9473,18 +9455,6 @@ pub struct LeanPromptAssemblyLayerCase {
     pub summary_count: usize,
     pub conversation_len: usize,
     pub slots: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyModeSanitizeCase {
-    pub name: String,
-    pub order_mode: LeanAssistantOrderMode,
-    pub input: Vec<LeanPromptAssemblyRow>,
-    pub expected: Vec<LeanPromptAssemblyRow>,
-    pub expected_twice: Vec<LeanPromptAssemblyRow>,
-    pub association: Vec<LeanPromptAssemblyRow>,
-    pub association_indices: Vec<Vec<usize>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -9542,14 +9512,6 @@ pub struct LeanPromptAssemblyRetentionCase {
     pub summary_max_output: usize,
     pub effective_summary_output: usize,
     pub rolling_summary_input_budget: usize,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyRow {
-    pub role: String,
-    pub kind: String,
-    pub call_ids: Vec<u64>,
-    pub content: Vec<LeanPromptAssemblyItem>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

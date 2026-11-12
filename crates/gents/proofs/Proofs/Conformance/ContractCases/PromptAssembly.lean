@@ -270,15 +270,11 @@ private def assistantText (sequence : Nat) (index : Nat) : ProviderRow :=
 
 structure PromptAssemblyModeSanitizeCase where
   name : String
-  orderMode : String
+  orderMode : PromptAssembly.Content.OrderMode
   input : List PromptAssemblyRowCase
-  expected : List PromptAssemblyRowCase
-  expectedTwice : List PromptAssemblyRowCase
-  association : List PromptAssemblyRowCase
-  associationIndices : List (List Nat)
   deriving Repr
 
-private def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) :
+def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) :
     List Nat :=
   match out.row.role, input.find? (fun pr => pr.row.sequence == out.row.sequence) with
   | .assistant, some source => out.content.map fun item => source.content.idxOf item
@@ -287,20 +283,7 @@ private def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) 
 private def modeSanitizeCase (name : String)
     (mode : PromptAssembly.Content.OrderMode) (rows : List ProviderRow) :
     PromptAssemblyModeSanitizeCase :=
-  let once := PromptAssembly.Provider.sanitizeForProviderGlobalFor mode rows
-  { name
-  , orderMode := match mode with
-      | .grouped => "grouped"
-      | .nativePreserved => "nativePreserved"
-  , input := rowCases rows
-  , expected := rowCases once
-  , expectedTwice := rowCases
-      (PromptAssembly.Provider.sanitizeForProviderGlobalFor mode once)
-  , association := rowCases
-      (PromptAssembly.Provider.sanitizeForProviderGlobalFor .nativePreserved rows)
-  , associationIndices :=
-      (PromptAssembly.Provider.sanitizeForProviderGlobalFor .nativePreserved rows).map
-        (retainedBlockIndices rows) }
+  { name, orderMode := mode, input := rowCases rows }
 
 private def interleavedCoherentRows : List ProviderRow :=
   [ mkRow 0 .assistant (.assistantToolCalls [1].toFinset)

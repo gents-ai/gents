@@ -125,12 +125,6 @@ def wakeInputCasesJson : String := jsonArray (wakeInputCases.map fun witness =>
 def jsonNatArray (values : List Nat) : String :=
   jsonArray (values.map toString)
 
-def promptAssemblyItemJson (item : PromptAssemblyItemCase) : String :=
-  "{"
-    ++ "\"item\":" ++ jsonString item.item ++ ","
-    ++ "\"value\":" ++ toString item.value
-    ++ "}"
-
 deriving instance Lean.ToJson for PromptAssemblyItemCase, PromptAssemblyRowCase,
   PromptAssembly.Content.OrderMode, PromptAssemblyAssistantOrderCase
 
@@ -156,17 +150,6 @@ def promptAssemblyAssistantOrder :
     let once := PromptAssembly.Content.normalizeFor i.orderMode (i.input.map (·.toModel))
     { expected := once.map itemCase
       twice := (PromptAssembly.Content.normalizeFor i.orderMode once).map itemCase }
-
-def promptAssemblyRowJson (row : PromptAssemblyRowCase) : String :=
-  "{"
-    ++ "\"role\":" ++ jsonString row.role ++ ","
-    ++ "\"kind\":" ++ jsonString row.kind ++ ","
-    ++ "\"call_ids\":" ++ jsonNatArray row.callIds ++ ","
-    ++ "\"content\":" ++ jsonArray (row.content.map promptAssemblyItemJson)
-    ++ "}"
-
-def promptAssemblyRowsJson (rows : List PromptAssemblyRowCase) : String :=
-  jsonArray (rows.map promptAssemblyRowJson)
 
 deriving instance Lean.ToJson for PromptAssemblySanitizeCase
 
@@ -218,20 +201,31 @@ def promptAssemblySanitizeSplit : Family SanitizeSplitInput (List PromptAssembly
     rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal
       ((promptAssemblyRowsToModel i.input).drop i.index))
 
-def promptAssemblyModeSanitizeCaseJson
-    (witness : PromptAssemblyModeSanitizeCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"order_mode\":" ++ jsonString witness.orderMode ++
-    ",\"input\":" ++ promptAssemblyRowsJson witness.input ++
-    ",\"expected\":" ++ promptAssemblyRowsJson witness.expected ++
-    ",\"expected_twice\":" ++ promptAssemblyRowsJson witness.expectedTwice ++
-    ",\"association\":" ++ promptAssemblyRowsJson witness.association ++
-    ",\"association_indices\":" ++
-      jsonArray (witness.associationIndices.map fun indices =>
-        jsonArray (indices.map toString)) ++ "}"
+deriving instance Lean.ToJson for PromptAssemblyModeSanitizeCase
 
-def promptAssemblyModeSanitizeCasesJson : String :=
-  jsonArray (promptAssemblyModeSanitizeCases.map promptAssemblyModeSanitizeCaseJson)
+structure ModeSanitizeOutput where
+  expected : List PromptAssemblyRowCase
+  twice : List PromptAssemblyRowCase
+  association : List PromptAssemblyRowCase
+  associationIndices : List (List Nat)
+  deriving Lean.ToJson
+
+/-- A loaded transcript sanitized for a provider order mode, once and again,
+and the provider-neutral association the owned loop keeps beside it with each
+row's retained source block indices: production
+`sanitize_history_for_provider`, `provider_view_tagged` and
+`sanitize_tagged_history`. -/
+@[conformance_family]
+def promptAssemblyModeSanitize : Family PromptAssemblyModeSanitizeCase ModeSanitizeOutput where
+  inputs := promptAssemblyModeSanitizeCases
+  model := fun i =>
+    let rows := promptAssemblyRowsToModel i.input
+    let once := PromptAssembly.Provider.sanitizeForProviderGlobalFor i.orderMode rows
+    let association := PromptAssembly.Provider.sanitizeForProviderGlobalFor .nativePreserved rows
+    { expected := rowCases once
+      twice := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobalFor i.orderMode once)
+      association := rowCases association
+      associationIndices := association.map (retainedBlockIndices rows) }
 
 def promptAssemblyLayerCaseJson (witness : PromptAssemblyLayerCase) : String :=
   "{"

@@ -2381,8 +2381,7 @@ def caseCoverage : List CoverageEntry :=
       "Checks the mode-selected native assistant-content ordering helper. It does not establish that every provider dispatch selects the correct mode.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_mode_sanitize_cases"
-      "PromptAssemblyModeSanitizeCases"
+      "family" "contracts_prompt_assembly_mode_sanitize"
       "Checks the composed native provider-view sanitizer on finite coherent, unique-call-id witnesses, and that the tagged association view is the native-order view whose send-boundary ordering is that composed view. General native reachability and arbitrary transcript premises remain outside this fence.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
