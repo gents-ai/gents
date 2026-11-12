@@ -1430,8 +1430,8 @@ def caseCoverage : List CoverageEntry :=
       "Checks explicit workflow selection and action-plan replay; native workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_child_cases"
-      "WorkspaceChildCases"
+      "family"
+      "workspace_capability_child_access"
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
@@ -1464,23 +1464,23 @@ def caseCoverage : List CoverageEntry :=
       "User publication fences on native Node update and commits the physical parent; raw direct creates remain outside the writer-fencing premise.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "workspace_child_revocation_cases"
-      "WorkspaceChildRevocationCases"
+      "family"
+      "workspace_capability_child_revocation"
       "Documents the completeness limit after explicitly granting a child owner native relationship deletion.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "workspace_admission_cases"
-      "WorkspaceAdmissionCases"
+      "family"
+      "workspace_capability_admission"
       "Exercises competing canonical exclusive admissions; native conflict fencing needs central validation.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_cleanup_cases"
-      "WorkspaceCleanupCases"
+      "family"
+      "workspace_capability_cleanup"
       "Cleanup claims the parent with native update permission after checking the canonical binding inventory.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_publication_cases"
-      "WorkspacePublicationCases"
+      "family"
+      "workspace_capability_publication"
       "Checks duplicate publication after revocation and a stale retry after cleanup has begun.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

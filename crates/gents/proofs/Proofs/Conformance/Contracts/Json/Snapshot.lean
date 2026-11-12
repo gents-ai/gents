@@ -15,6 +15,7 @@ import Proofs.Conformance.Identity.WorkspaceCompletion
 import Proofs.Conformance.Identity.ReceiverGrant
 import Proofs.Conformance.Identity.WorkspaceRoot
 import Proofs.Conformance.Identity.WorkspaceAndFileRequests
+import Proofs.Conformance.Identity.WorkspaceCapability
 import Proofs.Conformance.Identity.MailboxAccess
 import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
 import Proofs.Conformance.Identity.NodeProvisioning
@@ -705,16 +706,11 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"mailbox_claimed_recipient_cases\":" ++ Identity.MailboxAccess.claimedRecipientCasesJson ++ ","
     ++ "\"workspace_agent_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAgentSelectionCasesJson ++ ","
     ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
-    ++ "\"workspace_child_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildCasesJson ++ ","
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
     ++ "\"native_route_cases\":" ++ Triggers.NativeRoute.casesJson ++ ","
     ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
-    ++ "\"workspace_child_revocation_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildRevocationCasesJson ++ ","
-    ++ "\"workspace_admission_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAdmissionCasesJson ++ ","
-    ++ "\"workspace_cleanup_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceCleanupCasesJson ++ ","
-    ++ "\"workspace_publication_cases\":" ++ Identity.WorkspaceAndFileRequests.workspacePublicationCasesJson ++ ","
     ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
     ++ "\"session_input_edit_native_discovery_cases\":" ++ Identity.SessionInputEdit.discoveryCasesJson ++ ","

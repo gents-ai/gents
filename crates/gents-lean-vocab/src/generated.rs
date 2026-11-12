@@ -2976,16 +2976,11 @@ pub struct LeanContractSnapshot {
     pub mailbox_claimed_recipient_cases: Vec<LeanMailboxClaimedRecipientCase>,
     pub workspace_agent_selection_cases: Vec<serde_json::Value>,
     pub workspace_liveness_cases: Vec<LeanWorkspaceLivenessCase>,
-    pub workspace_child_cases: Vec<LeanWorkspaceChildCase>,
     pub workspace_quickstart_selection_cases: Vec<LeanWorkspaceQuickstartSelectionCase>,
     pub pack_placement_reader_cases: Vec<LeanPackPlacementReaderCase>,
     pub native_route_cases: Vec<LeanNativeRouteCase>,
     pub workspace_datastore_write_cases: Vec<LeanWorkspaceDatastoreWriteCase>,
     pub workspace_root_access_cases: Vec<LeanWorkspaceRootAccessCase>,
-    pub workspace_child_revocation_cases: Vec<LeanWorkspaceChildRevocationCase>,
-    pub workspace_admission_cases: Vec<LeanWorkspaceAdmissionCase>,
-    pub workspace_cleanup_cases: Vec<LeanWorkspaceCleanupCase>,
-    pub workspace_publication_cases: LeanWorkspacePublicationCases,
     pub workspace_quickstart_cases: Vec<LeanWorkspaceQuickstartCase>,
     pub mailbox_native_policy: serde_json::Value,
     pub session_input_edit_native_discovery_cases: Vec<
@@ -12149,14 +12144,6 @@ pub struct LeanWorkerCapacityState {
     pub active: Vec<[u64; 2]>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspaceAdmissionCase {
-    pub admitted: bool,
-    pub complete: bool,
-    pub occupied: bool,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct LeanWorkspaceBindingCase {
     pub name: String,
@@ -12190,30 +12177,6 @@ pub struct LeanWorkspaceCase {
     pub to: String,
     pub seal_hash: Option<String>,
     pub legal: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspaceChildCase {
-    pub actor: String,
-    pub expected: bool,
-    pub permission: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspaceChildRevocationCase {
-    pub actor: String,
-    pub read: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspaceCleanupCase {
-    pub active: bool,
-    pub allowed: bool,
-    pub begins: bool,
-    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -12431,16 +12394,6 @@ pub struct LeanWorkspacePermissionWriteCasePrevious {
     #[serde(rename = "reviewTask")]
     pub review_task: Option<u64>,
     pub revision: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspacePublicationCases {
-    pub aborted_document_visible: bool,
-    pub effect_after_failed_reservation: bool,
-    pub revoked_reader_restored: bool,
-    pub revoked_writer_restored: bool,
-    pub stale_publication_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
