@@ -38,6 +38,7 @@ import type { JoinMemberView } from "../generated/JoinMemberView.js";
 import type { JoinRequestDecideRequest } from "../generated/JoinRequestDecideRequest.js";
 import type { JoinRequestDecisionView } from "../generated/JoinRequestDecisionView.js";
 import type { JoinRequestView } from "../generated/JoinRequestView.js";
+import type { ManagedServerRepairResult } from "../generated/ManagedServerRepairResult.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
 import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
@@ -192,6 +193,7 @@ export type DesktopApiAdapter = {
     disposition?: HomeResetDisposition,
     fullReset?: boolean,
   ) => Promise<ManagedServerResetResult>;
+  repairManagedServer?: () => Promise<ManagedServerRepairResult>;
   quitDesktop?: () => Promise<void>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
   selectAgentWorkspaceRoot?: (
@@ -578,6 +580,7 @@ export type {
   JoinRequestDecideRequest,
   JoinRequestDecisionView,
   JoinRequestView,
+  ManagedServerRepairResult,
   ManagedServerResetResult,
   ManagedServerStatus,
 };

@@ -27,6 +27,7 @@ const savedPeer = {
   addr: deployment.addr,
   source: deployment.source,
   graphql: deployment.graphql,
+  local: false,
 };
 
 function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot {

@@ -220,28 +220,22 @@ export function useMailboxCause() {
 }
 
 export function useStartup() {
-  const { stores, lifecycle, actions } = useApp();
+  const { stores, lifecycle } = useApp();
   const managedServerWait = useStore(stores.localServer, (s) => s.wait);
   const state = useStore(
     stores.client,
     useShallow((s) => ({
       phase: s.startupPhase,
       error: s.error,
-      managedServerFailure: s.managedServerFailure,
+      repairPeers: s.repairPeers,
       diagnosticsHint:
         s.snapshot?.bootstrap.diagnosticsHint || s.startupDiagnosticsHint,
     })),
   );
-  const failure = state.managedServerFailure;
   return {
     ...state,
     managedServerWait,
     incompatibleHome: useIncompatibleHome(stores.client, lifecycle.home),
-    canRestartManagedServer: Boolean(
-      failure?.status.nodeName &&
-      failure.status.effectiveToolCeiling &&
-      actions.localServerOffers.restart,
-    ),
   };
 }
 

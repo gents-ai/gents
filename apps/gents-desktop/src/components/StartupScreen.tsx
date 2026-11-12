@@ -1,6 +1,7 @@
 import { Button } from "@gents/ui/components/button";
 
 import { projectStartupLoadingStatus, startupSteps } from "../lib/loadingStatus";
+import { continueLabel } from "../lib/remoteNodes";
 import { useApp } from "../ui/app/AppContext";
 import { Mark } from "../ui/app/Mark";
 import { useStartup } from "../ui/hooks/useClient";
@@ -55,15 +56,17 @@ export function StartupScreen({
   const status = projectStartupLoadingStatus(phase, lifecycle.supportsManagedServer);
   const wait =
     managedServerWait && phase === "checking-managed-server" ? managedServerWait : null;
-  const skip = (testId: string) => (
-    <Button
-      variant="outline"
-      data-testid={testId}
-      onClick={lifecycle.skipManagedServerWait}
-    >
-      Continue without the local node
-    </Button>
-  );
+  const label = continueLabel(startup.repairPeers);
+  const skip = (testId: string) =>
+    label && (
+      <Button
+        variant="outline"
+        data-testid={testId}
+        onClick={lifecycle.skipManagedServerWait}
+      >
+        {label}
+      </Button>
+    );
 
   return (
     <section
@@ -99,20 +102,8 @@ export function StartupScreen({
               >
                 Try again
               </Button>
-              {phase === "managed-server-error" && (
-                <>
-                  {startup.canRestartManagedServer && (
-                    <Button
-                      variant="outline"
-                      data-testid="startup-restart-managed-server"
-                      onClick={() => void lifecycle.restartManagedServer()}
-                    >
-                      Restart node
-                    </Button>
-                  )}
-                  {skip("startup-continue-without-managed-server")}
-                </>
-              )}
+              {phase === "managed-server-error" &&
+                skip("startup-continue-without-managed-server")}
             </>
           }
         />

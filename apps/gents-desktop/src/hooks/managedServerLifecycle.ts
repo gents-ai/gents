@@ -1,4 +1,5 @@
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type { ManagedServerRepairResult } from "@source-inc/gents-desktop-client/generated/ManagedServerRepairResult";
 
 import {
   awaitManagedServerSettled,
@@ -12,6 +13,7 @@ import { errorText } from "../lib/errorText";
 type RestoreOptions = {
   onWait?: (wait: ManagedServerWait | null) => void;
   signal?: AbortSignal;
+  onRepair?: (result: ManagedServerRepairResult) => void;
 };
 
 const managedServerRestoreInFlight = new WeakMap<
@@ -37,9 +39,21 @@ export function restoreManagedServer(
 
 async function restoreManagedServerOnce(
   api: DesktopApiAdapter,
-  { onWait = () => {}, signal }: RestoreOptions,
+  { onWait = () => {}, signal, onRepair }: RestoreOptions,
 ): Promise<boolean | null> {
   if (!api.managedServerStatus) return null;
+
+  const repair = await api.repairManagedServer?.();
+  if (repair) {
+    onRepair?.(repair);
+    if (repair.outcome === "blocked") {
+      throw new ManagedServerStartupError(
+        repair.blocker ?? "Gents could not finish starting.",
+        await api.managedServerStatus(),
+      );
+    }
+    if (repair.outcome === "needsSetup") return false;
+  }
 
   let awaitedApproval = false;
   const status = await awaitManagedServerSettled(
@@ -53,7 +67,22 @@ async function restoreManagedServerOnce(
   );
   if (!signal?.aborted) {
     const failure = unsettledManagedServerError(status);
-    if (failure) throw failure;
+    if (failure) {
+      // The repair sets aside a home its node refused as an older
+      // version's data, which it can see only once the node has refused it.
+      const retried =
+        failure.status.errorCode === "incompatibleLocalStore"
+          ? await api.repairManagedServer?.()
+          : undefined;
+      if (retried?.outcome === "needsSetup") {
+        onRepair?.({
+          ...retried,
+          repaired: [...(repair?.repaired ?? []), ...retried.repaired],
+        });
+        return false;
+      }
+      throw failure;
+    }
   }
   if (status.state === "running" || status.state === "external") {
     return true;
@@ -83,8 +112,7 @@ async function restoreManagedServerOnce(
       throw new ManagedServerStartupError(errorText(cause), status);
     }
   }
-  // Native launchd/systemd ownership is intentionally independent of the GUI.
-  // A stopped enabled service is an OS observation, not permission for this
-  // frontend to create a second process during application startup.
+  // The GUI repairs through launchd under the same label and never creates a
+  // second process; a stopped enabled service is not permission to start one.
   return false;
 }
