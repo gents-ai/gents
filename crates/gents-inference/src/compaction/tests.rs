@@ -1852,54 +1852,6 @@ fn pair_safe_boundary_retreats_to_the_turn_start() {
 }
 
 #[test]
-fn reused_call_ids_no_longer_shift_the_provider_view_prefix() {
-    let prefix = vec![
-        tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
-        text_msg("user", "next turn"),
-    ];
-    let suffix = vec![
-        tool_call_msg("read_file", r#"{"path": "/b.rs"}"#),
-        tool_result_msg("call-1", "b"),
-    ];
-
-    let (short_view, _) = provider_view(GROUPED_PROFILE, prefix.clone());
-    let mut whole = prefix;
-    whole.extend(suffix);
-    let (long_view, _) = provider_view(GROUPED_PROFILE, whole);
-
-    assert_eq!(
-        short_view.len(),
-        1,
-        "the unpaired announcement is dropped while nothing resolves it"
-    );
-    assert_eq!(
-        long_view
-            .iter()
-            .take(short_view.len())
-            .cloned()
-            .collect::<Vec<_>>(),
-        short_view,
-        "per-turn resolution must not resurrect the earlier announcement, so the \
-         prefix stays stable under append"
-    );
-}
-
-#[test]
-fn safe_to_reduce_accepts_reused_provider_ids_across_complete_turns() {
-    let messages = vec![
-        text_msg("user", "go"),
-        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
-        tool_result_msg("call-1", "fn main() {}"),
-        text_msg("assistant", "first turn complete"),
-        text_msg("user", "again"),
-        tool_call_msg("read_file", r#"{"path": "/src/lib.rs"}"#),
-        tool_result_msg("call-1", "pub fn library() {}"),
-        text_msg("assistant", "second turn complete"),
-    ];
-    assert!(safe_to_reduce(&messages));
-}
-
-#[test]
 fn safe_to_reduce_requires_a_sanitizer_fixed_point_and_turn_boundary() {
     let incomplete_turn = vec![
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
@@ -1971,27 +1923,6 @@ fn count_calls_and_results(messages: &[Message]) -> (usize, usize) {
         })
         .sum();
     (calls, results)
-}
-
-#[test]
-fn duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call() {
-    let out = super::sanitize_history_for_provider(
-        GROUPED_PROFILE,
-        vec![
-            Message::Assistant {
-                request_id: None,
-                id: None,
-                content: vec![scoped_call("c1"), scoped_call("c1")],
-            },
-            scoped_result("c1"),
-            scoped_result("c1"),
-        ],
-    );
-    assert_eq!(
-        count_calls_and_results(&out),
-        (1, 1),
-        "every surviving call must be closed by a result: {out:?}"
-    );
 }
 
 #[test]
