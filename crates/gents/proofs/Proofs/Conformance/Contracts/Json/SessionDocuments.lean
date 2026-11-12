@@ -351,9 +351,6 @@ def sessionDocumentStarterVerificationCasesJson : String :=
 def sessionDocumentArchiveCasesJson : String :=
   (toJson archiveCases).compress
 
-def sessionDocumentReferenceEncodingJson : String :=
-  (toJson "interned collection plus _docID, not raw _docID").compress
-
 def sessionDocumentRetryCasesJson : String :=
   (toJson [
       retryJson "exact_parent" [old] 101,

@@ -230,6 +230,8 @@ theorem task_opening_recorded (request : Nat) :
     openingRequestAtCreation request false true = some request := by
   simp [openingRequestAtCreation]
 structure RequestObservation where
+  /-- An interned (collection, `_docID`) reference, never a raw cross-collection
+  `_docID`: equal raw IDs in different collections are distinct values here. -/
   docId : Nat
   requestId : RequestId
   state : RequestState
