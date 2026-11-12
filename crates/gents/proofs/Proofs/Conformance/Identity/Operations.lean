@@ -151,13 +151,25 @@ structure ReaderRead where
   read : Bool
   deriving ToJson
 
-/-- The applied-pairing scenario reads the route as a sibling Agent and as the
-reader Agent while the user grants and revokes its tool and route readers. -/
+/-- The applied-pairing scenario reads the route as the reader Agent once the
+user grants its route reader, as a sibling Agent, and as the reader Agent while
+the user grants and revokes its tool and route readers. -/
 @[conformance_family]
 def readerPolicyRead : Family ReaderPolicyInput ReaderRead where
   inputs := readerPolicyInputs.filter
-    (·.name ∈ ["sibling", "tool-revoked", "tool-only", "both-revoked"])
+    (·.name ∈ ["agent", "sibling", "tool-revoked", "tool-only", "both-revoked"])
   model := fun i => { read := (readerPolicy i).read }
+
+structure ReaderUpdate where
+  update : Bool
+  deriving ToJson
+
+/-- The applied-pairing scenario has the granted reader Agent update the route
+through the authenticated GraphQL server. -/
+@[conformance_family]
+def readerPolicyUpdate : Family ReaderPolicyInput ReaderUpdate where
+  inputs := readerPolicyInputs.filter (·.name = "agent")
+  model := fun i => { update := (readerPolicy i).update }
 
 structure ManageReader where
   manageReader : Bool
@@ -170,10 +182,11 @@ def readerPolicyManage : Family ReaderPolicyInput ManageReader where
   inputs := readerPolicyInputs.filter (·.name = "manager-revoked")
   model := fun i => { manageReader := (readerPolicy i).manageReader }
 
-/-- model-production-gap: the applied-pairing scenario observes only the reads
-and the reader management replayed by `readerPolicyRead` and
-`readerPolicyManage`; no production path observes the runtime, user and
-reader Agent's access to the initial route or any route update decision. -/
+/-- model-production-gap: the applied-pairing scenario observes only the reads,
+the reader Agent's update and the reader management replayed by
+`readerPolicyRead`, `readerPolicyUpdate` and `readerPolicyManage`; no
+production path observes the runtime's and user's access to the initial route
+or any other route update decision. -/
 @[conformance_family]
 def readerPolicyUnreached : Family ReaderPolicyInput ReaderPolicy where
   inputs := readerPolicyInputs

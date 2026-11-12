@@ -119,6 +119,7 @@
   "identity_operations_reader_policy_manage": {"input":{"fields":[["name","string"],["actor","string"]],"struct":"ReaderPolicyInput"},"output":{"fields":[["manage_reader","bool"]],"struct":"ManageReader"}},
   "identity_operations_reader_policy_read": {"input":{"fields":[["name","string"],["actor","string"]],"struct":"ReaderPolicyInput"},"output":{"fields":[["read","bool"]],"struct":"ReaderRead"}},
   "identity_operations_reader_policy_unreached": {"input":{"fields":[["name","string"],["actor","string"]],"struct":"ReaderPolicyInput"},"output":{"fields":[["read","bool"],["update","bool"],["manage_reader","bool"]],"struct":"ReaderPolicy"}},
+  "identity_operations_reader_policy_update": {"input":{"fields":[["name","string"],["actor","string"]],"struct":"ReaderPolicyInput"},"output":{"fields":[["update","bool"]],"struct":"ReaderUpdate"}},
   "identity_operations_registry_writer_scenario": {"input":{"fields":[["name","string"],["creator","string"],["names_runtime","bool"]],"struct":"WriterInput"},"output":{"fields":[["writer",{"option":"string"}]],"struct":"Writer"}},
   "identity_operations_registry_writer_unreached": {"input":{"fields":[["name","string"],["creator","string"],["names_runtime","bool"]],"struct":"WriterInput"},"output":{"fields":[["writer",{"option":"string"}]],"struct":"Writer"}},
   "identity_receiver_grant": {"input":{"fields":[["sender_granted","bool"],["delivered","bool"]],"struct":"ReceiverGrantInput"},"output":"bool"},

@@ -1545,7 +1545,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "family"
       "identity_operations_reader_policy_unreached"
-      "model-production-gap: the applied-pairing scenario observes only the reads and reader management replayed by identity_operations_reader_policy_read and identity_operations_reader_policy_manage; the initial route access of the runtime, user and reader Agent and every route update decision are not observed.")
+      "model-production-gap: the applied-pairing scenario observes only the reads, the reader Agent's update and the reader management replayed by identity_operations_reader_policy_read, identity_operations_reader_policy_update and identity_operations_reader_policy_manage; the initial route access of the runtime and user and every other route update decision are not observed.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
