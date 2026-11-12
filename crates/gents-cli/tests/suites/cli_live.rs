@@ -885,6 +885,25 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             .and_then(Value::as_str)
             .context("clone receipt Agent DID")?
             .to_owned();
+        let root = created
+            .pointer("/host_root_access/published_root")
+            .and_then(Value::as_str)
+            .context("clone receipt workspace root")?;
+        run_cli_json(
+            &home_dir,
+            &[
+                "config",
+                "workspace-root",
+                "grant-reader",
+                "--graphql",
+                &graphql,
+                "--path",
+                root,
+                "--agent-did",
+                &spec.agent_did,
+            ],
+        )
+        .await?;
     }
 
     let agent_dids = request_specs
