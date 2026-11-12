@@ -3,6 +3,7 @@ import Proofs.Conformance.AgentViews
 import Proofs.Conformance.InferenceViews
 import Proofs.Conformance.PluginGrantDeclaration
 import Proofs.Conformance.EnrollmentRenewalNotices
+import Proofs.Conformance.Scope
 import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.InferenceObservationRegistry
@@ -237,35 +238,6 @@ def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
       ++ ",\"field\":" ++ jsonString rule.field
       ++ ",\"source\":" ++ jsonString (match rule.source with
           | .localDid => "localDid" | .homeDid => "homeDid") ++ "}")
-
-def nodeRouteCasesJson : String :=
-  jsonArray (([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
-    ["did:key:owner", "did:key:quoted\"owner"].map fun owner =>
-      let predicate := (ScopeTemplates.clientRouteFilters direction "did:key:reader" owner).find?
-        (fun item => item.collection == "Node")
-      "{\"direction\":" ++ jsonString (match direction with
-        | .clientToRuntime => "client-to-runtime" | .runtimeToClient => "runtime-to-client") ++
-      ",\"owner\":" ++ jsonString owner ++
-      ",\"allowed\":" ++ boolJson ((ScopeTemplates.clientRouteCollections direction).contains "Node") ++
-      ",\"node_did\":" ++ (predicate.bind fun item =>
-        (item.clauses.find? fun clause => clause.field == "node_did").map (fun clause => jsonString clause.value)).getD "null" ++ "}")
-
-def scopePredicateJson (predicate : ScopeTemplates.CollectionPredicate) : String :=
-  "{\"collection\":" ++ jsonString predicate.collection ++
-  ",\"clauses\":" ++ jsonArray (predicate.clauses.map fun clause =>
-    "{\"field\":" ++ jsonString clause.field ++ ",\"operator\":" ++ jsonString clause.operator ++
-    ",\"value\":" ++ jsonString clause.value ++ "}") ++ "}"
-
-def scopeTemplateCasesJson : String :=
-  jsonArray (ScopeTemplates.builtinCatalog.flatMap fun template =>
-    [ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient].map fun direction =>
-      "{\"id\":" ++ jsonString template.id ++
-      ",\"direction\":" ++ jsonString (match direction with
-        | .clientToRuntime => "client-to-runtime" | .runtimeToClient => "runtime-to-client") ++
-      ",\"collections\":" ++ jsonArray (template.collections.map jsonString) ++
-      ",\"delivery\":" ++ jsonString (match template.delivery with | .push => "push") ++
-      ",\"filters\":" ++ jsonArray ((ScopeTemplates.directionalScopeFilters template direction
-        "did:key:reader" "did:key:owner").map scopePredicateJson) ++ "}")
 
 /-- The snapshot's concatenation chains are bounded to keep model execution
 within Lean's interpreter recursion limit. -/
@@ -1064,8 +1036,6 @@ def snapshotPluginCasesJson : String :=
       ++ "\"machineRules\":"
         ++ scopeRulesJson ScopeTemplates.machineRules
       ++ "},"
-    ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
-    ++ "\"scope_template_cases\":" ++ scopeTemplateCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
     ++ "\"causal_hop_cap_observation_cases\":"

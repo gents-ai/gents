@@ -1558,8 +1558,20 @@ def caseCoverage : List CoverageEntry :=
       "FileReviewRouteCases")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "scope_node_route_cases"
-      "ScopeNodeRouteCases")
+      "family"
+      "scope_node_route_allowed")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "scope_node_route_filter")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "scope_template")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "scope_template_filters")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_order_window_cases"

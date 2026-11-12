@@ -2479,37 +2479,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +3004,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3201,8 +3169,6 @@ pub struct LeanContractSnapshot {
         String,
         Vec<LeanScopeCollectionRule>,
     >,
-    pub scope_node_route_cases: Vec<LeanScopeNodeRouteCase>,
-    pub scope_template_cases: Vec<LeanScopeTemplateCase>,
     pub title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
     pub title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
     pub title_text_cases: LeanTitleTextCases,
@@ -10629,40 +10595,6 @@ pub struct LeanScopeCollectionRule {
     pub collection: String,
     pub field: String,
     pub source: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanScopeNodeRouteCase {
-    pub allowed: bool,
-    pub direction: String,
-    pub node_did: Option<serde_json::Value>,
-    pub owner: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanScopeTemplateCase {
-    pub collections: Vec<String>,
-    pub delivery: String,
-    pub direction: String,
-    pub filters: Vec<LeanScopeTemplateCaseFiltersItem>,
-    pub id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanScopeTemplateCaseFiltersItem {
-    pub clauses: Vec<LeanScopeTemplateCaseFiltersItemClausesItem>,
-    pub collection: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanScopeTemplateCaseFiltersItemClausesItem {
-    pub field: String,
-    pub operator: String,
-    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
