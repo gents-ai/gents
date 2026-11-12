@@ -2968,7 +2968,6 @@ pub struct LeanContractSnapshot {
     pub goal_fresh_session_input_cases: Vec<LeanGoalFreshSessionInputCase>,
     pub session_message_goal_input_cases: Vec<LeanSessionMessageGoalInputCase>,
     pub goal_delivery_input_cases: Vec<serde_json::Value>,
-    pub goal_assignment_history_cases: Vec<LeanGoalAssignmentHistoryCase>,
     pub goal_operator_resume_cases: Vec<LeanGoalOperatorResumeCase>,
     pub goal_resume_publication_cases: Vec<LeanGoalResumePublicationCase>,
     pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,

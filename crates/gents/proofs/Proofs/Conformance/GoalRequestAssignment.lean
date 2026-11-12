@@ -2,6 +2,7 @@ import Proofs.Automation.GoalAutomation.HistoryProjection
 import Proofs.Automation.GoalAutomation.RequestAssignment
 import Proofs.ToolCalls.Recovery.Sweeps.SessionMessage
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.GoalRequestAssignmentContracts
@@ -229,12 +230,6 @@ def versionJson (v : Version) : Json :=
     ("height", toJson v.height), ("parents", toJson v.parents),
     ("assignment", assignmentJson v.assignment), ("status", toJson v.status.toDefraDB)]
 
-def historyObservationJson : HistoryObservation → Json
-  | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
-  | .unknown => Json.mkObj [("kind", toJson "unknown")]
-  | .assigned goal root status => Json.mkObj [("kind", toJson "assigned"),
-      ("goal", toJson goal), ("root", toJson root), ("status", toJson status.toDefraDB)]
-
 def historyHandoffReason (observation : HistoryObservation) : Option String :=
   let handoff : Recovery.AssignmentHandoff := match observation with
     | .unassigned => .absent
@@ -244,13 +239,48 @@ def historyHandoffReason (observation : HistoryObservation) : Option String :=
     | .assigned _ _ status => .live status.toDefraDB
   Recovery.sessionMessageHandoffReason true handoff
 
-def historyCaseJson (c : HistoryCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("versions", toJson (c.versions.map versionJson)),
-    ("entry", entryJson c.entry), ("retire_documents", toJson c.retireDocuments),
-    ("expected", historyObservationJson (observeHistory c.versions c.entry)),
-    ("expected_handoff_reason", toJson (historyHandoffReason (observeHistory c.versions c.entry)))]
+deriving instance ToJson for Goals.Status, Reference, Assignment, Entry, Version, HistoryCase
 
-def historyCasesJson : String := (toJson (historyCases.map historyCaseJson)).compress
+structure ObservationWire where
+  kind : String
+  goal : Option Nat
+  root : Option Nat
+  status : Option Goals.Status
+  deriving ToJson
+
+def ObservationWire.ofModel : HistoryObservation → ObservationWire
+  | .unassigned => ⟨"unassigned", none, none, none⟩
+  | .unknown => ⟨"unknown", none, none, none⟩
+  | .assigned goal root status => ⟨"assigned", some goal, some root, some status⟩
+
+/-- The assignment `latest_assignment_goals` and `observe_request_assignment`
+derive from a retained version history, over every history case. -/
+@[conformance_family]
+def history : Family HistoryCase ObservationWire where
+  inputs := historyCases
+  model := fun c => ObservationWire.ofModel (observeHistory c.versions c.entry)
+
+structure PersistedObservation where
+  observation : ObservationWire
+  handoffReason : Option String
+  deriving ToJson
+
+/-- The histories a served node can hold as written: each document's versions
+are written in order by create and update, so a history whose commits fork,
+merge, repeat or name a missing parent cannot be persisted. These cases drive
+`load_request_assignment`, its in-transaction form and the completion handoff
+over native DefraDB history. -/
+def persistedHistoryCases : List HistoryCase :=
+  historyCases.filter fun c => c.name ∈
+    ["retired_goal_keeps_its_status", "reused_goal_id_keeps_old_assignment",
+      "later_complete_goal_cannot_complete_older_active_assignment"]
+
+@[conformance_family]
+def persistedHistory : Family HistoryCase PersistedObservation where
+  inputs := persistedHistoryCases
+  model := fun c =>
+    { observation := ObservationWire.ofModel (observeHistory c.versions c.entry)
+      handoffReason := historyHandoffReason (observeHistory c.versions c.entry) }
 
 example : historyCases.length = 21 := by decide
 example : (historyCases.map fun c => observeHistory c.versions c.entry).take 2 =

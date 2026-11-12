@@ -1,9 +1,7 @@
 use super::contract_tests::{entry, goal};
 use super::*;
-use gents_lean_vocab::{
-    LeanGoalAssignmentHistoryCase, LeanGoalAssignmentHistoryCaseExpected,
-    LeanGoalAssignmentHistoryCaseVersionsItem,
-};
+use gents_lean_vocab::families::goal_request_assignment_contracts_history as history;
+use gents_lean_vocab::families::goal_request_assignment_contracts_persisted_history as persisted;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -14,7 +12,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-fn assignment_value(value: &LeanGoalAssignmentHistoryCaseVersionsItem) -> Value {
+fn assignment_value(value: &history::Version<String>) -> Value {
     json!({
         "goal": value.assignment.goal,
         "owner": value.assignment.owner,
@@ -24,7 +22,7 @@ fn assignment_value(value: &LeanGoalAssignmentHistoryCaseVersionsItem) -> Value 
 }
 
 fn versions(
-    values: &[LeanGoalAssignmentHistoryCaseVersionsItem],
+    values: &[history::Version<String>],
     identities: &[KeyIdentity],
 ) -> Vec<super::super::GoalAssignmentVersion> {
     values
@@ -37,13 +35,17 @@ fn versions(
                 goal,
                 format!("commit-{}", value.commit),
                 value.height as i64,
-                value.parents.iter().map(|id| format!("commit-{id}")).collect(),
+                value
+                    .parents
+                    .iter()
+                    .map(|id| format!("commit-{id}"))
+                    .collect(),
             )
         })
         .collect()
 }
 
-fn entry_value(case: &LeanGoalAssignmentHistoryCase) -> Value {
+fn entry_value(case: &history::HistoryCase<String>) -> Value {
     json!({
         "owner": case.entry.owner,
         "session": case.entry.session,
@@ -56,25 +58,10 @@ fn entry_value(case: &LeanGoalAssignmentHistoryCase) -> Value {
     })
 }
 
-fn expected_value(expected: &LeanGoalAssignmentHistoryCaseExpected) -> Value {
-    let mut value = serde_json::Map::new();
-    value.insert("kind".into(), json!(expected.kind));
-    if let Some(goal) = expected.goal {
-        value.insert("goal".into(), json!(goal));
-    }
-    if let Some(root) = expected.root {
-        value.insert("root".into(), json!(root));
-    }
-    if let Some(status) = &expected.status {
-        value.insert("status".into(), json!(status));
-    }
-    Value::Object(value)
-}
-
 fn observation(
     value: anyhow::Result<RequestAssignmentObservation>,
     roots: Option<&RapidHashMap<u64, String>>,
-) -> Value {
+) -> history::ObservationWire<String> {
     match value {
         Ok(RequestAssignmentObservation::Assigned(goal)) => {
             let root = goal.assignment_root_request_doc_id.as_deref().unwrap();
@@ -92,41 +79,65 @@ fn observation(
                         .parse::<u64>()
                         .unwrap()
                 });
-            json!({"kind":"assigned","goal":goal.goal_id.strip_prefix("goal-").unwrap().parse::<u64>().unwrap(),
-                "root":root,"status":goal.status})
+            history::ObservationWire {
+                kind: "assigned".into(),
+                goal: Some(
+                    goal.goal_id
+                        .strip_prefix("goal-")
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap(),
+                ),
+                root: Some(root),
+                status: Some(goal.status.clone()),
+            }
         }
-        Ok(RequestAssignmentObservation::None) => json!({"kind":"unassigned"}),
-        _ => json!({"kind":"unknown"}),
+        Ok(RequestAssignmentObservation::None) => history::ObservationWire {
+            kind: "unassigned".into(),
+            goal: None,
+            root: None,
+            status: None,
+        },
+        _ => history::ObservationWire {
+            kind: "unknown".into(),
+            goal: None,
+            root: None,
+            status: None,
+        },
     }
 }
 
 #[tokio::test]
 async fn generated_assignment_histories_drive_goal_version_selection() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_assignment_history_cases;
-    assert_eq!(cases.len(), 21);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("one.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("two.key"), None).unwrap(),
     ];
-    for case in cases {
-        let entry = entry(&entry_value(case), &identities).await;
-        let actual = latest_assignment_goals(&versions(&case.versions, &identities))
+    for case in
+        gents_lean_vocab::families::goal_request_assignment_contracts_history::cases::<String>()
+    {
+        let entry = entry(&entry_value(&case.input), &identities).await;
+        let actual = latest_assignment_goals(&versions(&case.input.versions, &identities))
             .map(|goals| observe_request_assignment(&goals, &entry));
-        assert_eq!(
-            observation(actual, None),
-            expected_value(&case.expected),
-            "{}",
-            case.name
-        );
-        if matches!(
-            case.name.as_str(),
-            "retired_goal_keeps_its_status"
-                | "reused_goal_id_keeps_old_assignment"
-                | "later_complete_goal_cannot_complete_older_active_assignment"
-        ) {
-            persisted_history(case, &identities).await;
-        }
+        case.check(observation(actual, None));
+    }
+}
+
+#[tokio::test]
+async fn persisted_histories_drive_native_assignment_and_handoff() {
+    let temp = tempfile::tempdir().unwrap();
+    let identities = [
+        KeyIdentity::load_or_create(temp.path().join("one.key"), None).unwrap(),
+        KeyIdentity::load_or_create(temp.path().join("two.key"), None).unwrap(),
+    ];
+    for case in
+        gents_lean_vocab::families::goal_request_assignment_contracts_persisted_history::cases::<
+            String,
+        >()
+    {
+        let input: history::HistoryCase<String> = gents_lean_vocab::family::recode(&case.input);
+        case.check(persisted_history(&input, &identities).await);
     }
 }
 
@@ -160,7 +171,10 @@ async fn persist_request(
     gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
-async fn persisted_history(case: &LeanGoalAssignmentHistoryCase, identities: &[KeyIdentity]) {
+async fn persisted_history(
+    case: &history::HistoryCase<String>,
+    identities: &[KeyIdentity],
+) -> persisted::PersistedObservation<String> {
     let identity = &identities[0];
     let node = Arc::new(
         defra_node::Node::builder()
@@ -191,10 +205,14 @@ async fn persisted_history(case: &LeanGoalAssignmentHistoryCase, identities: &[K
             persist_request(&access, identity, root, Some(reference)).await,
         );
     }
-    let reference = case.entry.reference.as_ref().map(|reference| GoalAssignmentInput {
-        goal_id: format!("goal-{}", reference.goal),
-        root_request_doc_id: Some(roots[&reference.root].clone()),
-    });
+    let reference = case
+        .entry
+        .reference
+        .as_ref()
+        .map(|reference| GoalAssignmentInput {
+            goal_id: format!("goal-{}", reference.goal),
+            root_request_doc_id: reference.root.map(|root| roots[&root].clone()),
+        });
     let entry_id = case.entry.doc;
     let request_doc = if let Some(doc) = roots.get(&entry_id) {
         doc.clone()
@@ -280,21 +298,17 @@ async fn persisted_history(case: &LeanGoalAssignmentHistoryCase, identities: &[K
         &rows[0],
     )
     .await;
-    assert_eq!(
-        observation(actual, Some(&roots)),
-        expected_value(&case.expected),
-        "{}: retained native history",
-        case.name
-    );
+    let retained = observation(actual, Some(&roots));
     let request = &rows[0];
     let within_transaction = access
         .transact_readonly("test.assignment_history_in_transaction", |txn| {
             Box::pin(super::load_request_assignment_in_txn(txn, request))
         })
         .await;
+    let within_transaction = observation(within_transaction, Some(&roots));
     assert_eq!(
-        observation(within_transaction, Some(&roots)),
-        expected_value(&case.expected),
+        serde_json::to_value(&within_transaction).unwrap(),
+        serde_json::to_value(&retained).unwrap(),
         "{}: retained history in the caller's transaction",
         case.name
     );
@@ -310,12 +324,6 @@ async fn persisted_history(case: &LeanGoalAssignmentHistoryCase, identities: &[K
         },
     )
     .await;
-    assert_eq!(
-        handoff.reason().map(str::to_owned),
-        case.expected_handoff_reason,
-        "{}: actual completion handoff",
-        case.name
-    );
     let current = super::super::load_canonical_goal(&node, identity.did(), "session-10")
         .await
         .unwrap()
@@ -327,4 +335,8 @@ async fn persisted_history(case: &LeanGoalAssignmentHistoryCase, identities: &[K
         case.name
     );
     node.shutdown().await.expect("node shutdown");
+    persisted::PersistedObservation {
+        observation: gents_lean_vocab::family::recode(&retained),
+        handoff_reason: handoff.reason().map(str::to_owned),
+    }
 }
