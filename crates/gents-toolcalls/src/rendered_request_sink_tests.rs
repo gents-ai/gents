@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
 use gents_inference::rendered_request::sink::{
-    BlockScope, DefraRenderedRequestSink, CAPTURE_BLOCK_CREATE_BATCH,
-    RENDERED_REQUEST_BLOCK_COLLECTION, RENDERED_REQUEST_COLLECTION,
+    DefraRenderedRequestSink, CAPTURE_BLOCK_CREATE_BATCH, RENDERED_REQUEST_BLOCK_COLLECTION,
+    RENDERED_REQUEST_COLLECTION,
 };
 use gents_inference::rendered_request::*;
 use gents_store::graphql::escape_graphql_string;
@@ -269,29 +269,6 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
     assert_eq!(reader.execute(query).await.unwrap(), before);
     assert_eq!(access.execute(query).await.unwrap(), before);
     node.shutdown().await.unwrap();
-}
-
-#[test]
-fn generated_capture_block_scope_cases_use_physical_session_identity() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().capture_block_scope_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        let field = |name: &str| case[name].as_str().expect("block scope case field");
-        let first = BlockScope {
-            session_doc_id: field("first_session").into(),
-            agent_did: String::new(),
-        };
-        let second = BlockScope {
-            session_doc_id: field("second_session").into(),
-            agent_did: String::new(),
-        };
-        let left = first.key(field("first_digest"));
-        let right = second.key(field("second_digest"));
-        assert_eq!(
-            left == right,
-            case["same_storage_identity"].as_bool().unwrap()
-        );
-    }
 }
 
 fn capture_text(seed: u64, len: usize) -> String {

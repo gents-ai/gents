@@ -1,3 +1,4 @@
+import Proofs.Conformance.Identity.BlockScope
 import Proofs.Conformance.AccountResolver
 import Proofs.Conformance.Identity.NetworkProtocol
 import Proofs.Conformance.ClaudePromptAssembly
@@ -289,8 +290,6 @@ def snapshotCaptureTailJson : String :=
       ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"auxiliary_session_child_binding_cases\":"
       ++ Identity.SessionChild.childScopeCasesJson ++ ","
-    ++ "\"capture_block_scope_cases\":"
-      ++ Identity.SessionChild.blockScopeCasesJson ++ ","
     ++ "\"goal_link_cases\":"
       ++ Identity.SessionChild.goalLinkCasesJson ++ ","
     ++ "\"local_self_publication_cases\":"

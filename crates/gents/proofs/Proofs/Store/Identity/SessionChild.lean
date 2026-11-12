@@ -480,29 +480,4 @@ theorem block_identity_is_session_scoped
   apply different
   exact congrArg Prod.fst equal
 
-structure BlockScopeCase where
-  firstSession : String
-  secondSession : String
-  firstDigest : String
-  secondDigest : String
-  deriving Repr
-
-def blockScopeCases : List BlockScopeCase :=
-  [ ⟨"session-a", "session-a", "digest-a", "digest-a"⟩,
-    ⟨"session-a", "session-b", "digest-a", "digest-a"⟩,
-    ⟨"session-a", "session-a", "digest-a", "digest-b"⟩,
-    ⟨"a:b", "a", "c", "b:c"⟩ ]
-
-def blockScopeCaseJson (c : BlockScopeCase) : Lean.Json := Lean.Json.mkObj
-  [("first_session", Lean.toJson c.firstSession),
-   ("second_session", Lean.toJson c.secondSession),
-   ("first_digest", Lean.toJson c.firstDigest),
-   ("second_digest", Lean.toJson c.secondDigest),
-   ("same_storage_identity", Lean.toJson
-     (blockStorageIdentity c.firstSession c.firstDigest ==
-       blockStorageIdentity c.secondSession c.secondDigest))]
-
-def blockScopeCasesJson : String :=
-  (Lean.toJson (blockScopeCases.map blockScopeCaseJson)).compress
-
 end Identity.SessionChild

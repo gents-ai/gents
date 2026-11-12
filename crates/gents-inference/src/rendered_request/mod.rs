@@ -795,6 +795,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn block_scope_keys_match_the_lean_storage_identity() {
+        gents_lean_vocab::families::block_scope_storage_identity::replay(|i| {
+            let first = sink::BlockScope {
+                session_doc_id: i.first_session.clone(),
+                agent_did: String::new(),
+            };
+            let second = sink::BlockScope {
+                session_doc_id: i.second_session.clone(),
+                agent_did: String::new(),
+            };
+            first.key(&i.first_digest) == second.key(&i.second_digest)
+        });
+    }
 }
 
 use anyhow::{Context, Result};
