@@ -73,6 +73,7 @@ import Proofs.Conformance.InferenceObservation
 import Proofs.Store.Identity.PublicationConformance
 import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
+import Proofs.Conformance.Identity.DelegatedFinality
 import Proofs.Store.Identity.AutomationConformance
 import Proofs.Store.Identity.OperationsConformance
 import Proofs.Store.Identity.EvalRecords
@@ -465,8 +466,6 @@ def snapshotGoalCasesJson : String :=
       ++ CanonicalOutput.Execution.AdmissionHandoff.Cases.casesJson ++ ","
     ++ "\"delegated_publication_cases\":"
       ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
-    ++ "\"delegated_finality_cases\":"
-      ++ Identity.DelegatedFinality.casesJson ++ ","
     ++ "\"client_signed_control_cases\":"
       ++ Conformance.NativeRefinement.clientSignedControlCasesJson ++ ","
     ++ "\"process_stop_action_cases\":"

@@ -2872,7 +2872,6 @@ pub struct LeanContextAnchor {
 pub struct LeanContractSnapshot {
     pub tool_admission_handoff_cases: Vec<LeanToolAdmissionHandoffCase>,
     pub delegated_publication_cases: Vec<serde_json::Value>,
-    pub delegated_finality_cases: Vec<LeanDelegatedFinalityCase>,
     pub generated_by: String,
     pub schema_publication_cases: Vec<LeanSchemaPublicationCase>,
     pub root_admission_cases: Vec<LeanRootAdmissionCase>,
@@ -3512,25 +3511,6 @@ pub struct LeanDeferredCreationCase {
     pub opening: bool,
     pub cause: bool,
     pub expected: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDelegatedFinalityCase {
-    pub actions: Vec<LeanDelegatedFinalityCaseActionsItem>,
-    pub expected_attempts: u64,
-    pub expected_knowledge: String,
-    pub expected_native: String,
-    pub may_report_failure: bool,
-    pub may_retry: bool,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDelegatedFinalityCaseActionsItem {
-    pub kind: String,
-    pub valid: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

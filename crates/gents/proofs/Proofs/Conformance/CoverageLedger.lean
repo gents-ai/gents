@@ -1545,6 +1545,11 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "session_input_edit_claim")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "delegated_finality_served_unreached"
+      "model-production-gap: the session-message commit keeps no caller-side knowledge state for a pending read, a foreign receipt or an invalid abort proof, and no attempt counter or retry and failure-report permission, so pending-is-unconfirmed, foreign-receipt, no-proof-of-abort and failure-proof-cannot-undo-child have no production form.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_private_journal_policy"
       "PrivateJournalSigner")
