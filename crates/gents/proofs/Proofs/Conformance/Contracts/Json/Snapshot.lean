@@ -432,8 +432,6 @@ def snapshotGoalCasesJson : String :=
       ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
     ++ "\"goal_queue_assignment_cases\":"
       ++ Conformance.GoalQueueAssignmentContracts.casesJson ++ ","
-    ++ "\"goal_request_head_cases\":"
-      ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
     ++ "\"durable_observation_cases\":"
       ++ Conformance.NativeRefinement.observationCasesJson ++ ","
     ++ "\"plugin_job_commit_kill_cases\":"

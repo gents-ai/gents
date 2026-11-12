@@ -1,16 +1,25 @@
 use super::*;
 
+fn physical_doc(doc_id: &str) -> u64 {
+    doc_id
+        .strip_prefix("physical-")
+        .and_then(|doc| doc.parse().ok())
+        .unwrap_or_else(|| panic!("{doc_id} is not a fixture document"))
+}
+
 #[tokio::test]
 async fn generated_membership_observations_keep_model_roots_and_linear_receipt_work() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_head_cases;
+    let cases = gents_lean_vocab::families::goal_request_head_contracts_membership::cases::<
+        InputDisposition,
+    >();
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
     ];
     let mut profiles = Vec::new();
-    for typed in cases {
-        let case = head_case(typed);
+    for typed in &cases {
+        let case = membership_case(&typed.input);
         let mut fixture = Fixture {
             case: &case,
             identities: &identities,
@@ -25,57 +34,63 @@ async fn generated_membership_observations_keep_model_roots_and_linear_receipt_w
         }
         let owner = identities[(case.scope.owner - 1) as usize].did();
         let session = format!("session-{}", case.scope.session);
-        let current = format!("physical-{}", typed.membership_current);
+        let current = format!("physical-{}", typed.input.membership_current);
         let (observed, checks) =
             gents_store::identity::request_receipt::count_request_receipt_verifications(|| {
                 authenticated_goal_request_members(owner, &session, &current, &rows)
             });
-        if let Some(root) = typed.membership_entry {
-            let observed = observed.unwrap_or_else(|error| panic!("{}: {error:#}", case.name));
-            assert_eq!(
-                observed.entry.doc_id.as_deref(),
-                Some(format!("physical-{root}").as_str()),
-                "{}: executed model entry",
-                case.name,
-            );
-            let mut expected_members = typed
-                .membership_members
-                .iter()
-                .map(|doc| format!("physical-{doc}"))
-                .collect::<Vec<_>>();
-            expected_members.sort_unstable();
-            assert_eq!(observed.member_doc_ids, expected_members, "{}", case.name);
-            let expected_parents = typed
-                .membership_parents
-                .iter()
-                .map(|edge| (format!("physical-{}", edge[0]), format!("physical-{}", edge[1])))
-                .collect::<std::collections::BTreeMap<_, _>>();
-            let observed_parents = rows
-                .iter()
-                .filter(|row| {
-                    row.doc_id != observed.entry.doc_id
-                        && row
-                            .doc_id
-                            .as_ref()
-                            .is_some_and(|doc| observed.member_doc_ids.contains(doc))
-                })
-                .map(|row| {
-                    (
-                        row.doc_id.clone().unwrap(),
-                        row.caused_by_parent_request_doc_id.clone().unwrap(),
-                    )
-                })
-                .collect::<std::collections::BTreeMap<_, _>>();
-            assert_eq!(observed_parents, expected_parents, "{}", case.name);
-        } else {
-            assert!(
-                observed.is_err(),
-                "{}: model rejects this observation",
-                case.name
-            );
-        }
-        if let Some(budget) = typed.membership_receipt_checks {
-            profiles.push((rows.len(), checks, usize::try_from(budget).unwrap()));
+        let output = match observed {
+            Ok(observed) => {
+                assert!(
+                    observed
+                        .member_doc_ids
+                        .windows(2)
+                        .all(|pair| pair[0] <= pair[1]),
+                    "{}: members are reported in document-id order",
+                    case.name
+                );
+                let mut members: Vec<u64> = observed
+                    .member_doc_ids
+                    .iter()
+                    .map(|doc| physical_doc(doc))
+                    .collect();
+                members.sort_unstable();
+                let mut parents: Vec<members::Edge> = rows
+                    .iter()
+                    .filter(|row| {
+                        row.doc_id != observed.entry.doc_id
+                            && row
+                                .doc_id
+                                .as_ref()
+                                .is_some_and(|doc| observed.member_doc_ids.contains(doc))
+                    })
+                    .map(|row| members::Edge {
+                        doc: physical_doc(row.doc_id.as_deref().unwrap()),
+                        parent: physical_doc(
+                            row.caused_by_parent_request_doc_id.as_deref().unwrap(),
+                        ),
+                    })
+                    .collect();
+                parents.sort_by_key(|edge| edge.doc);
+                members::MembershipOutput {
+                    membership_entry: Some(physical_doc(
+                        observed.entry.doc_id.as_deref().unwrap_or_else(|| {
+                            panic!("{}: an admitted entry has a document", case.name)
+                        }),
+                    )),
+                    membership_members: members,
+                    membership_parents: parents,
+                }
+            }
+            Err(_) => members::MembershipOutput {
+                membership_entry: None,
+                membership_members: Vec::new(),
+                membership_parents: Vec::new(),
+            },
+        };
+        typed.check(output);
+        if let Some(budget) = case.receipt_checks {
+            profiles.push((rows.len(), checks, budget));
         }
     }
     assert!(profiles.iter().any(|(rows, _, _)| *rows >= 128));

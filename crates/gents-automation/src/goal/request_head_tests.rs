@@ -1,5 +1,7 @@
 use super::*;
 use crate::goal::continuation::prepare_goal_continuation;
+use gents_lean_vocab::families::goal_request_head_contracts_membership as members;
+use gents_lean_vocab::families::goal_request_head_contracts_selection as head;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -46,9 +48,8 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                     .unwrap(),
                 })
                 .collect(),
-            expected: None,
             assignment_root: None,
-            expected_receipt_checks: None,
+            receipt_checks: None,
         };
         let mut fixture = Fixture {
             case: &case,
@@ -199,15 +200,9 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         let expected_invocation_entry = value
             .expected_invocation_entry
             .map(|doc| format!("physical-{doc}"));
+        assert_eq!(actual, expected_entry, "{}: assignment ancestry", case.name);
         assert_eq!(
-            actual,
-            expected_entry,
-            "{}: assignment ancestry",
-            case.name
-        );
-        assert_eq!(
-            invocation,
-            expected_invocation_entry,
+            invocation, expected_invocation_entry,
             "{}: invocation ancestry",
             case.name
         );
@@ -253,9 +248,8 @@ async fn generated_goal_ancestry_cases_keep_one_signed_goal() {
                     .unwrap(),
                 })
                 .collect(),
-            expected: None,
             assignment_root: None,
-            expected_receipt_checks: None,
+            receipt_checks: None,
         };
         let mut fixture = Fixture {
             case: &case,
@@ -284,15 +278,14 @@ async fn generated_goal_ancestry_cases_keep_one_signed_goal() {
         assert_eq!(actual, expected, "{}: signed physical ancestry", case.name);
     }
 }
-#[derive(Deserialize)]
 struct Scope {
     owner: u64,
     session: u64,
     goal: u64,
 }
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-enum InputDisposition {
+pub(super) enum InputDisposition {
     #[default]
     Execution,
     Folded,
@@ -300,7 +293,7 @@ enum InputDisposition {
     Removed,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 struct ModelRow {
     purpose: gents_protocol::request_admission::RequestPurpose,
     doc: u64,
@@ -313,39 +306,62 @@ struct ModelRow {
     sequence: u64,
     receipt_valid: bool,
     deterministic_identity: bool,
-    #[serde(default)]
     input_disposition: InputDisposition,
 }
-#[derive(Deserialize)]
 struct Case {
     name: String,
     scope: Scope,
     rows: Vec<ModelRow>,
-    expected: Option<ModelRow>,
-    #[serde(default)]
     assignment_root: Option<u64>,
-    #[serde(default)]
-    expected_receipt_checks: Option<usize>,
+    receipt_checks: Option<usize>,
 }
 
-fn head_case(case: &gents_lean_vocab::LeanGoalRequestHeadCase) -> Case {
+fn model_case(
+    name: &str,
+    scope: &head::Scope,
+    rows: &[head::RowWire<InputDisposition>],
+    assignment_root: Option<u64>,
+    receipt_checks: Option<u64>,
+) -> Case {
     Case {
-        name: case.name.clone(),
+        name: name.to_owned(),
         scope: Scope {
-            owner: case.scope.owner,
-            session: case.scope.session,
-            goal: case.scope.goal,
+            owner: scope.owner,
+            session: scope.session,
+            goal: scope.goal,
         },
-        rows: case.rows.iter().map(head_row).collect(),
-        expected: case.expected.as_ref().map(head_expected),
-        assignment_root: case.assignment_root,
-        expected_receipt_checks: case
-            .expected_receipt_checks
-            .map(|checks| usize::try_from(checks).unwrap()),
+        rows: rows.iter().map(model_row).collect(),
+        assignment_root,
+        receipt_checks: receipt_checks.map(|checks| usize::try_from(checks).unwrap()),
     }
 }
 
-fn head_row(row: &gents_lean_vocab::LeanGoalRequestHeadCaseRowsItem) -> ModelRow {
+fn selection_case(input: &head::SelectionInput<InputDisposition>) -> Case {
+    model_case(
+        &input.name,
+        &input.scope,
+        &input.rows,
+        input.assignment_root,
+        input.receipt_checks,
+    )
+}
+
+fn membership_case(input: &members::MembershipInput<InputDisposition>) -> Case {
+    let rows: Vec<head::RowWire<InputDisposition>> = input
+        .rows
+        .iter()
+        .map(gents_lean_vocab::family::recode)
+        .collect();
+    model_case(
+        &input.name,
+        &gents_lean_vocab::family::recode(&input.scope),
+        &rows,
+        input.assignment_root,
+        input.membership_receipt_checks,
+    )
+}
+
+fn model_row(row: &head::RowWire<InputDisposition>) -> ModelRow {
     ModelRow {
         purpose: serde_json::from_value(serde_json::Value::String(row.purpose.clone())).unwrap(),
         doc: row.doc,
@@ -358,30 +374,7 @@ fn head_row(row: &gents_lean_vocab::LeanGoalRequestHeadCaseRowsItem) -> ModelRow
         sequence: row.sequence,
         receipt_valid: row.receipt_valid,
         deterministic_identity: row.deterministic_identity,
-        input_disposition: serde_json::from_value(serde_json::Value::String(
-            row.input_disposition.clone(),
-        ))
-        .unwrap(),
-    }
-}
-
-fn head_expected(row: &gents_lean_vocab::LeanGoalRequestHeadCaseExpected) -> ModelRow {
-    ModelRow {
-        purpose: serde_json::from_value(serde_json::Value::String(row.purpose.clone())).unwrap(),
-        doc: row.doc,
-        request: row.request,
-        owner: row.owner,
-        session: row.session,
-        goal: row.goal,
-        parent_doc: row.parent_doc,
-        parent_request: row.parent_request,
-        sequence: row.sequence,
-        receipt_valid: row.receipt_valid,
-        deterministic_identity: row.deterministic_identity,
-        input_disposition: serde_json::from_value(serde_json::Value::String(
-            row.input_disposition.clone(),
-        ))
-        .unwrap(),
+        input_disposition: row.input_disposition,
     }
 }
 
@@ -613,15 +606,16 @@ impl Fixture<'_> {
 
 #[tokio::test]
 async fn generated_goal_request_head_cases_drive_signed_row_selector() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_head_cases;
-    assert_eq!(cases.len(), 27);
+    let cases = gents_lean_vocab::families::goal_request_head_contracts_selection::cases::<
+        InputDisposition,
+    >();
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
     ];
-    for typed in cases {
-        let case = head_case(typed);
+    for typed in &cases {
+        let case = selection_case(&typed.input);
         let goal: GoalDocument = serde_json::from_value(serde_json::json!({
             "_docID": "goal-doc", "goal_id": format!("goal-{}", case.scope.goal),
             "node_did": identities[(case.scope.owner - 1) as usize].did(),
@@ -669,23 +663,23 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
             gents_store::identity::request_receipt::count_request_receipt_verifications(|| {
                 latest_goal_request(&goal, &rows).and_then(|row| row.doc_id.as_deref())
             });
-        if let Some(expected_checks) = case.expected_receipt_checks {
+        if let Some(expected_checks) = case.receipt_checks {
             assert!(
                 verifications <= expected_checks,
                 "{}: {verifications} receipt checks exceed the Lean plan bound {expected_checks}",
                 case.name,
             );
         }
-        let expected = case
-            .expected
-            .as_ref()
-            .map(|row| format!("physical-{}", row.doc));
-        assert_eq!(
-            selected,
-            expected.as_deref(),
-            "{}: production selector must honor authenticated causal head",
-            case.name
-        );
+        let selected_row = selected.map(|doc| {
+            typed
+                .input
+                .rows
+                .iter()
+                .find(|row| format!("physical-{}", row.doc) == doc)
+                .unwrap_or_else(|| panic!("{}: selected {doc} is not a case row", case.name))
+                .clone()
+        });
+        typed.check(selected_row);
     }
 }
 

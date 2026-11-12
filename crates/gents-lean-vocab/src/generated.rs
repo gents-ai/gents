@@ -2961,7 +2961,6 @@ pub struct LeanContractSnapshot {
     pub background_process_identity_cases: Vec<LeanBackgroundProcessIdentityCase>,
     pub durable_observation_cases: Vec<LeanDurableObservationCase>,
     pub plugin_target_resolution_cases: Vec<LeanPluginTargetResolutionCase>,
-    pub goal_request_head_cases: Vec<LeanGoalRequestHeadCase>,
     pub goal_request_assignment_cases: Vec<LeanGoalRequestAssignmentCase>,
     pub goal_wake_receipt_cases: Vec<LeanGoalWakeReceiptCase>,
     pub goal_tool_context_cases: Vec<LeanGoalToolContextCase>,

@@ -1856,8 +1856,12 @@ def caseCoverage : List CoverageEntry :=
       "PluginTargetResolutionCases")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_request_head_cases"
-      "GoalRequestHeadCases")
+      "family"
+      "goal_request_head_contracts_selection")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_request_head_contracts_membership")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_edit_cases"
