@@ -18,23 +18,14 @@ use gents_loop::claude_messages_body::ClaudeRequestContext;
 fn cumulative_usage_keeps_start_counters_and_requires_message_stop() {
     let start = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":0,\"cache_read_input_tokens\":64,\"cache_creation_input_tokens\":36,\"output_tokens\":1}}}\n\n";
     let delta = "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":20}}\n\n";
-    let snapshot: Value =
-        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
-    for (name, stop) in [
+    for (name, stop, expected) in [
         (
             "messages_cumulative",
             "data: {\"type\":\"message_stop\"}\n\n",
+            gents_protocol::usage::TokenUsage { input_tokens: Some(100), output_tokens: Some(20), cached_input_tokens: Some(64), cache_creation_input_tokens: Some(36), reasoning_output_tokens: None, provider_total_tokens: None, final_response: true },
         ),
-        ("messages_eof", ""),
+        ("messages_eof", "", gents_protocol::usage::TokenUsage { input_tokens: Some(100), output_tokens: Some(20), cached_input_tokens: Some(64), cache_creation_input_tokens: Some(36), reasoning_output_tokens: None, provider_total_tokens: None, final_response: false }),
     ] {
-        let case = snapshot["provider_usage_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap();
-        let expected: gents_protocol::usage::TokenUsage =
-            serde_json::from_value(case["observations"][0].clone()).unwrap();
         let events =
             parse_messages_sse(&format!("{start}{delta}{stop}"), &RapidHashSet::new()).unwrap();
         let response = events

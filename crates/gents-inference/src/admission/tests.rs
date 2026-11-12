@@ -1871,8 +1871,8 @@ async fn transit_permit_of_pruned_pool_cannot_admit() {
 
 #[tokio::test]
 async fn invalid_provider_usage_still_publishes_the_modeled_terminal_observation() {
-    let snapshot: Value =
-        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
+    use gents_lean_vocab::families::provider_usage_invalid_storage as wire;
+
     let (db, signer) = test_node().await;
     let node = db.node.clone();
     let registry = TestRegistry::new(node.clone(), signer);
@@ -1886,68 +1886,58 @@ async fn invalid_provider_usage_still_publishes_the_modeled_terminal_observation
         registry.signer.clone(),
     )
     .unwrap();
-    let mut exercised = 0;
-    for case in snapshot["provider_usage_cases"].as_array().unwrap() {
-        for (observation, expected) in case["observations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .zip(case["expected"].as_array().unwrap())
-        {
-            if expected["valid"] != false {
-                continue;
-            }
-            let request_id = format!("invalid-usage-{exercised}");
-            let context = test_context(&registry, &request_id, "usage-backend").await;
-            let usage = serde_json::from_value(observation.clone()).unwrap();
-            scope_request(context, async {
-                let mut permit = registry.acquire_current_call_for_test().await.unwrap();
-                permit
-                    .finish_success(Some(super::ProviderCallUsage(usage)))
-                    .await
-                    .unwrap();
-            })
-            .await;
-            let response = access.execute(&format!(
-                r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ call_state ended_at prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness }} }}"#,
-                gents_store::graphql::escape_graphql_string(&request_id)
-            )).await.unwrap();
-            let rows = response["data"]["InferenceCall"].as_array().unwrap();
-            assert_eq!(rows.len(), 1, "{}", case["name"]);
-            let stored = &rows[0];
-            let columns: gents_protocol::usage::TokenUsageColumns =
-                serde_json::from_value(stored.clone()).unwrap();
-            let decoded = columns.observation().unwrap();
-            let expected_usage: gents_protocol::usage::TokenUsage =
-                serde_json::from_value(expected["for_storage"].clone()).unwrap();
-            assert_eq!(decoded, expected_usage, "{}", case["name"]);
-            let summary =
-                gents_protocol::usage::TokenUsageSummary::from_observations([decoded]).unwrap();
-            assert_eq!(summary.incomplete_calls, 1);
-            assert!(summary.charged_total().is_none());
-            assert_eq!(stored["call_state"], "completed", "{}", case["name"]);
-            assert!(stored["ended_at"].is_string());
+    for (index, case) in gents_lean_vocab::families::provider_usage_invalid_storage::cases::<
+        gents_protocol::usage::UsageCompleteness,
+    >()
+        .into_iter()
+        .enumerate()
+    {
+        let request_id = format!("invalid-usage-{index}");
+        let context = test_context(&registry, &request_id, "usage-backend").await;
+        let usage: gents_protocol::usage::TokenUsage =
+            gents_lean_vocab::family::recode(&case.input.observation);
+        scope_request(context, async {
+            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
+            permit
+                .finish_success(Some(super::ProviderCallUsage(usage)))
+                .await
+                .unwrap();
+        })
+        .await;
+        let response = access.execute(&format!(
+            r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ call_state ended_at prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness }} }}"#,
+            gents_store::graphql::escape_graphql_string(&request_id)
+        )).await.unwrap();
+        let rows = response["data"]["InferenceCall"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{request_id}");
+        let stored = &rows[0];
+        assert_eq!(stored["call_state"], "completed", "{request_id}");
+        assert!(stored["ended_at"].is_string(), "{request_id}");
+        let columns: gents_protocol::usage::TokenUsageColumns =
+            serde_json::from_value(stored.clone()).unwrap();
+        let decoded = columns.observation().unwrap();
+        let stored_completeness: gents_protocol::usage::UsageCompleteness =
+            serde_json::from_value(stored["usage_completeness"].clone()).unwrap();
+        let decoded_value = serde_json::to_value(decoded).unwrap();
+        for (column, observation) in [
+            ("prompt_tokens", "input_tokens"),
+            ("completion_tokens", "output_tokens"),
+            ("cached_input_tokens", "cached_input_tokens"),
+            ("cache_creation_input_tokens", "cache_creation_input_tokens"),
+            ("reasoning_output_tokens", "reasoning_output_tokens"),
+            ("provider_total_tokens", "provider_total_tokens"),
+        ] {
             assert_eq!(
-                stored["usage_completeness"], expected["storage_completeness"],
-                "{}",
-                case["name"]
+                stored[column], decoded_value[observation],
+                "{request_id} {column}"
             );
-            for (column, observation) in [
-                ("prompt_tokens", "input_tokens"),
-                ("completion_tokens", "output_tokens"),
-                ("cached_input_tokens", "cached_input_tokens"),
-                ("cache_creation_input_tokens", "cache_creation_input_tokens"),
-                ("reasoning_output_tokens", "reasoning_output_tokens"),
-                ("provider_total_tokens", "provider_total_tokens"),
-            ] {
-                assert_eq!(
-                    stored[column], expected["for_storage"][observation],
-                    "{} {column}",
-                    case["name"]
-                );
-            }
-            exercised += 1;
         }
+        let summary = gents_protocol::usage::TokenUsageSummary::from_observations([decoded]).ok();
+        case.check(wire::StoredOutput {
+            for_storage: gents_lean_vocab::family::recode(&decoded),
+            storage_completeness: stored_completeness,
+            incomplete_calls: summary.map(|summary| summary.incomplete_calls),
+            charged_total: summary.and_then(|summary| summary.charged_total()),
+        });
     }
-    assert!(exercised > 0);
 }
