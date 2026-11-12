@@ -506,9 +506,19 @@ def caseCoverage : List CoverageEntry :=
       "The snapshot emits and the decoder accepts these cases; no native test reads them.")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_owed_delivery_cases"
-      "LifecycleHookOwedDeliveryCases"
-      "The production record (hooks::owed::Record, owe_runner, derive_halts, prunable) is driven by every case. Its publication through the store's post-commit runtime write, the redrive's and the halt derivation's observation of core rows as the owning Agent, and the deletion of pruned rows are not driven by these cases.")
+      "family"
+      "hooks_contracts_owed_trace"
+      "The production record (hooks::owed::Record, owe_runner, publish, redrive, performs) is driven by every case. Its publication through the store's post-commit runtime write and the redrive's observation of core rows as the owning Agent are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "hooks_contracts_owed_derive"
+      "Production derive_halts decides every case. The halt derivation's observation of core rows as the owning Agent is not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "hooks_contracts_owed_prune"
+      "Production prunable decides every record. The deletion of pruned rows is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "cross_actor_authorization_cases" "CrossActorAuthorization"
@@ -1305,12 +1315,12 @@ def caseCoverage : List CoverageEntry :=
       "Production gate runs every case and production partition combines the answers through the conformance test's in-memory Host. The DefraDB transaction host, its revision read and the Goals listener (goal::lifecycle_hooks::AssignmentScope) are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_delivery_cases"
-      "LifecycleHookDeliveryCases")
+      "family"
+      "hooks_contracts_delivery_step")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_admit_cases"
-      "LifecycleHookAdmitCases")
+      "family"
+      "hooks_contracts_prepared_admission")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "lifecycle_hook_grant_cases"

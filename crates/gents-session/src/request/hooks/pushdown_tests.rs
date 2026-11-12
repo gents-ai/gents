@@ -15,23 +15,24 @@ use crate::request::hooks::queue_scope::{
 use crate::request::hooks::stage::{
     gate, owed, stage, stage_dropping, ApplyFailure, HookError, Host, Plugin, Staged,
 };
+use gents_lean_vocab::families::hooks_contracts_delivery_step::{self as delivery_step};
+use gents_lean_vocab::families::hooks_contracts_owed_derive::{self as owed_derive};
+use gents_lean_vocab::families::hooks_contracts_owed_prune::{self as owed_prune};
+use gents_lean_vocab::families::hooks_contracts_owed_trace::{self as owed_trace};
+use gents_lean_vocab::families::hooks_contracts_prepared_admission::{self as admission};
 use gents_lean_vocab::families::hooks_contracts_verdict_combination::{self as combination};
 use gents_lean_vocab::{
-    lean_lifecycle_hook_admit_cases,
-    lean_lifecycle_hook_delivery_cases, lean_lifecycle_hook_effect_cases,
+    lean_lifecycle_hook_effect_cases,
     lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_grant_cases,
-    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_owed_delivery_cases,
+    lean_lifecycle_hook_must_commit_cases,
     lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
-    LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult, LeanLifecycleHookBinding,
-    LeanLifecycleHookChoice, LeanLifecycleHookDecision, LeanLifecycleHookDeliveryRecord,
-    LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
-    LeanLifecycleHookManifest, LeanLifecycleHookOwedAttempt, LeanLifecycleHookOwedKey,
-    LeanLifecycleHookOwedKind, LeanLifecycleHookOwedRecord, LeanLifecycleHookOwedSettlement,
-    LeanLifecycleHookOwedStep, LeanLifecycleHookOwedWrite, LeanLifecycleHookPartition,
-    LeanLifecycleHookPreparedVerdict, LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRef,
+    LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
+    LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
+    LeanLifecycleHookManifest, LeanLifecycleHookPartition,
+    LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRef,
     LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
     LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookStageResult,
-    LeanLifecycleHookStale, LeanLifecycleHookState, LeanLifecycleHookSubject,
+    LeanLifecycleHookState, LeanLifecycleHookSubject,
     LeanLifecycleHookSubjectKind, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
 use serde_json::Value;
@@ -857,161 +858,171 @@ async fn generated_lifecycle_hook_queue_scope_cases_drive_the_queue_partition() 
     }
 }
 
-fn record_of(lean: &LeanLifecycleHookDeliveryRecord) -> DeliveryRecord<String, String> {
+fn record_of(wire: &delivery_step::RecordWire) -> DeliveryRecord<String, String> {
     DeliveryRecord {
-        terminal: lean.terminal.clone(),
-        owed: lean.owed.clone(),
-        delivered: lean.delivered.clone(),
+        terminal: wire.terminal.clone(),
+        owed: wire.owed.clone(),
+        delivered: wire.delivered.clone(),
     }
 }
 
 #[test]
-fn generated_lifecycle_hook_delivery_cases_drive_the_delivery_record() {
-    let cases = lean_lifecycle_hook_delivery_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let mut record = record_of(&case.initial);
-        for (index, entry) in case.trace.iter().enumerate() {
-            match &entry.step {
-                LeanLifecycleHookDeliveryStep::Publish {
-                    outcome,
-                    keys,
-                    commit,
-                } => record.publish(outcome.clone(), keys.iter().cloned(), *commit),
-                LeanLifecycleHookDeliveryStep::Deliver { key, applied } => {
-                    record.deliver(key, *applied)
-                }
-            }
-            assert_eq!(
-                record,
-                record_of(&entry.state),
-                "{} step {index}: record",
-                case.name
-            );
-            assert_eq!(
-                record.pending(),
-                entry.pending,
-                "{} step {index}: pending",
-                case.name
-            );
+fn delivery_steps_follow_the_lean_model() {
+    gents_lean_vocab::families::hooks_contracts_delivery_step::replay(|input: &delivery_step::DeliveryStepInput| {
+        let mut record = record_of(&input.before);
+        let step = &input.step;
+        match step.kind.as_str() {
+            "publish" => record.publish(
+                step.outcome.clone().expect("a publication names its outcome"),
+                step.keys.iter().cloned(),
+                step.commit.expect("a publication says whether it committed"),
+            ),
+            "deliver" => record.deliver(
+                step.key.as_ref().expect("a delivery names its key"),
+                step.applied.expect("a delivery says whether it applied"),
+            ),
+            other => panic!("the model has no delivery step {other}"),
         }
-    }
+        delivery_step::DeliveryStepOutput {
+            pending: record.pending(),
+            state: delivery_step::RecordWire {
+                terminal: record.terminal,
+                owed: record.owed,
+                delivered: record.delivered,
+            },
+        }
+    });
 }
 
-fn owed_key_of(lean: &LeanLifecycleHookOwedKey) -> owed::Key {
+fn owed_key_of(wire: &owed_trace::OwedKeyWire) -> owed::Key {
     owed::Key {
-        point: lean.point.clone(),
-        plugin: lean.plugin.clone(),
-        subject: lean.subject.clone(),
+        point: wire.point.clone(),
+        plugin: wire.plugin.clone(),
+        subject: wire.subject.clone(),
     }
 }
 
-fn owed_write_of(lean: &LeanLifecycleHookOwedWrite) -> owed::Write {
+fn owed_write_of(wire: &owed_trace::OwedWriteWire) -> owed::Write {
     owed::Write {
-        subject: lean.subject.clone(),
-        doc: lean.doc.clone(),
+        subject: wire.subject.clone(),
+        doc: wire.doc.clone(),
     }
 }
 
-fn owed_record_of(lean: &LeanLifecycleHookOwedRecord) -> owed::Record {
+fn owed_record_of(wire: &owed_trace::OwedRecordWire) -> owed::Record {
     owed::Record {
-        key: owed_key_of(&lean.key),
-        kind: match lean.kind {
-            LeanLifecycleHookOwedKind::Staging => owed::Kind::Staging,
-            LeanLifecycleHookOwedKind::OnBehalf => owed::Kind::OnBehalf,
+        key: owed_key_of(&wire.key),
+        kind: match wire.kind.as_str() {
+            "staging" => owed::Kind::Staging,
+            "on_behalf" => owed::Kind::OnBehalf,
+            other => panic!("the model has no owed kind {other}"),
         },
-        actor: lean.actor.clone(),
-        runner: lean.runner.clone(),
-        attempts: lean.attempts,
-        last_error: lean.last_error.clone(),
-        settled: lean.settled.map(|settled| match settled {
-            LeanLifecycleHookOwedSettlement::Delivered => owed::Settlement::Delivered,
-            LeanLifecycleHookOwedSettlement::Dropped => owed::Settlement::Dropped,
+        actor: wire.actor.clone(),
+        runner: wire.runner.clone(),
+        attempts: wire.attempts,
+        last_error: wire.last_error.clone(),
+        settled: wire.settled.as_deref().map(|settled| match settled {
+            "delivered" => owed::Settlement::Delivered,
+            "dropped" => owed::Settlement::Dropped,
+            other => panic!("the model has no settlement {other}"),
+        }),
+    }
+}
+
+fn owed_record_wire(record: &owed::Record) -> owed_trace::OwedRecordWire {
+    owed_trace::OwedRecordWire {
+        key: owed_trace::OwedKeyWire {
+            point: record.key.point.clone(),
+            plugin: record.key.plugin.clone(),
+            subject: record.key.subject.clone(),
+        },
+        kind: match record.kind {
+            owed::Kind::Staging => "staging",
+            owed::Kind::OnBehalf => "on_behalf",
+        }
+        .to_owned(),
+        actor: record.actor.clone(),
+        runner: record.runner.clone(),
+        attempts: record.attempts,
+        last_error: record.last_error.clone(),
+        settled: record.settled.map(|settled| {
+            match settled {
+                owed::Settlement::Delivered => "delivered",
+                owed::Settlement::Dropped => "dropped",
+            }
+            .to_owned()
         }),
     }
 }
 
 /// Lean `Hooks.OwedDelivery.owe`, `publish`, `redrive` and `performs` drive
-/// the production record the periodic sweep settles (`owed::redrive_pending`),
-/// and `deriveHalts` and `prune` drive the sweep's derivation and pruning.
+/// the production record the periodic sweep settles (`owed::redrive_pending`).
 #[test]
-fn generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record() {
-    let cases = lean_lifecycle_hook_owed_delivery_cases();
-    assert!(!cases.traces.is_empty());
-    for case in &cases.traces {
+fn owed_delivery_traces_follow_the_lean_model() {
+    gents_lean_vocab::families::hooks_contracts_owed_trace::replay(|input: &owed_trace::OwedTraceInput| {
         let mut records: Vec<owed::Record> = Vec::new();
-        for (index, entry) in case.trace.iter().enumerate() {
-            let (runner, performed) = match &entry.step {
-                LeanLifecycleHookOwedStep::Owe {
-                    point,
-                    actor,
-                    owner,
-                    signable,
-                    keys,
-                    commit,
-                } => {
+        let mut observed = Vec::new();
+        for step in &input.steps {
+            let (runner, performed) = match step.kind.as_str() {
+                "owe" => {
+                    let point = step.point.as_deref().expect("an owe names its point");
                     let kind = owed::Kind::of_point(point);
-                    let runner =
-                        owed::owe_runner(kind, actor.as_deref(), owner.as_deref(), |did| {
-                            signable.iter().any(|signable| signable == did)
-                        });
+                    let actor = step.actor.as_deref();
+                    let runner = owed::owe_runner(kind, actor, step.owner.as_deref(), |did| {
+                        step.signable.iter().any(|signable| signable == did)
+                    });
                     if let Some(runner) = &runner {
                         owed::publish(
                             &mut records,
-                            |key| owed::Record::fresh(kind, actor.as_deref(), runner, key),
-                            keys.iter().map(owed_key_of),
-                            *commit,
+                            |key| owed::Record::fresh(kind, actor, runner, key),
+                            step.keys.iter().map(owed_key_of),
+                            step.commit.expect("an owe says whether it committed"),
                         );
                     }
                     (runner, false)
                 }
-                LeanLifecycleHookOwedStep::Redrive {
-                    key,
-                    authorized,
-                    current,
-                    attempt,
-                    refused,
-                } => {
-                    let key = owed_key_of(key);
-                    let observed = owed::Observation {
-                        authorized: *authorized,
-                        current: *current,
+                "redrive" => {
+                    let key = owed_key_of(step.key.as_ref().expect("a redrive names its key"));
+                    let observation = owed::Observation {
+                        authorized: step.authorized.expect("a redrive observes authorization"),
+                        current: step.current.expect("a redrive observes currency"),
                     };
-                    let attempt = match attempt {
-                        LeanLifecycleHookOwedAttempt::Applied { writes } => {
-                            owed::Attempt::Applied(writes.iter().map(owed_write_of).collect())
+                    let attempt = step.attempt.as_ref().expect("a redrive attempts");
+                    let attempt = match attempt.kind.as_str() {
+                        "applied" => {
+                            owed::Attempt::Applied(attempt.writes.iter().map(owed_write_of).collect())
                         }
-                        LeanLifecycleHookOwedAttempt::Failed { error } => {
-                            owed::Attempt::Failed(error.clone())
-                        }
+                        "failed" => owed::Attempt::Failed(
+                            attempt.error.clone().expect("a failed attempt carries its error"),
+                        ),
+                        other => panic!("the model has no attempt {other}"),
                     };
-                    let refused: Vec<owed::Write> = refused.iter().map(owed_write_of).collect();
+                    let refused: Vec<owed::Write> = step.refused.iter().map(owed_write_of).collect();
                     let may_write = |write: &owed::Write| !refused.contains(write);
                     let mut performed = false;
                     for record in records.iter_mut().filter(|record| record.key == key) {
-                        performed |= record.performs(observed, &attempt, may_write);
-                        *record = record.redrive(observed, &attempt, may_write);
+                        performed |= record.performs(observation, &attempt, may_write);
+                        *record = record.redrive(observation, &attempt, may_write);
                     }
                     (None, performed)
                 }
+                other => panic!("the model has no owed step {other}"),
             };
-            assert_eq!(runner, entry.runner, "{} step {index}: runner", case.name);
-            assert_eq!(
-                records,
-                entry.records.iter().map(owed_record_of).collect::<Vec<_>>(),
-                "{} step {index}: records",
-                case.name
-            );
-            assert_eq!(
-                performed, entry.performed,
-                "{} step {index}: performed",
-                case.name
-            );
+            observed.push(owed_trace::OwedObservation {
+                runner,
+                records: records.iter().map(owed_record_wire).collect(),
+                performed,
+            });
         }
-    }
-    assert!(!cases.derive.is_empty());
-    for case in &cases.derive {
-        let sessions: Vec<owed::HaltedSession> = case
+        owed_trace::OwedTraceOutput { trace: observed }
+    });
+}
+
+/// Lean `Hooks.OwedDelivery.deriveHalts` drives the sweep's derivation.
+#[test]
+fn owed_halt_derivation_follows_the_lean_model() {
+    gents_lean_vocab::families::hooks_contracts_owed_derive::replay(|input: &owed_derive::OwedDeriveInput| {
+        let sessions: Vec<owed::HaltedSession> = input
             .sessions
             .iter()
             .map(|session| owed::HaltedSession {
@@ -1021,95 +1032,126 @@ fn generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record() {
                 current: session.current,
             })
             .collect();
-        let derived: Vec<owed::DerivedHalt> = case
-            .derived
-            .iter()
-            .map(|halt| owed::DerivedHalt {
-                session: halt.session.clone(),
-                at: halt.at.clone(),
-                owner: halt.owner.clone(),
-            })
-            .collect();
-        assert_eq!(
-            owed::derive_halts(case.bound, &sessions),
-            derived,
-            "{}: derived halts",
-            case.name
-        );
-    }
-    assert!(!cases.prune.is_empty());
-    for case in &cases.prune {
-        let kept: Vec<(owed::Record, u64)> = case
-            .records
-            .iter()
-            .map(|aged| (owed_record_of(&aged.record), aged.age))
-            .filter(|(record, age)| !owed::prunable(record, *age, case.retention))
-            .collect();
-        assert_eq!(
-            kept,
-            case.kept
+        let bound = usize::try_from(input.bound).expect("the bound fits");
+        owed_derive::OwedDeriveOutput {
+            derived: owed::derive_halts(bound, &sessions)
+                .into_iter()
+                .map(|halt| owed_derive::DerivedHaltWire {
+                    session: halt.session,
+                    halted_at: halt.at,
+                    owner: halt.owner,
+                })
+                .collect(),
+        }
+    });
+}
+
+/// Lean `Hooks.OwedDelivery.prune` keeps the records production `prunable`
+/// does not delete.
+#[test]
+fn owed_pruning_follows_the_lean_model() {
+    gents_lean_vocab::families::hooks_contracts_owed_prune::replay(|input: &owed_prune::OwedPruneInput| {
+        owed_prune::OwedPruneOutput {
+            kept: input
+                .records
                 .iter()
-                .map(|aged| (owed_record_of(&aged.record), aged.age))
-                .collect::<Vec<_>>(),
-            "{}: kept records",
-            case.name
-        );
-    }
+                .filter(|aged| {
+                    let record = owed_record_of(&gents_lean_vocab::family::recode(&aged.record));
+                    !owed::prunable(&record, aged.age, input.retention)
+                })
+                .cloned()
+                .collect(),
+        }
+    });
 }
 
-fn binding_of(lean: &LeanLifecycleHookBinding) -> Binding<String> {
+fn binding_of(wire: &admission::BindingWire) -> Binding<String> {
     Binding {
-        actor: lean.actor.clone(),
-        point: leak(&lean.point),
-        subject: lean.subject.clone(),
-        inputs: lean.inputs.clone(),
-        configuration: lean.configuration.clone(),
+        actor: wire.actor.clone(),
+        point: leak(&wire.point),
+        subject: wire.subject.clone(),
+        inputs: wire.inputs.clone(),
+        configuration: wire.configuration.clone(),
     }
 }
 
-fn stale_of(lean: &LeanLifecycleHookStale) -> Stale {
-    match lean {
-        LeanLifecycleHookStale::Unauthorized => Stale::Unauthorized,
-        LeanLifecycleHookStale::Cancelled => Stale::Cancelled,
-        LeanLifecycleHookStale::Missing => Stale::Missing,
-        LeanLifecycleHookStale::Stale => Stale::Stale,
-        LeanLifecycleHookStale::Denied { reason } => Stale::Denied(reason.clone()),
-        LeanLifecycleHookStale::Unavailable => Stale::Unavailable,
+fn binding_wire(binding: &Binding<String>) -> admission::BindingWire {
+    admission::BindingWire {
+        actor: binding.actor.clone(),
+        point: binding.point.to_owned(),
+        subject: binding.subject.clone(),
+        inputs: binding.inputs.clone(),
+        configuration: binding.configuration.clone(),
+    }
+}
+
+fn prepared_verdict_of(wire: &admission::PreparedVerdictWire) -> Verdict<String> {
+    match wire.kind.as_str() {
+        "allow" => Verdict::Allow(wire.payload.clone().expect("an allow carries its payload")),
+        "deny" => Verdict::Deny(wire.reason.clone().expect("a deny carries its reason")),
+        "unavailable" => Verdict::Unavailable,
+        other => panic!("the model has no prepared verdict {other}"),
+    }
+}
+
+fn prepared_verdict_wire(verdict: &Verdict<String>) -> admission::PreparedVerdictWire {
+    let (kind, payload, reason) = match verdict {
+        Verdict::Allow(payload) => ("allow", Some(payload.clone()), None),
+        Verdict::Deny(reason) => ("deny", None, Some(reason.clone())),
+        Verdict::Unavailable => ("unavailable", None, None),
+    };
+    admission::PreparedVerdictWire {
+        kind: kind.to_owned(),
+        payload,
+        reason,
+    }
+}
+
+fn stale_wire(stale: &Stale) -> admission::StaleWire {
+    let (kind, reason) = match stale {
+        Stale::Unauthorized => ("unauthorized", None),
+        Stale::Cancelled => ("cancelled", None),
+        Stale::Missing => ("missing", None),
+        Stale::Stale => ("stale", None),
+        Stale::Denied(reason) => ("denied", Some(reason.clone())),
+        Stale::Unavailable => ("unavailable", None),
+    };
+    admission::StaleWire {
+        kind: kind.to_owned(),
+        reason,
     }
 }
 
 #[test]
-fn generated_lifecycle_hook_admit_cases_drive_prepared_admission() {
-    let cases = lean_lifecycle_hook_admit_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let current = binding_of(&case.current);
-        let decision = case.prepared.as_ref().map(|prepared| {
-            let captured = binding_of(&prepared.binding);
-            let verdict = match &prepared.verdict {
-                LeanLifecycleHookPreparedVerdict::Allow { payload } => {
-                    Verdict::Allow(payload.clone())
-                }
-                LeanLifecycleHookPreparedVerdict::Deny { reason } => Verdict::Deny(reason.clone()),
-                LeanLifecycleHookPreparedVerdict::Unavailable => Verdict::Unavailable,
-            };
-            let decision = prepare(captured.clone(), |_: &()| verdict, &());
-            assert_eq!(
-                decision.binding, captured,
-                "{}: the host's binding is kept",
-                case.name
-            );
-            decision
+fn prepared_admission_follows_the_lean_model() {
+    gents_lean_vocab::families::hooks_contracts_prepared_admission::replay(|input: &admission::AdmissionInput| {
+        let decision = input.captured.as_ref().map(|captured| {
+            let verdict = prepared_verdict_of(&captured.verdict);
+            prepare(binding_of(&captured.binding), |_: &()| verdict, &())
         });
-        let expected = match &case.result {
-            LeanLifecycleHookAdmitResult::Ok { payload } => Ok(payload.clone()),
-            LeanLifecycleHookAdmitResult::Error { stale } => Err(stale_of(stale)),
+        let prepared = decision
+            .as_ref()
+            .map(|decision| admission::PreparedWire {
+                binding: binding_wire(&decision.binding),
+                verdict: prepared_verdict_wire(&decision.verdict),
+            });
+        let result = match admit(
+            input.authorized,
+            input.cancelled,
+            &binding_of(&input.current),
+            decision,
+        ) {
+            Ok(payload) => admission::AdmitResultWire {
+                kind: "ok".to_owned(),
+                payload: Some(payload),
+                stale: None,
+            },
+            Err(stale) => admission::AdmitResultWire {
+                kind: "error".to_owned(),
+                payload: None,
+                stale: Some(stale_wire(&stale)),
+            },
         };
-        assert_eq!(
-            admit(case.authorized, case.cancelled, &current, decision),
-            expected,
-            "{}",
-            case.name
-        );
-    }
+        admission::AdmissionOutput { prepared, result }
+    });
 }

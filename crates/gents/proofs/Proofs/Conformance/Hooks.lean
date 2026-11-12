@@ -897,33 +897,63 @@ def deliveryCases : List DeliveryCase :=
     , initial := ⟨none, ["trigger", "goal"], ["trigger"]⟩
     , steps := [.publish "interrupted" ["goal", "mailbox"] true, .deliver "mailbox" true] } ]
 
-private def recordJson (record : Record) : String :=
-  "{\"terminal\":" ++ ((record.terminal.map jsonString).getD "null") ++
-    ",\"owed\":" ++ jsonStringArray record.owed ++
-    ",\"delivered\":" ++ jsonStringArray record.delivered ++ "}"
+structure RecordWire where
+  terminal : Option String
+  owed : List String
+  delivered : List String
+  deriving ToJson
 
-private def deliveryStepJson : DeliveryStep → String
-  | .publish outcome keys commit =>
-      "{\"kind\":\"publish\",\"outcome\":" ++ jsonString outcome ++
-        ",\"keys\":" ++ jsonStringArray keys ++ ",\"commit\":" ++ boolJson commit ++ "}"
-  | .deliver key applied =>
-      "{\"kind\":\"deliver\",\"key\":" ++ jsonString key ++
-        ",\"applied\":" ++ boolJson applied ++ "}"
+def RecordWire.ofModel (record : Record) : RecordWire :=
+  ⟨record.terminal, record.owed, record.delivered⟩
 
-private def deliveryCaseJson (c : DeliveryCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"initial\":" ++ recordJson c.initial ++
-    ",\"trace\":" ++ jsonArray (c.trace.map fun entry =>
-      "{\"step\":" ++ deliveryStepJson entry.1 ++
-        ",\"state\":" ++ recordJson entry.2 ++
-        ",\"pending\":" ++ jsonStringArray (Delivery.pending entry.2) ++ "}") ++ "}"
+def RecordWire.toModel (wire : RecordWire) : Record :=
+  ⟨wire.terminal, wire.owed, wire.delivered⟩
 
-def deliveryCasesJson : String := jsonArray (deliveryCases.map deliveryCaseJson)
+structure DeliveryStepWire where
+  kind : String
+  outcome : Option String
+  keys : List String
+  commit : Option Bool
+  key : Option String
+  applied : Option Bool
+  deriving ToJson
+
+def DeliveryStepWire.ofModel : DeliveryStep → DeliveryStepWire
+  | .publish outcome keys commit => ⟨"publish", some outcome, keys, some commit, none, none⟩
+  | .deliver key applied => ⟨"deliver", none, [], none, some key, some applied⟩
+
+def DeliveryStepWire.toModel (wire : DeliveryStepWire) : DeliveryStep :=
+  match wire.kind, wire.key with
+  | "deliver", some key => .deliver key (wire.applied.getD false)
+  | _, _ => .publish (wire.outcome.getD "") wire.keys (wire.commit.getD false)
+
+/-- One step of a delivery trace: `before` is the record the trace started
+from (`initial`) folded through the steps preceding this one. -/
+structure DeliveryStepInput where
+  name : String
+  initial : RecordWire
+  before : RecordWire
+  step : DeliveryStepWire
+  deriving ToJson
+
+structure DeliveryStepOutput where
+  state : RecordWire
+  pending : List String
+  deriving ToJson
+
+@[conformance_family]
+def deliveryStep : Family DeliveryStepInput DeliveryStepOutput where
+  inputs := deliveryCases.flatMap fun c =>
+    (c.trace.zip (c.initial :: c.trace.map Prod.snd)).map fun (entry, before) =>
+      { name := c.name, initial := RecordWire.ofModel c.initial
+      , before := RecordWire.ofModel before, step := DeliveryStepWire.ofModel entry.1 }
+  model := fun i =>
+    let next := i.step.toModel.run i.before.toModel
+    { state := RecordWire.ofModel next, pending := Delivery.pending next }
 
 /-! Prepared decisions: `Hooks.prepare` and `Hooks.admit`. -/
 
 abbrev AdmitBinding := Binding String
-abbrev AdmitPrepared := Prepared String String
 
 private def admitBinding : AdmitBinding :=
   { actor := caller, point := "request.admit.verify", subject := "request-doc"
@@ -937,12 +967,6 @@ structure AdmitCase where
   /-- The binding the host captured when it prepared, and the plugin's
   answer; `none` when nothing was prepared. -/
   prepared : Option (AdmitBinding × Verdict String)
-
-def AdmitCase.decision (c : AdmitCase) : Option AdmitPrepared :=
-  c.prepared.map fun entry => Hooks.prepare entry.1 (fun (_ : Unit) => entry.2) ()
-
-def AdmitCase.result (c : AdmitCase) : Except Stale String :=
-  Hooks.admit c.authorized c.cancelled c.current c.decision
 
 def admitCases : List AdmitCase :=
   [ { name := "matching_allow_admits_with_its_payload"
@@ -968,41 +992,95 @@ def admitCases : List AdmitCase :=
     , prepared := some (admitBinding, .deny "continuation receipt has a different physical goal edge") }
   , { name := "unavailable_never_admits", prepared := some (admitBinding, .unavailable) } ]
 
-private def bindingJson (binding : AdmitBinding) : String :=
-  "{\"actor\":" ++ jsonString binding.actor ++
-    ",\"point\":" ++ jsonString binding.point ++
-    ",\"subject\":" ++ jsonString binding.subject ++
-    ",\"inputs\":" ++ jsonString binding.inputs ++
-    ",\"configuration\":" ++ jsonString binding.configuration ++ "}"
+structure BindingWire where
+  actor : String
+  point : String
+  subject : String
+  inputs : String
+  configuration : String
+  deriving ToJson
 
-private def preparedVerdictJson : Verdict String → String
-  | .allow payload => "{\"kind\":\"allow\",\"payload\":" ++ jsonString payload ++ "}"
-  | .deny reason => "{\"kind\":\"deny\",\"reason\":" ++ jsonString reason ++ "}"
-  | .unavailable => "{\"kind\":\"unavailable\"}"
+def BindingWire.ofModel (binding : AdmitBinding) : BindingWire :=
+  ⟨binding.actor, binding.point, binding.subject, binding.inputs, binding.configuration⟩
 
-private def staleJson : Stale → String
-  | .unauthorized => "{\"kind\":\"unauthorized\"}"
-  | .cancelled => "{\"kind\":\"cancelled\"}"
-  | .missing => "{\"kind\":\"missing\"}"
-  | .stale => "{\"kind\":\"stale\"}"
-  | .denied reason => "{\"kind\":\"denied\",\"reason\":" ++ jsonString reason ++ "}"
-  | .unavailable => "{\"kind\":\"unavailable\"}"
+def BindingWire.toModel (wire : BindingWire) : AdmitBinding :=
+  { actor := wire.actor, point := wire.point, subject := wire.subject
+  , inputs := wire.inputs, configuration := wire.configuration }
 
-private def admitResultJson : Except Stale String → String
-  | .ok payload => "{\"kind\":\"ok\",\"payload\":" ++ jsonString payload ++ "}"
-  | .error reason => "{\"kind\":\"error\",\"stale\":" ++ staleJson reason ++ "}"
+structure PreparedVerdictWire where
+  kind : String
+  payload : Option String
+  reason : Option String
+  deriving ToJson
 
-private def admitCaseJson (c : AdmitCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"authorized\":" ++ boolJson c.authorized ++
-    ",\"cancelled\":" ++ boolJson c.cancelled ++
-    ",\"current\":" ++ bindingJson c.current ++
-    ",\"prepared\":" ++ ((c.decision.map fun decision =>
-      "{\"binding\":" ++ bindingJson decision.binding ++
-        ",\"verdict\":" ++ preparedVerdictJson decision.verdict ++ "}").getD "null") ++
-    ",\"result\":" ++ admitResultJson c.result ++ "}"
+def PreparedVerdictWire.ofModel : Verdict String → PreparedVerdictWire
+  | .allow payload => ⟨"allow", some payload, none⟩
+  | .deny reason => ⟨"deny", none, some reason⟩
+  | .unavailable => ⟨"unavailable", none, none⟩
 
-def admitCasesJson : String := jsonArray (admitCases.map admitCaseJson)
+def PreparedVerdictWire.toModel (wire : PreparedVerdictWire) : Verdict String :=
+  match wire.kind, wire.payload, wire.reason with
+  | "allow", some payload, _ => .allow payload
+  | "deny", _, some reason => .deny reason
+  | _, _, _ => .unavailable
+
+structure PreparedWire where
+  binding : BindingWire
+  verdict : PreparedVerdictWire
+  deriving ToJson
+
+structure StaleWire where
+  kind : String
+  reason : Option String
+  deriving ToJson
+
+def StaleWire.ofModel : Stale → StaleWire
+  | .unauthorized => ⟨"unauthorized", none⟩
+  | .cancelled => ⟨"cancelled", none⟩
+  | .missing => ⟨"missing", none⟩
+  | .stale => ⟨"stale", none⟩
+  | .denied reason => ⟨"denied", some reason⟩
+  | .unavailable => ⟨"unavailable", none⟩
+
+structure AdmitResultWire where
+  kind : String
+  payload : Option String
+  stale : Option StaleWire
+  deriving ToJson
+
+def AdmitResultWire.ofModel : Except Stale String → AdmitResultWire
+  | .ok payload => ⟨"ok", some payload, none⟩
+  | .error reason => ⟨"error", none, some (StaleWire.ofModel reason)⟩
+
+/-- `captured` is the binding the host captured when it prepared, with the
+plugin's answer; `none` when nothing was prepared. -/
+structure AdmissionInput where
+  name : String
+  authorized : Bool
+  cancelled : Bool
+  current : BindingWire
+  captured : Option PreparedWire
+  deriving ToJson
+
+structure AdmissionOutput where
+  prepared : Option PreparedWire
+  result : AdmitResultWire
+  deriving ToJson
+
+@[conformance_family]
+def preparedAdmission : Family AdmissionInput AdmissionOutput where
+  inputs := admitCases.map fun c =>
+    { name := c.name, authorized := c.authorized, cancelled := c.cancelled
+    , current := BindingWire.ofModel c.current
+    , captured := c.prepared.map fun entry =>
+        ⟨BindingWire.ofModel entry.1, PreparedVerdictWire.ofModel entry.2⟩ }
+  model := fun i =>
+    let decision := i.captured.map fun captured =>
+      Hooks.prepare captured.binding.toModel (fun (_ : Unit) => captured.verdict.toModel) ()
+    { prepared := decision.map fun prepared =>
+        ⟨BindingWire.ofModel prepared.binding, PreparedVerdictWire.ofModel prepared.verdict⟩
+      result := AdmitResultWire.ofModel
+        (Hooks.admit i.authorized i.cancelled i.current.toModel decision) }
 
 /-! The owed-delivery record: `Hooks.OwedDelivery.owe`, `publish`, `redrive`
 and `performs` over the records of one node; `deriveHalts`; `prune`. -/
@@ -1137,76 +1215,179 @@ def owedPruneCases : List OwedPruneCase :=
                   (settledRecord terminalKey (some .dropped), 10),
                   (settledRecord stopKey none, 100)] } ]
 
-private def owedKeyJson (key : OwedDelivery.Key) : String :=
-  "{\"point\":" ++ jsonString key.point ++ ",\"plugin\":" ++ jsonString key.plugin ++
-    ",\"subject\":" ++ jsonString key.subject ++ "}"
+structure OwedKeyWire where
+  point : String
+  plugin : String
+  subject : String
+  deriving ToJson
 
-private def optionJson (value : Option String) : String := (value.map jsonString).getD "null"
+def OwedKeyWire.ofModel (key : OwedDelivery.Key) : OwedKeyWire :=
+  ⟨key.point, key.plugin, key.subject⟩
 
-private def owedRecordJson (record : OwedDelivery.Record) : String :=
-  "{\"key\":" ++ owedKeyJson record.key ++
-    ",\"kind\":" ++ (match record.kind with
-      | .staging => "\"staging\"" | .onBehalf => "\"on_behalf\"") ++
-    ",\"actor\":" ++ optionJson record.actor ++
-    ",\"runner\":" ++ jsonString record.runner ++
-    ",\"attempts\":" ++ toString record.attempts ++
-    ",\"last_error\":" ++ optionJson record.lastError ++
-    ",\"settled\":" ++ (match record.settled with
-      | none => "null"
-      | some .delivered => "\"delivered\""
-      | some .dropped => "\"dropped\"") ++ "}"
+def OwedKeyWire.toModel (wire : OwedKeyWire) : OwedDelivery.Key :=
+  ⟨wire.point, wire.plugin, wire.subject⟩
 
-private def owedWriteJson (write : OwedDelivery.Write) : String :=
-  "{\"subject\":" ++ jsonString write.subject ++ ",\"doc\":" ++ jsonString write.doc ++ "}"
+structure OwedWriteWire where
+  subject : String
+  doc : String
+  deriving ToJson
 
-private def owedAttemptJson : OwedDelivery.Attempt → String
-  | .applied writes => "{\"kind\":\"applied\",\"writes\":" ++
-      jsonArray (writes.map owedWriteJson) ++ "}"
-  | .failed error => "{\"kind\":\"failed\",\"error\":" ++ jsonString error ++ "}"
+def OwedWriteWire.ofModel (write : OwedDelivery.Write) : OwedWriteWire :=
+  ⟨write.subject, write.doc⟩
 
-private def owedStepJson : OwedStep → String
+def OwedWriteWire.toModel (wire : OwedWriteWire) : OwedDelivery.Write :=
+  ⟨wire.subject, wire.doc⟩
+
+structure OwedAttemptWire where
+  kind : String
+  writes : List OwedWriteWire
+  error : Option String
+  deriving ToJson
+
+def OwedAttemptWire.ofModel : OwedDelivery.Attempt → OwedAttemptWire
+  | .applied writes => ⟨"applied", writes.map OwedWriteWire.ofModel, none⟩
+  | .failed error => ⟨"failed", [], some error⟩
+
+def OwedAttemptWire.toModel (wire : OwedAttemptWire) : OwedDelivery.Attempt :=
+  match wire.kind, wire.error with
+  | "failed", some error => .failed error
+  | _, _ => .applied (wire.writes.map OwedWriteWire.toModel)
+
+structure OwedStepWire where
+  kind : String
+  point : Option String
+  actor : Option String
+  owner : Option String
+  signable : List String
+  keys : List OwedKeyWire
+  commit : Option Bool
+  key : Option OwedKeyWire
+  authorized : Option Bool
+  current : Option Bool
+  attempt : Option OwedAttemptWire
+  refused : List OwedWriteWire
+  deriving ToJson
+
+def OwedStepWire.ofModel : OwedStep → OwedStepWire
   | .owe point actor owner signable keys commit =>
-      "{\"kind\":\"owe\",\"point\":" ++ jsonString point ++
-        ",\"actor\":" ++ optionJson actor ++ ",\"owner\":" ++ optionJson owner ++
-        ",\"signable\":" ++ jsonStringArray signable ++
-        ",\"keys\":" ++ jsonArray (keys.map owedKeyJson) ++ ",\"commit\":" ++ boolJson commit ++ "}"
+      ⟨"owe", some point, actor, owner, signable, keys.map OwedKeyWire.ofModel, some commit,
+        none, none, none, none, []⟩
   | .redrive key authorized current attempt refused =>
-      "{\"kind\":\"redrive\",\"key\":" ++ owedKeyJson key ++
-        ",\"authorized\":" ++ boolJson authorized ++ ",\"current\":" ++ boolJson current ++
-        ",\"attempt\":" ++ owedAttemptJson attempt ++
-        ",\"refused\":" ++ jsonArray (refused.map owedWriteJson) ++ "}"
+      ⟨"redrive", none, none, none, [], [], none, some (OwedKeyWire.ofModel key),
+        some authorized, some current, some (OwedAttemptWire.ofModel attempt),
+        refused.map OwedWriteWire.ofModel⟩
 
-private def owedCaseJson (c : OwedCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"trace\":" ++ jsonArray (c.trace.map fun (step, runner, records, performed) =>
-      "{\"step\":" ++ owedStepJson step ++
-        ",\"runner\":" ++ optionJson runner ++
-        ",\"records\":" ++ jsonArray (records.map owedRecordJson) ++
-        ",\"performed\":" ++ boolJson performed ++ "}") ++ "}"
+def OwedStepWire.toModel (wire : OwedStepWire) : OwedStep :=
+  match wire.kind, wire.key, wire.attempt with
+  | "redrive", some key, some attempt =>
+      .redrive key.toModel (wire.authorized.getD false) (wire.current.getD false)
+        attempt.toModel (wire.refused.map OwedWriteWire.toModel)
+  | _, _, _ =>
+      .owe (wire.point.getD "") wire.actor wire.owner wire.signable
+        (wire.keys.map OwedKeyWire.toModel) (wire.commit.getD false)
 
-private def haltedSessionJson (session : OwedDelivery.HaltedSession) : String :=
-  "{\"session\":" ++ jsonString session.session ++ ",\"owner\":" ++ optionJson session.owner ++
-    ",\"latched_at\":" ++ optionJson session.latchedAt ++
-    ",\"current\":" ++ boolJson session.current ++ "}"
+structure OwedRecordWire where
+  key : OwedKeyWire
+  kind : String
+  actor : Option String
+  runner : String
+  attempts : Nat
+  lastError : Option String
+  settled : Option String
+  deriving ToJson
 
-private def owedDeriveCaseJson (c : OwedDeriveCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"bound\":" ++ toString c.bound ++
-    ",\"sessions\":" ++ jsonArray (c.sessions.map haltedSessionJson) ++
-    ",\"derived\":" ++ jsonArray ((OwedDelivery.deriveHalts c.bound c.sessions).map
-      fun (session, time, owner) =>
-        "{\"session\":" ++ jsonString session ++ ",\"at\":" ++ jsonString time ++
-          ",\"owner\":" ++ jsonString owner ++ "}") ++ "}"
+def OwedRecordWire.ofModel (record : OwedDelivery.Record) : OwedRecordWire :=
+  { key := OwedKeyWire.ofModel record.key
+  , kind := match record.kind with
+      | .staging => "staging"
+      | .onBehalf => "on_behalf"
+  , actor := record.actor, runner := record.runner, attempts := record.attempts
+  , lastError := record.lastError
+  , settled := record.settled.map fun
+      | .delivered => "delivered"
+      | .dropped => "dropped" }
 
-private def owedPruneCaseJson (c : OwedPruneCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"retention\":" ++ toString c.retention ++
-    ",\"records\":" ++ jsonArray (c.records.map fun (record, age) =>
-      "{\"record\":" ++ owedRecordJson record ++ ",\"age\":" ++ toString age ++ "}") ++
-    ",\"kept\":" ++ jsonArray ((OwedDelivery.prune c.records c.retention).map fun (record, age) =>
-      "{\"record\":" ++ owedRecordJson record ++ ",\"age\":" ++ toString age ++ "}") ++ "}"
+def OwedRecordWire.toModel (wire : OwedRecordWire) : OwedDelivery.Record :=
+  { key := wire.key.toModel
+  , kind := if wire.kind == "on_behalf" then .onBehalf else .staging
+  , actor := wire.actor, runner := wire.runner, attempts := wire.attempts
+  , lastError := wire.lastError
+  , settled := wire.settled.map fun settled =>
+      if settled == "dropped" then .dropped else .delivered }
 
-def owedCasesJson : String :=
-  "{\"traces\":" ++ jsonArray (owedCases.map owedCaseJson) ++
-    ",\"derive\":" ++ jsonArray (owedDeriveCases.map owedDeriveCaseJson) ++
-    ",\"prune\":" ++ jsonArray (owedPruneCases.map owedPruneCaseJson) ++ "}"
+structure OwedTraceInput where
+  name : String
+  steps : List OwedStepWire
+  deriving ToJson
+
+/-- What one step of an owed-delivery trace leaves: the identity an `owe`
+would run as, the records of the node after the step, and whether a redrive
+performed its delivery. -/
+structure OwedObservation where
+  runner : Option String
+  records : List OwedRecordWire
+  performed : Bool
+  deriving ToJson
+
+structure OwedTraceOutput where
+  trace : List OwedObservation
+  deriving ToJson
+
+@[conformance_family]
+def owedTrace : Family OwedTraceInput OwedTraceOutput where
+  inputs := owedCases.map fun c => { name := c.name, steps := c.steps.map OwedStepWire.ofModel }
+  model := fun i =>
+    { trace := (OwedCase.trace ⟨i.name, i.steps.map OwedStepWire.toModel⟩).map
+        fun (_, runner, records, performed) =>
+          { runner, records := records.map OwedRecordWire.ofModel, performed } }
+
+deriving instance ToJson for OwedDelivery.HaltedSession
+
+structure OwedDeriveInput where
+  name : String
+  bound : Nat
+  sessions : List OwedDelivery.HaltedSession
+  deriving ToJson
+
+structure DerivedHaltWire where
+  session : String
+  haltedAt : String
+  owner : String
+  deriving ToJson
+
+structure OwedDeriveOutput where
+  derived : List DerivedHaltWire
+  deriving ToJson
+
+@[conformance_family]
+def owedDerive : Family OwedDeriveInput OwedDeriveOutput where
+  inputs := owedDeriveCases.map fun c => { name := c.name, bound := c.bound, sessions := c.sessions }
+  model := fun i =>
+    { derived := (OwedDelivery.deriveHalts i.bound i.sessions).map fun (session, time, owner) =>
+        ⟨session, time, owner⟩ }
+
+structure AgedRecordWire where
+  record : OwedRecordWire
+  age : Nat
+  deriving ToJson
+
+structure OwedPruneInput where
+  name : String
+  retention : Nat
+  records : List AgedRecordWire
+  deriving ToJson
+
+structure OwedPruneOutput where
+  kept : List AgedRecordWire
+  deriving ToJson
+
+@[conformance_family]
+def owedPrune : Family OwedPruneInput OwedPruneOutput where
+  inputs := owedPruneCases.map fun c =>
+    { name := c.name, retention := c.retention
+    , records := c.records.map fun (record, age) => ⟨OwedRecordWire.ofModel record, age⟩ }
+  model := fun i =>
+    { kept := (OwedDelivery.prune (i.records.map fun aged => (aged.record.toModel, aged.age))
+        i.retention).map fun (record, age) => ⟨OwedRecordWire.ofModel record, age⟩ }
 
 end Conformance.HooksContracts
