@@ -1312,7 +1312,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         use anyhow::Context;
         use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
-        use gents_store::config_client::NodePermission;
+        use gents_store::config_client::{GraphqlEndpoint, NodePermission};
         use gents_store::identity::NodeIdentity;
 
         let model = lean_identity_household_cases()
@@ -1330,19 +1330,26 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let user =
             gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+        let runtime =
+            gents_store::identity::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
         let agent =
             gents_store::identity::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
         let sibling =
             gents_store::identity::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
         let outsider =
             gents_store::identity::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
-        let mut db = gents_inference::test_support::test_db(
-            "health-persistence",
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = db.node.clone();
-        let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_storage_backend(defra_node::StorageBackend::Regolith)
+                .data_path(dir.path().join("node"))
+                .build()
+                .await?,
+        );
         node.add_dac_policy_with_counter_as(
             &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
             gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
@@ -1353,7 +1360,13 @@ mod tests {
         node.add_collection(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
             .await?;
         let access = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
-            Ok(db.client_access(actor))
+            Ok(ConfigAccess::Graphql(
+                GraphqlEndpoint::as_principal(
+                    format!("http://{address}/api/v0/graphql"),
+                    actor.did(),
+                )
+                .with_client_signing_capability(actor.client_signing_capability()?)?,
+            ))
         };
         let user_access = access(&user)?;
         let runtime_access =
@@ -1475,10 +1488,24 @@ mod tests {
             .contains("service"));
         drop(user_access);
         drop(runtime_access);
+        node.shutdown().await?;
         drop(node);
-        db.simulate_process_crash().await?;
-        let restarted = db.node.clone();
-        let user_access = db.client_access(&user);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let restarted = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_storage_backend(defra_node::StorageBackend::Regolith)
+                .data_path(dir.path().join("node"))
+                .build()
+                .await?,
+        );
+        let user_access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?,
+        );
         let context = HealthPersistenceContext {
             node: &restarted,
             node_did: runtime.did(),

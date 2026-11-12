@@ -1182,13 +1182,8 @@ mod data_calls {
     const NODE: &str = "did:key:z6Mknode";
     const AGENT: &str = "did:key:z6Mkagent";
 
-    async fn node_with(rows: &[(&str, &str)]) -> gents_inference::test_support::TestDb {
-        let db = gents_inference::test_support::test_db(
-            "data-calls",
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = db.node.clone();
+    async fn node_with(rows: &[(&str, &str)]) -> Arc<defra_node::Node> {
+        let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
         node.add_collection("type Note { owner: String body: String }")
             .await
             .unwrap();
@@ -1202,7 +1197,7 @@ mod data_calls {
             .await
             .unwrap();
         }
-        db
+        node
     }
 
     fn declaration(ops: &[&str]) -> PluginDataDeclaration {
@@ -1277,8 +1272,7 @@ mod data_calls {
 
     #[tokio::test]
     async fn data_calls_query_substitutes_caller_did() {
-        let db = node_with(&[(AGENT, "mine"), ("did:key:z6Mkother", "theirs")]).await;
-        let node = db.node.clone();
+        let node = node_with(&[(AGENT, "mine"), ("did:key:z6Mkother", "theirs")]).await;
         let call = ask(
             Some(declaration(&["query"])),
             &node,
@@ -1294,8 +1288,7 @@ mod data_calls {
 
     #[tokio::test]
     async fn operator_data_call_uses_selected_node_and_declared_grant() {
-        let db = node_with(&[(NODE, "mine"), ("did:key:z6Mkother", "theirs")]).await;
-        let node = db.node.clone();
+        let node = node_with(&[(NODE, "mine"), ("did:key:z6Mkother", "theirs")]).await;
         let requests = json!([query(
             "q",
             json!({"filter": {"owner": {"_eq": "$caller.did"}}, "limit": 10})
@@ -1321,8 +1314,7 @@ mod data_calls {
 
     #[tokio::test]
     async fn data_calls_query_outside_the_grant_is_refused() {
-        let db = node_with(&[(NODE, "mine")]).await;
-        let node = db.node.clone();
+        let node = node_with(&[(NODE, "mine")]).await;
         let call = ask(
             Some(declaration(&["query"])),
             &node,
@@ -1347,8 +1339,7 @@ mod data_calls {
 
     #[tokio::test]
     async fn data_calls_query_with_a_bad_field_name_is_refused() {
-        let db = node_with(&[(NODE, "mine")]).await;
-        let node = db.node.clone();
+        let node = node_with(&[(NODE, "mine")]).await;
         let call = ask(
             Some(declaration(&["query"])),
             &node,
@@ -1370,8 +1361,7 @@ mod data_calls {
 
     #[tokio::test]
     async fn data_calls_query_returns_rows_after_offset() {
-        let db = node_with(&[(NODE, "a"), (NODE, "b"), (NODE, "c")]).await;
-        let node = db.node.clone();
+        let node = node_with(&[(NODE, "a"), (NODE, "b"), (NODE, "c")]).await;
         let ordered = |id: &str, extra: Value| {
             let mut request = json!({"order": {"body": "ASC"}});
             request
@@ -1398,8 +1388,7 @@ mod data_calls {
 
     #[tokio::test]
     async fn data_calls_is_not_offered_to_plugins_without_data() {
-        let db = node_with(&[(NODE, "mine")]).await;
-        let node = db.node.clone();
+        let node = node_with(&[(NODE, "mine")]).await;
         let call = ask(None, &node, json!([query("q", json!({"limit": 1}))])).await;
         assert_eq!(call.outcome.verdict, PluginVerdict::Success);
         assert!(call.outcome.output.get("data_calls").is_none());
@@ -1417,8 +1406,7 @@ mod data_calls {
 
     #[tokio::test]
     async fn data_call_with_an_unknown_key_is_a_bad_output() {
-        let db = node_with(&[(NODE, "mine")]).await;
-        let node = db.node.clone();
+        let node = node_with(&[(NODE, "mine")]).await;
         let mut request = query("a", json!({"limit": 1}));
         request["extra"] = json!(true);
         let call = ask(Some(declaration(&["query"])), &node, json!([request])).await;
@@ -1861,7 +1849,13 @@ mod job_calls {
             .await
             .unwrap();
         let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_job_opening_cases;
-        let expected = |name: &str| cases.iter().find(|case| case.name == name).unwrap().commits;
+        let expected = |name: &str| {
+            cases
+                .iter()
+                .find(|case| case.name == name)
+                .unwrap()
+                .commits
+        };
         let mut wrong_pin = create.clone();
         wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
         let wrong_plan =

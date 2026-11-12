@@ -7,12 +7,12 @@ use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
 #[tokio::test]
 async fn title_transitions_preserve_session_and_request_observation() {
-    let node_db = gents_inference::test_support::test_db(
-        "title-transitions-preserve-session-and-r",
-        crate::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = node_db.node.clone();
+    let node = Arc::new(
+        gents_store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     gents_store::test_support::acp_policies::install_identity_acp_policies(&node)
         .await
         .unwrap();
@@ -196,12 +196,12 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
     for case in cases {
         let before = model_session(&case["before"]);
         let expected = model_session(&case["after"]);
-        let node_db = gents_inference::test_support::test_db(
-            "generated-user-title-cases-drive-the-sha",
-            crate::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = node_db.node.clone();
+        let node = Arc::new(
+            gents_store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents_store::test_support::acp_policies::install_identity_acp_policies(&node)
             .await
             .unwrap();

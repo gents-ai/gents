@@ -697,19 +697,23 @@ mod tests {
     #[tokio::test]
     async fn shared_clock_survives_restart_and_quiescence_is_owner_scoped() {
         use gents_store::identity::NodeIdentity as _;
-        let node_db = gents_inference::test_support::test_db(
-            "shared-clock-survives-restart-and-quiesc",
-            crate::lifecycle_hooks::composition(),
-        )
-        .await;
-        let node = node_db.node.clone();
-        let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
+        let home = tempfile::tempdir().unwrap();
+        let root =
+            gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+                .unwrap();
         let binding_identity = gents_store::identity::provision_agent_identity(&root).unwrap();
         let agent =
             gents_store::identity::resolve_agent_identity(&root, &binding_identity).unwrap();
         let other_binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let other_agent =
             gents_store::identity::resolve_agent_identity(&root, &other_binding).unwrap();
+        let node = std::sync::Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(root.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         let access = gents_store::config_client::ConfigAccess::local_managed_agent(
             node.clone(),
             agent.did().parse().unwrap(),
