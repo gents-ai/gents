@@ -559,7 +559,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     )).await.unwrap();
     p.sweep(false).await;
     p.state(&job, "failed").await;
-    let rows = p.live.read_data(r#"{AgentToolCall(filter: {tool_call_key: {_eq: "malformed-recovery"}}) {lifecycle_state}}"#).await;
+    let rows = p.access(&p.primary).await.read_data(r#"{AgentToolCall(filter: {tool_call_key: {_eq: "malformed-recovery"}}) {lifecycle_state}}"#).await;
     assert_eq!(rows["AgentToolCall"][0]["lifecycle_state"], "running");
     p.release("job").await;
     p.stop().await;
