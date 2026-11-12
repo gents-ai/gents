@@ -1,6 +1,7 @@
 pub mod background_completion;
 pub mod plugin;
 pub mod plugin_job;
+pub mod self_config;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 use gents_pack::test_support::fixture_pack_copy;
