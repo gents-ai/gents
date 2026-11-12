@@ -57,6 +57,7 @@ pub use tool_modes::{BashMode, FileToolMode};
 mod trigger;
 mod unattended_admission;
 mod write_tool;
+pub mod views;
 
 pub use principal::{
     load_default_agent_did, load_default_agent_did_in_txn, load_node, DefaultAgentSelection, Node,
