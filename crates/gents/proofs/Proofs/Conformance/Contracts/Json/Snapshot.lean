@@ -1,3 +1,4 @@
+import Proofs.Conformance.PluginBind
 import Proofs.Conformance.OperatorProtection
 import Proofs.Conformance.EnrollmentMemberRenewal
 import Proofs.Conformance.ClaudeAuditStop
