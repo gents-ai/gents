@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createStore, useStore } from "zustand";
 import { ArrowLeft, Route } from "lucide-react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
+import { AsciiLoader } from "@gents/ui/components/ascii-loader";
 import { Button } from "@gents/ui/components/button";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
@@ -202,7 +203,7 @@ export function WorkflowStrip({ sessionId }: { sessionId: string }) {
     >
       {one ? (
         <>
-          <JobStateMark state={one.jobState} />
+          <Route className="size-4 shrink-0 text-ink" />
           <span className="shrink-0 font-medium">
             {one.jobProgress?.title || one.jobHandle || "Workflow"}
           </span>
@@ -210,8 +211,13 @@ export function WorkflowStrip({ sessionId }: { sessionId: string }) {
             <span className="min-w-0 truncate">Waiting on your answer</span>
           ) : (
             at >= 0 && (
-              <span className="min-w-0 truncate text-muted-foreground">
-                {phases[at]!.title} · stage {at + 1} of {phases.length}
+              <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                {one.jobState === "running" && (
+                  <AsciiLoader aria-hidden className="text-foreground" />
+                )}
+                <span className="min-w-0 truncate">
+                  {phases[at]!.title} · stage {at + 1} of {phases.length}
+                </span>
               </span>
             )
           )}
@@ -223,7 +229,7 @@ export function WorkflowStrip({ sessionId }: { sessionId: string }) {
         </>
       ) : (
         <>
-          <Route className="size-4 shrink-0" />
+          <Route className="size-4 shrink-0 text-ink" />
           <span className="shrink-0 font-medium">{going.length} workflows running</span>
           <span className="min-w-0 truncate text-muted-foreground">
             {waiting

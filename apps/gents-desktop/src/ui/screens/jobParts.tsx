@@ -1,7 +1,7 @@
 /* The pieces a workflow run shows wherever it appears: the transcript cell
    and the run view. */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { JobChildRow } from "@source-inc/gents-desktop-client/generated/JobChildRow";
 import type { JobChildState } from "@source-inc/gents-desktop-client/generated/JobChildState";
 import type { JobPhase } from "@source-inc/gents-desktop-client/generated/JobPhase";
@@ -245,87 +245,75 @@ export function JobStages({
     <div className="grid gap-2">
       <ol data-testid="job-phases" className="grid">
         {hidden > 0 && (
-          <li className="grid grid-cols-[1rem_1fr] gap-x-3">
-            <span className="flex flex-col items-center">
-              <span className="grid h-5 place-items-center">
-                <StageNode state="done" />
-              </span>
-              <span aria-hidden className="w-px flex-1 bg-brand/50" />
-            </span>
+          <Stage
+            node={<StageNode state="done" />}
+            above={null}
+            below="done"
+            card="bg-accent/40"
+          >
             <button
               type="button"
               data-testid="job-stages-folded"
-              className="flex h-5 items-center justify-self-start pb-4 text-sm text-brand underline decoration-brand/30 underline-offset-4 hover:decoration-brand"
+              className="flex h-5 items-center justify-self-start text-sm text-brand underline decoration-brand/30 underline-offset-4 hover:decoration-brand"
               onClick={() => setShowDone(true)}
             >
               {hidden} stages done
             </button>
-          </li>
+          </Stage>
         )}
         {phases.map((phase, i) => {
           if (i < hidden) return null;
           const active = phase.state === "active";
+          const first = i === hidden && hidden === 0;
           return (
-            <li
+            <Stage
               key={i}
               data-stage={phase.state}
-              className="grid grid-cols-[1rem_1fr] gap-x-3"
+              node={<StageNode state={phase.state} />}
+              above={first ? null : i === hidden ? "done" : phases[i - 1]!.state}
+              below={i < last ? phase.state : null}
+              card={cn(active ? "bg-accent/70 ring-1 ring-border" : "bg-accent/40")}
+              current={active}
             >
-              <span className="flex flex-col items-center">
-                <span className="grid h-5 place-items-center">
-                  <StageNode state={phase.state} />
-                </span>
-                {i < last && (
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "w-px flex-1",
-                      phase.state === "done" ? "bg-brand/50" : "bg-border",
-                    )}
-                  />
+              <span
+                className={cn(
+                  "flex h-5 items-center text-sm",
+                  phase.state === "pending" && "text-muted-foreground",
+                  phase.state === "done" && "text-brand",
+                  active && "font-medium",
+                  phase.state === "failed" && "text-destructive",
                 )}
+              >
+                {phase.title}
               </span>
-              <div className={cn("grid min-w-0 gap-1", i < last && "pb-4")}>
-                <span
-                  className={cn(
-                    "flex h-5 items-center text-sm",
-                    phase.state === "pending" && "text-muted-foreground",
-                    phase.state === "done" && "text-brand",
-                    active && "font-medium",
-                    phase.state === "failed" && "text-destructive",
-                  )}
-                >
-                  {phase.title}
-                </span>
-                {active && progress.active.length > 0 && (
-                  <ul data-testid="job-stage-agents" className="grid gap-1">
-                    {progress.active.map((child) => (
-                      <li
-                        key={child.slot}
-                        className="flex min-w-0 items-center gap-2 text-xs"
+              {active && progress.active.length > 0 && (
+                <ul data-testid="job-stage-agents" className="grid gap-1">
+                  {progress.active.map((child) => (
+                    <li
+                      key={child.slot}
+                      className="flex min-w-0 items-center gap-2 text-xs"
+                    >
+                      <LiveAgents active={[child]} />
+                      <a
+                        href={href({ name: "session", sessionId: child.session_id })}
+                        onClick={onOpenSession}
+                        className="min-w-0 truncate underline decoration-border underline-offset-4 hover:decoration-foreground"
                       >
-                        <LiveAgents active={[child]} />
-                        <a
-                          href={href({ name: "session", sessionId: child.session_id })}
-                          onClick={onOpenSession}
-                          className="min-w-0 truncate underline decoration-border underline-offset-4 hover:decoration-foreground"
-                        >
-                          {child.title || child.slot}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {active && progress.last_event && (
-                  <p
-                    data-testid="job-last-event"
-                    className="text-xs text-muted-foreground"
-                  >
-                    {progress.last_event}
-                  </p>
-                )}
-              </div>
-            </li>
+                        {child.title || child.slot}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {active && progress.last_event && (
+                <p
+                  data-testid="job-last-event"
+                  className="text-xs text-muted-foreground"
+                >
+                  {progress.last_event}
+                </p>
+              )}
+            </Stage>
           );
         })}
       </ol>
@@ -347,6 +335,46 @@ export function JobBudget({ progress }: { progress: JobProgress }) {
         {progress.budget.spent} of {progress.budget.total} agents
       </span>
     </p>
+  );
+}
+
+/* one stage on the timeline: its node on the line, the line's segments
+   above and below it coloured by the stage they lead from, and its card */
+function Stage({
+  node,
+  above,
+  below,
+  card,
+  current = false,
+  children,
+  ...rest
+}: {
+  node: ReactNode;
+  above: JobPhase["state"] | null;
+  below: JobPhase["state"] | null;
+  card: string;
+  current?: boolean;
+  children: ReactNode;
+  "data-stage"?: string;
+}) {
+  const line = (state: JobPhase["state"]) =>
+    state === "done" ? "bg-brand/50" : "bg-border";
+  return (
+    <li className="grid grid-cols-[1rem_1fr] gap-x-3" {...rest}>
+      <span aria-hidden className="flex flex-col items-center">
+        <span className={cn("h-2.5 w-px", above ? line(above) : "bg-transparent")} />
+        <span className="grid h-5 place-items-center">{node}</span>
+        {below && <span className={cn("w-px flex-1", line(below))} />}
+      </span>
+      <div className={cn("min-w-0", below && "pb-2")}>
+        <div
+          data-testid={current ? "job-stage-current" : undefined}
+          className={cn("grid min-w-0 gap-1 rounded-lg px-3 py-2.5", card)}
+        >
+          {children}
+        </div>
+      </div>
+    </li>
   );
 }
 
