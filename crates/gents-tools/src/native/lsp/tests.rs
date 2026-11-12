@@ -244,7 +244,7 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
                     .await;
                 match result {
                     Ok(output) => {
-                        let report = if output.contains("fixture (not started") {
+                        let report = if output.contains("fixture (not started — run a server-backed action") {
                             Some("not_started".to_string())
                         } else if output.contains("fixture (ready)")
                             || output.contains("fixture (starting/indexing)")
