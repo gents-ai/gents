@@ -718,6 +718,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::Goal) {
         return live_runtime::exercise(root, true).await;
     }
+    if matches!(journey, Journey::RuntimeReplacement) {
+        return live_runtime::exercise_replacement(root).await;
+    }
     #[cfg(feature = "editor-e2e")]
     if matches!(journey, Journey::Editor) {
         return live_runtime::exercise_editor(root, "live").await;
@@ -1414,21 +1417,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await
         .context("live output was not observed before provider completion")??;
     }
-    if matches!(journey, Journey::RuntimeReplacement) {
-        runtime_replacement::refuse_busy(&host_binary, &node_home).await?;
-        let unchanged = access.execute(&signed_query).await?;
-        let unchanged = &unchanged["data"]["AgentRequest"][0];
-        ensure!(
-            unchanged["_docID"] == original_doc_id,
-            "busy refusal replaced the input: {unchanged}"
-        );
-        ensure!(
-            !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
-                unchanged["lifecycle_state"].as_str()
-            ),
-            "busy refusal terminated the input: {unchanged}"
-        );
-    }
     if journey.is_steering() {
         let completion_path = root.join("finish-provider");
         let completion_gate = Arc::clone(&gate);
@@ -1838,27 +1826,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .context("the exact request's terminal answer was not observed")??;
-    if matches!(journey, Journey::RuntimeReplacement) {
-        runtime_replacement::Fixture {
-            root,
-            home: &node_home,
-            binary: &host_binary,
-            node_did,
-            agent_did,
-            session,
-            client_did: &client_did,
-            original_doc_id: &original_doc_id,
-            access: &access,
-        }
-        .replace_and_verify(&mut runtime, &mut client, &mut id)
-        .await.with_context(|| {
-            let requests: Vec<_> = provider.captured_chat_requests().iter().map(|request| json!({
-                "model":request["model"], "stream":request["stream"],
-                "userMessages":request["messages"].as_array().into_iter().flatten().filter(|message| message["role"] == "user").map(|message| message["content"].clone()).collect::<Vec<_>>(),
-            })).collect();
-            format!("provider observations: {}; completion gate permits: {}", json!(requests), gate.available_permits())
-        })?;
-    }
     let wrong_scope = client
         .try_call(
             id,

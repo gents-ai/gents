@@ -39,15 +39,19 @@ mod live_undo;
 const WAIT: Duration = Duration::from_secs(30);
 
 pub async fn exercise(root: &Path, goal: bool) -> Result<()> {
-    run(root, goal, None).await
+    run(root, goal, None, false).await
 }
 
 #[cfg(feature = "editor-e2e")]
 pub async fn exercise_editor(root: &Path, scenario: &str) -> Result<()> {
-    run(root, false, Some(scenario)).await
+    run(root, false, Some(scenario), false).await
 }
 
-async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
+pub async fn exercise_replacement(root: &Path) -> Result<()> {
+    run(root, false, None, true).await
+}
+
+async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -> Result<()> {
     let target = live_target().await;
     let fault = if editor == Some("retry") {
         Some(live_faults::FaultRelay::start(&target, super::editor_retry::PROMPT.to_owned(),
@@ -57,6 +61,9 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         None
     };
     let mut gates = live_goals::gates(root, editor).await?;
+    if replacement {
+        gates.push(live_gate::HeldTool::start(root).await?);
+    }
     let steering = matches!(editor, Some("live-steering" | "live-goal-steering"));
     let goal_steering = editor == Some("live-goal-steering");
     let root_owned = root.to_owned();
@@ -67,8 +74,13 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         ))
     })
     .await??;
+    let runtime_binary = if replacement {
+        tokio::task::spawn_blocking(|| support::native_binary("gents")).await??
+    } else {
+        binary.clone()
+    };
     let home = root.join("runtime");
-    let mut command = Command::new(&binary);
+    let mut command = Command::new(&runtime_binary);
     command
         .current_dir(root)
         .envs(homes.env())
@@ -109,7 +121,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         .await?
         .into_std()
         .await;
-    let mut runtime = Command::new(&binary)
+    let mut runtime = Command::new(&runtime_binary)
         .current_dir(root)
         .envs(homes.env())
         .env_remove("GENTS_SYSTEM_LOG")
@@ -222,8 +234,8 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         let agent = deployment["client"]["deployments"].as_array().unwrap().iter()
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
-        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref(), undo.as_ref(), fault.as_ref()).await?;
-        let opening = if steering { gates[0].prompt() } else if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools.".to_owned() } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.".to_owned() };
+        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref(), undo.as_ref(), fault.as_ref(), replacement).await?;
+        let opening = if steering || replacement { gates[0].prompt() } else if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools.".to_owned() } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.".to_owned() };
         let receipt = if goal_steering {
             client.try_call(id, "desktop_goal_control", json!({"request":{"nodeDid":node,"agentDid":agent,"action":{"kind":"create","objective":opening,"tokenBudget":"16000"}}})).await?
         } else {
@@ -234,6 +246,11 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         id += 1;
         let session = receipt["sessionId"].as_str().context("submitted session")?;
         let request = receipt["requestId"].as_str().context("submitted request")?;
+        if replacement {
+            gates[0].wait_started(WAIT).await?;
+            super::runtime_replacement::refuse_busy(&binary, &home).await?;
+            gates[0].release().await?;
+        }
         if steering {
             gates[0].wait_started(WAIT).await?;
             let mut fixture = json!({"gate":gates[0].descriptor()});
@@ -243,7 +260,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
             tokio::fs::write(root.join("editor-steering-fixture.json"), serde_json::to_vec(&fixture)?).await?;
             super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), editor.unwrap()).await?;
         }
-        if !goal && editor.is_none() {
+        if !goal && editor.is_none() && !replacement {
         let live = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({
             "nodeDid":node,"sessionId":session,"timelineLimit":40,
         }), |projection| {
@@ -269,6 +286,13 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         let wrong = client.try_call(id, "desktop_request_output", json!({"nodeDid":node,"sessionId":"another-session","requestId":request})).await;
         id += 1;
         ensure!(wrong.is_err() || wrong.is_ok_and(|value| value["output"]["kind"] == "loading"), "request output escaped its session");
+        if replacement {
+            super::runtime_replacement::Fixture {
+                root, home:&home, binary:&binary, node_did:node, agent_did:&agent,
+                session, client_did:&client_did, original_doc_id:row.doc_id.as_deref().context("original request document")?, access:&access,
+            }.replace_and_verify(&mut runtime, &mut client, &mut updates, &mut id).await?;
+            projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
+        }
         if goal {
             let author_paths = paths.clone();
             let author = tokio::task::spawn_blocking(move || gents_desktop_core::client::PrincipalIdentity::load_existing(&author_paths)).await??;
@@ -426,7 +450,9 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
     for gate in &mut gates {
         gate.release().await?;
     }
-    stop(&mut runtime).await?;
+    if !replacement {
+        stop(&mut runtime).await?;
+    }
     tokio::time::timeout(WAIT, drain)
         .await
         .context("runtime output cleanup deadline")???;
@@ -447,6 +473,7 @@ async fn configure(
     inventory: Option<&live_inventory::Inventory>,
     undo: Option<&live_undo::Undo>,
     fault: Option<&live_faults::FaultRelay>,
+    replacement: bool,
 ) -> Result<()> {
     let setup = client
         .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
@@ -460,13 +487,19 @@ async fn configure(
     if goal {
         selected["context_id"] = json!("native-live-goal-context");
     }
-    let profile = target.profile(node);
+    let mut profile = target.profile(node);
+    if replacement {
+        profile.execution_id = Some("native-live-replacement-budget".to_owned());
+    }
     selected["inference_profile_id"] = json!(profile.profile_id);
     let mut backend = target.backend(node);
     if let Some(fault) = fault {
         backend.endpoint = fault.endpoint().to_owned();
     }
     let mut document = json!({"node":{"node_did":node},"agents":[selected],"inference_backends":[backend],"inference_profiles":[profile]});
+    if replacement {
+        document["inference_executions"] = json!([{"node_did":node,"execution_id":"native-live-replacement-budget","max_total_tokens":8192}]);
+    }
     if goal {
         document["contexts"] = json!([{"node_did":node,"context_id":"native-live-goal-context","tools_id":"native-live-goal-tools","system_prompt":"Answer ordinary requests briefly. When the Goal is resumed, fulfill its objective and call update_goal with status complete. Do not create another Goal."}]);
         document["tools"] = json!([{"node_did":node,"tools_id":"native-live-goal-tools","built_ins":{"enable_goal_tools":true}}]);
@@ -523,7 +556,7 @@ async fn configure(
     Ok(())
 }
 
-async fn wait_client(
+pub(super) async fn wait_client(
     client: &mut Attachment,
     updates: &mut Attachment,
     id: &mut u32,
