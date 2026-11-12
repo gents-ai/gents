@@ -83,7 +83,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let case = |name: &str| {
         receiver_model
             .iter()
-            .find(|case| case["name"] == name)
+            .find(|case| case.name == name)
             .with_context(|| format!("missing replica case {name}"))
     };
     let reader = identity::Did::new(admin.did())?;
@@ -253,11 +253,11 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     }
     assert_eq!(
         count(&admin_local.execute(&query).await?) != 0,
-        case("pending")?["runtime_read"] == true
+        case("pending")?.runtime_read
     );
     assert_eq!(
         count(&http(admin_address, &user)?.execute(&query).await?) != 0,
-        case("pending")?["user_read"] == true
+        case("pending")?.user_read
     );
     let node = http(admin_address, &user)?
         .write(
@@ -283,7 +283,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     }
     assert_eq!(
         count(&http(admin_address, &user)?.execute(&query).await?) != 0,
-        case("linked")?["user_read"] == true
+        case("linked")?.user_read
     );
     for actor in [&agent, &sibling, &outsider] {
         assert_eq!(
@@ -343,7 +343,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     }
     assert_eq!(
         count(&http(admin_address, &user)?.execute(&query).await?) != 0,
-        case("after-repair")?["user_read"] == true
+        case("after-repair")?.user_read
     );
     let session = http(admin_address, &candidate)?.write(
         "test.transport.private_session",
@@ -447,7 +447,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     assert_eq!(public["data"]["PeerRegistry"][0]["peer_id"], candidate_peer);
     assert_eq!(
         count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
-        case("after-repair")?["outsider_read"] == true
+        case("after-repair")?.outsider_read
     );
     assert_eq!(
         !gents_protocol::graphql::graphql_rows_from_response(
@@ -455,7 +455,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             "AgentSession"
         )
         .is_empty(),
-        case("after-repair")?["app_read"] == true
+        case("after-repair")?.app_read
     );
 
     let runtime_registry = admin_local.write(
@@ -667,11 +667,11 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let reopened_local = ConfigAccess::local_as(reopened.clone(), reader.clone());
     assert_eq!(
         count(&reopened_local.execute(&query).await?) != 0,
-        case("after-repair")?["runtime_read"] == true
+        case("after-repair")?.runtime_read
     );
     assert_eq!(
         count(&http(reopened_address, &user)?.execute(&query).await?) != 0,
-        case("after-repair")?["user_read"] == true
+        case("after-repair")?.user_read
     );
     let reopened_write = http(reopened_address, &user)?
         .write(
@@ -691,7 +691,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             "AgentSession"
         )
         .is_empty(),
-        case("after-repair")?["app_read"] == true
+        case("after-repair")?.app_read
     );
     reopened.shutdown().await?;
     Ok(())

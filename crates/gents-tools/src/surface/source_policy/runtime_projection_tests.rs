@@ -53,8 +53,8 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
     let modeled_pending = |name: &str| {
         cases
             .iter()
-            .find(|case| case["name"] == name)
-            .and_then(|case| case["pending"].as_bool())
+            .find(|case| case.name == name)
+            .map(|case| case.pending)
             .expect("modeled transport publication case")
     };
     let relation = |name: &'static str, subject: Subject, network: String| {
