@@ -1,8 +1,15 @@
 use crate::support::*;
-use gents::support::live_inference::{live_target, InferenceTarget};
 
-use std::fs;
+#[path = "cli_live_process.rs"]
+mod live_process;
+use gents::support::live_inference::{live_target, InferenceTarget};
+use live_process::{
+    allocate_port, run_cli_failure_stderr, run_cli_json, run_cli_text, run_desktop_init_json,
+    run_init_json, spawn_cli, spawn_server_with_ready_json,
+};
+
 use std::time::Duration;
+use tokio::fs;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
@@ -16,7 +23,7 @@ struct LiveFileAgents<'a> {
     target: Option<&'a InferenceTarget>,
 }
 
-fn apply_live_file_agent_config(
+async fn apply_live_file_agent_config(
     home: &std::path::Path,
     root: &std::path::Path,
     graphql: &str,
@@ -44,9 +51,10 @@ fn apply_live_file_agent_config(
             "--node-did",
             node_did,
         ],
-    )?;
+    )
+    .await?;
     let path = root.join("pack_config.json");
-    let mut config = read_json_file(&path)?;
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).await?)?;
     if let Some(target) = target {
         let profile_id = config["agents"][0]["inference_profile_id"]
             .as_str()
@@ -94,7 +102,7 @@ fn apply_live_file_agent_config(
         .find(|tools| tools["tools_id"] == tools_id)
         .context("default Tools document is missing")?;
     tools["host"] = host;
-    let prompt = fs::read_to_string(system_prompt)?;
+    let prompt = fs::read_to_string(system_prompt).await?;
     for agent_did in agent_dids {
         let existing_context_id = config["agents"]
             .as_array()
@@ -114,7 +122,7 @@ fn apply_live_file_agent_config(
         context["system_prompt"] = Value::String(prompt.clone());
         context["tools_id"] = Value::String(tools_id.to_string());
     }
-    write_json_file(&path, &config)?;
+    fs::write(&path, serde_json::to_vec_pretty(&config)?).await?;
     run_cli_json(
         home,
         &[
@@ -127,7 +135,8 @@ fn apply_live_file_agent_config(
             "--graphql",
             graphql,
         ],
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
@@ -142,28 +151,28 @@ fn read_only_files(root: &std::path::Path) -> Result<Value> {
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools() -> Result<()>
 {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = live_process::tempdir().await?;
     let home_dir = tempdir.path().join("agent-home");
     let desktop_home = tempdir.path().join("desktop-home");
-    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&home_dir).await?;
     let home_arg = home_dir
         .to_str()
         .ok_or_else(|| anyhow!("demo home path is not UTF-8"))?;
 
     let files_dir = home_dir.join("demo-files");
-    fs::create_dir_all(&files_dir)?;
+    fs::create_dir_all(&files_dir).await?;
     let alpha_token = format!("LIVE_DEMO_ALPHA_{}", Uuid::new_v4().simple());
     let beta_token = format!("LIVE_DEMO_BETA_{}", Uuid::new_v4().simple());
-    fs::write(files_dir.join("alpha.txt"), format!("{alpha_token}\n"))?;
-    fs::write(files_dir.join("beta.txt"), format!("{beta_token}\n"))?;
+    fs::write(files_dir.join("alpha.txt"), format!("{alpha_token}\n")).await?;
+    fs::write(files_dir.join("beta.txt"), format!("{beta_token}\n")).await?;
 
     let system_prompt = tempdir.path().join("standard_onboarding_system_prompt.txt");
     fs::write(
         &system_prompt,
         "This is a live onboarding smoke test. When the user asks about files, use list_files and read_file before answering. Do not infer file contents from names. Keep final answers short and include the exact requested file tokens.",
-    )?;
+    ).await?;
 
-    let port = allocate_port()?;
+    let port = allocate_port().await?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
     let target = Some(live_target().await);
@@ -185,7 +194,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         model_endpoint,
     ];
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
-    let init = run_init_json(&home_dir, &init_arg_refs)?;
+    let init = run_init_json(&home_dir, &init_arg_refs).await?;
     let node_did = node_did_from_init(&init)?;
     let agent_did = init
         .pointer("/init/default_agent_did")
@@ -199,14 +208,15 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         .to_string();
 
     let (_serve, readiness) =
-        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
+        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[]).await?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     assert_eq!(
         readiness.get("p2p_transport").and_then(Value::as_str),
         Some("iroh")
     );
 
-    let desktop_init = run_desktop_init_json(&home_dir, &desktop_home, "Standard Onboarding Demo")?;
+    let desktop_init =
+        run_desktop_init_json(&home_dir, &desktop_home, "Standard Onboarding Demo").await?;
     assert_eq!(
         desktop_init.get("status").and_then(Value::as_str),
         Some("initialized")
@@ -240,6 +250,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let peer_directory_path = desktop_home.join("peers.json");
     let peer_directory: Value = serde_json::from_slice(
         &fs::read(&peer_directory_path)
+            .await
             .with_context(|| format!("reading {}", peer_directory_path.display()))?,
     )
     .with_context(|| format!("decoding {}", peer_directory_path.display()))?;
@@ -273,7 +284,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             agent_dids: &[&agent_did],
             target: target.as_ref(),
         },
-    )?;
+    )
+    .await?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let session_id = Uuid::new_v4().to_string();
@@ -298,7 +310,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             "--content",
             first_prompt,
         ],
-    )?;
+    )
+    .await?;
     assert_eq!(
         first.get("session_id").and_then(Value::as_str),
         Some(session_id.as_str())
@@ -333,7 +346,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             "--content",
             second_prompt,
         ],
-    )?;
+    )
+    .await?;
     assert_eq!(
         second.get("session_id").and_then(Value::as_str),
         Some(session_id.as_str())
@@ -365,24 +379,24 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = live_process::tempdir().await?;
     let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&home_dir).await?;
     let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     let files_dir = home_dir.join("live-projection-files");
-    fs::create_dir_all(&files_dir)?;
+    fs::create_dir_all(&files_dir).await?;
     let token = format!("LIVE_PROJECTION_{}", Uuid::new_v4().simple());
     let relative_fixture = "live-projection-files/source.txt";
-    fs::write(home_dir.join(relative_fixture), format!("{token}\n"))?;
+    fs::write(home_dir.join(relative_fixture), format!("{token}\n")).await?;
 
     let system_prompt = tempdir.path().join("projection_system_prompt.txt");
     fs::write(
         &system_prompt,
         "When the user asks about local files, use read_file before answering. Keep final answers to the requested file contents only.",
-    )?;
+    ).await?;
 
-    let port = allocate_port()?;
+    let port = allocate_port().await?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-projection-{}", Uuid::new_v4().simple());
     let target = live_target().await;
@@ -403,7 +417,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     init_args.push("--inference-url".to_string());
     init_args.push(model_endpoint);
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
-    let init = run_init_json(&home_dir, &init_arg_refs)?;
+    let init = run_init_json(&home_dir, &init_arg_refs).await?;
     let node_did = node_did_from_init(&init)?;
     let agent_did = init
         .pointer("/init/default_agent_did")
@@ -416,7 +430,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
 
-    let (_serve, _) = spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
+    let (_serve, _) =
+        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[]).await?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     apply_live_file_agent_config(
@@ -431,7 +446,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             agent_dids: &[&agent_did],
             target: None,
         },
-    )?;
+    )
+    .await?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let session_id = format!("live-projection-session-{}", Uuid::new_v4().simple());
@@ -462,7 +478,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             "--poll-secs",
             "1",
         ],
-    )?;
+    )
+    .await?;
     let request_id = result
         .get("request_id")
         .and_then(Value::as_str)
@@ -497,7 +514,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         &request_id,
         "openai-codex",
         "training-safe",
-    )?;
+    )
+    .await?;
     assert_eq!(
         openai.get("projection_id").and_then(Value::as_str),
         Some("openai_codex_run_trace")
@@ -643,7 +661,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         "openai-codex",
         "training-safe",
         "jsonl",
-    )?;
+    )
+    .await?;
     assert_projection_records(
         &openai_jsonl,
         "openai_codex_run_trace",
@@ -674,7 +693,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         "openai-codex",
         "training-safe",
         "eval-jsonl",
-    )?;
+    )
+    .await?;
     assert_projection_records(
         &openai_eval_jsonl,
         "openai_codex_run_trace",
@@ -696,7 +716,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         "langgraph",
         "training-safe",
         "eval-jsonl",
-    )?;
+    )
+    .await?;
     assert_projection_records(
         &langgraph_eval_jsonl,
         "langgraph_state_history",
@@ -718,7 +739,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         "multi-agent",
         "training-safe",
         "eval-jsonl",
-    )?;
+    )
+    .await?;
     assert_projection_records(
         &multi_agent_eval_jsonl,
         "multi_agent_task",
@@ -750,9 +772,9 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = live_process::tempdir().await?;
     let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&home_dir).await?;
     let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     struct LiveRequestSpec {
@@ -762,7 +784,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     }
 
     let files_dir = home_dir.join("live-smoke-files");
-    fs::create_dir_all(&files_dir)?;
+    fs::create_dir_all(&files_dir).await?;
     let agent_name = format!("cli-live-{}", Uuid::new_v4().simple());
     let mut request_specs = Vec::new();
     for request_index in 0..4 {
@@ -774,7 +796,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
                 "LIVE_E2E_REQUEST_{request_index}_FILE_{file_index}_{}",
                 Uuid::new_v4().simple()
             );
-            fs::write(home_dir.join(&path), format!("{token}\n"))?;
+            fs::write(home_dir.join(&path), format!("{token}\n")).await?;
             paths.push(path);
             tokens.push(token);
         }
@@ -793,9 +815,9 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     fs::write(
         &system_prompt,
         "When the user asks about local files, use the available file tools instead of guessing. For multi-file requests, call read_file separately for every requested path before answering. Keep final answers to the requested file tokens only.",
-    )?;
+    ).await?;
 
-    let port = allocate_port()?;
+    let port = allocate_port().await?;
     let graphql = graphql_url(port);
     let target = live_target().await;
     let model_endpoint = target.endpoint().to_owned();
@@ -815,7 +837,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     init_args.push("--inference-url".to_string());
     init_args.push(model_endpoint.clone());
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
-    let init = run_init_json(&home_dir, &init_arg_refs)?;
+    let init = run_init_json(&home_dir, &init_arg_refs).await?;
     let node_did = node_did_from_init(&init)?;
     let backend_id = init
         .pointer("/init/backend_id")
@@ -827,7 +849,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
-    let (serve, _) = spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
+    let (serve, _) =
+        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[]).await?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let default_agent = init
@@ -853,7 +876,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
                 "--profile-id",
                 profile_id,
             ],
-        )?;
+        )
+        .await?;
         spec.agent_did = created
             .get("agent_did")
             .and_then(Value::as_str)
@@ -877,7 +901,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             agent_dids: &agent_dids,
             target: None,
         },
-    )?;
+    )
+    .await?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let mut children = Vec::new();
@@ -911,7 +936,11 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let mut outputs = Vec::new();
     let mut wait_errors = Vec::new();
     for (spec, child) in children {
-        match child.wait_with_output() {
+        match tokio::time::timeout(Duration::from_secs(300), child.wait_with_output())
+            .await
+            .context("live request process deadline")
+            .and_then(|result| result.map_err(anyhow::Error::from))
+        {
             Ok(output) => outputs.push((spec, output)),
             Err(error) => wait_errors.push(format!("{}: {error}", spec.agent_did)),
         }
@@ -925,7 +954,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
 
     for (spec, output) in outputs {
         if !output.status.success() {
-            let (server_stdout, server_stderr) = serve.captured_output()?;
+            let (server_stdout, server_stderr) = serve.captured_output().await?;
             bail!(
                 "live request {} failed\nstdout:\n{}\nstderr:\n{}\nserver stdout:\n{}\nserver stderr:\n{}",
                 spec.agent_did,
@@ -1006,7 +1035,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     struct Release(std::path::PathBuf);
     impl Drop for Release {
         fn drop(&mut self) {
-            let _ = fs::write(&self.0, "released");
+            let release = self.0.clone();
+            tokio::task::spawn_blocking(move || live_process::release_fifo(&release));
         }
     }
     fn entries(snapshot: &Value) -> impl Iterator<Item = &Value> {
@@ -1047,13 +1077,17 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         serde_json::from_slice(&output.stdout).with_context(|| format!("parsing {what} output"))
     }
 
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = live_process::tempdir().await?;
     let home = tempdir.path().join("home");
     let workspace = tempdir.path().join("workspace");
-    fs::create_dir_all(&home)?;
-    fs::create_dir_all(&workspace)?;
-    let started = workspace.join("hold.started");
+    fs::create_dir_all(&home).await?;
+    fs::create_dir_all(&workspace).await?;
     let release = workspace.join("hold.release");
+    let fifo_status = tokio::process::Command::new("mkfifo")
+        .arg(&release)
+        .status()
+        .await?;
+    anyhow::ensure!(fifo_status.success(), "creating steering release FIFO");
     let _release_on_failure = Release(release.clone());
 
     let token = |label: &str| format!("{label}-{}", Uuid::new_v4().simple());
@@ -1082,10 +1116,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
 
     let hold_args = serde_json::json!({
         "command": format!(
-            "printf HOLD_STARTED > '{}'; while [ ! -f '{}' ] && [ -d '{}' ]; do sleep 0.2; done; printf '{tool_done}: answer using the latest user messages; do not call any tool again.'",
-            started.display(),
+            "IFS= read -r line < '{}'; printf '{tool_done}: answer using the latest user messages; do not call any tool again.'",
             release.display(),
-            workspace.display(),
         ),
         "args": [],
         "timeout_secs": 600
@@ -1096,7 +1128,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         format!(
             "You are an agent in a live integration test. When the user asks you to start, call bash_unrestricted exactly once with exactly these arguments: {hold_args}. Wait for its result. After it returns, read every later user message and give one short final answer that contains every token those messages ask for. Never call any tool after bash_unrestricted returns."
         ),
-    )?;
+    ).await?;
 
     let (endpoint, model, api_key_env) = live_eval_target().await?;
     let home_arg = home.to_str().context("home is not UTF-8")?;
@@ -1122,7 +1154,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     let init = run_init_json(
         &home,
         &init_args.iter().map(String::as_str).collect::<Vec<_>>(),
-    )?;
+    )
+    .await?;
     let node = node_did_from_init(&init)?;
     let agent_did = init
         .pointer("/init/default_agent_did")
@@ -1134,14 +1167,15 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         .and_then(Value::as_str)
         .context("init output missing tools_id")?
         .to_owned();
-    let port = allocate_port()?;
+    let port = allocate_port().await?;
     let graphql = graphql_url(port);
     let (_serve, _) = spawn_server_with_ready_json(
         &home,
         port,
         &["--home", home_arg, "--command-timeout-max-secs", "600"],
         &[],
-    )?;
+    )
+    .await?;
     wait_for_runtime_ready(&graphql, &node, Duration::from_secs(30)).await?;
     apply_live_file_agent_config(
         &home,
@@ -1158,7 +1192,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             agent_dids: &[&agent_did],
             target: None,
         },
-    )?;
+    )
+    .await?;
     wait_for_runtime_quiescence(&graphql, &node, 2, Duration::from_secs(6)).await?;
 
     let session = Uuid::new_v4().to_string();
@@ -1199,7 +1234,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             .context("spawn live CLI request")
     };
     let run = |args: Vec<String>| {
-        run_cli_json(&home, &args.iter().map(String::as_str).collect::<Vec<_>>())
+        let home = home.clone();
+        async move { run_cli_json(&home, &args.iter().map(String::as_str).collect::<Vec<_>>()).await }
     };
     let scope = [
         "--home",
@@ -1216,11 +1252,12 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     let access = gents_store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(&graphql),
     );
-    let pending = || {
+    let pending = || async {
         run_cli_json(
             &home,
             &[&["utils", "debug", "request", "pending"][..], &scope[..]].concat(),
         )
+        .await
     };
     let wait_for_pending = |expected: Vec<&str>| {
         let expected = expected.into_iter().map(str::to_owned).collect::<Vec<_>>();
@@ -1230,7 +1267,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             let mut changes = access.subscribe_changes("AgentRequest").await;
             tokio::time::timeout(Duration::from_secs(60), async {
                 loop {
-                    let snapshot = pending()?;
+                    let snapshot = pending().await?;
                     if contents(&snapshot) == expected {
                         break Ok::<_, anyhow::Error>(snapshot);
                     }
@@ -1300,7 +1337,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         .context("active doc id")?
         .to_owned();
 
-    let steer_submit = run(submit(steer, false))?;
+    let steer_submit = run(submit(steer, false)).await?;
     let steer_request_id = steer_submit["request_id"]
         .as_str()
         .context("steer submit output lacks request_id")?
@@ -1309,8 +1346,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
 
     let mut waiter = ChildGuard(Some(spawn(submit(alpha, true))?));
     wait_for_pending(vec![steer, alpha]).await?;
-    run(submit(beta, false))?;
-    run(submit(gamma, false))?;
+    run(submit(beta, false)).await?;
+    run(submit(gamma, false)).await?;
     let queued = wait_for_pending(vec![steer, alpha, beta, gamma]).await?;
     assert!(
         entries(&queued).all(|entry| entry["editable"] == true),
@@ -1326,13 +1363,14 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             "--content",
             alpha_edited,
         ],
-    ))?;
+    ))
+    .await?;
     assert_eq!(
         edited["request_doc_ids"].as_array().map(Vec::len),
         Some(1),
         "edit must name one replacement: {edited}"
     );
-    let after_edit = pending()?;
+    let after_edit = pending().await?;
     assert_eq!(contents(&after_edit), [steer, alpha_edited, beta, gamma]);
 
     run(mutate(
@@ -1346,8 +1384,9 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             "--request-doc-id",
             &doc_id_of(&after_edit, beta)?,
         ],
-    ))?;
-    let after_reorder = pending()?;
+    ))
+    .await?;
+    let after_reorder = pending().await?;
     assert_eq!(contents(&after_reorder), [steer, gamma, alpha_edited, beta]);
 
     let removed_doc_id = doc_id_of(&after_reorder, beta)?;
@@ -1355,13 +1394,14 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "remove-pending",
         &after_reorder,
         &["--request-doc-id", &removed_doc_id],
-    ))?;
+    ))
+    .await?;
     assert_eq!(
         removed["request_doc_ids"].as_array().map(Vec::len),
         Some(0),
         "removal creates no replacement: {removed}"
     );
-    let settled = pending()?;
+    let settled = pending().await?;
     assert_eq!(contents(&settled), [steer, gamma, alpha_edited]);
 
     let stale_args = mutate(
@@ -1377,12 +1417,13 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     let stderr = run_cli_failure_stderr(
         &home,
         &stale_args.iter().map(String::as_str).collect::<Vec<_>>(),
-    )?;
+    )
+    .await?;
     assert!(
         stderr.contains("The message queue changed"),
         "stale snapshot must fail with a queue-changed error: {stderr}"
     );
-    let unchanged = pending()?;
+    let unchanged = pending().await?;
     assert_eq!(
         ids(&unchanged),
         ids(&settled),
@@ -1396,7 +1437,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "submit --wait exited before the held tool was released"
     );
 
-    fs::write(&release, "released")?;
+    let release_path = release.clone();
+    tokio::task::spawn_blocking(move || live_process::release_fifo(&release_path)).await??;
     let first_result = wait_child(first.0.take().unwrap(), "first request submit --wait").await?;
     let waited = wait_child(waiter.0.take().unwrap(), "edited message's submit --wait").await?;
     assert_eq!(
@@ -1430,7 +1472,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         (&Value::from("interrupted"), &Value::Null),
         "removed input must terminate without folding into the running request: {removed_row}"
     );
-    assert!(contents(&pending()?).is_empty(), "queue must drain");
+    assert!(contents(&pending().await?).is_empty(), "queue must drain");
 
     let answer = first_result
         .pointer("/output/presentation/body_markdown")
@@ -1447,7 +1489,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     Ok(())
 }
 
-fn trace_project_json(
+async fn trace_project_json(
     home_dir: &std::path::Path,
     graphql: &str,
     request_id: &str,
@@ -1472,11 +1514,12 @@ fn trace_project_json(
             "--actor-did",
             "did:test:live-projection-test",
         ],
-    )?;
+    )
+    .await?;
     serde_json::from_str::<Value>(&output).context("parsing live adapter projection JSON")
 }
 
-fn trace_project_jsonl_lines(
+async fn trace_project_jsonl_lines(
     home_dir: &std::path::Path,
     graphql: &str,
     request_id: &str,
@@ -1504,7 +1547,8 @@ fn trace_project_jsonl_lines(
             "--actor-did",
             "did:test:live-projection-test",
         ],
-    )?;
+    )
+    .await?;
     output
         .lines()
         .map(|line| {
