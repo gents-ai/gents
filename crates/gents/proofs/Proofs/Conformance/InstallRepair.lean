@@ -22,17 +22,18 @@ def classification : Conformance.Family HomeObservation HomeState where
 @[conformance_family]
 def plans : Conformance.Family Observation Plan where
   inputs := homes.flatMap fun home => versions.flatMap fun version =>
-    (List.range 1024).map fun n =>
+    (List.range 2048).map fun n =>
       ⟨home, version, bit n 0, bit n 1, bit n 2, bit n 3, bit n 4,
-       bit n 5, bit n 6, bit n 7, bit n 8, bit n 9⟩
+       bit n 5, bit n 6, bit n 7, bit n 8, bit n 9, bit n 10⟩
   model := plan
 
 @[conformance_family]
 def servicePlans : Conformance.Family ServiceObservation (List ServiceStep) where
-  inputs := versions.flatMap fun version => (List.range 16384).map fun n =>
-    ⟨bit n 0, bit n 1, bit n 2, bit n 3, bit n 4, bit n 5,
-     bit n 6, bit n 7, bit n 8, bit n 9, version, bit n 10, bit n 11,
-     bit n 12, bit n 13⟩
+  inputs := versions.flatMap fun version =>
+    [ServedNode.none, .same, .different].flatMap fun serving =>
+      (List.range 4096).map fun n =>
+        ⟨bit n 0, bit n 1, bit n 2, bit n 3, bit n 4, bit n 5,
+         bit n 6, bit n 7, bit n 8, bit n 9, version, bit n 10, bit n 11, serving⟩
   model := servicePlan
 
 @[conformance_family]
@@ -40,5 +41,36 @@ def refusals : Conformance.Family RefusalObservation RefusalAction where
   inputs := (List.range 32).map fun n =>
     ⟨bit n 0, bit n 1, bit n 2, bit n 3, bit n 4⟩
   model := refusalAction
+
+end Conformance.InstallRepair
+
+namespace Conformance.InstallRepair
+open _root_.InstallRepair
+
+@[conformance_family]
+def clientBindings : Conformance.Family ClientObservation ClientBinding where
+  inputs := (List.range 128).map fun n =>
+    ⟨bit n 0, bit n 1, bit n 2, bit n 3, bit n 4, bit n 5, bit n 6⟩
+  model := clientBinding
+
+end Conformance.InstallRepair
+
+namespace Conformance.InstallRepair
+open _root_.InstallRepair
+
+private def crashSamples : List CrashSample :=
+  [⟨.unloaded, 0, false⟩, ⟨.ready, 0, false⟩, ⟨.running, 0, false⟩] ++
+  (List.range 6).flatMap fun counter => [false, true].map fun clean => ⟨.exited, counter, clean⟩
+
+@[conformance_family]
+def crashLoops : Conformance.Family (List CrashSample) (List CrashState) where
+  inputs := crashSamples.flatMap fun a => crashSamples.flatMap fun b => crashSamples.map fun c => [a,b,c]
+  model := crashTrace
+
+@[conformance_family]
+def storeExitCodes : Conformance.Family StoreKind Nat where
+  inputs := [.legacyRocksDb, .legacyLark, .unsupportedOrCorrupt, .unknownLineage, .foreignVersion,
+    .insecureKey, .unencryptedStore, .missingStoreKey, .otherVersionSchema]
+  model := storeExitCode
 
 end Conformance.InstallRepair
