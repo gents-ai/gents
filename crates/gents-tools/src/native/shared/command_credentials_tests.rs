@@ -6,15 +6,6 @@ use crate::{
 };
 use gents_session::workspace::sandbox::SANDBOX_EXEC;
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Case {
-    mode: CommandExecutionMode,
-    network: CommandNetworkMode,
-    effective_network: CommandNetworkMode,
-    protects_credentials: bool,
-}
-
 #[test]
 fn failed_credential_inspection_records_failure_and_stays_closed() {
     let folder = tempfile::tempdir().unwrap();
@@ -94,14 +85,17 @@ async fn generated_bounded_sandboxes_deny_credentials_and_default_network() {
     ]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    for value in cases {
-        let case: Case = serde_json::from_value(value.clone()).unwrap();
+    for case in cases {
         if !case.protects_credentials {
             continue;
         }
+        let mode: CommandExecutionMode =
+            serde_json::from_value(serde_json::Value::String(case.mode.clone())).unwrap();
+        let network: CommandNetworkMode =
+            serde_json::from_value(serde_json::Value::String(case.network.clone())).unwrap();
         let policy = CommandExecutionPolicy::write_capable()
-            .with_mode(case.mode)
-            .with_network_mode(case.network);
+            .with_mode(mode)
+            .with_network_mode(network);
         let mut profile = macos_workspace_write_policy(policy.effective_network_mode());
         let mut parameters = vec![format!("-DWRITABLE_ROOT={}", root.display())];
         protection.apply(&mut profile, &mut parameters).unwrap();
@@ -139,14 +133,14 @@ with socket.socket() as connection:
 print('verified credential, workspace and network boundaries')
 "#;
         let args = [
-            vec![port.to_string(), case.effective_network.as_str().into()],
+            vec![port.to_string(), case.effective_network.clone()],
             targets.clone(),
         ]
         .concat();
         let output = run(profile, parameters, &root, script, &args).await;
         assert!(
             output.status.success(),
-            "{value}: {}",
+            "{case:?}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("verified credential"));

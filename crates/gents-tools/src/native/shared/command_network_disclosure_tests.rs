@@ -5,18 +5,25 @@ use super::*;
 fn generated_command_isolation_matches_native_policy() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().command_isolation_cases;
     assert_eq!(cases.len(), 12);
-    for value in cases {
-        let mode: CommandExecutionMode = serde_json::from_value(value["mode"].clone()).unwrap();
-        let network: CommandNetworkMode = serde_json::from_value(value["network"].clone()).unwrap();
-        let effective: CommandNetworkMode =
-            serde_json::from_value(value["effectiveNetwork"].clone()).unwrap();
-        let protects_credentials = value["protectsCredentials"].as_bool().unwrap();
+    for case in cases {
+        let mode: CommandExecutionMode =
+            serde_json::from_value(serde_json::Value::String(case.mode.clone())).unwrap();
+        let network: CommandNetworkMode =
+            serde_json::from_value(serde_json::Value::String(case.network.clone())).unwrap();
+        let effective: CommandNetworkMode = serde_json::from_value(serde_json::Value::String(
+            case.effective_network.clone(),
+        ))
+        .unwrap();
         let policy = CommandExecutionPolicy::write_capable()
             .with_mode(mode)
             .with_network_mode(network);
-        assert_eq!(policy.effective_network_mode(), effective, "{value}");
-        assert_eq!(mode.protects_credentials(), protects_credentials, "{value}");
-        if protects_credentials && effective == CommandNetworkMode::Disabled {
+        assert_eq!(policy.effective_network_mode(), effective, "{case:?}");
+        assert_eq!(
+            mode.protects_credentials(),
+            case.protects_credentials,
+            "{case:?}"
+        );
+        if case.protects_credentials && effective == CommandNetworkMode::Disabled {
             assert!(policy
                 .network_enforcement_disclosure()
                 .starts_with("required_at_execution:"));
