@@ -299,6 +299,14 @@ impl EnrollmentProjection {
     }
 }
 
+/// What a decision withdraws: a denied request's own grant, or every grant of
+/// a revoked membership (Lean `Identity.EnrollmentGrant.applyDecision`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WithdrawalScope {
+    Request,
+    Membership,
+}
+
 #[derive(Clone)]
 pub struct GraphqlEnrollmentStore {
     node: Arc<EmbeddedNode>,
@@ -710,8 +718,12 @@ impl GraphqlEnrollmentStore {
             let request = denied.request.clone();
             let decision_doc_id = denied.decision_doc_id.clone();
             drop(_guard);
-            self.finish_grant_withdrawal(request_id, &request.candidate_did)
-                .await?;
+            self.finish_grant_withdrawal(
+                request_id,
+                &request.candidate_did,
+                WithdrawalScope::Request,
+            )
+            .await?;
             let delivery_pending = self
                 .deliver_terminal(&request, &decision_doc_id, None, None)
                 .await;
@@ -875,8 +887,12 @@ impl GraphqlEnrollmentStore {
         /* Lean `Identity.EnrollmentGrant.applyDecision .deny`: a grant whose
         approval never committed is withdrawn with the denial */
         if kind == WireDecisionKind::Denied {
-            self.finish_grant_withdrawal(request_id, &pending.request.candidate_did)
-                .await?;
+            self.finish_grant_withdrawal(
+                request_id,
+                &pending.request.candidate_did,
+                WithdrawalScope::Request,
+            )
+            .await?;
         }
         let delivery_pending = match &revision_doc_id {
             Some(revision_doc_id) => {
@@ -919,8 +935,12 @@ impl GraphqlEnrollmentStore {
             .find(|revoked| revoked.request.request_id == request_id)
         {
             let revoked = revoked.clone();
-            self.finish_grant_withdrawal(request_id, &revoked.request.candidate_did)
-                .await?;
+            self.finish_grant_withdrawal(
+                request_id,
+                &revoked.request.candidate_did,
+                WithdrawalScope::Membership,
+            )
+            .await?;
             drop(guard);
             let delivery_pending = self
                 .deliver_terminal(
@@ -985,7 +1005,11 @@ impl GraphqlEnrollmentStore {
         revision.admin_sig = self.identity.sign(&revision.signing_payload()).await?;
         revision.validate_against_approval(&active.request, &active.decision)?;
         let withdrawal = self
-            .prepare_grant_withdrawal(request_id, &active.request.candidate_did)
+            .prepare_grant_withdrawal(
+                request_id,
+                &active.request.candidate_did,
+                WithdrawalScope::Membership,
+            )
             .await?;
         let mutation = revision_mutation(&revision);
         let response = self
@@ -1041,21 +1065,31 @@ impl GraphqlEnrollmentStore {
         ))
     }
 
-    /// Lean `Identity.EnrollmentGrant.revoke`: plan the withdrawal of what an
-    /// explicit grant recorded for this request and revoke its node
-    /// permissions now, before the revision commits; the receipt and the
+    /// Lean `Identity.EnrollmentGrant.revoke` for a denied request, or
+    /// `revokeMember` for a revoked membership, whose every generation's
+    /// receipt is withdrawn: plan the withdrawal and revoke its node
+    /// permissions now, before the revision commits; the receipts and the
     /// Node `administrator` relation retire in the revision's transaction.
     async fn prepare_grant_withdrawal(
         &self,
         request_id: &str,
         member: &str,
+        scope: WithdrawalScope,
     ) -> Result<Option<gents_store::identity::EnrollmentGrantWithdrawal>> {
         let runtime = self.runtime_access()?;
         let receipts = gents_store::identity::load_enrollment_grant_receipts(&runtime, member)
             .await
             .context("reading the enrollment grant receipts before revocation")?;
-        let withdrawal =
-            gents_store::identity::EnrollmentGrantWithdrawal::plan(request_id, &receipts)?;
+        let withdrawal = match scope {
+            WithdrawalScope::Request => {
+                gents_store::identity::EnrollmentGrantWithdrawal::plan(request_id, &receipts)?
+            }
+            WithdrawalScope::Membership => {
+                gents_store::identity::EnrollmentGrantWithdrawal::plan_membership(
+                    member, &receipts,
+                )?
+            }
+        };
         if let Some(withdrawal) = &withdrawal {
             withdrawal
                 .revoke_node_permissions(&runtime)
@@ -1067,9 +1101,17 @@ impl GraphqlEnrollmentStore {
 
     /// A revision that committed before its grant's withdrawal finished (or
     /// before receipts existed) leaves a live receipt; retire it now.
-    async fn finish_grant_withdrawal(&self, request_id: &str, member: &str) -> Result<()> {
+    async fn finish_grant_withdrawal(
+        &self,
+        request_id: &str,
+        member: &str,
+        scope: WithdrawalScope,
+    ) -> Result<()> {
         use gents_store::graphql::escape_graphql_string;
-        let Some(withdrawal) = self.prepare_grant_withdrawal(request_id, member).await? else {
+        let Some(withdrawal) = self
+            .prepare_grant_withdrawal(request_id, member, scope)
+            .await?
+        else {
             return Ok(());
         };
         let runtime = identity::Did::new(self.identity.did())?;

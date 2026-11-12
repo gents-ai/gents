@@ -8,11 +8,13 @@ inductive Step where
   | grant (request member : String)
   | independent (member : String) (tuple : Tuple)
   | revoke (request : String)
+  | revokeMember (member : String)
 
 def Step.apply (s : State) : Step → State
   | .grant request member => EnrollmentGrant.grant s request member
   | .independent member tuple => grantIndependent s ⟨member, tuple⟩
   | .revoke request => EnrollmentGrant.revoke s request
+  | .revokeMember member => EnrollmentGrant.revokeMember s member
 
 def Step.json : Step → Json
   | .grant request member => Json.mkObj [("action", toJson "grant"), ("request", toJson request),
@@ -20,6 +22,8 @@ def Step.json : Step → Json
   | .independent member tuple => Json.mkObj [("action", toJson "independent"),
       ("member", toJson member), ("tuple", toJson tuple.name)]
   | .revoke request => Json.mkObj [("action", toJson "revoke"), ("request", toJson request)]
+  | .revokeMember member => Json.mkObj [("action", toJson "revoke_member"),
+      ("member", toJson member)]
 
 def subjects : List String := ["member", "other"]
 
@@ -48,7 +52,13 @@ def cases : List (String × List Step) :=
    ("revoke-is-idempotent", [.grant "a" "member", .revoke "a", .revoke "a"]),
    ("grant-is-idempotent", [.grant "a" "member", .grant "a" "member", .revoke "a"]),
    ("revoke-without-receipt-changes-nothing",
-      [.independent "member" (.permission "update-document"), .revoke "a"])]
+      [.independent "member" (.permission "update-document"), .revoke "a"]),
+   ("revoking-a-renewed-membership-withdraws-every-generation",
+      [.independent "other" .nodeAdministrator, .grant "first" "member",
+       .grant "renewal" "member", .revokeMember "member"]),
+   ("revoking-a-membership-preserves-independent-and-other-members",
+      [.independent "member" (.permission "read-document"), .grant "a" "member",
+       .grant "b" "other", .revokeMember "member"])]
 
 def derivedJson : Json := toJson (derived.map Tuple.name)
 
