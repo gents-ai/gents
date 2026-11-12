@@ -37,6 +37,12 @@ import Proofs.Conformance.GoalOperatorResumeProfiles
 import Proofs.Conformance.Identity.SessionInputEdit
 import Proofs.Conformance.Identity.ClientTransport
 import Proofs.Conformance.RootCandidates
+import Proofs.Conformance.ToolRoot
+import Proofs.Conformance.MCPHealthShutdown
+import Proofs.Conformance.DatastoreWrite
+import Proofs.Conformance.LspConsent
+import Proofs.Conformance.ConfigurationDiscovery
+import Proofs.Conformance.P2pAdministration
 import Proofs.Conformance.Views
 import Proofs.Conformance.AgentViews
 import Proofs.Conformance.InferenceViews
