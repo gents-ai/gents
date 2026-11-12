@@ -1028,10 +1028,9 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity as _;
-    for case in contract()["trigger_delivery_cursor_cases"]
-        .as_array()
-        .unwrap()
-    {
+    for case in gents_lean_vocab::families::trigger_delivery_arrival_cursor::cases() {
+        let input = &case.input;
+        let name = &input.name;
         let db = gents_inference::test_support::test_db(
             "arrival-checkpoints",
             crate::lifecycle_hooks::composition(),
@@ -1071,12 +1070,8 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             .add_collection("type Work { label: String eligible: Boolean }")
             .await
             .unwrap();
-        let source: Vec<Arrival> = decode(&case["source"]);
-        let seed_head = case["seed_head"]
-            .as_str()
-            .unwrap()
-            .parse::<usize>()
-            .unwrap();
+        let source: Vec<Arrival> = gents_lean_vocab::family::recode(&input.source);
+        let seed_head = input.seed_head.parse::<usize>().unwrap();
         let mut documents = std::collections::BTreeMap::new();
         for entry in source.iter().take(seed_head) {
             documents.insert(
@@ -1084,9 +1079,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 create_arrival_source(
                     &access,
                     &entry.identity.source_doc_id,
-                    case["source_eligible"][entry.position.parse::<usize>().unwrap() - 1]
-                        .as_bool()
-                        .unwrap(),
+                    input.source_eligible[entry.position.parse::<usize>().unwrap() - 1],
                 )
                 .await,
             );
@@ -1098,7 +1091,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 "source_collection":"Work","event_kind":"created","filter":"{eligible: {_eq: true}}"})),
             (gents_store::collection::Collection::Trigger, serde_json::json!({"node_did":owner,"trigger_id":"handoff",
                 "task_id":"contract-task","source":{"kind":"event","event_source_id":"source"},
-                "enabled":case["enabled"],"concurrency":case["mode"]})),
+                "enabled":input.enabled,"concurrency":input.mode})),
         ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {collection, add: value.clone(), update: value}).collect()).unwrap();
         access
             .transact_write("test.arrival_config", |txn| {
@@ -1117,9 +1110,8 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             .unwrap();
         assert_eq!(
             saved_arrival_cursor(&agent, owner).await,
-            seed_head.to_string(),
-            "{}",
-            case["name"]
+            input.seed_head,
+            "{name}"
         );
         for entry in source.iter().skip(seed_head) {
             documents.insert(
@@ -1127,43 +1119,35 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 create_arrival_source(
                     &access,
                     &entry.identity.source_doc_id,
-                    case["source_eligible"][entry.position.parse::<usize>().unwrap() - 1]
-                        .as_bool()
-                        .unwrap(),
+                    input.source_eligible[entry.position.parse::<usize>().unwrap() - 1],
                 )
                 .await,
             );
         }
-        let pre_after = case["pre_cursor"]["after"].as_str().unwrap();
-        agent
-            .transact_write("test.prior_checkpoint", |txn| {
-                Box::pin(async move {
-                    gents_documents::event_consumer::advance(
-                        txn,
-                        owner,
-                        &handoff_consumer(),
-                        "Work",
-                        pre_after,
-                    )
-                    .await
+        if let Some(prior_after) = &input.prior_after {
+            agent
+                .transact_write("test.prior_checkpoint", |txn| {
+                    Box::pin(async move {
+                        gents_documents::event_consumer::advance(
+                            txn,
+                            owner,
+                            &handoff_consumer(),
+                            "Work",
+                            prior_after,
+                        )
+                        .await
+                    })
                 })
-            })
-            .await
-            .unwrap();
-        if case["restart"].as_bool().unwrap() {
-            assert_eq!(
-                saved_arrival_cursor(&agent, owner).await,
-                pre_after,
-                "{}",
-                case["name"]
-            );
+                .await
+                .unwrap();
         }
+        let pre_after = saved_arrival_cursor(&agent, owner).await;
         let adapt_fire = |mut fire: Fire| {
             fire.identity.owner_did = owner.to_owned();
             fire.identity.source_doc_id = documents[&fire.identity.source_doc_id].clone();
             fire
         };
-        let pre: State = decode(&case["pre"]);
+        let pre: State = gents_lean_vocab::family::recode(&input.pre);
         for (index, request) in pre.requests.iter().enumerate() {
             let receipt = receipt(&adapt_fire(request.fire.clone()), index);
             let mutation = request_mutation_as(&receipt, &binding.agent_did);
@@ -1179,8 +1163,11 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 .await
                 .unwrap();
         }
-        if let Some(commit) = case["admission_commit"].as_bool() {
-            let receipt = receipt(&adapt_fire(decode(&case["fire"])), pre.requests.len());
+        if let Some(commit) = input.admission_commit {
+            let receipt = receipt(
+                &adapt_fire(gents_lean_vocab::family::recode(&input.fire)),
+                pre.requests.len(),
+            );
             let mutation = request_mutation_as(&receipt, &binding.agent_did);
             let admitted: anyhow::Result<()> = agent
                 .transact_write("test.arrival_admission_crash", |txn| {
@@ -1193,11 +1180,32 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     })
                 })
                 .await;
-            assert_eq!(admitted.is_ok(), commit, "{}: {admitted:?}", case["name"]);
+            assert_eq!(admitted.is_ok(), commit, "{name}: {admitted:?}");
         }
-        if let Some(commit) = case["checkpoint_commit"].as_bool() {
-            let entry: Arrival = decode(&case["entry"]);
-            let busy = case["busy"].as_bool().unwrap();
+        let entry: Arrival = gents_lean_vocab::family::recode(&input.entry);
+        let busy = input.busy;
+        let probed = std::sync::Mutex::new(None);
+        let probe: anyhow::Result<()> = agent
+            .transact_write("test.arrival_checkpoint_probe", |txn| {
+                let (entry, probed) = (&entry, &probed);
+                Box::pin(async move {
+                    let accepted = gents_documents::event_consumer::checkpoint_prefix(
+                        txn,
+                        owner,
+                        &handoff_consumer(),
+                        "Work",
+                        &entry.position,
+                        busy,
+                    )
+                    .await?;
+                    *probed.lock().unwrap() = Some(accepted);
+                    anyhow::bail!("checkpoint probe rolls back")
+                })
+            })
+            .await;
+        assert!(probe.is_err());
+        let acknowledgment_allowed = probed.into_inner().unwrap().unwrap();
+        let checkpoint_succeeds = if let Some(commit) = input.checkpoint_commit {
             let checkpointed: anyhow::Result<bool> = agent
                 .transact_write("test.arrival_checkpoint_crash", |txn| {
                     let entry = &entry;
@@ -1216,75 +1224,86 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     })
                 })
                 .await;
-            let accepted = if commit {
+            Some(if commit {
                 checkpointed.unwrap_or_else(|error| {
-                    panic!("{}: unexpected checkpoint error: {error:#}", case["name"])
+                    panic!("{name}: unexpected checkpoint error: {error:#}")
                 })
             } else {
                 let error = checkpointed.expect_err("injected checkpoint must roll back");
                 assert!(
                     format!("{error:#}").contains("injected crash before checkpoint commit"),
-                    "{}: unexpected rollback error: {error:#}",
-                    case["name"]
+                    "{name}: unexpected rollback error: {error:#}"
                 );
                 false
-            };
-            assert_eq!(
-                accepted,
-                case["checkpoint_succeeds"].as_bool().unwrap(),
-                "{}",
-                case["name"]
-            );
-        }
+            })
+        } else {
+            None
+        };
         let after = saved_arrival_cursor(&agent, owner).await;
-        assert_eq!(
-            after,
-            case["post_cursor"]["after"].as_str().unwrap(),
-            "{}",
-            case["name"]
-        );
         let page = access.execute(&format!(
             "{{ _documentArrivals(collection: \"Work\", after: \"{}\", limit: 128) {{ entries {{ cursor docID }} }} }}",
             escape_graphql_string(&after),
         )).await.unwrap();
-        let actual = page["data"]["_documentArrivals"]["entries"]
+        let modeled_identity = |doc_id: &str| {
+            source
+                .iter()
+                .find(|entry| documents[&entry.identity.source_doc_id] == doc_id)
+                .unwrap()
+                .identity
+                .clone()
+        };
+        let journal_after = page["data"]["_documentArrivals"]["entries"]
             .as_array()
             .unwrap()
             .iter()
             .map(|entry| {
-                (
-                    entry["cursor"].as_str().unwrap().to_owned(),
-                    entry["docID"].as_str().unwrap().to_owned(),
-                )
+                serde_json::json!({
+                    "position": entry["cursor"],
+                    "identity": modeled_identity(entry["docID"].as_str().unwrap()),
+                })
             })
             .collect::<Vec<_>>();
-        let expected = decode::<Vec<Arrival>>(&case["journal_after"])
-            .iter()
-            .map(|entry| {
-                (
-                    entry.position.clone(),
-                    documents[&entry.identity.source_doc_id].clone(),
-                )
+        let trigger_enabled = access
+            .transact_write("test.read_arrival_trigger", |txn| {
+                Box::pin(async move {
+                    let trigger = gents_documents::read_desired_state_document_in_txn(
+                        txn,
+                        gents_store::collection::Collection::Trigger,
+                        owner,
+                        "handoff",
+                    )
+                    .await?
+                    .unwrap();
+                    Ok::<_, anyhow::Error>(
+                        serde_json::from_value::<gents_documents::Trigger>(trigger)?.enabled,
+                    )
+                })
             })
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected, "{}", case["name"]);
-        let rows = agent
-            .execute("{ TriggerFire { source_doc_id } AgentRequest { request_id } }")
             .await
             .unwrap();
-        let post: State = decode(&case["post"]);
-        assert_eq!(
-            rows["data"]["TriggerFire"].as_array().unwrap().len(),
-            post.receipts.len(),
-            "{}",
-            case["name"]
-        );
-        assert_eq!(
-            rows["data"]["AgentRequest"].as_array().unwrap().len(),
-            post.requests.len(),
-            "{}",
-            case["name"]
-        );
+        let post = observed_delivery_state(&agent, |id| {
+            let mut id = id.clone();
+            if id.owner_did == owner {
+                id.owner_did = source[0].identity.owner_did.clone();
+            }
+            if let Some(entry) = source
+                .iter()
+                .find(|entry| documents.get(&entry.identity.source_doc_id) == Some(&id.source_doc_id))
+            {
+                id.source_doc_id = entry.identity.source_doc_id.clone();
+            }
+            id
+        })
+        .await;
+        case.check(gents_lean_vocab::family::recode(&serde_json::json!({
+            "pre_cursor": {"seeded": true, "after": pre_after},
+            "post_cursor": {"seeded": true, "after": after},
+            "post": post,
+            "checkpoint_succeeds": checkpoint_succeeds,
+            "acknowledgment_allowed": acknowledgment_allowed,
+            "pending": if trigger_enabled { journal_after.clone() } else { Vec::new() },
+            "journal_after": journal_after,
+        })));
         node.shutdown().await.expect("node shutdown");
     }
 }

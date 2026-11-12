@@ -2936,7 +2936,6 @@ pub struct LeanContractSnapshot {
     pub trigger_delivery_observed_claim_cases: serde_json::Value,
     pub trigger_delivery_outcome_trace_cases: serde_json::Value,
     pub trigger_delivery_retained_outcome_cases: serde_json::Value,
-    pub trigger_delivery_cursor_cases: serde_json::Value,
     pub trigger_delivery_callback_cursor_cases: serde_json::Value,
     pub trigger_delivery_callback_visibility_cases: serde_json::Value,
     pub trigger_delivery_session_cases: serde_json::Value,

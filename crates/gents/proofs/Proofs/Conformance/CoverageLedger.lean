@@ -611,8 +611,8 @@ def caseCoverage : List CoverageEntry :=
       "Triggers.Durable")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_cursor_cases"
-      "EventDelivery.Durable")
+      "family"
+      "trigger_delivery_arrival_cursor")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery_callback_cursor_cases"

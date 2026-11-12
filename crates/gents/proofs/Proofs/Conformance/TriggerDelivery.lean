@@ -437,52 +437,112 @@ structure CursorScenario where
   admissionCommit : Option Bool := none
   checkpointCommit : Option Bool := none
 
-def cursorCase (scenario : CursorScenario) : String :=
-  let source := [arrival 1 "a", arrival 2 "b", arrival 3 "c"]
-  let journal : EventDelivery.Durable.Journal := { head := 3, entries := source }
-  let first := EventDelivery.Durable.seed {} scenario.seedHead
-  let saved := match scenario.priorAfter with
-    | none => first
-    | some position => { first with after := position }
-  let before := if scenario.restart then EventDelivery.Durable.seed saved journal.head else saved
-  let f := { fire scenario.entry.identity.document with identity := scenario.entry.identity }
-  let afterState := match scenario.admissionCommit with
-    | none => scenario.committed
-    | some commit => admitTransaction scenario.committed f commit
+structure ArrivalWire where
+  position : String
+  identity : IdentityWire
+  deriving Lean.ToJson
+
+def ArrivalWire.ofModel (entry : EventDelivery.Durable.Arrival) : ArrivalWire :=
+  { position := toString entry.position, identity := .ofModel entry.identity }
+
+def ArrivalWire.toModel (entry : ArrivalWire) : EventDelivery.Durable.Arrival :=
+  { position := entry.position.toNat!, identity := entry.identity.toModel }
+
+structure CursorWire where
+  seeded : Bool
+  after : String
+  deriving Lean.ToJson
+
+def CursorWire.ofModel (cursor : EventDelivery.Durable.Cursor) : CursorWire :=
+  { seeded := cursor.seeded, after := toString cursor.after }
+
+def modeWire : ConcurrencyMode → String
+  | .serial => "serial"
+  | .queuedSerial => "queued_serial"
+  | .parallel => "parallel"
+  | .latestOnly => "latest_only"
+
+def modeOfWire : String → ConcurrencyMode
+  | "serial" => .serial
+  | "parallel" => .parallel
+  | "latest_only" => .latestOnly
+  | _ => .queuedSerial
+
+def cursorSource : List EventDelivery.Durable.Arrival := [arrival 1 "a", arrival 2 "b", arrival 3 "c"]
+
+/-- `sourceEligible` is the filter's verdict on each source document, in source
+order; `fire` is the fire the entry's admission stages. -/
+structure CursorInput where
+  name : String
+  seedHead : String
+  priorAfter : Option String
+  restart : Bool
+  enabled : Bool
+  pre : StateWire
+  source : List ArrivalWire
+  entry : ArrivalWire
+  sourceEligible : List Bool
+  journalHead : String
+  mode : String
+  busy : Bool
+  fire : FireWire
+  matchesFilter : Bool
+  admissionCommit : Option Bool
+  checkpointCommit : Option Bool
+  deriving Lean.ToJson
+
+def cursorInput (scenario : CursorScenario) : CursorInput :=
   let eligible := fun entry : EventDelivery.Durable.Arrival =>
     scenario.matchesFilter && !scenario.excludedDocuments.contains entry.identity.document
+  { name := scenario.name, seedHead := toString scenario.seedHead,
+    priorAfter := scenario.priorAfter.map toString, restart := scenario.restart,
+    enabled := scenario.enabled, pre := .ofModel scenario.committed,
+    source := cursorSource.map .ofModel, entry := .ofModel scenario.entry,
+    sourceEligible := cursorSource.map eligible, journalHead := "3", mode := modeWire scenario.mode,
+    busy := scenario.busy,
+    fire := .ofModel { fire scenario.entry.identity.document with identity := scenario.entry.identity },
+    matchesFilter := scenario.matchesFilter, admissionCommit := scenario.admissionCommit,
+    checkpointCommit := scenario.checkpointCommit }
+
+structure CursorOutput where
+  preCursor : CursorWire
+  postCursor : CursorWire
+  post : StateWire
+  checkpointSucceeds : Option Bool
+  acknowledgmentAllowed : Bool
+  pending : List ArrivalWire
+  journalAfter : List ArrivalWire
+  deriving Lean.ToJson
+
+def cursorOutput (i : CursorInput) : CursorOutput :=
+  let source := i.source.map (·.toModel)
+  let journal : EventDelivery.Durable.Journal := { head := i.journalHead.toNat!, entries := source }
+  let first := EventDelivery.Durable.seed {} i.seedHead.toNat!
+  let saved := match i.priorAfter with
+    | none => first
+    | some position => { first with after := position.toNat! }
+  let before := if i.restart then EventDelivery.Durable.seed saved journal.head else saved
+  let committed := i.pre.toModel
+  let afterState := match i.admissionCommit with
+    | none => committed
+    | some commit => admitTransaction committed i.fire.toModel commit
+  let eligible := fun entry : EventDelivery.Durable.Arrival =>
+    (i.sourceEligible.getD (entry.position - 1) false)
+  let mode := modeOfWire i.mode
+  let position := i.entry.position.toNat!
   let accepted := EventDelivery.Durable.checkpointAccepted before afterState journal
-    scenario.entry.position scenario.mode scenario.busy eligible
-  let afterCursor := match scenario.checkpointCommit with
+    position mode i.busy eligible
+  let afterCursor := match i.checkpointCommit with
     | none => before
     | some commit => EventDelivery.Durable.acknowledge before afterState journal
-        scenario.entry.position scenario.mode scenario.busy eligible commit
-  let optionalBool := fun value : Option Bool => match value with
-    | none => "null"
-    | some value => toString value
-  let mode := match scenario.mode with
-    | .serial => "serial"
-    | .queuedSerial => "queued_serial"
-    | .parallel => "parallel"
-    | .latestOnly => "latest_only"
-  object [
-    ("name", jsonString scenario.name), ("seed_head", jsonString (toString scenario.seedHead)),
-    ("restart", toString scenario.restart), ("enabled", toString scenario.enabled),
-    ("pre_cursor", cursorJson before), ("post_cursor", cursorJson afterCursor),
-    ("pre", stateJson scenario.committed), ("post", stateJson afterState),
-    ("source", jsonArray (source.map arrivalJson)), ("entry", arrivalJson scenario.entry),
-    ("source_eligible", jsonArray (source.map fun entry => toString (eligible entry))),
-    ("journal_head", jsonString (toString journal.head)),
-    ("mode", jsonString mode), ("busy", toString scenario.busy),
-    ("fire", fireJson f), ("matches_filter", toString scenario.matchesFilter),
-    ("admission_commit", optionalBool scenario.admissionCommit),
-    ("checkpoint_commit", optionalBool scenario.checkpointCommit),
-    ("checkpoint_succeeds", optionalBool (scenario.checkpointCommit.map accepted)),
-    ("acknowledgment_allowed", toString (accepted true)),
-    ("pending", jsonArray ((EventDelivery.Durable.pending afterCursor source scenario.enabled).map arrivalJson)),
-    ("journal_after", jsonArray ((EventDelivery.Durable.pending afterCursor source true).map arrivalJson))]
+        position mode i.busy eligible commit
+  { preCursor := .ofModel before, postCursor := .ofModel afterCursor, post := .ofModel afterState,
+    checkpointSucceeds := i.checkpointCommit.map accepted,
+    acknowledgmentAllowed := accepted true,
+    pending := (EventDelivery.Durable.pending afterCursor source i.enabled).map .ofModel,
+    journalAfter := (EventDelivery.Durable.pending afterCursor source true).map .ofModel }
 
-def cursorCases : List String :=
+def cursorScenarios : List CursorScenario :=
   [({ name := "first_seed_excludes_existing", seedHead := 3 } : CursorScenario),
    { name := "first_seed_disabled_retains_later_arrivals", enabled := false },
    { name := "reenabled_delivers_receiving_order" },
@@ -502,10 +562,21 @@ def cursorCases : List String :=
    { name := "legacy_serial_busy_exclusion", mode := .serial, busy := true, checkpointCommit := some true },
    { name := "queued_serial_busy_requires_receipt", busy := true, checkpointCommit := some true },
    { name := "latest_only_busy_requires_receipt", mode := .latestOnly, busy := true, checkpointCommit := some true },
-   { name := "latest_only_later_receipt_cannot_skip_gap", mode := .latestOnly, entry := arrival 3 "c", admissionCommit := some true, checkpointCommit := some true }].map cursorCase
+   { name := "latest_only_later_receipt_cannot_skip_gap", mode := .latestOnly, entry := arrival 3 "c", admissionCommit := some true, checkpointCommit := some true }]
 
+@[conformance_family]
+def arrivalCursor : Family CursorInput CursorOutput where
+  inputs := cursorScenarios.map cursorInput
+  model := cursorOutput
 
-
+/-- An unadmitted matching arrival keeps the cursor, stays in the journal and
+leaves no receipt. -/
+example :
+    let o := cursorOutput (cursorInput { name := "unadmitted_match_cannot_checkpoint", checkpointCommit := some true })
+    o.postCursor.after = o.preCursor.after ∧ o.postCursor.seeded = o.preCursor.seeded ∧
+      o.journalAfter.any (fun entry => entry.position == "2" && entry.identity.sourceDocId == "b") ∧
+      o.post.receipts.isEmpty := by
+  native_decide
 
 structure CallbackCursorScenario where
   name : String
@@ -757,9 +828,6 @@ def triggerDeliveryOutcomeTraceCasesJson : String :=
 
 def triggerDeliveryRetainedOutcomeCasesJson : String :=
   jsonArray retainedOutcomeCases
-
-def triggerDeliveryCursorCasesJson : String :=
-  jsonArray cursorCases
 
 def triggerDeliveryCallbackCursorCasesJson : String :=
   jsonArray callbackCursorCases
