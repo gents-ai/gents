@@ -28,6 +28,7 @@ struct Processes {
     root: tempfile::TempDir,
     primary: String,
     secondary: String,
+    gates: tokio::sync::Mutex<Vec<std::fs::File>>,
 }
 
 impl Processes {
@@ -134,6 +135,7 @@ impl Processes {
             root,
             primary: agents.remove(0),
             secondary: agents.remove(0),
+            gates: tokio::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -212,7 +214,20 @@ impl Processes {
         .unwrap()
         .unwrap()
         .success());
-        let args = json!({"command":"sh", "args":["-c", "printf READY; IFS= read -r release < \"$1\"; printf FINISHED", "gents-live-process", fifo.display().to_string()]});
+        let retained_fifo = fifo.clone();
+        let retained = tokio::task::spawn_blocking(move || {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(retained_fifo)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        self.gates.lock().await.push(retained);
+        let args = json!({"command":"sh", "args":["-c", "exec 3< \"$1\"; printf READY; IFS= read -r release <&3; printf FINISHED", "gents-live-process", fifo.display().to_string()]});
         let request = if background {
             self.request(
                 agent,
