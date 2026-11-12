@@ -24,23 +24,22 @@ fn agent_delivery_matches_lean() {
 
 #[tokio::test]
 async fn remote_delivery_waits_for_authenticated_http_transport() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let claim = snapshot["remote_agent_delivery_claim_cases"]
-        .as_array()
-        .unwrap()
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
+    let claim = snapshot
+        .remote_agent_delivery_claim_cases
         .iter()
-        .find(|case| case["name"] == "native-read-no-atomic-authority")
+        .find(|case| case.name == "native-read-no-atomic-authority")
         .unwrap();
-    assert_eq!(claim["document_visible"], true);
-    assert_eq!(claim["atomic_requester_authorization"], false);
-    assert_eq!(claim["claim"], false);
-    let cases = snapshot["remote_agent_delivery_cases"].as_array().unwrap();
-    let case = cases
+    assert_eq!(claim.document_visible, true);
+    assert_eq!(claim.atomic_requester_authorization, false);
+    assert_eq!(claim.claim, false);
+    let case = snapshot
+        .remote_agent_delivery_cases
         .iter()
-        .find(|case| case["name"] == "committed-response-observed")
+        .find(|case| case.name == "committed-response-observed")
         .unwrap();
-    assert_eq!(case["result"], "committed");
-    let intent = &case["intent"];
+    assert_eq!(case.result, "committed");
+    let intent = &case.intent;
     use gents_store::identity::NodeIdentity;
     let temp = tempfile::tempdir().unwrap();
     let root =
@@ -70,7 +69,7 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
     };
     let target = gents_protocol::request_lifecycle::SessionMessageTarget {
         node_did: "target-runtime".into(),
-        agent_did: intent["target"].as_str().unwrap().into(),
+        agent_did: intent.target.as_str().into(),
         session_id: "target-session".into(),
     };
     let result = super::plan::plan_with_delivery(
