@@ -368,4 +368,29 @@ mod conformance {
             gents_lean_vocab::families::causal_hop_contracts_chain::HopTrace { hops, admitted }
         });
     }
+
+    #[test]
+    fn causal_hop_calls_follow_the_lean_causal_hop_model() {
+        gents_lean_vocab::families::causal_hop_contracts_call::replay::<String>(|call| {
+            let max_request_hop = call
+                .max_request_hop
+                .map(|bound| u32::try_from(bound).unwrap());
+            let (mut a, mut b) = (0, 0);
+            let mut hops = Vec::new();
+            let mut admitted = Vec::new();
+            for event in &call.events {
+                let (target, cause) = match event.as_str() {
+                    "a_sends_b" => (&mut b, RequestHopCause::CrossSession { cause_hop: a }),
+                    "b_sends_a" => (&mut a, RequestHopCause::CrossSession { cause_hop: b }),
+                    "return_to_a" => (&mut a, RequestHopCause::Return),
+                    "return_to_b" => (&mut b, RequestHopCause::Return),
+                    other => panic!("unknown Lean call event {other:?}"),
+                };
+                *target = next_request_hop(cause, *target);
+                hops.push(u64::from(*target));
+                admitted.push(request_hop_within_bound(max_request_hop, *target));
+            }
+            gents_lean_vocab::families::causal_hop_contracts_call::HopTrace { hops, admitted }
+        });
+    }
 }

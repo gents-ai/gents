@@ -119,28 +119,6 @@ fn generated_causal_hop_cases_match_native_materializer() {
             case.name
         );
     }
-    assert!(!contract.causal_hop_call_cases.is_empty());
-    for call in &contract.causal_hop_call_cases {
-        let (mut a, mut b) = (0, 0);
-        let mut hops = Vec::new();
-        for event in &call.events {
-            let (target, cause) = match event.as_str() {
-                "a_sends_b" => (&mut b, RequestHopCause::CrossSession { cause_hop: a }),
-                "b_sends_a" => (&mut a, RequestHopCause::CrossSession { cause_hop: b }),
-                "return_to_a" => (&mut a, RequestHopCause::Return),
-                "return_to_b" => (&mut b, RequestHopCause::Return),
-                other => panic!("unknown Lean call event {other:?}"),
-            };
-            *target = next_request_hop(cause, *target);
-            hops.push(*target);
-        }
-        let admitted = hops
-            .iter()
-            .map(|hop| request_hop_within_bound(call.max_request_hop, *hop))
-            .collect::<Vec<_>>();
-        assert_eq!(hops, call.expected_hops, "{}", call.name);
-        assert_eq!(admitted, call.expected_admitted, "{}", call.name);
-    }
     assert!(!contract.causal_hop_interrupt_cases.is_empty());
     for case in &contract.causal_hop_interrupt_cases {
         assert_eq!(

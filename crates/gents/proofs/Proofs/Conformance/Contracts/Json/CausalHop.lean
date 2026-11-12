@@ -92,24 +92,17 @@ def callHops : CausalHop.Pair → List CausalHop.Event → List Nat
   | _, [] => []
   | p, e :: rest => e.hop p :: callHops (e.apply p) rest
 
-def eventString : CausalHop.Event → String
-  | .aSendsB => "a_sends_b"
-  | .bSendsA => "b_sends_a"
-  | .returnToA => "return_to_a"
-  | .returnToB => "return_to_b"
+deriving instance Lean.ToJson for CausalHop.Event
+
+structure CallInput where
+  name : String
+  maxRequestHop : Option Nat
+  events : List CausalHop.Event
+  deriving Lean.ToJson
 
 def optionalNatJson : Option Nat → String
   | none => "null"
   | some value => toString value
-
-def callCaseJson (c : CallCase) : String :=
-  let hops := callHops ⟨0, 0⟩ c.events
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
-    ++ ",\"events\":" ++ jsonArray (c.events.map (jsonString ∘ eventString))
-    ++ ",\"expected_hops\":" ++ jsonArray (hops.map toString)
-    ++ ",\"expected_admitted\":"
-      ++ jsonArray (hops.map (toString ∘ CausalHop.admitHop c.maxRequestHop)) ++ "}"
 
 def stepCaseJson (c : StepCase) : String :=
   let hop := CausalHop.nextHop c.cause c.ownPredecessorHop
@@ -166,6 +159,14 @@ def chain : Family ChainInput HopTrace where
     let hops := chainHops 0 (i.steps.map ChainStepWire.toModel)
     { hops, admitted := hops.map (CausalHop.admitHop i.maxRequestHop) }
 
+
+@[conformance_family]
+def call : Family CallInput HopTrace where
+  inputs := callCases.map fun c =>
+    { name := c.name, maxRequestHop := c.maxRequestHop, events := c.events }
+  model := fun i =>
+    let hops := callHops ⟨0, 0⟩ i.events
+    { hops, admitted := hops.map (CausalHop.admitHop i.maxRequestHop) }
 
 structure CreationCase where
   name : String
@@ -364,9 +365,6 @@ def defaultMaxRequestHopJson : String :=
 
 def stepCasesJson : String :=
   jsonArray (stepCases.map stepCaseJson)
-
-def callCasesJson : String :=
-  jsonArray (callCases.map callCaseJson)
 
 def interruptCasesJson : String :=
   jsonArray (interruptCases.map interruptCaseJson)
