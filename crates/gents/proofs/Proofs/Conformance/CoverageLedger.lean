@@ -1889,23 +1889,19 @@ def caseCoverage : List CoverageEntry :=
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "goal_observation_contracts_acceptance")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "goal_observation_contracts_recovery")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
-      "goal_observation_contracts_acceptance")
+      "goal_session_observation_contracts_classification")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_session_observation_cases"
-      "GoalSessionObservationCases")
-      "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "goal_session_observation_cases"
-      "GoalSessionObservationCases")
-      "durable-goals" [Surface.operatorUi]
-  , tagged (consumerCoverage
-      "goal_session_observation_cases"
-      "GoalSessionObservationCases")
+      "family"
+      "goal_session_observation_contracts_presentation")
       "durable-goals" [Surface.operatorUi]
   , tagged (followUpCoverage
       "goal_session_fold_cases"
