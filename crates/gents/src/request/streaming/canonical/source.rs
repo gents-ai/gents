@@ -206,6 +206,76 @@ pub(crate) fn validate_source_purpose(
     Ok(())
 }
 
+/// The turn's source without its records' payload. A provider flush needs the
+/// structure of the records already written, never their bytes, so the
+/// per-flush read stays independent of the turn's accumulated output.
+pub(super) async fn load_source_shapes_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    prepared: &OutputSegment,
+) -> Result<Vec<gents_protocol::output::rows::OutputSegmentShapeRow>> {
+    let response = txn
+        .execute_local_response(
+            &gents_protocol::output::rows::source_output_segment_shapes_query(
+                &prepared.request_doc_id,
+                &prepared.source,
+            )?,
+        )
+        .await?;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentOutputSegment"))
+        .and_then(serde_json::Value::as_array)
+        .context("source shape query omitted rows")?;
+    gents_protocol::output::rows::decode_scoped_request_output_segment_shapes(
+        rows,
+        &prepared.node_did,
+        Some(&prepared.session_id),
+        prepared.requester_did.as_deref(),
+    )
+    .map(|rows| {
+        let rows: Vec<_> = rows
+            .into_iter()
+            .filter(|row| row.shape.source == prepared.source)
+            .collect();
+        #[cfg(test)]
+        crate::session::record_source_read(rows.len(), 0);
+        rows
+    })
+    .map_err(anyhow::Error::from)
+}
+
+/// One recorded segment with its payload, by physical identity, scoped like
+/// the source read that found it.
+pub(super) async fn load_segment_document_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    prepared: &OutputSegment,
+    doc_id: &str,
+) -> Result<OutputSegmentRow> {
+    let response = txn
+        .execute_local_response(
+            &gents_protocol::output::rows::output_segment_document_query(doc_id),
+        )
+        .await?;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentOutputSegment"))
+        .and_then(serde_json::Value::as_array)
+        .context("segment document query omitted rows")?;
+    let mut rows = gents_protocol::output::rows::decode_scoped_request_output_segments(
+        rows,
+        &prepared.node_did,
+        Some(&prepared.session_id),
+        prepared.requester_did.as_deref(),
+    )?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "canonical output segment {doc_id} has no unique authorized row"
+    );
+    Ok(rows.remove(0))
+}
+
 pub(super) async fn load_source_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
@@ -229,9 +299,16 @@ pub(super) async fn load_source_in_txn(
         prepared.requester_did.as_deref(),
     )
     .map(|rows| {
-        rows.into_iter()
+        let rows: Vec<OutputSegmentRow> = rows
+            .into_iter()
             .filter(|row| row.segment.source == prepared.source)
-            .collect()
+            .collect();
+        #[cfg(test)]
+        crate::session::record_source_read(
+            rows.len(),
+            rows.iter().map(|row| row.segment.payload.len()).sum(),
+        );
+        rows
     })
     .map_err(anyhow::Error::from)
 }

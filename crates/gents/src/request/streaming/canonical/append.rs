@@ -1,17 +1,17 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
-use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::extent::ObservedShape;
 use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::store::config_client::session_children::output_segment_bound_variables;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::created_doc_id;
-use gents_protocol::output::rows::{OutputSegmentRow, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION};
+use gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;
 
 use super::{
-    source::{load_request_in_txn, load_source_in_txn},
+    source::{load_request_in_txn, load_segment_document_in_txn, load_source_shapes_in_txn},
     ProviderAppendRejection,
 };
 
@@ -99,16 +99,20 @@ async fn append_in_txn_with_time(
         "raw append requires an open provider flush and its exact request writer"
     );
     let request = load_request_in_txn(txn, prepared).await?;
-    let mut records = load_source_in_txn(txn, prepared).await?;
-    let replays = records
-        .iter()
-        .filter(|row| row.segment == *prepared)
-        .collect::<Vec<_>>();
+    let records = load_source_shapes_in_txn(txn, prepared).await?;
+    let shape = prepared.shape();
+    let mut replays = Vec::new();
+    for candidate in records.iter().filter(|row| row.shape == shape) {
+        let recorded = load_segment_document_in_txn(txn, prepared, &candidate.doc_id).await?;
+        if recorded.segment == *prepared {
+            replays.push(candidate.doc_id.clone());
+        }
+    }
     if !replays.is_empty() {
         anyhow::ensure!(replays.len() == 1, "ambiguous immutable segment replay");
-        return Ok(replays[0].doc_id.clone());
+        return Ok(replays.remove(0));
     }
-    if records.iter().any(|row| row.segment.close.is_some()) {
+    if records.iter().any(|row| row.shape.close.is_some()) {
         return Err(ProviderAppendRejection::ClosedSource.into());
     }
     let owner = request
@@ -143,18 +147,14 @@ async fn append_in_txn_with_time(
         )
         .await?;
     let doc_id = created_doc_id(&result, "AgentOutputSegment")?;
-    records.push(OutputSegmentRow {
-        doc_id: doc_id.clone(),
-        segment: prepared.clone(),
-    });
     let observations = records
         .iter()
-        .map(|row| ObservedSegment {
-            doc_id: &row.doc_id,
-            segment: &row.segment,
-        })
+        .map(|row| ObservedShape::from_shape(&row.doc_id, &row.shape))
+        .chain(std::iter::once(ObservedShape::from_segment(
+            &doc_id, prepared,
+        )))
         .collect::<Vec<_>>();
-    gents_protocol::output::extent::inspect_open_source(
+    gents_protocol::output::extent::inspect_open_source_shape(
         &observations,
         &prepared.request_doc_id,
         &prepared.source,

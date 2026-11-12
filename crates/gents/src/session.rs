@@ -94,6 +94,8 @@ pub use output::reader::{load_canonical_message, load_canonical_message_from_nod
 pub(crate) use output::reader::{
     load_canonical_message_in_txn, load_request_headers_in_txn, TxnCanonicalReader,
 };
+#[cfg(test)]
+pub(crate) use output::record_source_read;
 pub(crate) use output::replay_request::validate_canonical_replay_boundary;
 pub(crate) use output::replay_tags::resolve_canonical_replay_tags_on;
 pub use output::CanonicalOutputReadError;
