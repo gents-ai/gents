@@ -18,15 +18,15 @@ use support::Attachment;
 const WAIT: Duration = Duration::from_secs(30);
 
 pub async fn exercise(root: &Path, goal: bool) -> Result<()> {
-    run(root, goal, false).await
+    run(root, goal, None).await
 }
 
 #[cfg(feature = "editor-e2e")]
-pub async fn exercise_editor(root: &Path) -> Result<()> {
-    run(root, false, true).await
+pub async fn exercise_editor(root: &Path, scenario: &str) -> Result<()> {
+    run(root, false, Some(scenario)).await
 }
 
-async fn run(root: &Path, goal: bool, editor: bool) -> Result<()> {
+async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
     let target = live_target().await;
     let root_owned = root.to_owned();
     let (binary, homes) = tokio::task::spawn_blocking(move || {
@@ -147,15 +147,16 @@ async fn run(root: &Path, goal: bool, editor: bool) -> Result<()> {
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
         configure(&mut client, &mut id, node, &agent, &target, goal).await?;
+        let opening = if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools." } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools." };
         let receipt = client.try_call(id, "desktop_chat_send", json!({"request": {
             "nodeDid": node, "agentDid": agent,
-            "content": if goal { "Acknowledge this predecessor briefly. Do not call tools." } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools." },
+            "content": opening,
             "delivery": "queue",
         }})).await?;
         id += 1;
         let session = receipt["sessionId"].as_str().context("submitted session")?;
         let request = receipt["requestId"].as_str().context("submitted request")?;
-        if !goal {
+        if !goal && editor.is_none() {
         let live = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({
             "nodeDid":node,"sessionId":session,"timelineLimit":40,
         }), |projection| {
@@ -201,8 +202,30 @@ async fn run(root: &Path, goal: bool, editor: bool) -> Result<()> {
             wait_goal(&mut client, &mut updates, &mut id, node, session, "complete").await?;
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == resumed_request && value["turnState"] == "completed").await?;
         }
-        if editor {
-            super::super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), "live").await?;
+        if let Some(scenario) = editor {
+            if scenario == "live-history" {
+                let prompts = (1..=45).map(|turn| format!("History turn {turn}: give one short sentence about a leaf. Do not call tools.")).collect::<Vec<_>>();
+                for prompt in &prompts {
+                    let sent = client.try_call(id, "desktop_chat_send", json!({"request":{"nodeDid":node,"agentDid":agent,"sessionId":session,"content":prompt,"delivery":"queue"}})).await?;
+                    id += 1;
+                    ensure!(sent["sessionId"] == session);
+                    let request = sent["requestId"].as_str().context("history request receipt")?;
+                    ensure!(wait_for_request_terminal(&access, request, WAIT).await == "completed");
+                    projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == request && value["turnState"] == "completed").await?;
+                }
+                tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
+            }
+            super::super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), scenario).await?;
+            if scenario == "live-workspace" {
+                let evidence = super::super::editor_workspace::verify(&access, root, node, session, &client_did).await?;
+                tokio::fs::write(root.join("editor-workspace-canonical.json"), serde_json::to_vec(&evidence)?).await?;
+                projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
+            } else if scenario == "live-history" {
+                let ui: Value = serde_json::from_slice(&tokio::fs::read(root.join("editor-history-ui.json")).await?)?;
+                let archive: Value = serde_json::from_slice(&tokio::fs::read(root.join("editor-archive-ui.json")).await?)?;
+                ensure!(ui["sessionId"] == session && ui["allInputs"] == 45 && ui["draftPreservedAfterReload"] == true);
+                tokio::fs::write(root.join("editor-history-canonical.json"), serde_json::to_vec(&json!({"ui":ui,"archive":archive,"sessionId":session,"completedLiveTurns":45}))?).await?;
+            } else {
             let evidence: Value = serde_json::from_slice(&tokio::fs::read(root.join("editor-live-canonical.json")).await?)?;
             ensure!(evidence["sessionId"] == session);
             let prompt = evidence["prompt"].as_str().context("editor submitted prompt")?;
@@ -215,6 +238,7 @@ async fn run(root: &Path, goal: bool, editor: bool) -> Result<()> {
             ensure!(rows.iter().all(|row| row.content.as_deref() != evidence["draft"].as_str()), "the retained editor draft was submitted");
             ensure!(wait_for_request_terminal(&access, &submitted.request_id, WAIT).await == "completed");
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == submitted.request_id && value["turnState"] == "completed").await?;
+            }
         }
         Ok::<_, anyhow::Error>((session.to_owned(), projection))
     }.await;

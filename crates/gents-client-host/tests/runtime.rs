@@ -692,7 +692,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     #[cfg(feature = "editor-e2e")]
     if matches!(journey, Journey::Editor) {
-        return live_runtime::exercise_editor(root).await;
+        return live_runtime::exercise_editor(root, "live").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorWorkspace) {
+        return live_runtime::exercise_editor(root, "live-workspace").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorHistory)
+        && !editor_history::Options::from_env()?.profile
+        && std::env::var_os("GENTS_PREVIOUS_CLIENT_HOST").is_none()
+    {
+        return live_runtime::exercise_editor(root, "live-history").await;
     }
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
@@ -2135,8 +2146,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await?;
         let evidence =
-            editor_workspace::verify(&access, &provider, root, node_did, session, &client_did)
-                .await?;
+            editor_workspace::verify(&access, root, node_did, session, &client_did).await?;
         std::fs::write(
             root.join("editor-workspace-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
