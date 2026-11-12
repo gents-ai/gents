@@ -64,3 +64,5 @@ mod plugin_job_support;
 
 #[path = "e2e_live/runtime_entry_live.rs"]
 mod runtime_entry_live;
+#[path = "e2e_live/rendered_request_capture_live.rs"]
+mod rendered_request_capture_live;

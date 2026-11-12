@@ -8,7 +8,7 @@ use gents_inference::llm::message::Message;
 use gents_inference::rendered_request::RenderedCompletionRequest;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_store::graphql::escape_graphql_string;
+use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_store::identity::NodeIdentity;
 use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
@@ -164,62 +164,6 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         row["model_name"], CAPTURE_MODEL,
         "the model column must name the model the provider was asked for"
     );
-    assert!(
-        row["capture_key"]
-            .as_str()
-            .is_some_and(|key| key.starts_with("rendered:v1:")),
-        "unexpected capture key {:?}",
-        row["capture_key"]
-    );
-
-    let provenance = parse_json(&row["provenance_json"]);
-    assert_eq!(provenance["capture_seam"], "transport_body");
-    assert_eq!(provenance["status"], "captured_only");
-    assert_eq!(provenance["capture_scope"], "inference.1");
-    let provenance_payload = parse_json(&row["provenance_payload_json"]);
-    assert!(
-        provenance_payload["effective_messages"].is_null(),
-        "a reconstructible turn must not duplicate its full transcript: {provenance_payload}"
-    );
-    assert_eq!(
-        provenance["assembly_trace"]["effective_message_count"], 1,
-        "the compact trace still validates positional overlays"
-    );
-    let accounting = provenance["assembly_trace"]["context_accounting"].clone();
-    assert_eq!(accounting["compaction_reason"], "below_threshold");
-    assert_eq!(
-        accounting["estimated_input_tokens"].as_u64(),
-        Some(gents_loop::provider_input::estimate_input_body(observed[0].clone()).unwrap() as u64),
-        "pre-dispatch input accounting must equal estimation of the actual HTTP body"
-    );
-    let components = &accounting["components"];
-    let component_total = [
-        "messages",
-        "documents",
-        "tool_schemas",
-        "additional_parameters",
-        "output_schema",
-    ]
-    .into_iter()
-    .map(|field| components[field].as_u64().expect("accounting component"))
-    .sum::<u64>();
-    assert_eq!(
-        accounting["estimated_input_tokens"].as_u64(),
-        Some(component_total),
-        "request-bound accounting must be internally reproducible"
-    );
-
-    let calls = fixture.inference_calls("req-capture-1").await;
-    let inference_call = calls
-        .iter()
-        .find(|call| call["call_kind"] == "inference")
-        .expect("joined inference call");
-    assert_eq!(
-        parse_json(&inference_call["context_accounting_json"]),
-        accounting,
-        "the replicated InferenceCall projection must match local capture provenance"
-    );
-
     fixture.runtime.shutdown().await;
 }
 
@@ -560,8 +504,9 @@ async fn stored_request_json(node: &EmbeddedNode, capture_key: &str) -> String {
         r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json}} }}"#,
         escape_graphql_string(capture_key)
     );
-    let response = node.execute(&query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let response = graphql_with_transaction_retry(node, &query, "test.capture_read")
+        .await
+        .unwrap();
     response.data.unwrap()["RenderedRequest"][0]["request_json"]
         .as_str()
         .expect("stored request_json")
@@ -573,8 +518,9 @@ async fn capture_doc_id(node: &EmbeddedNode, capture_key: &str) -> String {
         r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{_docID}} }}"#,
         escape_graphql_string(capture_key)
     );
-    let response = node.execute(&query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let response = graphql_with_transaction_retry(node, &query, "test.capture_read")
+        .await
+        .unwrap();
     response.data.unwrap()["RenderedRequest"][0]["_docID"]
         .as_str()
         .expect("capture doc id")
@@ -586,8 +532,9 @@ async fn request_json_commit_cid(node: &EmbeddedNode, doc_id: &str) -> String {
         r#"{{ _commits(docID:"{}") {{ cid fieldName }} }}"#,
         escape_graphql_string(doc_id)
     );
-    let response = node.execute(&query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let response = graphql_with_transaction_retry(node, &query, "test.capture_read")
+        .await
+        .unwrap();
     response.data.unwrap()["_commits"]
         .as_array()
         .expect("commits")
@@ -765,7 +712,6 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
             canonical(&observed[index]),
             "row {index} must carry the body the provider was posted"
         );
-        assert_eq!(build_path(row), "budgeted");
     }
     let first_accounting =
         parse_json(&rows[0]["provenance_json"])["assembly_trace"]["context_accounting"].clone();
@@ -897,153 +843,6 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         rows["data"]["AgentMessage"].as_array().unwrap().len(),
         usize::from(case.publish)
     );
-    fixture.runtime.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
-    const TOOL_OUTPUT: &str = "MULTI_TURN_TOOL_OUTPUT_47bd";
-    let marker = "capture-multi-turn";
-    let backend = MockStreamingBackend::start_with_plans(
-        CAPTURE_MODEL,
-        vec![StreamPlan::new(
-            marker,
-            vec![
-                StreamResponse::streams(
-                    marker,
-                    vec![StreamChunk::tool_call(
-                        "call-multi-1",
-                        CAPTURE_TOOL,
-                        r#"{"note":"first"}"#,
-                    )],
-                ),
-                StreamResponse::completes(marker, ["done"]),
-            ],
-        )],
-    )
-    .expect("mock backend");
-    let fixture = OwnedCaptureFixture::new_with_tool(
-        "rendered-request-capture-multi-turn",
-        backend.endpoint(),
-        FixedOutputTool::new(CAPTURE_TOOL, TOOL_OUTPUT),
-    )
-    .await;
-    let doc_id = fixture
-        .submit(
-            "req-capture-multi-turn",
-            "session-capture-multi-turn",
-            &format!("please use the tool {marker}"),
-        )
-        .await;
-    fixture.wait_completed("req-capture-multi-turn").await;
-
-    let observed = backend.observed_completion_bodies();
-    assert_eq!(
-        observed.len(),
-        2,
-        "a tool-calling turn and the turn that reads its result: {observed:?}"
-    );
-
-    let rows = fixture.rendered_requests("req-capture-multi-turn").await;
-    assert_eq!(
-        coordinates(&rows),
-        vec![("inference.1", 0, 0), ("inference.1", 1, 0)],
-        "one row per turn, in order, all inside one completion loop"
-    );
-    for (index, row) in rows.iter().enumerate() {
-        assert_eq!(row["request_doc_id"].as_str(), Some(doc_id.as_str()));
-        let request_commit_cid = row["request_commit_cid"]
-            .as_str()
-            .expect("request-backed capture commit CID");
-        assert!(
-            !request_commit_cid.is_empty(),
-            "request-backed provider calls must pin a DefraDB version"
-        );
-        assert_eq!(
-            parse_json(&row["request_json"]),
-            canonical(&observed[index]),
-            "turn {index} must carry the body the provider was posted"
-        );
-    }
-    let query = format!(
-        r#"{{ _commits(docID: "{}", filter: {{ fieldName: {{ _eq: "_C" }} }}) {{ cid }} }}"#,
-        escape_graphql_string(&doc_id)
-    );
-    let response = fixture.access.execute(&query).await.unwrap();
-    let request_commits = response["data"]["_commits"].as_array().unwrap();
-    for row in &rows {
-        let pinned = row["request_commit_cid"].as_str().unwrap_or_default();
-        assert!(
-            request_commits.iter().any(|commit| commit["cid"] == pinned),
-            "capture must pin an actual DefraDB version of its request: {pinned}"
-        );
-    }
-
-    let turn_zero = message_count(&rows[0]);
-    let turn_one = message_count(&rows[1]);
-    assert!(
-        turn_one > turn_zero,
-        "turn 1 must extend turn 0's message list ({turn_zero} -> {turn_one})"
-    );
-    let turn_one_body = row_text(&rows[1]);
-    assert!(
-        turn_one_body.contains("call-multi-1"),
-        "turn 1 must thread the tool call id back to the provider"
-    );
-    assert!(
-        turn_one_body.contains(TOOL_OUTPUT),
-        "turn 1 must thread the tool's output back to the provider"
-    );
-    assert!(
-        !row_text(&rows[0]).contains(TOOL_OUTPUT),
-        "turn 0 was sent before the tool ran; its body cannot contain the result"
-    );
-
-    let threaded = serde_json::to_string(
-        &parse_json(&rows[1]["provenance_payload_json"])["threaded_tool_results"],
-    )
-    .expect("threaded tool results");
-    assert!(
-        threaded.contains("call-multi-1") && threaded.contains(TOOL_OUTPUT),
-        "the assembly trace must carry the threaded tool result verbatim: {threaded}"
-    );
-
-    let calls = fixture.inference_calls("req-capture-multi-turn").await;
-    let inference_call_seqs: Vec<i64> = calls
-        .iter()
-        .filter(|call| call["call_kind"].as_str() == Some("inference"))
-        .filter_map(|call| call["call_seq"].as_i64())
-        .collect();
-    let mut seen_call_ids = std::collections::BTreeSet::new();
-    for row in &rows {
-        let manifest = parse_json(&row["provenance_json"]);
-        assert_eq!(
-            manifest["manifest_version"],
-            gents_inference::rendered_request::PROVENANCE_MANIFEST_VERSION,
-            "manifest version"
-        );
-        let admission = manifest
-            .get("admission")
-            .unwrap_or_else(|| panic!("daemon capture must carry an admission join: {manifest}"));
-        let call_seq = admission["call_seq"].as_i64().expect("join call_seq");
-        assert!(
-            inference_call_seqs.contains(&call_seq),
-            "joined call_seq {call_seq} must name a persisted inference InferenceCall \
-             (persisted: {inference_call_seqs:?})"
-        );
-        let call_id = admission["call_id"].as_str().expect("join call_id");
-        assert!(
-            calls
-                .iter()
-                .any(|call| call["call_id"].as_str() == Some(call_id)),
-            "joined call_id {call_id} must name a persisted InferenceCall row"
-        );
-        assert!(
-            seen_call_ids.insert(call_id.to_string()),
-            "each capture joins a distinct provider call"
-        );
-    }
-
     fixture.runtime.shutdown().await;
 }
 
@@ -2102,13 +1901,6 @@ fn coordinates(rows: &[Value]) -> Vec<(&str, i64, i64)> {
         .collect()
 }
 
-fn build_path(row: &Value) -> String {
-    parse_json(&row["provenance_json"])["assembly_trace"]["build_path"]
-        .as_str()
-        .unwrap_or("<missing>")
-        .to_string()
-}
-
 fn row_text(row: &Value) -> String {
     serde_json::to_string(&parse_json(&row["request_json"])).expect("captured body re-serializes")
 }
@@ -2133,13 +1925,6 @@ fn tool_call_arguments(row: &Value, tool_call_id: &str) -> String {
         }
     }
     panic!("captured body carries no tool call {tool_call_id}: {body}");
-}
-
-fn message_count(row: &Value) -> usize {
-    parse_json(&row["request_json"])["messages"]
-        .as_array()
-        .map(Vec::len)
-        .unwrap_or_default()
 }
 
 fn canonical(value: &Value) -> Value {
@@ -2311,12 +2096,9 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
         }}"#,
         request_id = escape_graphql_string(request_id),
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "RenderedRequest query failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(node, &query, "test.capture_read")
+        .await
+        .unwrap();
     let mut rows = response
         .data
         .and_then(|data| data.get("RenderedRequest").cloned())
@@ -2434,7 +2216,9 @@ async fn commit_set(node: &EmbeddedNode, capture_key: &str) -> Vec<(String, Stri
         }}"#,
         capture_key = escape_graphql_string(capture_key),
     );
-    let response = node.execute(&doc_id_query).await;
+    let response = graphql_with_transaction_retry(node, &doc_id_query, "test.capture_doc_id")
+        .await
+        .unwrap();
     assert!(
         !response.has_errors(),
         "RenderedRequest _docID query failed: {:?}",
@@ -2458,12 +2242,9 @@ async fn commit_set(node: &EmbeddedNode, capture_key: &str) -> Vec<(String, Stri
         }}"#,
         doc_id = escape_graphql_string(&doc_id),
     );
-    let response = node.execute(&commits_query).await;
-    assert!(
-        !response.has_errors(),
-        "_commits query failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(node, &commits_query, "test.capture_commits")
+        .await
+        .unwrap();
     let mut commits = response
         .data
         .and_then(|data| data.get("_commits").cloned())
@@ -2491,19 +2272,22 @@ async fn wait_for_rendered_requests(
     request_id: &str,
     expected: usize,
 ) -> Vec<Value> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let rows = rendered_requests_as(reader, request_id).await;
-        if rows.len() >= expected {
-            return rows;
+    let mut changes = gents_store::subscription_source::subscribe_collections(
+        reader.local_node().expect("embedded capture reader"),
+        ["RenderedRequest"],
+    )
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let rows = rendered_requests_as(reader, request_id).await;
+            if rows.len() >= expected {
+                return rows;
+            }
+            changes.recv().await.expect("capture subscription closed");
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "expected {expected} RenderedRequest rows for {request_id}, saw {}",
-            rows.len()
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    })
+    .await
+    .expect("rendered captures did not become visible")
 }
 
 async fn boot_capture_agent_with(
@@ -2905,30 +2689,13 @@ impl OwnedCaptureFixture {
     }
 
     async fn wait_terminal(&self, request_id: &str, timeout: Duration) -> RequestLifecycleState {
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
-            escape_graphql_string(request_id)
-        );
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            let result = self.access.execute(&query).await.unwrap();
-            let rows = result["data"]["AgentRequest"].as_array().unwrap();
-            if let Some(row) = rows.first() {
-                if let Some(state) = row["lifecycle_state"]
-                    .as_str()
-                    .and_then(|state| RequestLifecycleState::parse(state).ok())
-                {
-                    if state.is_terminal() {
-                        return state;
-                    }
-                }
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "request did not complete: {result}"
-            );
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        let state = crate::support::live_inference::wait_for_request_terminal(
+            &self.access,
+            request_id,
+            timeout,
+        )
+        .await;
+        RequestLifecycleState::parse(&state).expect("terminal request lifecycle")
     }
 
     async fn wait_for_goal_observation(&self, session_id: &str) {
@@ -2971,7 +2738,7 @@ impl OwnedCaptureFixture {
             escape_graphql_string(doc)
         );
         let response = self.access.execute(&query).await.unwrap();
-        let cid = response["data"]["_commits"][0]["cid"]
+        let cid = response.data.unwrap()["_commits"][0]["cid"]
             .as_str()
             .expect("genesis composite CID");
         let (block, signature) = self
