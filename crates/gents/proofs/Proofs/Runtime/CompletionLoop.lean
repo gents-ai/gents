@@ -41,6 +41,9 @@ structure Input where
   nestedUsage : Option Usage := none
   structured : Bool := false
   recoveredPair : Bool := false
+  /-- The loop has a per-turn compactor for the forced reduction a provider
+  context overflow asks for. -/
+  compactor : Bool := false
   deriving ToJson
 
 structure Coordinate where
@@ -70,6 +73,9 @@ fails for the wrong one is a different observation. -/
 inductive Failure where
   | turnLimit | budgetExhausted | budgetOverrun | usageMissing | captureMissing
   | retryExhausted | refused
+  /-- The provider rejected the input as over its context window and the loop
+  has no compactor to reduce it. -/
+  | contextOverflow
   deriving BEq, Repr, ToJson
 
 structure Observation where
@@ -85,12 +91,15 @@ structure Observation where
   captures : List Capture := []
   allowances : List Nat := []
   ledgerUsed : Option Nat := none
+  /-- Whether each provider request offered the loop's toolset. -/
+  offered : List Bool := []
   deriving ToJson
 
 def failureClass : String → FailureClass
   | "parse" => .parseBadRequest
   | "reasoning" => .reasoningRejected
   | "permanent" => .permanent
+  | "overflow" => .contextOverflow
   | _ => .transport
 
 def structuredValid (text : List String) : Bool :=
@@ -109,7 +118,10 @@ def transition (state : State) (action : Action) : State :=
 
 /-- A provider failure before output uses the classified retry policy. Once
 preview bytes or an unaccepted tool intent exist, transport recovery first
-retracts that attempt. Only accepted tool turns enter the next request. -/
+retracts that attempt. Only accepted tool turns enter the next request. A
+context overflow is retried at once on the compacted input, at most once per
+turn, and the compacted input no longer threads the tool results it replaced;
+without a compactor it ends the run as that overflow. -/
 def run (input : Input) : Observation := Id.run do
   let budget : Budget := ⟨input.transport, input.resample, 1, input.repair, 0⟩
   let mut state := { baseState with phase := .issuing, now := 0, budget := budget, deadline := if input.deadlineFits then none else some 0 }
@@ -117,6 +129,8 @@ def run (input : Input) : Observation := Id.run do
   let mut dirty := input.initialDirty
   let mut repaired := input.nestedUsage.isSome
   let mut repairAttempt := false
+  let mut threaded : List String :=
+    if input.initialDirty then ["ok"] else if input.recoveredPair then ["restored"] else []
   let mut ledger := input.limit.map fun limit =>
     (⟨limit, (input.nestedUsage.map fun usage => usage.input + usage.output).getD 0⟩ : PromptAssembly.AggregateBudget.Ledger)
   result := { result with ledgerUsed := ledger.map (·.used) }
@@ -129,8 +143,8 @@ def run (input : Input) : Observation := Id.run do
       result := { result with failure := some .budgetExhausted }
       break
     result := { result with allowances := result.allowances ++ (ledger.map (·.remaining)).toList }
-    result := { result with dirtyInputs := result.dirtyInputs ++ [dirty], contextInputs := result.contextInputs ++ [input.context], text := result.text ++ call.text, reasoning := result.reasoning ++ call.reasoning }
-    result := { result with captures := result.captures ++ [⟨state.turn, state.attempt, if repairAttempt then "repair" else "budgeted", input.context || repaired, (if input.initialDirty then ["ok"] else if input.recoveredPair then ["restored"] else []) ++ result.tools, true⟩] }
+    result := { result with dirtyInputs := result.dirtyInputs ++ [dirty], contextInputs := result.contextInputs ++ [input.context], offered := result.offered ++ [true], text := result.text ++ call.text, reasoning := result.reasoning ++ call.reasoning }
+    result := { result with captures := result.captures ++ [⟨state.turn, state.attempt, if repairAttempt then "repair" else "budgeted", input.context || repaired, threaded, true⟩] }
     if input.missingCapture then
       result := { result with failure := some .captureMissing, text := [], reasoning := [] }
       break
@@ -155,6 +169,7 @@ def run (input : Input) : Observation := Id.run do
         break
     if call.failure.isNone && call.tool then
       result := { result with tools := result.tools ++ ["ECHOED"] }
+      threaded := threaded ++ ["ECHOED"]
       dirty := dirty || call.poison
       repairAttempt := false
       state := { state with phase := .issuing, turn := state.turn + 1, attempt := 0, emptyUsed := 0, compactUsed := false }
@@ -169,6 +184,18 @@ def run (input : Input) : Observation := Id.run do
       state := transition state (.observeFailure failure (call.failure.getD "empty") (state.now + 1))
       state := transition state (.confirmRetraction true)
       state := transition state .schedule
+      let compacting := match state.phase with | .compacting => true | _ => false
+      if compacting then
+        result := { result with retries := result.retries ++ [⟨before.turn, before.attempt, input.compactor, false⟩] }
+        if input.compactor then
+          state := transition state .compactIssue
+          threaded := []
+          repaired := true
+          repairAttempt := false
+          continue
+        else
+          result := { result with failure := some .contextOverflow }
+          break
       let retry := match state.phase with
         | .backingOff _ | .repairing => true
         | _ => false
