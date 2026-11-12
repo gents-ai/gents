@@ -15,6 +15,7 @@ use crate::request::hooks::queue_scope::{
 use crate::request::hooks::stage::{
     gate, owed, stage, stage_dropping, ApplyFailure, HookError, Host, Plugin, Staged,
 };
+use gents_lean_vocab::families::hooks_contracts_claim_gate::{self as claim_gate};
 use gents_lean_vocab::families::hooks_contracts_delivery_step::{self as delivery_step};
 use gents_lean_vocab::families::hooks_contracts_effect_commit::{self as effect_commit};
 use gents_lean_vocab::families::hooks_contracts_grant_validity::{self as grant_validity};
@@ -27,11 +28,10 @@ use gents_lean_vocab::families::hooks_contracts_refusable_staging::{self as stag
 use gents_lean_vocab::families::hooks_contracts_verdict_combination::{self as combination};
 use gents_lean_vocab::{
     
-    lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_queue_scope_cases, LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
-    LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
-    LeanLifecycleHookPartition,
+    lean_lifecycle_hook_queue_scope_cases, LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
+    LeanLifecycleHookEffect, LeanLifecycleHookPartition,
     LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
-    LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
+    LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookWorld,
 };
 use serde_json::Value;
 
@@ -113,23 +113,6 @@ fn row(lean: &LeanLifecycleHookRow) -> Row {
         doc: DocRef::new(&lean.collection, &lean.doc),
         revision: lean.revision,
         value: Value::String(lean.value.clone()),
-    }
-}
-
-fn verdict(lean: &LeanLifecycleHookVerdict) -> ClaimVerdict {
-    match lean {
-        LeanLifecycleHookVerdict::Allow => ClaimVerdict::Allow,
-        LeanLifecycleHookVerdict::LeaveQueued => ClaimVerdict::LeaveQueued,
-        LeanLifecycleHookVerdict::Retire { reason, successor } => ClaimVerdict::Retire {
-            reason: reason.clone(),
-            successor: Successor {
-                request_id: successor.request_id.clone(),
-                request_doc_id: successor.request_doc_id.clone(),
-            },
-        },
-        LeanLifecycleHookVerdict::Reject { reason } => ClaimVerdict::Reject {
-            reason: reason.clone(),
-        },
     }
 }
 
@@ -883,49 +866,49 @@ fn verdict_combination_follows_the_lean_model() {
     });
 }
 
+fn gate_verdict(verdict: &ClaimVerdict) -> claim_gate::VerdictWire {
+    gents_lean_vocab::family::recode(&verdict_wire(verdict))
+}
+
 #[tokio::test]
-async fn generated_lifecycle_hook_gate_cases_drive_the_claim_gate() {
-    let cases = lean_lifecycle_hook_gate_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let host = StoreDouble::of(&case.world);
+async fn claim_gate_follows_the_lean_model() {
+    for case in gents_lean_vocab::families::hooks_contracts_claim_gate::cases() {
+        let input = &case.input;
+        let host = host_of(&input.world, None, &[]);
         let initial = host.snapshot();
-        let plugins: Vec<Plugin<(), ClaimVerdict>> = case
-            .plugins
+        let scripts: Vec<staging::ScriptWire> = gents_lean_vocab::family::recode(&input.plugins);
+        let plugins: Vec<Plugin<(), ClaimVerdict>> = scripts
             .iter()
-            .map(|script| plugin(script, verdict))
+            .map(|script| {
+                scripted(script, |value| {
+                    let verdict: combination::VerdictWire = gents_lean_vocab::family::recode(
+                        value.verdict.as_ref().expect("a gate value is a verdict"),
+                    );
+                    claim_verdict(&verdict)
+                })
+            })
             .collect();
-        let gated = gate(&host, &plugins, &()).await;
-        match (&gated, &case.result) {
-            (
-                Ok(verdicts),
-                LeanLifecycleHookGateResult::Ok {
-                    verdicts: expected,
-                    combined,
-                },
-            ) => {
-                let expected: Vec<ClaimVerdict> = expected.iter().map(verdict).collect();
-                assert_eq!(verdicts, &expected, "{}: verdicts", case.name);
-                assert_eq!(
-                    combine(verdicts.iter().cloned()),
-                    verdict(combined),
-                    "{}: combined",
-                    case.name
-                );
-            }
-            (Err(error), LeanLifecycleHookGateResult::Error { refusal }) => {
-                assert_eq!(&host.refusal(error), refusal, "{}: {error:?}", case.name);
-            }
-            (actual, expected) => {
-                panic!("{}: gated {actual:?}, model {expected:?}", case.name)
-            }
-        }
+        let result = match gate(&host, &plugins, &()).await {
+            Ok(verdicts) => claim_gate::GateResultWire {
+                kind: "ok".to_owned(),
+                combined: Some(gate_verdict(&combine(verdicts.iter().cloned()))),
+                verdicts: verdicts.iter().map(gate_verdict).collect(),
+                refusal: None,
+            },
+            Err(error) => claim_gate::GateResultWire {
+                kind: "error".to_owned(),
+                verdicts: Vec::new(),
+                combined: None,
+                refusal: Some(gents_lean_vocab::family::recode(&host.refusal_wire(&error))),
+            },
+        };
         assert_eq!(
             host.snapshot(),
             initial,
             "{}: a gate writes nothing",
-            case.name
+            input.name
         );
+        case.check(claim_gate::GateOutput { result });
     }
 }
 

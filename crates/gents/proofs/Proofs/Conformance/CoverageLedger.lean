@@ -1306,8 +1306,8 @@ def caseCoverage : List CoverageEntry :=
       "hooks_contracts_verdict_combination")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_gate_cases"
-      "LifecycleHookGateCases")
+      "family"
+      "hooks_contracts_claim_gate")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "lifecycle_hook_queue_scope_cases"

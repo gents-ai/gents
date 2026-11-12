@@ -265,10 +265,6 @@ pub fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] {
     &lean_contract_snapshot().interrupt_queue_cases
 }
 
-pub fn lean_lifecycle_hook_gate_cases() -> &'static [LeanLifecycleHookGateCase] {
-    &lean_contract_snapshot().lifecycle_hook_gate_cases
-}
-
 pub fn lean_lifecycle_hook_goal_halt_cases() -> &'static [LeanLifecycleHookGoalHaltCase] {
     &lean_contract_snapshot().lifecycle_hook_goal_halt_cases
 }
@@ -3345,7 +3341,6 @@ pub struct LeanContractSnapshot {
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
     pub lifecycle_hook_rerun_cases: Vec<LeanLifecycleHookRerunCase>,
     pub lifecycle_hook_goal_resume_cases: Vec<LeanLifecycleHookGoalResumeCase>,
-    pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
     pub lifecycle_hook_queue_scope_cases: Vec<LeanLifecycleHookQueueScopeCase>,
     pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
     pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
@@ -6747,22 +6742,6 @@ pub struct LeanLifecycleHookDenial {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookGateCase {
-    pub name: String,
-    pub world: LeanLifecycleHookWorld,
-    pub plugins: Vec<LeanLifecycleHookScript<LeanLifecycleHookVerdict>>,
-    pub result: LeanLifecycleHookGateResult,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookGateResult {
-    Ok { verdicts: Vec<LeanLifecycleHookVerdict>, combined: LeanLifecycleHookVerdict },
-    Error { refusal: LeanLifecycleHookRefusal },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookGoalHaltCase {
     pub name: String,
     pub status: Option<String>,
@@ -6868,28 +6847,12 @@ pub struct LeanLifecycleHookScopeKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookSuccessor {
-    pub request_id: String,
-    pub request_doc_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookSupersedeCase {
     pub name: String,
     pub selector: LeanSupersedeSelector,
     pub rows: Vec<LeanSupersedeRow>,
     pub parents: Vec<LeanSupersedeParent>,
     pub stale: Vec<LeanSupersedeStale>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookVerdict {
-    Allow,
-    LeaveQueued,
-    Retire { reason: String, successor: LeanLifecycleHookSuccessor },
-    Reject { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

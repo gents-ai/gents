@@ -1040,19 +1040,43 @@ def gateCases : List GateCase :=
   , { name := "effects_rejected_even_when_allowing", world := stageWorld
     , plugins := [mailbox, fence.deciding (.proceed .allow [coreOp "request.supersede"])] } ]
 
-private def gateResultJson : Except Refusal (List ClaimVerdict) → String
-  | .ok verdicts =>
-      "{\"kind\":\"ok\",\"verdicts\":" ++ jsonArray (verdicts.map verdictJson) ++
-        ",\"combined\":" ++ verdictJson (Hooks.combine verdicts) ++ "}"
-  | .error refusal => "{\"kind\":\"error\",\"refusal\":" ++ refusalJson refusal ++ "}"
+def ValueWire.ofVerdict (verdict : ClaimVerdict) : ValueWire :=
+  ⟨none, some (VerdictWire.ofModel verdict), []⟩
 
-private def gateCaseJson (c : GateCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"world\":" ++ worldJson c.world ++
-    ",\"plugins\":" ++ jsonArray (c.plugins.map (scriptJson verdictJson)) ++
-    ",\"result\":" ++ gateResultJson c.result ++ "}"
+def ValueWire.toVerdict (wire : ValueWire) : ClaimVerdict :=
+  (wire.verdict.map VerdictWire.toModel).getD .allow
 
-def gateCasesJson : String := jsonArray (gateCases.map gateCaseJson)
+structure GateInput where
+  name : String
+  world : WorldWire
+  plugins : List ScriptWire
+  deriving ToJson
+
+structure GateResultWire where
+  kind : String
+  verdicts : List VerdictWire
+  combined : Option VerdictWire
+  refusal : Option RefusalWire
+  deriving ToJson
+
+structure GateOutput where
+  result : GateResultWire
+  deriving ToJson
+
+@[conformance_family]
+def claimGate : Family GateInput GateOutput where
+  inputs := gateCases.map fun c =>
+    { name := c.name, world := WorldWire.ofModel c.world
+    , plugins := c.plugins.map (ScriptWire.ofModel ValueWire.ofVerdict) }
+  model := fun i =>
+    let c : GateCase :=
+      { name := i.name, world := i.world.toModel
+      , plugins := i.plugins.map (ScriptWire.toModel ValueWire.toVerdict) }
+    { result := match c.result with
+        | .ok verdicts =>
+            ⟨"ok", verdicts.map VerdictWire.ofModel, some (VerdictWire.ofModel (Hooks.combine verdicts)),
+              none⟩
+        | .error refusal => ⟨"error", [], none, some (RefusalWire.ofModel refusal)⟩ }
 
 /-! Queue partitions: `Hooks.QueueScope.scopes` at `request.queue.scope`. -/
 
