@@ -31,6 +31,8 @@ mod live_questions;
 mod live_related_work;
 #[path = "live_steering.rs"]
 mod live_steering;
+#[path = "live_undo.rs"]
+mod live_undo;
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -66,7 +68,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         .arg(&home)
         .args([
             "--tool-package",
-            if matches!(editor, Some("live-review" | "live-review-inventory")) {
+            if matches!(
+                editor,
+                Some("live-review" | "live-review-inventory" | "live-undo")
+            ) {
                 "write"
             } else {
                 "readonly"
@@ -190,6 +195,11 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
     } else {
         None
     };
+    let undo = if editor == Some("live-undo") {
+        Some(live_undo::Undo::prepare(root, gates[0].descriptor()).await?)
+    } else {
+        None
+    };
     let mut client = Attachment::start_with_binary(&paths, &binary).await;
     let mut updates = Attachment::start_with_binary(&paths, &binary).await;
     let result = async {
@@ -203,7 +213,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         let agent = deployment["client"]["deployments"].as_array().unwrap().iter()
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
-        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref()).await?;
+        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref(), undo.as_ref()).await?;
         let opening = if steering { gates[0].prompt() } else if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools.".to_owned() } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.".to_owned() };
         let receipt = if goal_steering {
             client.try_call(id, "desktop_goal_control", json!({"request":{"nodeDid":node,"agentDid":agent,"action":{"kind":"create","objective":opening,"tokenBudget":"16000"}}})).await?
@@ -300,7 +310,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
                 tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
             }
             super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), scenario).await?;
-            if let Some(inventory) = &inventory {
+            if let Some(undo) = &undo {
+                let evidence = undo.verify(&mut client, &mut id, &access, node, &client_did).await?;
+                tokio::fs::write(root.join("editor-undo-canonical.json"), serde_json::to_vec(&evidence)?).await?;
+            } else if let Some(inventory) = &inventory {
                 let evidence = inventory.verify(&mut client, &mut id, &access, node, session, &client_did).await?;
                 tokio::fs::write(root.join("editor-inventory-canonical.json"), serde_json::to_vec(&evidence)?).await?;
                 projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
@@ -415,6 +428,7 @@ async fn configure(
     questions: Option<&live_questions::Questions>,
     related_work: Option<&live_related_work::RelatedWork>,
     inventory: Option<&live_inventory::Inventory>,
+    undo: Option<&live_undo::Undo>,
 ) -> Result<()> {
     let setup = client
         .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
@@ -472,6 +486,9 @@ async fn configure(
     }
     if let Some(inventory) = inventory {
         inventory.configure(&mut document, node)?;
+    }
+    if let Some(undo) = undo {
+        undo.configure(&mut document, node)?;
     }
     client
         .try_call(
