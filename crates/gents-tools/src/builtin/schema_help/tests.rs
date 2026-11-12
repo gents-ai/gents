@@ -180,18 +180,15 @@ fn runtime_owned_tool(node: &Arc<EmbeddedNode>) -> SchemaTool {
 }
 
 #[tokio::test]
-async fn schema_publication_matches_executable_lean_contract() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().schema_publication_cases {
-        if !case.native_allowed {
-            continue;
-        }
+async fn contracts_runtime_schema_publication_matches_lean() {
+    for case in gents_lean_vocab::families::contracts_runtime_schema_publication::cases() {
         let db = node().await;
         let node = db.node.clone();
         let tool = SchemaTool::new(node.clone());
         let access = ConfigAccess::local(node.clone());
-        let grant = case.grant;
-        let compatible = case.compatible;
-        let artifact = case.artifact;
+        let grant = case.input.grant;
+        let compatible = case.input.compatible;
+        let artifact = case.input.artifact;
         if !compatible {
             access
                 .add_collection("type Probe { value: Int }")
@@ -234,15 +231,14 @@ async fn schema_publication_matches_executable_lean_contract() {
         } else {
             false
         };
-        assert_eq!(accepted, case.accepted, "{case:?}");
-        if !accepted {
-            assert_eq!(
-                before,
-                access.collection_version("Probe").await.unwrap(),
-                "{case:?}"
-            );
-        }
+        let installed = before != access.collection_version("Probe").await.unwrap();
         assert!(!surface.tool_names().contains(&"config".to_owned()));
+        case.check(
+            gents_lean_vocab::families::contracts_runtime_schema_publication::SchemaPublicationOutput {
+                accepted,
+                installed,
+            },
+        );
     }
 }
 
@@ -251,10 +247,7 @@ async fn schema_publication_uses_agent_native_authority() {
     use gents_store::config_client::NodePermission;
     use gents_store::identity::{KeyIdentity, NodeIdentity};
 
-    for case in &gents_lean_vocab::lean_contract_snapshot().schema_publication_cases {
-        if !case.grant || !case.artifact || !case.compatible {
-            continue;
-        }
+    for case in gents_lean_vocab::families::contracts_schema_publication::cases() {
         let home = tempfile::tempdir().unwrap();
         let db = gents_inference::test_support::test_db(
             "schema-help-publication",
@@ -316,22 +309,69 @@ async fn schema_publication_uses_agent_native_authority() {
             .grant_node_permission(&agent_did, NodePermission::CollectionGet)
             .await
             .unwrap();
-        if case.native_allowed {
+        if case.input.native_allowed {
             admin
                 .grant_node_permission(&agent_did, NodePermission::CollectionPatch)
                 .await
                 .unwrap();
         }
-        let preview = call(&tool, json!({"argv":["collection","preview","create"],"options":{"sdl":"type AgentSchemaProbe { value: String }"}})).await;
-        let result = tool.call(args(preview["next_call"]["args"].clone())).await;
-        assert_eq!(result.is_ok(), case.accepted, "{case:?}: {result:?}");
-        let installed = ConfigAccess::local(node.clone())
+        if !case.input.compatible {
+            admin
+                .add_collection("type AgentSchemaProbe { value: Int }")
+                .await
+                .unwrap();
+        }
+        let surface = AgentToolSurfaceConfig::from_selection(
+            "worker",
+            ResolvedToolSelection {
+                enable_schema_tool: case.input.grant,
+                ..Default::default()
+            },
+            &ToolCeiling::meta_only(),
+            Vec::new(),
+        )
+        .unwrap()
+        .resolve(
+            &node,
+            node.node_identity_did().unwrap(),
+            &crate::plugin_host::NoPluginHost,
+        )
+        .await
+        .unwrap();
+        let before = ConfigAccess::local(node.clone())
             .collection_version("AgentSchemaProbe")
             .await
-            .unwrap()
-            .is_some();
-        assert_eq!(installed, case.accepted, "{case:?}");
+            .unwrap();
+        let mut intent = json!({"argv":["collection","preview","create"],"options":{"sdl":"type AgentSchemaProbe { value: String }"}});
+        let preview = tool.call(args(intent.clone())).await;
+        intent["argv"].as_array_mut().unwrap().remove(1);
+        intent["options"]["digest"] = if case.input.artifact {
+            preview
+                .as_ref()
+                .ok()
+                .and_then(|v| serde_json::from_str::<Value>(v).ok())
+                .map(|v| v["next_call"]["args"]["options"]["digest"].clone())
+                .unwrap_or(json!("unavailable"))
+        } else {
+            json!("wrong")
+        };
+        let accepted = if surface.tool_names().contains(&SCHEMA_TOOL_NAME.to_owned()) {
+            tool.call(args(intent)).await.is_ok()
+        } else {
+            false
+        };
+        let installed = before
+            != ConfigAccess::local(node.clone())
+                .collection_version("AgentSchemaProbe")
+                .await
+                .unwrap();
         node.shutdown().await.unwrap();
+        case.check(
+            gents_lean_vocab::families::contracts_schema_publication::SchemaPublicationOutput {
+                accepted,
+                installed,
+            },
+        );
     }
 }
 

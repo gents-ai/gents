@@ -843,7 +843,6 @@ def snapshotClientCasesJson : String :=
       ++ policyGrantBoundCasesJson ++ ","
     ++ "\"policy_lockout_cases\":"
       ++ policyLockoutCasesJson ++ ","
-    ++ "\"schema_publication_cases\":" ++ schemaPublicationCasesJson ++ ","
     ++ "\"self_config_cases\":"
       ++ selfConfigCasesJson ++ ","
     ++ "\"agent_decision_cases\":"

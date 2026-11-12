@@ -156,18 +156,39 @@ def selfConfigCaseJson (w : CaseWitness) : String :=
 def selfConfigCasesJson : String :=
   jsonArray (selfConfigCases.map selfConfigCaseJson)
 
-def schemaPublicationCasesJson : String := Id.run do
-  let mut rows : List String := []
-  for grant in [false, true] do
-    for artifact in [false, true] do
-      for compatible in [false, true] do
-        for nativeAllowed in [false, true] do
-          rows := rows ++ ["{\"grant\":" ++ scBool grant
-            ++ ",\"artifact\":" ++ scBool artifact
-            ++ ",\"compatible\":" ++ scBool compatible
-            ++ ",\"native_allowed\":" ++ scBool nativeAllowed
-            ++ ",\"accepted\":" ++ scBool (SelfConfig.schemaPublicationAllowed grant artifact compatible nativeAllowed) ++ "}"]
-  return jsonArray rows
+structure SchemaPublicationInput where
+  grant : Bool
+  artifact : Bool
+  compatible : Bool
+  nativeAllowed : Bool
+  deriving Lean.ToJson
+
+structure SchemaPublicationOutput where
+  accepted : Bool
+  installed : Bool
+  deriving Lean.ToJson
+
+def schemaPublicationInputs : List SchemaPublicationInput :=
+  [false, true].flatMap fun grant => [false, true].flatMap fun artifact =>
+    [false, true].flatMap fun compatible => [false, true].map fun nativeAllowed =>
+      { grant, artifact, compatible, nativeAllowed }
+
+def schemaPublicationOutcome (i : SchemaPublicationInput) : SchemaPublicationOutput :=
+  let accepted := SelfConfig.schemaPublicationAllowed i.grant i.artifact i.compatible i.nativeAllowed
+  { accepted, installed := accepted }
+
+@[conformance_family]
+def schemaPublication : Family SchemaPublicationInput SchemaPublicationOutput where
+  inputs := schemaPublicationInputs
+  model := schemaPublicationOutcome
+
+/-- The runtime-owned schema tool acts with the node's own authority, which
+natively holds every collection permission, so only natively allowed
+publications can be built for it. -/
+@[conformance_family]
+def runtimeSchemaPublication : Family SchemaPublicationInput SchemaPublicationOutput where
+  inputs := schemaPublicationInputs.filter (·.nativeAllowed)
+  model := schemaPublicationOutcome
 
 /-- Edit authority by category, scope and held self-config categories. -/
 def selfConfigScopeEditCasesJson : String := Id.run do
