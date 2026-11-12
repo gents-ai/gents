@@ -44,10 +44,10 @@ async fn assert_background_rows(
 
 #[tokio::test]
 async fn generated_background_budget_uses_accepted_dispatch() {
-    let witness = gents_lean_vocab::lean_r6_background_theorem_witnesses()
-        .iter()
-        .find(|w| w.witness_kind == "admission_bound")
-        .expect("modeled admission bound");
+    let cases = gents_lean_vocab::families::contracts_background_admission_bound::cases();
+    assert_eq!(cases.len(), 1);
+    let case = &cases[0];
+    let bound = usize::try_from(case.input.numeric_bound).unwrap();
     let executions = BackgroundExecutionRegistry::default();
     let registry =
         BackgroundToolRegistry::from_tools(vec![Box::new(PendingTool)], &["slow_tool".into()]);
@@ -71,37 +71,48 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         .await;
     let args = r#"{"tool_name":"slow_tool","args":{}}"#;
     let mut children = Vec::new();
-    for index in 0..witness.numeric_bound {
+    let mut admitted_modes = Vec::new();
+    for index in 0..bound {
         let receipt = invoke(&hook, &format!("budget-{index}"), "spawn_process", args).await;
         assert_eq!(receipt["status"], "running");
-        assert_eq!(receipt["await_mode"], witness.kind_field("await_mode"));
         let child = receipt["tool_call_id"].as_str().unwrap().to_owned();
         let row = tool_row(&access, &session, &child).await;
-        assert_eq!(row["await_mode"], witness.kind_field("await_mode"));
+        assert_eq!(row["await_mode"], receipt["await_mode"]);
+        admitted_modes.push(receipt["await_mode"].as_str().unwrap().to_owned());
         assert_background_rows(&access, &request_id, index + 1, "running").await;
         children.push(child);
     }
+    admitted_modes.dedup();
+    assert_eq!(admitted_modes.len(), 1, "{admitted_modes:?}");
     let denied = invoke(&hook, "budget-overflow", "spawn_process", args).await;
-    assert_eq!(
-        denied["code"],
-        witness.kind_field("error_code_on_violation")
+    case.check(
+        gents_lean_vocab::families::contracts_background_admission_bound::AdmissionObservation {
+            kind_fields: [
+                ("await_mode", Some(admitted_modes[0].as_str())),
+                ("error_code_on_violation", denied["code"].as_str()),
+            ]
+            .into_iter()
+            .filter_map(|(key, value)| {
+                value.map(|value| {
+                    gents_lean_vocab::families::contracts_background_admission_bound::KindField {
+                        key: key.to_owned(),
+                        value: value.to_owned(),
+                    }
+                })
+            })
+            .collect(),
+            current_backgrounded: denied["current_backgrounded"].as_u64().unwrap(),
+            max_backgrounded: denied["max_backgrounded"].as_u64().unwrap(),
+        },
     );
-    assert_eq!(
-        denied["current_backgrounded"].as_u64(),
-        Some(witness.numeric_bound as u64)
-    );
-    assert_eq!(
-        denied["max_backgrounded"].as_u64(),
-        Some(witness.numeric_bound as u64)
-    );
-    assert_background_rows(&access, &request_id, witness.numeric_bound, "running").await;
+    assert_background_rows(&access, &request_id, bound, "running").await;
     for (index, child) in children.iter().enumerate() {
         let args = json!({"tool_call_id": child}).to_string();
         let result = invoke(&hook, &format!("cancel-{index}"), "cancel_process", &args).await;
         assert_eq!(result["status"], "cancelled");
         executions.wait_for_completion(child).await;
     }
-    assert_background_rows(&access, &request_id, witness.numeric_bound, "cancelled").await;
+    assert_background_rows(&access, &request_id, bound, "cancelled").await;
     let batch = gents_lean_vocab::lean_r6_backgrounding_cases()
         .iter()
         .filter(|case| case.group == "budget_batch")
@@ -156,10 +167,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         if receipt["status"] == "running" {
             admitted.push(receipt["tool_call_id"].as_str().unwrap().to_owned());
         } else {
-            assert_eq!(
-                receipt["code"],
-                witness.kind_field("error_code_on_violation")
-            );
+            assert_eq!(receipt["code"], denied["code"]);
             rejected += 1;
         }
     }

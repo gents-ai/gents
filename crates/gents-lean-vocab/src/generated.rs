@@ -545,10 +545,6 @@ pub fn lean_r4c_background_work_cases() -> &'static [LeanR4cBackgroundWorkCase] 
     &lean_contract_snapshot().r4c_background_work_cases
 }
 
-pub fn lean_r6_background_theorem_witnesses() -> &'static [LeanBackgroundTheoremWitness] {
-    &lean_contract_snapshot().r6_background_theorem_witnesses
-}
-
 pub fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
     &lean_contract_snapshot().r6_backgrounding_cases
 }
@@ -1260,21 +1256,6 @@ pub struct LeanBackendWakeCase {
     pub deadline_ms: i64,
     pub attempts: u32,
     pub wake_ms: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanBackgroundTheoremKindField {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanBackgroundTheoremWitness {
-    pub theorem_name: String,
-    pub witness_kind: String,
-    pub scenario: String,
-    pub numeric_bound: usize,
-    pub kind_fields: Vec<LeanBackgroundTheoremKindField>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3217,7 +3198,6 @@ pub struct LeanContractSnapshot {
     pub r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
-    pub r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub reasoning_audit_cases: Vec<LeanReasoningAuditCase>,

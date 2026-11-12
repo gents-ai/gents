@@ -5,6 +5,7 @@ import Proofs.Runtime.Background.ToolOutputCases
 import Proofs.Conformance.ContractCases.InterruptDisposition
 import Proofs.Conformance.Functions.ToolCalls
 import Proofs.Conformance.Family
+import Proofs.ToolCalls.PluginJob.Admission
 
 namespace Conformance.Contracts
 
@@ -101,20 +102,6 @@ def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
     ++ "\"wake_created\":" ++ jsonOptionalBool witness.wakeCreated ++ ","
     ++ "\"redrive_allowed\":" ++ jsonOptionalBool witness.redriveAllowed ++ ","
     ++ "\"operation\":" ++ jsonOptionalString witness.operation
-    ++ "}"
-
-def backgroundTheoremWitnessJson (witness : BackgroundTheoremWitness) : String :=
-  "{"
-    ++ "\"theorem_name\":" ++ jsonString witness.theoremName ++ ","
-    ++ "\"witness_kind\":" ++ jsonString witness.witnessKind ++ ","
-    ++ "\"scenario\":" ++ jsonString witness.scenario ++ ","
-    ++ "\"numeric_bound\":" ++ toString witness.numericBound ++ ","
-    ++ "\"kind_fields\":"
-      ++ jsonArray (witness.kindFields.map (fun (key, value) =>
-            "{"
-              ++ "\"key\":" ++ jsonString key ++ ","
-              ++ "\"value\":" ++ jsonString value
-              ++ "}"))
     ++ "}"
 
 def transcriptCaseJson (witness : TranscriptCase) : String :=
@@ -223,5 +210,58 @@ def interruptInFlight : Family InterruptDisposition.Input InterruptDisposition.I
     { disposition := Background.Interrupt.disposition tool
       postState := post.state
       postAwaitMode := post.awaitMode }
+
+namespace BackgroundBudget
+
+/-- `theoremName` and `scenario` label the proved bound and the native
+scenario that drives it. The bound is computed by the model; the scenario
+performs that many attempts and then the one it bounds. -/
+structure Bound where
+  theoremName : String
+  scenario : String
+  numericBound : Nat
+  deriving Lean.ToJson
+
+structure KindField where
+  key : String
+  value : String
+  deriving Lean.ToJson
+
+structure AdmissionObservation where
+  kindFields : List KindField
+  currentBackgrounded : Nat
+  maxBackgrounded : Nat
+  deriving Lean.ToJson
+
+def liveAfter (admissions : Nat) : Nat :=
+  (List.range admissions).foldl (fun live _ => (Background.admitBackground live).getD live) 0
+
+end BackgroundBudget
+
+@[conformance_family]
+def backgroundAdmissionBound : Family BackgroundBudget.Bound BackgroundBudget.AdmissionObservation where
+  inputs := [{ theoremName := "Background.admitted_background_count_bounded"
+               scenario := "background_tool_admission_respects_max_backgrounded_per_parent"
+               numericBound := Background.maxBackgroundedPerParent }]
+  model := fun i =>
+    let live := BackgroundBudget.liveAfter i.numericBound
+    let refusal :=
+      if (Background.admitBackground live).isNone then
+        PluginJob.Refusal.backgroundBudgetExceeded.code
+      else none
+    { kindFields :=
+        ⟨"await_mode", ToolExecution.AwaitMode.background.toDefraDB⟩ ::
+          refusal.toList.map fun code => ⟨"error_code_on_violation", code⟩
+      currentBackgrounded := live
+      maxBackgrounded := Background.maxBackgroundedPerParent }
+
+@[conformance_family]
+def backgroundReceiptContention : Family BackgroundBudget.Bound Bool where
+  inputs := [{ theoremName := "Background.admission_cohort_receipt_commits"
+               scenario := "spawn_receipt_commits_after_bounded_transaction_conflicts"
+               numericBound := Background.receiptContentionAttempts - 1 }]
+  model := fun i =>
+    Background.receiptCommits (List.replicate i.numericBound false ++ [true])
+      Background.receiptContentionAttempts
 
 end Conformance.Contracts

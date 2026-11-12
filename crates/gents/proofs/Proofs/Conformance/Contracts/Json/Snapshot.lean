@@ -1107,9 +1107,6 @@ def snapshotFileCasesJson : String :=
     ++ "\"callback_recovery_cases\":" ++ callbackRecoveryCasesJson ++ ","
     ++ "\"callback_cases\":"
       ++ callbackCasesJson ++ ","
-    ++ "\"r6_background_theorem_witnesses\":"
-      ++ jsonArray
-        (r6BackgroundTheoremWitnesses.map backgroundTheoremWitnessJson) ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

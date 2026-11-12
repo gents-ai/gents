@@ -2006,8 +2006,12 @@ def caseCoverage : List CoverageEntry :=
       "Covers four persisted tool recovery/cancellation outcomes through canonical accepted admission and physical request/tool rows. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
       "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "r6_background_theorem_witnesses"
-      "BackgroundBudgetBoundedTheoremWitness")
+      "family"
+      "contracts_background_admission_bound")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_background_receipt_contention")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r4c_background_work_cases"
