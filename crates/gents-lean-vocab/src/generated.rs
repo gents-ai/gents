@@ -213,10 +213,6 @@ pub fn lean_goal_create_cases() -> &'static [LeanGoalCreateCase] {
     &lean_contract_snapshot().goal_create_cases
 }
 
-pub fn lean_goal_readiness_gate_cases() -> &'static [LeanGoalReadinessGateCase] {
-    &lean_contract_snapshot().goal_readiness_gate_cases
-}
-
 pub fn lean_handover_fold_cases() -> &'static [LeanHandoverFoldCase] {
     &lean_contract_snapshot().handover_fold_cases
 }
@@ -3093,7 +3089,6 @@ pub struct LeanContractSnapshot {
     pub discovery_scope_cases: Vec<serde_json::Value>,
     pub discovery_guidance_cases: Vec<LeanDiscoveryGuidanceCase>,
     pub budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
-    pub goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,
     pub goal_claimed_readiness_cases: Vec<LeanGoalClaimedReadinessCase>,
     pub goal_create_cases: Vec<LeanGoalCreateCase>,
     pub goal_client_delivery_cases: Vec<serde_json::Value>,
@@ -5349,28 +5344,6 @@ pub struct LeanGoalQueueAssignmentCaseCandidateReference {
 pub struct LeanGoalQueueAssignmentCaseHeadReference {
     pub goal_id: String,
     pub root_request_doc_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanGoalReadinessGateCase {
-    pub name: String,
-    pub observation: String,
-    pub newer_than_terminal: bool,
-    pub settled: bool,
-    pub cause: String,
-    pub status: String,
-    pub terminal: String,
-    pub session_idle: bool,
-    pub child_exists: bool,
-    pub budget_reached: bool,
-    pub has_activity: bool,
-    pub request_is_wrapup: bool,
-    pub infrastructure_retries: i64,
-    pub wrapup_requested: bool,
-    pub wrapup_completed: bool,
-    pub expected_readiness: String,
-    pub expected_gate: String,
-    pub expected_retries: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

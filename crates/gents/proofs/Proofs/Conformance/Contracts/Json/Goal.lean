@@ -739,55 +739,122 @@ def goalReadinessGateCases : List GoalReadinessGateCase :=
       settled := true, cause := .attempt, input := activeInput .completed (idle := false) }
   ]
 
-def readinessObservationName : Observation → String
-  | .ready _ => "ready"
-  | .backendRecovering => "backend_recovering"
-  | .unavailable => "unavailable"
-  | .unassigned => "unassigned"
-  | .unknown => "unknown"
+inductive ObservationWire where
+  | ready
+  | backendRecovering
+  | unavailable
+  | unassigned
+  | unknown
+  deriving Lean.ToJson
 
-def readinessName : Readiness → String
-  | .ready => "ready"
-  | .waiting => "waiting"
-  | .unavailable => "unavailable"
+def ObservationWire.ofModel : Observation → ObservationWire
+  | .ready _ => .ready
+  | .backendRecovering => .backendRecovering
+  | .unavailable => .unavailable
+  | .unassigned => .unassigned
+  | .unknown => .unknown
 
-def readinessCauseName : Cause → String
-  | .attempt => "attempt"
-  | .agentUnavailable => "agent_unavailable"
-  | .goalControlUnavailable => "goal_control_unavailable"
+def ObservationWire.toModel (newerThanTerminal : Bool) : ObservationWire → Observation
+  | .ready => .ready newerThanTerminal
+  | .backendRecovering => .backendRecovering
+  | .unavailable => .unavailable
+  | .unassigned => .unassigned
+  | .unknown => .unknown
 
-def gatedName : Gated → String
-  | .decided decision => decisionName decision
-  | .awaitReadiness => "await_readiness"
-  | .agentUnavailable => "agent_unavailable"
+inductive GatedWire where
+  | none
+  | continue
+  | retry
+  | pause
+  | wrapup
+  | abandonWrapup
+  | awaitReadiness
+  | agentUnavailable
+  deriving Lean.ToJson
 
-def goalReadinessGateCaseJson (w : GoalReadinessGateCase) : String :=
-  let readiness := observe w.observation w.settled
-  let gated := gate w.observation w.settled w.cause w.input
-  let i := w.input
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"observation\":" ++ jsonString (readinessObservationName w.observation) ++ ","
-    ++ "\"newer_than_terminal\":" ++ boolString w.observation.newerThanTerminal ++ ","
-    ++ "\"settled\":" ++ boolString w.settled ++ ","
-    ++ "\"cause\":" ++ jsonString (readinessCauseName w.cause) ++ ","
-    ++ "\"status\":" ++ jsonString i.status.toDefraDB ++ ","
-    ++ "\"terminal\":" ++ jsonString (terminalName i.terminal) ++ ","
-    ++ "\"session_idle\":" ++ boolString i.sessionIdle ++ ","
-    ++ "\"child_exists\":" ++ boolString i.childExists ++ ","
-    ++ "\"budget_reached\":" ++ boolString i.budgetReached ++ ","
-    ++ "\"has_activity\":" ++ boolString i.hasActivity ++ ","
-    ++ "\"request_is_wrapup\":" ++ boolString i.requestIsWrapup ++ ","
-    ++ "\"infrastructure_retries\":" ++ toString i.retries ++ ","
-    ++ "\"wrapup_requested\":" ++ boolString i.wrapupRequested ++ ","
-    ++ "\"wrapup_completed\":" ++ boolString i.wrapupCompleted ++ ","
-    ++ "\"expected_readiness\":" ++ jsonString (readinessName readiness) ++ ","
-    ++ "\"expected_gate\":" ++ jsonString (gatedName gated) ++ ","
-    ++ "\"expected_retries\":" ++ toString (nextRetries w.cause i gated)
-    ++ "}"
+def GatedWire.ofModel : Gated → GatedWire
+  | .decided .none => .none
+  | .decided .continue => .continue
+  | .decided .retry => .retry
+  | .decided .pause => .pause
+  | .decided .wrapup => .wrapup
+  | .decided .abandonWrapup => .abandonWrapup
+  | .awaitReadiness => .awaitReadiness
+  | .agentUnavailable => .agentUnavailable
 
-def goalReadinessGateCasesJson : String :=
-  jsonArray (goalReadinessGateCases.map goalReadinessGateCaseJson)
+deriving instance Lean.ToJson for Readiness, Cause
+
+structure ReadinessGateInput where
+  name : String
+  observation : ObservationWire
+  newerThanTerminal : Bool
+  settled : Bool
+  cause : Cause
+  status : Goals.Status
+  terminal : Goals.RequestTerminal
+  sessionIdle : Bool
+  childExists : Bool
+  budgetReached : Bool
+  hasActivity : Bool
+  requestIsWrapup : Bool
+  infrastructureRetries : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  deriving Lean.ToJson
+
+def ReadinessGateInput.ofCase (w : GoalReadinessGateCase) : ReadinessGateInput :=
+  { name := w.name, observation := ObservationWire.ofModel w.observation
+  , newerThanTerminal := w.observation.newerThanTerminal, settled := w.settled, cause := w.cause
+  , status := w.input.status, terminal := w.input.terminal, sessionIdle := w.input.sessionIdle
+  , childExists := w.input.childExists, budgetReached := w.input.budgetReached
+  , hasActivity := w.input.hasActivity, requestIsWrapup := w.input.requestIsWrapup
+  , infrastructureRetries := w.input.retries, wrapupRequested := w.input.wrapupRequested
+  , wrapupCompleted := w.input.wrapupCompleted }
+
+def ReadinessGateInput.toObservation (i : ReadinessGateInput) : Observation :=
+  i.observation.toModel i.newerThanTerminal
+
+def ReadinessGateInput.toInput (i : ReadinessGateInput) : Input :=
+  { status := i.status, terminal := i.terminal, sessionIdle := i.sessionIdle
+  , childExists := i.childExists, budgetReached := i.budgetReached, hasActivity := i.hasActivity
+  , requestIsWrapup := i.requestIsWrapup, retries := i.infrastructureRetries
+  , wrapupRequested := i.wrapupRequested, wrapupCompleted := i.wrapupCompleted }
+
+structure ReadinessGateOutput where
+  readiness : Readiness
+  gate : GatedWire
+  retries : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalReadinessGate : Family ReadinessGateInput ReadinessGateOutput where
+  inputs := goalReadinessGateCases.map ReadinessGateInput.ofCase
+  model := fun i =>
+    let gated := GoalAutomation.ReadinessGate.gate i.toObservation i.settled i.cause i.toInput
+    { readiness := observe i.toObservation i.settled
+    , gate := GatedWire.ofModel gated
+    , retries := nextRetries i.cause i.toInput gated }
+
+structure ReadinessGateGoalWrite where
+  gate : GatedWire
+  retries : Nat
+  deriving Lean.ToJson
+
+/-- The goal source reads readiness from the node readiness document and the
+reconcile phase, in order, on one active goal after one completed attempt: only
+the attempt cases whose observation that document and phase can publish are
+built, and the goal paused by the last one ends the sequence. -/
+def goalReadinessGateServedCases : List GoalReadinessGateCase :=
+  goalReadinessGateCases.filter fun w => w.name ∈
+    [ "missing_readiness_defers_continuation", "backend_recovery_defers_even_when_settled"
+    , "unsettled_invalid_agent_defers", "settled_invalid_agent_stops_active_goal" ]
+
+@[conformance_family]
+def goalReadinessGateServed : Family ReadinessGateInput ReadinessGateGoalWrite where
+  inputs := goalReadinessGateServedCases.map ReadinessGateInput.ofCase
+  model := fun i =>
+    let gated := GoalAutomation.ReadinessGate.gate i.toObservation i.settled i.cause i.toInput
+    { gate := GatedWire.ofModel gated, retries := nextRetries i.cause i.toInput gated }
 
 end ReadinessGate
 

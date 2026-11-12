@@ -632,8 +632,12 @@ def caseCoverage : List CoverageEntry :=
       "contracts_goal_decision")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_readiness_gate_cases"
-      "GoalReadinessGateCases")
+      "family"
+      "contracts_goal_readiness_gate")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_goal_readiness_gate_served")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_claimed_readiness_cases"

@@ -8,22 +8,9 @@ use crate::goal::{
     GoalRequestTerminal, GoalState, GoalSubmissionState,
 };
 use gents_lean_vocab::{
-    lean_goal_create_cases, lean_goal_readiness_gate_cases, lean_task_goal_publication_cases,
-    lean_task_goal_recovery_cases,
+    lean_goal_create_cases, lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
 };
 use gents_protocol::goal_status::GoalStatus;
-
-fn parse_goal_decision(name: &str) -> Option<GoalDecision> {
-    Some(match name {
-        "none" => GoalDecision::None,
-        "continue" => GoalDecision::Continue,
-        "retry" => GoalDecision::Retry,
-        "pause" => GoalDecision::Pause,
-        "wrapup" => GoalDecision::Wrapup,
-        "abandon_wrapup" => GoalDecision::AbandonWrapup,
-        _ => return None,
-    })
-}
 
 #[test]
 fn generated_goal_decision_cases_fence_runtime_controller() {
@@ -45,9 +32,14 @@ fn generated_goal_decision_cases_fence_runtime_controller() {
 
 #[test]
 fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
-    let cases = lean_goal_readiness_gate_cases();
-    assert_eq!(cases.len(), 25, "the goal readiness gate matrix drifted");
-    for case in cases {
+    gents_lean_vocab::families::contracts_goal_readiness_gate::replay::<
+        GoalFailureCause,
+        String,
+        String,
+        GoalAgentReadiness,
+        GoalRequestTerminal,
+        GoalStatus,
+    >(|case| {
         let observation = match case.observation.as_str() {
             "ready" => GoalAgentObservation::Ready {
                 newer_than_terminal: case.newer_than_terminal,
@@ -58,53 +50,39 @@ fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
             "unknown" => GoalAgentObservation::Unknown,
             other => panic!("unknown observation {other:?} in Lean case {}", case.name),
         };
-        let cause = match case.cause.as_str() {
-            "attempt" => GoalFailureCause::Attempt,
-            "agent_unavailable" => GoalFailureCause::AgentUnavailable,
-            "goal_control_unavailable" => GoalFailureCause::GoalControlUnavailable,
-            other => panic!("unknown cause {other:?} in Lean case {}", case.name),
-        };
-        let readiness = observe_goal_agent_readiness(observation, case.settled);
-        let readiness_name = match readiness {
-            GoalAgentReadiness::Ready => "ready",
-            GoalAgentReadiness::Waiting => "waiting",
-            GoalAgentReadiness::Unavailable => "unavailable",
-        };
-        assert_eq!(
-            readiness_name, case.expected_readiness,
-            "Lean case {}",
-            case.name
-        );
         let facts = GoalContinuationFacts {
-            status: GoalStatus::parse(&case.status)
-                .unwrap_or_else(|| panic!("unknown status in Lean case {}", case.name)),
-            terminal: GoalRequestTerminal::parse(&case.terminal)
-                .unwrap_or_else(|| panic!("unknown terminal in Lean case {}", case.name)),
+            status: case.status,
+            terminal: case.terminal,
             session_idle: case.session_idle,
             child_exists: case.child_exists,
             budget_reached: case.budget_reached,
             has_activity: case.has_activity,
             request_is_wrapup: case.request_is_wrapup,
-            infrastructure_retries: case.infrastructure_retries,
+            infrastructure_retries: i64::try_from(case.infrastructure_retries)
+                .expect("modeled retries fit i64"),
             wrapup_requested: case.wrapup_requested,
             wrapup_completed: case.wrapup_completed,
         };
-        let gated = gate_goal_continuation(observation, case.settled, cause, &facts);
-        let expected = match case.expected_gate.as_str() {
-            "await_readiness" => GoalGatedDecision::AwaitReadiness,
-            "agent_unavailable" => GoalGatedDecision::AgentUnavailable,
-            other => GoalGatedDecision::Decided(
-                parse_goal_decision(other)
-                    .unwrap_or_else(|| panic!("unknown gate {other:?} in Lean case {}", case.name)),
-            ),
-        };
-        assert_eq!(gated, expected, "Lean case {}", case.name);
-        assert_eq!(
-            next_goal_infrastructure_retries(cause, &facts, gated),
-            case.expected_retries,
-            "Lean case {}",
-            case.name
-        );
+        let gated = gate_goal_continuation(observation, case.settled, case.cause, &facts);
+        gents_lean_vocab::families::contracts_goal_readiness_gate::ReadinessGateOutput {
+            readiness: observe_goal_agent_readiness(observation, case.settled),
+            gate: gated_wire(gated).to_owned(),
+            retries: u64::try_from(next_goal_infrastructure_retries(case.cause, &facts, gated))
+                .expect("retries are never negative"),
+        }
+    });
+}
+
+fn gated_wire(gated: GoalGatedDecision) -> &'static str {
+    match gated {
+        GoalGatedDecision::Decided(GoalDecision::None) => "none",
+        GoalGatedDecision::Decided(GoalDecision::Continue) => "continue",
+        GoalGatedDecision::Decided(GoalDecision::Retry) => "retry",
+        GoalGatedDecision::Decided(GoalDecision::Pause) => "pause",
+        GoalGatedDecision::Decided(GoalDecision::Wrapup) => "wrapup",
+        GoalGatedDecision::Decided(GoalDecision::AbandonWrapup) => "abandon_wrapup",
+        GoalGatedDecision::AwaitReadiness => "await_readiness",
+        GoalGatedDecision::AgentUnavailable => "agent_unavailable",
     }
 }
 
