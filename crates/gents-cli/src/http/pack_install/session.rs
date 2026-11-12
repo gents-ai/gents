@@ -409,6 +409,14 @@ async fn run_inner(
             &received.root,
             &received.dependencies,
         );
+        // The client grants after this install, from the rows of its plan.
+        let planned = crate::commands::pack::wire::planned_root_agents(
+            &access,
+            &state.node_did,
+            received.root.manifest(),
+            &prepared,
+        )
+        .await?;
         let prepared = Arc::new(prepared);
         let stage = gents::pack::stage_hosted_pack(
             &state.node_did,
@@ -419,10 +427,10 @@ async fn run_inner(
             received.request.explicit,
         )
         .await?;
-        Ok::<_, anyhow::Error>((received, prepared, stage))
+        Ok::<_, anyhow::Error>((received, prepared, stage, planned))
     }
     .await;
-    let (received, prepared, stage) = prepare.map_err(|error| (error, "not_installed"))?;
+    let (received, prepared, stage, planned) = prepare.map_err(|error| (error, "not_installed"))?;
     let installed_plugins = stage.installed_plugins().to_vec();
     let materialized = if received.request.explicit {
         let cache_home = home.clone();
@@ -603,7 +611,8 @@ async fn run_inner(
         manifest.metadata.namespace, manifest.name
     ))
     .map_err(|error| (error, "unconfirmed"))?;
-    let result = json!({"pack":received.root.manifest().name, "source":received.root.label(), "digest":received.root.digest(), "owner":state.node_did, "inference":prepared.inference, "dependency_inference":prepared.dependency_inference, "origin_tag":origin_tag, "dependencies":received.root.manifest().metadata.dependencies, "schemas":schemas, "apply":report});
+    let mut result = json!({"pack":received.root.manifest().name, "source":received.root.label(), "digest":received.root.digest(), "owner":state.node_did, "inference":prepared.inference, "dependency_inference":prepared.dependency_inference, "origin_tag":origin_tag, "dependencies":received.root.manifest().metadata.dependencies, "schemas":schemas, "apply":report});
+    crate::commands::pack::wire::attach_planned_root_agents(&mut result, &planned);
     send(
         &mut *socket.lock().await,
         json!({"type":"finished", "result":result}),

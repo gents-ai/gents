@@ -191,45 +191,76 @@ impl NodeIdentity for PrincipalIdentity {
     }
 }
 
+/// Requires the stored metadata to match `expected`, persisting it when absent.
+///
+/// Two first-run writers can share one home — a `gents` invocation beside the
+/// desktop app, or two CLI invocations — so both may observe the file missing
+/// and both persist. Their signing key is already single-winner, so the loser's
+/// own re-read finds equal metadata and succeeds; only genuinely divergent
+/// metadata is an error.
 async fn validate_or_persist_metadata(path: &Path, expected: &NodeIdentityMetadata) -> Result<()> {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => {
-            let stored: NodeIdentityMetadata = serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing node identity metadata {}", path.display()))?;
-            if stored != *expected {
-                return Err(anyhow::anyhow!(
-                    "node identity metadata mismatch at {}",
-                    path.display()
-                ));
+    match read_metadata(path).await? {
+        Some(stored) => ensure_metadata_matches(path, &stored, expected),
+        None => {
+            write_json_atomically(path, expected).await?;
+            match read_metadata(path).await? {
+                Some(stored) => ensure_metadata_matches(path, &stored, expected),
+                None => Ok(()),
             }
-            Ok(())
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            write_json_atomically(path, expected).await
-        }
+    }
+}
+
+async fn read_metadata(path: &Path) -> Result<Option<NodeIdentityMetadata>> {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .with_context(|| format!("parsing node identity metadata {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => {
             Err(anyhow::Error::from(error)).with_context(|| format!("reading {}", path.display()))
         }
     }
 }
 
+fn ensure_metadata_matches(
+    path: &Path,
+    stored: &NodeIdentityMetadata,
+    expected: &NodeIdentityMetadata,
+) -> Result<()> {
+    anyhow::ensure!(
+        stored == expected,
+        "node identity metadata mismatch at {}",
+        path.display()
+    );
+    Ok(())
+}
+
+/// Replaces `path` in one `rename`, staged under a name no other writer can
+/// pick, so concurrent writers cannot consume each other's staging file and no
+/// reader ever observes the destination missing.
 async fn write_json_atomically<T>(path: &Path, value: &T) -> Result<()>
 where
     T: Serialize,
 {
-    let bytes = serde_json::to_vec_pretty(value)?;
-    let tmp_path = path.with_extension("tmp");
+    use std::io::Write as _;
 
-    tokio::fs::write(&tmp_path, bytes)
-        .await
-        .with_context(|| format!("writing {}", tmp_path.display()))?;
-    if tokio::fs::try_exists(path).await.unwrap_or(false) {
-        let _ = tokio::fs::remove_file(path).await;
-    }
-    tokio::fs::rename(&tmp_path, path)
-        .await
-        .with_context(|| format!("persisting {}", path.display()))?;
-    Ok(())
+    let bytes = serde_json::to_vec_pretty(value)?;
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut staged = tempfile::NamedTempFile::new_in(parent)
+            .with_context(|| format!("staging {}", path.display()))?;
+        staged
+            .write_all(&bytes)
+            .with_context(|| format!("writing staged {}", path.display()))?;
+        staged
+            .persist(&path)
+            .with_context(|| format!("persisting {}", path.display()))?;
+        Ok(())
+    })
+    .await
+    .context("joining node identity metadata write")?
 }
 
 fn abbreviate_did(did: &str) -> String {
@@ -243,6 +274,27 @@ fn abbreviate_did(did: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_first_load_or_create_agrees_on_one_identity() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+        paths.ensure_root_dirs().await.unwrap();
+
+        let loads: Vec<_> = (0..8)
+            .map(|_| {
+                let paths = paths.clone();
+                tokio::spawn(async move { PrincipalIdentity::load_or_create(&paths).await })
+            })
+            .collect();
+
+        let mut dids = Vec::new();
+        for load in loads {
+            let identity = load.await.unwrap().expect("concurrent load_or_create");
+            dids.push(identity.did().to_owned());
+        }
+        assert!(dids.windows(2).all(|pair| pair[0] == pair[1]), "{dids:?}");
+    }
 
     #[cfg(unix)]
     #[tokio::test]

@@ -256,6 +256,7 @@ pub async fn promote(
         grant_authority: true,
         wire: Vec::new(),
         expect_digest: None,
+        root_agents: None,
         explicit: true,
     };
     let installed = async {

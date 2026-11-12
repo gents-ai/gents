@@ -1089,7 +1089,7 @@ async fn cancelling_queued_call_terminalizes_without_holding_slot() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    registry.drop_cleanup_idle().await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_reconstructed_slot_count(&rows, "backend-a", 0);
     assert_eq!(state_count_for_backend(&rows, "backend-a", "completed"), 1);
@@ -1310,7 +1310,7 @@ async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    registry.drop_cleanup_idle().await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["call_state"], "cancelled");
@@ -1355,7 +1355,7 @@ async fn dropped_permit_with_terminal_failure_reason_persists_failed_reason() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    registry.drop_cleanup_idle().await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["call_state"], "failed");
@@ -1385,7 +1385,7 @@ async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    registry.drop_cleanup_idle().await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["call_state"], "failed");
@@ -1456,6 +1456,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
             node.clone(),
             pending_call(&node, "req-leak-a", "backend-queue-leak", &signer).await,
             "backend-queue-leak:connection",
+            crate::drop_cleanup::DropCleanup::current(),
             None,
             None,
         )
@@ -1467,6 +1468,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
             schemaless,
             pending_call(&node, "req-leak-b", "backend-queue-leak", &signer).await,
             "backend-queue-leak:connection",
+            crate::drop_cleanup::DropCleanup::current(),
             None,
             None,
         )
@@ -1490,6 +1492,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         node.clone(),
         pending_call(&node, "req-leak-c", "backend-queue-leak", &signer).await,
         "backend-queue-leak:connection",
+        crate::drop_cleanup::DropCleanup::current(),
         None,
         None,
     ));

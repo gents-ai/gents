@@ -343,6 +343,13 @@ pub(crate) struct PackInstallArgs {
         help = "Refuse the install, writing nothing, unless the pack's content digest is this one (see gents config pack show)"
     )]
     pub(crate) expect_digest: Option<String>,
+    #[arg(
+        long = "root-agent",
+        value_name = "NAMESPACE/PACK=AGENT",
+        action = clap::ArgAction::Append,
+        help = "With --grant-authority, grant the installer's tool root only to these agents: the rows a preview listed under host_tool_roots.rows. Without it, the agents this install itself lists are granted"
+    )]
+    pub(crate) root_agents: Option<Vec<String>>,
     /// Whether this install was requested for its own sake, rather than only
     /// as a documents pack's dependency; never a CLI flag.
     #[arg(skip = true)]

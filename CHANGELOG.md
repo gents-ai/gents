@@ -108,6 +108,12 @@ source consistency checks, not a separate runtime compatibility version.
   `truncate-collection` node permission. `config pack remove PACKAGE
   --with-collections` also removes the pack's collections that nothing else
   uses; the default still keeps them (#3572).
+- A `gents` invocation and the desktop app that first touch one home at the
+  same moment no longer fail with `persisting .../principal.json: No such
+  file or directory`. Client identity metadata is staged under a name no
+  other writer can pick and installed in one rename, so concurrent first-run
+  writers cannot consume each other's staging file and no reader observes
+  the metadata file missing (#3659).
 - Rendered request captures cut the stable request fields (model, tool
   schemas, settings) apart from the message list, and close shared manifest
   groups after four entries at every second content key instead of eight at
@@ -224,6 +230,10 @@ source consistency checks, not a separate runtime compatibility version.
   notice. Codex as a model provider, including `accounts login codex`, is
   unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
+- Stopping the native service waits for the runtime's own shutdown instead of
+  about a second, so a stop that succeeds no longer reports `native supervisor
+  did not confirm that the Gents job unloaded or became inactive`. Stop node in
+  the desktop stops showing that error on macOS (#3652).
 
 ## 1.0.0-rc1 - 2026-11-03
 
