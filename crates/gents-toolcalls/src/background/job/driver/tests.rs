@@ -1927,12 +1927,18 @@ async fn guest_state_steps_match_the_lean_model() {
 #[tokio::test]
 async fn driver_admission_matches_the_lean_model() {
     use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
-    use gents_store::service::RuntimeServiceAdmission;
+    use gents_store::service::{RetirementError, RuntimeServiceAdmission};
 
     let actor = super::super::input::tests::agent_actor();
     let authority = || RetirementAuthority {
         operator_authenticated: true,
         observed_build_matches: true,
+    };
+    // A refused retirement is refused only because the runtime still owns work.
+    let retire = |admission: &RuntimeServiceAdmission| match admission.retire(authority()) {
+        Ok(_) => true,
+        Err(RetirementError::Busy) => false,
+        Err(other) => panic!("retirement refused for another reason: {other}"),
     };
     for case in gents_lean_vocab::families::plugin_job_step_driver_admission::cases::<String>() {
         let step = stepper(json!({"effects": {}})).await;
@@ -1949,10 +1955,12 @@ async fn driver_admission_matches_the_lean_model() {
             let (admitted, retired_during) = match op.kind.as_str() {
                 "hold" => {
                     let mut during = None;
-                    let ran = driver
+                    let mut body_ran = false;
+                    let returned = driver
                         .hold_steps(&step.row, &actor, async {
+                            body_ran = true;
                             if op.retire_during {
-                                during = Some(admission.retire(authority()).is_ok());
+                                during = Some(retire(&admission));
                             }
                             if op.wake {
                                 driver.kick(&step.row, &actor).unwrap();
@@ -1960,13 +1968,14 @@ async fn driver_admission_matches_the_lean_model() {
                         })
                         .await
                         .is_some();
-                    (ran, during)
+                    assert_eq!(returned, body_ran, "a hold runs its body exactly when admitted");
+                    (body_ran, during)
                 }
                 "release_permits" => {
                     held = None;
                     (true, None)
                 }
-                "retire" => (admission.retire(authority()).is_ok(), None),
+                "retire" => (retire(&admission), None),
                 other => panic!("unknown driver op {other}"),
             };
             if held.is_none() {
