@@ -2,6 +2,7 @@ use super::*;
 use crate::goal::continuation::prepare_goal_continuation;
 use gents_lean_vocab::families::goal_request_head_contracts_membership as members;
 use gents_lean_vocab::families::goal_request_head_contracts_selection as head;
+use gents_lean_vocab::families::goal_wake_ancestry_contracts_ancestry as ancestry;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -9,14 +10,13 @@ use serde::Deserialize;
 
 #[tokio::test]
 async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_wake_ancestry_cases;
-    assert_eq!(cases.len(), 19);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
     ];
-    for value in cases {
+    for modeled in gents_lean_vocab::families::goal_wake_ancestry_contracts_ancestry::cases::<InputDisposition>() {
+        let value = &modeled.input;
         let rows = &value.rows;
         let case = Case {
             name: value.name.clone(),
@@ -27,26 +27,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
             },
             rows: rows
                 .iter()
-                .map(|row| ModelRow {
-                    purpose: serde_json::from_value(serde_json::Value::String(
-                        row.request.purpose.clone(),
-                    ))
-                    .unwrap(),
-                    doc: row.request.doc,
-                    request: row.request.request,
-                    owner: row.request.owner,
-                    session: row.request.session,
-                    goal: row.request.goal,
-                    parent_doc: row.request.parent_doc,
-                    parent_request: row.request.parent_request,
-                    sequence: row.request.sequence,
-                    receipt_valid: row.request.receipt_valid,
-                    deterministic_identity: row.request.deterministic_identity,
-                    input_disposition: serde_json::from_value(serde_json::Value::String(
-                        row.request.input_disposition.clone(),
-                    ))
-                    .unwrap(),
-                })
+                .map(|row| model_row(&gents_lean_vocab::family::recode(&row.request)))
                 .collect(),
             assignment_root: None,
             receipt_checks: None,
@@ -155,11 +136,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         let owner = identities[0].did();
         let by_doc = request_rows_by_doc(owner, "session-1", &built).unwrap();
         let current = format!("physical-{}", value.current);
-        let expected_goal = value
-            .expected_goal
-            .as_ref()
-            .and_then(|goal| goal.as_u64())
-            .map(|goal| format!("goal-{goal}"));
+        let expected_goal = value.expected_goal.map(|goal| format!("goal-{goal}"));
         let opening_facts = rows
             .iter()
             .filter(|row| !row.opening_goals.is_empty())
@@ -196,16 +173,13 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         )
         .ok()
         .and_then(|row| row.doc_id.clone());
-        let expected_entry = value.expected_entry.map(|doc| format!("physical-{doc}"));
-        let expected_invocation_entry = value
-            .expected_invocation_entry
-            .map(|doc| format!("physical-{doc}"));
-        assert_eq!(actual, expected_entry, "{}: assignment ancestry", case.name);
-        assert_eq!(
-            invocation, expected_invocation_entry,
-            "{}: invocation ancestry",
-            case.name
-        );
+        let number = |doc: Option<String>| {
+            doc.map(|doc| doc.strip_prefix("physical-").unwrap().parse::<u64>().unwrap())
+        };
+        modeled.check(ancestry::AncestryOutput {
+            entry: number(actual),
+            invocation_entry: number(invocation),
+        });
     }
 }
 

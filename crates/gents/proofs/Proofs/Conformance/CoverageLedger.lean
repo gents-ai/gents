@@ -1808,8 +1808,12 @@ def caseCoverage : List CoverageEntry :=
       "goal_wake_coalescing_contracts_assignment_wakes")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_wake_ancestry_cases"
-      "GoalWakeAncestryCases")
+      "family"
+      "goal_wake_ancestry_contracts_ancestry")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_wake_ancestry_contracts_continuation_opening")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
