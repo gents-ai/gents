@@ -21,7 +21,7 @@ pub fn lean_aggregate_token_budget_cases() -> &'static [LeanAggregateTokenBudget
     &lean_contract_snapshot().aggregate_token_budget_cases
 }
 
-pub fn lean_application_write_cases() -> &'static [serde_json::Value] {
+pub fn lean_application_write_cases() -> &'static [LeanApplicationWriteCase] {
     &lean_contract_snapshot().application_write_cases
 }
 
@@ -661,7 +661,7 @@ pub fn lean_sibling_tools_cases() -> &'static [LeanSiblingToolsCase] {
     &lean_contract_snapshot().sibling_tools_cases
 }
 
-pub fn lean_snapshot_demotion_cases() -> &'static [serde_json::Value] {
+pub fn lean_snapshot_demotion_cases() -> &'static [LeanSnapshotDemotionCase] {
     &lean_contract_snapshot().snapshot_demotion_cases
 }
 
@@ -1012,26 +1012,6 @@ pub struct LeanAgentSteeringBoundaryInput {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAgentTargetAccessCase {
-    pub applied: bool,
-    pub configurer: String,
-    pub enabled: bool,
-    pub invokes: Vec<LeanAgentTargetAccessCaseInvokesItem>,
-    pub job_target_ids: Vec<String>,
-    pub state: String,
-    pub target_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAgentTargetAccessCaseInvokesItem {
-    pub caller: String,
-    pub invoke: bool,
-    pub target: String,
-}
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct LeanAggregateTokenBudgetCase {
     pub request_doc_id: String,
@@ -1055,6 +1035,23 @@ pub struct LeanAggregateTokenBudgetCase {
     pub charge_result: String,
     pub next_used: Option<u64>,
     pub post_charge_action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanApplicationWriteCase {
+    pub admitted: bool,
+    pub application: bool,
+    pub bounded: bool,
+    pub credential: bool,
+    pub digest_matches: bool,
+    pub granted: bool,
+    pub limit: u64,
+    pub may_apply: bool,
+    pub operation: String,
+    pub preview: bool,
+    pub protected: bool,
+    pub targets: u64,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -3036,7 +3033,6 @@ pub struct LeanContractSnapshot {
     pub workspace_child_cases: Vec<LeanWorkspaceChildCase>,
     pub workspace_quickstart_selection_cases: Vec<LeanWorkspaceQuickstartSelectionCase>,
     pub pack_placement_reader_cases: Vec<LeanPackPlacementReaderCase>,
-    pub agent_target_access_cases: Vec<LeanAgentTargetAccessCase>,
     pub native_route_cases: Vec<LeanNativeRouteCase>,
     pub workspace_datastore_write_cases: Vec<LeanWorkspaceDatastoreWriteCase>,
     pub workspace_root_access_cases: Vec<LeanWorkspaceRootAccessCase>,
@@ -3188,7 +3184,7 @@ pub struct LeanContractSnapshot {
     pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub startup_readiness_cases: Vec<LeanStartupReadinessCase>,
-    pub snapshot_demotion_cases: Vec<serde_json::Value>,
+    pub snapshot_demotion_cases: Vec<LeanSnapshotDemotionCase>,
     pub plugin_reference_cases: Vec<serde_json::Value>,
     pub plugin_pin_cases: Vec<serde_json::Value>,
     pub pack_wire_lock_cases: Vec<serde_json::Value>,
@@ -3200,7 +3196,7 @@ pub struct LeanContractSnapshot {
     pub eval_document_capture_cases: Vec<LeanEvalDocumentCaptureCase>,
     pub optimization_cases: LeanOptimizationCases,
     pub tool_policy_cases: Vec<LeanToolPolicyCase>,
-    pub application_write_cases: Vec<serde_json::Value>,
+    pub application_write_cases: Vec<LeanApplicationWriteCase>,
     pub field_read_cases: Vec<LeanFieldReadCase>,
     pub write_input_cases: Vec<serde_json::Value>,
     pub invocation_correlation_cases: Vec<LeanInvocationCorrelationCase>,
@@ -11362,6 +11358,20 @@ pub struct LeanSiblingToolsCase {
     pub existing_network: String,
     pub admitted: bool,
     pub result_network: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanSnapshotDemotionCase {
+    pub default_agent: u64,
+    pub demotions: Vec<u64>,
+    pub post_default_agent: u64,
+    pub post_runnable: Vec<u64>,
+    pub post_unavailable: Vec<u64>,
+    pub runnable: Vec<u64>,
+    pub unavailable: Vec<u64>,
+    pub well_formed: bool,
+    pub witness: String,
 }
 
 #[derive(Debug, Deserialize)]
