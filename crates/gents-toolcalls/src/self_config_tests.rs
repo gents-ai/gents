@@ -1126,7 +1126,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     std::fs::create_dir_all(&source).unwrap();
     let marker = root.path().join("SHOULD_NEVER_RUN");
     let source_config = include_str!(
-        "../../../../gents/tests/fixtures/configuration_discovery/codex-user/config.toml"
+        "../../gents/tests/fixtures/configuration_discovery/codex-user/config.toml"
     )
     .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy());
     std::fs::write(source.join("config.toml"), source_config).unwrap();
@@ -1288,7 +1288,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     std::fs::write(
         user_root.join("config.toml"),
         include_str!(
-            "../../../../gents/tests/fixtures/configuration_discovery/codex-user/config.toml"
+            "../../gents/tests/fixtures/configuration_discovery/codex-user/config.toml"
         )
         .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy()),
     )
@@ -1296,20 +1296,20 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     std::fs::write(
         user_root.join("AGENTS.md"),
         include_str!(
-            "../../../../gents/tests/fixtures/configuration_discovery/codex-user/AGENTS.md"
+            "../../gents/tests/fixtures/configuration_discovery/codex-user/AGENTS.md"
         ),
     )
     .unwrap();
     std::fs::write(
         project_root.join(".codex/config.toml"),
         include_str!(
-            "../../../../gents/tests/fixtures/configuration_discovery/project/.codex/config.toml"
+            "../../gents/tests/fixtures/configuration_discovery/project/.codex/config.toml"
         ),
     )
     .unwrap();
     std::fs::write(
         project_root.join("AGENTS.md"),
-        include_str!("../../../../gents/tests/fixtures/configuration_discovery/project/AGENTS.md"),
+        include_str!("../../gents/tests/fixtures/configuration_discovery/project/AGENTS.md"),
     )
     .unwrap();
 
@@ -2878,6 +2878,10 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     .expect("cleanup preserves unrelated configuration");
 }
 
+/// Lean `SelfConfig.catalog_refused_without_grants`: choosing the default needs
+/// `manage_agents` on the Node, which an Agent holding only its own grants does
+/// not hold, whatever its Tools categories; the Node's owner chooses it through
+/// the selection document.
 #[tokio::test]
 async fn user_owned_node_default_rejects_agent_update_and_accepts_user() {
     let fixture = SelfConfigFixture::new("agent-default-authority").await;
@@ -5827,8 +5831,3 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     assert_eq!(installed["effective"]["digest"], Value::String(digest));
     assert!(node.get_collection("FixtureJob").unwrap().is_some());
 }
-/// Lean `SelfConfig.yoloGroup` and `Identity.GrantSets.yoloRecipient`: an
-/// Agent the User grants its own self-configuration edits its own Tools
-/// through the self-config tool, writes no other Agent's configuration, and
-/// holds no node permission beyond the agent baseline. Granting again changes
-/// nothing.

@@ -672,8 +672,3 @@ pub fn take_agent_tool(
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered")
 }
-
-/// Lean `SelfConfig.catalog_refused_without_grants`: choosing the default needs
-/// `manage_agents` on the Node, which an Agent holding only its own grants does
-/// not hold, whatever its Tools categories; the Node's owner chooses it through
-/// the selection document.

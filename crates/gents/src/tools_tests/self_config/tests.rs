@@ -2592,6 +2592,11 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
 }
 
+/// Lean `SelfConfig.yoloGroup` and `Identity.GrantSets.yoloRecipient`: an
+/// Agent the User grants its own self-configuration edits its own Tools
+/// through the self-config tool, writes no other Agent's configuration, and
+/// holds no node permission beyond the agent baseline. Granting again changes
+/// nothing.
 #[tokio::test]
 async fn an_agent_granted_its_own_self_configuration_edits_itself_and_nothing_else() {
     use gents_store::config_client::ConfigAccess;

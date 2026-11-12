@@ -1,3 +1,4 @@
+use gents_store::identity::NodeIdentity;
 use crate::test_support::background_completion::{
     admission_verifier, background_hints, desktop_owned_session,
 };
