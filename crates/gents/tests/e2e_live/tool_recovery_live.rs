@@ -119,13 +119,20 @@ impl Recovery {
         .unwrap()
         .unwrap();
         assert!(created.success(), "create held recovery process FIFO");
-        let gate = tokio::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&fifo)
-            .await
-            .unwrap();
-        self.submit(id, "bash", json!({"command":"sh", "args":["-c", "printf READY; IFS= read -r release < \"$1\"; printf FINISHED", "gents-recovery", fifo.display().to_string()]})).await;
+        let gate_path = fifo.clone();
+        let gate = tokio::task::spawn_blocking(move || {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(gate_path)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let gate = tokio::fs::File::from_std(gate);
+        self.submit(id, "bash", json!({"command":"sh", "args":["-c", "exec 3< \"$1\"; printf READY; IFS= read -r release <&3; printf FINISHED", "gents-recovery", fifo.display().to_string()]})).await;
         let call = self.call(id, "running").await;
         let deadline = tokio::time::Instant::now() + WAIT;
         let mut changes = self

@@ -444,17 +444,24 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     .unwrap()
     .unwrap()
     .success());
-    let mut release = tokio::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&process_gate)
-        .await
-        .unwrap();
+    let gate_path = process_gate.clone();
+    let release = tokio::task::spawn_blocking(move || {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(gate_path)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let mut release = tokio::fs::File::from_std(release);
     let held_process_args = serde_json::json!({
         "tool_name": "bash",
         "args": {
             "command": "sh",
-            "args": ["-c", r#"IFS= read -r release < "$1""#,
+            "args": ["-c", r#"exec 3< "$1"; IFS= read -r release <&3"#,
                 "held-process", process_gate.to_string_lossy()],
         },
     })
