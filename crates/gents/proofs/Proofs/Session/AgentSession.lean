@@ -881,4 +881,89 @@ theorem complete_does_not_overwrite_session_observation_for_newer_request
     staleCompletionLatest newer stale = some ⟨2, 2, newer⟩ := by
   cases newer <;> cases stale <;> decide
 
+/-- Whether `advance` publishes `r` as the observed head; the owner reports it. -/
+def advances (s : Document) (rows : List RequestFact) (r : RequestFact) : Bool :=
+  decide (r.scope = s.scope ∧ r.agent = s.agent ∧
+    r ∈ rows ∧ latest rows s.scope.node s.scope.session (some s.scope.requester) = some r)
+
+theorem advance_without_advances (s : Document) (rows : List RequestFact)
+    (r : RequestFact) (preview : String) (now : Time) (h : advances s rows r = false) :
+    advance s rows r preview now = s := by
+  unfold advance
+  rw [if_neg]
+  simpa [advances] using h
+
+/-- Whether `refresh` re-reads the observed request; the owner reports it. -/
+def refreshes (s : Document) (rows : List RequestFact) (event : RequestObservation) : Bool :=
+  match s.observation with
+  | some o => match o.latest with
+    | some old => decide (old.docId = event.docId ∧ old.requestId = event.requestId) &&
+        match observedRequest rows event with
+        | some current => decide (current.scope = s.scope ∧ current.agent = s.agent)
+        | none => false
+    | none => false
+  | none => false
+
+/-- A terminal boundary (`some reply`) also observes the reply of the request it
+refreshed; ordinary activity (`none`) keeps the last reply. -/
+def refreshReply (s : Document) (rows : List RequestFact) (event : RequestObservation)
+    (reply : Option (Option String)) (now : Time) : Document :=
+  let next := refresh s rows event now
+  match reply, next.observation, observedRequest rows event with
+  | some text, some o, some current =>
+      if refreshes s rows event then
+        { next with observation := some (observeReply o current.observed text) }
+      else next
+  | _, _, _ => next
+
+/-- Reopening clears a close and reports whether the session was closed. -/
+def reopen (s : Document) (now : Time) : Document × Bool :=
+  if s.closedAt.isSome then (setClosed s none now, true) else (s, false)
+
+theorem reopen_keeps_observation (s : Document) (o : Observation) (now : Time)
+    (h : s.observation = some o) :
+    ((reopen s now).1.observation.map (·.latest)) = some o.latest ∧
+    ((reopen s now).1.observation.map (·.replyPreview)) = some o.replyPreview ∧
+    (reopen s now).1.tags = s.tags ∧ (reopen s now).1.createdAt = s.createdAt := by
+  unfold reopen
+  split <;> simp [setClosed, touch, h]
+
+def refreshFixture : Document := { scope := ⟨1, 1, none⟩, agent := 1, createdAt := 1000 }
+def refreshFixtureRow : RequestFact :=
+  { purpose := .normal, scope := ⟨1, 1, none⟩, agent := 1, createdAt := 0,
+    observed := ⟨0, 1, .completed⟩ }
+def refreshForeignRow : RequestFact :=
+  { refreshFixtureRow with scope := ⟨1, 2, none⟩, observed := ⟨1, 1, .failed⟩ }
+def refreshFixtureObserved (row : RequestFact) : Document :=
+  let observation : Observation :=
+    { activity := 1000, preview := some "prompt", latest := some row.observed,
+      replyPreview := some "Finished" }
+  { refreshFixture with observation := some observation }
+
+/-- An absent requester is its own exact scope: a session without a requester
+refreshes its own request, and an observation naming a request of another
+session, even with the same logical request id, is never refreshed from it. -/
+theorem refresh_accepts_null_requester_and_rejects_changed_session_scope :
+    refreshes (refreshFixtureObserved refreshFixtureRow) [refreshFixtureRow, refreshForeignRow]
+      refreshFixtureRow.observed = true ∧
+    refreshes (refreshFixtureObserved refreshForeignRow) [refreshFixtureRow, refreshForeignRow]
+      refreshForeignRow.observed = false := by
+  decide
+
+def tiePredecessor : RequestFact :=
+  { purpose := .normal, scope := ⟨1, 1, none⟩, agent := 1, createdAt := 0,
+    observed := ⟨0, 9, .completed⟩, terminalizedAt := some 400 }
+def tieSuccessor : RequestFact :=
+  { tiePredecessor with observed := ⟨1, 4, .claimed⟩, terminalizedAt := none }
+def tieSuccessorDone : RequestFact :=
+  { tieSuccessor with observed := ⟨1, 4, .completed⟩, terminalizedAt := some 1300 }
+
+/-- #3604: a claim admitted in the second its predecessor finished advances the
+observation although its request id sorts lower, and stays the head once it
+completes later. -/
+theorem same_second_claim_after_completion_becomes_the_observed_head :
+    advances refreshFixture [tiePredecessor, tieSuccessor] tieSuccessor = true ∧
+    latest [tiePredecessor, tieSuccessorDone] 1 1 (some none) = some tieSuccessorDone := by
+  decide
+
 end AgentSession
