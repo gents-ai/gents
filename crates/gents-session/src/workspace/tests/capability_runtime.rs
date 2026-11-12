@@ -148,15 +148,15 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
         super::super::runtime::load_docs_with_access(&other_access, "workspace", runtime.did())
             .await?;
     for case in &gents_lean_vocab::lean_contract_snapshot().workspace_completion_access_cases {
-        let docs = match case["actor"].as_str().unwrap() {
+        let docs = match case.actor.as_str() {
             "agent" => &selected_docs,
             "other" => &other_docs,
             actor => panic!("unknown modeled actor {actor}"),
         };
         assert_eq!(
             docs.load_isolated_workspace("workspace")?.is_some(),
-            case["read"].as_bool().unwrap(),
-            "{case}"
+            case.read,
+            "{case:?}"
         );
     }
     assert!(super::super::runtime::load_repository_with_access(
