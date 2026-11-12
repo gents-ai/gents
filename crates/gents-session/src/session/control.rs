@@ -48,21 +48,13 @@ impl std::fmt::Debug for SessionControlError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct SessionStopReceipt {
-    pub session_id: String,
-    pub status: &'static str,
-    pub interrupted_request_id: Option<String>,
-    pub drained_request_ids: Vec<String>,
-}
-
 pub async fn stop_session_with_access(
     node: &Arc<EmbeddedNode>,
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<SessionStopReceipt, SessionControlError> {
+) -> Result<gents_protocol::operations::session::SessionStopReceipt, SessionControlError> {
     if session_id.trim().is_empty() || node_did.trim().is_empty() {
         return Err(SessionControlError::IdentityRequired);
     }
@@ -139,13 +131,12 @@ pub async fn stop_session_with_access(
                     crate::request::hooks::points::session_halt(txn, &node_did, &session_id)
                         .await?;
                 }
-                Ok(SessionStopReceipt {
+                Ok(gents_protocol::operations::session::SessionStopReceipt {
+                    status: gents_protocol::operations::session::SessionStopStatus::of(
+                        interrupted_request_id.is_some(),
+                    ),
+                    node_did,
                     session_id,
-                    status: if interrupted_request_id.is_some() {
-                        "stopping"
-                    } else {
-                        "stop_requested"
-                    },
                     interrupted_request_id,
                     drained_request_ids,
                 })

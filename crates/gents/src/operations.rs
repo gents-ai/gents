@@ -5,6 +5,5 @@
 pub mod agent;
 pub mod mcp_service;
 pub mod request;
-pub mod session;
 pub mod skill;
 pub mod tools;

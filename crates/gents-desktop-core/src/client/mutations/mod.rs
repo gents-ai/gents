@@ -1,12 +1,10 @@
 mod chat;
 mod graphql;
-mod interrupt;
 mod journal;
 mod manage;
 mod setup;
 
 pub use chat::{SubmitRequestOptions, SubmittedRequest};
-pub use interrupt::interrupt_request_on;
 pub use manage::{
     apply_config_components_on, delete_agent_context_on, delete_agent_on, delete_event_source_on,
     delete_inference_backend_on, delete_inference_profile_on, delete_schedule_on, delete_skill_on,

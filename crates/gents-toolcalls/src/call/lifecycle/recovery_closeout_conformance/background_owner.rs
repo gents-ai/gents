@@ -377,7 +377,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     )
     .await
     .unwrap();
-    assert_eq!(stop.status, "stop_requested");
+    assert_eq!(stop.status.as_str(), "stop_requested");
     tool.cancel_during_run(gents_session::session::tool_call_state::CancelCause::UserCancelled)
         .await
         .unwrap();

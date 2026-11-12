@@ -96,28 +96,6 @@ impl ClientCore {
         request_in_scope(&self.store.snapshot().requests, request_id, node_did)
     }
 
-    pub async fn resend_request_in_scope(
-        &self,
-        stale_request_id: &str,
-        node_did: Option<&str>,
-    ) -> Result<SubmittedRequest> {
-        let snapshot = self.store.snapshot();
-        let held = find_request_in_scope(&snapshot.requests, stale_request_id, node_did)?;
-        let node_did = match held.as_ref() {
-            Some(stale) => stale
-                .node_did
-                .as_deref()
-                .context("stale request has no node_did")?,
-            None => node_did.with_context(|| format!("request {stale_request_id} not found"))?,
-        };
-        let parent = RequestRef {
-            node_did: node_did.to_owned(),
-            requester_did: held.as_ref().and_then(|stale| stale.requester_did.clone()),
-            request_id: stale_request_id.to_owned(),
-        };
-        self.reissue(ReissueKind::Resend, parent, None).await
-    }
-
     pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
         let node_did = parent
             .node_did
