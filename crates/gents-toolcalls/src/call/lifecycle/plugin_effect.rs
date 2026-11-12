@@ -598,15 +598,15 @@ mod tests {
 
     #[test]
     fn spawned_dispatchers_conform_to_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_call_cases
-            ["spawned_dispatcher"];
-        for case in cases.as_array().unwrap() {
-            assert_eq!(
-                spawned_may_compose(case["spawner"] == "plugin_child"),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
+        gents_lean_vocab::families::plugin_resources_spawned_dispatchers::replay(|i| {
+            gents_lean_vocab::families::plugin_resources_spawned_dispatchers::SpawnedOutput {
+                spawned_dispatcher: spawned_may_compose(match i.spawner.as_str() {
+                    "plugin_child" => true,
+                    "accepted" => false,
+                    spawner => panic!("unknown spawner {spawner}"),
+                }),
+            }
+        });
     }
 
     #[tokio::test]

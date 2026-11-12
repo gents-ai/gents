@@ -1667,8 +1667,44 @@ def caseCoverage : List CoverageEntry :=
       "PluginEffectAccountingCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_tool_call_cases"
-      "PluginToolCallCases")
+      "family"
+      "plugin_resources_host_call_lifetimes")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_compute_allowances")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_sleeps")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_supported_routes")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_availabilities")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_spawned_dispatchers")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_reservations")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_result_sizes")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_settlements")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_consents")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_job_admission_cases"

@@ -7,6 +7,7 @@ import Proofs.Conformance.PluginReceipt
 import Proofs.Tools.ToolPolicy.PluginCalls
 import Proofs.Tools.ToolPolicy.PluginData
 import Proofs.Conformance.PluginEffects
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.PluginResources
@@ -145,47 +146,166 @@ private def invocationJson : Json :=
           | none => false
           | some current => PluginInvocation.reusable original current))]
 
-private def toolCallsJson : Json := Json.mkObj [
-  ("host_call_lifetime", toJson <| [(300, false, none), (300, false, some 100),
-      (300, false, some 600), (300, true, some 36000), (300, true, some 0)].map
-    fun (declared, background, remaining) => Json.mkObj [
-      ("declared", toJson declared), ("background", toJson background),
-      ("remaining", toJson remaining),
-      ("expected", toJson (PluginCalls.hostCallLifetime declared background remaining))]),
-  ("compute_allowance", toJson <| [(300, 36000, false), (300, 100, false), (300, 0, false),
-      (300, 36000, true), (0, 10, false)].map
-    fun (declared, remaining, stopped) => Json.mkObj [
-      ("declared", toJson declared), ("remaining", toJson remaining),
-      ("stopped", toJson stopped),
-      ("expected", toJson (PluginCalls.computeAllowance declared remaining stopped))]),
-  ("sleep", toJson <| [(0, 0), (1, 0), (0, 1), (30, 30), (31, 30), (1000, 60000)].map
-    fun (milliseconds, remaining) => Json.mkObj [
-      ("milliseconds", toJson milliseconds), ("remaining", toJson remaining),
-      ("expected", toJson (PluginCalls.sleepAdmissible milliseconds remaining))]),
-  ("supported", toJson <| [("ordinary", PluginCalls.DispatchRoute.ordinary),
-    ("hook_owned", .hookOwned)].map fun (route, value) =>
-      Json.mkObj [("route", toJson route), ("expected", toJson (PluginCalls.supported value))]),
-  ("availability", toJson <| [false, true].flatMap fun grant =>
-    [("live", true), ("absent", false), ("child", PluginCalls.childDispatcher)].map fun (scope, live) =>
-      Json.mkObj [("grant", toJson grant), ("dispatcher", toJson scope),
-        ("expected", toJson (PluginCalls.available grant live))]),
-  ("spawned_dispatcher", toJson <| [("accepted", PluginCalls.Origin.spawnedByAccepted),
-    ("plugin_child", .spawnedByPluginChild)].map fun (spawner, origin) =>
-      Json.mkObj [("spawner", toJson spawner),
-        ("expected", toJson (PluginCalls.dispatcherFor origin))]),
-  ("reservation", toJson <| [0, 1, 63, 64, 65, 1000].map fun used => Json.mkObj [
-    ("used", toJson used), ("expected", toJson (PluginCalls.reserve used))]),
-  ("result_bytes", toJson <| [0, 1048575, 1048576, 1048577].map fun bytes => Json.mkObj [
-    ("bytes", toJson bytes), ("expected", toJson (PluginCalls.resultFits bytes))]),
-  ("settlement", toJson <| [("completed", PluginCalls.ChildOutcome.completed), ("failed", .failed),
-    ("unavailable", .unavailable), ("timed_out", .timedOut), ("cancelled", .cancelled),
-    ("fatal", .fatal)].map fun (name, outcome) => Json.mkObj [("outcome", toJson name),
-      ("expected", toJson (match PluginCalls.settle outcome with
-        | .result => "result" | .guestError => "guest_error" | .parentFatal => "parent_fatal"))]),
-  ("consent", toJson <| [false, true].flatMap fun interactive => [false, true].map fun composed =>
-    Json.mkObj [("interactive", toJson interactive), ("composed", toJson composed),
-      ("expected", toJson (match PluginCalls.consentRoute interactive composed with
-        | .ask => "ask" | .deny => "deny"))])]
+section ToolCalls
+open PluginCalls
+
+deriving instance ToJson for DispatchRoute, ChildOutcome, Settlement, ConsentRoute
+
+structure LifetimeInput where
+  declared : Nat
+  background : Bool
+  remaining : Option Nat
+  deriving ToJson
+
+structure LifetimeOutput where
+  hostCallLifetime : Nat
+  deriving ToJson
+
+@[conformance_family]
+def hostCallLifetimes : Family LifetimeInput LifetimeOutput where
+  inputs := [(300, false, none), (300, false, some 100), (300, false, some 600),
+    (300, true, some 36000), (300, true, some 0)].map
+      fun (declared, background, remaining) => { declared, background, remaining }
+  model := fun i => { hostCallLifetime := hostCallLifetime i.declared i.background i.remaining }
+
+structure AllowanceInput where
+  declared : Nat
+  remaining : Nat
+  stopped : Bool
+  deriving ToJson
+
+structure AllowanceOutput where
+  computeAllowance : Nat
+  deriving ToJson
+
+@[conformance_family]
+def computeAllowances : Family AllowanceInput AllowanceOutput where
+  inputs := [(300, 36000, false), (300, 100, false), (300, 0, false), (300, 36000, true),
+    (0, 10, false)].map fun (declared, remaining, stopped) => { declared, remaining, stopped }
+  model := fun i => { computeAllowance := computeAllowance i.declared i.remaining i.stopped }
+
+structure SleepInput where
+  milliseconds : Nat
+  remaining : Nat
+  deriving ToJson
+
+structure SleepOutput where
+  sleep : Bool
+  deriving ToJson
+
+@[conformance_family]
+def sleeps : Family SleepInput SleepOutput where
+  inputs := [(0, 0), (1, 0), (0, 1), (30, 30), (31, 30), (1000, 60000)].map
+    fun (milliseconds, remaining) => { milliseconds, remaining }
+  model := fun i => { sleep := sleepAdmissible i.milliseconds i.remaining }
+
+structure RouteInput where
+  route : DispatchRoute
+  deriving ToJson
+
+structure SupportedOutput where
+  supported : Bool
+  deriving ToJson
+
+@[conformance_family]
+def supportedRoutes : Family RouteInput SupportedOutput where
+  inputs := [.ordinary, .hookOwned].map fun route => { route }
+  model := fun i => { supported := supported i.route }
+
+/-- `dispatcher` names the scope a call runs in: `live` under the model's
+dispatcher, `absent` with none, `child` inside a plugin child's scope. -/
+structure AvailabilityInput where
+  grant : Bool
+  dispatcher : String
+  deriving ToJson
+
+structure AvailabilityOutput where
+  availability : Bool
+  deriving ToJson
+
+private def dispatcherScopes : List (String × Bool) :=
+  [("live", true), ("absent", false), ("child", childDispatcher)]
+
+@[conformance_family]
+def availabilities : Family AvailabilityInput AvailabilityOutput where
+  inputs := [false, true].flatMap fun grant =>
+    dispatcherScopes.map fun (dispatcher, _) => { grant, dispatcher }
+  model := fun i =>
+    { availability := available i.grant ((dispatcherScopes.lookup i.dispatcher).getD false) }
+
+/-- `spawner` is what spawned the background invocation: `accepted` (the
+model's own call) or `plugin_child`. -/
+structure SpawnerInput where
+  spawner : String
+  deriving ToJson
+
+structure SpawnedOutput where
+  spawnedDispatcher : Bool
+  deriving ToJson
+
+@[conformance_family]
+def spawnedDispatchers : Family SpawnerInput SpawnedOutput where
+  inputs := ["accepted", "plugin_child"].map fun spawner => { spawner }
+  model := fun i =>
+    { spawnedDispatcher := dispatcherFor
+        (if i.spawner == "plugin_child" then .spawnedByPluginChild else .spawnedByAccepted) }
+
+structure ReservationInput where
+  used : Nat
+  deriving ToJson
+
+structure ReservationOutput where
+  reservation : Option Nat
+  deriving ToJson
+
+@[conformance_family]
+def reservations : Family ReservationInput ReservationOutput where
+  inputs := [0, 1, 63, 64, 65, 1000].map fun used => { used }
+  model := fun i => { reservation := reserve i.used }
+
+structure BytesInput where
+  bytes : Nat
+  deriving ToJson
+
+structure BytesOutput where
+  resultBytes : Bool
+  deriving ToJson
+
+@[conformance_family]
+def resultSizes : Family BytesInput BytesOutput where
+  inputs := [0, 1048575, 1048576, 1048577].map fun bytes => { bytes }
+  model := fun i => { resultBytes := resultFits i.bytes }
+
+structure SettlementInput where
+  outcome : ChildOutcome
+  deriving ToJson
+
+structure SettlementOutput where
+  settlement : Settlement
+  deriving ToJson
+
+@[conformance_family]
+def settlements : Family SettlementInput SettlementOutput where
+  inputs := [.completed, .failed, .unavailable, .timedOut, .cancelled, .fatal].map
+    fun outcome => { outcome }
+  model := fun i => { settlement := settle i.outcome }
+
+structure ConsentInput where
+  interactive : Bool
+  composed : Bool
+  deriving ToJson
+
+structure ConsentOutput where
+  consent : ConsentRoute
+  deriving ToJson
+
+@[conformance_family]
+def consents : Family ConsentInput ConsentOutput where
+  inputs := [false, true].flatMap fun interactive => [false, true].map
+    fun composed => { interactive, composed }
+  model := fun i => { consent := consentRoute i.interactive i.composed }
+
+end ToolCalls
 
 private def childAdmissionJson : Json := toJson <| [false, true].flatMap fun selected =>
   [("ordinary", PluginCalls.DispatchRoute.ordinary), ("hook_owned", .hookOwned)].flatMap
@@ -444,9 +564,6 @@ def pluginResourceBudgetCasesJson : String :=
 
 def pluginResourcePublicationCasesJson : String :=
   publicationJson.compress
-
-def pluginResourceToolCallCasesJson : String :=
-  toolCallsJson.compress
 
 def pluginResourceChildAdmissionCasesJson : String :=
   childAdmissionJson.compress

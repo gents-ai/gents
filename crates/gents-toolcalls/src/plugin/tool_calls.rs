@@ -366,12 +366,10 @@ mod tests {
         }).await;
     }
 
-    #[tokio::test]
-    async fn generated_tool_call_bounds_and_grants() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_call_cases;
-        for case in cases["supported"].as_array().unwrap() {
-            let expected = case["expected"].as_bool().unwrap();
-            let names: Vec<&str> = match case["route"].as_str().unwrap() {
+    #[test]
+    fn supported_routes_conform_to_lean() {
+        gents_lean_vocab::families::plugin_resources_supported_routes::replay::<String>(|i| {
+            let names: Vec<&str> = match i.route.as_str() {
                 "hook_owned" => crate::call::hook::persistence::HookOwnedTool::ROUTES
                     .iter()
                     .map(|(name, _)| *name)
@@ -379,18 +377,28 @@ mod tests {
                 "ordinary" => vec!["bash", "query", "charts", "call_tool", "configure"],
                 route => panic!("unknown route {route}"),
             };
-            for name in names {
-                assert_eq!(supported(name, &BTreeSet::new()), expected, "{case} {name}");
+            let observed: BTreeSet<bool> = names
+                .into_iter()
+                .map(|name| supported(name, &BTreeSet::new()))
+                .collect();
+            assert_eq!(observed.len(), 1, "route {} splits its tools", i.route);
+            gents_lean_vocab::families::plugin_resources_supported_routes::SupportedOutput {
+                supported: observed.into_iter().all(|value| value),
             }
-        }
-        for case in cases["availability"].as_array().unwrap() {
-            let granted = case["grant"].as_bool().unwrap();
-            let live: Option<Arc<dyn ToolEffectDispatcher>> = match case["dispatcher"].as_str() {
-                Some("live" | "child") => Some(Arc::new(Tools::default())),
-                _ => None,
+        });
+    }
+
+    #[tokio::test]
+    async fn tool_call_availability_conforms_to_lean() {
+        for case in gents_lean_vocab::families::plugin_resources_availabilities::cases() {
+            let granted = case.input.grant;
+            let live: Option<Arc<dyn ToolEffectDispatcher>> = match case.input.dispatcher.as_str() {
+                "live" | "child" => Some(Arc::new(Tools::default())),
+                "absent" => None,
+                dispatcher => panic!("unknown dispatcher scope {dispatcher}"),
             };
-            let child = case["dispatcher"] == "child";
-            let observed = gents_loop::tool_effects::scope(live, async {
+            let child = case.input.dispatcher == "child";
+            let availability = gents_loop::tool_effects::scope(live, async {
                 if child {
                     gents_loop::tool_effects::scope(None, async {
                         Session::for_call(granted).is_some()
@@ -401,25 +409,36 @@ mod tests {
                 }
             })
             .await;
-            assert_eq!(observed, case["expected"].as_bool().unwrap(), "{case}");
-        }
-        for case in cases["reservation"].as_array().unwrap() {
-            let expected = case["expected"].as_u64().map(|value| value as u32);
-            assert_eq!(
-                reserve(case["used"].as_u64().unwrap() as u32),
-                expected,
-                "{case}"
+            case.check(
+                gents_lean_vocab::families::plugin_resources_availabilities::AvailabilityOutput {
+                    availability,
+                },
             );
         }
-        for case in cases["result_bytes"].as_array().unwrap() {
-            assert_eq!(
-                result_fits(case["bytes"].as_u64().unwrap() as usize),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
-        for case in cases["settlement"].as_array().unwrap() {
-            let outcome = match case["outcome"].as_str().unwrap() {
+    }
+
+    #[test]
+    fn reservations_conform_to_lean() {
+        gents_lean_vocab::families::plugin_resources_reservations::replay(|i| {
+            gents_lean_vocab::families::plugin_resources_reservations::ReservationOutput {
+                reservation: reserve(u32::try_from(i.used).unwrap()).map(u64::from),
+            }
+        });
+    }
+
+    #[test]
+    fn result_sizes_conform_to_lean() {
+        gents_lean_vocab::families::plugin_resources_result_sizes::replay(|i| {
+            gents_lean_vocab::families::plugin_resources_result_sizes::BytesOutput {
+                result_bytes: result_fits(usize::try_from(i.bytes).unwrap()),
+            }
+        });
+    }
+
+    #[test]
+    fn child_settlements_conform_to_lean() {
+        gents_lean_vocab::families::plugin_resources_settlements::replay::<String, String>(|i| {
+            let outcome = match i.outcome.as_str() {
                 "completed" => Ok(ToolOutcome::Completed("{}".into())),
                 "failed" => Ok(ToolOutcome::Failed {
                     class: gents_loop::tool_call_lifecycle::FailureClass::External,
@@ -432,25 +451,18 @@ mod tests {
                 "fatal" => Err(ToolEffectError::Fatal("durable failure".into())),
                 outcome => panic!("unknown outcome {outcome}"),
             };
-            let observed = match settle(outcome) {
+            let settlement = match settle(outcome) {
                 Err(_) => "parent_fatal",
                 Ok(value) if value.get("result").is_some() => "result",
                 Ok(value) => {
-                    assert!(value["error"].is_string(), "{case}");
+                    assert!(value["error"].is_string(), "{}", i.outcome);
                     "guest_error"
                 }
             };
-            assert_eq!(observed, case["expected"], "{case}");
-        }
-        for case in cases["consent"].as_array().unwrap() {
-            let interactive = case["interactive"].as_bool().unwrap();
-            let route = gents_tools::plugin::approval::consent(interactive);
-            let expected = match case["expected"].as_str().unwrap() {
-                "ask" => gents_tools::plugin::approval::Consent::Ask,
-                _ => gents_tools::plugin::approval::Consent::Deny,
-            };
-            assert_eq!(route, expected, "{case}");
-        }
+            gents_lean_vocab::families::plugin_resources_settlements::SettlementOutput {
+                settlement: settlement.to_owned(),
+            }
+        });
     }
 
     #[derive(Clone)]
