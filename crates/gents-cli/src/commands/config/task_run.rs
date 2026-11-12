@@ -180,14 +180,9 @@ mod tests {
 
     #[tokio::test]
     async fn generated_manual_task_goal_input_preserves_signed_receipts() -> Result<()> {
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
-        let cases = snapshot["goal_delivery_input_cases"].as_array().unwrap();
-        let mut covered = 0;
-        for case in cases
-            .iter()
-            .filter(|case| case["plugin"] == false && case["owned"] == true)
-        {
-            covered += 1;
+        use gents_lean_vocab::families::goal_delivery_input_manual_task_run as family;
+        for modeled in gents_lean_vocab::families::goal_delivery_input_manual_task_run::cases() {
+            let case = &serde_json::to_value(&modeled.input)?;
             let source = fixture(
                 case["existing"].as_bool().unwrap(),
                 true,
@@ -224,13 +219,27 @@ mod tests {
                 input,
             )
             .await?;
-            expected.goal_assignment = reference(&case["expected"]["reference"]);
-            assert_eq!(actual, expected, "{case}");
+            let mut unchanged = actual.clone();
+            unchanged.goal_assignment = expected.goal_assignment.clone();
+            assert_eq!(unchanged, expected, "{case}: only the assignment is prepared");
+            let number = |value: &str, prefix: &str| -> u64 {
+                value.strip_prefix(prefix).unwrap().parse().unwrap()
+            };
+            let prepared = family::PreparedWire {
+                kind: "prepared".into(),
+                reference: actual.goal_assignment.as_ref().map(|goal| family::Reference {
+                    goal: number(&goal.goal_id, "goal:"),
+                    root: goal
+                        .root_request_doc_id
+                        .as_deref()
+                        .map(|root| number(root, "request-document:")),
+                }),
+            };
             if admitted.is_some() || case["captured"].is_object() || case["existing"] == false {
                 assert_eq!(source.exchanges(), before, "{case}");
             }
+            modeled.check(Some(prepared));
         }
-        assert_eq!(covered, 7);
         Ok(())
     }
 

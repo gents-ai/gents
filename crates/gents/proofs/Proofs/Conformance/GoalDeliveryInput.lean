@@ -1,5 +1,6 @@
 import Proofs.Automation.GoalAutomation.DeliveryInput
 import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.Family
 
 namespace Conformance.GoalDeliveryInput
 
@@ -40,31 +41,63 @@ def cases : List Case :=
   , {name := "plugin_admitted_absence_survives_new_goal", plugin := true, admitted := some none}
   ]
 
-def caseJson (c : Case) : Json :=
-  let identity : Triggers.Durable.Identity := ⟨"1", "delivery", "Task", c.name⟩
-  let key : PluginJob.SpawnKey := ⟨c.name, "worker", 1⟩
-  let destination := if c.plugin then some (DeliveryInput.pluginDestination key c.existing)
-    else DeliveryInput.triggerDestination identity (if c.existing then some "10" else none) c.owned
-  let facts : MessageInputFacts := {
-    owner := 1, session := 10, sessionReadable := c.existing,
-    observationVerified := true,
-    observed := c.observed.map fun reference => ⟨1, 10, reference.goal, reference.root⟩,
-    callerReference := some ⟨9, some 900⟩ }
-  let expected := (DeliveryInput.prepare destination c.admitted c.captured facts).map fun
-    | .pending => Json.mkObj [("kind", toJson "pending")]
-    | .prepared reference => Json.mkObj [("kind", toJson "prepared"),
-        ("reference", reference.map GoalRequestAssignmentContracts.referenceJson |>.getD Json.null)]
-  Json.mkObj [("name", toJson c.name), ("plugin", toJson c.plugin),
-    ("existing", toJson c.existing), ("owned", toJson c.owned),
-    ("observed", c.observed.map GoalRequestAssignmentContracts.referenceJson |>.getD Json.null),
-    ("captured", c.captured.map GoalRequestAssignmentContracts.referenceJson |>.getD Json.null),
-    ("admitted", toJson c.admitted.isSome),
-    ("admitted_reference", (c.admitted.bind id).map GoalRequestAssignmentContracts.referenceJson |>.getD Json.null),
-    ("session", destination.map (fun selected => toJson selected.session) |>.getD Json.null),
-    ("expected", expected.getD Json.null)]
+structure DeliveryCase where
+  name : String
+  plugin : Bool
+  existing : Bool
+  owned : Bool
+  observed : Option Reference
+  captured : Option Reference
+  admitted : Bool
+  admittedReference : Option Reference
+  deriving ToJson
 
-def json : String := (toJson (cases.map caseJson)).compress
+def DeliveryCase.ofCase (c : Case) : DeliveryCase :=
+  ⟨c.name, c.plugin, c.existing, c.owned, c.observed, c.captured, c.admitted.isSome,
+    c.admitted.bind id⟩
+
+def DeliveryCase.destination (i : DeliveryCase) : Option GoalAutomation.DeliveryInput.Destination :=
+  if i.plugin then some (GoalAutomation.DeliveryInput.pluginDestination ⟨i.name, "worker", 1⟩ i.existing)
+  else GoalAutomation.DeliveryInput.triggerDestination ⟨"1", "delivery", "Task", i.name⟩
+    (if i.existing then some "10" else none) i.owned
+
+structure PreparedWire where
+  kind : String
+  reference : Option Reference
+  deriving ToJson
+
+def PreparedWire.ofModel : PreparedInput → PreparedWire
+  | .pending => ⟨"pending", none⟩
+  | .prepared reference => ⟨"prepared", reference⟩
+
+def DeliveryCase.expected (i : DeliveryCase) : Option PreparedWire :=
+  let facts : MessageInputFacts := {
+    owner := 1, session := 10, sessionReadable := i.existing,
+    observationVerified := true,
+    observed := i.observed.map fun reference => ⟨1, 10, reference.goal, reference.root⟩,
+    callerReference := some ⟨9, some 900⟩ }
+  (GoalAutomation.DeliveryInput.prepare i.destination (if i.admitted then some i.admittedReference else none)
+    i.captured facts).map PreparedWire.ofModel
+
+structure DeliveryOutput where
+  session : Option String
+  expected : Option PreparedWire
+  deriving ToJson
+
+@[conformance_family]
+def delivery : Family DeliveryCase DeliveryOutput where
+  inputs := cases.map DeliveryCase.ofCase
+  model := fun i => { session := i.destination.map (·.session), expected := i.expected }
+
+/-- A manual Task run is the client's trigger delivery into a destination this
+runtime owns; plugin deliveries and foreign destinations never reach it. -/
+@[conformance_family]
+def manualTaskRun : Family DeliveryCase (Option PreparedWire) where
+  inputs := (cases.filter fun c => !c.plugin && c.owned).map DeliveryCase.ofCase
+  model := DeliveryCase.expected
 
 example : cases.length = 14 := by decide
+
+example : (cases.filter fun c => !c.plugin && c.owned).length = 7 := by decide
 
 end Conformance.GoalDeliveryInput

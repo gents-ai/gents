@@ -1780,9 +1780,13 @@ def caseCoverage : List CoverageEntry :=
       "SessionMessageGoalInputCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_delivery_input_cases"
-      "GoalDeliveryInputCases")
+      "family"
+      "goal_delivery_input_delivery")
       "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_delivery_input_manual_task_run")
+      "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
       "goal_input_binding_cases"
       "GoalInputBindingCases")
