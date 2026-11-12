@@ -123,6 +123,7 @@ inductive QueuedSteeringGuard where
   deriving Lean.ToJson
 
 structure QueuedSteeringGuardInput where
+  name : String
   guard : QueuedSteeringGuard
   deriving Lean.ToJson
 
@@ -147,7 +148,8 @@ scenario builds those rows, so each guard is checked in the model alone. -/
 @[conformance_family]
 def queuedSteeringGuardUnreached :
     Conformance.Family QueuedSteeringGuardInput QueuedSteeringGuardOutput where
-  inputs := [⟨.wrongHead⟩, ⟨.incoherentOwner⟩, ⟨.interruptedPublish⟩]
+  inputs := [.wrongHead, .incoherentOwner, .interruptedPublish].map fun guard =>
+    { name := (guardObservation guard).name, guard }
   model := fun i =>
     let observation := guardObservation i.guard
     { prefixAdmitted := observation.prefixAdmitted, admitted := observation.admitted }
