@@ -2432,8 +2432,8 @@ def caseCoverage : List CoverageEntry :=
       "RenderedCaptureKeyCases")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "CaptureScopeCases")
+      "family"
+      "capture_scope_parse")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "rendered_capture_cases"

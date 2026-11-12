@@ -301,35 +301,8 @@ fn generated_rendered_capture_cases_never_permit_an_uncaptured_send() {
 }
 
 #[test]
-fn generated_capture_scope_cases_pin_the_shared_parser_and_order() {
+fn generated_capture_order_cases_pin_the_shared_order() {
     use crate::rendered_request::{CaptureOrderKey, CaptureScope};
-
-    let scope_cases = gents_lean_vocab::lean_capture_scope_cases();
-    assert!(
-        !scope_cases.is_empty(),
-        "Lean emitted no capture scope cases"
-    );
-    for case in scope_cases {
-        let parsed = case.label.parse::<CaptureScope>();
-        if case.valid {
-            let scope = parsed.unwrap_or_else(|error| {
-                panic!("{label:?} must parse: {error}", label = case.label)
-            });
-            assert_eq!(scope.kind.as_str(), case.kind, "{:?}", case.label);
-            assert_eq!(scope.seq, case.seq, "{:?}", case.label);
-            assert_eq!(
-                scope.to_string(),
-                case.label,
-                "label round trip must be exact"
-            );
-        } else {
-            assert!(
-                parsed.is_err(),
-                "{label:?} must be rejected, never defaulted",
-                label = case.label
-            );
-        }
-    }
 
     let order_cases = gents_lean_vocab::lean_capture_order_cases();
     assert!(

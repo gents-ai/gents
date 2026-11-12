@@ -47,17 +47,6 @@ def renderedCaptureKeyCaseJson (witness : RenderedCaptureKeyCase) : String :=
 def renderedCaptureKeyCasesJson : String :=
   jsonArray (renderedCaptureKeyCases.map renderedCaptureKeyCaseJson)
 
-def captureScopeCaseJson (witness : CaptureScopeCase) : String :=
-  "{"
-    ++ "\"label\":" ++ jsonString witness.label ++ ","
-    ++ "\"kind\":" ++ jsonString witness.kind ++ ","
-    ++ "\"seq\":" ++ toString witness.seq ++ ","
-    ++ "\"valid\":" ++ boolString witness.valid
-    ++ "}"
-
-def captureScopeCasesJson : String :=
-  jsonArray (captureScopeCases.map captureScopeCaseJson)
-
 def captureOrderCaseJson (witness : CaptureOrderCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
