@@ -129,7 +129,7 @@ describe("remote onboarding", () => {
     const ready = snapshot([], true);
     act(() => publishSnapshot(app, ready));
     await userEvent.click(
-      screen.getByRole("button", { name: "Continue to My computer" }),
+      screen.getByRole("button", { name: "Continue with My computer" }),
     );
     expect(onDone).toHaveBeenCalledWith(ready, request.ownerNode);
   });
@@ -240,7 +240,7 @@ describe("remote onboarding", () => {
       screen.getByRole("button", { name: "View request to My computer" }),
     ).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Continue to My computer" }),
+      screen.getByRole("button", { name: "Continue with My computer" }),
     ).toBeDisabled();
     await act(async () => finish(request));
   });

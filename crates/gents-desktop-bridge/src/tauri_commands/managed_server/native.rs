@@ -190,9 +190,6 @@ where
         executable.service_path().to_path_buf(),
     )
     .map_err(native_error)?;
-    config.stderr_path = Some(crate::logging::runtime_error_log(
-        state.policy.desktop_paths.root(),
-    ));
     let bundle_id = app.config().identifier.clone();
     if !bundle_id.trim().is_empty() {
         config.associated_bundle_id = Some(bundle_id);

@@ -31,6 +31,10 @@ fn main() -> anyhow::Result<()> {
                 store.kind,
             ));
         }
+        if gents::store::local::store_key::store_key_unavailable(error.as_ref()).is_some() {
+            eprintln!("Error: {error:#}");
+            std::process::exit(gents_server::native_service::STORE_KEY_UNAVAILABLE_EXIT_CODE);
+        }
     }
     result
 }

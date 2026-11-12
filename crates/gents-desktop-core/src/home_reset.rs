@@ -621,7 +621,10 @@ fn plan_reset(
         let entries = if full_reset {
             canonical.client_state_entries()
         } else {
-            vec![canonical.node_data_dir().to_path_buf()]
+            vec![
+                canonical.node_data_dir().to_path_buf(),
+                canonical.retired_local_peers_path(),
+            ]
         };
         for entry in entries.into_iter().chain(std::iter::once(preference)) {
             if desktop_owned && present(&entry)? {
@@ -777,6 +780,15 @@ fn plan_reset(
 }
 
 impl HomeResetPlan {
+    /// Leaves `managed-server.json` (the reviewed host access and auto-start)
+    /// in place when only a client store is being set aside.
+    pub fn keeping_managed_server_preference(mut self) -> Self {
+        let preference = self.desktop_root.join(MANAGED_SERVER_CONFIG);
+        self.client_entries.retain(|entry| *entry != preference);
+        self.ownership_records.retain(|entry| *entry != preference);
+        self
+    }
+
     /// The desktop client state is retired with its runtime: its pairing
     /// names the runtime identity being retired.
     pub fn retires_client_state(&self) -> bool {
@@ -1503,6 +1515,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let user = temp.path().canonicalize().unwrap();
         let (home, desktop, service) = fixture(&user);
+        write(&desktop.retired_local_peers_path(), "[]");
         let plan = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
         let preview = plan.preview();
         assert!(preview.delete_confirmation.is_some());
@@ -1519,6 +1532,7 @@ mod tests {
             "service definition"
         );
         assert!(backup.join("desktop/logs/client.log").is_file());
+        assert!(backup.join("desktop/local-peers.json").is_file());
         assert!(backup.join("home/init.json").is_file());
         assert!(home.join("other-node/init.json").is_file());
         assert!(home.join("keys/other.key").is_file());

@@ -3,6 +3,7 @@ import type {
   ManagedServerAuthorityInput,
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
+import type { ManagedServerRepairResult } from "@source-inc/gents-desktop-client/generated/ManagedServerRepairResult";
 
 import {
   ensureManagedRuntimeServing,
@@ -227,14 +228,17 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
         return next;
       });
     },
-    restoreLocalServer(signal?: AbortSignal) {
+    restoreLocalServer(
+      signal?: AbortSignal,
+      onRepair?: (result: ManagedServerRepairResult) => void,
+    ) {
       if (signal?.aborted) return Promise.resolve(false);
       const pending = operate(
         "restore",
         () =>
           signal?.aborted
             ? Promise.resolve(false)
-            : restoreManagedServer(api, { onWait: publishWait, signal }),
+            : restoreManagedServer(api, { onWait: publishWait, signal, onRepair }),
         Symbol("restore"),
       );
       if (!signal) return pending;

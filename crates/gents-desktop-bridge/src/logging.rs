@@ -35,11 +35,11 @@ pub fn runtime_error_log(desktop_root: &Path) -> PathBuf {
     desktop_root.join("logs").join("runtime-errors.log")
 }
 
-pub fn diagnostics_hint(desktop_root: &Path) -> String {
+pub fn diagnostics_hint(user_home: &Path) -> String {
     format!(
         "{}. Runtime startup errors: {}",
         gents::runtime::native_logging::diagnostics_hint(),
-        runtime_error_log(desktop_root).display()
+        gents_server::native_service::runtime_error_log(user_home).display()
     )
 }
 

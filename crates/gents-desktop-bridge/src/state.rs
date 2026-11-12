@@ -42,11 +42,17 @@ pub struct ManagedServerState {
     pub pairing_cancel: Option<Arc<tokio_util::sync::CancellationToken>>,
     pub starting: bool,
     pub last_error: Option<String>,
+    /// The last error the background Node logged, read when its exit is observed.
+    pub last_exit_error: Option<String>,
+    /// The exit `last_exit_error` was read for.
+    pub last_exit: Option<gents_service::native_service::ServiceExit>,
     /// Cancels a start that is waiting outside the lifecycle lock.
     pub start_wait: Option<crate::tauri_commands::managed_server::start_wait::StartWait>,
-    pub crash_loop: crate::tauri_commands::managed_server::status::CrashLoopWatch,
+    pub crash_loop: gents_server::repair::crash_loop::CrashLoopWatch,
     pub approval_refused: bool,
     pub incompatible_store: Option<gents_store::local::storage_backend::IncompatibleStore>,
+    /// The node home its node stopped for because it was deleted.
+    pub deleted_home: Option<PathBuf>,
 }
 
 pub struct ProviderLoginWait {

@@ -721,3 +721,137 @@ impl Drop for ReplyLossProxy {
         self.task.abort();
     }
 }
+
+/// v0.19.0's declarations of one runtime-local and one enrollment collection,
+/// unchanged at v1.0.0-rc1 apart from a renamed field: both branchable, and
+/// with no identity policy.
+const OTHER_VERSION_SCHEMA: [(&str, &str); 2] = [
+    (
+        "CompactionConfig",
+        r#"type CompactionConfig @branchable @index(fields: ["agent_did", "compaction_id"], unique: true) {
+    compaction_id: String
+    agent_did: String @index
+    display_name: String
+    strategy: String
+    threshold: Float
+    keep_recent_tokens: Int
+    tool_result_max_chars: Int
+    summary_max_output_tokens: Int
+    summary_file_list_max: Int
+    inference_profile_id: String @index
+    tags: [String!]
+    updated_at: DateTime @index(direction: DESC)
+}"#,
+    ),
+    (
+        "NetworkEnrollmentRequest",
+        r#"type NetworkEnrollmentRequest @branchable {
+    protocol_version: Int @immutable
+    request_id: String @index(unique: true) @immutable
+    request_digest: String @index @immutable
+    offer_id: String @index @immutable
+    offer_token: String @immutable
+    challenge: String @index(unique: true) @immutable
+    network_id: String @index @immutable
+    admin_did: String @index @immutable
+    server_peer: String @immutable
+    candidate_did: String @index @immutable
+    candidate_peer: String @index @immutable
+    candidate_ticket: String @immutable
+    owner_agent: String @index @immutable
+    profile: String @immutable
+    client_nonce: String @immutable
+    issued_at: DateTime @immutable
+    expires_at: DateTime @immutable
+    candidate_sig: String @immutable
+}"#,
+    ),
+];
+
+/// A client store with another version's schema, written through the
+/// migration owner with that version's declarations. `enrolled` adds the
+/// enrollment row onboarding wrote, which this build's document projector
+/// refuses while the store opens; without it the store opens and the
+/// migration owner refuses it. `encrypted` records a file-custody key first,
+/// as a store this build's upgrade already encrypted.
+pub async fn write_other_version_client_store(
+    paths: &crate::client::DesktopPaths,
+    enrolled: bool,
+    encrypted: bool,
+) {
+    use gents::store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
+    paths.ensure_root_dirs().await.unwrap();
+    let identity = crate::client::PrincipalIdentity::load_or_create(paths)
+        .await
+        .unwrap();
+    let mut builder = defra_node::Node::builder()
+        .data_path(paths.node_data_dir())
+        .with_storage_backend(defra_node::StorageBackend::Regolith)
+        .with_node_identity_did(identity.did());
+    if encrypted {
+        let record = StoreEncryption::prepare(
+            StoreKeyCustodyChoice::File,
+            paths.store_key_path(),
+            paths.node_data_dir(),
+        )
+        .unwrap();
+        std::fs::write(
+            paths.store_encryption_path(),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        let key = record
+            .initialize(paths.store_key_path(), paths.node_data_dir())
+            .unwrap();
+        builder = key.encrypt(builder);
+    }
+    let node = builder.build().await.unwrap();
+    let baseline = OTHER_VERSION_SCHEMA.map(|(name, sdl)| gents_migration::BaselineCollection {
+        name,
+        sdl,
+        expected_version: None,
+        expected_state: gents_migration::CollectionExpectation::dag_only(),
+    });
+    let registry = gents_migration::Registry {
+        baseline: &baseline,
+        steps: &[],
+        ordinary_indexes: &[],
+    };
+    gents_migration::ensure_migrations_with_registry(&node, &registry)
+        .await
+        .unwrap();
+    if enrolled {
+        let created = node
+            .execute(r#"mutation { create_NetworkEnrollmentRequest(input: { request_id: "onboarding" }) { _docID } }"#)
+            .await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+    }
+    node.shutdown().await.unwrap();
+}
+
+/// Runs this build's encryption upgrade on a plaintext client store and stops
+/// before the client records its key, as a start interrupted after the
+/// upgrade promoted its stage. Returns the record that start would write.
+pub async fn encrypt_client_store_without_its_record(
+    paths: &crate::client::DesktopPaths,
+) -> gents::store::local::store_key::StoreEncryption {
+    use gents::store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
+    let data = paths.node_data_dir();
+    let record = StoreEncryption::prepare(
+        StoreKeyCustodyChoice::File,
+        paths.store_key_path(),
+        &upgrade::staging_path(data),
+    )
+    .unwrap();
+    upgrade::begin(data, &record).unwrap();
+    let key = record
+        .initialize(
+            paths.store_key_path(),
+            &upgrade::key_store_path(data).unwrap(),
+        )
+        .unwrap();
+    upgrade::encrypt_existing(data, &record, &key)
+        .await
+        .unwrap();
+    record
+}

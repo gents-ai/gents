@@ -1525,3 +1525,87 @@ fn init_refuses_an_explicit_identity_path_that_collides_with_the_store_key() -> 
     assert!(!home_dir.join(".gents/init.json").exists());
     Ok(())
 }
+
+async fn exit_status_within(
+    serve: &mut ServeProcess,
+    limit: Duration,
+) -> Result<std::process::ExitStatus> {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        if let Some(status) = serve.child.try_wait()? {
+            return Ok(status);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let (stdout, stderr) = serve.captured_output()?;
+            return Err(anyhow!(
+                "server still running after {limit:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_on_a_missing_home_exits_68_and_creates_nothing() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let missing = temp.path().join(".gents");
+    let mut serve = spawn_server(temp.path(), allocate_port()?)?;
+    // Not 5 s: a freshly spawned test binary can spend several seconds in
+    // dyld on a loaded host before `main` runs.
+    let status = exit_status_within(&mut serve, Duration::from_secs(30)).await?;
+    assert_eq!(status.code(), Some(68));
+    assert!(!missing.exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_deleted_home_stops_its_server_without_writing_into_the_new_one() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join(".gents");
+    let model_name = format!("home-watch-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    run_init_json(
+        temp.path(),
+        &[
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let (mut serve, _) = spawn_server_with_ready_json(temp.path(), allocate_port()?, &[], &[])?;
+    // `service-updates` is the server's last startup write into the home.
+    let started_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !home
+        .join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME)
+        .is_dir()
+    {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < started_deadline,
+            "the server never created its service-updates directory"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // The server writes into the home until it notices, so a removal can
+    // race a new file; repeat it as a user repeats `rm -rf`.
+    let removal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while let Err(error) = fs::remove_dir_all(&home) {
+        if error.kind() != std::io::ErrorKind::DirectoryNotEmpty
+            || tokio::time::Instant::now() >= removal_deadline
+        {
+            return Err(error.into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    fs::create_dir(&home)?;
+    let status = exit_status_within(&mut serve, Duration::from_secs(5)).await?;
+    assert_eq!(status.code(), Some(68), "{:?}", serve.captured_output()?);
+    let written = fs::read_dir(&home)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    assert!(
+        written.is_empty(),
+        "nothing written into the new folder: {written:?}"
+    );
+    Ok(())
+}

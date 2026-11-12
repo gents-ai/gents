@@ -31,6 +31,15 @@ pub const FOREIGN_STORE_EXIT_CODE: i32 = 67;
 /// Like [`INCOMPATIBLE_STORE_EXIT_CODE`], for an identity key an older build
 /// wrote with unsafe permissions (sysexits `EX_NOINPUT`).
 pub const INSECURE_KEY_EXIT_CODE: i32 = 66;
+/// The server's home directory is missing, or was deleted or replaced while it
+/// ran (sysexits `EX_NOHOST`, otherwise unused here).
+pub const HOME_GONE_EXIT_CODE: i32 = 68;
+/// The store key exists but cannot be read now, for example behind a locked
+/// Keychain (sysexits `EX_UNAVAILABLE`).
+pub const STORE_KEY_UNAVAILABLE_EXIT_CODE: i32 = 69;
+/// Like [`INCOMPATIBLE_STORE_EXIT_CODE`], for an encrypted store whose
+/// recorded key is gone (`IncompatibleStoreKind::MissingStoreKey`).
+pub const MISSING_STORE_KEY_EXIT_CODE: i32 = 72;
 
 pub fn incompatible_store_exit_code(
     kind: gents_store::local::storage_backend::IncompatibleStoreKind,
@@ -39,6 +48,7 @@ pub fn incompatible_store_exit_code(
     match kind {
         IncompatibleStoreKind::InsecureKey => INSECURE_KEY_EXIT_CODE,
         IncompatibleStoreKind::ForeignVersion => FOREIGN_STORE_EXIT_CODE,
+        IncompatibleStoreKind::MissingStoreKey => MISSING_STORE_KEY_EXIT_CODE,
         _ => INCOMPATIBLE_STORE_EXIT_CODE,
     }
 }
@@ -59,6 +69,15 @@ impl std::fmt::Display for BackgroundApprovalPending {
 }
 
 impl std::error::Error for BackgroundApprovalPending {}
+
+/// How a start ended when it did not fail: the job started, or macOS withheld
+/// it until the user approves Gents under Login Items. `detail` is launchd's
+/// refusal, when there was one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartOutcome {
+    Started,
+    ApprovalPending { detail: Option<String> },
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum BackgroundItemStatus {
@@ -132,6 +151,7 @@ impl NativeServiceConfig {
                 .unwrap_or_else(|| user_home.join(".config"))
                 .join("systemd/user"),
         };
+        let stderr_path = Some(runtime_error_log(&user_home));
         Ok(Self {
             home,
             executable,
@@ -143,7 +163,7 @@ impl NativeServiceConfig {
                 std::env::var_os("APPIMAGE").as_deref().map(Path::new),
             ),
             associated_bundle_id: None,
-            stderr_path: None,
+            stderr_path,
         })
     }
 
@@ -154,6 +174,39 @@ impl NativeServiceConfig {
                 .join(format!("{SERVICE_LABEL}.plist")),
             NativeServicePlatform::Linux => self.service_config_dir.join(SYSTEMD_UNIT),
         }
+    }
+}
+
+/// Both installers log the runtime's stderr here so one place holds why the
+/// service failed to start.
+pub fn runtime_error_log(user_home: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        user_home.join("Library/Logs/gents/runtime-errors.log")
+    } else {
+        user_home.join(".local/state/gents/runtime-errors.log")
+    }
+}
+
+/// Waits until `pid` no longer exists; true when it is gone within `timeout`.
+/// A pid that is not a positive `i32` is never waited on, since `kill` would
+/// address a process group.
+#[cfg(unix)]
+pub async fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
+    let Some(pid) = i32::try_from(pid).ok().filter(|pid| *pid > 0) else {
+        return false;
+    };
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        // SAFETY: signal 0 only probes for existence.
+        let gone = unsafe { libc::kill(pid, 0) } != 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        if gone {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -495,16 +548,65 @@ where
         self.install_environment(Some(environment))
     }
 
+    /// Installs this home's service with the settings of `previous`, a
+    /// definition read before it was removed: its executable, PATH, user home,
+    /// bundle association and custom environment carry over, and it is enabled
+    /// at login when `enabled`. The home and log path are this config's, and so
+    /// is the executable when `replace_executable`.
+    pub fn install_carrying(
+        &self,
+        previous: &[u8],
+        replace_executable: bool,
+        enabled: bool,
+    ) -> Result<()> {
+        let config = self.carried_config(previous, replace_executable)?;
+        self.write_definition(&config, Some(previous), None)?;
+        if enabled {
+            self.set_enabled(true)?;
+        }
+        Ok(())
+    }
+
+    /// Fails where `install_carrying` would before it writes anything, so a
+    /// caller can check before it removes the old definition.
+    pub fn check_carrying(&self, previous: &[u8], replace_executable: bool) -> Result<()> {
+        validate_installable(&self.carried_config(previous, replace_executable)?)
+    }
+
+    fn carried_config(
+        &self,
+        previous: &[u8],
+        replace_executable: bool,
+    ) -> Result<NativeServiceConfig> {
+        let mut config = installed_config(self.platform, &self.config, previous)?;
+        config.home = self.config.home.clone();
+        if replace_executable {
+            config.executable = self.config.executable.clone();
+        }
+        Ok(config)
+    }
+
+    pub fn installed_definition(&self) -> Result<Vec<u8>> {
+        fs::read(self.config.definition_path(self.platform))
+            .context("reading the installed native service")
+    }
+
     fn install_environment(
         &self,
         replacement: Option<&std::collections::BTreeMap<String, String>>,
     ) -> Result<()> {
-        validate_config(&self.config)?;
-        ensure_durable_service_executable(
-            &self.config.executable,
-            std::env::var_os("APPDIR").as_deref().map(Path::new),
-            std::env::var_os("APPIMAGE").as_deref().map(Path::new),
-        )?;
+        self.write_definition(&self.config, None, replacement)
+    }
+
+    /// Renders `config` at this config's definition path. Custom environment
+    /// comes from `replacement`, else the installed definition, else `carried`.
+    fn write_definition(
+        &self,
+        config: &NativeServiceConfig,
+        carried: Option<&[u8]>,
+        replacement: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Result<()> {
+        validate_installable(config)?;
         let path = self.config.definition_path(self.platform);
         let parent = path
             .parent()
@@ -521,8 +623,8 @@ where
         };
         let contents = environment::apply(
             self.platform,
-            self.render_definition()?,
-            installed.as_deref(),
+            render(self.platform, config)?,
+            installed.as_deref().or(carried),
             replacement,
         )?;
         self.prepare_stderr_log()?;
@@ -574,16 +676,113 @@ where
         Ok(())
     }
 
+    /// The pid of the service's running job, if the service manager has one.
+    pub fn job_pid(&self) -> Result<Option<u32>> {
+        match self.platform {
+            NativeServicePlatform::Macos => {
+                let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
+                let print =
+                    self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
+                ensure_launchd_print_result(&print)?;
+                Ok(print.success.then(|| launchd_pid(&print.stdout)).flatten())
+            }
+            NativeServicePlatform::Linux => {
+                let show = self.run_allow_failure(
+                    "systemctl",
+                    &[
+                        "--user".into(),
+                        "show".into(),
+                        "-p".into(),
+                        "MainPID".into(),
+                        "--value".into(),
+                        SYSTEMD_UNIT.into(),
+                    ],
+                )?;
+                if !show.success {
+                    bail!("systemctl show failed: {}", output_detail(&show));
+                }
+                Ok(show.stdout.trim().parse().ok().filter(|pid| *pid > 0))
+            }
+        }
+    }
+
+    /// The home the installed definition serves, including a foreign one.
+    pub fn installed_home(&self) -> Result<Option<PathBuf>> {
+        match fs::read(self.config.definition_path(self.platform)) {
+            Ok(bytes) => Ok(Some(installed_home(self.platform, &bytes)?)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).context("reading the installed native service"),
+        }
+    }
+
+    pub fn config(&self) -> &NativeServiceConfig {
+        &self.config
+    }
+
+    /// Whether the owned definition already logs to this config's log path;
+    /// true when nothing is installed.
+    pub fn definition_log_current(&self) -> Result<bool> {
+        Ok(self
+            .refreshed_definition()?
+            .is_none_or(|(installed, contents)| contents.as_bytes() == installed))
+    }
+
+    /// Re-renders the owned definition with this config's log path, keeping the
+    /// installed executable, home and custom environment. Touches no service
+    /// manager; returns whether it wrote.
+    pub fn refresh_definition_file(&self) -> Result<bool> {
+        let Some((installed, contents)) = self.refreshed_definition()? else {
+            return Ok(false);
+        };
+        if contents.as_bytes() == installed {
+            return Ok(false);
+        }
+        let path = self.config.definition_path(self.platform);
+        self.prepare_stderr_log()?;
+        atomic_write(&path, contents.as_bytes())
+            .with_context(|| format!("refreshing native service definition {}", path.display()))?;
+        Ok(true)
+    }
+
+    /// The installed owned definition and its re-render with this config's log path.
+    fn refreshed_definition(&self) -> Result<Option<(Vec<u8>, String)>> {
+        let installed = match fs::read(self.config.definition_path(self.platform)) {
+            Ok(installed) => installed,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("reading the installed native service"),
+        };
+        self.ensure_owned_definition(&installed)?;
+        let mut config = installed_config(self.platform, &self.config, &installed)?;
+        config.stderr_path = self.config.stderr_path.clone();
+        let contents = environment::apply(
+            self.platform,
+            render(self.platform, &config)?,
+            Some(&installed),
+            None,
+        )?;
+        Ok(Some((installed, contents)))
+    }
+
+    /// Fails with [`BackgroundApprovalPending`] when macOS withholds the start.
     pub fn start(&self, enable_at_login: bool) -> Result<()> {
+        match self.start_or_approval(enable_at_login)? {
+            StartOutcome::Started => Ok(()),
+            StartOutcome::ApprovalPending { detail } => Err(BackgroundApprovalPending {
+                detail: detail.unwrap_or_default(),
+            }
+            .into()),
+        }
+    }
+
+    pub fn start_or_approval(&self, enable_at_login: bool) -> Result<StartOutcome> {
         self.require_installed()?;
         self.prepare_stderr_log()?;
         if self.platform == NativeServicePlatform::Macos
             && self.background_item() == BackgroundItemStatus::RequiresApproval
         {
-            return Err(BackgroundApprovalPending {
-                detail: "Background Task Management requires approval".to_string(),
-            }
-            .into());
+            return Ok(StartOutcome::ApprovalPending {
+                detail: Some("Background Task Management requires approval".to_string()),
+            });
         }
         let was_enabled = self.status()?.enabled;
         if enable_at_login {
@@ -597,7 +796,7 @@ where
                 if !enable_at_login && !was_enabled {
                     self.set_enabled(true)?;
                 }
-                let start_result = (|| -> Result<()> {
+                let start_result = (|| -> Result<StartOutcome> {
                     let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
                     let domain = format!("gui/{}", self.current_uid()?);
                     let path = self.config.definition_path(self.platform);
@@ -619,10 +818,9 @@ where
                                     | BackgroundItemStatus::NotFound
                             )
                         {
-                            return Err(BackgroundApprovalPending {
-                                detail: output_detail(&bootstrap),
-                            }
-                            .into());
+                            return Ok(StartOutcome::ApprovalPending {
+                                detail: Some(output_detail(&bootstrap)),
+                            });
                         }
                         bail!(
                             "launchctl could not start Gents: {} (bootstrap: {})",
@@ -630,7 +828,7 @@ where
                             output_detail(&bootstrap)
                         );
                     }
-                    Ok(())
+                    Ok(StartOutcome::Started)
                 })();
                 let restore_result = if !enable_at_login && !was_enabled {
                     self.set_enabled(false)
@@ -638,9 +836,12 @@ where
                     Ok(())
                 };
                 match (start_result, restore_result) {
-                    (Ok(()), Ok(())) => Ok(()),
+                    (Ok(outcome), Ok(())) => Ok(outcome),
                     (Err(start), Ok(())) => Err(start),
-                    (Ok(()), Err(restore)) => Err(restore).context(
+                    (Ok(StartOutcome::ApprovalPending { .. }), Err(restore)) => bail!(
+                        "Gents failed to start: {BACKGROUND_APPROVAL_REQUIRED}; restoring disabled-at-login state also failed, so enablement is uncertain: {restore:#}"
+                    ),
+                    (Ok(StartOutcome::Started), Err(restore)) => Err(restore).context(
                         "Gents started, but restoring disabled-at-login state failed; enablement is uncertain",
                     ),
                     (Err(start), Err(restore)) => bail!(
@@ -659,7 +860,8 @@ where
                 self.run_checked(
                     "systemctl",
                     &["--user".into(), "start".into(), SYSTEMD_UNIT.into()],
-                )
+                )?;
+                Ok(StartOutcome::Started)
             }
         }
     }
@@ -953,13 +1155,6 @@ where
         Ok(())
     }
 
-    fn render_definition(&self) -> Result<String> {
-        match self.platform {
-            NativeServicePlatform::Macos => render_launchd(&self.config),
-            NativeServicePlatform::Linux => render_systemd(&self.config),
-        }
-    }
-
     /// Confirm the service-manager transition: launchd no longer has the job
     /// label loaded, or systemd reports the unit inactive. This does not claim
     /// an independent observation of the former child PID.
@@ -1066,6 +1261,22 @@ where
             }
         })
     }
+}
+
+fn render(platform: NativeServicePlatform, config: &NativeServiceConfig) -> Result<String> {
+    match platform {
+        NativeServicePlatform::Macos => render_launchd(config),
+        NativeServicePlatform::Linux => render_systemd(config),
+    }
+}
+
+fn validate_installable(config: &NativeServiceConfig) -> Result<()> {
+    validate_config(config)?;
+    ensure_durable_service_executable(
+        &config.executable,
+        std::env::var_os("APPDIR").as_deref().map(Path::new),
+        std::env::var_os("APPIMAGE").as_deref().map(Path::new),
+    )
 }
 
 fn validate_config(config: &NativeServiceConfig) -> Result<()> {
@@ -1236,7 +1447,7 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
         .transpose()?
         .unwrap_or_else(|| "journal".to_string());
     Ok(format!(
-        "[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={}\nStandardOutput=journal\nStandardError={stderr}\nRestart=always\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={}\nStandardOutput=journal\nStandardError={stderr}\nRestart=always\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE} {HOME_GONE_EXIT_CODE} {STORE_KEY_UNAVAILABLE_EXIT_CODE} {MISSING_STORE_KEY_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
         command.join(" ")
     ))
 }
@@ -1351,6 +1562,81 @@ fn launchd_arguments(plist: &str) -> Result<Vec<String>> {
     Ok(values.into_iter().map(str::to_owned).collect())
 }
 
+/// The installed definition's own settings, so a refresh by another installer
+/// keeps its executable, PATH, user home and bundle association.
+fn installed_config(
+    platform: NativeServicePlatform,
+    config: &NativeServiceConfig,
+    definition: &[u8],
+) -> Result<NativeServiceConfig> {
+    let text = std::str::from_utf8(definition).context("native service definition is not UTF-8")?;
+    let mut installed = config.clone();
+    match platform {
+        NativeServicePlatform::Macos => {
+            let value = plist::Value::from_reader_xml(std::io::Cursor::new(text.as_bytes()))
+                .context("parsing launchd property list")?;
+            let arguments = launchd_arguments(text)?;
+            installed.executable = PathBuf::from(&arguments[0]);
+            installed.home = PathBuf::from(&arguments[3]);
+            let dictionary = value
+                .as_dictionary()
+                .context("launchd definition root is not a dictionary")?;
+            let environment = dictionary
+                .get("EnvironmentVariables")
+                .and_then(plist::Value::as_dictionary);
+            let variable = |name| {
+                environment
+                    .and_then(|environment| environment.get(name))
+                    .and_then(plist::Value::as_string)
+            };
+            installed.search_path = variable("PATH").map(OsString::from);
+            if let Some(user_home) = variable("HOME") {
+                installed.user_home = PathBuf::from(user_home);
+            }
+            installed.associated_bundle_id = dictionary
+                .get("AssociatedBundleIdentifiers")
+                .and_then(plist::Value::as_array)
+                .and_then(|ids| ids.first())
+                .and_then(plist::Value::as_string)
+                .map(str::to_owned);
+        }
+        NativeServicePlatform::Linux => {
+            installed.executable = PathBuf::from(systemd_executable(text)?);
+            installed.home = PathBuf::from(systemd_home(text)?);
+            installed.search_path = systemd_search_path(text)?.map(OsString::from);
+        }
+    }
+    Ok(installed)
+}
+
+fn systemd_search_path(unit: &str) -> Result<Option<String>> {
+    let Some(exec) = unit
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))
+    else {
+        return Ok(None);
+    };
+    let Some(start) = exec.find("\"PATH=") else {
+        return Ok(None);
+    };
+    let mut end = None;
+    let mut escaped = false;
+    for (offset, ch) in exec[start + 1..].char_indices() {
+        match ch {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => {
+                end = Some(start + 1 + offset);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let end = end.context("systemd PATH argument is not terminated")?;
+    let argument = parse_systemd_quoted(&exec[start..=end])?;
+    Ok(argument.strip_prefix("PATH=").map(str::to_owned))
+}
+
 fn systemd_home(unit: &str) -> Result<String> {
     let exec = unit
         .lines()
@@ -1425,17 +1711,20 @@ fn output_detail(output: &CommandOutput) -> String {
     }
 }
 
+fn launchd_pid(output: &str) -> Option<u32> {
+    output.lines().map(str::trim).find_map(|line| {
+        line.strip_prefix("pid = ")
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .filter(|pid| *pid > 0)
+    })
+}
+
 fn launchd_is_running(output: &str) -> bool {
     let state_running = output
         .lines()
         .map(str::trim)
         .any(|line| line == "state = running");
-    let has_pid = output.lines().map(str::trim).any(|line| {
-        line.strip_prefix("pid = ")
-            .and_then(|pid| pid.parse::<u32>().ok())
-            .is_some_and(|pid| pid > 0)
-    });
-    state_running && has_pid
+    state_running && launchd_pid(output).is_some()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1447,10 +1736,6 @@ pub struct ServiceExit {
 }
 
 impl ServiceExit {
-    pub fn incompatible_store(&self) -> bool {
-        self.refused_store().is_some()
-    }
-
     pub fn refused_store(
         &self,
     ) -> Option<gents_store::local::storage_backend::IncompatibleStoreKind> {
@@ -1464,9 +1749,31 @@ impl ServiceExit {
             Some(INSECURE_KEY_EXIT_CODE) => {
                 Some(gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey)
             }
+            Some(MISSING_STORE_KEY_EXIT_CODE) => {
+                Some(gents::store::local::storage_backend::IncompatibleStoreKind::MissingStoreKey)
+            }
             _ => None,
         }
     }
+
+    pub fn refusal(&self) -> Option<ServiceRefusal> {
+        if let Some(kind) = self.refused_store() {
+            return Some(ServiceRefusal::Store(kind));
+        }
+        match self.code {
+            Some(STORE_KEY_UNAVAILABLE_EXIT_CODE) => Some(ServiceRefusal::StoreKeyUnavailable),
+            Some(HOME_GONE_EXIT_CODE) => Some(ServiceRefusal::HomeGone),
+            _ => None,
+        }
+    }
+}
+
+/// Why the server refused to run, read from its exit code alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceRefusal {
+    Store(gents::store::local::storage_backend::IncompatibleStoreKind),
+    StoreKeyUnavailable,
+    HomeGone,
 }
 
 fn launchd_exit_failure(output: &str) -> Option<ServiceExit> {
@@ -1591,5 +1898,70 @@ fn ensure_launchd_print_result(output: &CommandOutput) -> Result<()> {
             "launchctl could not inspect Gents: {}",
             output_detail(output)
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents::store::local::storage_backend::IncompatibleStoreKind;
+
+    fn exit(code: i32) -> ServiceExit {
+        ServiceExit {
+            reason: format!("exited with code {code}"),
+            restarts: 0,
+            clean: false,
+            code: Some(code),
+        }
+    }
+
+    #[test]
+    fn refusal_codes_map_to_their_reason() {
+        for (code, refusal) in [
+            (
+                65,
+                Some(ServiceRefusal::Store(IncompatibleStoreKind::UnknownLineage)),
+            ),
+            (
+                66,
+                Some(ServiceRefusal::Store(IncompatibleStoreKind::InsecureKey)),
+            ),
+            (
+                67,
+                Some(ServiceRefusal::Store(IncompatibleStoreKind::ForeignVersion)),
+            ),
+            (68, Some(ServiceRefusal::HomeGone)),
+            (69, Some(ServiceRefusal::StoreKeyUnavailable)),
+            (
+                72,
+                Some(ServiceRefusal::Store(
+                    IncompatibleStoreKind::MissingStoreKey,
+                )),
+            ),
+            (1, None),
+        ] {
+            assert_eq!(exit(code).refusal(), refusal, "{code}");
+        }
+    }
+
+    #[test]
+    fn another_versions_schema_exits_as_an_incompatible_store() {
+        assert_eq!(
+            incompatible_store_exit_code(IncompatibleStoreKind::OtherVersionSchema),
+            INCOMPATIBLE_STORE_EXIT_CODE
+        );
+    }
+
+    #[test]
+    fn missing_store_key_has_its_own_code() {
+        assert_eq!(
+            incompatible_store_exit_code(IncompatibleStoreKind::MissingStoreKey),
+            MISSING_STORE_KEY_EXIT_CODE
+        );
+        assert_eq!(MISSING_STORE_KEY_EXIT_CODE, 72);
+        assert_eq!(
+            exit(MISSING_STORE_KEY_EXIT_CODE).refused_store(),
+            Some(IncompatibleStoreKind::MissingStoreKey)
+        );
     }
 }

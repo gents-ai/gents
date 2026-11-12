@@ -33,6 +33,7 @@ mod interactive_backend;
 mod next_call;
 mod operation_failure;
 pub mod packs;
+pub mod repair;
 mod request_helpers;
 mod resolve_helpers;
 pub mod server_host;

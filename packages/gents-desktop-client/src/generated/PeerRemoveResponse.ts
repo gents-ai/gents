@@ -3,4 +3,8 @@ import type { DesktopBootstrapSummary } from "./DesktopBootstrapSummary.js";
 import type { DesktopRuntimeSnapshot } from "./DesktopRuntimeSnapshot.js";
 import type { PeerMutationView } from "./PeerMutationView.js";
 
-export type PeerRemoveResponse = { mutation: PeerMutationView, bootstrap: DesktopBootstrapSummary, client: DesktopRuntimeSnapshot | null, };
+export type PeerRemoveResponse = { mutation: PeerMutationView, bootstrap: DesktopBootstrapSummary, client: DesktopRuntimeSnapshot | null,
+/**
+ * What this client start set aside before opening, for the repair banner.
+ */
+repairNote?: string | null, };

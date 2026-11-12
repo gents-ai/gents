@@ -34,6 +34,18 @@ pub async fn ensure_migrations(node: &EmbeddedNode) -> Result<MigrationReport> {
     Ok(report)
 }
 
+/// The read-only refusals [`ensure_migrations`] raises before it writes: a
+/// store whose branchability or identity policies another Gents version
+/// declared. Callers decide from it whether this build can take the store.
+pub async fn validate_existing_schema(node: &EmbeddedNode) -> Result<()> {
+    let registry = &*DEFAULT_REGISTRY;
+    validate_runtime_locality(node)?;
+    validate_identity_bindings(node, registry)?;
+    validate_legacy_backend_bindings(node, registry).await?;
+    validate_client_journal_binding(node, registry)?;
+    validate_mailbox_binding(node, registry)
+}
+
 /// DefraDB omits branchability from schema CIDs and rejects changes to it.
 /// A matching lineage therefore cannot establish runtime-local placement. Refuse
 /// an incompatible store before registering or changing any of its collections;

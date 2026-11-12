@@ -3,20 +3,76 @@ use super::ensure_allowed;
 use super::native::{native_service, run_native};
 use super::pairing::pairing_is_ready;
 use super::port::{
-    observe_port_readiness, occupied_port_message, status_unreadable_error, user_status_signer,
-    PortReadiness,
+    observe_port_readiness, occupied_port_message, sentence, status_unreadable_error,
+    user_status_signer, PortReadiness,
 };
 use super::preference::load_bound_preference;
-use super::readiness::{
-    managed_selection_outdated_message, refused_runtime_store, CRASH_LOOP_RESTARTS,
-};
+use super::readiness::{managed_selection_outdated_message, refused_runtime_store};
 use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerState, ManagedServerStatus};
+use gents_store::local::storage_backend::IncompatibleStoreKind;
 use gents_desktop_core::preference::StoredManagedServer;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
+use gents_server::repair::crash_loop;
+pub(super) use gents_server::repair::crash_loop::{CrashLoopWatch, JobSample};
+use gents_server::repair::reason::{blocker_for_exit, read_last_error};
 use tauri::{AppHandle, Emitter, Runtime};
+
+/// A store refusal the launch-time repair does not own: a missing store key
+/// is set aside by the repair instead of shown as an incompatible home.
+pub(super) fn store_refusal(
+    exit: &gents_service::native_service::ServiceExit,
+) -> Option<IncompatibleStoreKind> {
+    exit.refused_store()
+        .filter(|kind| *kind != IncompatibleStoreKind::MissingStoreKey)
+}
+
+/// The last error the background Node logged: the shared log first, then the
+/// log an older desktop install wrote. No user home, no read.
+pub(super) async fn last_runtime_error(state: &DesktopAppState) -> Option<String> {
+    last_error_in(dirs::home_dir()?, state.policy.desktop_paths.root()).await
+}
+
+pub(super) async fn last_error_in(
+    user_home: std::path::PathBuf,
+    desktop_root: &std::path::Path,
+) -> Option<String> {
+    let old_desktop_log = crate::logging::runtime_error_log(desktop_root);
+    read_last_error(&user_home, Some(&old_desktop_log)).await
+}
+
+/// The node home once its node exited because the home was deleted, or once
+/// its service stays defined with no `init.json` left in the home (no node
+/// starts without it): the exit is read only between respawns, so a read that
+/// lands during one, or during a start the desktop retries, would miss it.
+/// Kept across later exits, which fail otherwise when a respawn finds the
+/// directory recreated mid-delete, until a new setup writes `init.json`.
+pub(super) async fn deleted_home(
+    kept: Option<std::path::PathBuf>,
+    exit: Option<&gents_service::native_service::ServiceExit>,
+    service_defined: bool,
+    node_home: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let init = gents_store::local::home::init_config_path(node_home);
+    if tokio::fs::try_exists(init).await.unwrap_or(true) {
+        return None;
+    }
+    let gone = kept.is_some()
+        || service_defined
+        || exit.and_then(gents_service::native_service::ServiceExit::refusal)
+            == Some(gents_service::native_service::ServiceRefusal::HomeGone);
+    gone.then(|| node_home.to_path_buf())
+}
+
+/// Whether `now` is an exit whose log tail has not been read yet.
+pub(super) fn exit_is_new(
+    seen: Option<&gents_service::native_service::ServiceExit>,
+    now: Option<&gents_service::native_service::ServiceExit>,
+) -> bool {
+    now.is_some() && seen != now
+}
 
 pub(super) async fn observe_managed_server_status<R>(
     app: &AppHandle<R>,
@@ -51,14 +107,40 @@ where
         }
         None => PortReadiness::NotListening,
     };
+    let (seen, kept_deleted_home) = {
+        let managed = state.managed_server.lock().await;
+        (managed.last_exit.clone(), managed.deleted_home.clone())
+    };
+    let last_exit_error = if exit_is_new(seen.as_ref(), last_exit.as_ref()) {
+        Some(last_runtime_error(state).await)
+    } else {
+        None
+    };
+    let deleted = match state.policy.node_home.as_deref() {
+        Some(node_home) => {
+            deleted_home(
+                kept_deleted_home,
+                last_exit.as_ref(),
+                native.job_loaded,
+                node_home,
+            )
+            .await
+        }
+        None => None,
+    };
     let mut managed = state.managed_server.lock().await;
+    if let Some(error) = last_exit_error {
+        managed.last_exit_error = error;
+    }
+    managed.last_exit = last_exit.clone();
+    managed.deleted_home = deleted;
     if native.job_loaded
         || native.background_item == gents_service::native_service::BackgroundItemStatus::Enabled
     {
         managed.approval_refused = false;
     }
     if let (Some(exit), Some(node_home)) = (last_exit.as_ref(), state.policy.node_home.as_deref()) {
-        if let Some(kind) = exit.refused_store().filter(|_| !managed.starting) {
+        if let Some(kind) = store_refusal(exit).filter(|_| !managed.starting) {
             managed.incompatible_store = Some(refused_runtime_store(node_home, Some(kind)));
         }
     }
@@ -66,6 +148,9 @@ where
         managed
             .crash_loop
             .observe(job_sample(&port, native.job_loaded, last_exit.as_ref()));
+    if crash_loop.is_none() && last_exit.is_none() {
+        managed.last_exit_error = None;
+    }
     let mut status = status_from(
         &managed,
         stored.as_ref(),
@@ -165,51 +250,14 @@ pub(super) fn job_sample<'a>(
     job_loaded: bool,
     last_exit: Option<&'a gents_service::native_service::ServiceExit>,
 ) -> JobSample<'a> {
-    match (port, last_exit) {
-        (PortReadiness::Ready(_) | PortReadiness::StatusUnreadable { .. }, _) => JobSample::Ready,
-        _ if !job_loaded => JobSample::Unloaded,
-        (_, Some(exit)) => JobSample::Exited(exit),
-        (_, None) => JobSample::Running,
-    }
-}
-
-pub(super) fn restarts_since(baseline: &mut Option<u64>, counter: u64) -> u64 {
-    let first = baseline
-        .filter(|first| *first <= counter)
-        .unwrap_or(counter);
-    *baseline = Some(first);
-    counter - first
-}
-
-#[derive(Debug, Default)]
-pub struct CrashLoopWatch {
-    pub(super) baseline: Option<u64>,
-    looping: Option<(gents_service::native_service::ServiceExit, u64)>,
-}
-
-pub(super) enum JobSample<'a> {
-    Unloaded,
-    Ready,
-    Running,
-    Exited(&'a gents_service::native_service::ServiceExit),
-}
-
-impl CrashLoopWatch {
-    pub(super) fn observe(
-        &mut self,
-        sample: JobSample<'_>,
-    ) -> Option<(gents_service::native_service::ServiceExit, u64)> {
-        match sample {
-            JobSample::Unloaded | JobSample::Ready => *self = Self::default(),
-            JobSample::Exited(exit) if exit.clean => *self = Self::default(),
-            JobSample::Exited(exit) => {
-                let restarts = restarts_since(&mut self.baseline, exit.restarts);
-                self.looping = (restarts >= CRASH_LOOP_RESTARTS).then(|| (exit.clone(), restarts));
-            }
-            JobSample::Running => {}
-        }
-        self.looping.clone()
-    }
+    crash_loop::job_sample(
+        matches!(
+            port,
+            PortReadiness::Ready(_) | PortReadiness::StatusUnreadable { .. }
+        ),
+        job_loaded,
+        last_exit,
+    )
 }
 
 pub(super) fn status_from(
@@ -223,7 +271,7 @@ pub(super) fn status_from(
         native.is_some_and(|status| status.approval_pending(managed.approval_refused));
     let exited_cleanly = last_exit.is_some_and(|exit| exit.clean);
     let settled = !managed.starting && !approval_required;
-    let refused_exit = last_exit.is_some_and(|exit| settled && exit.incompatible_store());
+    let refused_exit = last_exit.is_some_and(|exit| settled && store_refusal(exit).is_some());
     let refused_store = refused_exit.then(|| {
         managed
             .incompatible_store
@@ -236,12 +284,7 @@ pub(super) fn status_from(
     let crashed = refused_store.or_else(|| {
         crash_loop
             .filter(|_| settled)
-            .map(|(exit, restarts)| {
-                format!(
-                    "The background Node keeps exiting before it becomes ready: it {} and was restarted {restarts} times in a row. Restart the Node, or check its log.",
-                    exit.reason
-                )
-            })
+            .map(|(exit, _)| sentence(&blocker_for_exit(exit, managed.last_exit_error.clone())))
             .or_else(|| {
                 last_exit
                     .filter(|exit| {
@@ -250,10 +293,11 @@ pub(super) fn status_from(
                             && native.is_some_and(|status| status.failed)
                     })
                     .map(|exit| {
-                        format!(
-                            "The background Node failed and will not be restarted: it {} after {} restarts. Start the Node again, or check its log.",
-                            exit.reason, exit.restarts
-                        )
+                        let cause = managed
+                            .last_exit_error
+                            .clone()
+                            .or_else(|| exit.code.is_none().then(|| exit.reason.clone()));
+                        sentence(&blocker_for_exit(exit, cause))
                     })
             })
     });
@@ -290,6 +334,10 @@ pub(super) fn status_from(
         runtime_booting: false,
         error: crashed.or_else(|| managed.last_error.clone()),
         error_code: refused.then_some(BridgeErrorCode::IncompatibleLocalStore),
+        deleted_home: managed
+            .deleted_home
+            .as_ref()
+            .map(|home| home.display().to_string()),
     }
 }
 

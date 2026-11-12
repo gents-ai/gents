@@ -124,7 +124,12 @@ impl LiveBox {
     }
 
     pub(super) fn gents(&self) -> Command {
-        let mut command = Command::new(cli_bin());
+        self.gents_from(cli_bin())
+    }
+
+    /// `gents` as run from another copy of the binary.
+    pub(super) fn gents_from(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
+        let mut command = Command::new(program);
         command
             .current_dir(&self.root)
             .env("HOME", &self.root)

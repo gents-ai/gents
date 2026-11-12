@@ -245,6 +245,25 @@ pub fn default_home_dir() -> Result<PathBuf> {
 
 pub const GENTS_HOME_ENV: &str = "GENTS_HOME";
 
+/// The folder `gents` opens with neither `--home` nor `GENTS_HOME`: the
+/// remembered folder, else `~/.gents`.
+pub fn default_home_ignoring_env() -> Result<PathBuf> {
+    let home = default_home_from(
+        None,
+        dirs::config_dir().as_deref(),
+        dirs::home_dir().as_deref(),
+    )?;
+    refuse_real_gents_home(&home, GENTS_HOME_ENV);
+    Ok(home)
+}
+
+/// Where Gents keeps state about its homes, outside every home.
+pub fn gents_config_dir() -> Result<PathBuf> {
+    Ok(remembered_home_dir(
+        &dirs::config_dir().ok_or(HomeError::HomeDirUnresolved)?,
+    ))
+}
+
 /// An unreadable remembered file is an error: falling back to `~/.gents` would
 /// open the wrong data.
 fn default_home_from(
@@ -381,6 +400,9 @@ pub const UX_PREVIEW_DIR_NAME: &str = "ux-preview";
 /// that window has `init.json` but no default agent, and a service started on it exits at once
 /// and is restarted forever.
 pub const INIT_PENDING_FILE_NAME: &str = "init-pending";
+/// Written by `init` when it reserves a fresh node bootstrap; its presence
+/// refuses another bootstrap attempt at the same home.
+pub const BOOTSTRAP_CONSUMED_FILE_NAME: &str = ".node-bootstrap-consumed";
 
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
@@ -423,10 +445,14 @@ pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
 /// cold backups across retirement of live node state. Moving these paths on
 /// reset would strand a running helper; it authenticates the node/build again
 /// before retirement, so retained receipts confer no authority on a fresh node.
-/// The node bootstrap marker stays across retirement, so a retired home cannot
-/// become a fresh bootstrap attempt; the CLI writes it outside this owner.
+/// The node bootstrap marker stays at the path across retirement, so a retired
+/// home cannot become a fresh bootstrap attempt; the CLI writes it outside this
+/// owner. The one exception is the onboarding repair's set-aside
+/// (`gents_server::repair::home::set_aside_home`): it moves the whole folder,
+/// identity keys and data included, so the next setup at that path provisions
+/// a new node and confers nothing from the old one.
 pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] =
-    &[SERVICE_UPDATES_DIR_NAME, ".node-bootstrap-consumed"];
+    &[SERVICE_UPDATES_DIR_NAME, BOOTSTRAP_CONSUMED_FILE_NAME];
 
 pub fn default_data_dir(home_dir: &Path) -> PathBuf {
     home_dir.join(DATA_DIR_NAME)

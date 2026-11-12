@@ -300,7 +300,7 @@ where
             gents_store::local::storage_backend::incompatible_store_kind(
                 &gents_store::local::home::default_data_dir(node_home)
             ),
-            Ok(Some(_))
+            Ok(Some(kind)) if kind != gents::store::local::storage_backend::IncompatibleStoreKind::MissingStoreKey
         );
     let refused_store = refused.then(|| refused_runtime_store(node_home, refused_kind));
     state.managed_server.lock().await.incompatible_store = refused_store.clone();

@@ -6,6 +6,7 @@ import {
   type DesktopApiAdapter,
   type ManagedServerResetResult,
 } from "@source-inc/gents-desktop-client";
+import type { ManagedServerRepairResult } from "@source-inc/gents-desktop-client/generated/ManagedServerRepairResult";
 
 import { ManagedServerStartupError } from "../lib/managedServerStartup";
 import type { ClientState, ClientStore } from "./clientStore";
@@ -16,6 +17,8 @@ type IncompatibleHomeOptions = {
   client: ClientStore;
   setError: (error: string | null) => void;
   startFresh: () => Promise<void>;
+  /** Setup follows a home the repair set aside instead of asking. */
+  setAside: (repair: ManagedServerRepairResult) => void;
 };
 
 export type IncompatibleHome = {
@@ -47,6 +50,7 @@ export function createIncompatibleHomeOps({
   client,
   setError,
   startFresh,
+  setAside,
 }: IncompatibleHomeOptions) {
   let previewing: Promise<boolean> | null = null;
   const home = () => client.getState().home;
@@ -64,6 +68,11 @@ export function createIncompatibleHomeOps({
     const resetManagedServer = api.resetManagedServer;
     const pending = (async () => {
       try {
+        const repaired = await api.repairManagedServer?.();
+        if (repaired?.outcome === "needsSetup") {
+          setAside(repaired);
+          return true;
+        }
         setHome({ report: await resetManagedServer(), fullReset: false });
         return true;
       } catch (previewError) {

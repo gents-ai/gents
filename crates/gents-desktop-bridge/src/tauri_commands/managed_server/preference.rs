@@ -4,19 +4,6 @@ use crate::state::DesktopAppState;
 use crate::types::ManagedServerToolCeiling;
 use gents_desktop_core::preference::{ReviewedHome, StoredManagedServer, MANAGED_SERVER_CONFIG};
 
-pub(super) async fn read_initialized_did(node_home: &std::path::Path) -> Option<String> {
-    tokio::fs::read(node_home.join("init.json"))
-        .await
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| {
-            value
-                .get("node_did")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
-}
-
 pub(super) async fn read_initialized_name(node_home: &std::path::Path) -> Option<String> {
     tokio::fs::read(node_home.join("init.json"))
         .await
@@ -156,6 +143,10 @@ pub(super) async fn load_bound_preference(
     Ok(Some(bind_preference(stored, home.as_ref())))
 }
 
+/// A preference in another version's shape (valid JSON whose fields differ)
+/// is set aside so setup starts fresh. A truncated file fails as end of input
+/// and is left in place, because `save_preference` writes it in place and a
+/// concurrent read can see a partial write.
 pub(super) async fn load_preference(
     state: &DesktopAppState,
 ) -> Result<Option<StoredManagedServer>, BridgeError> {
@@ -165,9 +156,22 @@ pub(super) async fn load_preference(
         .root()
         .join(MANAGED_SERVER_CONFIG);
     match tokio::fs::read(&path).await {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|error| BridgeError::untyped(error.to_string())),
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(stored) => Ok(Some(stored)),
+            Err(error) if error.classify() == serde_json::error::Category::Data => {
+                let aside = gents_desktop_core::client::set_aside_unreadable(&path)
+                    .await
+                    .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
+                tracing::warn!(
+                    target: "gents_desktop::managed_server",
+                    %error,
+                    aside = %aside.display(),
+                    "managed-server.json is from another version; set it aside"
+                );
+                Ok(None)
+            }
+            Err(error) => Err(BridgeError::untyped(error.to_string())),
+        },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(BridgeError::untyped(error.to_string())),
     }

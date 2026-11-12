@@ -1,7 +1,10 @@
 import { useEffect, useReducer, useState } from "react";
 import { useStore } from "zustand";
 import { ArrowRight, Server, Wifi } from "lucide-react";
-import { enrollmentActivationMessage } from "@source-inc/gents-desktop-client";
+import {
+  enrollmentActivationMessage,
+  isSavedRemote,
+} from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientSnapshot,
   ManagedServerAuthorityInput,
@@ -485,20 +488,30 @@ export function OnboardingWizard({
         >
           {allowLocal ? "Let’s get set up" : "Connect to your node"}
         </Title>
-        {!allowLocal &&
-          snapshot?.client?.deployments
-            .filter((node) => node.chatSafe)
-            .map((node) => (
-              <Button
-                key={node.nodeDid}
-                className="mb-3 w-full"
-                variant="outline"
-                disabled={busy}
-                onClick={() => onDone(snapshot, node.nodeDid)}
-              >
-                <span className="truncate">Continue to {node.label}</span>
-              </Button>
-            ))}
+        {snapshot?.client?.deployments
+          .filter(
+            (node) =>
+              node.chatSafe &&
+              (!allowLocal ||
+                Boolean(
+                  bootstrap?.savedPeers.some(
+                    (peer) =>
+                      peer.nodeDid === node.nodeDid &&
+                      isSavedRemote(peer, bootstrap.initNodeDid),
+                  ),
+                )),
+          )
+          .map((node) => (
+            <Button
+              key={node.nodeDid}
+              className="mb-3 w-full"
+              variant="outline"
+              disabled={busy}
+              onClick={() => onDone(snapshot, node.nodeDid)}
+            >
+              <span className="truncate">Continue with {node.label}</span>
+            </Button>
+          ))}
         {!allowLocal && enrollmentRequests && enrollmentRequests.length > 0 && (
           <div className="mb-6 grid min-w-0 gap-2">
             <p className="text-sm text-muted-foreground">
