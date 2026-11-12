@@ -560,11 +560,20 @@ structure CursorOutput where
   post : StateWire
   checkpointSucceeds : Option Bool
   acknowledgmentAllowed : Bool
-  pending : List ArrivalWire
   journalAfter : List ArrivalWire
   deriving Lean.ToJson
 
-def cursorOutput (i : CursorInput) : CursorOutput :=
+/-- One cursor scenario run through the durable delivery model: the cursor
+before and after the checkpoint, the committed delivery state, and whether a
+checkpoint at the entry is accepted. -/
+structure CursorRun where
+  source : List EventDelivery.Durable.Arrival
+  before : EventDelivery.Durable.Cursor
+  after : EventDelivery.Durable.Cursor
+  state : State
+  accepted : Bool → Bool
+
+def cursorRun (i : CursorInput) : CursorRun :=
   let source := i.source.map (·.toModel)
   let journal : EventDelivery.Durable.Journal := { head := i.journalHead.toNat!, entries := source }
   let first := EventDelivery.Durable.seed {} i.seedHead.toNat!
@@ -580,17 +589,20 @@ def cursorOutput (i : CursorInput) : CursorOutput :=
     (i.sourceEligible.getD (entry.position - 1) false)
   let mode := modeOfWire i.mode
   let position := i.entry.position.toNat!
-  let accepted := EventDelivery.Durable.checkpointAccepted before afterState journal
-    position mode i.busy eligible
   let afterCursor := match i.checkpointCommit with
     | none => before
     | some commit => EventDelivery.Durable.acknowledge before afterState journal
         position mode i.busy eligible commit
-  { preCursor := .ofModel before, postCursor := .ofModel afterCursor, post := .ofModel afterState,
-    checkpointSucceeds := i.checkpointCommit.map accepted,
-    acknowledgmentAllowed := accepted true,
-    pending := (EventDelivery.Durable.pending afterCursor source i.enabled).map .ofModel,
-    journalAfter := (EventDelivery.Durable.pending afterCursor source true).map .ofModel }
+  { source, before, after := afterCursor, state := afterState,
+    accepted := EventDelivery.Durable.checkpointAccepted before afterState journal
+      position mode i.busy eligible }
+
+def cursorOutput (i : CursorInput) : CursorOutput :=
+  let run := cursorRun i
+  { preCursor := .ofModel run.before, postCursor := .ofModel run.after, post := .ofModel run.state,
+    checkpointSucceeds := i.checkpointCommit.map run.accepted,
+    acknowledgmentAllowed := run.accepted true,
+    journalAfter := (EventDelivery.Durable.pending run.after run.source true).map .ofModel }
 
 def cursorScenarios : List CursorScenario :=
   [({ name := "first_seed_excludes_existing", seedHead := 3 } : CursorScenario),
@@ -618,6 +630,19 @@ def cursorScenarios : List CursorScenario :=
 def arrivalCursor : Family CursorInput CursorOutput where
   inputs := cursorScenarios.map cursorInput
   model := cursorOutput
+
+/-- model-production-gap: the arrivals a consumer still owes after the
+checkpoint, empty while its Trigger is disabled (`EventDelivery.Durable.pending`).
+Production returns no such list: the durable event-source scan decides each
+arrival's delivery inside its loop, so no production function yields it for a
+consumer to compare. The journal after the cursor is observed by
+`trigger_delivery_arrival_cursor` (`journalAfter`). -/
+@[conformance_family]
+def arrivalCursorPending : Family CursorInput (List ArrivalWire) where
+  inputs := cursorScenarios.map cursorInput
+  model := fun i =>
+    let run := cursorRun i
+    (EventDelivery.Durable.pending run.after run.source i.enabled).map .ofModel
 
 /-- An unadmitted matching arrival keeps the cursor, stays in the journal and
 leaves no receipt. -/

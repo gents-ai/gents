@@ -939,6 +939,29 @@ fn handoff_consumer() -> gents_protocol::event_delivery::EventConsumer {
     }
 }
 
+/// Whether the consumer's arrival cursor exists, read before `load_or_seed`
+/// could create it.
+async fn arrival_cursor_seeded(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+    consumer: &gents_protocol::event_delivery::EventConsumer,
+) -> bool {
+    access
+        .transact_write("test.read_arrival_cursor_seeded", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    gents_documents::event_source_cursor::load_for_source(
+                        txn, owner, consumer, "Work",
+                    )
+                    .await?
+                    .is_some(),
+                )
+            })
+        })
+        .await
+        .unwrap()
+}
+
 async fn saved_arrival_cursor(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
@@ -1077,6 +1100,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 .await
                 .unwrap();
         }
+        let pre_seeded = arrival_cursor_seeded(&agent, owner, &handoff_consumer()).await;
         let pre_after = saved_arrival_cursor(&agent, owner).await;
         let adapt_fire = |mut fire: Fire| {
             fire.identity.owner_did = owner.to_owned();
@@ -1175,6 +1199,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         } else {
             None
         };
+        let post_seeded = arrival_cursor_seeded(&agent, owner, &handoff_consumer()).await;
         let after = saved_arrival_cursor(&agent, owner).await;
         let page = access.execute(&format!(
             "{{ _documentArrivals(collection: \"Work\", after: \"{}\", limit: 128) {{ entries {{ cursor docID }} }} }}",
@@ -1199,24 +1224,6 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 })
             })
             .collect::<Vec<_>>();
-        let trigger_enabled = access
-            .transact_write("test.read_arrival_trigger", |txn| {
-                Box::pin(async move {
-                    let trigger = gents_documents::read_desired_state_document_in_txn(
-                        txn,
-                        gents_store::collection::Collection::Trigger,
-                        owner,
-                        "handoff",
-                    )
-                    .await?
-                    .unwrap();
-                    Ok::<_, anyhow::Error>(
-                        serde_json::from_value::<gents_documents::Trigger>(trigger)?.enabled,
-                    )
-                })
-            })
-            .await
-            .unwrap();
         let post = observed_delivery_state(&agent, |id| {
             let mut id = id.clone();
             if id.owner_did == owner {
@@ -1232,12 +1239,11 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         })
         .await;
         case.check(gents_lean_vocab::family::recode(&serde_json::json!({
-            "pre_cursor": {"seeded": true, "after": pre_after},
-            "post_cursor": {"seeded": true, "after": after},
+            "pre_cursor": {"seeded": pre_seeded, "after": pre_after},
+            "post_cursor": {"seeded": post_seeded, "after": after},
             "post": post,
             "checkpoint_succeeds": checkpoint_succeeds,
             "acknowledgment_allowed": acknowledgment_allowed,
-            "pending": if trigger_enabled { journal_after.clone() } else { Vec::new() },
             "journal_after": journal_after,
         })));
         node.shutdown().await.expect("node shutdown");
@@ -1443,6 +1449,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 .await
                 .unwrap();
         }
+        let pre_seeded = arrival_cursor_seeded(&agent_access, owner, &handoff_binding()).await;
         let pre_after = saved().await;
         for receipt in gents_lean_vocab::family::recode::<_, Vec<FireIdentity>>(&input.pre_receipts) {
             admit_callback_arrival(
@@ -1520,6 +1527,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         } else {
             None
         };
+        let post_seeded = arrival_cursor_seeded(&agent_access, owner, &handoff_binding()).await;
         let after = saved().await;
         let page = access.execute(&format!(
             "{{ _documentArrivals(collection: \"Work\", after: \"{}\", limit: 128) {{ entries {{ cursor docID }} }} }}",
@@ -1567,8 +1575,8 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 .unwrap()
         });
         case.check(gents_lean_vocab::family::recode(&serde_json::json!({
-            "pre_cursor": {"seeded": true, "after": pre_after},
-            "post_cursor": {"seeded": true, "after": after},
+            "pre_cursor": {"seeded": pre_seeded, "after": pre_after},
+            "post_cursor": {"seeded": post_seeded, "after": after},
             "post_receipts": receipts,
             "checkpoint_succeeds": checkpoint_succeeds,
             "journal_after": journal_after,

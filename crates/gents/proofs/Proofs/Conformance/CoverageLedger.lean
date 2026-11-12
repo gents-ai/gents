@@ -614,6 +614,10 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "trigger_delivery_arrival_cursor")
       "event-delivery" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "trigger_delivery_arrival_cursor_pending"
+      "model-production-gap: production returns no list of the arrivals a consumer still owes; the durable event-source scan decides each arrival's delivery inside its loop.")
+      "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "trigger_delivery_callback_cursor")
