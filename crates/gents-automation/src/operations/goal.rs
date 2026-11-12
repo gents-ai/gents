@@ -207,6 +207,35 @@ async fn observed_revision_is_current(
     Ok(expected.composite == current.cid)
 }
 
+/// The session's Goal revision as the caller observes it now; a set that
+/// sends it back is refused as stale once the Goal changes.
+pub async fn observe_revision(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+) -> anyhow::Result<Option<GoalRevision>> {
+    access
+        .transact_readonly("goal.observe_revision", |txn| {
+            Box::pin(async move {
+                let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
+                    return Ok(None);
+                };
+                let current = gents_store::graphql::newest_document_composite_commit_in_txn(
+                    txn,
+                    &goal.doc_id,
+                    "goal.observe_revision",
+                )
+                .await?
+                .context("goal has no unambiguous composite revision")?;
+                Ok::<_, anyhow::Error>(Some(GoalRevision {
+                    document: goal.doc_id,
+                    composite: current.cid,
+                }))
+            })
+        })
+        .await
+}
+
 /// Decides whether `actor` may start a Goal on the session now. `claim_key`
 /// names the creation claim the start would converge on, when it is not the
 /// session's deterministic one.
