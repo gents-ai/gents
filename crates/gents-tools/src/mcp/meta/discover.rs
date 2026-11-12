@@ -61,7 +61,8 @@ impl Tool for DiscoverToolsTool {
             ),
             &self.ctx.node_did,
         )
-        .await?
+        .await
+        .map_err(anyhow::Error::from)?
         .into_iter()
         .filter(|service| {
             service.enabled && self.ctx.service_selection(&service.service_id).is_some()
