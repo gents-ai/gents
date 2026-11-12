@@ -628,8 +628,8 @@ def caseCoverage : List CoverageEntry :=
       "TriggerDispatch")
       "triggers" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "goal_decision_cases"
-      "GoalDecisionCases")
+      "family"
+      "contracts_goal_decision")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_readiness_gate_cases"
@@ -859,8 +859,8 @@ def caseCoverage : List CoverageEntry :=
       "Model-derived missing, unknown and explicit purpose wire inputs require a strict native decoder and signed-field selection. No native consumer is bound; absent purpose must never default to normal.")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_decision_cases"
-      "GoalDecisionCases")
+      "family"
+      "contracts_goal_decision")
       "durable-goals" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "runtime_reconcile_cases"

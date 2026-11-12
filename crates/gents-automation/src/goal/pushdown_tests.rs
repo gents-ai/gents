@@ -8,7 +8,7 @@ use crate::goal::{
     GoalRequestTerminal, GoalState, GoalSubmissionAction, GoalSubmissionState,
 };
 use gents_lean_vocab::{
-    lean_goal_continuation_materialization_cases, lean_goal_create_cases, lean_goal_decision_cases,
+    lean_goal_continuation_materialization_cases, lean_goal_create_cases,
     lean_goal_readiness_gate_cases, lean_goal_submission_cases, lean_goal_transition_cases,
     lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
 };
@@ -28,33 +28,20 @@ fn parse_goal_decision(name: &str) -> Option<GoalDecision> {
 
 #[test]
 fn generated_goal_decision_cases_fence_runtime_controller() {
-    let cases = lean_goal_decision_cases();
-    assert_eq!(cases.len(), 30, "the durable-goal decision matrix drifted");
-    for case in cases {
-        let status = GoalStatus::parse(&case.status)
-            .unwrap_or_else(|| panic!("unknown status in Lean case {}", case.name));
-        let terminal = GoalRequestTerminal::parse(&case.terminal)
-            .unwrap_or_else(|| panic!("unknown terminal in Lean case {}", case.name));
-        let actual = decide_goal_continuation(
-            status,
-            terminal,
+    gents_lean_vocab::families::contracts_goal_decision::replay(|case| {
+        decide_goal_continuation(
+            case.status,
+            case.terminal,
             case.session_idle,
             case.child_exists,
             case.budget_reached,
             case.has_activity,
             case.request_is_wrapup,
-            case.infrastructure_retries,
+            i64::try_from(case.infrastructure_retries).expect("modeled retries fit i64"),
             case.wrapup_requested,
             case.wrapup_completed,
-        );
-        let expected = parse_goal_decision(&case.expected_decision).unwrap_or_else(|| {
-            panic!(
-                "unknown decision {:?} in Lean case {}",
-                case.expected_decision, case.name
-            )
-        });
-        assert_eq!(actual, expected, "Lean case {}", case.name);
-    }
+        )
+    });
 }
 
 #[test]

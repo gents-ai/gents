@@ -3,6 +3,8 @@ import Proofs.Automation.GoalAutomation
 import Proofs.Automation.GoalAutomation.ReadinessGate
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -145,27 +147,14 @@ def goalDecisionCases : List GoalDecisionCase :=
       requestIsWrapup := true, infrastructureRetries := 0
       wrapupRequested := true, wrapupCompleted := false })
 
-def goalDecisionCaseJson (w : GoalDecisionCase) : String :=
-  let decision := Goals.decide w.status w.terminal w.sessionIdle w.childExists
+deriving instance Lean.ToJson for Goals.RequestTerminal, GoalDecisionCase
+
+@[conformance_family]
+def goalDecision : Family GoalDecisionCase Goals.Decision where
+  inputs := goalDecisionCases
+  model := fun w => Goals.decide w.status w.terminal w.sessionIdle w.childExists
     w.budgetReached w.hasActivity w.requestIsWrapup w.infrastructureRetries
     w.wrapupRequested w.wrapupCompleted
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"status\":" ++ jsonString w.status.toDefraDB ++ ","
-    ++ "\"terminal\":" ++ jsonString (terminalName w.terminal) ++ ","
-    ++ "\"session_idle\":" ++ boolString w.sessionIdle ++ ","
-    ++ "\"child_exists\":" ++ boolString w.childExists ++ ","
-    ++ "\"budget_reached\":" ++ boolString w.budgetReached ++ ","
-    ++ "\"has_activity\":" ++ boolString w.hasActivity ++ ","
-    ++ "\"request_is_wrapup\":" ++ boolString w.requestIsWrapup ++ ","
-    ++ "\"infrastructure_retries\":" ++ toString w.infrastructureRetries ++ ","
-    ++ "\"wrapup_requested\":" ++ boolString w.wrapupRequested ++ ","
-    ++ "\"wrapup_completed\":" ++ boolString w.wrapupCompleted ++ ","
-    ++ "\"expected_decision\":" ++ jsonString (decisionName decision)
-    ++ "}"
-
-def goalDecisionCasesJson : String :=
-  jsonArray (goalDecisionCases.map goalDecisionCaseJson)
 
 structure GoalTransitionCase where
   name : String

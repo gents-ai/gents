@@ -217,10 +217,6 @@ pub fn lean_goal_create_cases() -> &'static [LeanGoalCreateCase] {
     &lean_contract_snapshot().goal_create_cases
 }
 
-pub fn lean_goal_decision_cases() -> &'static [LeanGoalDecisionCase] {
-    &lean_contract_snapshot().goal_decision_cases
-}
-
 pub fn lean_goal_readiness_gate_cases() -> &'static [LeanGoalReadinessGateCase] {
     &lean_contract_snapshot().goal_readiness_gate_cases
 }
@@ -2479,37 +2475,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +3000,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3141,7 +3105,6 @@ pub struct LeanContractSnapshot {
     pub discovery_scope_cases: Vec<serde_json::Value>,
     pub discovery_guidance_cases: Vec<LeanDiscoveryGuidanceCase>,
     pub budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
-    pub goal_decision_cases: Vec<LeanGoalDecisionCase>,
     pub goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,
     pub goal_claimed_readiness_cases: Vec<LeanGoalClaimedReadinessCase>,
     pub goal_transition_cases: Vec<LeanGoalTransitionCase>,
@@ -5060,22 +5023,6 @@ pub struct LeanGoalCreateCase {
     pub existing: bool,
     pub existing_matches: bool,
     pub expected: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanGoalDecisionCase {
-    pub name: String,
-    pub status: String,
-    pub terminal: String,
-    pub session_idle: bool,
-    pub child_exists: bool,
-    pub budget_reached: bool,
-    pub has_activity: bool,
-    pub request_is_wrapup: bool,
-    pub infrastructure_retries: i64,
-    pub wrapup_requested: bool,
-    pub wrapup_completed: bool,
-    pub expected_decision: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

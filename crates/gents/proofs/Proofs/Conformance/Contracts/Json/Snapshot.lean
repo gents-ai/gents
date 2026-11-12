@@ -567,8 +567,6 @@ def snapshotRequestCasesJson : String :=
       ++ toString Conformance.EventGroupContracts.eventGroupCaseCount ++ ","
     ++ "\"event_group_cases\":"
       ++ Conformance.EventGroupContracts.eventGroupCasesJson ++ ","
-    ++ "\"goal_decision_cases\":"
-      ++ goalDecisionCasesJson ++ ","
     ++ "\"goal_readiness_gate_cases\":"
       ++ goalReadinessGateCasesJson ++ ","
     ++ "\"goal_claimed_readiness_cases\":"
