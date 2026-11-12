@@ -1,81 +1,30 @@
 use super::*;
 use crate::system::identity_for;
 
-fn cause(name: &str) -> Cause {
-    match name {
-        "client" => Cause::Client,
-        "agent_new" => Cause::AgentNew,
-        "task_trigger" => Cause::TaskTrigger,
-        "plugin_job" => Cause::PluginJob,
-        other => panic!("unknown cause {other}"),
-    }
-}
-
-fn kind(name: &str) -> Kind {
-    match name {
-        "turn" => Kind::Turn,
-        "compaction" => Kind::Compaction,
-        "title" => Kind::Title,
-        "one_shot" => Kind::OneShot,
-        other => panic!("unknown kind {other}"),
-    }
-}
-
-fn flag(case: &serde_json::Value, key: &str) -> bool {
-    case[key].as_bool().unwrap()
-}
-
 #[test]
-fn generated_origin_cases_pick_the_wire_mode() {
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["prompt_assembly_claude_origin_cases"]
-        .as_array()
-        .unwrap();
-    assert_eq!(cases.len(), 128, "the Lean cases enumerate every origin");
-    for case in cases {
-        let name = &case["name"];
-        let origin = Origin {
-            cause: cause(case["cause"].as_str().unwrap()),
-            root_client: flag(case, "root_client"),
-            scheduled: flag(case, "scheduled"),
-            kind: kind(case["kind"].as_str().unwrap()),
-            appends_system_prompt: flag(case, "appends_system_prompt"),
-        };
-        assert_eq!(origin.turn_origin(), case["turn_origin"].as_str(), "{name}");
-        assert_eq!(
-            origin.turn_position(3, false),
-            case["prompt_index_after_three"]
-                .as_u64()
-                .zip(case["turn_index_after_three"].as_u64()),
-            "{name}"
-        );
-        assert_eq!(origin.turn_position(3, true), None, "{name}");
+fn origin_wire_modes_match_lean() {
+    use gents_lean_vocab::families::claude_prompt_assembly_origin as family;
+    family::replay::<Cause, Kind>(|i| {
+        let origin: Origin = gents_lean_vocab::family::recode(&i.origin);
         let mode = origin.wire_mode();
-        assert_eq!(
-            identity_for(false, mode.session),
-            case["identity"].as_str().unwrap(),
-            "{name}"
-        );
-        assert_eq!(
-            mode.entrypoint,
-            case["entrypoint"].as_str().unwrap(),
-            "{name}"
-        );
-        assert_eq!(mode.background, flag(case, "background"), "{name}");
-        assert_eq!(mode.workload, case["workload"].as_str(), "{name}");
-        assert_eq!(mode.subagent, flag(case, "subagent"), "{name}");
-        assert_eq!(
-            mode.request_class.as_str(),
-            case["request_class"].as_str().unwrap(),
-            "{name}"
-        );
-        assert_eq!(
-            mode.main_thread_source,
-            flag(case, "main_thread_source"),
-            "{name}"
-        );
-        assert_eq!(mode.agentic, flag(case, "agentic"), "{name}");
-    }
+        family::OriginObservation {
+            turn_origin: origin.turn_origin().map(str::to_owned),
+            turn_position: origin
+                .turn_position(i.prompts, i.position_lost)
+                .map(|(prompt_index, turn_index)| family::OriginPosition {
+                    prompt_index,
+                    turn_index,
+                }),
+            identity: identity_for(false, mode.session).to_owned(),
+            entrypoint: mode.entrypoint.to_owned(),
+            background: mode.background,
+            workload: mode.workload.map(str::to_owned),
+            subagent: mode.subagent,
+            request_class: mode.request_class.as_str().to_owned(),
+            main_thread_source: mode.main_thread_source,
+            agentic: mode.agentic,
+        }
+    });
 }
 
 #[test]

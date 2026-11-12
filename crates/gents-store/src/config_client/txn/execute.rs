@@ -1332,21 +1332,15 @@ mod owner_registration_model_tests {
 
     #[test]
     fn http_registration_observations_match_executed_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().identity_owner_registration_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let row = HttpOwnerObservation {
+        gents_lean_vocab::families::owner_registration_cases::replay(|input| {
+            HttpOwnerObservation {
                 doc_id: "document".into(),
-                visible: case["visible"].as_bool().unwrap(),
-                is_owner: case["is_owner"].as_bool().unwrap(),
-                owner_registered: case["owner_registered"].as_bool(),
-            };
-            assert_eq!(
-                row.registered().ok(),
-                case["expected_registered"].as_bool(),
-                "{}",
-                case["name"]
-            );
-        }
+                visible: input.visible,
+                is_owner: input.is_owner,
+                owner_registered: input.owner_registered,
+            }
+            .registered()
+            .ok()
+        });
     }
 }

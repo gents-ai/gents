@@ -263,17 +263,10 @@ mod tests {
 
     #[tokio::test]
     async fn hosted_home_publication_conforms_to_lean() {
-        let cases = tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .hosted_pack_home_cases
-                .clone()
-        })
-        .await
-        .unwrap();
-        for case in cases {
+        for case in gents_lean_vocab::families::contracts_pack_installation_hosted_home::cases() {
             let directory = tempfile::tempdir().unwrap();
             let home = directory.path().join("node");
-            let writable = case["home_written"].as_bool().unwrap();
+            let writable = case.input.home_written;
             if !writable {
                 let path = home.clone();
                 tokio::task::spawn_blocking(move || std::fs::write(path, "not a directory"))
@@ -301,11 +294,7 @@ mod tests {
                 leases: Vec::new(),
             };
             let result = publish_hosted_home(publication).await;
-            assert_eq!(
-                result.is_ok(),
-                case["reported_success"].as_bool().unwrap(),
-                "{case}: {result:?}"
-            );
+            case.check(result.is_ok());
             if writable {
                 assert!(crate::pack::read_home_install(&home, "fixture/hosted")
                     .unwrap()

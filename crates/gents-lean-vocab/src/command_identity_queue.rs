@@ -288,14 +288,6 @@ pub struct LeanIdentityAgent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanIdentityStructuralCase {
-    pub name: String,
-    pub nodes: Vec<LeanIdentityNode>,
-    pub agents: Vec<LeanIdentityAgent>,
-    pub well_formed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanIdentityPermissionGrant {
     pub actor: String,
     pub permission: String,
@@ -859,34 +851,6 @@ pub struct LeanPackIdentityBinding {
     pub slot: String,
     pub creation_nonce: String,
     pub agent_did: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPackIdentityCase {
-    pub name: String,
-    pub recorded: Vec<LeanPackIdentityBinding>,
-    pub requested: Vec<String>,
-    pub provisioned: Vec<LeanPackIdentityBinding>,
-    pub accepted: bool,
-    pub selected: Vec<LeanPackIdentityBinding>,
-    pub next_recorded: Vec<LeanPackIdentityBinding>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanPackIdentityDependencyBindings {
-    pub coordinate: String,
-    pub bindings: Vec<LeanPackIdentityBinding>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanPackIdentityReferenceCase {
-    pub name: String,
-    pub declared: Vec<String>,
-    pub available: Vec<LeanPackIdentityDependencyBindings>,
-    pub dependency: String,
-    pub slot: String,
-    pub expected: Option<LeanPackIdentityBinding>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

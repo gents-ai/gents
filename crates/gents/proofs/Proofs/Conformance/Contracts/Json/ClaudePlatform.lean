@@ -1,83 +1,101 @@
 import Proofs.Documents.Configuration.ClaudePlatform
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts.ClaudePlatform
-open Configuration.ClaudePlatform
+open Configuration.ClaudePlatform Lean
 
-private def valuesOf (fields : List Field) (v : Values) : List (String × String) :=
-  fields.filterMap fun f =>
-    match f with
-    | .region => v.region.map ("region", ·)
-    | .project => v.project.map ("project", ·)
-    | .location => v.location.map ("location", ·)
-    | .workspaceId => v.workspaceId.map ("workspace_id", ·)
-    | .resource => v.resource.map ("resource", ·)
-    | .bearerToken => none
+structure Settings where
+  region : Option String
+  project : Option String
+  location : Option String
+  workspaceId : Option String
+  resource : Option String
+  bearerToken : Option Bool
+  deriving ToJson
 
-/-- The values the document actually sets: a field outside `fields` is absent. -/
-private def restrict (fields : List Field) (v : Values) : Values :=
+structure Input where
+  name : String
+  kind : String
+  claudePlatform : Option Settings
+  deriving ToJson
+
+structure Output where
+  valid : Bool
+  defaultBaseUrl : Option String
+  deriving ToJson
+
+private def settings (fields : List Field) (v : Values) (bearer : Bool) : Settings :=
   { region := if fields.contains .region then v.region else none
     project := if fields.contains .project then v.project else none
     location := if fields.contains .location then v.location else none
     workspaceId := if fields.contains .workspaceId then v.workspaceId else none
-    resource := if fields.contains .resource then v.resource else none }
+    resource := if fields.contains .resource then v.resource else none
+    bearerToken := if fields.contains .bearerToken then some bearer else none }
 
-/-- One backend: the kind, the settings it sets (`bearer_token` is a flag), and
-the Lean verdict and default base URL. -/
-private def caseJson (name kind : String) (present : Option (List Field))
-    (values : Values) (bearer : Bool) : String :=
-  let v := restrict (present.getD []) values
-  let fields := (present.map fun fs => valuesOf fs v).map fun pairs =>
-    "{" ++ ",".intercalate (pairs.map fun (k, x) => jsonString k ++ ":" ++ jsonString x) ++
-      (if present.any (·.contains .bearerToken) then
-        (if pairs.isEmpty then "" else ",") ++ "\"bearer_token\":" ++ toString bearer
-       else "") ++ "}"
-  "{\"name\":" ++ jsonString name ++ ",\"kind\":" ++ jsonString kind ++
-    ",\"claude_platform\":" ++ fields.getD "null" ++
-    ",\"valid\":" ++ toString (valid kind present) ++
-    ",\"default_base_url\":" ++ (match (if valid kind present then defaultBaseUrl kind v else none) with
-      | none => "null"
-      | some url => jsonString url) ++ "}"
+private def presentFields (s : Settings) : List Field :=
+  (if s.region.isSome then [Field.region] else []) ++
+  (if s.project.isSome then [Field.project] else []) ++
+  (if s.location.isSome then [Field.location] else []) ++
+  (if s.workspaceId.isSome then [Field.workspaceId] else []) ++
+  (if s.resource.isSome then [Field.resource] else []) ++
+  (if s.bearerToken.isSome then [Field.bearerToken] else [])
+
+private def valuesOfSettings (s : Settings) : Values :=
+  { region := s.region, project := s.project, location := s.location
+    workspaceId := s.workspaceId, resource := s.resource }
+
+private def caseInput (name kind : String) (present : Option (List Field))
+    (values : Values) (bearer : Bool) : Input :=
+  { name, kind, claudePlatform := present.map fun fields => settings fields values bearer }
 
 private def aws : Values := { region := some "us-west-2", workspaceId := some "wrkspc_01" }
 private def gcp : Values :=
   { project := some "proj-1", location := some "europe-west4", workspaceId := some "ws-1" }
 
-def casesJson : String := jsonArray [
-  caseJson "bedrock_region" "ClaudeBedrock" (some [.region]) aws false,
-  caseJson "bedrock_missing_region" "ClaudeBedrock" none aws false,
-  caseJson "bedrock_extra_project" "ClaudeBedrock" (some [.region, .project]) gcp false,
-  caseJson "mantle_region" "ClaudeMantle" (some [.region]) aws false,
-  caseJson "mantle_missing_region" "ClaudeMantle" (some []) aws false,
-  caseJson "anthropic_aws_region_workspace" "ClaudeAnthropicAws"
+private def cases : List Input := [
+  caseInput "bedrock_region" "ClaudeBedrock" (some [.region]) aws false,
+  caseInput "bedrock_missing_region" "ClaudeBedrock" none aws false,
+  caseInput "bedrock_extra_project" "ClaudeBedrock" (some [.region, .project]) gcp false,
+  caseInput "mantle_region" "ClaudeMantle" (some [.region]) aws false,
+  caseInput "mantle_missing_region" "ClaudeMantle" (some []) aws false,
+  caseInput "anthropic_aws_region_workspace" "ClaudeAnthropicAws"
     (some [.region, .workspaceId]) aws false,
-  caseJson "anthropic_aws_missing_workspace" "ClaudeAnthropicAws" (some [.region]) aws false,
-  caseJson "foundry_resource" "ClaudeFoundry" (some [.resource])
+  caseInput "anthropic_aws_missing_workspace" "ClaudeAnthropicAws" (some [.region]) aws false,
+  caseInput "foundry_resource" "ClaudeFoundry" (some [.resource])
     { resource := some "my-resource" } false,
-  caseJson "foundry_bearer_token" "ClaudeFoundry" (some [.resource, .bearerToken])
+  caseInput "foundry_bearer_token" "ClaudeFoundry" (some [.resource, .bearerToken])
     { resource := some "my-resource" } true,
-  caseJson "foundry_missing_resource" "ClaudeFoundry" (some [.bearerToken]) {} true,
-  caseJson "bearer_token_outside_foundry" "ClaudeMantle" (some [.region, .bearerToken]) aws true,
-  caseJson "vertex_project_default_location" "ClaudeVertex" (some [.project]) gcp false,
-  caseJson "vertex_global" "ClaudeVertex" (some [.project, .location])
+  caseInput "foundry_missing_resource" "ClaudeFoundry" (some [.bearerToken]) {} true,
+  caseInput "bearer_token_outside_foundry" "ClaudeMantle" (some [.region, .bearerToken]) aws true,
+  caseInput "vertex_project_default_location" "ClaudeVertex" (some [.project]) gcp false,
+  caseInput "vertex_global" "ClaudeVertex" (some [.project, .location])
     { project := some "proj-1", location := some "global" } false,
-  caseJson "vertex_us_multi_region" "ClaudeVertex" (some [.project, .location])
+  caseInput "vertex_us_multi_region" "ClaudeVertex" (some [.project, .location])
     { project := some "proj-1", location := some "us" } false,
-  caseJson "vertex_eu_multi_region" "ClaudeVertex" (some [.project, .location])
+  caseInput "vertex_eu_multi_region" "ClaudeVertex" (some [.project, .location])
     { project := some "proj-1", location := some "eu" } false,
-  caseJson "vertex_regional" "ClaudeVertex" (some [.project, .location]) gcp false,
-  caseJson "vertex_missing_project" "ClaudeVertex" (some [.location]) gcp false,
-  caseJson "google_cloud_default_location" "ClaudeGoogleCloud" (some [.project, .workspaceId])
+  caseInput "vertex_regional" "ClaudeVertex" (some [.project, .location]) gcp false,
+  caseInput "vertex_missing_project" "ClaudeVertex" (some [.location]) gcp false,
+  caseInput "google_cloud_default_location" "ClaudeGoogleCloud" (some [.project, .workspaceId])
     gcp false,
-  caseJson "google_cloud_location" "ClaudeGoogleCloud"
+  caseInput "google_cloud_location" "ClaudeGoogleCloud"
     (some [.project, .location, .workspaceId]) gcp false,
-  caseJson "google_cloud_missing_workspace" "ClaudeGoogleCloud" (some [.project]) gcp false,
-  caseJson "gateway_absent" "ClaudeGateway" none {} false,
-  caseJson "gateway_empty" "ClaudeGateway" (some []) {} false,
-  caseJson "gateway_region" "ClaudeGateway" (some [.region]) aws false,
-  caseJson "subscription_absent" "ClaudeCliSubscription" none {} false,
-  caseJson "subscription_settings" "ClaudeCliSubscription" (some [.region]) aws false,
-  caseJson "openai_empty_settings" "OpenAiCompatible" (some []) {} false
+  caseInput "google_cloud_missing_workspace" "ClaudeGoogleCloud" (some [.project]) gcp false,
+  caseInput "gateway_absent" "ClaudeGateway" none {} false,
+  caseInput "gateway_empty" "ClaudeGateway" (some []) {} false,
+  caseInput "gateway_region" "ClaudeGateway" (some [.region]) aws false,
+  caseInput "subscription_absent" "ClaudeCliSubscription" none {} false,
+  caseInput "subscription_settings" "ClaudeCliSubscription" (some [.region]) aws false,
+  caseInput "openai_empty_settings" "OpenAiCompatible" (some []) {} false
 ]
+
+@[conformance_family]
+def outcome : Conformance.Family Input Output where
+  inputs := cases
+  model := fun i =>
+    let present := i.claudePlatform.map presentFields
+    let values := (i.claudePlatform.map valuesOfSettings).getD {}
+    { valid := valid i.kind present
+      defaultBaseUrl := if valid i.kind present then defaultBaseUrl i.kind values else none }
 
 end Conformance.Contracts.ClaudePlatform

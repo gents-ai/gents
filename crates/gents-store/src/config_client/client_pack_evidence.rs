@@ -648,17 +648,11 @@ mod tests {
                 })
             })
             .await?;
-        let cases = tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .hosted_pack_schema_cases
-                .clone()
-        })
-        .await?;
         let signed = prepare_pack_schema_approval(&user_key, &scope).await?;
-        for case in cases {
-            let scope_matches = case["scope_matches"].as_bool().unwrap();
-            let signature_valid = case["signed"].as_bool().unwrap();
-            let native_update = case["native_update"].as_bool().unwrap();
+        for case in gents_lean_vocab::families::contracts_pack_installation_hosted_schema::cases() {
+            let scope_matches = case.input.scope_matches;
+            let signature_valid = case.input.signed;
+            let native_update = case.input.native_update;
             let subject = if native_update { &user } else { &other };
             let mut evidence = signed.clone();
             if !signature_valid {
@@ -695,12 +689,8 @@ mod tests {
                 })
                 .await
                 .is_ok();
-            assert_eq!(observed, native_update, "{case}");
-            assert_eq!(
-                valid && observed,
-                case["allowed"].as_bool().unwrap(),
-                "{case}"
-            );
+            assert_eq!(observed, native_update);
+            case.check(valid && observed);
         }
         Ok(())
     }
@@ -758,17 +748,13 @@ mod tests {
         let other_access = ConfigAccess::local_as(node.clone(), other.did().parse()?);
         let other_evidence =
             prepare_pack_evidence(&other_access, &other_key, &scope, &create).await?;
-        let cases = tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .hosted_pack_evidence_cases
-                .clone()
-        })
-        .await?;
+        let cases =
+            gents_lean_vocab::families::contracts_pack_installation_hosted_evidence::cases();
         let tampered = PackMutation::Create {
             collection: "PackInstallation".into(),
             input: json!({"node_did": runtime.did(), "coordinate": "acme/fixture", "version": "1", "digest": "other"}),
         };
-        let created = access
+        let (created, stale_expected) = access
             .transact_verified_pack("test.pack_evidence.create", |txn| {
                 let evidence = evidence.clone();
                 let other_evidence = other_evidence.clone();
@@ -781,11 +767,11 @@ mod tests {
                 let scope = &scope;
                 Box::pin(async move {
                     let mut response = None;
+                    let mut admitted = Vec::new();
                     for case in cases {
-                        let actor_matches = case["actor_matches"].as_bool().unwrap();
-                        let graph_verified = case["graph_verified"].as_bool().unwrap();
-                        let plan_approved = case["plan_approved"].as_bool().unwrap();
-                        let expected = case["allowed"].as_bool().unwrap();
+                        let actor_matches = case.input.actor_matches;
+                        let graph_verified = case.input.graph_verified;
+                        let plan_approved = case.input.plan_approved;
                         let candidate = if graph_verified { create } else { tampered };
                         let signed = if actor_matches {
                             evidence.clone()
@@ -801,11 +787,22 @@ mod tests {
                                 signed,
                             )
                             .await;
-                        assert_eq!(actual.is_ok(), expected, "{case}");
+                        case.check(actual.is_ok());
+                        admitted.push((
+                            (actor_matches, graph_verified, plan_approved),
+                            actual.is_ok(),
+                        ));
                         if let Ok(value) = actual {
                             response = Some(value);
                         }
                     }
+                    let admission = |actor: bool, graph: bool, plan: bool| {
+                        admitted
+                            .iter()
+                            .find(|(key, _)| *key == (actor, graph, plan))
+                            .expect("modeled case")
+                            .1
+                    };
                     let response = response.expect("modeled successful create");
                     let created = crate::graphql::created_doc_id(&response, "PackInstallation")?;
                     let parent = PackRelationship {
@@ -821,16 +818,7 @@ mod tests {
                     let signed = prepare_pack_relationship(actor, scope, &parent).await?;
                     let mut altered = signed.clone();
                     altered.relationship.relation = "reader".into();
-                    let expected = cases
-                        .iter()
-                        .find(|case| {
-                            case["actor_matches"] == true
-                                && case["graph_verified"] == false
-                                && case["plan_approved"] == true
-                        })
-                        .unwrap()["allowed"]
-                        .as_bool()
-                        .unwrap();
+                    let expected = admission(true, false, true);
                     assert_eq!(
                         txn.apply_relationship(scope, &parent, altered)
                             .await
@@ -838,16 +826,7 @@ mod tests {
                         expected
                     );
                     let other_signed = prepare_pack_relationship(other, scope, &parent).await?;
-                    let expected = cases
-                        .iter()
-                        .find(|case| {
-                            case["actor_matches"] == false
-                                && case["graph_verified"] == true
-                                && case["plan_approved"] == true
-                        })
-                        .unwrap()["allowed"]
-                        .as_bool()
-                        .unwrap();
+                    let expected = admission(false, true, true);
                     assert_eq!(
                         txn.apply_relationship(scope, &parent, other_signed)
                             .await
@@ -856,16 +835,7 @@ mod tests {
                     );
                     let mut wrong_scope = (*scope).clone();
                     wrong_scope.nonce.push_str("-other");
-                    let expected = cases
-                        .iter()
-                        .find(|case| {
-                            case["actor_matches"] == true
-                                && case["graph_verified"] == true
-                                && case["plan_approved"] == false
-                        })
-                        .unwrap()["allowed"]
-                        .as_bool()
-                        .unwrap();
+                    let expected = admission(true, true, false);
                     assert_eq!(
                         txn.apply_relationship(&wrong_scope, &parent, signed.clone())
                             .await
@@ -873,7 +843,7 @@ mod tests {
                         expected
                     );
                     txn.apply_relationship(scope, &parent, signed).await?;
-                    Ok::<_, anyhow::Error>(created)
+                    Ok::<_, anyhow::Error>((created, admission(true, false, true)))
                 })
             })
             .await?;
@@ -948,12 +918,6 @@ mod tests {
                 })
             })
             .await;
-        let stale_expected = cases
-            .iter()
-            .find(|case| case["actor_matches"] == true && case["graph_verified"] == false)
-            .expect("modeled stale graph")["allowed"]
-            .as_bool()
-            .unwrap();
         assert_eq!(stale_result.is_ok(), stale_expected);
         let observed = access
             .execute("{ PackInstallation { coordinate version } }")

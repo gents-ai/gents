@@ -75,16 +75,4 @@ theorem hidden_never_proves_registration (own : Bool) (registered : Option Bool)
     registration false own registered ≠ some true := by
   cases own <;> cases registered <;> simp [registration] <;> split <;> simp_all
 
-def registrationCasesJson : String :=
-  let cases : List (String × Bool × Bool × Option Bool) :=
-    [("owner", true, true, some true), ("reader", true, false, some true),
-     ("unregistered", true, false, some false), ("hidden", false, false, some false),
-     ("legacy-owner", true, true, none), ("legacy-reader", true, false, none),
-     ("invalid-hidden-owner", false, true, some false),
-     ("invalid-hidden-registered", false, false, some true),
-     ("invalid-unregistered-owner", true, true, some false)]
-  (toJson (cases.map fun (name, visible, own, registered) => Json.mkObj
-    [("name", toJson name), ("visible", toJson visible), ("is_owner", toJson own),
-     ("owner_registered", toJson registered),
-     ("expected_registered", toJson (registration visible own registered))])).compress
 end Identity.EvalRecords

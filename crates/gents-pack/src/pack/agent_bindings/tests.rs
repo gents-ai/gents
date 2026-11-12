@@ -1,10 +1,19 @@
 use super::*;
-use gents_lean_vocab::{lean_pack_identity_cases, LeanPackIdentityBinding};
+use gents_lean_vocab::families::contracts_pack_installation_identity_plan as plan_family;
+use gents_lean_vocab::families::contracts_pack_installation_identity_reference as reference_family;
+use gents_lean_vocab::family::recode;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::json;
 use std::sync::Arc;
 
-fn decode_bindings(rows: &[LeanPackIdentityBinding]) -> Result<PackAgentBindings> {
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BindingRow {
+    slot: String,
+    creation_nonce: String,
+    agent_did: String,
+}
+
+fn decode_bindings(rows: &[BindingRow]) -> Result<PackAgentBindings> {
     let mut bindings = PackAgentBindings::new();
     for row in rows {
         anyhow::ensure!(
@@ -23,29 +32,39 @@ fn decode_bindings(rows: &[LeanPackIdentityBinding]) -> Result<PackAgentBindings
     Ok(bindings)
 }
 
+fn encode_bindings(bindings: &PackAgentBindings) -> Vec<BindingRow> {
+    bindings
+        .iter()
+        .map(|(slot, binding)| BindingRow {
+            slot: slot.clone(),
+            creation_nonce: binding.creation_nonce.clone(),
+            agent_did: binding.agent_did.clone(),
+        })
+        .collect()
+}
+
 #[test]
 fn binding_plan_matches_lean() {
-    for case in lean_pack_identity_cases() {
-        let actual = decode_bindings(&case.recorded).and_then(|recorded| {
-            let provisioned = decode_bindings(&case.provisioned)?;
-            plan_agent_bindings(&recorded, &case.requested, &provisioned)
+    gents_lean_vocab::families::contracts_pack_installation_identity_plan::replay(|i| {
+        let recorded: Vec<BindingRow> = recode(&i.recorded);
+        let provisioned: Vec<BindingRow> = recode(&i.provisioned);
+        let actual = decode_bindings(&recorded).and_then(|recorded| {
+            let provisioned = decode_bindings(&provisioned)?;
+            plan_agent_bindings(&recorded, &i.requested, &provisioned)
         });
-        assert_eq!(actual.is_ok(), case.accepted, "{}", case.name);
-        if let Ok(actual) = actual {
-            assert_eq!(
-                actual.selected,
-                decode_bindings(&case.selected).unwrap(),
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                actual.recorded,
-                decode_bindings(&case.next_recorded).unwrap(),
-                "{}",
-                case.name
-            );
+        match actual {
+            Ok(plan) => plan_family::IdentityPlanResult {
+                accepted: true,
+                selected: recode(&encode_bindings(&plan.selected)),
+                next_recorded: recode(&encode_bindings(&plan.recorded)),
+            },
+            Err(_) => plan_family::IdentityPlanResult {
+                accepted: false,
+                selected: Vec::new(),
+                next_recorded: Vec::new(),
+            },
         }
-    }
+    });
 }
 
 fn manifest(name: &str) -> PackManifest {
@@ -268,36 +287,27 @@ async fn installed_agents_reuse_bindings_and_reject_stale_preparation() {
 
 #[test]
 fn dependency_reference_matches_lean() {
-    for case in gents_lean_vocab::lean_pack_identity_reference_cases() {
+    gents_lean_vocab::families::contracts_pack_installation_identity_reference::replay(|i| {
         let actual = (|| -> Result<AgentIdentityBinding> {
             let mut available = BTreeMap::new();
-            for dependency in &case.available {
+            for dependency in &i.available {
+                let rows: Vec<BindingRow> = recode(&dependency.bindings);
                 anyhow::ensure!(
                     available
-                        .insert(
-                            dependency.coordinate.clone(),
-                            decode_bindings(&dependency.bindings)?
-                        )
+                        .insert(dependency.coordinate.clone(), decode_bindings(&rows)?)
                         .is_none(),
                     "duplicate dependency coordinate"
                 );
             }
-            resolve_dependency_binding(&case.declared, &available, &case.dependency, &case.slot)
-                .cloned()
+            resolve_dependency_binding(&i.declared, &available, &i.dependency, &i.slot).cloned()
         })();
-        assert_eq!(actual.is_ok(), case.expected.is_some(), "{}", case.name);
-        if let Some(expected) = &case.expected {
-            assert_eq!(
-                actual.unwrap(),
-                AgentIdentityBinding {
-                    creation_nonce: expected.creation_nonce.clone(),
-                    agent_did: expected.agent_did.clone()
-                },
-                "{}",
-                case.name
-            );
-        }
-    }
+        actual
+            .ok()
+            .map(|binding| reference_family::ResolvedBinding {
+                creation_nonce: binding.creation_nonce,
+                agent_did: binding.agent_did,
+            })
+    });
 }
 
 fn archive(manifest: &PackManifest, config: &Value) -> super::super::archive::PackArchive {

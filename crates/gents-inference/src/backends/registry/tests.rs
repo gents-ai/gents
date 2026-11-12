@@ -2,6 +2,7 @@ use super::*;
 use crate::admission::BackendAdmissionConfig;
 use crate::backends::provider::BackendProviderKind;
 use gents_documents::inference_backend::derive_display_state;
+use gents_lean_vocab::families::contracts_catalog_refresh_scenarios as family;
 use gents_lean_vocab::lean_backend_health_admission_cases;
 use gents_loop::openai_wire::OpenAiWireApi;
 
@@ -986,11 +987,11 @@ async fn stored_catalog_row(
 }
 
 fn catalog_action(
-    action: &serde_json::Value,
+    action: &family::Refresh,
     backend: &InferenceBackend,
 ) -> Result<BackendModelCatalog> {
     use chrono::TimeZone as _;
-    let payload = action["payload"].as_str().unwrap();
+    let payload = action.payload.as_str();
     let models = serde_json::from_str::<Vec<gents_documents::AdvertisedModel>>(payload)?;
     assert_eq!(
         serde_json::to_string(&models)?,
@@ -1000,7 +1001,7 @@ fn catalog_action(
     Ok(BackendModelCatalog {
         node_did: backend.catalog_scope().map(str::to_owned),
         observed_at: chrono::Utc
-            .timestamp_opt(action["observed_at"].as_i64().unwrap(), 0)
+            .timestamp_opt(i64::try_from(action.observed_at)?, 0)
             .single()
             .unwrap()
             .to_rfc3339(),
@@ -1008,16 +1009,17 @@ fn catalog_action(
     })
 }
 
+const DELAYED_WITNESS: &str = "catalog.delayed-change-after-identical";
+
 #[tokio::test]
 async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness() -> Result<()> {
+    let cases = family::cases();
     let (db, _user, access) =
         crate::test_support::signed_test_node_without_agent("registry-generated-catalog")
             .await;
     let node = db.node.clone();
-    for (index, case) in gents_lean_vocab::lean_catalog_refresh_cases()
-        .iter()
-        .enumerate()
-    {
+    let mut delayed_stored = None;
+    for (index, case) in cases.iter().enumerate() {
         let mut backend = base_backend();
         backend.node_did = db.node_identity.did().to_owned();
         backend.backend_id = format!("catalog-case-{index}");
@@ -1037,7 +1039,7 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
             );
         }
         let mut writes = [0_u64; 2];
-        for action in case["actions"].as_array().unwrap() {
+        for action in &case.input.refreshes {
             record_catalog_for_runtime(&node, &backend, catalog_action(action, &backend)?).await?;
             for (index, field) in fields.iter().enumerate() {
                 let current =
@@ -1046,50 +1048,51 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
                 previous[index] = current;
             }
         }
-        assert_eq!(
-            writes,
-            [
-                case["content_writes"].as_u64().unwrap(),
-                case["watermark_writes"].as_u64().unwrap()
-            ],
-            "{}",
-            case["witness"]
-        );
         let row = stored_catalog_row(&access, &backend).await?;
-        let raw: InferenceBackendObservation = serde_json::from_value(row.clone())?;
+        let raw: InferenceBackendObservation = serde_json::from_value(row)?;
         let projected =
             lookup_backend_observation_for_runtime(&node, &backend.node_did, &backend.backend_id)
                 .await?
                 .unwrap();
-        if case["expected"].is_null() {
-            assert!(raw.catalogs.is_empty());
-            assert!(projected.catalogs.is_empty());
+        let expected = if raw.catalogs.is_empty() {
+            assert!(projected.catalogs.is_empty(), "{}", case.input.witness);
+            None
         } else {
-            let expected = &case["expected"];
             assert_eq!(
-                serde_json::to_string(&raw.catalogs[0].models)?,
-                expected["payload"].as_str().unwrap(),
+                projected.catalogs[0].models, raw.catalogs[0].models,
                 "{}",
-                case["witness"]
+                case.input.witness
             );
-            assert_eq!(
-                chrono::DateTime::parse_from_rfc3339(&raw.catalogs[0].observed_at)?.timestamp(),
-                expected["content_at"].as_i64().unwrap()
-            );
-            assert_eq!(projected.catalogs[0].models, raw.catalogs[0].models);
-            assert_eq!(
-                chrono::DateTime::parse_from_rfc3339(&projected.catalogs[0].observed_at)?
-                    .timestamp(),
-                expected["observed_at"].as_i64().unwrap()
-            );
+            Some(family::Stored {
+                payload: serde_json::to_string(&raw.catalogs[0].models)?,
+                content_at: u64::try_from(
+                    chrono::DateTime::parse_from_rfc3339(&raw.catalogs[0].observed_at)?
+                        .timestamp(),
+                )?,
+                observed_at: u64::try_from(
+                    chrono::DateTime::parse_from_rfc3339(&projected.catalogs[0].observed_at)?
+                        .timestamp(),
+                )?,
+            })
+        };
+        let output = family::Output {
+            expected,
+            content_writes: writes[0],
+            watermark_writes: writes[1],
+        };
+        if case.input.witness == DELAYED_WITNESS {
+            delayed_stored = output.expected.clone();
         }
+        case.check(output);
     }
     node.shutdown().await.expect("node shutdown");
-    Ok(())
-}
+    let delayed_stored = delayed_stored.expect("the family contains the delayed-change witness");
+    let delayed = cases
+        .iter()
+        .find(|case| case.input.witness == DELAYED_WITNESS)
+        .expect("the family contains the delayed-change witness");
+    let actions = &delayed.input.refreshes;
 
-#[tokio::test]
-async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Result<()> {
     let (mut db, user, access) =
         crate::test_support::signed_test_node_without_agent("registry-reopen").await;
     let node = db.node.clone();
@@ -1101,11 +1104,6 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
         &crate::resolved::ProviderProfilePolicy,
     )
     .await?;
-    let case = gents_lean_vocab::lean_catalog_refresh_cases()
-        .iter()
-        .find(|case| case["witness"] == "catalog.delayed-change-after-identical")
-        .unwrap();
-    let actions = case["actions"].as_array().unwrap();
     let original = catalog_action(&actions[0], &backend)?;
     let row = stored_catalog_row(&access, &backend).await?;
     let observation_doc = row["_docID"]
@@ -1155,11 +1153,13 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
             .unwrap();
     assert_eq!(
         serde_json::to_string(&observed.catalogs[0].models)?,
-        case["expected"]["payload"].as_str().unwrap()
+        delayed_stored.payload
     );
     assert_eq!(
-        chrono::DateTime::parse_from_rfc3339(&observed.catalogs[0].observed_at)?.timestamp(),
-        case["expected"]["observed_at"].as_i64().unwrap()
+        u64::try_from(
+            chrono::DateTime::parse_from_rfc3339(&observed.catalogs[0].observed_at)?.timestamp()
+        )?,
+        delayed_stored.observed_at
     );
     node.shutdown().await.expect("node shutdown");
     Ok(())

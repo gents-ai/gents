@@ -533,11 +533,34 @@ async fn oauth_account_scope_matches_lean() {
     };
     use gents_inference::backends::provider::BackendProviderOauthExt;
     use gents_loop::backend_provider::BackendProviderKind;
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let lean = &snapshot.configuration_scope_cases["oauth_account"];
-    let kind_of = |value: &serde_json::Value| -> BackendProviderKind {
-        serde_json::from_value(value.clone()).unwrap()
+    use gents_lean_vocab::families::configuration_scope_oauth_account as family;
+    let kind_of = |value: &str| -> BackendProviderKind {
+        serde_json::from_value(serde_json::Value::String(value.to_owned())).unwrap()
     };
+    let backend_auth = |auth: &family::OauthAuth| -> BackendAuth {
+        let mut value = serde_json::to_value(auth).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .retain(|_, field| !field.is_null());
+        let backend: BackendAuth = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&backend).unwrap(), value);
+        backend
+    };
+    let cases = family::cases();
+    let rows_of = |rows: &[family::OauthRow]| -> Vec<(String, String, Option<String>, bool)> {
+        rows.iter()
+            .map(|row| {
+                (
+                    row.owner.clone(),
+                    row.provider_kind.clone(),
+                    row.account.clone(),
+                    row.enabled,
+                )
+            })
+            .collect()
+    };
+    let rows = rows_of(&cases[0].input.rows);
 
     let (local_db, _local_user, access, _local_agent) =
         crate::test_support::root::signed_test_node("oauth-model-local").await;
@@ -560,10 +583,10 @@ async fn oauth_account_scope_matches_lean() {
             panic!("unknown actual Node {actual}")
         }
     };
-    for row in lean["rows"].as_array().unwrap() {
-        let provider = kind_of(&row["provider_kind"]).oauth_provider().unwrap();
-        let owner = row["owner"].as_str().unwrap();
-        let account = row["account"].as_str();
+    for (owner, provider_kind, account, enabled) in &rows {
+        let provider = kind_of(provider_kind).oauth_provider().unwrap();
+        let owner = owner.as_str();
+        let account = account.as_deref();
         let credential = gents_inference::auth::credential::OAuthCredential {
             doc_id: None,
             credential_id: format!("{provider}:{owner}:{}", account.unwrap_or("original")),
@@ -577,7 +600,7 @@ async fn oauth_account_scope_matches_lean() {
             is_fedramp: false,
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
-            enabled: row["enabled"].as_bool().unwrap(),
+            enabled: *enabled,
             account_ref: account.map(str::to_string),
             connected_at: None,
             provider_account_key: None,
@@ -593,69 +616,55 @@ async fn oauth_account_scope_matches_lean() {
             .unwrap();
     }
 
-    let row_json = |owner: &str, account: Option<&str>| serde_json::json!({"owner": owner, "account": account});
-    let cases = lean["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 11);
+    let resolved_row = |owner: &str, account: Option<&str>| family::OauthResolved {
+        owner: owner.to_owned(),
+        account: account.map(str::to_owned),
+    };
     for case in cases {
-        let text = case["auth"].as_str().unwrap();
-        let auth: BackendAuth = serde_json::from_str(text).unwrap();
-        assert_eq!(serde_json::to_string(&auth).unwrap(), text, "{case}");
-        let scope = case["scope"].as_str().unwrap();
-        let stored_owner = case["stored_owner"].as_str().unwrap();
+        let input = &case.input;
+        assert_eq!(rows_of(&input.rows), rows);
+        let auth = backend_auth(&input.auth);
+        let text = serde_json::to_string(&auth).unwrap();
         assert!(
-            !text.contains(scope) && !text.contains(stored_owner),
-            "{case}"
+            !text.contains(&input.scope) && !text.contains(&input.stored_owner),
+            "{text}"
         );
-        let actual_scope = actual_owner(scope);
-        if let BackendAuth::NodeOAuthPool { .. } = auth {
-            let owner = case["owner"].as_str().unwrap();
-            let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
-            let rows = resolve_oauth_pool(&access, actual_scope, provider)
-                .await
-                .unwrap();
-            let mut pool: Vec<_> = rows
-                .iter()
-                .inspect(|row| assert_eq!(row.node_did, actual_owner(owner), "{case}"))
-                .map(|row| row_json(model_owner(&row.node_did), row.account_ref.as_deref()))
-                .collect();
-            let mut expected: Vec<_> = case["resolved"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|row| row_json(row["owner"].as_str().unwrap(), row["account"].as_str()))
-                .collect();
-            let key = |row: &serde_json::Value| row.to_string();
-            pool.sort_by_key(key);
-            expected.sort_by_key(key);
-            assert_eq!(pool, expected, "{case}");
-            continue;
-        }
-        let resolved = match case["owner"].as_str() {
-            Some(owner) => {
-                assert!(matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
-                let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
-                let row = resolve_oauth_credential(
+        let actual_scope = actual_owner(&input.scope);
+        let resolved = match &auth {
+            BackendAuth::NodeOAuthPool { .. } => {
+                let provider = kind_of(&input.provider_kind).oauth_provider().unwrap();
+                let pool_rows = resolve_oauth_pool(&access, actual_scope, provider)
+                    .await
+                    .unwrap();
+                let mut pool: Vec<_> = pool_rows
+                    .iter()
+                    .map(|row| {
+                        resolved_row(model_owner(&row.node_did), row.account_ref.as_deref())
+                    })
+                    .collect();
+                pool.sort_by_key(|row| (row.owner.clone(), row.account.clone()));
+                pool
+            }
+            BackendAuth::NodeOAuth { .. } => {
+                let provider = kind_of(&input.provider_kind).oauth_provider().unwrap();
+                resolve_oauth_credential(
                     &access,
                     actual_scope,
                     provider,
                     AccountPick::Reference(auth.oauth_account_ref()),
                 )
                 .await
-                .unwrap();
-                if let Some(row) = &row {
-                    assert_eq!(row.node_did, actual_owner(owner), "{case}");
-                }
-                row.map(|row| row_json(model_owner(&row.node_did), row.account_ref.as_deref()))
+                .unwrap()
+                .map(|row| resolved_row(model_owner(&row.node_did), row.account_ref.as_deref()))
+                .into_iter()
+                .collect()
             }
-            None => {
-                assert!(!matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
-                None
-            }
+            _ => Vec::new(),
         };
-        let expected = case["resolved"]
-            .as_object()
-            .map(|row| row_json(row["owner"].as_str().unwrap(), row["account"].as_str()));
-        assert_eq!(resolved, expected, "{case}");
+        case.check(family::OauthOutput {
+            uses_node_oauth: auth.uses_node_oauth(),
+            resolved,
+        });
     }
 }
 

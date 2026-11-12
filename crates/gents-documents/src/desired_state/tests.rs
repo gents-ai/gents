@@ -652,14 +652,12 @@ fn cyclic_configuration(owner: &str, agent_did: &str) -> Vec<DesiredStateApplyDo
 
 #[tokio::test]
 async fn generated_default_replacements_preserve_runtime_startup_selection() -> Result<()> {
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let cases = snapshot.configuration_scope_cases["default_replacement"]
-        .as_array()
-        .expect("Lean default replacement cases");
-    assert_eq!(cases.len(), 6);
+    use gents_lean_vocab::families::configuration_scope_default_replacement as family;
+
+    let cases = family::cases();
     // The Lean cases name agents by label; Agent and Node identities are DIDs.
-    let agent_did = |label: &Value| -> Value {
-        match label.as_str() {
+    let agent_did = |label: &Option<String>| -> Value {
+        match label.as_deref() {
             None => Value::Null,
             Some("coding") => json!(CODING_AGENT_DID),
             Some("review") => json!(REVIEW_AGENT_DID),
@@ -684,7 +682,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             ),
             config(
                 Collection::DefaultAgentSelection,
-                json!({"node_did":owner,"default_agent_did":agent_did(&case["current"])}),
+                json!({"node_did":owner,"default_agent_did":agent_did(&case.input.current)}),
             ),
         ];
         for agent in [CODING_AGENT_DID, REVIEW_AGENT_DID] {
@@ -698,9 +696,9 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             "node": {"node_did":owner,"display_name":"Changed"},
             "default_agent_selection": {"node_did":owner}
         });
-        if !case["candidate"].is_null() {
+        if case.input.candidate.is_some() {
             requested["default_agent_selection"]["default_agent_did"] =
-                agent_did(&case["candidate"]);
+                agent_did(&case.input.candidate);
         }
         let pack: crate::PackConfig = serde_json::from_value(requested)?;
         let plan = DesiredStateApplyPlan::from_pack_config(&pack)?;
@@ -731,9 +729,9 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
                 })
             })
             .await;
-        let allowed = case["allowed"].as_bool().expect("modeled verdict");
-        assert_eq!(preview.is_ok(), allowed, "preview: {case}: {preview:?}");
-        assert_eq!(published.is_ok(), allowed, "publish: {case}: {published:?}");
+        let allowed = published.is_ok();
+        assert_eq!(preview.is_ok(), allowed, "case {index}: {preview:?}");
+        case.check(allowed);
         let (after_node, after_selection) = read_principal_and_default(&access, owner).await?;
         if allowed {
             let (_, after_node) = after_node.expect("published principal");
@@ -741,7 +739,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             let (_, after_selection) = after_selection.expect("published default selection");
             assert_eq!(
                 after_selection["default_agent_did"],
-                agent_did(&case["candidate"])
+                agent_did(&case.input.candidate)
             );
         } else {
             assert_eq!(
@@ -757,7 +755,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
                 message.contains("DefaultAgentSelection replacement would clear default_agent_did"),
                 "{message}"
             );
-            let current = agent_did(&case["current"]);
+            let current = agent_did(&case.input.current);
             assert!(
                 message.contains(current.as_str().expect("refused default")),
                 "{message}"

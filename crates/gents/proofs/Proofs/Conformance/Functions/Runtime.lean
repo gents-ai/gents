@@ -23,4 +23,3 @@ attribute [conformance_function]
   Proofs.BackendHealth.HealthState.blocksRouting
   RuntimeReconcile.MetricsScrapeAccess.decide
   RuntimeReconcile.MetricsScrapeAccess.bindAllowed
-  RuntimeReconcile.UpdateHandoff.canRestore

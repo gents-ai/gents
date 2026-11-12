@@ -1,4 +1,6 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub enum Phase {
     Accepting,
     Draining,
@@ -63,84 +65,60 @@ impl State {
 #[cfg(test)]
 mod compatibility_tests {
     use super::can_reuse;
-    use serde_json::Value;
 
     #[test]
     fn generated_installation_compatibility_matches_lean() {
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["client_installation_compatibility_cases"]
-            .as_array()
-            .unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let strings = |key: &str| {
-                case[key]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|value| value.as_str().unwrap().to_owned())
-                    .collect::<Vec<_>>()
-            };
-            assert_eq!(
-                can_reuse(
-                    case["protocolMatches"].as_bool().unwrap(),
-                    case["frameLimitMatches"].as_bool().unwrap(),
-                    &strings("requiredCommands"),
-                    &strings("availableCommands"),
-                ),
-                case["reuse"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
+        gents_lean_vocab::families::client_installation_compatibility::replay(|i| {
+            can_reuse(
+                i.protocol_matches,
+                i.frame_limit_matches,
+                &i.required_commands,
+                &i.available_commands,
+            )
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
+    use gents_lean_vocab::families::client_installation_traces::{StateWire, TraceStep};
 
-    fn state(value: &Value) -> State {
-        State {
-            phase: match value["phase"].as_str().unwrap() {
-                "accepting" => Phase::Accepting,
-                "draining" => Phase::Draining,
-                "released" => Phase::Released,
-                other => panic!("unknown modeled phase {other}"),
-            },
-            attachments: value["attachments"].as_u64().unwrap().try_into().unwrap(),
+    fn action(kind: &str, startup_reserved: bool) -> Action {
+        match kind {
+            "attach" => Action::Attach,
+            "detach" => Action::Detach,
+            "retire" => Action::Retire,
+            "release" => Action::Release,
+            "replace" => Action::Replace { startup_reserved },
+            other => panic!("unknown modeled action {other}"),
         }
     }
 
     #[test]
     fn generated_installation_traces_preserve_draining_and_replacement_guards() {
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["client_installation_cases"].as_array().unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let mut current = state(&case["initial"]);
-            for step in case["trace"].as_array().unwrap() {
-                let action = match step["action"]["kind"].as_str().unwrap() {
-                    "attach" => Action::Attach,
-                    "detach" => Action::Detach,
-                    "retire" => Action::Retire,
-                    "release" => Action::Release,
-                    "replace" => Action::Replace {
-                        startup_reserved: step["action"]["startupReserved"].as_bool().unwrap(),
-                    },
-                    other => panic!("unknown modeled action {other}"),
-                };
-                let next = current.step(action);
-                assert_eq!(
-                    next.is_some(),
-                    step["accepted"].as_bool().unwrap(),
-                    "{case}"
-                );
-                if let Some(next) = next {
-                    current = next;
-                }
-                assert_eq!(current, state(&step["state"]), "{case}");
-            }
-        }
+        gents_lean_vocab::families::client_installation_traces::replay::<String, Phase>(|i| {
+            let mut current = State {
+                phase: i.phase,
+                attachments: i.attachments as usize,
+            };
+            i.trace
+                .iter()
+                .map(|step| {
+                    let next = current.step(action(&step.kind, step.startup_reserved));
+                    let accepted = next.is_some();
+                    if let Some(next) = next {
+                        current = next;
+                    }
+                    TraceStep {
+                        accepted,
+                        state: StateWire {
+                            phase: current.phase,
+                            attachments: current.attachments as u64,
+                        },
+                    }
+                })
+                .collect()
+        });
     }
 }

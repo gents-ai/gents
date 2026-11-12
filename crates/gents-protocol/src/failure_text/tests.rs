@@ -25,14 +25,18 @@ fn a_100_kib_provider_body_is_capped_per_cause_and_overall() {
         r#"{{"error":{{"message":"prompt is too long: 1001685 tokens > 1000000 maximum","echo":"{}"}}}}"#,
         "x".repeat(100 * 1024)
     );
-    let error = anyhow::Error::from(rig::http_client::Error::InvalidStatusCodeWithMessage(
-        "400".parse().unwrap(),
-        body,
-    ))
-    .context("ProviderError: inference failed")
-    .context("projecting compactable provider messages");
+    let error = Layer {
+        text: "projecting compactable provider messages".to_owned(),
+        source: Some(Box::new(Layer {
+            text: "ProviderError: inference failed".to_owned(),
+            source: Some(Box::new(Layer {
+                text: format!("Invalid status code 400 Bad Request with message: {body}"),
+                source: None,
+            })),
+        })),
+    };
 
-    let reason = bounded_error_chain(error.as_ref());
+    let reason = bounded_error_chain(&error);
     assert!(reason.len() <= FAILURE_TEXT_MAX_BYTES, "{}", reason.len());
     assert!(reason.starts_with(
         "projecting compactable provider messages: ProviderError: inference failed: "
@@ -46,7 +50,7 @@ fn a_100_kib_provider_body_is_capped_per_cause_and_overall() {
         assert!(cause.len() <= FAILURE_CAUSE_MAX_BYTES, "{}", cause.len());
     }
     assert_eq!(
-        BoundedErrorChain(error.as_ref()).to_string(),
+        BoundedErrorChain(&error).to_string(),
         reason,
         "logs get the same rendering"
     );
@@ -109,25 +113,6 @@ fn credentials_and_token_bearing_urls_never_survive() {
         "the endpoint without its query stays: {reason}"
     );
     assert!(reason.contains("Authorization: [REDACTED]"), "{reason}");
-}
-
-#[test]
-fn provider_rejection_errors_carry_no_request_headers() {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::AUTHORIZATION,
-        "Bearer sk-ant-api03-HEADERSECRET".parse().unwrap(),
-    );
-    headers.insert("x-api-key", "sk-proj-HEADERSECRET".parse().unwrap());
-    headers.insert("retry-after", "30".parse().unwrap());
-    let error = crate::clients::provider_http::rejected_response_error(
-        reqwest::StatusCode::TOO_MANY_REQUESTS,
-        &headers,
-        r#"{"error":{"type":"rate_limit_error"}}"#,
-    );
-    let rendered = error.to_string();
-    assert!(!rendered.contains("HEADERSECRET"), "{rendered}");
-    assert!(rendered.contains("rate_limit_error"));
 }
 
 #[test]

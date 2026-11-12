@@ -166,8 +166,6 @@ pub struct LeanContractSnapshot {
     pub tool_admission_handoff_cases: Vec<LeanToolAdmissionHandoffCase>,
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub delegated_finality_cases: Vec<serde_json::Value>,
-    pub claude_output_config_cases: Vec<serde_json::Value>,
-    pub checkpoint_fallback_cases: Vec<serde_json::Value>,
     pub checkpoint_list_fields: Vec<String>,
     pub generated_by: String,
     pub schema_publication_cases: Vec<serde_json::Value>,
@@ -246,10 +244,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<serde_json::Value>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<serde_json::Value>,
-    pub client_installation_cases: Vec<serde_json::Value>,
-    pub client_installation_compatibility_cases: Vec<serde_json::Value>,
-    pub runtime_service_replacement_cases: Vec<serde_json::Value>,
-    pub update_handoff_cases: Vec<serde_json::Value>,
     pub client_observation_scope_cases: Vec<serde_json::Value>,
     pub inference_observation_cases: Vec<serde_json::Value>,
     pub inference_visibility_cases: Vec<serde_json::Value>,
@@ -258,12 +252,8 @@ pub struct LeanContractSnapshot {
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub identity_delegation_cases: Vec<LeanDelegationCase>,
     pub identity_agent_baseline_cases: Vec<LeanAgentBaselineCase>,
-    pub identity_enrollment_grant_cases: serde_json::Value,
     pub identity_agent_creator_cases: Vec<serde_json::Value>,
     pub identity_agent_creation_exposure_cases: Vec<serde_json::Value>,
-    pub identity_created_agent_access_cases: Vec<serde_json::Value>,
-    pub identity_client_agent_creation_cases: Vec<LeanIdentityClientAgentCreationCase>,
-    pub identity_client_document_creation_cases: Vec<serde_json::Value>,
     pub identity_agent_block_signing_cases: Vec<LeanAgentBlockSigningCase>,
     pub identity_private_journal_policy: LeanPrivateJournalPolicy,
     pub mailbox_runtime_notice_case: serde_json::Value,
@@ -276,7 +266,6 @@ pub struct LeanContractSnapshot {
     pub workspace_liveness_cases: Vec<serde_json::Value>,
     pub workspace_child_cases: Vec<serde_json::Value>,
     pub workspace_quickstart_selection_cases: Vec<serde_json::Value>,
-    pub workspace_callback_selection_cases: Vec<serde_json::Value>,
     pub pack_placement_reader_cases: Vec<serde_json::Value>,
     pub agent_target_access_cases: Vec<serde_json::Value>,
     pub native_route_cases: Vec<serde_json::Value>,
@@ -292,20 +281,17 @@ pub struct LeanContractSnapshot {
     pub session_input_edit_native_discovery_cases: Vec<serde_json::Value>,
     pub session_input_edit_native_claim_cases: Vec<serde_json::Value>,
     pub client_optimistic_send_cases: serde_json::Value,
-    pub identity_client_agent_journal_cases: Vec<LeanIdentityClientAgentJournalCase>,
     pub identity_client_agent_recovery_cases: Vec<LeanIdentityClientAgentRecoveryCase>,
     pub client_publication_protected_collection: String,
     pub watcher_actor_cases: Vec<serde_json::Value>,
     pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
     pub identity_bootstrap_cases: Vec<serde_json::Value>,
     pub identity_bootstrap_reservation_cases: Vec<serde_json::Value>,
-    pub identity_bootstrap_startup_cases: Vec<serde_json::Value>,
     pub identity_runtime_nac_cases: Vec<serde_json::Value>,
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub identity_callback_parent_actor_cases: Vec<serde_json::Value>,
     pub identity_eval_record_cases: Vec<serde_json::Value>,
     pub identity_optimization_promotion_cases: Vec<serde_json::Value>,
-    pub identity_owner_registration_cases: Vec<serde_json::Value>,
     pub identity_readiness_preflight_cases: Vec<serde_json::Value>,
     pub identity_secret_publication_cases: Vec<serde_json::Value>,
     pub identity_deferred_operation_cases: Vec<serde_json::Value>,
@@ -314,18 +300,14 @@ pub struct LeanContractSnapshot {
     pub identity_receiver_grant_cases: Vec<serde_json::Value>,
     pub identity_pairing_reader_cases: Vec<serde_json::Value>,
     pub identity_pairing_reader_policy_cases: Vec<serde_json::Value>,
-    pub identity_relationship_replay_cases: Vec<serde_json::Value>,
-    pub identity_relationship_replay_producer_cases: Vec<serde_json::Value>,
     pub identity_local_registry_writer_cases: Vec<serde_json::Value>,
     pub identity_discovery_policy_cases: Vec<serde_json::Value>,
     pub identity_client_transport_cases: Vec<serde_json::Value>,
     pub identity_replica_grant_cases: Vec<serde_json::Value>,
-    pub identity_network_protocol_cases: Vec<serde_json::Value>,
     pub identity_enrollment_policy_cases: Vec<serde_json::Value>,
     pub identity_readiness_recovery_cases: Vec<serde_json::Value>,
     pub identity_readiness_observation_cases: Vec<serde_json::Value>,
     pub identity_readiness_settled_cases: Vec<serde_json::Value>,
-    pub identity_directory_publication_cases: Vec<serde_json::Value>,
     pub identity_startup_readiness_cases: Vec<LeanIdentityStartupReadinessCase>,
     pub goal_link_cases: Vec<LeanGoalLinkCase>,
     pub remote_agent_delivery_cases: Vec<serde_json::Value>,
@@ -348,7 +330,6 @@ pub struct LeanContractSnapshot {
     pub request_execution_lease_cases: Vec<LeanRequestExecutionLeaseCase>,
     pub request_execution_lease_observed_cases: Vec<LeanRequestExecutionObservedCase>,
     pub request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
-    pub inference_registry_cases: Vec<serde_json::Value>,
     pub trigger_dispatch_case_count: usize,
     pub trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
     pub event_group_case_count: usize,
@@ -364,8 +345,6 @@ pub struct LeanContractSnapshot {
     pub session_reply_preview_cases: Vec<serde_json::Value>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub background_wake_row_cases: Vec<serde_json::Value>,
-    pub configuration_scope_cases: serde_json::Value,
-    pub initial_inference_cases: Vec<serde_json::Value>,
     pub discovery_scope_cases: Vec<serde_json::Value>,
     pub discovery_guidance_cases: Vec<serde_json::Value>,
     pub budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
@@ -389,7 +368,6 @@ pub struct LeanContractSnapshot {
     pub workspace_permission_cases: Vec<serde_json::Value>,
     pub workspace_command_root_cases: Vec<serde_json::Value>,
     pub operator_path_cases: Vec<serde_json::Value>,
-    pub access_review_cases: Vec<serde_json::Value>,
     pub access_review_task_cases: Vec<serde_json::Value>,
     pub plugin_approval_cases: Vec<serde_json::Value>,
     pub goal_objective_whitespace_codepoints: Vec<u32>,
@@ -408,7 +386,6 @@ pub struct LeanContractSnapshot {
     pub client_sync_health_cases: Vec<serde_json::Value>,
     pub enrollment_route_readiness_cases: Vec<serde_json::Value>,
     pub enrollment_startup_cases: Vec<serde_json::Value>,
-    pub enrollment_candidate_name_cases: Vec<serde_json::Value>,
     pub enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub enrollment_auto_renewal_cases: Vec<serde_json::Value>,
@@ -423,7 +400,6 @@ pub struct LeanContractSnapshot {
     pub title_text_cases: serde_json::Value,
     pub title_usage_cases: Vec<LeanTitleUsageCase>,
     pub provider_usage_cases: Vec<serde_json::Value>,
-    pub provider_limit_read_cases: Vec<serde_json::Value>,
     pub title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub frontend_client_shell_case_count: usize,
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
@@ -438,18 +414,12 @@ pub struct LeanContractSnapshot {
     pub client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub snapshot_demotion_cases: Vec<serde_json::Value>,
-    pub catalog_refresh_cases: Vec<serde_json::Value>,
-    pub claude_platform_cases: Vec<serde_json::Value>,
     pub plugin_reference_cases: Vec<serde_json::Value>,
     pub plugin_pin_cases: Vec<serde_json::Value>,
-    pub pack_document_ownership_cases: Vec<serde_json::Value>,
     pub pack_wire_lock_cases: Vec<serde_json::Value>,
     pub pack_wire_target_cases: Vec<serde_json::Value>,
     pub pack_finality_cases: Vec<serde_json::Value>,
-    pub hosted_pack_evidence_cases: Vec<serde_json::Value>,
     pub hosted_plugin_cases: Vec<serde_json::Value>,
-    pub hosted_pack_schema_cases: Vec<serde_json::Value>,
-    pub hosted_pack_home_cases: Vec<serde_json::Value>,
     pub readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub eval_outcome_cases: Vec<LeanEvalOutcomeCase>,
     pub eval_document_capture_cases: Vec<LeanEvalDocumentCaptureCase>,
@@ -577,15 +547,9 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_compaction_trigger_cases: Vec<LeanPromptAssemblyCompactionTriggerCase>,
     pub prompt_assembly_claude_map_cases: Vec<LeanPromptAssemblyClaudeMapCase>,
     pub prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
-    pub prompt_assembly_claude_attribution_cases: Vec<LeanPromptAssemblyClaudeAttributionCase>,
-    pub prompt_assembly_claude_cache_cases: Vec<LeanPromptAssemblyClaudeCacheCase>,
-    pub prompt_assembly_claude_origin_cases: Vec<LeanPromptAssemblyClaudeOriginCase>,
-    pub prompt_assembly_claude_field_cases: Vec<LeanPromptAssemblyClaudeFieldCase>,
-    pub prompt_assembly_claude_field_row_cases: Vec<LeanPromptAssemblyClaudeFieldRowCase>,
     pub prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
     pub prompt_assembly_claude_thinking_stream_cases:
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
-    pub prompt_assembly_claude_wire_start_cases: Vec<LeanPromptAssemblyClaudeWireStartCase>,
     pub prompt_assembly_service_tier_cases: Vec<LeanPromptAssemblyServiceTierCase>,
     pub prompt_assembly_responses_storage_cases: Vec<LeanPromptAssemblyResponsesStorageCase>,
     pub prompt_assembly_responses_effort_cases: Vec<LeanPromptAssemblyResponsesEffortCase>,
@@ -596,16 +560,12 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_replay_prefix_cases: Vec<LeanPromptAssemblyReplayPrefixCase>,
     pub protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
-    pub rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
     pub durable_reduction_cases: Vec<LeanDurableReductionCase>,
-    pub rolling_compaction_cases: Vec<LeanRollingCompactionCase>,
-    pub reduction_engine_cases: Vec<LeanReductionEngineCase>,
     pub compaction_projection_join_cases: Vec<LeanCompactionProjectionJoinCase>,
     pub compaction_canonical_projection_cases: Vec<LeanCanonicalCompactionCase>,
     pub repaired_projection_admission_cases: Vec<LeanRepairedProjectionCase>,
     pub rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     pub capture_block_scope_cases: Vec<serde_json::Value>,
-    pub session_child_cases: Vec<serde_json::Value>,
     pub auxiliary_session_child_binding_cases: Vec<serde_json::Value>,
     pub local_self_publication_cases: Vec<serde_json::Value>,
     pub client_request_publication_cases: Vec<serde_json::Value>,
@@ -613,9 +573,6 @@ pub struct LeanContractSnapshot {
     pub capture_order_cases: Vec<LeanCaptureOrderCase>,
     pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
     pub task_hook_admission_cases: Vec<LeanTaskHookAdmissionCase>,
-    pub storage_write_gate_cases: Vec<serde_json::Value>,
-    pub storage_write_gate_admission_cases: Vec<serde_json::Value>,
-    pub storage_write_gate_stream_waiter_cases: Vec<serde_json::Value>,
     pub native_completion_cases: Vec<serde_json::Value>,
     pub native_claim_lifetime_cases: Vec<serde_json::Value>,
     pub families: BTreeMap<String, family::LeanFamily>,
@@ -641,7 +598,6 @@ pub struct LeanContractSnapshot {
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
     pub feature_matrix: LeanFeatureMatrix,
-    pub identity_structural_cases: Vec<LeanIdentityStructuralCase>,
     pub identity_permission_cases: Vec<LeanIdentityPermissionCase>,
     pub identity_household_cases: Vec<LeanIdentityHouseholdCase>,
     pub identity_task_session_publication_cases: Vec<serde_json::Value>,
@@ -649,8 +605,6 @@ pub struct LeanContractSnapshot {
     pub identity_atomic_client_request_cases: Vec<serde_json::Value>,
     pub identity_derivation_cases: Vec<LeanIdentityDerivationCase>,
     pub identity_contracts: Vec<LeanIdentityContract>,
-    pub pack_identity_cases: Vec<LeanPackIdentityCase>,
-    pub pack_identity_reference_cases: Vec<LeanPackIdentityReferenceCase>,
     pub pack_eval_subject_cases: Vec<LeanPackEvalSubjectCase>,
     pub workspace_cases: Vec<LeanWorkspaceCase>,
     pub workspace_binding_cases: Vec<LeanWorkspaceBindingCase>,
@@ -688,14 +642,6 @@ pub struct LeanPrivateJournalCheck {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientAgentJournalCase {
-    pub name: String,
-    pub initial: LeanIdentityClientAgentJournalState,
-    pub steps: Vec<LeanIdentityClientAgentJournalStep>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanIdentityClientAgentRecoveryCase {
     pub name: String,
     pub actor_matches: bool,
@@ -717,83 +663,12 @@ pub enum LeanIdentityClientAgentRecoveryDisposition {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientAgentJournalStep {
-    pub action: LeanIdentityClientAgentJournalAction,
-    pub before: LeanIdentityClientAgentJournalState,
-    pub after: LeanIdentityClientAgentJournalState,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientAgentJournalState {
-    pub client: String,
-    pub agent_did: String,
-    pub node_did: String,
-    pub agent_doc: String,
-    pub node_doc: String,
-    pub commit: LeanIdentityClientAgentJournalStatus,
-    pub parent: LeanIdentityClientAgentJournalStatus,
-    pub executor: LeanIdentityClientAgentJournalStatus,
-    pub permit: Option<LeanIdentityClientAgentJournalStage>,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeanIdentityClientAgentJournalStatus {
     Fresh,
     Pending,
     Succeeded,
     Failed,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanIdentityClientAgentJournalStage {
-    Commit,
-    Parent,
-    Executor,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanIdentityClientAgentJournalAction {
-    Record {
-        stage: LeanIdentityClientAgentJournalStage,
-        durable: bool,
-    },
-    Dispatch {
-        stage: LeanIdentityClientAgentJournalStage,
-    },
-    Finish {
-        stage: LeanIdentityClientAgentJournalStage,
-        success: bool,
-        confirmed_failure: bool,
-    },
-    Restart,
-    SaveUnrelated,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientAgentCreationCase {
-    pub name: String,
-    pub client_intent: bool,
-    pub agent_collection: bool,
-    pub create: bool,
-    pub http: bool,
-    pub signer_available: bool,
-    pub supported: bool,
-    pub signer_matches_bearer: bool,
-    pub input_matches_graph: bool,
-    pub trusted_schema: bool,
-    pub graph_verified: bool,
-    pub transport_ready: bool,
-    pub native_authorized: bool,
-    pub commit: String,
-    pub grants: String,
-    pub expected_route: String,
-    pub expected_publication: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2789,10 +2664,8 @@ mod hook_decisions;
 mod hooks;
 mod optimization;
 mod prompt_assembly;
-mod reduction_engine;
 mod rendered_capture;
 mod request_execution_lease;
-mod rolling_compaction;
 mod self_config;
 mod session_documents;
 mod slot_persistence_health;
@@ -2823,10 +2696,8 @@ pub use hook_decisions::*;
 pub use hooks::*;
 pub use optimization::*;
 pub use prompt_assembly::*;
-pub use reduction_engine::*;
 pub use rendered_capture::*;
 pub use request_execution_lease::*;
-pub use rolling_compaction::*;
 pub use self_config::*;
 pub use session_documents::*;
 pub use slot_persistence_health::*;
@@ -3831,15 +3702,6 @@ pub fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAssemblyC
     &lean_contract_snapshot().prompt_assembly_claude_body_cases
 }
 
-pub fn lean_prompt_assembly_claude_attribution_cases(
-) -> &'static [LeanPromptAssemblyClaudeAttributionCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_attribution_cases
-}
-
-pub fn lean_prompt_assembly_claude_cache_cases() -> &'static [LeanPromptAssemblyClaudeCacheCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_cache_cases
-}
-
 pub fn lean_prompt_assembly_claude_stream_cases() -> &'static [LeanPromptAssemblyClaudeStreamCase] {
     &lean_contract_snapshot().prompt_assembly_claude_stream_cases
 }
@@ -3847,11 +3709,6 @@ pub fn lean_prompt_assembly_claude_stream_cases() -> &'static [LeanPromptAssembl
 pub fn lean_prompt_assembly_claude_thinking_stream_cases(
 ) -> &'static [LeanPromptAssemblyClaudeThinkingStreamCase] {
     &lean_contract_snapshot().prompt_assembly_claude_thinking_stream_cases
-}
-
-pub fn lean_prompt_assembly_claude_wire_start_cases(
-) -> &'static [LeanPromptAssemblyClaudeWireStartCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_wire_start_cases
 }
 
 pub fn lean_prompt_assembly_responses_storage_cases(
@@ -3894,20 +3751,8 @@ pub fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
     &lean_contract_snapshot().rendered_capture_cases
 }
 
-pub fn lean_rendered_capture_storage_cases() -> &'static [LeanRenderedCaptureStorageCase] {
-    &lean_contract_snapshot().rendered_capture_storage_cases
-}
-
 pub fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {
     &lean_contract_snapshot().durable_reduction_cases
-}
-
-pub fn lean_rolling_compaction_cases() -> &'static [LeanRollingCompactionCase] {
-    &lean_contract_snapshot().rolling_compaction_cases
-}
-
-pub fn lean_reduction_engine_cases() -> &'static [LeanReductionEngineCase] {
-    &lean_contract_snapshot().reduction_engine_cases
 }
 
 pub fn lean_compaction_projection_join_cases() -> &'static [LeanCompactionProjectionJoinCase] {
@@ -4012,10 +3857,6 @@ pub fn lean_command_env_case(name: &str) -> &'static LeanCommandEnvCase {
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean command env case {name:?} was not emitted"))
-}
-
-pub fn lean_identity_structural_cases() -> &'static [LeanIdentityStructuralCase] {
-    &lean_contract_snapshot().identity_structural_cases
 }
 
 pub fn lean_identity_permission_cases() -> &'static [LeanIdentityPermissionCase] {
@@ -4729,24 +4570,8 @@ pub fn lean_plugin_reference_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().plugin_reference_cases
 }
 
-pub fn lean_catalog_refresh_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().catalog_refresh_cases
-}
-
 pub fn lean_request_terminal_selection_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().request_terminal_selection_cases
-}
-
-pub fn lean_claude_platform_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().claude_platform_cases
-}
-
-pub fn lean_pack_identity_cases() -> &'static [LeanPackIdentityCase] {
-    &lean_contract_snapshot().pack_identity_cases
-}
-
-pub fn lean_pack_identity_reference_cases() -> &'static [LeanPackIdentityReferenceCase] {
-    &lean_contract_snapshot().pack_identity_reference_cases
 }
 
 pub fn lean_pack_eval_subject_cases() -> &'static [LeanPackEvalSubjectCase] {

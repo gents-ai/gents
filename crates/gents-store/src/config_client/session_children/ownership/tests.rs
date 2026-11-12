@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn publication_matches_atomic_session_child_model() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().session_child_cases {
-        let name = case["name"].as_str().unwrap();
+    for case in gents_lean_vocab::families::session_child_recovery_cases::cases() {
+        let name = case.input.name.as_str();
         let home = tempfile::tempdir().unwrap();
         let runtime = KeyIdentity::load_or_create(home.path().join("node"), None).unwrap();
         let binding = crate::identity::provision_agent_identity(&runtime).unwrap();
@@ -52,7 +52,7 @@ async fn publication_matches_atomic_session_child_model() {
                 let response = txn.execute_with_variables(
                     "mutation($input: AgentMessageMutationInputArg!) { create_AgentMessage(input: $input) { _docID } }",
                     &json!({"input": {"node_did": runtime_did, "session_id": "child-test", "session_doc_id": session_doc,
-                        "agent_did": agent_did, "creator_did": creator, "parent_linked": case["parent_linked"],
+                        "agent_did": agent_did, "creator_did": creator, "parent_linked": case.input.parent_linked,
                         "message_key": "child-test", "sequence": 1, "role": "assistant", "created_at": "2026-11-04T00:00:00Z"}}),
                 ).await?;
                 Ok::<_, anyhow::Error>(crate::graphql::created_doc_id(&response, "AgentMessage")?)
@@ -124,19 +124,19 @@ async fn publication_matches_atomic_session_child_model() {
             escape_graphql_string(&message)
         );
         let actual = access.execute(&query).await.unwrap();
-        assert_eq!(
-            actual["data"]["AgentMessage"][0]["parent_linked"], case["expected_linked"],
-            "{name}"
-        );
+        let linked = actual["data"]["AgentMessage"][0]["parent_linked"]
+            .as_bool()
+            .unwrap();
         let visible = reader_access.execute(&query).await.unwrap()["data"]["AgentMessage"]
             .as_array()
             .unwrap()
             .len()
             == 1;
-        assert_eq!(
-            visible,
-            case["expected_granted"].as_bool().unwrap(),
-            "{name}"
+        case.check(
+            gents_lean_vocab::families::session_child_recovery_cases::RecoveryOutput {
+                granted: visible,
+                linked,
+            },
         );
         node.shutdown().await.unwrap();
     }

@@ -1296,20 +1296,15 @@ async fn node_read_outcomes_hold_no_secrets() {
 
 #[test]
 fn cached_open_and_refresh_follow_the_executable_model() {
-    let snapshot: Value =
-        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
-    for case in snapshot["provider_limit_read_cases"].as_array().unwrap() {
-        let trigger: UsageTrigger = serde_json::from_value(case["trigger"].clone()).unwrap();
-        let now = DateTime::from_timestamp(case["now"].as_i64().unwrap(), 0).unwrap();
-        let previous = case["previous"]
-            .as_i64()
-            .map(|time| DateTime::from_timestamp(time, 0).unwrap());
-        assert_eq!(
-            should_read(trigger, now, previous),
-            case["should_read"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+    gents_lean_vocab::families::provider_usage_limit_read::replay::<UsageTrigger>(|input| {
+        should_read(
+            input.trigger,
+            DateTime::from_timestamp(i64::try_from(input.now).unwrap(), 0).unwrap(),
+            input
+                .previous
+                .map(|time| DateTime::from_timestamp(i64::try_from(time).unwrap(), 0).unwrap()),
+        )
+    });
 }
 
 #[tokio::test]

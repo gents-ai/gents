@@ -1,18 +1,17 @@
 import Proofs.P2P.Enrollment.State
-import Proofs.Conformance.Contracts.Json.Core
+import Proofs.Conformance.Family
 
 namespace Conformance.EnrollmentCandidateName
 
-open Conformance.Contracts
+open Lean
 
-private def optionalString : Option String → String
-  | none => "null"
-  | some value => jsonString value
+structure NameInput where
+  name : Option String
+  deriving ToJson
 
-private def caseJson (name : Option String) : String :=
-  "{\"name\":" ++ optionalString name ++ ",\"fields\":" ++
-    jsonStringArray (Enrollment.candidateNameFields name) ++ "}"
-
-def casesJson : String := jsonArray ([none, some "Ivan", some "顾问"] |>.map caseJson)
+@[conformance_family]
+def fields : Conformance.Family NameInput (List String) where
+  inputs := [{ name := none }, { name := some "Ivan" }, { name := some "顾问" }]
+  model := fun i => Enrollment.candidateNameFields i.name
 
 end Conformance.EnrollmentCandidateName

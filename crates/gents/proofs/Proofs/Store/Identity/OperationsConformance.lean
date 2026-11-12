@@ -204,67 +204,6 @@ def pairingReaderPolicyCasesJson : String :=
      ("update", toJson (allowed 5 state actor "pairing_observations" "route" "update")),
      ("manage_reader", toJson (mayManage state actor route))])).compress
 
-structure ReplayCase where
-  name : String
-  before : Identity.RelationshipReplay.Receiver
-  event : Identity.RelationshipReplay.Event
-  validSignature : Bool
-  authenticatedTarget : Bool
-  registered : Bool
-  nativeManager : Bool
-  committed : Bool
-
-def replayReceiver : Identity.RelationshipReplay.Receiver :=
-  ⟨"policy", "network", "document", "reader", "actor", "", "recipient", "", "recipient", 0, false⟩
-
-def replayGrant : Identity.RelationshipReplay.Event :=
-  ⟨"policy", "network", "document", "reader", "actor", "", "recipient", "", "recipient", "owner", 1, true⟩
-
-def replayCases : List ReplayCase :=
-  [ ⟨"grant", replayReceiver, replayGrant, true, true, true, true, true⟩
-  , ⟨"invalid-signature", replayReceiver, replayGrant, false, true, true, true, true⟩
-  , ⟨"wrong-transport-recipient", replayReceiver, replayGrant, true, false, true, true, true⟩
-  , ⟨"unregistered-document", replayReceiver, replayGrant, true, true, false, true, true⟩
-  , ⟨"unauthorized-manager", replayReceiver, replayGrant, true, true, true, false, true⟩
-  , ⟨"aborted", replayReceiver, replayGrant, true, true, true, true, false⟩
-  , ⟨"other-document", replayReceiver, { replayGrant with document := "other" }, true, true, true, true, true⟩
-  , ⟨"other-subject", replayReceiver, { replayGrant with targetId := "other" }, true, true, true, true, true⟩
-  , ⟨"other-recipient", replayReceiver, { replayGrant with recipient := "other" }, true, true, true, true, true⟩
-  , ⟨"out-of-order", replayReceiver, { replayGrant with sequence := 2 }, true, true, true, true, true⟩
-  , ⟨"revoke", { replayReceiver with sequence := 1, granted := true },
-      { replayGrant with sequence := 2, add := false }, true, true, true, true, true⟩
-  , ⟨"stale-grant", { replayReceiver with sequence := 2 }, replayGrant, true, true, true, true, true⟩ ]
-
-def replayCaseJson (c : ReplayCase) : Json :=
-  let after := Identity.RelationshipReplay.receive c.before c.event c.validSignature
-    c.authenticatedTarget c.registered c.nativeManager c.committed
-  let e := c.event
-  let r := c.before
-  Json.mkObj [("name", toJson c.name),
-    ("before", Json.mkObj [("policy", toJson r.policy), ("resource", toJson r.resource),
-      ("document", toJson r.document), ("relation", toJson r.relation),
-      ("target_kind", toJson r.targetKind), ("target_resource", toJson r.targetResource),
-      ("target_id", toJson r.targetId), ("target_relation", toJson r.targetRelation),
-      ("recipient", toJson r.recipient), ("sequence", toJson r.sequence), ("granted", toJson r.granted)]),
-    ("event", Json.mkObj [("policy", toJson e.policy), ("resource", toJson e.resource),
-      ("document", toJson e.document), ("relation", toJson e.relation),
-      ("target_kind", toJson e.targetKind), ("target_resource", toJson e.targetResource),
-      ("target_id", toJson e.targetId), ("target_relation", toJson e.targetRelation),
-      ("recipient", toJson e.recipient), ("signer", toJson e.signer),
-      ("sequence", toJson e.sequence), ("add", toJson e.add)]),
-    ("valid_signature", toJson c.validSignature), ("authenticated_target", toJson c.authenticatedTarget),
-    ("registered", toJson c.registered), ("native_manager", toJson c.nativeManager),
-    ("committed", toJson c.committed), ("expected_sequence", toJson after.sequence),
-    ("expected_granted", toJson after.granted)]
-
-def replayCasesJson : String := (toJson (replayCases.map replayCaseJson)).compress
-
-def replayProducerCasesJson : String := (toJson
-  ([(true, true, true), (false, true, true), (true, false, true), (true, true, false)].map
-    fun (held, manager, committed) => Json.mkObj [("held_signer", toJson held),
-      ("native_manager", toJson manager), ("committed", toJson committed),
-      ("deliverable", toJson (Identity.RelationshipReplay.producerMayDeliver held manager committed))])).compress
-
 def enrollmentPolicyCasesJson : String :=
   let empty : State := { objects := [], relations := [], enrolled := [] }
   let thin := publishEnrollmentRequest empty "client" "admin" "request" none
@@ -294,14 +233,6 @@ def enrollmentPolicyCasesJson : String :=
     Json.mkObj [("name", toJson name), ("actor", toJson actor), ("document", toJson id),
       ("permission", toJson permission),
       ("allowed", toJson (allowed 5 state actor "enrollment_records" id permission))])).compress
-
-def networkProtocolCasesJson : String :=
-  let collections := ["Network", "NetworkEnrollmentRequest", "NetworkEnrollmentDecision",
-    "NetworkEnrollmentRouteReceipt", "NetworkAuthorizationRevision",
-    "EnrollmentRenewalIntent", "EnrollmentRenewalOffer", "NodeDirectoryEntry",
-    "PeerRegistry", "AgentSession"]
-  (toJson (collections.map fun name => Json.mkObj [
-    ("collection", toJson name), ("resource", toJson (networkProtocolResource name))])).compress
 
 def replicaGrantCasesJson : String :=
   let before := privateReplicaFixture

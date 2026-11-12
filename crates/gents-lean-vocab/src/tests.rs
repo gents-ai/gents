@@ -3,24 +3,6 @@ use std::collections::BTreeSet;
 use super::*;
 
 #[test]
-fn enrollment_candidate_names_match_the_contract() {
-    let cases = &lean_contract_snapshot().enrollment_candidate_name_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        let fields: Vec<&str> = case["fields"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|field| field.as_str().unwrap())
-            .collect();
-        assert_eq!(
-            gents_protocol::enrollment::candidate_name_fields(case["name"].as_str()),
-            fields
-        );
-    }
-}
-
-#[test]
 fn reports_malformed_arm() {
     let lean = r#"
 namespace Sample

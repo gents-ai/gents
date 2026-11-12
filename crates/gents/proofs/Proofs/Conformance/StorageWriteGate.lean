@@ -1,8 +1,8 @@
 import Proofs.Store.StorageWriteGate
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.StorageWriteGateContracts
-open StorageWriteGate Conformance.Contracts
+open StorageWriteGate
 
 structure Case where
   name : String
@@ -33,18 +33,41 @@ def gateHeldAfterOwnerHandoff (c : Case) : Bool :=
     step ⟨.storage, c.independentlyScheduled, true⟩ .rollbackOwnerScheduled
   else ⟨.storage, c.independentlyScheduled, false⟩)
 
-private def jsonBool (b : Bool) : String := if b then "true" else "false"
+structure HandoffInput where
+  name : String
+  independentlyScheduled : Bool
+  cleanupTimesOut : Bool
+  deriving Lean.ToJson
 
-def caseJson (c : Case) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"independently_scheduled\":" ++ jsonBool c.independentlyScheduled ++
-  ",\"storage_returns\":" ++ jsonBool c.storageReturns ++
-  ",\"rollback_owner_scheduled\":" ++ jsonBool c.rollbackOwnerScheduled ++
-  ",\"cleanup_times_out\":" ++ jsonBool c.cleanupTimesOut ++
-  ",\"expected_gate_held_after_owner_handoff\":" ++
-    jsonBool (gateHeldAfterOwnerHandoff c) ++
-  ",\"expected_gate_held\":" ++ jsonBool (held (finalState c)) ++ "}"
+structure HandoffOutput where
+  gateHeldAfterOwnerHandoff : Bool
+  gateHeld : Bool
+  deriving Lean.ToJson
 
-def casesJson : String := jsonArray (cases.map caseJson)
+@[conformance_family]
+def handoff : Conformance.Family HandoffInput HandoffOutput where
+  inputs := (cases.filter fun c => c.rollbackOwnerScheduled).map fun c =>
+    { name := c.name
+      independentlyScheduled := c.independentlyScheduled
+      cleanupTimesOut := c.cleanupTimesOut }
+  model := fun i =>
+    let c : Case := ⟨i.name, i.independentlyScheduled, false, true, i.cleanupTimesOut⟩
+    { gateHeldAfterOwnerHandoff := gateHeldAfterOwnerHandoff c
+      gateHeld := held (finalState c) }
+
+structure FinalizationInput where
+  name : String
+  independentlyScheduled : Bool
+  storageReturns : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def streamFinalization : Conformance.Family FinalizationInput Bool where
+  inputs := (cases.filter fun c => !c.rollbackOwnerScheduled).map fun c =>
+    { name := c.name
+      independentlyScheduled := c.independentlyScheduled
+      storageReturns := c.storageReturns }
+  model := fun i =>
+    held (finalState ⟨i.name, i.independentlyScheduled, i.storageReturns, false, false⟩)
 
 end Conformance.StorageWriteGateContracts

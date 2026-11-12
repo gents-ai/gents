@@ -123,6 +123,8 @@ impl PartialEq for ClientSigningCapability {
 impl Eq for ClientSigningCapability {}
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub enum CreateRoute {
     Native,
     Signed,
