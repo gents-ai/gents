@@ -1015,6 +1015,10 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "mailbox_notification_contracts_stamp")
       "mailbox" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_sweep_contracts_progress")
+      "mailbox" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "mailbox_reply_contracts_claim"

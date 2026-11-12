@@ -2986,7 +2986,6 @@ pub struct LeanContractSnapshot {
     pub plugin_job_recovery_cases: Vec<LeanPluginJobRecoveryCase>,
     pub plugin_job_wake_cases: Vec<LeanPluginJobWakeCase>,
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
-    pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -7380,44 +7379,6 @@ pub struct LeanMailboxQuestionCaseWaitsItem {
     pub open: bool,
     pub same_parent: bool,
     pub waiting: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxSweepCase {
-    pub actions: Vec<LeanMailboxSweepCaseActionsItem>,
-    pub budget: u64,
-    pub case: String,
-    pub node_did: String,
-    pub page_size: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxSweepCaseActionsItem {
-    pub cursor: Option<u64>,
-    pub next_cursor: Option<u64>,
-    pub post_rows: Vec<LeanMailboxSweepCaseActionsItemPostRowsItem>,
-    pub rows: Vec<LeanMailboxSweepCaseActionsItemRowsItem>,
-    pub selected: Vec<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxSweepCaseActionsItemPostRowsItem {
-    pub doc_id: u64,
-    pub due: bool,
-    pub node_did: String,
-    pub open: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxSweepCaseActionsItemRowsItem {
-    pub doc_id: u64,
-    pub due: bool,
-    pub node_did: String,
-    pub open: bool,
 }
 
 #[derive(Debug, Deserialize)]

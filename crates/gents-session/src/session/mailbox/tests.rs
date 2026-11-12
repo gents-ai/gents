@@ -714,264 +714,254 @@ async fn poisoned_item_does_not_block_later_expiry() {
 async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
     use std::collections::BTreeMap;
 
-    let node = test_node().await;
-    let contract = gents_lean_vocab::lean_contract_snapshot();
-    let case = contract
-        .mailbox_sweep_cases
-        .first()
-        .expect("Lean mailbox sweep case");
-    let node_did = case.node_did.as_str();
-    assert_eq!(case.page_size, MAILBOX_SWEEP_PAGE_SIZE as u64);
-    assert_eq!(case.budget, MAILBOX_SWEEP_PAGE_SIZE as u64);
-    let actions = &case.actions;
-    assert_eq!(actions.len(), 4);
-    let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
-    let mut modeled_doc_ids = BTreeMap::<u64, String>::new();
-    let mut modeled_item_keys = BTreeMap::<u64, String>::new();
-    let mut modeled_ids_by_doc = BTreeMap::<String, u64>::new();
-    let mut modeled_ids_by_item_key = BTreeMap::<String, u64>::new();
-    let mut modeled_due = BTreeMap::<u64, bool>::new();
-    let mut created_local_ids = Vec::new();
-    let mut foreign_doc_id = None;
-    for row in &actions[0].rows {
-        let model_id = row.doc_id;
-        let due = row.due;
-        modeled_due.insert(model_id, due);
-        let local = row.node_did.as_str() == node_did;
-        let row_context = context("did:test:owner");
-        let mut row_args = args(
-            MailboxAction::WriteDocument,
-            &format!("model-row-{model_id:04}"),
-        );
-        row_args.deadline_at = Some(future.clone());
-        if local {
-            let created =
-                stamp_create_with_close_collections(&node, &row_context, row_args, FIXTURE_CLOSE)
-                    .await
-                    .unwrap();
-            modeled_doc_ids.insert(model_id, created.doc_id.clone());
-            modeled_item_keys.insert(model_id, created.item_key.clone());
-            modeled_ids_by_doc.insert(created.doc_id.clone(), model_id);
-            modeled_ids_by_item_key.insert(created.item_key, model_id);
-            created_local_ids.push(created.doc_id);
-        } else {
-            foreign_doc_id =
-                Some(seed_foreign_mailbox_row(&node, &row_args.source_id, &future).await);
-        }
-    }
+    use gents_lean_vocab::families::mailbox_sweep_contracts_progress::{
+        RowStatus, SweepOutput, TickObservation,
+    };
 
-    for index in 0..64 {
-        let closed_context = context("did:test:owner");
-        let mut closed_args = args(
-            MailboxAction::WriteDocument,
-            &format!("000-closed-{index:04}"),
-        );
-        closed_args.deadline_at = Some(future.clone());
-        let closed =
-            stamp_create_with_close_collections(&node, &closed_context, closed_args, FIXTURE_CLOSE)
+    for case in gents_lean_vocab::families::mailbox_sweep_contracts_progress::cases() {
+        let node = test_node().await;
+        let node_did = case.input.node_did.as_str();
+        assert_eq!(case.input.page_size, MAILBOX_SWEEP_PAGE_SIZE as u64);
+        assert_eq!(case.input.budget, MAILBOX_SWEEP_PAGE_SIZE as u64);
+        let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let mut modeled_doc_ids = BTreeMap::<u64, String>::new();
+        let mut modeled_item_keys = BTreeMap::<u64, String>::new();
+        let mut modeled_ids_by_doc = BTreeMap::<String, u64>::new();
+        let mut modeled_ids_by_item_key = BTreeMap::<String, u64>::new();
+        let mut modeled_due = BTreeMap::<u64, bool>::new();
+        let mut created_local_ids = Vec::new();
+        let mut foreign_doc_id = None;
+        let mut foreign_model_id = None;
+        for row in &case.input.rows {
+            let model_id = row.doc_id;
+            let due = row.due;
+            modeled_due.insert(model_id, due);
+            let local = row.node_did.as_str() == node_did;
+            let row_context = context("did:test:owner");
+            let mut row_args = args(
+                MailboxAction::WriteDocument,
+                &format!("model-row-{model_id:04}"),
+            );
+            row_args.deadline_at = Some(future.clone());
+            if local {
+                let created = stamp_create_with_close_collections(
+                    &node,
+                    &row_context,
+                    row_args,
+                    FIXTURE_CLOSE,
+                )
                 .await
                 .unwrap();
-        assert!(
-            transition_open_item(&agent_access(&node), &closed, MailboxStatus::Acted, None)
-                .await
-                .unwrap()
-        );
+                modeled_doc_ids.insert(model_id, created.doc_id.clone());
+                modeled_item_keys.insert(model_id, created.item_key.clone());
+                modeled_ids_by_doc.insert(created.doc_id.clone(), model_id);
+                modeled_ids_by_item_key.insert(created.item_key, model_id);
+                created_local_ids.push(created.doc_id);
+            } else {
+                foreign_doc_id =
+                    Some(seed_foreign_mailbox_row(&node, &row_args.source_id, &future).await);
+                foreign_model_id = Some(model_id);
+            }
+        }
 
-        seed_foreign_mailbox_row(&node, &format!("000-foreign-{index:04}"), &future).await;
-    }
-    let response = agent_access(&node)
-        .execute(&format!(
-            r#"{{ MailboxItem(filter: {{ _and: [
+        for index in 0..64 {
+            let closed_context = context("did:test:owner");
+            let mut closed_args = args(
+                MailboxAction::WriteDocument,
+                &format!("000-closed-{index:04}"),
+            );
+            closed_args.deadline_at = Some(future.clone());
+            let closed = stamp_create_with_close_collections(
+                &node,
+                &closed_context,
+                closed_args,
+                FIXTURE_CLOSE,
+            )
+            .await
+            .unwrap();
+            assert!(transition_open_item(
+                &agent_access(&node),
+                &closed,
+                MailboxStatus::Acted,
+                None
+            )
+            .await
+            .unwrap());
+
+            seed_foreign_mailbox_row(&node, &format!("000-foreign-{index:04}"), &future).await;
+        }
+        let response = agent_access(&node)
+            .execute(&format!(
+                r#"{{ MailboxItem(filter: {{ _and: [
                 {{ node_did: {{ _eq: "{}" }} }},
                 {{ status: {{ _eq: "open" }} }}
             ] }}, order: {{ item_key: ASC }}) {{ _docID item_key }} }}"#,
-            escape_graphql_string(root_identity().did())
-        ))
-        .await
-        .unwrap();
-    let ordered_rows = response["data"][MAILBOX_COLLECTION]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|row| {
-            (
-                row["_docID"].as_str().unwrap().to_owned(),
-                row["item_key"].as_str().unwrap().to_owned(),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(ordered_rows.len(), created_local_ids.len());
-    for (doc_id, item_key) in ordered_rows {
-        let model_id = modeled_ids_by_doc[&doc_id];
-        assert_eq!(modeled_item_keys[&model_id], item_key);
-        if modeled_due[&model_id] {
-            let item = load_as_creator(&node, &doc_id).await.unwrap().unwrap();
-            let response = node.execute(&format!(
+                escape_graphql_string(root_identity().did())
+            ))
+            .await
+            .unwrap();
+        let ordered_rows = response["data"][MAILBOX_COLLECTION]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["_docID"].as_str().unwrap().to_owned(),
+                    row["item_key"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_rows.len(), created_local_ids.len());
+        for (doc_id, item_key) in ordered_rows {
+            let model_id = modeled_ids_by_doc[&doc_id];
+            assert_eq!(modeled_item_keys[&model_id], item_key);
+            if modeled_due[&model_id] {
+                let item = load_as_creator(&node, &doc_id).await.unwrap().unwrap();
+                let response = node.execute(&format!(
                 r#"mutation {{ create_MailboxFixture(input: {{ mailbox_item_key: "{}", body: "done" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&item.item_key),
             )).await;
-            assert!(
-                !response.has_errors(),
-                "mailbox close fixture: {:?}",
-                response.errors
-            );
-        }
-    }
-    let mut cursor = None::<String>;
-    fn metric(value: &Value, name: &str) -> Option<u64> {
-        match value {
-            Value::Object(object) => object
-                .get(name)
-                .and_then(Value::as_u64)
-                .or_else(|| object.values().find_map(|value| metric(value, name))),
-            Value::Array(array) => array.iter().find_map(|value| metric(value, name)),
-            _ => None,
-        }
-    }
-    fn cursor_model_id(token: &str, modeled_ids_by_item_key: &BTreeMap<String, u64>) -> u64 {
-        let decoded = cursor::Cursor::decode(token).expect("native cursor token");
-        let item_key = decoded.keys["item_key"].as_str().unwrap();
-        modeled_ids_by_item_key[item_key]
-    }
-    fn cursor_doc_id(token: &str) -> String {
-        cursor::Cursor::decode(token)
-            .expect("native cursor token")
-            .doc_id
-    }
-    for (index, action) in actions.iter().enumerate() {
-        let input_cursor = action.cursor;
-        assert_eq!(
-            cursor
-                .as_deref()
-                .map(|token| cursor_model_id(token, &modeled_ids_by_item_key)),
-            input_cursor,
-            "native indexed cursor follows Lean row ordering"
-        );
-        if let (Some(token), Some(model_id)) = (cursor.as_deref(), input_cursor) {
-            assert_eq!(
-                cursor_doc_id(token),
-                modeled_doc_ids[&model_id],
-                "opaque cursor retains the physical identity of the modeled row"
-            );
-        }
-        if index == 1 {
-            let current_cursor = cursor.as_deref().expect("second page keyset cursor");
-            let cursor_model_id = cursor_model_id(current_cursor, &modeled_ids_by_item_key);
-            for model_id in [4, cursor_model_id + 4] {
-                assert!(!modeled_due[&model_id]);
-                assert_eq!(
-                    load_as_creator(&node, &modeled_doc_ids[&model_id])
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .status,
-                    "open",
-                    "residual open row {model_id} should remain on either side of the cursor"
+                assert!(
+                    !response.has_errors(),
+                    "mailbox close fixture: {:?}",
+                    response.errors
                 );
             }
-            let page_query = open_mailbox_page_query(
-                root_identity().did(),
-                agent_identity().did(),
-                Some(current_cursor),
-            );
-            let planned = agent_access(&node)
-                .execute(&format!("query @explain(type: simple) {page_query}"))
-                .await
-                .unwrap();
-            let plan = planned["data"].get("explain").unwrap();
-            assert!(
-                plan.to_string()
-                    .contains("MailboxItem_node_status_item_key"),
-                "mailbox page must select its registered compound index: {plan}"
-            );
-            let explain = agent_access(&node)
-                .execute(&format!("query @explain(type: execute) {page_query}"))
-                .await
-                .unwrap();
-            let execution = explain["data"].get("explain").unwrap();
-            assert_eq!(execution["executionSuccess"], true, "{execution}");
-            let roots = execution["operationNode"].as_array().unwrap();
-            assert_eq!(roots.len(), 1);
-            let doc_fetches = metric(&roots[0], "docFetches").expect("docFetches metric");
-            let index_fetches = metric(&roots[0], "indexFetches").expect("indexFetches metric");
-            let remaining_local_open_rows = action
-                .rows
-                .iter()
-                .filter(|row| {
-                    row.node_did.as_str() == node_did && row.open && row.doc_id > cursor_model_id
-                })
-                .count() as u64;
-            assert!(
-                doc_fetches <= (MAILBOX_SWEEP_PAGE_SIZE + 1) as u64,
-                "keyset page must bound document reads, got {doc_fetches}: {execution}"
-            );
-            assert!(
+        }
+        let mut cursor = None::<String>;
+        fn metric(value: &Value, name: &str) -> Option<u64> {
+            match value {
+                Value::Object(object) => object
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .or_else(|| object.values().find_map(|value| metric(value, name))),
+                Value::Array(array) => array.iter().find_map(|value| metric(value, name)),
+                _ => None,
+            }
+        }
+        fn cursor_model_id(token: &str, modeled_ids_by_item_key: &BTreeMap<String, u64>) -> u64 {
+            let decoded = cursor::Cursor::decode(token).expect("native cursor token");
+            let item_key = decoded.keys["item_key"].as_str().unwrap();
+            modeled_ids_by_item_key[item_key]
+        }
+        fn cursor_doc_id(token: &str) -> String {
+            cursor::Cursor::decode(token)
+                .expect("native cursor token")
+                .doc_id
+        }
+        let mut ticks = Vec::new();
+        for index in 0..case.input.ticks {
+            let input_cursor = cursor
+                .as_deref()
+                .map(|token| cursor_model_id(token, &modeled_ids_by_item_key));
+            if let (Some(token), Some(model_id)) = (cursor.as_deref(), input_cursor) {
+                assert_eq!(
+                    cursor_doc_id(token),
+                    modeled_doc_ids[&model_id],
+                    "opaque cursor retains the physical identity of the modeled row"
+                );
+            }
+            if index == 1 {
+                let current_cursor = cursor.as_deref().expect("second page keyset cursor");
+                let cursor_model_id = cursor_model_id(current_cursor, &modeled_ids_by_item_key);
+                for model_id in [4, cursor_model_id + 4] {
+                    assert!(!modeled_due[&model_id]);
+                    assert_eq!(
+                        load_as_creator(&node, &modeled_doc_ids[&model_id])
+                            .await
+                            .unwrap()
+                            .unwrap()
+                            .status,
+                        "open",
+                        "residual open row {model_id} should remain on either side of the cursor"
+                    );
+                }
+                let page_query = open_mailbox_page_query(
+                    root_identity().did(),
+                    agent_identity().did(),
+                    Some(current_cursor),
+                );
+                let planned = agent_access(&node)
+                    .execute(&format!("query @explain(type: simple) {page_query}"))
+                    .await
+                    .unwrap();
+                let plan = planned["data"].get("explain").unwrap();
+                assert!(
+                    plan.to_string()
+                        .contains("MailboxItem_node_status_item_key"),
+                    "mailbox page must select its registered compound index: {plan}"
+                );
+                let explain = agent_access(&node)
+                    .execute(&format!("query @explain(type: execute) {page_query}"))
+                    .await
+                    .unwrap();
+                let execution = explain["data"].get("explain").unwrap();
+                assert_eq!(execution["executionSuccess"], true, "{execution}");
+                let roots = execution["operationNode"].as_array().unwrap();
+                assert_eq!(roots.len(), 1);
+                let doc_fetches = metric(&roots[0], "docFetches").expect("docFetches metric");
+                let index_fetches = metric(&roots[0], "indexFetches").expect("indexFetches metric");
+                let remaining_local_open_rows = case.input.second_tick_index_bound;
+                assert!(
+                    doc_fetches <= (MAILBOX_SWEEP_PAGE_SIZE + 1) as u64,
+                    "keyset page must bound document reads, got {doc_fetches}: {execution}"
+                );
+                assert!(
                 index_fetches <= remaining_local_open_rows,
                 "keyset index scan should stay within the modeled local open suffix of {remaining_local_open_rows}, got {index_fetches}: {execution}"
             );
+            }
+            let turn_started = Instant::now();
+            let page = sweep_open_mailbox_items_with_clock(
+                &node,
+                root_identity().did(),
+                &[agent_identity()],
+                cursor.as_deref(),
+                FIXTURE_CLOSE,
+                || turn_started,
+            )
+            .await
+            .unwrap();
+            assert!(page.report.scanned <= MAILBOX_SWEEP_PAGE_SIZE);
+            assert_eq!(page.report.expired, 0);
+            let next_cursor = page
+                .next_cursor
+                .as_deref()
+                .map(|token| cursor_model_id(token, &modeled_ids_by_item_key));
+            if let (Some(token), Some(next)) = (page.next_cursor.as_deref(), next_cursor) {
+                assert_eq!(
+                    cursor_doc_id(token),
+                    modeled_doc_ids[&next],
+                    "returned cursor retains the corresponding physical document ID"
+                );
+            }
+            ticks.push(TickObservation {
+                cursor: input_cursor,
+                scanned: page.report.scanned as u64,
+                acted: page.report.acted as u64,
+                next_cursor,
+            });
+            cursor = page.next_cursor;
         }
-        let turn_started = Instant::now();
-        let page = sweep_open_mailbox_items_with_clock(
-            &node,
-            root_identity().did(),
-            &[agent_identity()],
-            cursor.as_deref(),
-            FIXTURE_CLOSE,
-            || turn_started,
-        )
-        .await
-        .unwrap();
-        assert!(page.report.scanned <= MAILBOX_SWEEP_PAGE_SIZE);
-        let selected = &action.selected;
-        assert_eq!(page.report.scanned, selected.len());
-        let due_selected = selected
-            .iter()
-            .filter(|model_id| modeled_due[*model_id])
-            .count();
-        assert_eq!(page.report.acted, due_selected);
-        assert_eq!(page.report.expired, 0);
-        let expected_next = action.next_cursor;
-        if let Some(next) = expected_next {
-            assert_eq!(
-                page.next_cursor
-                    .as_deref()
-                    .map(|token| { cursor_model_id(token, &modeled_ids_by_item_key) }),
-                Some(next),
-                "returned cursor is the last processed indexed row"
-            );
-            assert_eq!(
-                page.next_cursor.as_deref().map(cursor_doc_id),
-                Some(modeled_doc_ids[&next].clone()),
-                "returned cursor retains the corresponding physical document ID"
-            );
-        } else {
-            assert!(page.next_cursor.is_none());
-        }
-        cursor = page.next_cursor;
-    }
-    for (model_id, doc_id) in &modeled_doc_ids {
-        let expected_status = if modeled_due[model_id] {
-            "acted"
-        } else {
-            "open"
-        };
-        assert_eq!(
-            load_as_creator(&node, doc_id)
+        let mut final_rows = Vec::new();
+        for row in &case.input.rows {
+            let doc_id = if Some(row.doc_id) == foreign_model_id {
+                foreign_doc_id.clone().unwrap()
+            } else {
+                modeled_doc_ids[&row.doc_id].clone()
+            };
+            let status = load_as_creator(&node, &doc_id)
                 .await
                 .unwrap()
                 .unwrap()
-                .status,
-            expected_status
-        );
+                .status;
+            final_rows.push(RowStatus {
+                doc_id: row.doc_id,
+                is_open: status == "open",
+            });
+        }
+        case.check(SweepOutput { ticks, final_rows });
     }
-    assert_eq!(
-        load_as_creator(&node, foreign_doc_id.as_deref().unwrap())
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        "open"
-    );
 }
 
 /// MailboxItem carries a collection ACP policy, so the block must be read as
