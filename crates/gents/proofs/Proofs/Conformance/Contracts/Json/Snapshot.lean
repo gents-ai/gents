@@ -1,3 +1,6 @@
+import Proofs.Conformance.Views
+import Proofs.Conformance.AgentViews
+import Proofs.Conformance.InferenceViews
 import Proofs.Conformance.PluginGrantDeclaration
 import Proofs.Conformance.EnrollmentRenewalNotices
 import Proofs.Conformance.ToolDispatch
