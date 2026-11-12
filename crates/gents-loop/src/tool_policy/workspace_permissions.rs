@@ -258,21 +258,20 @@ mod tests {
     }
 
     #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct WriteCase {
-        previous: Option<Preference<u64>>,
-        expected: u64,
-        mode: Mode,
-        requested_task: Option<u64>,
-        accepted: bool,
-        changed: bool,
-        next: Option<Preference<u64>>,
-    }
-
-    #[derive(Deserialize)]
     struct Snapshot {
         workspace_permission_cases: Vec<Case>,
-        workspace_permission_write_cases: Vec<WriteCase>,
+    }
+
+    fn wire_mode(value: &str) -> Mode {
+        serde_json::from_value(serde_json::Value::String(value.to_owned())).unwrap()
+    }
+
+    fn case_preference(mode: &str, revision: u64, review_task: Option<u64>) -> Preference<u64> {
+        Preference {
+            revision,
+            mode: wire_mode(mode),
+            review_task,
+        }
     }
 
     #[test]
@@ -299,23 +298,31 @@ mod tests {
 
     #[test]
     fn generated_workspace_permission_write_cases() {
-        let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert!(!snapshot.workspace_permission_write_cases.is_empty());
-        for case in snapshot.workspace_permission_write_cases {
+        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_permission_write_cases;
+        assert!(!cases.is_empty());
+        for case in cases {
+            let previous = case
+                .previous
+                .as_ref()
+                .map(|value| case_preference(&value.mode, value.revision, value.review_task));
+            let next = case
+                .next
+                .as_ref()
+                .map(|value| case_preference(&value.mode, value.revision, value.review_task));
             let result = select_mode(
-                case.previous.as_ref(),
+                previous.as_ref(),
                 case.expected,
-                case.mode,
+                wire_mode(&case.mode),
                 case.requested_task,
             );
             assert_eq!(result.is_ok(), case.accepted);
             match result {
                 Ok(selection) => {
-                    assert_eq!(Some(selection.next), case.next);
+                    assert_eq!(Some(selection.next), next);
                     assert_eq!(selection.changed, case.changed);
                 }
                 Err(_) => {
-                    assert_eq!(case.previous, case.next);
+                    assert_eq!(previous, next);
                     assert!(!case.changed);
                 }
             }

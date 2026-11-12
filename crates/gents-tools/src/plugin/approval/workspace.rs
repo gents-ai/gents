@@ -575,16 +575,15 @@ mod tests {
 
     #[test]
     fn generated_workspace_permission_writes_preserve_selected_policy_versions() -> Result<()> {
-        #[derive(serde::Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Case {
-            previous: Option<Preference<u64>>,
-            expected: u64,
-            mode: Mode,
-            requested_task: Option<u64>,
-            accepted: bool,
-            changed: bool,
-            next: Option<Preference<u64>>,
+        fn wire_mode(value: &str) -> Mode {
+            serde_json::from_value(serde_json::Value::String(value.to_owned())).unwrap()
+        }
+        fn case_preference(mode: &str, revision: u64, review_task: Option<u64>) -> Preference<u64> {
+            Preference {
+                revision,
+                mode: wire_mode(mode),
+                review_task,
+            }
         }
         fn selection(id: u64) -> ReviewTaskSelection {
             let mut task = default_review_task("node", "agent");
@@ -604,9 +603,21 @@ mod tests {
         let key = WorkspaceKey::canonical("node", "requester", "agent", directory.path())?;
         let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_permission_write_cases;
         assert!(!cases.is_empty());
-        for raw in cases {
-            let case: Case = serde_json::from_value(raw.clone())?;
-            let previous = case.previous.map(preference);
+        for case in cases {
+            let previous = case.previous.as_ref().map(|value| {
+                preference(case_preference(
+                    &value.mode,
+                    value.revision,
+                    value.review_task,
+                ))
+            });
+            let next = case.next.as_ref().map(|value| {
+                preference(case_preference(
+                    &value.mode,
+                    value.revision,
+                    value.review_task,
+                ))
+            });
             let stored = Stored {
                 entries: previous
                     .clone()
@@ -621,11 +632,11 @@ mod tests {
             };
             save(&home, &stored)?;
             let task = case.requested_task.map(selection);
-            let result = save_mode(&home, &key, case.expected, case.mode, task.as_ref());
-            assert_eq!(result.is_ok(), case.accepted, "{raw}");
+            let result = save_mode(&home, &key, case.expected, wire_mode(&case.mode), task.as_ref());
+            assert_eq!(result.is_ok(), case.accepted, "{case:?}");
             let observed = get(&home, &key)?.map(|settings| settings.selection);
-            assert_eq!(observed, case.next.map(preference), "{raw}");
-            assert_eq!(observed != previous, case.changed, "{raw}");
+            assert_eq!(observed, next, "{case:?}");
+            assert_eq!(observed != previous, case.changed, "{case:?}");
         }
         Ok(())
     }
