@@ -7,6 +7,7 @@ use gents_protocol::job::{JobChildState, JobState};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
@@ -295,9 +296,14 @@ pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarne
         &query,
         Duration::from_secs(120),
         |data| {
-            data["AgentToolCall"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "completed"))
+            data["AgentToolCall"].as_array().is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    row["lifecycle_state"]
+                        .as_str()
+                        .and_then(ToolCallState::from_persisted)
+                        .is_some_and(ToolCallState::is_terminal)
+                })
+            })
         },
     )
     .await;
@@ -305,9 +311,31 @@ pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarne
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["lifecycle_state"] == "completed")
+        .find(|row| {
+            row["lifecycle_state"]
+                .as_str()
+                .and_then(ToolCallState::from_persisted)
+                .is_some_and(ToolCallState::is_terminal)
+        })
         .unwrap()
         .clone();
+    if row["lifecycle_state"] != "completed" {
+        let result = gents_session::tool_call::query::result::load_tool_call_result(
+            &live.access,
+            row["_docID"].as_str().unwrap(),
+            &live.node_did,
+            &session_id,
+            Some(live.user_did()),
+        )
+        .await
+        .expect("read the terminal job error");
+        let rendered = gents_session::tool_call::query::result::render_tool_result(&result)
+            .expect("render the terminal job error");
+        panic!(
+            "job_fixture did not complete: state={}, result={rendered}",
+            row["lifecycle_state"]
+        );
+    }
     assert_eq!(
         wait_for_request_terminal(&live.access, &request_id, Duration::from_secs(120)).await,
         "completed"
