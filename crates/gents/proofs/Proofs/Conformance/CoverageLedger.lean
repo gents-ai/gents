@@ -806,9 +806,18 @@ def caseCoverage : List CoverageEntry :=
       "Wrong-head claim, incoherent supplied-owner and interrupted publication guards are checked by the Lean owner and generated decoder/conformance structural tests only. The exact physical interrupt latch, like native interrupt_request_by_doc_id, permits terminal rows and preserves an existing stamp; lifecycle terminalization is separate. Bind each guard to the native queue/owned-execution rejection path before claiming native conformance.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "aggregate_token_budget_cases"
-      "AggregateTokenBudgetCases"
+      "family"
+      "aggregate_budget_ledger"
       "Exercises charged-usage summation and the owned loop budget ledger. Database selection of restart rows and missing-usage rejection still need completion-owner observations.")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "family"
+      "aggregate_budget_ledger_unreached"
+      "model-production-gap: the owned loop ledger receives usage rows already scoped to the physical request; a history that mixes requests reaches only the served rehydration test.")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "aggregate_budget_shared")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "task_hook_admission_cases"

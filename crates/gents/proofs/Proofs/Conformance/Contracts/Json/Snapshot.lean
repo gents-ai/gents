@@ -166,6 +166,7 @@ import Proofs.Conformance.PromptAssemblyBudget
 import Proofs.Conformance.PromptAssemblyRepair
 import Proofs.Conformance.ProviderToolIdentity
 import Proofs.Conformance.ReasoningDeltas
+import Proofs.Conformance.AggregateBudget
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
@@ -322,8 +323,6 @@ def snapshotCaptureTailJson : String :=
       ++ captureScopeCasesJson ++ ","
     ++ "\"capture_order_cases\":"
       ++ captureOrderCasesJson ++ ","
-    ++ "\"aggregate_token_budget_cases\":"
-      ++ aggregateTokenBudgetCasesJson ++ ","
     ++ "\"task_hook_admission_cases\":"
       ++ Conformance.TaskHooksContracts.admissionCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","

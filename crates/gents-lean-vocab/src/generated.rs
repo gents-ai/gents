@@ -17,10 +17,6 @@ pub fn lean_agent_request_admission_cases() -> &'static [LeanAgentRequestAdmissi
     &lean_contract_snapshot().agent_request_admission_cases
 }
 
-pub fn lean_aggregate_token_budget_cases() -> &'static [LeanAggregateTokenBudgetCase] {
-    &lean_contract_snapshot().aggregate_token_budget_cases
-}
-
 pub fn lean_application_write_cases() -> &'static [LeanApplicationWriteCase] {
     &lean_contract_snapshot().application_write_cases
 }
@@ -986,31 +982,6 @@ pub struct LeanAgentSteeringBoundaryCase {
 pub struct LeanAgentSteeringBoundaryInput {
     pub id: u64,
     pub kind: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanAggregateTokenBudgetCase {
-    pub request_doc_id: String,
-    pub prior_request_doc_ids: Vec<String>,
-    pub prior_call_kinds: Vec<String>,
-    pub name: String,
-    pub limit: u64,
-    pub used: u64,
-    pub prior_prompt_tokens: Vec<u64>,
-    pub prior_completion_tokens: Vec<u64>,
-    pub input_tokens: u64,
-    pub configured_max_output_tokens: u64,
-    pub reported_input_tokens: u64,
-    pub reported_output_tokens: u64,
-    pub reported_total_tokens: u64,
-    pub usage_present: bool,
-    pub terminal_valid: bool,
-    pub effective_output_tokens: u64,
-    pub can_dispatch: bool,
-    pub charged_tokens: u64,
-    pub charge_result: String,
-    pub next_used: Option<u64>,
-    pub post_charge_action: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -3348,7 +3319,6 @@ pub struct LeanContractSnapshot {
     pub client_request_publication_cases: Vec<serde_json::Value>,
     pub capture_scope_cases: Vec<LeanCaptureScopeCase>,
     pub capture_order_cases: Vec<LeanCaptureOrderCase>,
-    pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
     pub task_hook_admission_cases: Vec<LeanTaskHookAdmissionCase>,
     pub native_completion_cases: Vec<LeanNativeCompletionCase>,
     pub native_claim_lifetime_cases: Vec<LeanNativeClaimLifetimeCase>,
