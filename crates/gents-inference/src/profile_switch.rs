@@ -133,8 +133,10 @@ pub async fn switch_profile_account(
 ) -> Result<SwitchReceipt> {
     crate::operations::admit_account_operation_on(
         access,
+        node_did,
         gents_protocol::operations::inference::AccountOperation::SelectForProfile,
-    )?;
+    )
+    .await?;
     let accounts = list_accounts(access, node_did).await?;
     let accounts = &accounts;
     access

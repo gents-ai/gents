@@ -421,6 +421,43 @@
       },
       "output": "bool"
     },
+    "inference_operations_actor_kind": {
+      "input": {
+        "fields": [
+          [
+            "signer",
+            {
+              "enum": "Signer",
+              "values": [
+                "client_held",
+                "managed_agent",
+                "none"
+              ]
+            }
+          ],
+          [
+            "did",
+            {
+              "enum": "ActingDid",
+              "values": [
+                "absent",
+                "node",
+                "agent_of_node",
+                "other"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "Actor",
+        "values": [
+          "person",
+          "agent"
+        ]
+      }
+    },
     "inference_operations_backend_create_decision": {
       "input": {
         "fields": [

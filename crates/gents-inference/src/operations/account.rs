@@ -11,27 +11,29 @@ use super::OperationFailure;
 use crate::auth::credential::{backend_account, remove_account_in_txn, AccountSummary};
 use crate::resolved::ProviderProfilePolicy;
 
-/// Lean `InferenceOperations.accountOperationAdmitted` for the actor that
-/// signs `txn`.
-pub fn admit_account_operation(
+/// Lean `InferenceOperations.accountOperationAdmitted` for the actor of
+/// `txn`.
+pub async fn admit_account_operation(
     txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
     operation: AccountOperation,
-) -> Result<(), InferenceOperationError> {
-    if account_operation_admitted(acting(txn), operation) {
+) -> Result<(), OperationFailure> {
+    if account_operation_admitted(acting(txn, node_did).await?, operation) {
         Ok(())
     } else {
-        Err(InferenceOperationError::AccountOperation(operation))
+        Err(InferenceOperationError::AccountOperation(operation).into())
     }
 }
 
-pub fn admit_account_operation_on(
+pub async fn admit_account_operation_on(
     access: &ConfigAccess,
+    node_did: &str,
     operation: AccountOperation,
-) -> Result<(), InferenceOperationError> {
-    if account_operation_admitted(acting_on(access), operation) {
+) -> Result<(), OperationFailure> {
+    if account_operation_admitted(acting_on(access, node_did).await?, operation) {
         Ok(())
     } else {
-        Err(InferenceOperationError::AccountOperation(operation))
+        Err(InferenceOperationError::AccountOperation(operation).into())
     }
 }
 
@@ -54,7 +56,7 @@ pub async fn remove_account(
     access
         .transact_write("inference.account.remove", |txn| {
             Box::pin(async move {
-                admit_account_operation(txn, AccountOperation::Remove)?;
+                admit_account_operation(txn, node_did, AccountOperation::Remove).await?;
                 remove_account_in_txn(txn, node_did, &account.credential_id).await?;
                 let profiles = list_inference_profiles_in_txn(txn, node_did).await?;
                 let (kept_backends, deleted_backends): (Vec<_>, Vec<_>) =

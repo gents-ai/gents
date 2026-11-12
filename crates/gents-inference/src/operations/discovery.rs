@@ -7,7 +7,7 @@ use gents_protocol::operations::inference::{
 };
 use gents_store::config_client::ConfigAccess;
 
-use super::decision::{acting_on, discovery_answer};
+use super::decision::{acting_for_authenticated_request, acting_on, discovery_answer};
 use super::OperationFailure;
 use crate::backends::registry::{
     discover_backend_for_actor, discover_shared_backend, lookup_backend_observation_in_txn,
@@ -41,6 +41,18 @@ pub async fn discovery_target(
     node_did: &str,
     backend_id: &str,
 ) -> Result<DiscoveryTarget, InferenceOperationError> {
+    let actor = acting_on(access, node_did)
+        .await
+        .map_err(OperationFailure::from)?;
+    target_for(access, node_did, backend_id, actor).await
+}
+
+async fn target_for(
+    access: &ConfigAccess,
+    node_did: &str,
+    backend_id: &str,
+    actor: InferenceActor,
+) -> Result<DiscoveryTarget, InferenceOperationError> {
     let (backend, stored) = access
         .transact_readonly("inference.backend.discovery_target", |txn| {
             Box::pin(async move {
@@ -57,11 +69,28 @@ pub async fn discovery_target(
         })
         .await?;
     Ok(DiscoveryTarget {
-        actor: acting_on(access),
+        actor,
         node_did: node_did.to_owned(),
         backend,
         stored,
     })
+}
+
+/// Discovery for the caller of a runtime route, on the embedded access the
+/// route opened as that caller; `acting_for_authenticated_request` states
+/// what the route must have verified.
+pub async fn discover_for_authenticated_request(
+    access: &ConfigAccess,
+    node_did: &str,
+    backend_id: &str,
+) -> Result<Discovery, InferenceOperationError> {
+    let actor = acting_for_authenticated_request(access, node_did)
+        .await
+        .map_err(OperationFailure::from)?;
+    target_for(access, node_did, backend_id, actor)
+        .await?
+        .resolve(access)
+        .await
 }
 
 impl DiscoveryTarget {

@@ -469,6 +469,19 @@ impl ConfigAccess {
         }
     }
 
+    /// The DID whose signing key this access's client holds: its endpoint's,
+    /// or the endpoint an embedded access routes its client-signed writes
+    /// through.
+    pub fn client_held_signer_did(&self) -> Option<&str> {
+        match self.write_route() {
+            WriteRoute::Http(endpoint) => endpoint
+                .held_client_signing_capability()
+                .ok()
+                .map(|capability| capability.did()),
+            WriteRoute::Local(_) => None,
+        }
+    }
+
     pub fn with_client_signed_configuration(mut self) -> Self {
         match &mut self {
             Self::Local(local) => local.require_client_signed_writes(),

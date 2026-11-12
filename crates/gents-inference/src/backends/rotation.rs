@@ -54,8 +54,10 @@ pub async fn set_backend_rotation_in_txn(
 ) -> Result<InferenceBackend> {
     crate::operations::admit_account_operation(
         txn,
+        node_did,
         gents_protocol::operations::inference::AccountOperation::SetPool,
-    )?;
+    )
+    .await?;
     let mut backend = load_inference_backend_in_txn(txn, node_did, backend_id)
         .await?
         .with_context(|| format!("Backend {backend_id:?} does not exist on this node."))?;

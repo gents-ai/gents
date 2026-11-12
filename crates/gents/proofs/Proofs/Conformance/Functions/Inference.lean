@@ -3,10 +3,11 @@ import Proofs.Conformance.Family
 
 namespace InferenceOperations
 
-deriving instance Lean.ToJson for Actor, AuthClass, BackendDecision, CurrentBackend,
+deriving instance Lean.ToJson for Actor, Signer, ActingDid, AuthClass, BackendDecision, CurrentBackend,
   ChoiceDecision, ProfileRoute, DiscoveryAnswer, AccountOperation
 
 attribute [conformance_function]
+  actorKind
   backendUpdateDecision
   backendCreateDecision
   profileWriteDecision

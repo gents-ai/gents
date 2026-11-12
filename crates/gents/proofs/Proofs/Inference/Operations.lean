@@ -10,14 +10,64 @@ namespace InferenceOperations
 
 open Configuration (BackendAuth)
 
-/-- Who signs the operation's transaction. A person signs with a key their
-client holds. An Agent signs as itself with the key its runtime manages. The
-Engineer administers its Node and is still an `agent` here: an Agent does not
-handle secrets, whatever it may administer. -/
+/-- Whose rules an operation runs under. `agent` is the restrictive set and
+the default: the Engineer administers its Node and is still an `agent` here,
+because an Agent does not handle secrets, whatever it may administer. -/
 inductive Actor where
   | person
   | agent
   deriving DecidableEq, Repr
+
+/-- What signs for the transaction's actor. -/
+inductive Signer where
+  /-- A key the client itself holds for the acting DID, as the CLI and the
+  desktop sign, or a request the runtime authenticated as signed by one. -/
+  | clientHeld
+  /-- The signer a runtime manages for one of its Agents. -/
+  | managedAgent
+  /-- Nothing: a read-only transaction such as a preview, an access with no
+  identity, or one whose signer does not match its actor. -/
+  | none
+  deriving DecidableEq, Repr
+
+/-- What the node knows of the DID the transaction acts as. -/
+inductive ActingDid where
+  /-- The transaction names no actor. -/
+  | absent
+  /-- The Node's own DID: the node key acts. -/
+  | node
+  | agentOfNode
+  /-- Any other DID: a User, another node's Agent, or one the node has never
+  seen. The DID alone does not tell these apart. -/
+  | other
+  deriving DecidableEq, Repr
+
+/-- The actor kind, decided closed: the person rules need positive evidence,
+a client-held signer for a DID that is neither the Node nor one of its Agents.
+An Agent's key never leaves its runtime, so a client-held key is a person's.
+Everything else, including whatever the handler cannot tell, gets the Agent
+rules. -/
+def actorKind (signer : Signer) (did : ActingDid) : Actor :=
+  match signer, did with
+  | .clientHeld, .other => .person
+  | _, _ => .agent
+
+theorem person_needs_evidence (signer : Signer) (did : ActingDid)
+    (h : actorKind signer did = .person) : signer = .clientHeld ∧ did = .other := by
+  cases signer <;> cases did <;> simp_all [actorKind]
+
+theorem no_signer_is_an_agent (did : ActingDid) : actorKind .none did = .agent := by
+  cases did <;> rfl
+
+theorem node_key_is_an_agent (signer : Signer) : actorKind signer .node = .agent := by
+  cases signer <;> rfl
+
+theorem node_agent_is_an_agent (signer : Signer) : actorKind signer .agentOfNode = .agent := by
+  cases signer <;> rfl
+
+theorem unknown_did_without_client_key_is_an_agent (signer : Signer) (h : signer ≠ .clientHeld) :
+    actorKind signer .other = .agent := by
+  cases signer <;> simp_all [actorKind]
 
 /-- The OAuth account a backend names; a non-OAuth backend names none. -/
 def oauthRef : BackendAuth → Option String
@@ -289,5 +339,56 @@ def accountOperationAdmitted (actor : Actor) (operation : AccountOperation) : Bo
 theorem agent_changes_no_account (operation : AccountOperation)
     (h : accountOperationAdmitted .agent operation = true) : operation = .list := by
   cases operation <;> simp_all [accountOperationAdmitted]
+
+/-- No input lacking the person evidence is admitted to an account change. -/
+theorem account_change_needs_person_evidence (signer : Signer) (did : ActingDid)
+    (operation : AccountOperation) (hop : operation ≠ .list)
+    (h : accountOperationAdmitted (actorKind signer did) operation = true) :
+    signer = .clientHeld ∧ did = .other := by
+  apply person_needs_evidence
+  cases hk : actorKind signer did with
+  | person => rfl
+  | agent => rw [hk] at h; exact absurd (agent_changes_no_account operation h) hop
+
+/-- No input lacking the person evidence introduces or changes a secret, an
+OAuth account or a pool on a backend. -/
+theorem credential_write_needs_person_evidence (signer : Signer) (did : ActingDid)
+    (auth : AuthClass) (hauth : auth ≠ .accountFree)
+    (h : backendUpdateDecision (actorKind signer did) auth false = .admitted) :
+    signer = .clientHeld ∧ did = .other := by
+  apply person_needs_evidence
+  cases hk : actorKind signer did with
+  | person => rfl
+  | agent => rw [hk] at h; cases auth <;> simp_all [backendUpdateDecision]
+
+/-- No input lacking the person evidence creates anything but a local server. -/
+theorem credentialed_create_needs_person_evidence (signer : Signer) (did : ActingDid)
+    (enabled : Bool) (h : backendCreateDecision (actorKind signer did) false enabled = .admitted) :
+    signer = .clientHeld ∧ did = .other := by
+  apply person_needs_evidence
+  cases hk : actorKind signer did with
+  | person => rfl
+  | agent => rw [hk] at h; simp [backendCreateDecision] at h
+
+/-- No input lacking the person evidence moves a profile to another account
+of its provider. -/
+theorem account_switch_needs_person_evidence (signer : Signer) (did : ActingDid)
+    (route : ProfileRoute) (isDefault : Bool)
+    (h : profileWriteDecision route (actorKind signer did) .oauthAccount .sameProvider isDefault =
+      .admitted) :
+    signer = .clientHeld ∧ did = .other := by
+  apply person_needs_evidence
+  cases hk : actorKind signer did with
+  | person => rfl
+  | agent => rw [hk] at h; cases route <;> simp [profileWriteDecision, profileChoiceDecision] at h
+
+/-- No input lacking the person evidence contacts a credentialed provider. -/
+theorem credentialed_contact_needs_person_evidence (signer : Signer) (did : ActingDid)
+    (h : discoveryAnswer (actorKind signer did) true = .contactsProvider) :
+    signer = .clientHeld ∧ did = .other := by
+  apply person_needs_evidence
+  cases hk : actorKind signer did with
+  | person => rfl
+  | agent => rw [hk] at h; simp [discoveryAnswer] at h
 
 end InferenceOperations

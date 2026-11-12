@@ -100,6 +100,19 @@ impl<'a> ConfigApplyTxn<'a> {
             TxnBackend::Http { .. } => None,
         }
     }
+    /// The DID whose signing key the client of this transaction holds, when
+    /// the transaction travels over an endpoint bound to that key. An embedded
+    /// transaction holds no client key.
+    pub fn client_held_signer_did(&self) -> Option<&str> {
+        match &self.backend {
+            TxnBackend::Http { endpoint, .. } => endpoint
+                .held_client_signing_capability()
+                .ok()
+                .map(|capability| capability.did()),
+            TxnBackend::Embedded { .. } => None,
+        }
+    }
+
     /// The explicitly selected transaction actor, never an implicit runtime DID.
     pub fn actor_did(&self) -> Option<&str> {
         match &self.backend {

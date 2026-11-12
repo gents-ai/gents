@@ -7,20 +7,137 @@ use serde::{Deserialize, Serialize};
 
 use crate::backends::provider::BackendProviderKind;
 
-/// Lean `InferenceOperations.Actor`: an Agent signs with the key its runtime
-/// manages; any other signer is a person's client.
-pub fn acting(txn: &ConfigApplyTxn<'_>) -> InferenceActor {
-    match txn.managed_agent_signer() {
-        Some(_) => InferenceActor::Agent,
-        None => InferenceActor::Person,
+/// Lean `InferenceOperations.Signer`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Signer {
+    ClientHeld,
+    ManagedAgent,
+    None,
+}
+
+/// Lean `InferenceOperations.ActingDid`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActingDid {
+    Absent,
+    Node,
+    AgentOfNode,
+    Other,
+}
+
+/// Lean `InferenceOperations.actorKind`: the person rules need a client-held
+/// signer for a DID that is neither the Node nor one of its Agents; anything
+/// else, and anything that cannot be told, gets the Agent rules.
+pub fn actor_kind(signer: Signer, did: ActingDid) -> InferenceActor {
+    match (signer, did) {
+        (Signer::ClientHeld, ActingDid::Other) => InferenceActor::Person,
+        _ => InferenceActor::Agent,
     }
 }
 
-pub fn acting_on(access: &ConfigAccess) -> InferenceActor {
-    match access.managed_agent_signer() {
-        Some(_) => InferenceActor::Agent,
-        None => InferenceActor::Person,
+fn signer(managed_agent: bool, client_held: Option<&str>, actor: Option<&str>) -> Signer {
+    if managed_agent {
+        Signer::ManagedAgent
+    } else if actor.is_some() && client_held == actor {
+        Signer::ClientHeld
+    } else {
+        Signer::None
     }
+}
+
+async fn acting_did(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    actor: Option<&str>,
+) -> anyhow::Result<ActingDid> {
+    use gents_protocol::document_query::{self as query, fields::agent, Filter, Query, Selection};
+    let Some(actor) = actor else {
+        return Ok(ActingDid::Absent);
+    };
+    if actor == node_did {
+        return Ok(ActingDid::Node);
+    }
+    let response = txn
+        .run(
+            &Query::select(Selection::doc_id())
+                .filter(Filter::eq(agent::NODE_DID, node_did).and(Filter::eq(agent::AGENT_DID, actor)))
+                .limit(1)
+                .render(),
+        )
+        .await?;
+    Ok(if query::rows(&response, "Agent").is_empty() {
+        ActingDid::Other
+    } else {
+        ActingDid::AgentOfNode
+    })
+}
+
+/// The actor kind of `txn` from what the transaction itself carries. An
+/// embedded transaction carries no client key, so it never proves a person.
+pub async fn acting(txn: &ConfigApplyTxn<'_>, node_did: &str) -> anyhow::Result<InferenceActor> {
+    let actor = txn.actor_did().map(str::to_owned);
+    let signer = signer(
+        txn.managed_agent_signer().is_some(),
+        txn.client_held_signer_did(),
+        actor.as_deref(),
+    );
+    if signer != Signer::ClientHeld {
+        return Ok(InferenceActor::Agent);
+    }
+    Ok(actor_kind(
+        signer,
+        acting_did(txn, node_did, actor.as_deref()).await?,
+    ))
+}
+
+async fn acting_with(
+    access: &ConfigAccess,
+    node_did: &str,
+    signer: Signer,
+) -> anyhow::Result<InferenceActor> {
+    if signer != Signer::ClientHeld {
+        return Ok(InferenceActor::Agent);
+    }
+    let actor = access.actor_did();
+    let did = access
+        .transact_readonly("inference.operation.actor", |txn| {
+            let actor = actor.as_deref();
+            Box::pin(acting_did(txn, node_did, actor))
+        })
+        .await?;
+    Ok(actor_kind(signer, did))
+}
+
+/// The actor kind of an access: a person only when its client holds the
+/// signing key of the DID it acts as.
+pub async fn acting_on(access: &ConfigAccess, node_did: &str) -> anyhow::Result<InferenceActor> {
+    let actor = access.actor_did();
+    let signer = signer(
+        access.managed_agent_signer().is_some(),
+        access.client_held_signer_did(),
+        actor.as_deref(),
+    );
+    acting_with(access, node_did, signer).await
+}
+
+/// The actor kind of an embedded access a runtime route opened for the
+/// caller of an HTTP request. The caller must have obtained the access's
+/// actor from DefraDB's authenticated request extractor: the request's bearer
+/// was signed by a key its sender holds, which is the client-held evidence an
+/// embedded access cannot carry itself.
+pub async fn acting_for_authenticated_request(
+    access: &ConfigAccess,
+    node_did: &str,
+) -> anyhow::Result<InferenceActor> {
+    let signer = if access.managed_agent_signer().is_some() {
+        Signer::ManagedAgent
+    } else if access.actor_did().is_some() {
+        Signer::ClientHeld
+    } else {
+        Signer::None
+    };
+    acting_with(access, node_did, signer).await
 }
 
 /// Lean `InferenceOperations.AuthClass`.
@@ -253,6 +370,15 @@ mod conformance {
                 (BackendAuth::Unauthenticated, pool(false)),
             ],
         }
+    }
+
+    #[test]
+    fn the_actor_kind_is_decided_as_the_model_decides_it() {
+        families::inference_operations_actor_kind::replay(
+            |i: &families::inference_operations_actor_kind::Input<Signer, ActingDid>| {
+                actor_kind(i.signer, i.did)
+            },
+        );
     }
 
     #[test]
