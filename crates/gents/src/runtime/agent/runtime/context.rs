@@ -309,9 +309,10 @@ impl RuntimeContext {
 #[cfg(test)]
 mod startup_barrier_tests {
     use super::*;
+    use gents_lean_vocab::families::runtime_startup_barrier_obligations as family;
 
     fn agent_config(agent_did: &str) -> Arc<gents_inference::resolved::ResolvedAgent> {
-        crate::runtime::agent::PendingAgent::new(agent_did)
+        let mut agent = crate::runtime::agent::PendingAgent::new(agent_did)
             .build_with_identity_for_test(
                 gents_store::identity::KeyIdentity::load_or_create(
                     std::env::temp_dir()
@@ -320,59 +321,62 @@ mod startup_barrier_tests {
                 )
                 .unwrap(),
             )
-            .agent
+            .agent;
+        Arc::make_mut(&mut agent).agent_did = agent_did.to_owned();
+        agent
+    }
+
+    async fn observation(barrier: &StartupBarrier, released: Option<bool>) -> family::Observation {
+        family::Observation {
+            pending: barrier
+                .pending_standings
+                .lock()
+                .await
+                .iter()
+                .map(|(agent, generation)| family::Slot {
+                    agent: agent.clone(),
+                    generation: *generation,
+                })
+                .collect(),
+            ready: futures::FutureExt::now_or_never(barrier.wait_ready()).is_some(),
+            released,
+        }
     }
 
     #[tokio::test]
-    async fn empty_seed_is_immediately_ready() {
-        let barrier = StartupBarrier::new(&[]);
-        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
-            .await
-            .expect("an empty barrier must not wait");
-    }
-
-    #[tokio::test]
-    async fn release_before_and_after_wait_both_complete() {
-        let (a, b) = (agent_config("a"), agent_config("b"));
-        let barrier = Arc::new(StartupBarrier::new(&[a.clone(), b.clone()]));
-
-        barrier.mark_agent_ready(&a.agent_did, 1).await;
-
-        let waiter = {
-            let barrier = barrier.clone();
-            tokio::spawn(async move { barrier.wait_ready().await })
-        };
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        barrier.mark_agent_ready(&b.agent_did, 1).await;
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
-            .await
-            .expect("waiter must observe the final release")
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn demotion_and_supersession_release_without_readiness() {
-        let (healthy, unbuildable, retired) = (
-            agent_config("healthy"),
-            agent_config("unbuildable"),
-            agent_config("retired"),
-        );
-        let barrier = Arc::new(StartupBarrier::new(&[
-            healthy.clone(),
-            unbuildable.clone(),
-            retired.clone(),
-        ]));
-
-        barrier.mark_agent_ready(&healthy.agent_did, 1).await;
-        barrier.mark_agent_demoted(&unbuildable.agent_did, 1).await;
-        assert!(barrier.is_pending(&retired.agent_did, 1).await);
-        barrier.mark_agent_superseded(&retired.agent_did, 1).await;
-        assert!(!barrier.is_pending(&retired.agent_did, 1).await);
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
-            .await
-            .expect("all release classes together must free the barrier");
-        assert!(barrier.pending_agents().await.is_empty());
+    async fn generated_startup_obligations_release_only_the_selected_generation() {
+        for case in family::cases::<String>() {
+            let agents = case
+                .input
+                .seed
+                .iter()
+                .map(|agent| agent_config(agent))
+                .collect::<Vec<_>>();
+            let barrier = StartupBarrier::new(&agents);
+            let mut observed = vec![observation(&barrier, None).await];
+            for action in &case.input.actions {
+                let slot = &action.slot;
+                let released = match action.operation.as_str() {
+                    "register" => {
+                        barrier.register_agent(&slot.agent, slot.generation).await;
+                        None
+                    }
+                    "ready" => Some(barrier.mark_agent_ready(&slot.agent, slot.generation).await),
+                    "demote" => Some(
+                        barrier
+                            .mark_agent_demoted(&slot.agent, slot.generation)
+                            .await,
+                    ),
+                    "supersede" => Some(
+                        barrier
+                            .mark_agent_superseded(&slot.agent, slot.generation)
+                            .await,
+                    ),
+                    other => panic!("unknown modeled startup operation {other}"),
+                };
+                observed.push(observation(&barrier, released).await);
+            }
+            case.check(observed);
+        }
     }
 }
