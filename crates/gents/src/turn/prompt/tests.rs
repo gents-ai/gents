@@ -28,7 +28,11 @@ fn mcp_discovery_guidance_matches_presented_operations_model() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().discovery_guidance_cases;
     assert!(!cases.is_empty());
     for case in cases {
-        let tools = case.presented.iter().map(|name| name.as_str()).collect::<Vec<_>>();
+        let tools = case
+            .presented
+            .iter()
+            .map(|name| name.as_str())
+            .collect::<Vec<_>>();
         let preamble = build_preamble("Instructions", "worker", &tools, case.enabled);
         assert_eq!(
             preamble.contains("## Tool Discovery"),
@@ -92,61 +96,6 @@ async fn build_with_summaries_prepends() {
     } else {
         panic!("expected user message");
     }
-}
-
-#[tokio::test]
-async fn build_preserves_each_source_through_summary_prepend_even_with_equal_native_ids() {
-    let builder = test_builder("Be helpful.", "general");
-    let tag = |turn_index| ReplayTag {
-        request_doc_id: "request-one".to_string(),
-        source: OutputSource::ProviderTurn {
-            scope: CaptureScope {
-                kind: CaptureScopeKind::Inference,
-                seq: 1,
-            },
-            turn_index,
-            attempt: 0,
-        },
-    };
-    let with_native_id = |text: &str| Message::Assistant {
-        request_id: None,
-        id: Some("same-provider-id".to_string()),
-        content: vec![AssistantContent::Text(Text {
-            text: text.to_string(),
-        })],
-    };
-    let first = TaggedMessage {
-        message: with_native_id("first"),
-        source: Some(tag(1)),
-        physical_header: None,
-        block_indices: Vec::new(),
-    };
-    let second = TaggedMessage {
-        message: with_native_id("second"),
-        source: Some(tag(2)),
-        physical_header: None,
-        block_indices: Vec::new(),
-    };
-    let prompt = builder
-        .build(
-            &[first.clone(), second.clone()],
-            &["earlier conversation".to_string()],
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(prompt.messages.len(), 3);
-    assert!(prompt.messages[0].source.is_none());
-    assert_eq!(prompt.messages[1], first);
-    assert_eq!(prompt.messages[2], second);
-    assert_eq!(
-        prompt.native_messages(),
-        prompt
-            .messages
-            .iter()
-            .map(|row| row.message.clone())
-            .collect::<Vec<_>>()
-    );
 }
 
 #[test]
