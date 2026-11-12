@@ -129,6 +129,13 @@ mod conformance {
         });
     }
 
+    #[test]
+    fn lsp_actions_cold_start_exactly_as_the_lean_model() {
+        gents_lean_vocab::families::lsp_lsp_action_may_cold_start::replay(|i| {
+            LspAction::may_cold_start(i.lsp_action)
+        });
+    }
+
     fn file_from_rank(rank: u64) -> FileToolMode {
         match rank {
             0 => FileToolMode::Off,

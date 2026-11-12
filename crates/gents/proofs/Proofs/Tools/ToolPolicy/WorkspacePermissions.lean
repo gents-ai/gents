@@ -109,6 +109,54 @@ theorem review_cannot_authorize_another_action (input : Input) (grant : Grant)
     reviewedRoute input .allow grant = .deny := by
   simp [reviewedRoute, routed, different]
 
+/-- Workspace consent is an optional restriction on native command authority,
+not its source. A command runs inside one selected workspace whose configured
+ceiling already admitted it and for which no command grant was recorded; a
+read-only command does not cross the workspace boundary. -/
+def commandInput (mode : Mode) (readOnly : Bool) : Input :=
+  { current := { workspace := 0, revision := 1 }
+    configuredWorkspace := 0
+    mode := mode
+    action := 0
+    ceilingAllows := true
+    crossesBoundary := !readOnly }
+
+/-- A caller with no selected workspace preference is never routed: it keeps its
+configured policy. -/
+def commandRoute (preference : Option Mode) (readOnly : Bool) : Option Route :=
+  preference.map fun mode => route (commandInput mode readOnly)
+
+/-- The route after review when no reviewer is attached to the request. -/
+def unattendedRoute (preference : Option Mode) (readOnly : Bool) : Option Route :=
+  preference.map fun mode =>
+    let input := commandInput mode readOnly
+    reviewedRoute input .unavailable { scope := input.current, action := input.action }
+
+def needsPerson (preference : Option Mode) (readOnly : Bool) : Bool :=
+  match unattendedRoute preference readOnly with
+  | some .ask | some .review => true
+  | _ => false
+
+/-- A command routed to a person runs only on that person's answer; a caller
+that cannot ask (not interactive) is refused instead. -/
+def commandRuns (preference : Option Mode) (readOnly : Bool) : Bool :=
+  match unattendedRoute preference readOnly with
+  | none | some .allow => true
+  | _ => false
+
+def asksPerson (preference : Option Mode) (readOnly interactive : Bool) : Bool :=
+  interactive && needsPerson preference readOnly
+
+theorem callers_without_workspace_preferences_keep_their_configured_policy
+    (readOnly interactive : Bool) :
+    commandRoute none readOnly = none ∧ commandRuns none readOnly = true ∧
+      asksPerson none readOnly interactive = false := by
+  cases interactive <;> simp [commandRoute, commandRuns, unattendedRoute, asksPerson, needsPerson]
+
+theorem strict_ask_refuses_an_unattended_command (readOnly : Bool) :
+    commandRuns (some .ask) readOnly = false := by
+  cases readOnly <;> decide
+
 /-- Workspace observations come from the host preference owner. That owner
 rejects duplicate workspace keys before supplying these facts. A question
 never selects a different workspace's settings as a fallback. -/

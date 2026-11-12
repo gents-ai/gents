@@ -280,6 +280,8 @@ import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
 import Proofs.Documents.ScopeTemplates.Derivation
+import Proofs.Conformance.LspServerStart
+import Proofs.Conformance.WorkspacePermissions
 
 namespace Conformance.Contracts
 
