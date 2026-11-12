@@ -4,21 +4,10 @@ use serde_json::Value;
 
 #[derive(Deserialize)]
 struct Contracts {
-    goal_edit_cases: Vec<Case>,
     goal_objective_whitespace_codepoints: Vec<u32>,
 }
 
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    origin: GoalEditOrigin,
-    observed: Assignment,
-    current: Assignment,
-    fields: GoalEdit,
-    expected: Option<Assignment>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, PartialEq)]
 struct Assignment {
     status: GoalStatus,
     sequence: i64,
@@ -35,15 +24,48 @@ fn assignment(goal: &GoalDocument) -> Assignment {
     }
 }
 
+fn case_assignment(status: &str, sequence: u64, objective: &str, budget: u64) -> Assignment {
+    Assignment {
+        status: serde_json::from_value(Value::String(status.to_owned())).unwrap(),
+        sequence: sequence as i64,
+        objective: objective.to_owned(),
+        budget: Some(budget as i64),
+    }
+}
+
 async fn durable_rows(access: &gents_store::config_client::ConfigAccess) -> Value {
     access.execute("{ Goal { _docID _version { cid } goal_id objective status token_budget continuation_sequence updated_at } GoalCreationClaim { _docID creation_key goal_id objective token_budget } }").await.unwrap()["data"].clone()
 }
 
 #[tokio::test]
 async fn generated_goal_edit_cases_drive_real_transactions() {
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_edit_cases.len(), 66);
-    for case in contracts.goal_edit_cases {
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_edit_cases;
+    assert_eq!(cases.len(), 66);
+    for case in cases {
+        let observed_case = case_assignment(
+            &case.observed.status,
+            case.observed.sequence,
+            &case.observed.objective,
+            case.observed.budget,
+        );
+        let current_case = case_assignment(
+            &case.current.status,
+            case.current.sequence,
+            &case.current.objective,
+            case.current.budget,
+        );
+        let expected = case.expected.as_ref().map(|expected| {
+            case_assignment(
+                &expected.status,
+                expected.sequence,
+                &expected.objective,
+                expected.budget,
+            )
+        });
+        let fields = GoalEdit {
+            objective: case.fields.objective.clone(),
+            budget: case.fields.budget,
+        };
         let temp = tempfile::tempdir().unwrap();
         let signer =
             gents_store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
@@ -107,28 +129,22 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
         };
         let doc = escape_graphql_string(&observed.doc_id);
         access.transact_write("test.goal_edit_state", |txn| {
-            let case = &case;
             let doc = &doc;
             Box::pin(async move {
                 txn.execute_client_signed_update(
                     &format!(r#"mutation($input: GoalMutationInputArg!) {{update_Goal(docID: "{doc}", input: $input) {{_docID}}}}"#),
                     &serde_json::json!({"input": {"status": case.current.status.as_str(),
-                        "continuation_sequence": case.current.sequence, "objective": case.current.objective,
+                        "continuation_sequence": case.current.sequence, "objective": case.current.objective.as_str(),
                         "token_budget": case.current.budget}}),
                     gents_protocol::schemas::GOAL,
                 ).await
             })
         }).await.unwrap();
-        observed.status = case.observed.status.as_str().to_owned();
-        observed.continuation_sequence = Some(case.observed.sequence);
+        observed.status = case.observed.status.clone();
+        observed.continuation_sequence = Some(case.observed.sequence as i64);
         observed.objective = case.observed.objective.clone();
-        observed.token_budget = case.observed.budget;
-        assert_eq!(
-            assignment(&observed),
-            case.observed,
-            "{} observation",
-            case.name
-        );
+        observed.token_budget = Some(case.observed.budget as i64);
+        assert_eq!(assignment(&observed), observed_case, "{} observation", case.name);
         let current = access
             .transact_readonly("test.goal_edit.current", |txn| {
                 Box::pin(load_canonical_goal_in_txn(
@@ -142,18 +158,20 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             .unwrap();
         assert_eq!(
             assignment(&current),
-            case.current,
+            current_case,
             "{} durable input",
             case.name
         );
         let before = durable_rows(&access).await;
-        let edit = match case.origin {
+        let origin: GoalEditOrigin =
+            serde_json::from_value(Value::String(case.origin.clone())).unwrap();
+        let edit = match origin {
             GoalEditOrigin::Agent => {
-                edit_active_goal_from_access(&agent_access, &observed, &case.fields).await
+                edit_active_goal_from_access(&agent_access, &observed, &fields).await
             }
             GoalEditOrigin::Client => {
                 let observed = &observed;
-                let fields = &case.fields;
+                let fields = &fields;
                 access
                     .transact_write("test.goal_client_edit", |txn| {
                         Box::pin(async move {
@@ -166,17 +184,12 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
         let result = match edit {
             Ok(result) => result,
             Err(error) => {
-                assert!(case.fields.validate().is_err(), "{}: {error:#}", case.name);
+                assert!(fields.validate().is_err(), "{}: {error:#}", case.name);
                 None
             }
         };
-        assert_eq!(
-            result.as_ref().map(assignment),
-            case.expected,
-            "{}",
-            case.name
-        );
-        if let (Some(updated), Some(expected)) = (&result, &case.expected) {
+        assert_eq!(result.as_ref().map(assignment), expected, "{}", case.name);
+        if let (Some(updated), Some(expected)) = (&result, &expected) {
             let prompt =
                 crate::triggers::engine::goal_source::continuation_prompt(updated, None, false);
             let objective = serde_json::to_string(&expected.objective).unwrap();
@@ -194,7 +207,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             "{}",
             case.name
         );
-        if case.expected.is_none() || case.expected == Some(case.current) {
+        if expected.is_none() || expected == Some(current_case) {
             assert_eq!(before, after, "{} must not write", case.name);
         }
         assert_eq!(after["Goal"][0]["goal_id"], before["Goal"][0]["goal_id"]);
