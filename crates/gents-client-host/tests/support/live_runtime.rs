@@ -23,6 +23,8 @@ mod live_file_actions;
 mod live_gate;
 #[path = "live_goals.rs"]
 mod live_goals;
+#[path = "live_inventory.rs"]
+mod live_inventory;
 #[path = "live_questions.rs"]
 mod live_questions;
 #[path = "live_related_work.rs"]
@@ -64,7 +66,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         .arg(&home)
         .args([
             "--tool-package",
-            if editor == Some("live-review") {
+            if matches!(editor, Some("live-review" | "live-review-inventory")) {
                 "write"
             } else {
                 "readonly"
@@ -183,6 +185,11 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
     } else {
         None
     };
+    let inventory = if editor == Some("live-review-inventory") {
+        Some(live_inventory::Inventory::prepare(root).await?)
+    } else {
+        None
+    };
     let mut client = Attachment::start_with_binary(&paths, &binary).await;
     let mut updates = Attachment::start_with_binary(&paths, &binary).await;
     let result = async {
@@ -196,7 +203,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         let agent = deployment["client"]["deployments"].as_array().unwrap().iter()
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
-        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref()).await?;
+        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref()).await?;
         let opening = if steering { gates[0].prompt() } else if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools.".to_owned() } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.".to_owned() };
         let receipt = if goal_steering {
             client.try_call(id, "desktop_goal_control", json!({"request":{"nodeDid":node,"agentDid":agent,"action":{"kind":"create","objective":opening,"tokenBudget":"16000"}}})).await?
@@ -268,6 +275,15 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         }
         if let Some(scenario) = editor.filter(|_| !steering) {
             live_goals::prepare(root, scenario, &gates).await?;
+            if let Some(inventory) = &inventory {
+                for prompt in &inventory.seed_prompts {
+                    let sent = client.try_call(id, "desktop_chat_send", json!({"request":{"nodeDid":node,"agentDid":agent,"sessionId":session,"content":prompt,"delivery":"queue"}})).await?;
+                    id += 1;
+                    let request = sent["requestId"].as_str().context("inventory request receipt")?;
+                    ensure!(wait_for_request_terminal(&access, request, WAIT).await == "completed");
+                    projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == request && value["turnState"] == "completed").await?;
+                }
+            }
             if scenario == "live-review" {
                 live_file_actions::prepare_review(root).await?;
             }
@@ -284,7 +300,11 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
                 tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
             }
             super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), scenario).await?;
-            if let Some(related_work) = &related_work {
+            if let Some(inventory) = &inventory {
+                let evidence = inventory.verify(&mut client, &mut id, &access, node, session, &client_did).await?;
+                tokio::fs::write(root.join("editor-inventory-canonical.json"), serde_json::to_vec(&evidence)?).await?;
+                projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
+            } else if let Some(related_work) = &related_work {
                 let evidence = related_work.verify(&access, root, node, session, &client_did).await?;
                 tokio::fs::write(root.join("editor-related-work-canonical.json"), serde_json::to_vec(&evidence)?).await?;
                 projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
@@ -394,6 +414,7 @@ async fn configure(
     editor: Option<&str>,
     questions: Option<&live_questions::Questions>,
     related_work: Option<&live_related_work::RelatedWork>,
+    inventory: Option<&live_inventory::Inventory>,
 ) -> Result<()> {
     let setup = client
         .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
@@ -448,6 +469,9 @@ async fn configure(
     }
     if let Some(related_work) = related_work {
         related_work.configure(&mut document, node)?;
+    }
+    if let Some(inventory) = inventory {
+        inventory.configure(&mut document, node)?;
     }
     client
         .try_call(
