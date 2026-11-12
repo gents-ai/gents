@@ -1238,6 +1238,7 @@ pub fn generate(
         structs: BTreeMap::new(),
     };
     let mut patches = Vec::new();
+    let mut retyped: BTreeMap<String, String> = BTreeMap::new();
     let mut findings: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut fields_total = 0u64;
     let mut fields_agree = 0u64;
@@ -1362,6 +1363,7 @@ pub fn generate(
                         (false, _) => inference.infer(shape, &stem),
                     };
                     field.ty = syn::parse_str(&ty).unwrap();
+                    retyped.insert(key.clone(), ty.clone());
                     patches.push(format!("{ROOT}.{key}: typed as {ty}"));
                 }
             }
@@ -1429,7 +1431,15 @@ pub fn generate(
         {
             continue;
         }
-        loaders.push(Item::Fn(loader.item.clone()));
+        let mut item = loader.item.clone();
+        if let Some(ty) = retyped.get(&loader.field) {
+            let output = match ty.strip_prefix("Vec<").and_then(|ty| ty.strip_suffix('>')) {
+                Some(case) => format!("-> &'static [{case}]"),
+                None => format!("-> &'static {ty}"),
+            };
+            item.sig.output = syn::parse_str(&output).unwrap();
+        }
+        loaders.push(Item::Fn(item));
         origin_files.insert(loader.file);
         let path = &oracle.paths[loader.file];
         if path != GENERATED {
