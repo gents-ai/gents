@@ -924,8 +924,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"remote_agent_delivery_claim_cases\":" ++ Request.RemoteDelivery.claimCasesJson ++ ","
     ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
     ++ "\"remote_agent_delivery_response_cases\":" ++ Request.RemoteDelivery.responseCasesJson ++ ","
-    ++ "\"interrupt_delivery_cases\":"
-      ++ jsonArray (QueuedSteering.interruptDeliveryCases.map interruptDeliveryCaseJson) ++ ","
 
 def snapshotRecoveryCasesJson : String :=
   ""

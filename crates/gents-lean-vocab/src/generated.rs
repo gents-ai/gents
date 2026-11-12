@@ -3239,7 +3239,6 @@ pub struct LeanContractSnapshot {
     pub queued_steering_trace_cases: Vec<LeanQueuedSteeringTraceCase>,
     pub queued_steering_guard_cases: Vec<LeanQueuedSteeringGuardCase>,
     pub agent_delivery_cases: Vec<LeanAgentDeliveryCase>,
-    pub interrupt_delivery_cases: Vec<LeanInterruptDeliveryCase>,
     pub agent_steer_disposition_cases: Vec<LeanAgentSteerDispositionCase>,
     pub agent_steer_target_cases: Vec<LeanAgentSteerTargetCase>,
     pub agent_steering_boundary_cases: Vec<LeanAgentSteeringBoundaryCase>,
@@ -6429,14 +6428,6 @@ pub struct LeanInferenceVisibilityCase {
     pub expected: bool,
     pub requests: u64,
     pub sessions: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanInterruptDeliveryCase {
-    pub goal_paused: bool,
-    pub planned: Option<u64>,
-    pub active: Option<u64>,
-    pub expected: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

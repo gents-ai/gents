@@ -786,8 +786,8 @@ def caseCoverage : List CoverageEntry :=
       "Binds delivery resolution; transaction admission and owned-loop delivery need native flow coverage.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "interrupt_delivery_cases"
-      "InterruptDeliveryCases"
+      "family"
+      "contracts_interrupt_delivery"
       "Binds the physical target selected in the message publication transaction; cross-node replication remains a separate boundary.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
