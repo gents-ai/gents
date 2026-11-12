@@ -7,6 +7,7 @@ import Proofs.Runtime.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Session.Compaction.Executable
 import Proofs.Conformance.Recovery.ContractCases
 import Proofs.Clients.QueuedSteering
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -29,13 +30,20 @@ def interruptDeliveryCaseJson (input : Option Nat × Option Nat) : String :=
     number (QueuedSteering.interruptDeliveryTarget input.1 input.2) ++
     ",\"goal_paused\":" ++ boolString ((QueuedSteering.interruptDeliveryGoal true ⟨.active, 0, false, false⟩).status == .paused) ++ "}"
 
-def agentSteerDispositionCaseJson (input : Bool × Bool) : String :=
-  let result := match QueuedSteering.agentSteerDisposition input.1 input.2 with
-    | .start => "start"
-    | .steer => "steer"
-    | .refuse => "refuse"
-  "{\"active\":" ++ boolString input.1 ++ ",\"compatible\":" ++ boolString input.2 ++
-    ",\"expected\":" ++ jsonString result ++ "}"
+deriving instance Lean.ToJson for QueuedSteering.AgentSteerDisposition,
+  QueuedSteering.BoundaryInputKind
+
+structure AgentSteerDispositionInput where
+  active : Bool
+  compatible : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def agentSteerDisposition :
+    Family AgentSteerDispositionInput QueuedSteering.AgentSteerDisposition where
+  inputs := QueuedSteering.agentSteerDispositionCases.map fun (active, compatible) =>
+    { active, compatible }
+  model := fun i => QueuedSteering.agentSteerDisposition i.active i.compatible
 
 private def agentMessageOutcomeJson : QueuedSteering.AgentMessageOutcome → String
   | .pending => jsonString "pending"
@@ -66,15 +74,34 @@ private def boundaryKindJson : QueuedSteering.BoundaryInputKind → String
   | .agentSteer => jsonString "agent_steer"
   | .blocked => jsonString "blocked"
 
-def agentSteerTargetCaseJson (input : Nat × Nat) : String :=
-  "{\"planned_head\":" ++ toString input.1 ++ ",\"active_head\":" ++ toString input.2 ++
-    ",\"expected\":" ++ boolString (QueuedSteering.agentSteerTargets input.1 input.2) ++ "}"
+structure AgentSteerTargetInput where
+  plannedHead : Nat
+  activeHead : Nat
+  deriving Lean.ToJson
 
-def agentSteerReachabilityCaseJson (input : List (Nat × QueuedSteering.BoundaryInputKind × Bool) × Nat) : String :=
-  let entryJson := fun entry => "{\"id\":" ++ toString entry.1 ++
-    ",\"kind\":" ++ boundaryKindJson entry.2.1 ++ ",\"compatible\":" ++ boolString entry.2.2 ++ "}"
-  "{\"inputs\":" ++ jsonArray (input.1.map entryJson) ++ ",\"target\":" ++ toString input.2 ++
-    ",\"expected\":" ++ boolString (QueuedSteering.agentSteerReachable input.2 input.1) ++ "}"
+@[conformance_family]
+def agentSteerTarget : Family AgentSteerTargetInput Bool where
+  inputs := QueuedSteering.agentSteerTargetCases.map fun (plannedHead, activeHead) =>
+    { plannedHead, activeHead }
+  model := fun i => QueuedSteering.agentSteerTargets i.plannedHead i.activeHead
+
+structure AgentSteerEntry where
+  id : Nat
+  kind : QueuedSteering.BoundaryInputKind
+  compatible : Bool
+  deriving Lean.ToJson
+
+structure AgentSteerReachabilityInput where
+  inputs : List AgentSteerEntry
+  target : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def agentSteerReachability : Family AgentSteerReachabilityInput Bool where
+  inputs := QueuedSteering.agentSteerReachabilityCases.map fun (entries, target) =>
+    { inputs := entries.map fun (id, kind, compatible) => { id, kind, compatible }, target }
+  model := fun i =>
+    QueuedSteering.agentSteerReachable i.target (i.inputs.map fun e => (e.id, e.kind, e.compatible))
 
 def boundaryCaseJson (inputs : List (Nat × QueuedSteering.BoundaryInputKind)) : String :=
   let entryJson := fun entry => "{\"id\":" ++ toString entry.1 ++

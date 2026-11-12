@@ -960,35 +960,6 @@ pub struct LeanAgentResolvedSession {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanAgentSteerDispositionCase {
-    pub active: bool,
-    pub compatible: bool,
-    pub expected: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanAgentSteerReachabilityCase {
-    pub inputs: Vec<LeanAgentSteerReachabilityInput>,
-    pub target: u64,
-    pub expected: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanAgentSteerReachabilityInput {
-    pub id: u64,
-    pub kind: String,
-    pub compatible: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAgentSteerTargetCase {
-    pub active_head: u64,
-    pub expected: bool,
-    pub planned_head: u64,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanAgentSteeringBoundaryCase {
     pub inputs: Vec<LeanAgentSteeringBoundaryInput>,
     pub expected: Option<u64>,
@@ -3269,10 +3240,7 @@ pub struct LeanContractSnapshot {
     pub queued_steering_guard_cases: Vec<LeanQueuedSteeringGuardCase>,
     pub agent_delivery_cases: Vec<LeanAgentDeliveryCase>,
     pub interrupt_delivery_cases: Vec<LeanInterruptDeliveryCase>,
-    pub agent_steer_disposition_cases: Vec<LeanAgentSteerDispositionCase>,
-    pub agent_steer_target_cases: Vec<LeanAgentSteerTargetCase>,
     pub agent_steering_boundary_cases: Vec<LeanAgentSteeringBoundaryCase>,
-    pub agent_steer_reachability_cases: Vec<LeanAgentSteerReachabilityCase>,
     pub agent_message_outcome_cases: Vec<LeanAgentMessageOutcomeCase>,
     pub agent_folded_binding_cases: Vec<LeanAgentFoldedBindingCase>,
     pub queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,

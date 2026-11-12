@@ -762,13 +762,13 @@ def caseCoverage : List CoverageEntry :=
       "PackInstallUpgradeCases")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_steer_disposition_cases"
-      "AgentSteerDispositionCases"
+      "family"
+      "contracts_agent_steer_disposition"
       "Binds refusal of incompatible contexts; signed cross-requester and workspace integration remain to be exercised.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "agent_steer_target_cases"
-      "AgentSteerTargetCases")
+      "family"
+      "contracts_agent_steer_target")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "agent_steering_boundary_cases"
@@ -776,8 +776,8 @@ def caseCoverage : List CoverageEntry :=
       "Binds ordered boundary selection; held-tool delivery and exact replay need native flow coverage.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_steer_reachability_cases"
-      "AgentSteerReachabilityCases"
+      "family"
+      "contracts_agent_steer_reachability"
       "Binds admission against the ordered boundary owner, including compatible earlier steers.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

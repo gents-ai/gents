@@ -945,14 +945,8 @@ def snapshotRuntimeCasesJson : String :=
 
 def snapshotRecoveryCasesJson : String :=
   ""
-    ++ "\"agent_steer_disposition_cases\":"
-      ++ jsonArray (QueuedSteering.agentSteerDispositionCases.map agentSteerDispositionCaseJson) ++ ","
-    ++ "\"agent_steer_target_cases\":"
-      ++ jsonArray (QueuedSteering.agentSteerTargetCases.map agentSteerTargetCaseJson) ++ ","
     ++ "\"agent_steering_boundary_cases\":"
       ++ jsonArray (QueuedSteering.boundaryCases.map boundaryCaseJson) ++ ","
-    ++ "\"agent_steer_reachability_cases\":"
-      ++ jsonArray (QueuedSteering.agentSteerReachabilityCases.map agentSteerReachabilityCaseJson) ++ ","
     ++ "\"agent_folded_binding_cases\":"
       ++ jsonArray (QueuedSteering.foldedBindingCases.map foldedBindingCaseJson) ++ ","
     ++ "\"agent_message_outcome_cases\":"
