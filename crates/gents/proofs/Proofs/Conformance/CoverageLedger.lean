@@ -674,8 +674,8 @@ def caseCoverage : List CoverageEntry :=
       "The native consumer checks closure construction against modeled rows, but supplies access and denial observations as fixture input. It does not verify live ACP decisions.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_cases"
-      "EnrollmentCases")
+      "family"
+      "enrollment_core_trace")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
@@ -683,12 +683,12 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: issue_renewal_offer is reached only through a served two-node offer exchange holding one enabled current generation; conflicted, revoked or expired generations, transport mismatch and re-signed intents with another scope or window are not built per case. enrollment_auto_renewal_intent_projection replays their generation and window checks.")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_encoding_cases"
-      "EnrollmentEncodingCases")
+      "family"
+      "enrollment_core_frame")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_digest_cases"
-      "EnrollmentDigestCases")
+      "family"
+      "enrollment_core_digest")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "event_group_cases"
@@ -696,8 +696,8 @@ def caseCoverage : List CoverageEntry :=
       "Exercises the production count/timeout eligibility owner for trigger and callback cases. Typed consumer/config/owner identity, durable marker suppression and atomic materialization require the migrated event-group owner; the old trigger-only spy cannot establish these guarantees.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_durable_projection_cases"
-      "EnrollmentDurableProjectionCases")
+      "family"
+      "enrollment_core_durable_projection")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "enrollment_pending_request_cases"

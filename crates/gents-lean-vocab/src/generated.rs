@@ -141,22 +141,6 @@ pub fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {
     &lean_contract_snapshot().durable_reduction_cases
 }
 
-pub fn lean_enrollment_cases() -> &'static [LeanEnrollmentCase] {
-    &lean_contract_snapshot().enrollment_cases
-}
-
-pub fn lean_enrollment_digest_cases() -> &'static [LeanEnrollmentDigestCase] {
-    &lean_contract_snapshot().enrollment_digest_cases
-}
-
-pub fn lean_enrollment_durable_projection_cases() -> &'static [LeanEnrollmentDurableProjectionCase] {
-    &lean_contract_snapshot().enrollment_durable_projection_cases
-}
-
-pub fn lean_enrollment_encoding_cases() -> &'static [LeanEnrollmentEncodingCase] {
-    &lean_contract_snapshot().enrollment_encoding_cases
-}
-
 pub fn lean_eval_document_capture_cases() -> &'static [LeanEvalDocumentCaptureCase] {
     &lean_contract_snapshot().eval_document_capture_cases
 }
@@ -3137,8 +3121,6 @@ pub struct LeanContractSnapshot {
         LeanGoalContinuationMaterializationCase,
     >,
     pub file_inventory_closure_cases: Vec<LeanSessionClosureCase>,
-    pub enrollment_cases: Vec<LeanEnrollmentCase>,
-    pub enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
     pub enrollment_pending_request_cases: Vec<LeanEnrollmentPendingRequestCase>,
     pub enrollment_absent_peer_cases: Vec<LeanEnrollmentAbsentPeerCase>,
     pub client_chat_readiness_cases: Vec<LeanClientChatReadinessCase>,
@@ -3147,8 +3129,6 @@ pub struct LeanContractSnapshot {
     pub client_sync_health_cases: Vec<LeanClientSyncHealthCase>,
     pub enrollment_route_readiness_cases: Vec<LeanEnrollmentRouteReadinessCase>,
     pub enrollment_startup_cases: Vec<LeanEnrollmentStartupCase>,
-    pub enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
-    pub enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub causal_hop_cap_observation_cases: Vec<LeanCapObservationCase>,
@@ -3701,41 +3681,6 @@ pub struct LeanEnrollmentAbsentPeerCase {
     pub managed: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanEnrollmentCase {
-    pub name: String,
-    pub steps: Vec<LeanEnrollmentTraceStep>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanEnrollmentDigestCase {
-    pub name: String,
-    pub fields: Vec<String>,
-    pub expected_payload: String,
-    pub actual_payload: String,
-    pub expected_digest: String,
-    pub actual_digest: String,
-    pub payload_matches: bool,
-    pub digest_matches: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanEnrollmentDurableProjectionCase {
-    pub name: String,
-    pub documents: Vec<LeanEnrollmentTraceStep>,
-    pub expected_current_approval: bool,
-    pub expected_current_route_receipt: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanEnrollmentEncodingCase {
-    pub name: String,
-    pub value: String,
-    pub expected_frame: String,
-    pub actual_frame: String,
-    pub frame_matches: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanEnrollmentPendingRequestCase {
@@ -3793,107 +3738,6 @@ pub struct LeanEnrollmentRouteReadinessCase {
 pub struct LeanEnrollmentStartupCase {
     pub expected_authority_unchanged: bool,
     pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanEnrollmentTraceStep {
-    pub action: String,
-    pub peer_admission_did: String,
-    pub offer_id: String,
-    pub offer_challenge: String,
-    pub offer_network_id: String,
-    pub offer_admin_did: String,
-    pub offer_server_peer: String,
-    pub offer_owner_node: String,
-    pub offer_profile: String,
-    pub challenge: String,
-    pub request_id: String,
-    pub request_digest: String,
-    pub request_offer_id: String,
-    pub network_id: String,
-    pub admin_did: String,
-    pub server_peer: String,
-    pub server_ticket_peer: String,
-    pub resolved_server_did: String,
-    pub profile: String,
-    pub schema_compatible: bool,
-    pub offer_admin_signed: bool,
-    pub offer_fresh: bool,
-    pub candidate_did: String,
-    pub candidate_peer: String,
-    pub observed_candidate_peer: String,
-    pub resolved_candidate_did: String,
-    pub candidate_ticket_peer: String,
-    pub owner_node: String,
-    pub client_nonce: String,
-    pub issued_at: String,
-    pub expires_at: String,
-    pub candidate_signed: bool,
-    pub request_fresh: bool,
-    pub decision_authorization_sequence: usize,
-    pub decision_authorization_expires_at: String,
-    pub decision_signer_did: String,
-    pub decision_kind: String,
-    pub decision_request_id: String,
-    pub decision_request_digest: String,
-    pub decision_network_id: String,
-    pub decision_admin_did: String,
-    pub decision_candidate_did: String,
-    pub decision_candidate_peer: String,
-    pub decision_owner_node: String,
-    pub decision_admin_signed: bool,
-    pub decision_fresh: bool,
-    pub revision_kind: String,
-    pub revision_sequence: usize,
-    pub revision_authorization_expires_at: String,
-    pub revision_signer_did: String,
-    pub revision_request_id: String,
-    pub revision_request_digest: String,
-    pub revision_network_id: String,
-    pub revision_admin_did: String,
-    pub revision_member_did: String,
-    pub revision_member_peer: String,
-    pub revision_owner_node: String,
-    pub revision_admin_signed: bool,
-    pub receipt_request_id: String,
-    pub receipt_request_digest: String,
-    pub receipt_network_id: String,
-    pub receipt_admin_did: String,
-    pub receipt_member_did: String,
-    pub receipt_member_peer: String,
-    pub receipt_server_peer: String,
-    pub receipt_owner_node: String,
-    pub receipt_authorization_sequence: usize,
-    pub receipt_authorization_expires_at: String,
-    pub receipt_direction: String,
-    pub receipt_signer_did: String,
-    pub receipt_admin_signed: bool,
-    pub receipt_applied: bool,
-    pub observed_offer_count: usize,
-    pub admin_pin_count: usize,
-    pub challenge_binding_count: usize,
-    pub request_binding_count: usize,
-    pub request_count: usize,
-    pub decision_count: usize,
-    pub authorization_count: usize,
-    pub membership_count: usize,
-    pub receipt_count: usize,
-    pub route_count: usize,
-    pub request_accepted: bool,
-    pub decision_recorded: bool,
-    pub authorization_recorded: bool,
-    pub revision_recorded: bool,
-    pub receipt_recorded: bool,
-    pub membership_present: bool,
-    pub client_route_present: bool,
-    pub server_route_present: bool,
-    pub admin_pin_present: bool,
-    pub admin_pin_conflict: bool,
-    pub challenge_binding_conflict: bool,
-    pub request_binding_conflict: bool,
-    pub current_approval: bool,
-    pub peer_admitted: bool,
-    pub ready: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

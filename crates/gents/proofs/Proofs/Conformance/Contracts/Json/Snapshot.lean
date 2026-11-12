@@ -5,6 +5,7 @@ import Proofs.Conformance.PluginGrantDeclaration
 import Proofs.Conformance.EnrollmentRenewalNotices
 import Proofs.Conformance.Scope
 import Proofs.Conformance.EnrollmentAutoRenewal
+import Proofs.Conformance.EnrollmentCore
 import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.InferenceObservationRegistry
@@ -590,10 +591,6 @@ def snapshotSessionCasesJson : String :=
   ""
     ++ "\"file_inventory_closure_cases\":"
       ++ fileInventoryClosureCasesJson ++ ","
-    ++ "\"enrollment_cases\":"
-      ++ enrollmentCasesJson ++ ","
-    ++ "\"enrollment_durable_projection_cases\":"
-      ++ enrollmentDurableProjectionCasesJson ++ ","
     ++ "\"enrollment_pending_request_cases\":"
       ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
     ++ "\"enrollment_absent_peer_cases\":"
@@ -610,10 +607,6 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
     ++ "\"enrollment_startup_cases\":"
       ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
-    ++ "\"enrollment_encoding_cases\":"
-      ++ enrollmentEncodingCasesJson ++ ","
-    ++ "\"enrollment_digest_cases\":"
-      ++ enrollmentDigestCasesJson ++ ","
     ++ "\"discovery_scope_cases\":" ++ Conformance.ConfigurationScope.discoveryCasesJson ++ ","
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
     ++ "\"session_document_starter_verification_cases\":" ++ sessionDocumentStarterVerificationCasesJson ++ ","
