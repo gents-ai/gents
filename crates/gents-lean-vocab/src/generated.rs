@@ -225,10 +225,6 @@ pub fn lean_goal_submission_cases() -> &'static [LeanGoalSubmissionCase] {
     &lean_contract_snapshot().goal_submission_cases
 }
 
-pub fn lean_goal_transition_cases() -> &'static [LeanGoalTransitionCase] {
-    &lean_contract_snapshot().goal_transition_cases
-}
-
 pub fn lean_handover_fold_cases() -> &'static [LeanHandoverFoldCase] {
     &lean_contract_snapshot().handover_fold_cases
 }
@@ -3107,7 +3103,6 @@ pub struct LeanContractSnapshot {
     pub budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,
     pub goal_claimed_readiness_cases: Vec<LeanGoalClaimedReadinessCase>,
-    pub goal_transition_cases: Vec<LeanGoalTransitionCase>,
     pub goal_create_cases: Vec<LeanGoalCreateCase>,
     pub goal_client_delivery_cases: Vec<serde_json::Value>,
     pub goal_client_control_cases: Vec<LeanGoalClientControlCase>,
@@ -5769,21 +5764,6 @@ pub struct LeanGoalToolContextCaseVersionsItemAssignment {
     pub owner: u64,
     pub root: Option<u64>,
     pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanGoalTransitionCase {
-    pub name: String,
-    pub pre_status: String,
-    pub pre_blocked_audits: i64,
-    pub pre_wrapup_requested: bool,
-    pub pre_wrapup_completed: bool,
-    pub action: String,
-    pub accepted: bool,
-    pub expected_status: String,
-    pub expected_blocked_audits: i64,
-    pub expected_wrapup_requested: bool,
-    pub expected_wrapup_completed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

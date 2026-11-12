@@ -9,8 +9,8 @@ use crate::goal::{
 };
 use gents_lean_vocab::{
     lean_goal_continuation_materialization_cases, lean_goal_create_cases,
-    lean_goal_readiness_gate_cases, lean_goal_submission_cases, lean_goal_transition_cases,
-    lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
+    lean_goal_readiness_gate_cases, lean_goal_submission_cases, lean_task_goal_publication_cases,
+    lean_task_goal_recovery_cases,
 };
 use gents_protocol::goal_status::GoalStatus;
 
@@ -111,17 +111,10 @@ fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
 
 #[test]
 fn generated_goal_transition_cases_fence_runtime_state_machine() {
-    let cases = lean_goal_transition_cases();
-    assert_eq!(
-        cases.len(),
-        27,
-        "the durable-goal transition matrix drifted"
-    );
-    for case in cases {
+    gents_lean_vocab::families::contracts_goal_transition::replay::<String, GoalStatus>(|case| {
         let pre = GoalState {
-            status: GoalStatus::parse(&case.pre_status)
-                .unwrap_or_else(|| panic!("unknown pre-status in Lean case {}", case.name)),
-            blocked_audits: case.pre_blocked_audits,
+            status: case.pre_status,
+            blocked_audits: i64::try_from(case.pre_blocked_audits).expect("modeled audits fit i64"),
             wrapup_requested: case.pre_wrapup_requested,
             wrapup_completed: case.pre_wrapup_completed,
         };
@@ -147,32 +140,16 @@ fn generated_goal_transition_cases_fence_runtime_state_machine() {
             "clean_turn" => GoalAction::CleanTurn,
             other => panic!("unknown action {other:?} in Lean case {}", case.name),
         };
-        let actual = pre.step(action);
-        assert_eq!(actual.is_some(), case.accepted, "Lean case {}", case.name);
-        if let Some(actual) = actual {
-            assert_eq!(
-                actual.status.as_str(),
-                case.expected_status,
-                "Lean case {}",
-                case.name
-            );
-            assert_eq!(
-                actual.blocked_audits, case.expected_blocked_audits,
-                "Lean case {}",
-                case.name
-            );
-            assert_eq!(
-                actual.wrapup_requested, case.expected_wrapup_requested,
-                "Lean case {}",
-                case.name
-            );
-            assert_eq!(
-                actual.wrapup_completed, case.expected_wrapup_completed,
-                "Lean case {}",
-                case.name
-            );
+        let stepped = pre.step(action);
+        let post = stepped.unwrap_or(pre);
+        gents_lean_vocab::families::contracts_goal_transition::GoalTransitionOutput {
+            accepted: stepped.is_some(),
+            status: post.status,
+            blocked_audits: u64::try_from(post.blocked_audits).expect("audits are never negative"),
+            wrapup_requested: post.wrapup_requested,
+            wrapup_completed: post.wrapup_completed,
         }
-    }
+    });
 }
 
 #[test]

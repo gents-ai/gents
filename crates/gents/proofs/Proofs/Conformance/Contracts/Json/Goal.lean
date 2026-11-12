@@ -161,21 +161,6 @@ structure GoalTransitionCase where
   pre : Goals.State
   action : Goals.Action
 
-def goalActionName : Goals.Action → String
-  | .pause => "pause"
-  | .resume => "resume"
-  | .stop => "stop"
-  | .complete => "complete"
-  | .blockedAudit .sameRequest => "blocked_audit_same_request"
-  | .blockedAudit .sameCondition => "blocked_audit_same_condition"
-  | .blockedAudit .newCondition => "blocked_audit_new_condition"
-  | .operatorBlock => "operator_block"
-  | .usageLimit => "usage_limit"
-  | .budgetExhausted => "budget_exhausted"
-  | .wrapupFinished => "wrapup_finished"
-  | .wrapupAbandoned => "wrapup_abandoned"
-  | .cleanTurn => "clean_turn"
-
 def goalCaseState (status : Goals.Status) (audits : Nat := 0)
     (requested : Bool := false) (completed : Bool := false) : Goals.State :=
   { status := status, blockedAudits := audits,
@@ -238,25 +223,85 @@ def goalTransitionCases : List GoalTransitionCase :=
       action := .cleanTurn }
   ]
 
-def goalTransitionCaseJson (w : GoalTransitionCase) : String :=
-  let result := Goals.step? w.pre w.action
-  let post := result.getD w.pre
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"pre_status\":" ++ jsonString w.pre.status.toDefraDB ++ ","
-    ++ "\"pre_blocked_audits\":" ++ toString w.pre.blockedAudits ++ ","
-    ++ "\"pre_wrapup_requested\":" ++ boolString w.pre.wrapupRequested ++ ","
-    ++ "\"pre_wrapup_completed\":" ++ boolString w.pre.wrapupCompleted ++ ","
-    ++ "\"action\":" ++ jsonString (goalActionName w.action) ++ ","
-    ++ "\"accepted\":" ++ boolString result.isSome ++ ","
-    ++ "\"expected_status\":" ++ jsonString post.status.toDefraDB ++ ","
-    ++ "\"expected_blocked_audits\":" ++ toString post.blockedAudits ++ ","
-    ++ "\"expected_wrapup_requested\":" ++ boolString post.wrapupRequested ++ ","
-    ++ "\"expected_wrapup_completed\":" ++ boolString post.wrapupCompleted
-    ++ "}"
+inductive GoalActionWire where
+  | pause
+  | resume
+  | stop
+  | complete
+  | blockedAuditSameRequest
+  | blockedAuditSameCondition
+  | blockedAuditNewCondition
+  | operatorBlock
+  | usageLimit
+  | budgetExhausted
+  | wrapupFinished
+  | wrapupAbandoned
+  | cleanTurn
+  deriving Lean.ToJson
 
-def goalTransitionCasesJson : String :=
-  jsonArray (goalTransitionCases.map goalTransitionCaseJson)
+def GoalActionWire.ofModel : Goals.Action → GoalActionWire
+  | .pause => .pause
+  | .resume => .resume
+  | .stop => .stop
+  | .complete => .complete
+  | .blockedAudit .sameRequest => .blockedAuditSameRequest
+  | .blockedAudit .sameCondition => .blockedAuditSameCondition
+  | .blockedAudit .newCondition => .blockedAuditNewCondition
+  | .operatorBlock => .operatorBlock
+  | .usageLimit => .usageLimit
+  | .budgetExhausted => .budgetExhausted
+  | .wrapupFinished => .wrapupFinished
+  | .wrapupAbandoned => .wrapupAbandoned
+  | .cleanTurn => .cleanTurn
+
+def GoalActionWire.toModel : GoalActionWire → Goals.Action
+  | .pause => .pause
+  | .resume => .resume
+  | .stop => .stop
+  | .complete => .complete
+  | .blockedAuditSameRequest => .blockedAudit .sameRequest
+  | .blockedAuditSameCondition => .blockedAudit .sameCondition
+  | .blockedAuditNewCondition => .blockedAudit .newCondition
+  | .operatorBlock => .operatorBlock
+  | .usageLimit => .usageLimit
+  | .budgetExhausted => .budgetExhausted
+  | .wrapupFinished => .wrapupFinished
+  | .wrapupAbandoned => .wrapupAbandoned
+  | .cleanTurn => .cleanTurn
+
+structure GoalTransitionInput where
+  name : String
+  preStatus : Goals.Status
+  preBlockedAudits : Nat
+  preWrapupRequested : Bool
+  preWrapupCompleted : Bool
+  action : GoalActionWire
+  deriving Lean.ToJson
+
+/-- A rejected step leaves the goal as it was, so the observed state after a
+rejection is the state before it. -/
+structure GoalTransitionOutput where
+  accepted : Bool
+  status : Goals.Status
+  blockedAudits : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalTransition : Family GoalTransitionInput GoalTransitionOutput where
+  inputs := goalTransitionCases.map fun w =>
+    { name := w.name, preStatus := w.pre.status, preBlockedAudits := w.pre.blockedAudits
+    , preWrapupRequested := w.pre.wrapupRequested, preWrapupCompleted := w.pre.wrapupCompleted
+    , action := GoalActionWire.ofModel w.action }
+  model := fun i =>
+    let pre : Goals.State :=
+      { status := i.preStatus, blockedAudits := i.preBlockedAudits
+      , wrapupRequested := i.preWrapupRequested, wrapupCompleted := i.preWrapupCompleted }
+    let result := Goals.step? pre i.action.toModel
+    let post := result.getD pre
+    { accepted := result.isSome, status := post.status, blockedAudits := post.blockedAudits
+    , wrapupRequested := post.wrapupRequested, wrapupCompleted := post.wrapupCompleted }
 
 structure GoalCreateCase where
   name : String
