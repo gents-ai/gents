@@ -685,10 +685,6 @@ pub fn lean_terminal_diagnostic_replay_cases() -> &'static [LeanTerminalDiagnost
     &lean_contract_snapshot().terminal_diagnostic_replay_cases
 }
 
-pub fn lean_title_admission_join_cases() -> &'static [LeanTitleAdmissionJoinCase] {
-    &lean_contract_snapshot().title_admission_join_cases
-}
-
 pub fn lean_title_request_admission_cases() -> &'static [LeanTitleRequestAdmissionCase] {
     &lean_contract_snapshot().title_request_admission_cases
 }
@@ -3151,7 +3147,6 @@ pub struct LeanContractSnapshot {
     pub title_text_cases: LeanTitleTextCases,
     pub title_usage_cases: Vec<LeanTitleUsageCase>,
     pub provider_usage_cases: Vec<serde_json::Value>,
-    pub title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub frontend_client_shell_case_count: usize,
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub desktop_client_shell_cases: Vec<LeanClientShellCase>,
@@ -11440,30 +11435,6 @@ pub struct LeanTitleAdmission {
     pub signature_valid: bool,
     pub model_signed_fields_hex: Vec<String>,
     pub model_expected_fields_hex: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleAdmissionJoinCase {
-    pub name: String,
-    pub admission_case: String,
-    pub observation_available: bool,
-    pub row: LeanTitleJoinRow,
-    pub world: LeanTitleJoinWorld,
-    pub generation: u64,
-    pub duration: u64,
-    pub deadline: u64,
-    pub now: u64,
-    #[serde(deserialize_with = "required_nullable")]
-    pub expected_activation: Option<LeanTitleJoinBinding>,
-    pub expected_claimed: bool,
-    pub expected_lease_active: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub expected_claimed_binding: Option<LeanTitleJoinBinding>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub expected_queue_active: Option<String>,
-    pub expected_queue_unchanged: bool,
-    pub expected_own_physical: String,
 }
 
 #[derive(Debug, Deserialize)]

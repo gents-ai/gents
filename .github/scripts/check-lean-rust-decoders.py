@@ -29,7 +29,6 @@ GROUPS = {
     "prompt_assembly_replay_prefix_cases": "LeanPromptAssemblyReplayPrefixCase",
     "title_request_admission_cases": "LeanTitleRequestAdmissionCase",
     "title_usage_cases": "LeanTitleUsageCase",
-    "title_admission_join_cases": "LeanTitleAdmissionJoinCase",
     "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
     "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
     "repaired_projection_admission_cases": "LeanRepairedProjectionCase",

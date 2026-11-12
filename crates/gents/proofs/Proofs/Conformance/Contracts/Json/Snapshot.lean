@@ -657,8 +657,6 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.TitleUsage.casesJson ++ ","
     ++ "\"provider_usage_cases\":"
       ++ Conformance.ProviderUsage.casesJson ++ ","
-    ++ "\"title_admission_join_cases\":"
-      ++ Conformance.TitleAdmission.casesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"

@@ -21,14 +21,10 @@ mod tests {
 
     #[test]
     fn generated_title_groups_decode_without_native_binding_claim() {
-        use super::super::{
-            lean_title_admission_join_cases, lean_title_request_admission_cases,
-            lean_title_usage_cases,
-        };
+        use super::super::{lean_title_request_admission_cases, lean_title_usage_cases};
 
         assert!(!lean_title_request_admission_cases().is_empty());
         assert!(!lean_title_usage_cases().is_empty());
-        assert!(!lean_title_admission_join_cases().is_empty());
     }
 
     #[derive(Debug, Deserialize)]

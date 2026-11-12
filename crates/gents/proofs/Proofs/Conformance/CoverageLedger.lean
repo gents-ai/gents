@@ -2081,10 +2081,10 @@ def caseCoverage : List CoverageEntry :=
       "title_text_cases"
       "TitleTextCases")
       "canonical-output" [Surface.operatorUi, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "title_admission_join_cases"
-      "TitleAdmissionJoinCases"
-      "Model-derived row observation and independent title-world inputs exercise admitted direct own-lease claim, exact physical/logical row binding, active normal queue preservation, unavailable retry and invalid preclaim facts. The executable join calls the existing title activation/claim owner and checks non-vacuity, but its exported projections do not serialize a full application trace or bind native materialization, renewal, recovery or output capture.")
+  , tagged (boundaryCoverage
+      "family"
+      "title_admission_join_unreached"
+      "model-production-gap: the join of the observed request row with the own-lease title or access-review world runs only through the Lean activation and claim owner; no production scenario materializes those rows for the native watcher admission and claim owners, nor renewal, recovery or output capture.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "canonical_payload_presentation_cases"
