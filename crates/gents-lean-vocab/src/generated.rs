@@ -565,14 +565,6 @@ pub fn lean_repaired_projection_admission_cases() -> &'static [LeanRepairedProje
     &lean_contract_snapshot().repaired_projection_admission_cases
 }
 
-pub fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {
-    &lean_contract_snapshot().request_execution_lease_cases
-}
-
-pub fn lean_request_execution_lease_observed_cases() -> &'static [LeanRequestExecutionObservedCase] {
-    &lean_contract_snapshot().request_execution_lease_observed_cases
-}
-
 pub fn lean_request_execution_lease_trace_cases() -> &'static [LeanRequestExecutionLeaseTraceCase] {
     &lean_contract_snapshot().request_execution_lease_trace_cases
 }
@@ -3029,8 +3021,6 @@ pub struct LeanContractSnapshot {
     pub client_session_queue_order_cases: Vec<serde_json::Value>,
     pub request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub process_transition_cases: Vec<LeanLifecycleTransitionCase>,
-    pub request_execution_lease_cases: Vec<LeanRequestExecutionLeaseCase>,
-    pub request_execution_lease_observed_cases: Vec<LeanRequestExecutionObservedCase>,
     pub request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
     pub trigger_dispatch_case_count: usize,
     pub trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
@@ -10095,15 +10085,6 @@ pub struct LeanRequestExecutionLease {
     pub outcome: Option<LeanRequestExecutionOutcome>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRequestExecutionLeaseCase {
-    pub name: String,
-    pub pre: LeanRequestExecutionWorld,
-    pub action: LeanRequestExecutionAction,
-    pub expected: Option<LeanRequestExecutionWorld>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeanRequestExecutionLeaseStatus {
@@ -10119,16 +10100,6 @@ pub struct LeanRequestExecutionLeaseTraceCase {
     pub name: String,
     pub pre: LeanRequestExecutionWorld,
     pub actions: Vec<LeanRequestExecutionAction>,
-    pub expected: Option<LeanRequestExecutionWorld>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRequestExecutionObservedCase {
-    pub name: String,
-    pub pre: LeanRequestExecutionWorld,
-    pub action: LeanRequestExecutionAction,
-    pub intervening: Vec<LeanRequestExecutionAction>,
     pub expected: Option<LeanRequestExecutionWorld>,
 }
 

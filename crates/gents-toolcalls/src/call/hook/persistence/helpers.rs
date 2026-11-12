@@ -703,20 +703,16 @@ mod tests {
         DateTime<Utc>,
         DateTime<Utc>,
     ) {
-        let case = gents_lean_vocab::lean_request_execution_lease_observed_cases()
-            .iter()
-            .find(|case| case.name == "recovery_invalidates_admitted_renewal")
-            .unwrap();
         let (node, dir, identity, agent) = test_node().await;
         let access = agent_access(&node, &identity, &agent);
         let epoch = Utc::now();
-        let lifecycle = observed_case_request(&node, &identity, &agent, case, epoch).await;
+        let lifecycle = observed_case_request(&node, &identity, &agent, 20, 20, epoch).await;
         let row = request_row(&access, &lifecycle.request().doc_id).await;
         let deadline =
             DateTime::parse_from_rfc3339(row.execution_lease_expires_at.as_deref().unwrap())
                 .unwrap()
                 .with_timezone(&Utc);
-        let now = epoch + chrono::Duration::seconds(case.pre.now as i64);
+        let now = epoch + chrono::Duration::seconds(15);
         (
             node, dir, identity, agent, access, lifecycle, row, deadline, now,
         )

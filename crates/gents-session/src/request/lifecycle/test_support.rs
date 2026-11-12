@@ -403,16 +403,16 @@ pub async fn observed_case_request(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn gents_store::identity::NodeIdentity>,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-    case: &gents_lean_vocab::LeanRequestExecutionObservedCase,
+    duration_secs: u64,
+    deadline_secs: u64,
     epoch: DateTime<Utc>,
 ) -> RequestLifecycle {
     let lifecycle = owner(node, identity, agent).await;
     let doc_id = escape_graphql_string(&lifecycle.request.doc_id);
-    let deadline =
-        epoch + chrono::Duration::seconds(case.pre.lease.explicit_deadline.unwrap() as i64);
+    let deadline = epoch + chrono::Duration::seconds(deadline_secs as i64);
     agent_access(node, identity, agent).write("test.observed_lease_seed", &format!(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ execution_lease_secs: {}, execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
-        case.pre.lease.duration.unwrap(), escape_graphql_string(&deadline.to_rfc3339()),
+        duration_secs, escape_graphql_string(&deadline.to_rfc3339()),
     )).await.unwrap();
     lifecycle
 }

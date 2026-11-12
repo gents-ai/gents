@@ -545,12 +545,21 @@ def caseCoverage : List CoverageEntry :=
       "request_execution_lease_contracts_provider_eof")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "request_execution_lease_observed_cases"
-      "RequestExecutionObservedCases")
+      "family"
+      "request_execution_lease_contracts_observed_publication")
       "request-execution-lease" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "request_execution_lease_observed_cases"
-      "RequestExecutionObservedCases")
+      "family"
+      "request_execution_lease_contracts_observed_recovery")
+      "request-execution-lease" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "request_execution_lease_contracts_observed_recheck")
+      "request-execution-lease" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "request_execution_lease_contracts_observed_world_unreached"
+      "model-production-gap: no production owner computes the whole lease world after an observed transaction commits; finalization, revocation, drop and competing-renewal interleavings have no served scenario.")
       "request-execution-lease" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -564,10 +573,22 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "account_rotation_contracts_observation")
       "account-rotation" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "request_execution_lease_cases"
-      "RequestExecutionLeaseCases"
-      "#1571 explicit-renewal input/expected-state cases supersede the retired response/progress policy adapter. Bind the generated actions to native claim, due-only deadline CAS, producer admission and terminal/recovery owners; decoding fixtures is not native coverage.")
+  , tagged (consumerCoverage
+      "family"
+      "request_execution_lease_contracts_admission")
+      "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "request_execution_lease_contracts_renewal")
+      "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "request_execution_lease_contracts_relinquishment")
+      "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "request_execution_lease_contracts_step_world_unreached"
+      "model-production-gap: no production owner computes the whole lease world; claim, finalization, recovery, revocation, observing-replica and clock steps have no native replay (#1571).")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "request_execution_lease_trace_cases"

@@ -212,83 +212,70 @@ async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
 
 #[tokio::test]
 async fn native_relinquishment_follows_generated_drop_cases() {
-    use gents_lean_vocab::{
-        LeanRequestExecutionAction, LeanRequestExecutionBoundary, LeanRequestExecutionLeaseStatus,
-    };
-
     let (node, _dir, identity, agent) = test_node().await;
 
     let access = agent_access(&node, &identity, &agent);
-    let mut exercised = 0;
-    for case in gents_lean_vocab::lean_request_execution_lease_cases() {
-        let LeanRequestExecutionAction::Drop {
-            boundary: LeanRequestExecutionBoundary::MutationWriteGate,
-            generation,
-        } = case.action
-        else {
-            continue;
-        };
-        let Some(expected) = &case.expected else {
-            continue;
-        };
+    for case in gents_lean_vocab::families::request_execution_lease_contracts_relinquishment::cases::<
+        RequestLifecycleState,
+    >() {
         let mut lifecycle = owner(&node, &identity, &agent).await;
         drop(lifecycle.renewal_task.take());
         lifecycle.state = LocalLifecycleState::Completed;
         let doc_id = lifecycle.request().doc_id.clone();
-        let observed_generation = case.pre.lease.generation.unwrap().to_string();
+        let pre = &case.input.pre;
+        let observed_generation = pre.lease.generation.unwrap().to_string();
         let deadline = DateTime::from_timestamp_millis(
-            case.pre
-                .lease
-                .explicit_deadline
-                .unwrap()
-                .try_into()
-                .unwrap(),
+            pre.lease.explicit_deadline.unwrap().try_into().unwrap(),
         )
         .unwrap();
-        let now = DateTime::from_timestamp_millis(case.pre.now.try_into().unwrap()).unwrap();
+        let now = DateTime::from_timestamp_millis(pre.now.try_into().unwrap()).unwrap();
         access.write("test.generated_drop_case",
             &format!(
                 r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
                     lifecycle_state: "{}", execution_generation: "{}", execution_lease_expires_at: "{}"
                 }}) {{ _docID }} }}"#,
                 escape_graphql_string(&doc_id),
-                escape_graphql_string(case.pre.request.as_str()),
+                escape_graphql_string(pre.request.as_str()),
                 escape_graphql_string(&observed_generation),
                 escape_graphql_string(&deadline.to_rfc3339()),
             ),
         ).await.unwrap();
         let before = lease_tuple(&request_row(&access, &doc_id).await);
-        relinquish_execution_lease(&access, &doc_id, &generation.to_string(), now)
-            .await
-            .unwrap();
-        let row = request_row(&access, &doc_id).await;
-        assert_eq!(row.lifecycle_state, Some(expected.request), "{}", case.name);
-        assert_eq!(
-            row.execution_generation.as_deref(),
-            Some(observed_generation.as_str()),
-            "{}",
-            case.name
-        );
-        match expected.lease.status {
-            LeanRequestExecutionLeaseStatus::Active => {
-                assert_eq!(lease_tuple(&row), before, "{}", case.name);
+        let relinquished = relinquish_execution_lease(
+            &access,
+            &doc_id,
+            &case.input.action.generation.unwrap().to_string(),
+            now,
+        )
+        .await;
+        let observed = match relinquished {
+            Ok(()) => {
+                let row = request_row(&access, &doc_id).await;
+                let status = if lease_tuple(&row) == before {
+                    "active"
+                } else if DateTime::parse_from_rfc3339(
+                    row.execution_lease_expires_at.as_deref().unwrap(),
+                )
+                .unwrap()
+                    < now
+                {
+                    "recoverable"
+                } else {
+                    "renewed"
+                };
+                Some(gents_lean_vocab::families::request_execution_lease_contracts_relinquishment::RelinquishOutput {
+                    request: row.lifecycle_state.expect("relinquished request state"),
+                    generation: row
+                        .execution_generation
+                        .as_deref()
+                        .map(|generation| generation.parse().unwrap()),
+                    status: status.to_owned(),
+                })
             }
-            LeanRequestExecutionLeaseStatus::Recoverable => {
-                assert!(
-                    DateTime::parse_from_rfc3339(
-                        row.execution_lease_expires_at.as_deref().unwrap()
-                    )
-                    .unwrap()
-                        < now,
-                    "{}",
-                    case.name
-                );
-            }
-            _ => panic!("unexpected generated drop outcome: {}", case.name),
-        }
-        exercised += 1;
+            Err(_) => None,
+        };
+        case.check(observed);
     }
-    assert_eq!(exercised, 3);
     node.shutdown().await.expect("shut down test node");
 }
 
@@ -1165,7 +1152,6 @@ async fn native_doc_id_targeting_preserves_request_update_filters() {
 
 #[tokio::test]
 async fn generated_renewal_invalidates_real_publication_point_read_transaction() {
-    use gents_lean_vocab::LeanRequestExecutionAction;
     use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -1174,160 +1160,185 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, SegmentRun, SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
     };
-    let case = gents_lean_vocab::lean_request_execution_lease_observed_cases()
-        .iter()
-        .find(|case| case.name == "renewal_invalidates_admitted_publication")
-        .unwrap();
-    let (node, _dir, identity, agent) = test_node().await;
-    let access = agent_access(&node, &identity, &agent);
-    let epoch = Utc::now();
-    let lifecycle = observed_case_request(&node, &identity, &agent, case, epoch).await;
-    let row = request_row(&access, &lifecycle.request.doc_id).await;
-    let request = escape_graphql_string(&lifecycle.request.doc_id);
-    let txn = gents_store::config_client::ConfigApplyTxn::begin_local_with_signer(
-        &node,
-        identity::Did::new(&agent.agent_did).unwrap(),
-        agent_signer(&identity, &agent),
-    )
-    .await
-    .unwrap();
-    txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ execution_generation execution_lease_expires_at }} }}"#)).await.unwrap();
-    let now = epoch.to_rfc3339();
-    let generation = row.execution_generation.as_deref().unwrap();
-    let message_key = format!("renewal-publication:{}", lifecycle.request.doc_id);
-    let payload = "publication staged before renewal";
-    let segment = OutputSegment {
-        node_did: lifecycle.request.node_did.clone(),
-        requester_did: lifecycle.request.requester_did.clone(),
-        session_id: lifecycle.request.session_id.clone(),
-        request_doc_id: lifecycle.request.doc_id.clone(),
-        source: OutputSource::Authored {
-            key: message_key.clone(),
-        },
-        writer: OutputWriter::RequestExecution {
-            execution_generation: generation.to_owned(),
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: payload.len().try_into().unwrap(),
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::Text,
-            }),
-        }],
-        payload: payload.to_owned(),
-        close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments: 1,
-            stream_bytes: vec![payload.len() as u64],
-        }),
-        created_at: now.clone(),
-    };
-    let segment_result = txn
-        .execute_with_variables(
-            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-            &output_segment_create_variables(&segment).unwrap(),
+    for case in
+        gents_lean_vocab::families::request_execution_lease_contracts_observed_publication::cases::<
+            RequestLifecycleState,
+        >()
+    {
+        let (node, _dir, identity, agent) = test_node().await;
+        let access = agent_access(&node, &identity, &agent);
+        let epoch = Utc::now();
+        let lifecycle = observed_case_request(
+            &node,
+            &identity,
+            &agent,
+            case.input.pre.lease.duration.unwrap(),
+            case.input.pre.lease.explicit_deadline.unwrap(),
+            epoch,
+        )
+        .await;
+        let row = request_row(&access, &lifecycle.request.doc_id).await;
+        let request = escape_graphql_string(&lifecycle.request.doc_id);
+        let txn = gents_store::config_client::ConfigApplyTxn::begin_local_with_signer(
+            &node,
+            identity::Did::new(&agent.agent_did).unwrap(),
+            agent_signer(&identity, &agent),
         )
         .await
         .unwrap();
-    let segment_doc_id =
-        gents_store::graphql::created_doc_id(&segment_result, "AgentOutputSegment").unwrap();
-    let message = TranscriptMessage {
-        native_request_id: None,
-        message_key: message_key.clone(),
-        session_id: lifecycle.request.session_id.clone(),
-        node_did: lifecycle.request.node_did.clone(),
-        requester_did: lifecycle.request.requester_did.clone(),
-        request_doc_id: Some(lifecycle.request.doc_id.clone()),
-        publication: MessagePublication::RequestExecution {
-            execution_generation: generation.to_owned(),
-        },
-        outcome: OutputOutcome::Complete,
-        sequence: 0,
-        role: MessageRole::Assistant,
-        native_id: None,
-        blocks: vec![MessageBlock::Text {
-            text: gents_protocol::output::PresentedPayload {
-                output: gents_protocol::output::PayloadRef {
-                    close_doc_id: segment_doc_id,
-                    stream: 0,
-                },
-                presentation: gents_protocol::output::PayloadPresentation::Full,
+        txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ execution_generation execution_lease_expires_at }} }}"#)).await.unwrap();
+        let now = epoch.to_rfc3339();
+        let generation = row.execution_generation.as_deref().unwrap();
+        let message_key = format!("renewal-publication:{}", lifecycle.request.doc_id);
+        let payload = "publication staged before renewal";
+        let segment = OutputSegment {
+            node_did: lifecycle.request.node_did.clone(),
+            requester_did: lifecycle.request.requester_did.clone(),
+            session_id: lifecycle.request.session_id.clone(),
+            request_doc_id: lifecycle.request.doc_id.clone(),
+            source: OutputSource::Authored {
+                key: message_key.clone(),
             },
-        }],
-        created_at: now,
-    };
-    txn.execute_with_variables(
-        CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&message).unwrap(),
-    )
-    .await
-    .unwrap();
-    let [LeanRequestExecutionAction::Renew {
-        expected_deadline, ..
-    }] = case.intervening.as_slice()
-    else {
-        panic!("generated renewal interleaving")
-    };
-    let renewed = tokio::time::timeout(
-        Duration::from_secs(10),
-        crate::request::lifecycle::renew_execution_lease_once_at_with_access(
-            &access,
-            &lifecycle.request.doc_id,
-            row.execution_generation.as_deref().unwrap(),
-            epoch + chrono::Duration::seconds(*expected_deadline as i64),
-            epoch + chrono::Duration::seconds(case.pre.now as i64),
-        ),
-    )
-    .await
-    .expect("renewal must not wait for the held ordinary gate")
-    .unwrap();
-    assert_eq!(
-        renewed,
-        crate::request::lifecycle::RenewalAttemptOutcome::Committed
-    );
-    let result = txn.commit().await;
-    assert_eq!(result.is_ok(), case.expected.is_some(), "{}", case.name);
-    assert!(gents_store::config_client::is_classified_transaction_conflict(&result.unwrap_err()));
-    let request = escape_graphql_string(&lifecycle.request.doc_id);
-    let key = escape_graphql_string(&message_key);
-    let published = access
+            writer: OutputWriter::RequestExecution {
+                execution_generation: generation.to_owned(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: payload.len().try_into().unwrap(),
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Text,
+                }),
+            }],
+            payload: payload.to_owned(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![payload.len() as u64],
+            }),
+            created_at: now.clone(),
+        };
+        let segment_result = txn
+            .execute_with_variables(
+                CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                &output_segment_create_variables(&segment).unwrap(),
+            )
+            .await
+            .unwrap();
+        let segment_doc_id =
+            gents_store::graphql::created_doc_id(&segment_result, "AgentOutputSegment").unwrap();
+        let message = TranscriptMessage {
+            native_request_id: None,
+            message_key: message_key.clone(),
+            session_id: lifecycle.request.session_id.clone(),
+            node_did: lifecycle.request.node_did.clone(),
+            requester_did: lifecycle.request.requester_did.clone(),
+            request_doc_id: Some(lifecycle.request.doc_id.clone()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: generation.to_owned(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: 0,
+            role: MessageRole::Assistant,
+            native_id: None,
+            blocks: vec![MessageBlock::Text {
+                text: gents_protocol::output::PresentedPayload {
+                    output: gents_protocol::output::PayloadRef {
+                        close_doc_id: segment_doc_id,
+                        stream: 0,
+                    },
+                    presentation: gents_protocol::output::PayloadPresentation::Full,
+                },
+            }],
+            created_at: now,
+        };
+        txn.execute_with_variables(
+            CREATE_AGENT_MESSAGE_MUTATION,
+            &transcript_message_create_variables(&message).unwrap(),
+        )
+        .await
+        .unwrap();
+        let [renewal] = case.input.intervening.as_slice() else {
+            panic!("generated renewal interleaving")
+        };
+        let Some(expected_deadline) = renewal
+            .expected_deadline
+            .filter(|_| renewal.kind == "renew")
+        else {
+            panic!("generated renewal interleaving")
+        };
+        let renewed = tokio::time::timeout(
+            Duration::from_secs(10),
+            crate::request::lifecycle::renew_execution_lease_once_at_with_access(
+                &access,
+                &lifecycle.request.doc_id,
+                row.execution_generation.as_deref().unwrap(),
+                epoch + chrono::Duration::seconds(expected_deadline as i64),
+                epoch + chrono::Duration::seconds(case.input.pre.now as i64),
+            ),
+        )
+        .await
+        .expect("renewal must not wait for the held ordinary gate")
+        .unwrap();
+        let result = txn.commit().await;
+        let committed = result.is_ok();
+        if let Err(error) = &result {
+            assert!(gents_store::config_client::is_classified_transaction_conflict(error));
+        }
+        let request = escape_graphql_string(&lifecycle.request.doc_id);
+        let key = escape_graphql_string(&message_key);
+        let published = access
         .execute(
             &format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{key}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID source }} }}"#),
         )
     .await
     .unwrap();
-    assert_eq!(
-        published["data"]["AgentMessage"].as_array().unwrap().len(),
-        0
+        assert_eq!(
+            published["data"]["AgentMessage"].as_array().unwrap().len(),
+            0
+        );
+        assert!(published["data"]["AgentOutputSegment"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["source"]["key"] != message_key));
+        case.check(
+        gents_lean_vocab::families::request_execution_lease_contracts_observed_publication::PublicationOutput {
+            renewed: renewed == crate::request::lifecycle::RenewalAttemptOutcome::Committed,
+            committed,
+        },
     );
-    assert!(published["data"]["AgentOutputSegment"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|row| row["source"]["key"] != message_key));
+    }
 }
 
 #[tokio::test]
 async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
-    use gents_lean_vocab::LeanRequestExecutionAction;
-    let case = gents_lean_vocab::lean_request_execution_lease_observed_cases()
-        .iter()
-        .find(|case| case.name == "recovery_invalidates_admitted_renewal")
-        .unwrap();
-    let (node, _dir, identity, agent) = test_node().await;
-    let access = agent_access(&node, &identity, &agent);
-    let epoch = Utc::now();
-    let lifecycle = observed_case_request(&node, &identity, &agent, case, epoch).await;
-    let row = request_row(&access, &lifecycle.request.doc_id).await;
-    let generation = row.execution_generation.as_deref().unwrap();
-    let expiry = row.execution_lease_expires_at.as_deref().unwrap();
-    let deadline = DateTime::parse_from_rfc3339(expiry)
-        .unwrap()
-        .with_timezone(&Utc);
-    let txn =
+    for case in
+        gents_lean_vocab::families::request_execution_lease_contracts_observed_recovery::cases::<
+            RequestLifecycleState,
+        >()
+    {
+        let (node, _dir, identity, agent) = test_node().await;
+        let access = agent_access(&node, &identity, &agent);
+        let epoch = Utc::now();
+        let lifecycle = observed_case_request(
+            &node,
+            &identity,
+            &agent,
+            case.input.pre.lease.duration.unwrap(),
+            case.input.pre.lease.explicit_deadline.unwrap(),
+            epoch,
+        )
+        .await;
+        let row = request_row(&access, &lifecycle.request.doc_id).await;
+        let generation = row.execution_generation.as_deref().unwrap();
+        let expiry = row.execution_lease_expires_at.as_deref().unwrap();
+        let deadline = DateTime::parse_from_rfc3339(expiry)
+            .unwrap()
+            .with_timezone(&Utc);
+        let txn =
         gents_store::config_client::ConfigApplyTxn::begin_execution_renewal_for_test_with_signer(
             &node,
             identity::Did::new(&agent.agent_did).unwrap(),
@@ -1335,97 +1346,103 @@ async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
         )
         .await
         .unwrap();
-    let renewed = crate::request::lifecycle::renew_in_transaction(
-        &txn,
-        &lifecycle.request.doc_id,
-        generation,
-        Some(deadline),
-        Some(epoch + chrono::Duration::seconds(case.pre.now as i64)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        renewed,
-        crate::request::lifecycle::RenewalAttemptOutcome::Committed
-    );
-    let [LeanRequestExecutionAction::AdvanceTime { now }, LeanRequestExecutionAction::RecoverExpiredAndFail {
-        fresh_generation, ..
-    }] = case.intervening.as_slice()
-    else {
-        panic!("generated recovery interleaving")
-    };
-    let fresh = format!("modeled-recovery-{fresh_generation}");
-    let recovered = crate::request::lifecycle::recover_expired_generation_with_access_for_test(
-        &access,
-        &row,
-        generation,
-        expiry,
-        fresh.clone(),
-        epoch + chrono::Duration::seconds(*now as i64),
-        Some(crate::request::lifecycle::RecoverySelectionChoice::NoMessage),
-        Some(RequestLifecycleState::Failed),
-    )
-    .await
-    .unwrap();
-    assert!(matches!(
-        recovered,
-        crate::request::lifecycle::RecoveryResult::Won { .. }
-    ));
-    let result = txn.commit().await;
-    assert_eq!(result.is_ok(), case.expected.is_some(), "{}", case.name);
-    assert!(gents_store::config_client::is_classified_transaction_conflict(&result.unwrap_err()));
-    let terminal = request_row(&access, &lifecycle.request.doc_id).await;
-    assert_eq!(
-        terminal.lifecycle_state,
-        Some(RequestLifecycleState::Failed)
-    );
-    assert_eq!(
-        terminal.execution_generation.as_deref(),
-        Some(fresh.as_str())
-    );
+        let renewed = crate::request::lifecycle::renew_in_transaction(
+            &txn,
+            &lifecycle.request.doc_id,
+            generation,
+            Some(deadline),
+            Some(epoch + chrono::Duration::seconds(case.input.pre.now as i64)),
+        )
+        .await
+        .unwrap();
+        let [advance, recovery] = case.input.intervening.as_slice() else {
+            panic!("generated recovery interleaving")
+        };
+        let (Some(now), Some(fresh_generation)) = (
+            advance.now.filter(|_| advance.kind == "advance_time"),
+            recovery
+                .fresh_generation
+                .filter(|_| recovery.kind == "recover_expired_and_fail"),
+        ) else {
+            panic!("generated recovery interleaving")
+        };
+        let fresh = format!("modeled-recovery-{fresh_generation}");
+        let recovered = crate::request::lifecycle::recover_expired_generation_with_access_for_test(
+            &access,
+            &row,
+            generation,
+            expiry,
+            fresh.clone(),
+            epoch + chrono::Duration::seconds(now as i64),
+            Some(crate::request::lifecycle::RecoverySelectionChoice::NoMessage),
+            Some(RequestLifecycleState::Failed),
+        )
+        .await
+        .unwrap();
+        let result = txn.commit().await;
+        if let Err(error) = &result {
+            assert!(gents_store::config_client::is_classified_transaction_conflict(error));
+        }
+        let terminal = request_row(&access, &lifecycle.request.doc_id).await;
+        case.check(gents_lean_vocab::families::request_execution_lease_contracts_observed_recovery::RecoveryOutput {
+            staged: renewed == crate::request::lifecycle::RenewalAttemptOutcome::Committed,
+            recovered: matches!(
+                recovered,
+                crate::request::lifecycle::RecoveryResult::Won { .. }
+            ),
+            committed: result.is_ok(),
+            request: terminal.lifecycle_state,
+            generation: terminal
+                .execution_generation
+                .as_deref()
+                .and_then(|label| label.strip_prefix("modeled-recovery-"))
+                .map(|generation| generation.parse().unwrap()),
+        });
+    }
 }
 
 #[tokio::test]
 async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
-    let cases = gents_lean_vocab::lean_request_execution_lease_observed_cases();
-    let admitted = cases
-        .iter()
-        .find(|case| {
-            case.name == "admitted_renewal_can_commit_after_clock_expiry_without_storage_conflict"
-        })
+    for case in
+        gents_lean_vocab::families::request_execution_lease_contracts_observed_recheck::cases::<
+            RequestLifecycleState,
+        >()
+    {
+        let (admitted, expired) = (&case.input.admitted, &case.input.recheck);
+        let (node, _dir, identity, agent) = test_node().await;
+        let access = agent_access(&node, &identity, &agent);
+        let epoch = Utc::now();
+        let lifecycle = observed_case_request(
+            &node,
+            &identity,
+            &agent,
+            admitted.pre.lease.duration.unwrap(),
+            admitted.pre.lease.explicit_deadline.unwrap(),
+            epoch,
+        )
+        .await;
+        let before = request_row(&access, &lifecycle.request.doc_id).await;
+        let deadline =
+            epoch + chrono::Duration::seconds(admitted.pre.lease.explicit_deadline.unwrap() as i64);
+        let result = crate::request::lifecycle::renew_with_recheck_at(
+            &access,
+            &lifecycle.request.doc_id,
+            before.execution_generation.as_deref().unwrap(),
+            deadline,
+            epoch + chrono::Duration::seconds(admitted.pre.now as i64),
+            epoch + chrono::Duration::seconds(expired.pre.now as i64),
+        )
+        .await
         .unwrap();
-    let expired = cases
-        .iter()
-        .find(|case| case.name == "renewal_admission_after_expiry_is_rejected")
-        .unwrap();
-    let (node, _dir, identity, agent) = test_node().await;
-    let access = agent_access(&node, &identity, &agent);
-    let epoch = Utc::now();
-    let lifecycle = observed_case_request(&node, &identity, &agent, admitted, epoch).await;
-    let before = request_row(&access, &lifecycle.request.doc_id).await;
-    let deadline =
-        epoch + chrono::Duration::seconds(admitted.pre.lease.explicit_deadline.unwrap() as i64);
-    let result = crate::request::lifecycle::renew_with_recheck_at(
-        &access,
-        &lifecycle.request.doc_id,
-        before.execution_generation.as_deref().unwrap(),
-        deadline,
-        epoch + chrono::Duration::seconds(admitted.pre.now as i64),
-        epoch + chrono::Duration::seconds(expired.pre.now as i64),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        result == crate::request::lifecycle::RenewalAttemptOutcome::Committed,
-        expired.expected.is_some()
-    );
-    assert_eq!(
-        result,
-        crate::request::lifecycle::RenewalAttemptOutcome::Lost
-    );
-    let after = request_row(&access, &lifecycle.request.doc_id).await;
-    assert_eq!(lease_tuple(&after), lease_tuple(&before));
-    assert_eq!(after.lifecycle_state, before.lifecycle_state);
+        assert_eq!(
+            result,
+            crate::request::lifecycle::RenewalAttemptOutcome::Lost
+        );
+        let after = request_row(&access, &lifecycle.request.doc_id).await;
+        assert_eq!(lease_tuple(&after), lease_tuple(&before));
+        assert_eq!(after.lifecycle_state, before.lifecycle_state);
+        case.check(result == crate::request::lifecycle::RenewalAttemptOutcome::Committed);
+    }
 }
 
 #[tokio::test]

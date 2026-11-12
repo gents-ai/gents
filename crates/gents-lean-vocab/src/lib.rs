@@ -152,7 +152,6 @@ pub mod consumer_scan;
 pub mod family;
 mod hooks;
 mod prompt_assembly;
-mod request_execution_lease;
 mod session_documents;
 mod title;
 
@@ -167,9 +166,9 @@ pub use canonical_presentation::native_adapter::native_presentation;
 pub use canonical_presentation::*;
 pub use compaction_canonical_projection::*;
 pub use compaction_projection_join::*;
+pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use hooks::*;
 pub use prompt_assembly::*;
-pub use request_execution_lease::*;
 pub use title::*;
 
 #[cfg(test)]

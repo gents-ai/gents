@@ -180,4 +180,54 @@ mod conformance {
             provider_eof_is_failure(i.saw_explicit_final)
         });
     }
+
+    #[test]
+    fn native_admission_follows_the_lean_lease_model() {
+        gents_lean_vocab::families::request_execution_lease_contracts_admission::replay::<
+            RequestLifecycleState,
+        >(|case| {
+            let generation = case.pre.lease.generation.expect("active lease").to_string();
+            let observed = LeaseObservation {
+                request: case.pre.request,
+                generation: &generation,
+                deadline_ms: i64::try_from(case.pre.lease.explicit_deadline.expect("active lease"))
+                    .unwrap(),
+            };
+            let expected = case.action.generation.expect("fenced action").to_string();
+            let now = i64::try_from(case.pre.now).unwrap();
+            match case.action.kind.as_str() {
+                "begin" => authorize_begin(observed, &expected, now),
+                "append_output" => authorize_output_append(observed, &expected, now),
+                "authorize_producer_decision" => {
+                    authorize_producer_decision(observed, &expected, now)
+                }
+                kind => panic!("{}: no native admission for {kind}", case.name),
+            }
+        });
+    }
+
+    #[test]
+    fn native_renewal_follows_the_lean_lease_model() {
+        gents_lean_vocab::families::request_execution_lease_contracts_renewal::replay::<
+            RequestLifecycleState,
+        >(|case| {
+            assert_eq!(case.action.kind, "renew", "{}", case.name);
+            let generation = case.pre.lease.generation.expect("active lease").to_string();
+            let observed = LeaseObservation {
+                request: case.pre.request,
+                generation: &generation,
+                deadline_ms: i64::try_from(case.pre.lease.explicit_deadline.expect("active lease"))
+                    .unwrap(),
+            };
+            authorize_renewal(
+                observed,
+                &case.action.generation.expect("fenced renewal").to_string(),
+                i64::try_from(case.action.expected_deadline.expect("renewal CAS deadline"))
+                    .unwrap(),
+                i64::try_from(case.pre.lease.duration.expect("active lease")).unwrap(),
+                i64::try_from(case.pre.now).unwrap(),
+            )
+            .map(|deadline| u64::try_from(deadline).unwrap())
+        });
+    }
 }
