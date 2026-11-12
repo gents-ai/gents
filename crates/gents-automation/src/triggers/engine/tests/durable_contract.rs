@@ -745,13 +745,9 @@ async fn persisted_outcome_requests(
 
 #[tokio::test]
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
-    for trace in contract()["trigger_delivery_outcome_trace_cases"]
-        .as_array()
-        .unwrap()
-    {
-        // The Task's Agent admits, claims, terminalizes and recovers its fires.
-        let (db, _user, _access, binding) =
-            crate::test_support::signed_test_node(trace["name"].as_str().unwrap()).await;
+    for case in gents_lean_vocab::families::trigger_delivery_outcome_trace::cases() {
+        let name = &case.input.name;
+        let (db, _user, _access, binding) = crate::test_support::signed_test_node(name).await;
         let node = db.node.clone();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
@@ -762,16 +758,16 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
             agent.as_ref(),
         )
         .unwrap();
-        let mut published = std::collections::BTreeMap::new();
         let mut terminal_states = std::collections::BTreeMap::new();
-        for (index, step) in trace["steps"].as_array().unwrap().iter().enumerate() {
-            let action: OutcomeAction = decode(&step["action"]);
-            let expected: State = decode(&step["post"]);
+        let mut steps = Vec::new();
+        let mut pre = observed_delivery_state(&access, FireIdentity::clone).await;
+        for (index, wire) in case.input.actions.iter().enumerate() {
+            let action: OutcomeAction = gents_lean_vocab::family::recode(wire);
             match action {
                 OutcomeAction::Admit { fire } => {
                     let receipt = receipt(&fire, index);
                     let mutation = request_mutation_as(&receipt, agent.did());
-                    let result = access
+                    access
                         .transact_write("test.outcome_trace_admit", |txn| {
                             let receipt = &receipt;
                             let mutation = &mutation;
@@ -791,13 +787,8 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                                 durable::stage_fire_request(txn, receipt, mutation).await
                             })
                         })
-                        .await;
-                    assert_eq!(
-                        result.is_ok(),
-                        expected.receipts.contains(&fire.identity),
-                        "{}",
-                        trace["name"]
-                    );
+                        .await
+                        .ok();
                 }
                 OutcomeAction::Claim { identity } => {
                     let rows = persisted_outcome_requests(&access).await;
@@ -824,8 +815,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                             .await
                             .unwrap()
                             .was_claimed(),
-                        "{}",
-                        trace["name"]
+                        "{name}"
                     );
                 }
                 OutcomeAction::RequestTerminal {
@@ -844,7 +834,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                             anyhow::ensure!(commit, "injected terminal transaction crash"); Ok(())
                         })
                     }).await;
-                    assert_eq!(result.is_ok(), commit);
+                    assert_eq!(result.is_ok(), commit, "{name}");
                 }
                 OutcomeAction::GoalStatus { identity, status } => {
                     let rows = persisted_outcome_requests(&access).await;
@@ -869,107 +859,52 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                                 })
                             })
                             .await;
-                        assert!(result.is_err());
+                        assert!(result.is_err(), "{name}");
                     }
                 }
             }
-            for publication in step["published"].as_array().unwrap() {
-                let identity: FireIdentity = decode(&publication["identity"]);
-                published.insert(
-                    identity.outcome_id(),
-                    publication["reason"].as_str().unwrap().to_owned(),
-                );
-            }
-            let response = access.execute("{FireOutcome {handoff_id terminal_state} TriggerFire {fire_key goal_assignment_applied} Goal {node_did session_id assignment_root_request_doc_id status}}").await.unwrap();
-            let outcomes = response["data"]["FireOutcome"].as_array().unwrap();
+            let post = observed_delivery_state(&access, FireIdentity::clone).await;
+            let response = access
+                .execute("{ FireOutcome { handoff_id terminal_state } Goal { _docID } }")
+                .await
+                .unwrap();
             assert_eq!(
-                outcomes.len(),
-                expected.outcomes.len(),
-                "{} step {index}",
-                trace["name"]
+                response["data"]["Goal"].as_array().unwrap().len(),
+                post["goals"].as_array().unwrap().len(),
+                "{name} step {index}: every Goal is bound to an admitted fire"
             );
-            for id in &expected.outcomes {
-                let outcome = outcomes
-                    .iter()
-                    .find(|row| row["handoff_id"] == id.outcome_id())
-                    .unwrap();
-                let reason = &published[&id.outcome_id()];
-                assert_eq!(
-                    outcome["terminal_state"],
-                    if reason == "request_terminal" {
-                        terminal_states[&id.request_id()].as_str()
+            let published = post["outcomes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|identity| !pre["outcomes"].as_array().unwrap().contains(identity))
+                .map(|identity| {
+                    let identity: FireIdentity = serde_json::from_value(identity.clone()).unwrap();
+                    let stored = response["data"]["FireOutcome"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|row| row["handoff_id"] == identity.outcome_id())
+                        .unwrap()["terminal_state"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned();
+                    let reason = if terminal_states.get(&identity.request_id()) == Some(&stored) {
+                        "request_terminal".to_owned()
                     } else {
-                        reason.as_str()
-                    },
-                    "{} step {index}",
-                    trace["name"]
-                );
-            }
-            let requests = persisted_outcome_requests(&access).await;
-            assert_eq!(
-                requests.len(),
-                expected.requests.len(),
-                "{} step {index}",
-                trace["name"]
-            );
-            for expected_request in &expected.requests {
-                let row = requests
-                    .iter()
-                    .find(|row| row.request_id == expected_request.fire.identity.request_id())
-                    .unwrap();
-                assert_eq!(
-                    row.lifecycle_state.is_some_and(|state| state.is_terminal()),
-                    expected_request.terminal,
-                    "{} step {index}: request {} terminal state",
-                    trace["name"],
-                    row.request_id
-                );
-                assert_eq!(
-                    row.lifecycle_state.is_some_and(|state| matches!(
-                        state,
-                        gents_protocol::request_lifecycle::RequestLifecycleState::Claimed
-                            | gents_protocol::request_lifecycle::RequestLifecycleState::Processing
-                    )),
-                    expected_request.running,
-                    "{} step {index}: request {} running state",
-                    trace["name"],
-                    row.request_id
-                );
-                let receipts = response["data"]["TriggerFire"].as_array().unwrap();
-                let receipt = receipts
-                    .iter()
-                    .find(|row| row["fire_key"] == expected_request.fire.identity.fire_key())
-                    .unwrap();
-                assert_eq!(
-                    receipt["goal_assignment_applied"]
-                        .as_bool()
-                        .unwrap_or(false),
-                    expected_request.goal_assignment_applied,
-                    "{} step {index}: request {} Goal assignment",
-                    trace["name"],
-                    row.request_id
-                );
-            }
-            let goals = response["data"]["Goal"].as_array().unwrap();
-            assert_eq!(goals.len(), expected.goals.len());
-            for binding in &expected.goals {
-                let goal = goals
-                    .iter()
-                    .find(|row| {
-                        row["node_did"] == binding.owner && row["session_id"] == binding.session
-                    })
-                    .unwrap();
-                let assignment = requests
-                    .iter()
-                    .find(|row| row.request_id == binding.assignment.request_id())
-                    .unwrap();
-                assert_eq!(
-                    goal["assignment_root_request_doc_id"].as_str(),
-                    assignment.doc_id.as_deref()
-                );
-                assert_eq!(goal["status"], binding.status);
-            }
+                        stored
+                    };
+                    serde_json::json!({"identity": identity, "reason": reason})
+                })
+                .collect::<Vec<_>>();
+            steps.push(serde_json::json!({
+                "action": wire, "pre": pre, "post": post, "published": published,
+            }));
+            pre = post;
         }
+        case.check(gents_lean_vocab::family::recode(
+            &serde_json::json!({ "steps": steps }),
+        ));
     }
 }
 

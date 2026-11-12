@@ -124,12 +124,6 @@ def goalBindingJson (goal : GoalBinding) : String := object [
   ("owner", jsonString goal.owner), ("session", jsonString goal.session),
   ("assignment", identityJson goal.assignment), ("status", jsonString goal.status.toDefraDB)]
 
-def stateJson (s : State) : String := object [
-  ("receipts", jsonArray (s.receipts.map identityJson)),
-  ("requests", jsonArray (s.requests.map requestJson)),
-  ("outcomes", jsonArray (s.outcomes.map identityJson)),
-  ("goals", jsonArray (s.goals.map goalBindingJson))]
-
 structure AdmissionInput where
   name : String
   pre : StateWire
@@ -357,14 +351,41 @@ inductive OutcomeAction where
   | goalStatus (id : Identity) (status : Goals.Status)
   | recover (commit : Bool)
 
-def outcomeActionJson : OutcomeAction → String
-  | .admitFire f => object [("kind", jsonString "admit"), ("fire", fireJson f)]
-  | .claimFire id => object [("kind", jsonString "claim"), ("identity", identityJson id)]
-  | .requestTerminal id terminalState commit => object [("kind", jsonString "request_terminal"),
-      ("identity", identityJson id), ("terminal_state", jsonString terminalState), ("commit", toString commit)]
-  | .goalStatus id status => object [("kind", jsonString "goal_status"),
-      ("identity", identityJson id), ("status", jsonString status.toDefraDB)]
-  | .recover commit => object [("kind", jsonString "recover"), ("commit", toString commit)]
+structure ActionWire where
+  kind : String
+  fire : Option FireWire
+  identity : Option IdentityWire
+  terminalState : Option String
+  commit : Option Bool
+  status : Option String
+  deriving Lean.ToJson
+
+def ActionWire.ofModel : OutcomeAction → ActionWire
+  | .admitFire f =>
+    { kind := "admit", fire := some (.ofModel f), identity := none, terminalState := none,
+      commit := none, status := none }
+  | .claimFire id =>
+    { kind := "claim", fire := none, identity := some (.ofModel id), terminalState := none,
+      commit := none, status := none }
+  | .requestTerminal id terminalState commit =>
+    { kind := "request_terminal", fire := none, identity := some (.ofModel id),
+      terminalState := some terminalState, commit := some commit, status := none }
+  | .goalStatus id status =>
+    { kind := "goal_status", fire := none, identity := some (.ofModel id), terminalState := none,
+      commit := none, status := some status.toDefraDB }
+  | .recover commit =>
+    { kind := "recover", fire := none, identity := none, terminalState := none,
+      commit := some commit, status := none }
+
+def ActionWire.toModel (a : ActionWire) : OutcomeAction :=
+  match a.kind, a.fire, a.identity, a.terminalState, a.commit, a.status with
+  | "admit", some f, _, _, _, _ => .admitFire f.toModel
+  | "claim", _, some id, _, _, _ => .claimFire id.toModel
+  | "request_terminal", _, some id, some terminalState, some commit, _ =>
+      .requestTerminal id.toModel terminalState commit
+  | "goal_status", _, some id, _, _, some status =>
+      .goalStatus id.toModel ((Goals.Status.fromDefraDB? status).getD .active)
+  | _, _, _, _, commit, _ => .recover (commit.getD false)
 
 def applyOutcomeAction (state : State) : OutcomeAction → State
   | .admitFire f => admit state f
@@ -373,45 +394,74 @@ def applyOutcomeAction (state : State) : OutcomeAction → State
   | .goalStatus id status => setGoal state id status
   | .recover commit => if commit then recoverOutcomes state else state
 
-def outcomeSteps (state : State) : List OutcomeAction → List String
+structure PublishedWire where
+  identity : IdentityWire
+  reason : Option String
+  deriving Lean.ToJson
+
+/-- `published` lists the outcomes a step publishes in receipt order, with the
+reason each is published for. -/
+structure StepWire where
+  action : ActionWire
+  pre : StateWire
+  post : StateWire
+  published : List PublishedWire
+  deriving Lean.ToJson
+
+def outcomeSteps (state : State) : List OutcomeAction → List StepWire
   | [] => []
   | action :: actions =>
     let post := applyOutcomeAction state action
-    let reasons := (post.outcomes.filter fun id => !decide (id ∈ state.outcomes)).map fun id =>
+    let published := (post.receipts.filter fun id =>
+        decide (id ∈ post.outcomes) && !decide (id ∈ state.outcomes)).map fun id =>
       let reason := ((state.requests.find? (·.fire.identity == id)).bind (outcomeReason state)).orElse
         (fun _ => (post.requests.find? (·.fire.identity == id)).bind (outcomeReason post))
-      object [("identity", identityJson id), ("reason", jsonOptionalString (reason.map reasonString))]
-    object [("action", outcomeActionJson action), ("pre", stateJson state),
-      ("post", stateJson post), ("published", jsonArray reasons)] :: outcomeSteps post actions
+      ({ identity := .ofModel id, reason := reason.map reasonString } : PublishedWire)
+    { action := .ofModel action, pre := .ofModel state, post := .ofModel post, published } ::
+      outcomeSteps post actions
 
-def outcomeTrace (name : String) (actions : List OutcomeAction) : String :=
-  object [("name", jsonString name), ("steps", jsonArray (outcomeSteps {} actions))]
+structure OutcomeTraceInput where
+  name : String
+  actions : List ActionWire
+  deriving Lean.ToJson
 
-def outcomeTraces : List String :=
+structure OutcomeTraceOutput where
+  steps : List StepWire
+  deriving Lean.ToJson
+
+def outcomeTraceInput (name : String) (actions : List OutcomeAction) : OutcomeTraceInput :=
+  { name, actions := actions.map .ofModel }
+
+def outcomeTraces : List OutcomeTraceInput :=
   let a := fire "a"
   let goal := { a with goalBacked := true }
   let next := { goal with identity := identity "owner-a" "b" }
   let ended := [.requestTerminal a.identity "completed" true, .recover true]
   let replacementPrefix := [.admitFire goal, .claimFire goal.identity, .requestTerminal goal.identity "completed" true]
-  [outcomeTrace "terminal_and_publication_crash_boundaries"
+  [outcomeTraceInput "terminal_and_publication_crash_boundaries"
       ([.admitFire a, .requestTerminal a.identity "completed" false, .recover true,
         .requestTerminal a.identity "completed" true, .recover false, .recover true, .recover true]),
-   outcomeTrace "goal_request_boundary_then_complete"
+   outcomeTraceInput "goal_request_boundary_then_complete"
       ([.admitFire goal, .claimFire goal.identity] ++ ended ++ [.goalStatus goal.identity .complete, .recover true]),
-   outcomeTrace "goal_preclaim_cancellation" [.admitFire goal, .requestTerminal goal.identity "interrupted" true, .recover true],
-   outcomeTrace "paused_usage_limited_preserve_outcome"
+   outcomeTraceInput "goal_preclaim_cancellation" [.admitFire goal, .requestTerminal goal.identity "interrupted" true, .recover true],
+   outcomeTraceInput "paused_usage_limited_preserve_outcome"
       (replacementPrefix ++ [.goalStatus goal.identity .paused, .recover true,
         .goalStatus goal.identity .usageLimited, .recover true, .goalStatus goal.identity .budgetLimited, .recover true]),
-   outcomeTrace "replacement_supersedes_previous_assignment"
+   outcomeTraceInput "replacement_supersedes_previous_assignment"
       (replacementPrefix ++ [.admitFire next, .claimFire next.identity, .requestTerminal next.identity "completed" true,
         .goalStatus next.identity .complete, .recover true, .recover true]),
-   outcomeTrace "replacement_preserves_prior_complete_boundary"
+   outcomeTraceInput "replacement_preserves_prior_complete_boundary"
       (replacementPrefix ++ [.goalStatus goal.identity .complete, .admitFire next, .claimFire next.identity, .recover true]),
-   outcomeTrace "outcome_consumer_rejects_recursive_emission"
+   outcomeTraceInput "outcome_consumer_rejects_recursive_emission"
       [.admitFire { a with identity := { a.identity with collection := "FireOutcome" } }, .recover true],
-   outcomeTrace "outcome_consumer_stops_chain"
+   outcomeTraceInput "outcome_consumer_stops_chain"
       ([.admitFire { a with emitOutcome := false, identity := { a.identity with collection := "FireOutcome" } },
         .requestTerminal { a.identity with collection := "FireOutcome" } "completed" true, .recover true])]
+
+@[conformance_family]
+def outcomeTrace : Family OutcomeTraceInput OutcomeTraceOutput where
+  inputs := outcomeTraces
+  model := fun i => { steps := outcomeSteps {} (i.actions.map (·.toModel)) }
 
 def arrival (position : Nat) (document : String) : EventDelivery.Durable.Arrival :=
   { position, identity := identity "owner-a" document }
@@ -844,9 +894,6 @@ def latestAdmission : Family LatestAdmissionInput LatestAdmissionOutput where
 
 def triggerDeliveryObservedClaimCasesJson : String :=
   jsonArray observedClaimCases
-
-def triggerDeliveryOutcomeTraceCasesJson : String :=
-  jsonArray outcomeTraces
 
 def triggerDeliveryRetainedOutcomeCasesJson : String :=
   jsonArray retainedOutcomeCases
