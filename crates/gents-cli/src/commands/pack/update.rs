@@ -150,6 +150,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
             grant_authority: false,
             wire: Vec::new(),
             expect_digest: None,
+            root_agents: None,
             explicit: false,
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
@@ -274,6 +275,7 @@ mod tests {
             grant_authority: false,
             wire: Vec::new(),
             expect_digest: None,
+            root_agents: None,
             explicit: true,
         }))
         .await
@@ -403,6 +405,7 @@ mod tests {
                 grant_authority: false,
                 wire: Vec::new(),
                 expect_digest: None,
+                root_agents: None,
                 explicit,
             }))
         };
@@ -452,6 +455,7 @@ mod tests {
             grant_authority: false,
             wire: Vec::new(),
             expect_digest: None,
+            root_agents: None,
             explicit: true,
         }))
         .await
@@ -504,6 +508,7 @@ mod tests {
             grant_authority: false,
             wire: Vec::new(),
             expect_digest: None,
+            root_agents: None,
             explicit: true,
         }))
         .await
