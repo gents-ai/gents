@@ -465,10 +465,6 @@ pub fn lean_prompt_assembly_claude_thinking_stream_cases() -> &'static [LeanProm
     &lean_contract_snapshot().prompt_assembly_claude_thinking_stream_cases
 }
 
-pub fn lean_prompt_assembly_compaction_trigger_cases() -> &'static [LeanPromptAssemblyCompactionTriggerCase] {
-    &lean_contract_snapshot().prompt_assembly_compaction_trigger_cases
-}
-
 pub fn lean_prompt_assembly_layer_cases() -> &'static [LeanPromptAssemblyLayerCase] {
     &lean_contract_snapshot().prompt_assembly_layer_cases
 }
@@ -2851,13 +2847,6 @@ pub struct LeanConfigurationSignedWriteRetryCase {
     pub may_retry: bool,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-pub struct LeanContextAnchor {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub estimated_input_tokens: usize,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanContractSnapshot {
@@ -3293,9 +3282,6 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
     pub prompt_assembly_turn_budget_cases: Vec<LeanPromptAssemblyTurnBudgetCase>,
     pub prompt_assembly_retention_cases: Vec<LeanPromptAssemblyRetentionCase>,
-    pub prompt_assembly_compaction_trigger_cases: Vec<
-        LeanPromptAssemblyCompactionTriggerCase,
-    >,
     pub prompt_assembly_claude_map_cases: Vec<LeanPromptAssemblyClaudeMapCase>,
     pub prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
     pub prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
@@ -9423,26 +9409,6 @@ pub struct LeanPromptAssemblyClaudeThinkingStreamCase {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct LeanPromptAssemblyCompactionTriggerCase {
-    pub name: String,
-    pub context_window: usize,
-    pub max_output_tokens: usize,
-    pub threshold_basis_points: u64,
-    pub prior_basis_points: u64,
-    pub seeded_observations: Vec<u64>,
-    pub observed: Vec<(u64, usize)>,
-    pub anchor: Option<LeanContextAnchor>,
-    pub invalidate: bool,
-    pub raw_input_tokens: usize,
-    pub ratio_basis_points: u64,
-    pub calibrated_tokens: usize,
-    pub anchored_tokens: Option<usize>,
-    pub context_tokens: usize,
-    pub compaction_input_budget: usize,
-    pub admission: Option<LeanReductionAdmission>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct LeanPromptAssemblyLayerCase {
     pub name: String,
     pub skill_count: usize,
@@ -9868,12 +9834,6 @@ pub struct LeanRecoverySweepCase {
     pub recovery_cause: Option<String>,
     pub notification_reason: Option<String>,
     pub deadline_audit_ref: String,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-pub struct LeanReductionAdmission {
-    pub input_tokens: usize,
-    pub input_budget: usize,
 }
 
 #[derive(Debug, Deserialize)]

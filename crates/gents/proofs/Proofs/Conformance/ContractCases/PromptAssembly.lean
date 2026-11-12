@@ -161,28 +161,6 @@ structure PromptAssemblyTurnBudgetCase where
   turnCanDispatch : List Bool
   deriving Repr
 
-/-- One compaction-trigger witness: the calibration state, a raw estimate
-and the budget inputs, with the trigger's decision derived by
-`ContextCalibration.State.admission`. -/
-structure PromptAssemblyCompactionTriggerCase where
-  name : String
-  contextWindow : Nat
-  maxOutputTokens : Nat
-  thresholdBasisPoints : Nat
-  priorBasisPoints : Nat
-  seededObservations : List Nat
-  observed : List (Nat × Nat)
-  anchor : Option PromptAssembly.ContextCalibration.Anchor
-  invalidate : Bool
-  rawInputTokens : Nat
-  ratioBasisPoints : Nat
-  calibratedTokens : Nat
-  anchoredTokens : Option Nat
-  contextTokens : Nat
-  compactionInputBudget : Nat
-  admission : Option PromptAssembly.ContextCalibration.Admission
-  deriving Repr
-
 structure PromptAssemblyRetentionCase where
   name : String
   configuredKeepRecent : Nat
@@ -655,7 +633,9 @@ private def turnBudgetCase
 def promptAssemblyTurnBudgetCases : List PromptAssemblyTurnBudgetCase :=
   turnBudgetWitnesses.map turnBudgetCase
 
-private structure TriggerWitness where
+/-- One compaction-trigger witness: the calibration state, a raw estimate
+and the budget inputs. -/
+structure PromptAssemblyCompactionTriggerCase where
   name : String
   contextWindow : Nat := 1000000
   maxOutputTokens : Nat := 32000
@@ -668,7 +648,7 @@ private structure TriggerWitness where
   invalidate : Bool := false
   rawInputTokens : Nat
 
-private def triggerWitnesses : List TriggerWitness :=
+private def triggerWitnesses : List PromptAssemblyCompactionTriggerCase :=
   [ { name := "unit-prior-below-budget", rawInputTokens := 700000 }
   , { name := "unit-prior-at-budget", rawInputTokens := 750000 }
   , { name := "unit-prior-one-over-budget", rawInputTokens := 750001 }
@@ -718,35 +698,8 @@ private def triggerWitnesses : List TriggerWitness :=
     , thresholdBasisPoints := 7500, priorBasisPoints := 20000, rawInputTokens := 376 }
   ]
 
-open PromptAssembly.ContextCalibration in
-private def triggerCase (witness : TriggerWitness) : PromptAssemblyCompactionTriggerCase :=
-  let seeded := { seed witness.priorBasisPoints witness.seededObservations with
-    anchor := witness.anchor }
-  let observedState := witness.observed.foldl
-    (fun state (provider, estimate) => state.observe provider estimate) seeded
-  let state := if witness.invalidate then observedState.invalidate else observedState
-  { name := witness.name
-  , contextWindow := witness.contextWindow
-  , maxOutputTokens := witness.maxOutputTokens
-  , thresholdBasisPoints := witness.thresholdBasisPoints
-  , priorBasisPoints := witness.priorBasisPoints
-  , seededObservations := witness.seededObservations
-  , observed := witness.observed
-  , anchor := witness.anchor
-  , invalidate := witness.invalidate
-  , rawInputTokens := witness.rawInputTokens
-  , ratioBasisPoints := state.ratio
-  , calibratedTokens := calibrated witness.rawInputTokens state.ratio
-  , anchoredTokens := state.anchor.bind fun anchor =>
-      anchored anchor witness.rawInputTokens state.ratio
-  , contextTokens := state.tokens witness.rawInputTokens
-  , compactionInputBudget := PromptAssembly.Budget.compactionInputBudget
-      witness.contextWindow witness.thresholdBasisPoints witness.maxOutputTokens
-  , admission := state.admission witness.rawInputTokens witness.contextWindow
-      witness.thresholdBasisPoints witness.maxOutputTokens }
-
 def promptAssemblyCompactionTriggerCases : List PromptAssemblyCompactionTriggerCase :=
-  triggerWitnesses.map triggerCase
+  triggerWitnesses
 
 private structure RetentionWitness where
   name : String

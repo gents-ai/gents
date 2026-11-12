@@ -343,42 +343,73 @@ def promptAssemblyTurnBudgetCaseJson
 def promptAssemblyTurnBudgetCasesJson : String :=
   jsonArray (promptAssemblyTurnBudgetCases.map promptAssemblyTurnBudgetCaseJson)
 
-private def natOptionJson : Option Nat → String
-  | some value => toString value
-  | none => "null"
+structure ObservedCount where
+  provider : Nat
+  estimate : Nat
+  deriving Lean.ToJson
 
-def promptAssemblyCompactionTriggerCaseJson
-    (witness : PromptAssemblyCompactionTriggerCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"context_window\":" ++ toString witness.contextWindow ++ ","
-    ++ "\"max_output_tokens\":" ++ toString witness.maxOutputTokens ++ ","
-    ++ "\"threshold_basis_points\":" ++ toString witness.thresholdBasisPoints ++ ","
-    ++ "\"prior_basis_points\":" ++ toString witness.priorBasisPoints ++ ","
-    ++ "\"seeded_observations\":"
-      ++ jsonArray (witness.seededObservations.map toString) ++ ","
-    ++ "\"observed\":" ++ jsonArray (witness.observed.map fun (provider, estimate) =>
-      "[" ++ toString provider ++ "," ++ toString estimate ++ "]") ++ ","
-    ++ "\"anchor\":" ++ (match witness.anchor with
-      | some anchor => "{\"input_tokens\":" ++ toString anchor.input
-          ++ ",\"output_tokens\":" ++ toString anchor.output
-          ++ ",\"estimated_input_tokens\":" ++ toString anchor.estimated ++ "}"
-      | none => "null") ++ ","
-    ++ "\"invalidate\":" ++ boolString witness.invalidate ++ ","
-    ++ "\"raw_input_tokens\":" ++ toString witness.rawInputTokens ++ ","
-    ++ "\"ratio_basis_points\":" ++ toString witness.ratioBasisPoints ++ ","
-    ++ "\"calibrated_tokens\":" ++ toString witness.calibratedTokens ++ ","
-    ++ "\"anchored_tokens\":" ++ natOptionJson witness.anchoredTokens ++ ","
-    ++ "\"context_tokens\":" ++ toString witness.contextTokens ++ ","
-    ++ "\"compaction_input_budget\":" ++ toString witness.compactionInputBudget ++ ","
-    ++ "\"admission\":" ++ (match witness.admission with
-      | some admission => "{\"input_tokens\":" ++ toString admission.inputTokens
-          ++ ",\"input_budget\":" ++ toString admission.inputBudget ++ "}"
-      | none => "null")
-    ++ "}"
+structure AnchorWire where
+  inputTokens : Nat
+  outputTokens : Nat
+  estimatedInputTokens : Nat
+  deriving Lean.ToJson
 
-def promptAssemblyCompactionTriggerCasesJson : String :=
-  jsonArray (promptAssemblyCompactionTriggerCases.map promptAssemblyCompactionTriggerCaseJson)
+def AnchorWire.toModel (a : AnchorWire) : PromptAssembly.ContextCalibration.Anchor :=
+  { input := a.inputTokens, output := a.outputTokens, estimated := a.estimatedInputTokens }
+
+structure CompactionTriggerInput where
+  name : String
+  contextWindow : Nat
+  maxOutputTokens : Nat
+  thresholdBasisPoints : Nat
+  priorBasisPoints : Nat
+  seededObservations : List Nat
+  observed : List ObservedCount
+  anchor : Option AnchorWire
+  invalidate : Bool
+  rawInputTokens : Nat
+  deriving Lean.ToJson
+
+deriving instance Lean.ToJson for PromptAssembly.ContextCalibration.Admission
+
+structure CompactionTriggerOutput where
+  ratioBasisPoints : Nat
+  calibratedTokens : Nat
+  anchoredTokens : Option Nat
+  contextTokens : Nat
+  compactionInputBudget : Nat
+  admission : Option PromptAssembly.ContextCalibration.Admission
+  deriving Lean.ToJson
+
+open PromptAssembly.ContextCalibration in
+/-- The calibrated context size of a raw estimate, the compaction budget and
+the trigger's admission: production `ContextCalibration::context`,
+`compaction_input_budget` and `ReductionAdmission::for_context`. -/
+@[conformance_family]
+def promptAssemblyCompactionTrigger : Family CompactionTriggerInput CompactionTriggerOutput where
+  inputs := promptAssemblyCompactionTriggerCases.map fun w =>
+    { name := w.name, contextWindow := w.contextWindow, maxOutputTokens := w.maxOutputTokens
+      thresholdBasisPoints := w.thresholdBasisPoints, priorBasisPoints := w.priorBasisPoints
+      seededObservations := w.seededObservations
+      observed := w.observed.map fun (provider, estimate) => { provider, estimate }
+      anchor := w.anchor.map fun a =>
+        { inputTokens := a.input, outputTokens := a.output, estimatedInputTokens := a.estimated }
+      invalidate := w.invalidate, rawInputTokens := w.rawInputTokens }
+  model := fun i =>
+    let seeded := { seed i.priorBasisPoints i.seededObservations with
+      anchor := i.anchor.map AnchorWire.toModel }
+    let observedState := i.observed.foldl
+      (fun state count => state.observe count.provider count.estimate) seeded
+    let state := if i.invalidate then observedState.invalidate else observedState
+    { ratioBasisPoints := state.ratio
+      calibratedTokens := calibrated i.rawInputTokens state.ratio
+      anchoredTokens := state.anchor.bind fun anchor =>
+        anchored anchor i.rawInputTokens state.ratio
+      contextTokens := state.tokens i.rawInputTokens
+      compactionInputBudget := PromptAssembly.Budget.compactionInputBudget
+        i.contextWindow i.thresholdBasisPoints i.maxOutputTokens
+      admission := state.admission i.rawInputTokens i.contextWindow
+        i.thresholdBasisPoints i.maxOutputTokens }
 
 def promptAssemblyRetentionCaseJson
     (witness : PromptAssemblyRetentionCase) : String :=

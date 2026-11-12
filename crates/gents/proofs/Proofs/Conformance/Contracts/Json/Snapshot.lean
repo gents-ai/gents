@@ -273,8 +273,6 @@ def snapshotPromptTailJson : String :=
   ""
     ++ "\"prompt_assembly_retention_cases\":"
       ++ promptAssemblyRetentionCasesJson ++ ","
-    ++ "\"prompt_assembly_compaction_trigger_cases\":"
-      ++ promptAssemblyCompactionTriggerCasesJson ++ ","
     ++ "\"prompt_assembly_claude_map_cases\":"
       ++ promptAssemblyClaudeMapCasesJson ++ ","
     ++ "\"prompt_assembly_claude_body_cases\":"
