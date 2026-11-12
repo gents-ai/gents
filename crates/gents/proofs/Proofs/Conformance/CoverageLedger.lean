@@ -1021,9 +1021,13 @@ def caseCoverage : List CoverageEntry :=
       "MailboxQuestionCases")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "mailbox_handoff_cases"
-      "MailboxHandoffCases"
-      "Only the fresh-linked positive case drives the stamped mailbox write, signed producer terminal owner, and linked reply admission in native storage. The other eleven generated handoff cases remain model-only; this consumer does not exercise AgentToolCall result publication, the owned completion loop, or atomic crash recovery across the separate mailbox and request transactions.")
+      "family"
+      "mailbox_handoff_contracts_linked"
+      "The fresh-linked case drives the stamped mailbox write, signed producer terminal owner, and linked reply admission in native storage; this consumer does not exercise AgentToolCall result publication, the owned completion loop, or atomic crash recovery across the separate mailbox and request transactions.")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "mailbox_handoff_contracts_linked_unreached"
+      "model-production-gap: the stamped mailbox write takes the question's request, session and owner from the filing request, so production cannot file a mismatched question, and no scenario replays the reply-side mismatches through the signed reply claim after a linked handoff.")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "count_carrier_cases"

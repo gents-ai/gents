@@ -2995,7 +2995,6 @@ pub struct LeanContractSnapshot {
     pub plugin_job_recovery_cases: Vec<LeanPluginJobRecoveryCase>,
     pub plugin_job_wake_cases: Vec<LeanPluginJobWakeCase>,
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
-    pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
@@ -7338,32 +7337,6 @@ pub struct LeanMailboxClaimedRecipientCase {
     pub request_doc: Option<String>,
     pub session_doc: Option<String>,
     pub signer: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxHandoffCase {
-    pub variant: String,
-    pub kind: String,
-    pub action: String,
-    pub content: String,
-    pub request_id: u64,
-    pub producer_request_id: u64,
-    pub tool_request_id: u64,
-    pub producer_node_did: String,
-    pub producer_requester_did: String,
-    pub question_node_did: String,
-    pub question_requester_did: String,
-    pub session_id: String,
-    pub request_doc_id: String,
-    pub mailbox_doc_id: String,
-    pub reply_request_doc_id: String,
-    pub reply_source_doc_id: String,
-    pub reply_session_id: String,
-    pub reply_bound_session_id: Option<String>,
-    pub handoff_accepted: bool,
-    pub stored_open_receipt: bool,
-    pub linked_reply_accepted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

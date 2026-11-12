@@ -997,8 +997,6 @@ def snapshotRecoveryCasesJson : String :=
       ++ Conformance.LogicalOutputObligationContracts.casesJson ++ ","
     ++ "\"mailbox_question_cases\":"
       ++ Conformance.MailboxQuestionContracts.casesJson ++ ","
-    ++ "\"mailbox_handoff_cases\":"
-      ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
     ++ "\"mailbox_sweep_cases\":"
       ++ Conformance.MailboxSweepContracts.casesJson ++ ","
     ++ "\"schema_argument_repair_cases\":"
