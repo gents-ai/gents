@@ -444,3 +444,6 @@ pub use authored_schema::{authored_document_schema, authored_pack_config_schema}
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod pushdown_tests;

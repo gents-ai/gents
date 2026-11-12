@@ -383,3 +383,6 @@ fn finish(raw: BoundedCommandOutput) -> AfbRunOutput {
         fuel_used: raw.fuel_consumed,
     }
 }
+
+#[cfg(test)]
+mod pushdown_tests;

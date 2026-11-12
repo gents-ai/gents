@@ -197,3 +197,36 @@ pub fn asking_plugin_wat(
         canned_len = canned.len(),
     )
 }
+
+pub fn load_pack_system_prompt(root: &std::path::Path) -> anyhow::Result<String> {
+    use crate::pack::{load_pack_config, PackInstallOptions, PackManifest};
+    use anyhow::Context;
+
+    let manifest: PackManifest =
+        serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
+    let config = load_pack_config(
+        &manifest,
+        &PackInstallOptions {
+            node_did: "did:key:lsp-live-fixture".into(),
+        },
+        &|path| Ok(std::fs::read(root.join(path))?),
+        &|name| std::env::var(name).ok(),
+    )?;
+    let agent = config
+        .agents
+        .iter()
+        .find(|agent| agent.agent_did == "lsp-coder")
+        .context("pack has no lsp-coder Agent")?;
+    let context_id = agent
+        .context_id
+        .as_deref()
+        .context("lsp-coder has no Context")?;
+    config
+        .contexts
+        .iter()
+        .find(|context| context.context_id == context_id)
+        .context("lsp-coder Context is missing")?
+        .system_prompt
+        .clone()
+        .context("lsp-coder Context has no system prompt")
+}
