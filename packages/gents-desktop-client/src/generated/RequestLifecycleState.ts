@@ -4,4 +4,4 @@
  * The TypeScript union is derived from the variant names, not from the
  * manual serde impls; `typescript_union_matches_wire_tokens` binds it to `as_str`.
  */
-export type RequestLifecycleState = "workspaceBindingPending" | "pending" | "claimed" | "processing" | "completed" | "failed" | "superseded" | "dead" | "interrupted";
+export type RequestLifecycleState = "workspaceBindingPending" | "pending" | "claimed" | "processing" | "waitingForBackend" | "resumingBackend" | "completed" | "failed" | "superseded" | "dead" | "interrupted";

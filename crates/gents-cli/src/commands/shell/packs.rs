@@ -396,6 +396,7 @@ pub(super) async fn install(
             grant,
             false,
             None,
+            None,
         )
     };
     change(&runtime, &home, install).await
@@ -468,7 +469,7 @@ pub(super) fn installed(
             ];
             ask(title, &refusal, allow)
         }
-        Err(refusal @ PackChangeError::Edited { .. }) => {
+        Err(refusal @ (PackChangeError::Edited { .. } | PackChangeError::Differing { .. })) => {
             let replace = install(EditedChoice::Overwrite, grant, slots.clone());
             let keep = install(EditedChoice::Keep, grant, slots);
             ask(title, &refusal, keep_or_replace(replace, keep))
@@ -515,7 +516,8 @@ pub(super) fn updated(pack: String, done: Result<Value, PackChangeError>) -> Upd
             )
         }
         Err(
-            error @ (PackChangeError::Grant(_)
+            error @ (PackChangeError::Differing { .. }
+            | PackChangeError::Grant(_)
             | PackChangeError::Slots(_)
             | PackChangeError::Other(_)),
         ) => Update::Notice(format!("{error:#}")),

@@ -140,6 +140,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
             package: format!("{coordinate}@{latest}"),
             inference_slots: args.inference_slots.clone(),
             dependency_variables: Vec::new(),
+            bind_agents: Vec::new(),
             preview: false,
             scope: args.scope.clone(),
             output: OutputFormat::Json,
@@ -149,6 +150,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
             grant_authority: false,
             wire: Vec::new(),
             expect_digest: None,
+            root_agents: None,
             explicit: false,
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
@@ -263,6 +265,7 @@ mod tests {
             package: "demo_pack".to_owned(),
             inference_slots: Vec::new(),
             dependency_variables: Vec::new(),
+            bind_agents: Vec::new(),
             preview: false,
             scope: scope.clone(),
             output: OutputFormat::Json,
@@ -272,6 +275,7 @@ mod tests {
             grant_authority: false,
             wire: Vec::new(),
             expect_digest: None,
+            root_agents: None,
             explicit: true,
         }))
         .await
@@ -391,6 +395,7 @@ mod tests {
                 package,
                 inference_slots: vec![slot.clone()],
                 dependency_variables: Vec::new(),
+                bind_agents: Vec::new(),
                 preview: false,
                 scope: scope.clone(),
                 output: OutputFormat::Json,
@@ -400,6 +405,7 @@ mod tests {
                 grant_authority: false,
                 wire: Vec::new(),
                 expect_digest: None,
+                root_agents: None,
                 explicit,
             }))
         };
@@ -438,6 +444,7 @@ mod tests {
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: fixture.to_str().unwrap().to_owned(),
             dependency_variables: Vec::new(),
+            bind_agents: Vec::new(),
             inference_slots: Vec::new(),
             preview: false,
             scope: scope.clone(),
@@ -448,6 +455,7 @@ mod tests {
             grant_authority: false,
             wire: Vec::new(),
             expect_digest: None,
+            root_agents: None,
             explicit: true,
         }))
         .await
@@ -490,6 +498,7 @@ mod tests {
             package: fixture.to_str().unwrap().to_owned(),
             inference_slots: Vec::new(),
             dependency_variables: Vec::new(),
+            bind_agents: Vec::new(),
             preview: false,
             scope: scope.clone(),
             output: OutputFormat::Json,
@@ -499,6 +508,7 @@ mod tests {
             grant_authority: false,
             wire: Vec::new(),
             expect_digest: None,
+            root_agents: None,
             explicit: true,
         }))
         .await

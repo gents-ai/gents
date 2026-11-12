@@ -26,6 +26,9 @@ private def parentState (f : OwnedTool → OwnedTool) : World :=
 private def admitted : World := match admitPluginEffect baseline 7 admission with
   | .ok post => post | .error _ => baseline
 
+private def backgroundParent : World := match changeToolControl baseline 7 600 .background with
+  | .ok post => post | .error _ => baseline
+
 private def scenarios : List (String × World × Nat × PluginEffectAdmission) :=
   [ ("valid", baseline, 7, admission)
   , ("replay", admitted, 7, admission)
@@ -45,13 +48,16 @@ private def scenarios : List (String × World × Nat × PluginEffectAdmission) :
   , ("ordinal_last", baseline, 7, { admission with ordinal := 64 })
   , ("ordinal_exceeded", baseline, 7, { admission with ordinal := 65 })
   , ("extended_deadline", baseline, 7,
-       { admission with context := { admission.context with deadline := 21 } }) ]
+       { admission with context := { admission.context with deadline := 21 } })
+  , ("background_parent", backgroundParent, 7, admission)
+  , ("background_child", baseline, 7,
+       { admission with context := { admission.context with awaitMode := .background } }) ]
 
 theorem admission_regressions :
     (scenarios.map fun (_, before, generation, call) =>
       succeeds (admitPluginEffect before generation call)) =
       [true, true, false, false, false, false, false, false, false, false, false,
-       true, false, false] := by native_decide
+       true, false, false, true, true] := by native_decide
 
 private def render (item : String × World × Nat × PluginEffectAdmission) : Json :=
   let (name, before, generation, call) := item
@@ -65,11 +71,13 @@ private def render (item : String × World × Nat × PluginEffectAdmission) : Js
         ("state", toJson (match p.context.state with
           | .pending => "pending" | .running => "running" | .completed => "completed"
           | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timed_out")), ("request", toJson p.requestDoc),
-        ("session", toJson p.session), ("deadline", toJson p.context.deadline)]
+        ("session", toJson p.session), ("deadline", toJson p.context.deadline),
+        ("await_mode", toJson (match p.context.awaitMode with | .foreground => "foreground" | .background => "background"))]
   Json.mkObj [("name", toJson name), ("generation", toJson generation),
     ("ordinal", toJson call.ordinal),
     ("parent", parentJson), ("child", Json.mkObj [("document", toJson call.document),
-      ("deadline", toJson call.context.deadline)]),
+      ("deadline", toJson call.context.deadline),
+      ("await_mode", toJson (match call.context.awaitMode with | .foreground => "foreground" | .background => "background"))]),
     ("arguments", (Json.parse (Conformance.Contracts.canonicalSegmentJson call.arguments)).toOption.getD Json.null),
     ("prior", if (ownedToolByDocument? before call.document).isSome then
       (Json.parse (Conformance.Contracts.canonicalSegmentJson arguments)).toOption.getD Json.null else Json.null),
@@ -161,11 +169,30 @@ theorem parent_interruption_retains_completed_children :
       child.context.state == .completed && child.terminalOutput == some terminalPayload) = true := by
   native_decide
 
+private def backgroundAdmitted : World := match admitPluginEffect backgroundParent 7 admission with
+  | .ok post => post | .error _ => backgroundParent
+
+private def backgroundRunningChild : World :=
+  match dispatch backgroundAdmitted 7 ⟨601, true, true⟩ with
+  | .ok post => post | .error _ => backgroundAdmitted
+
+/-- Request accounting leaves the children of a running background invocation
+to that invocation, and still hands the background invocation itself off. -/
+theorem live_background_parent_keeps_its_children :
+    ((ownedToolByDocument? (accountOwnedTools backgroundAdmitted 7 true) 601).any fun child =>
+      child.context.state == .pending) = true ∧
+    ((ownedToolByDocument? (accountOwnedTools backgroundRunningChild 7 true) 601).any fun child =>
+      child.context.state == .running && child.stuckSince.isNone) = true ∧
+    ((ownedToolByDocument? (accountOwnedTools backgroundRunningChild 7 true) 600).any fun parent =>
+      parent.context.state == .running && parent.stuckSince.isSome) = true := by native_decide
+
 def accountingCasesJson : Json := toJson <|
   [("pending_cancel", admitted, true), ("running_normal", runningWithCompletedParent, false),
    ("running_exceptional", running, true),
    ("timed_out_normal", completeParent timedOutChild, false),
-   ("completed_exceptional", completedChild, true)].map fun (name, before, exceptional) =>
+   ("completed_exceptional", completedChild, true),
+   ("background_parent_pending", backgroundAdmitted, true),
+   ("background_parent_running", backgroundRunningChild, true)].map fun (name, before, exceptional) =>
     let post := if exceptional then accountOwnedTools before 7 exceptional else before
     let child := (ownedToolByDocument? post 601).getD
       { document := 601, requestDoc := 10, session := 1, acceptedSequence := 0,
@@ -180,4 +207,36 @@ def accountingCasesJson : Json := toJson <|
       ("expected_normal_ready", toJson (normalCompletionToolsReady post 7))]
 
 def casesJson : Json := toJson (scenarios.map render)
+
+private def backgroundRunning : World := Id.run do
+  let admission := { admission with context := { admission.context with awaitMode := .background } }
+  let .ok accepted := admitPluginEffect baseline 7 admission | return baseline
+  let .ok running := dispatch accepted 7 ⟨601, true, true⟩ | return accepted
+  return running
+
+private def receipt : Segment :=
+  { id := 604, coordinate := ⟨10, .authored 91⟩, writer := .tool 601
+    flush := some ⟨0, [⟨0, 2, some { block := 0, part := 0, kind := .toolOutput }⟩], [123, 125]⟩
+    close := some (.closed .complete 1 [2]), createdAt := 5 }
+
+private def receiptAccepted (replay changed terminal : Bool) : Bool := Id.run do
+  let before := if terminal then closeChild backgroundRunning .complete else backgroundRunning
+  let before := if replay then
+      (ToolDelivery.publishPluginReceipt before 601 receipt).toOption.getD before
+    else before
+  let record := if changed then { receipt with
+      flush := some ⟨0, [⟨0, 4, some { block := 0, part := 0, kind := .toolOutput }⟩], [110, 117, 108, 108]⟩
+      close := some (.closed .complete 1 [4]) } else receipt
+  return succeeds (ToolDelivery.publishPluginReceipt before 601 record)
+
+theorem asynchronous_receipt_regressions :
+    [receiptAccepted false false false, receiptAccepted true false false,
+      receiptAccepted true true false, receiptAccepted false false true] =
+    [true, true, false, false] := by native_decide
+
+def receiptCasesJson : Json := toJson <|
+  [(false, false, false), (true, false, false), (true, true, false), (false, false, true)].map
+    fun (replay, changed, terminal) => Json.mkObj [
+      ("replay", toJson replay), ("changed", toJson changed), ("terminal", toJson terminal),
+      ("expected", toJson (receiptAccepted replay changed terminal))]
 end Conformance.PluginEffects

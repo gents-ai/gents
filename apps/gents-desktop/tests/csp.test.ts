@@ -128,6 +128,10 @@ describe("the sandbox document", () => {
     expect(html.match(/<\/script>/g)).toHaveLength(1);
   });
 
+  it("paints the app's color roles, so a plugin's page reads like the app's", () => {
+    expect(sandboxDocument(nonce, "")).toContain('data-context="app"');
+  });
+
   it("mints a fresh nonce per frame", () => {
     expect(frameNonce()).not.toBe(frameNonce());
     expect(frameNonce()).toMatch(/^[A-Za-z0-9]{16,}$/);

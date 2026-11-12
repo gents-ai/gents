@@ -45,7 +45,7 @@ const escapeClose = (text: string, tag: string) =>
 export function sandboxDocument(nonce: string, css: string): string {
   return [
     "<!doctype html>",
-    '<html lang="en" data-context="ux-sandbox">',
+    '<html lang="en" data-context="app">',
     "<head>",
     '<meta charset="UTF-8" />',
     `<meta http-equiv="Content-Security-Policy" content="${sandboxCsp(nonce)}" />`,

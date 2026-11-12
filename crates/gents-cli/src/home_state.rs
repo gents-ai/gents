@@ -380,7 +380,7 @@ pub(crate) fn resolve_node_did(home: Option<&Path>, explicit: Option<&str>) -> R
     }
 
     anyhow::bail!(
-        "node DID is required; run `gents init`, start `gents runtime server`, then retry `gents status`, or pass --node-did explicitly"
+        "node DID is required; run `gents` to set up this home and start its runtime, then retry `gents status`, or pass --node-did explicitly"
     )
 }
 

@@ -75,6 +75,7 @@ pub(crate) async fn load_sequenced_history_for_request(
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
     provider_profile: crate::turn::provider_input::ProviderInputProfile,
+    include_request_input: bool,
 ) -> Result<Vec<SequencedMessage>> {
     let access = crate::store::config_client::ConfigAccess::local_as(
         node.clone(),
@@ -87,10 +88,53 @@ pub(crate) async fn load_sequenced_history_for_request(
         request.requester_did.as_deref(),
         through_sequence,
         after_sequence,
-        Some(request.doc_id.as_str()),
+        (!include_request_input).then_some(request.doc_id.as_str()),
         Some(provider_profile),
     )
     .await
+}
+
+pub(crate) async fn resumed_request_has_published_input(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request: &gents_protocol::row::AgentRequest,
+) -> Result<bool> {
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(request.agent_did.clone())?,
+    );
+    let scope = gents_protocol::session::session_scope_filter(
+        &request.node_did,
+        &request.session_id,
+        request.requester_did.as_deref(),
+    );
+    let key = crate::store::graphql::escape_graphql_string(
+        &gents_protocol::output::rows::authored_message_key(&request.doc_id, "prompt"),
+    );
+    let fields = gents_protocol::output::rows::AGENT_MESSAGE_FIELDS;
+    let response = access
+        .execute(&format!(r#"{{ AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{key}" }} }}, limit: 2) {{ {fields} }} }}"#))
+        .await?;
+    let rows = response
+        .pointer("/data/AgentMessage")
+        .and_then(serde_json::Value::as_array)
+        .context("resumed request input query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "resumed request has ambiguous authored input"
+    );
+    let Some(row) = rows.first() else {
+        return Ok(false);
+    };
+    let row = gents_protocol::output::rows::decode_transcript_message_row(row)?;
+    anyhow::ensure!(
+        row.message.session_id == request.session_id
+            && row.message.node_did == request.node_did
+            && row.message.requester_did == request.requester_did
+            && row.message.role == gents_protocol::output::MessageRole::User
+            && super::output::sequenced::is_current_admission_input(&row.message, &request.doc_id),
+        "resumed request input does not match its admitted scope"
+    );
+    Ok(true)
 }
 
 pub(crate) async fn retry_has_published_input(

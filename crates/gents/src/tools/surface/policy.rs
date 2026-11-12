@@ -266,6 +266,7 @@ impl ToolPolicySurface {
                 &[
                     NodePermission::CollectionGet,
                     NodePermission::CollectionPatch,
+                    NodePermission::CollectionTruncate,
                     NodePermission::MigrationSet,
                     NodePermission::ViewAdd,
                 ],

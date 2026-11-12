@@ -17,6 +17,9 @@ pub const NODE_DIRECTORY_ENTRY: &str =
     include_str!("../schemas/agent/node_directory_entry.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
+pub const AGENT_REQUEST_BACKEND_WAIT_NAME: &str = "AgentRequestBackendWait";
+pub const AGENT_REQUEST_BACKEND_WAIT: &str =
+    include_str!("../schemas/agent/agent_request_backend_wait.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
@@ -76,6 +79,10 @@ pub const TOOLS_NAME: &str = "Tools";
 pub const TOOLS: &str = include_str!("../schemas/agent/tools.graphql");
 pub const SKILL_NAME: &str = "Skill";
 pub const SKILL: &str = include_str!("../schemas/agent/skill.graphql");
+pub const PAGE_NAME: &str = "Page";
+pub const PAGE: &str = include_str!("../schemas/agent/page.graphql");
+pub const PLUGIN_SOURCE_NAME: &str = "PluginSource";
+pub const PLUGIN_SOURCE: &str = include_str!("../schemas/agent/plugin_source.graphql");
 pub const DATASTORE_TOOL_SURFACE_NAME: &str = "DatastoreToolSurface";
 pub const DATASTORE_TOOL_SURFACE: &str =
     include_str!("../schemas/agent/datastore_tool_surface.graphql");
@@ -212,6 +219,8 @@ pub const ALL: &[&str] = &[
     TOOLS,
     SKILL,
     DATASTORE_TOOL_SURFACE,
+    PAGE,
+    PLUGIN_SOURCE,
     PENDING_CHAT_SUBMISSION,
     WORKSPACE_ROOT,
     ISOLATED_WORKSPACE,
@@ -230,6 +239,7 @@ pub const ALL: &[&str] = &[
     CALLBACK_INVOCATION,
     CALLBACK_RESULT,
     AGENT_REQUEST,
+    AGENT_REQUEST_BACKEND_WAIT,
     AGENT_OUTPUT_SEGMENT,
     AGENT_SESSION,
     GOAL,
@@ -292,6 +302,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     TOOLS_NAME,
     SKILL_NAME,
     DATASTORE_TOOL_SURFACE_NAME,
+    PAGE_NAME,
+    PLUGIN_SOURCE_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
     WORKSPACE_ROOT_NAME,
     ISOLATED_WORKSPACE_NAME,
@@ -310,6 +322,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_INVOCATION_NAME,
     CALLBACK_RESULT_NAME,
     AGENT_REQUEST_NAME,
+    AGENT_REQUEST_BACKEND_WAIT_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,

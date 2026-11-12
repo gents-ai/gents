@@ -550,8 +550,42 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
     )
     .await;
     assert_eq!(
-        first["messages"][0]["text"],
-        "The retry decision was retain state."
+        first["messages"][0],
+        json!({"sequence":1,"role":first["messages"][0]["role"],"text":"The retry decision was retain state."}),
+        "a whole message is its sequence, role and text"
+    );
+    let detailed = call(
+        &tool,
+        json!({"action":"transcript","session_id":"work","limit":1,"details":true}),
+    )
+    .await;
+    assert!(detailed["messages"][0]["message_doc_id"].is_string());
+    assert!(detailed["messages"][0]["payload_references"][0]["close_doc_id"].is_string());
+    let summary = call(&tool, json!({"action":"get","session_id":"work"})).await;
+    assert_eq!(summary["session"]["session_id"], "work");
+    assert!(
+        summary.get("details").is_none()
+            && summary["session"]["provenance"]
+                .get("creation_receipt")
+                .is_none()
+            && !summary.to_string().contains("null"),
+        "{summary}"
+    );
+    assert!(
+        summary.to_string().len() <= 320,
+        "sessions get is {} chars: {summary}",
+        summary.to_string().len()
+    );
+    let whole = call(
+        &tool,
+        json!({"action":"get","session_id":"work","details":true}),
+    )
+    .await;
+    assert!(whole["details"].is_object(), "{whole}");
+    assert!(
+        whole["session"].as_object().unwrap().len()
+            >= summary["session"].as_object().unwrap().len(),
+        "{whole}"
     );
     let second = call(
         &tool,

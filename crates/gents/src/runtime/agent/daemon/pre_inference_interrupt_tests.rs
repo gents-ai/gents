@@ -443,6 +443,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
             &request,
             shutdown_rx,
             interrupt_rx,
+            None,
         )
         .await;
     assert_eq!(

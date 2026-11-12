@@ -371,6 +371,12 @@ pub const PACK_INSTALLS_DIR_NAME: &str = "pack-installs";
 /// UX plugins dropped in by hand for development (`<id>/plugin.js`); the
 /// desktop's dev door. Installed packs keep theirs in the pack store.
 pub const UX_PLUGINS_DIR_NAME: &str = "ux-plugins";
+/// Scratch pack directories `config plugin build` materializes from
+/// `PluginSource` documents, one per plugin; each is its build's sandbox root.
+pub const PLUGIN_BUILDS_DIR_NAME: &str = "plugin-builds";
+/// Screenshots and `report.json` that `config ux preview` writes, one
+/// directory per previewed page; each preview replaces its own.
+pub const UX_PREVIEW_DIR_NAME: &str = "ux-preview";
 /// Present from when `init` records key custody until it publishes configuration. A home in
 /// that window has `init.json` but no default agent, and a service started on it exits at once
 /// and is restarted forever.
@@ -398,6 +404,8 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     EVAL_DIR_NAME,
     PACK_INSTALLS_DIR_NAME,
     UX_PLUGINS_DIR_NAME,
+    PLUGIN_BUILDS_DIR_NAME,
+    UX_PREVIEW_DIR_NAME,
 ];
 
 /// Lock files stay in place when state is retired: replacing a held lock file

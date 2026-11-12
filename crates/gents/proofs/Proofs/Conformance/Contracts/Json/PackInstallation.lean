@@ -53,10 +53,14 @@ def caseJson (name : String) (references : List (List String))
     ",\"dependency_ships\":" ++ jsonStringArray dependencyShips ++
     ",\"installed\":" ++ jsonStringArray installed ++
     ",\"local\":" ++ toString isLocal ++
-    ",\"removal_accepted\":" ++ toString (Configuration.pluginRemovalObservedSafe
+    ",\"removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
+      references.flatten (rootShips ++ dependencyShips) true) ++
+    ",\"unobserved_removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
       references.flatten (rootShips ++ dependencyShips) false) ++
     ",\"retain_notification_record\":" ++ toString
       (Configuration.retainPluginStoreRecord rootShips false) ++
+    ",\"retain_retired_record\":" ++ toString
+      (Configuration.retainPluginStoreRecord rootShips true) ++
     ",\"accepted\":" ++ toString (Configuration.pluginInstallAvailable
       references.flatten (rootShips ++ dependencyShips) installed isLocal) ++ "}"
 
@@ -85,6 +89,13 @@ def wireTargetCasesJson : String := jsonArray (
       "{\"local\":" ++ toString localTarget ++ ",\"preview\":" ++ toString preview ++
       ",\"remove\":" ++ toString remove ++ ",\"allowed\":" ++
       toString (Configuration.wireTargetAllowed localTarget preview remove) ++ "}")
+
+def operatorWireCasesJson : String := jsonArray (
+  [false, true].flatMap fun operator => [false, true].flatMap fun ready =>
+    [false, true].map fun home =>
+      "{\"operator\":" ++ toString operator ++ ",\"ready\":" ++ toString ready ++
+      ",\"home\":" ++ toString home ++ ",\"allowed\":" ++
+      toString (Configuration.operatorWireAvailable operator ready home) ++ "}")
 
 def casesJson : String := jsonArray [
   caseJson "plugin_references.empty" [[]] [] [] [],

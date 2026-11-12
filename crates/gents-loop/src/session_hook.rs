@@ -50,6 +50,8 @@ pub trait SessionHook: Send + Sync {
     type Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send + Sync + 'static;
     fn observe_provider(&self, _observation: ProviderObservation) {}
 
+    async fn bind_tool_surface(&self, _tools: std::sync::Arc<Vec<Box<dyn crate::tool::ToolDyn>>>) {}
+
     async fn run_foreground_tool(
         &self,
         _name: &str,
@@ -79,6 +81,16 @@ pub trait SessionHook: Send + Sync {
         &self,
         _internal_id: &str,
         _interruption: Option<&ToolOutcome>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Terminalize every child `parent_internal_id` left pending or running in
+    /// the foreground when it stopped with `stop`.
+    async fn settle_tool_effects(
+        &self,
+        _parent_internal_id: &str,
+        _stop: &ToolOutcome,
     ) -> Result<(), String> {
         Ok(())
     }

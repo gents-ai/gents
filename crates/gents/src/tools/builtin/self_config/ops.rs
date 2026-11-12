@@ -60,10 +60,8 @@ impl std::fmt::Display for MissingAgent {
     }
 }
 
-pub const EFFECT_TIMING_NOTE: &str = "Committed changes are picked up by the runtime reconciler \
-     (typically within a few seconds) and apply to requests dispatched after \
-     the resulting generation swap; the current turn keeps its existing \
-     configuration.";
+pub const EFFECT_TIMING_NOTE: &str = "Applies from the next request, once the runtime reconciler \
+     picks it up (a few seconds); the current turn keeps its existing configuration.";
 
 #[derive(Clone)]
 pub struct SelfConfigCore {
@@ -191,10 +189,7 @@ impl SelfConfigCore {
     /// fails with `ManagedAgentSignerRequired`, and it never falls back to the
     /// Agent identity alone or to the Node.
     pub(crate) fn access(&self) -> Result<ConfigAccess> {
-        let signer = self
-            .agent_signer
-            .clone()
-            .ok_or(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)?;
+        let signer = self.agent_signer()?;
         let actor = self.identity()?;
         anyhow::ensure!(
             actor.as_str() != self.node_did,
@@ -205,6 +200,14 @@ impl SelfConfigCore {
             actor,
             signer,
         )?)
+    }
+
+    /// The invoking Agent's own managed signer.
+    pub(crate) fn agent_signer(&self) -> Result<crate::store::identity::ManagedAgentSigner> {
+        Ok(self
+            .agent_signer
+            .clone()
+            .ok_or(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)?)
     }
 
     pub(crate) fn with_runtime_identity(

@@ -9,8 +9,9 @@ pub use agent_bindings::{
 };
 pub mod archive;
 pub use agent_bindings::{
-    agent_slot_reference, load_pack_authoring_config, load_pack_install_config, AuthoredPackConfig,
-    BoundPackConfig, PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
+    agent_binding_variable, agent_did_variable, agent_slot_reference, install_variables,
+    load_pack_authoring_config, load_pack_install_config, AuthoredPackConfig, BoundPackConfig,
+    PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
 };
 pub mod authoring;
 pub mod home_install;
@@ -21,6 +22,7 @@ mod loader;
 pub mod local;
 mod manifest_validation;
 pub mod materialize;
+pub mod node_packs;
 mod plugin;
 pub mod plugin_lifecycle;
 mod plugin_validation;
@@ -31,8 +33,9 @@ pub mod registry;
 pub mod resolve;
 pub mod store;
 mod ux;
+pub mod wiring;
 pub use home_install::{
-    forget_home_install, list_home_installs, list_home_installs_with_skips,
+    forget_home_install, installer_provenance, list_home_installs, list_home_installs_with_skips,
     list_readable_home_installs, read_home_install, record_after_install, write_home_install,
     HomePackInstall, InstalledVia, SkippedHomeInstall,
 };
@@ -50,21 +53,23 @@ pub(crate) use inference::{
 pub(crate) use installation::record_plugin_store_change_as_with_node_binding;
 pub use installation::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
-    declared_readers, document_pack_schema_paths, ensure_plugins_unreferenced,
-    hosted_document_graph, install_prepared_document_graph, install_prepared_document_pack,
-    installed_catalog, installed_pack_documents, installed_packs, list_installed_packs,
-    plugin_data_unique_keys, prepare_document_pack_archive,
+    collections_install_creates, declared_readers, document_pack_schema_paths,
+    edited_installed_documents, ensure_plugins_unreferenced, hosted_document_graph,
+    install_prepared_document_graph, install_prepared_document_pack, installed_catalog,
+    installed_pack_documents, installed_packs, installer_tool_root, list_installed_packs,
+    pack_root_record, plugin_data_unique_keys, plugin_pin_conflicts, prepare_document_pack_archive,
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
-    prepare_hosted_document_pack_archive, read_installed_pack, record_plugin_store_change,
-    record_plugin_store_change_as, record_staged_plugin_store_change, referenced_pack_digests,
-    remove_pack, DependencyVariableOverrides, DriftPolicy, HostedDocumentGraph,
-    HostedPackPreparation, InstallReport, InstalledCatalogEntry, InstalledPack,
-    InstalledPackPlugin, PackChangeError, PackIdentity, PackRemovalError, PackSource,
-    PackSourceHistory, PluginStoreChangeError, PreparedDependency, PreparedDocumentPackInstall,
-    RemoveReport, Retained,
+    prepare_hosted_document_pack_archive, read_installed_pack, record_plugin_retirement_as,
+    record_plugin_store_change, record_plugin_store_change_as, record_staged_plugin_store_change,
+    referenced_pack_digests, remove_pack, tools_taking_installer_root, visible_plugin_selections,
+    DependencyVariableOverrides, DriftPolicy, HostedDocumentGraph, HostedPackPreparation,
+    InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, InstallerRootAgent,
+    PackAgentRoot, PackChangeError, PackIdentity, PackRemovalError, PackRootRecord, PackSource,
+    PackSourceHistory, PluginPinConflict, PluginSelection, PluginStoreChangeError,
+    PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{
-    prepare_document_pack_archive_with_provisioner,
+    declared_collections, prepare_document_pack_archive_with_provisioner,
     record_staged_plugin_store_change_as_with_node_binding, sdl_paths, PluginStageContext,
 };
 pub use installation::{

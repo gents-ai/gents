@@ -534,7 +534,7 @@ impl RequestLifecycle {
                         }
                         anyhow::ensure!(
                             super::execution_policy::authorize_begin(observed, &generation, now),
-                            "execution begin requires a live claimed generation"
+                            "execution begin requires a live claimed or resuming generation"
                         );
                         let update = Update::doc(
                             &request_doc_id,
@@ -544,10 +544,7 @@ impl RequestLifecycle {
                             ),
                         )
                         .filter(Filter::eq(fields::DOC_ID, &request_doc_id))
-                        .filter(Filter::eq(
-                            fields::LIFECYCLE_STATE,
-                            RequestLifecycleState::Claimed.as_str(),
-                        ))
+                        .filter(Filter::eq(fields::LIFECYCLE_STATE, state.as_str()))
                         .filter(Filter::eq(fields::EXECUTION_GENERATION, &generation))
                         .filter(Filter::eq(fields::EXECUTION_LEASE_EXPIRES_AT, expiry))
                         .render();

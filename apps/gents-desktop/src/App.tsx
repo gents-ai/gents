@@ -69,6 +69,7 @@ import { MailboxScreen } from "./ui/screens/MailboxScreen";
 import { AutomationsScreen } from "./ui/screens/AutomationsScreen";
 import { PacksScreen } from "./ui/screens/PacksScreen";
 import { PluginPageScreen } from "./ui/screens/PluginPageScreen";
+import { StarterPacksCard } from "./ui/screens/packs/DefaultPacksReview";
 import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
 import { SessionScreen } from "./ui/screens/SessionScreen";
 import { SessionsScreen } from "./ui/screens/SessionsScreen";
@@ -296,6 +297,7 @@ function AppBody() {
       {hasLocalNode && <PluginAccessPrompt />}
       {hasLocalNode && <JoinRequestAlerts route={route} />}
       {hasLocalNode && <JoinRequestDialog />}
+      {hasLocalNode && <StarterPacksCard />}
       <Shortcuts />
       <SearchPalette />
       <MailboxStack route={route} />

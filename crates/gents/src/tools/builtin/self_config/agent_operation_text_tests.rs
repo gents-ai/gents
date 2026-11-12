@@ -225,7 +225,16 @@ Page and recipe: ["help","agent"]
 agent: an agent role. create bundles its Context and Tools; a profile supplies inference settings. get without an ID inspects your current role.
 Verbs: list | get ID | create (options.display-name, system-prompt, preset, profile; allocates ID and Context/Tools) | update ID | delete ID. Preview: agent preview create (same options) | update|delete ID.
 Also: agent clone, disable, default. Use context get/update for its selected Context.
-Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.
+Fields of Agent: ["display_name","description","context_id","inference_profile_id","enabled","tags"]. Append --help to create/update for shapes.
+Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. A change is durable once its transaction commits and runs after the runtime reconciler swaps generations; select the agent in a new session, since existing sessions remain bound to their original agent; canonical documents replicate to authorized paired clients and are reloaded after restart. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.
+Recipe: a new agent with its own model and run limits
+  {"argv":["execution","create"],"target_id":"lead-exec","set":{"deadline_duration_secs":86400,"max_turns":200}}
+  {"argv":["profile","create","lead"],"set":{"backend_id":"<BACKEND_ID>","execution_id":"lead-exec","model_name":"<MODEL>"}}
+  {"argv":["agent","create"],"options":{"display-name":"Lead","preset":"readonly","profile":"lead","root":"<ROOT>","system-prompt":"<PROMPT>"}}
+  <ROOT> is a published WorkspaceRoot path; host tools wait for the User grant in host_root_access, so omit preset and root when the agent needs no files. Copy agent_did from this receipt into <CREATED_AGENT_DID> in the next call
+  {"argv":["agent-target","create"],"target_id":"lead","set":{"agent_did":"<CREATED_AGENT_DID>","name":"lead"}}
+  {"argv":["tools","update"],"set":{"agents":{"enabled":true,"target_ids":["lead"]}}}
+  you can now start it; keep any target_ids tools get already shows
 Next: give it tools (["help","tools"]) and test it in a fresh session.
 ## preview create (ok)
 {

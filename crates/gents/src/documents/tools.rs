@@ -634,6 +634,13 @@ pub struct SelfConfigTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_pack_install: Option<bool>,
+    /// Pack authority: an install grants what the pack's plugins ask for, and
+    /// `pack build` and `pack test` compile plugin source in the command
+    /// sandbox. The Engineer preset carries it; other agents have it only
+    /// through their own Tools, and a node owner narrows it by clearing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_pack_authority: Option<bool>,
 }
 
 impl Tools {
@@ -1185,6 +1192,15 @@ pub fn wire_plugin(
         }
     }
     plugins[index].job = job.clone();
+    if job
+        .as_ref()
+        .is_some_and(|job| job.policy.dynamic == gents_protocol::job::DynamicMode::Check)
+    {
+        warnings.push(format!(
+            "dynamic_check: {}",
+            settings::dynamic_check_notice(&coordinate)
+        ));
+    }
 
     let added: Vec<String> = agents
         .target_ids
@@ -1225,6 +1241,25 @@ pub fn wire_plugin(
             next_call,
         },
     ))
+}
+
+/// Applies the node owner's consent to `coordinate` calling its caller's own
+/// tools: the selection [`wire_plugin`] wrote gets `tool_calls: true`. A pack
+/// cannot ship that grant for an agent it does not own, so it is given where
+/// the owner approves the pack.
+pub fn consent_tool_calls(tools: &mut Tools, coordinate: &str, report: &mut WireReport) {
+    let Some(selection) = tools
+        .integrations
+        .iter_mut()
+        .flat_map(|integrations| integrations.plugins.iter_mut().flatten())
+        .find(|plugin| plugin.plugin == coordinate && !plugin.tool_calls)
+    else {
+        return;
+    };
+    selection.tool_calls = true;
+    report.changed.push(format!(
+        "set tool_calls true for {coordinate}: the node owner approved it calling this agent's tools"
+    ));
 }
 
 /// Inverse of [`wire_plugin`]. With no `targets_from`, drops the plugin entry

@@ -206,6 +206,7 @@ where
                     hook: hook.clone(),
                     parent_internal_id: internal_id.clone(),
                     fatal: tokio::sync::Mutex::new(None),
+                    composed: Default::default(),
                 })
             });
             let call_fn = tool_dispatch::foreground_call(tool_dispatch::ForegroundExecution {

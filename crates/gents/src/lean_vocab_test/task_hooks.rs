@@ -45,6 +45,7 @@ pub(crate) enum LeanTaskPrimaryError {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum LeanTaskOutcome {
+    Parked,
     Success,
     Failure { error: LeanTaskPrimaryError },
     Interrupted,

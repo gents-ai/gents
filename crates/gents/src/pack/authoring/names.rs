@@ -31,6 +31,12 @@ impl Names {
     }
 }
 
+/// The pack name a requested name stands for: a hyphenated name is taken as
+/// its snake_case spelling. Anything else is left for [`Names::new`] to judge.
+pub fn pack_name(requested: &str) -> String {
+    requested.replace('-', "_")
+}
+
 pub fn to_snake_case(name: &str) -> String {
     let mut out = String::new();
     for (index, ch) in name.chars().enumerate() {

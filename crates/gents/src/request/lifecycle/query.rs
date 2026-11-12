@@ -295,12 +295,37 @@ fn claim_observation(
         serial: receipt.is_some_and(|r| r.queued_serial),
         receipt: receipt.is_some(),
         arrival: None,
-        running: matches!(
-            row.lifecycle_state,
-            Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
-        ),
+        running: row
+            .lifecycle_state
+            .is_some_and(RequestLifecycleState::is_unsettled_execution),
         terminal: row
             .lifecycle_state
             .is_none_or(RequestLifecycleState::is_terminal),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_parked_or_resuming_row_is_running_in_the_claim_gate() {
+        for state in RequestLifecycleState::ALL {
+            let row = AgentRequestRow {
+                lifecycle_state: Some(state),
+                ..Default::default()
+            };
+            assert_eq!(
+                claim_observation(&row, "owner", None).running,
+                matches!(
+                    state,
+                    RequestLifecycleState::Claimed
+                        | RequestLifecycleState::Processing
+                        | RequestLifecycleState::WaitingForBackend
+                        | RequestLifecycleState::ResumingBackend
+                ),
+                "{state}"
+            );
+        }
     }
 }

@@ -9,6 +9,7 @@ import Proofs.ClientShell.OptimisticSend
 import Proofs.Conformance.ClientChatReadinessCases
 import Proofs.Conformance.ClientSyncHealthCases
 import Proofs.Conformance.AccessReview
+import Proofs.Conformance.BackendWake
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.CommandIsolation
@@ -767,6 +768,7 @@ def snapshotClientCasesJson : String :=
     ++ "\"pack_document_ownership_cases\":" ++ PackInstallation.ownershipCasesJson ++ ","
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_wire_target_cases\":" ++ PackInstallation.wireTargetCasesJson ++ ","
+    ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
     ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","
     ++ "\"hosted_plugin_cases\":" ++ PackInstallation.hostedPluginCasesJson ++ ","
     ++ "\"hosted_pack_evidence_cases\":" ++ PackInstallation.evidenceCasesJson ++ ","
@@ -875,6 +877,14 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"
       ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
+    ++ "\"backend_wake_cases\":" ++ Conformance.BackendWake.casesJson ++ ","
+    ++ "\"backend_capture_scope_cases\":" ++ Conformance.BackendWake.captureScopeCasesJson ++ ","
+    ++ "\"backend_health_wake_cases\":" ++ Conformance.BackendWake.healthCasesJson ++ ","
+    ++ "\"backend_generation_mark_cases\":" ++ Conformance.BackendWake.generationCasesJson ++ ","
+    ++ "\"backend_resume_admission_cases\":" ++ Conformance.BackendWake.admissionCasesJson ++ ","
+    ++ "\"backend_repark_cases\":" ++ Conformance.BackendWake.reparkCasesJson ++ ","
+    ++ "\"backend_parked_finalize_cases\":" ++ Conformance.BackendWake.parkedFinalizeCasesJson ++ ","
+    ++ "\"backend_resumed_turn_cases\":" ++ Conformance.BackendWake.resumedTurnCasesJson ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
     ++ "\"account_rotation_select_cases\":"

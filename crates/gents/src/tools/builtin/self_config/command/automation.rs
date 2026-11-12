@@ -1,4 +1,5 @@
 use super::*;
+use crate::request::task_run;
 
 impl ConfigCommandTool {
     pub(super) async fn mcp_service(&self, argv: &[String]) -> Result<String> {
@@ -20,9 +21,60 @@ impl ConfigCommandTool {
                     .await
             }
             other => bail!(
-                "unknown mcp-service command {other:?}; accepted: get, preview, edit; see [\"help\",\"mcp-service\"]"
+                "unknown mcp-service command {other:?}; accepted: list, get, create, update, delete, preview, edit; see [\"help\",\"mcp-service\"]"
             ),
         }
+    }
+
+    /// `task run`: fire one Task now through the owner `gents automation task run` uses.
+    /// The Task's agent answers, so another agent's Task needs the catalog grant.
+    pub(super) async fn task_run(&self, argv: &[String]) -> Result<String> {
+        self.ensure_resource("automation")?;
+        anyhow::ensure!(
+            argv.first().is_some_and(|verb| verb == "run"),
+            "unknown task command; see [\"help\",\"task\"]"
+        );
+        let task_id = required_resource_id(argv.get(1), "TASK_ID")?;
+        let parsed = ParsedArgs::parse(&argv[2..])?;
+        anyhow::ensure!(
+            parsed.positionals.is_empty()
+                && parsed.switches.is_empty()
+                && parsed
+                    .options
+                    .keys()
+                    .all(|name| matches!(name.as_str(), "args" | "session-id" | "continue-session")),
+            "task run takes TASK_ID and options args, session-id and continue-session; see [\"task\",\"run\",\"--help\"]"
+        );
+        let args = match parsed.one("args")? {
+            Some(raw) => serde_json::from_str(raw).context("options.args must be a JSON object")?,
+            None => json!({}),
+        };
+        let signer = self.core.agent_signer()?;
+        let access = self.core.access()?;
+        let task = task_run::read_runnable_task(&access, &self.node_did, task_id).await?;
+        self.execution.enter_mutation();
+        let output = task_run::enqueue_task_run(
+            &access,
+            &self.node_did,
+            &signer,
+            task,
+            &task_run::TaskRunOptions {
+                args,
+                session_id: parsed.one("session-id")?.map(ToOwned::to_owned),
+                continue_session: parsed.one("continue-session")?.map(ToOwned::to_owned),
+            },
+        )
+        .await?;
+        ordered! {
+            "task_id": output.task_id,
+            "agent_did": output.agent_did,
+            "request_id": output.request_id,
+            "session_id": output.session_id,
+            "status": output.status,
+            "duplicate": output.duplicate,
+            "next": "The request is queued, not finished. Inspect its session with the sessions tool.",
+        }
+        .pretty()
     }
 
     pub(super) async fn automation(&self, argv: &[String]) -> Result<String> {

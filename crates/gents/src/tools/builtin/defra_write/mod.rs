@@ -399,5 +399,58 @@ impl crate::inference::llm::tool::Tool for BoundedWriteTool {
     }
 }
 
+/// How an agent comes to write application collection(s) through the `write`
+/// tool, whose grant is the exact names in its Tools'
+/// `datastore.write_collections`. `datastore` is the caller's current
+/// datastore group when it could be read: a `set` replaces a whole group, so
+/// the call sends the group back with the names added. A caller without the
+/// `tools` category of `config` cannot make the call and is told who can.
+pub(crate) fn write_grant_guidance(
+    holds_tools: bool,
+    datastore: Option<&crate::documents::DatastoreTools>,
+    collections: &[String],
+) -> Value {
+    let names = collections.join(", ");
+    let granted = |name: &String| {
+        datastore
+            .and_then(|group| group.write_collections.as_ref())
+            .is_some_and(|granted| granted.contains(name))
+    };
+    if !collections.is_empty() && collections.iter().all(granted) {
+        return json!({
+            "writable": true,
+            "how": format!("Your Tools already grant the write tool {names}."),
+        });
+    }
+    if !holds_tools {
+        return json!({
+            "writable": false,
+            "how": format!("Writes go through the write tool, which takes the exact collection names in your Tools' datastore.write_collections; {names} is not there and you do not hold the tools category of config, so you cannot add it. The node's User, or an agent that configures your Tools (the Engineer), adds it with config {{\"argv\":[\"tools\",\"edit\"],\"options\":{{\"agent\":YOUR_AGENT_DID}},\"set\":{{\"datastore\":{{...}}}}}}."),
+        });
+    }
+    let how = format!("Writes go through the write tool, which takes the exact collection names in your Tools' datastore.write_collections; {names} is not there yet. Add it with next_call, then write in a fresh request.");
+    match datastore {
+        Some(group) => {
+            let mut group = group.clone();
+            let granted = group.write_collections.get_or_insert_with(Vec::new);
+            for name in collections {
+                if !granted.contains(name) {
+                    granted.push(name.clone());
+                }
+            }
+            json!({
+                "writable": false,
+                "how": how,
+                "next_call": {"tool": "config", "args": {"argv": ["tools", "edit"], "set": {"datastore": group}}},
+            })
+        }
+        None => json!({
+            "writable": false,
+            "how": format!("{how} A set replaces the whole datastore group: read yours with config [\"tools\",\"get\"] and send it back with write_collections extended."),
+            "next_call": {"tool": "config", "args": {"argv": ["tools", "edit"], "set": {"datastore": {"write_collections": collections}}}},
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests;

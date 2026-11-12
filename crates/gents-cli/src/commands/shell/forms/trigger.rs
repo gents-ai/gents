@@ -843,6 +843,8 @@ mod tests {
                     event_source_id: "asks".to_string(),
                 },
                 session_id_template: Some("{{ doc.lead_session_id }}".to_string()),
+                create_session: None,
+                max_fires_per_hour: None,
                 enabled: false,
                 concurrency: Some(ConcurrencyMode::QueuedSerial),
                 created_at: Some("2026-01-01T00:00:00Z".to_string()),

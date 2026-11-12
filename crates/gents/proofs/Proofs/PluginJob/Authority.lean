@@ -7,7 +7,8 @@ import Proofs.PluginJob.Admission
 Origin is a host fact decided by the call (`callOrigin`): a call that carries a
 `script` runs model-authored code and is `dynamic`; any other call runs the
 plugin artifact itself and is `installed`. The artifact's pack must be
-operator-installed, or every step is refused. The dynamic policy gates
+operator-installed or installed under pack authority (`installerProvenance`),
+or every step is refused. The dynamic policy gates
 dynamic-origin scripts, pack-shipped job blocks stay within what the operator
 installed, a job-descended caller cannot start a job, and a script reaches
 child requests and data only through admission.
@@ -40,15 +41,59 @@ inductive Record
   | written (via : InstallProvenance)
   deriving DecidableEq, Repr
 
-/-- A document pack with desktop UX needs a local home record and explicit
-operator installation. A model-authored installation does not authorize UI code. -/
-def documentUxAllowed (hasUx hasLocalHome : Bool) (via : InstallProvenance) : Bool :=
-  !hasUx || (hasLocalHome && via == .operator)
+/-- A document pack with desktop UX needs a local home record, because the
+desktop loads a page from that record. Who installed the pack does not matter.
 
-theorem document_ux_requires_operator_home (hasHome : Bool) (via : InstallProvenance)
-    (h : documentUxAllowed true hasHome via = true) :
-    hasHome = true ∧ via = .operator := by
-  cases hasHome <;> cases via <;> simp_all [documentUxAllowed]
+Maintainer decision (2026-11-09): the Engineer can install any pack by default,
+especially ones it wrote. Reason: an Engineer that authors a pack has to be able
+to finish it on its own node, and a separate operator step stopped it at the
+last call. A self-configuration install therefore authorizes a page as an
+operator install does, and the page follows its manifest's `default_enabled`. -/
+def documentUxAllowed (hasUx hasLocalHome : Bool) : Bool :=
+  !hasUx || hasLocalHome
+
+theorem document_ux_requires_home (hasHome : Bool)
+    (h : documentUxAllowed true hasHome = true) : hasHome = true := by
+  simpa [documentUxAllowed] using h
+
+/-- Where the desktop reads a page from. A pack's `ux[]` entry is read from
+the home record its install wrote; a `Page` document is read from the node's
+documents and has no home record.
+
+Maintainer direction (2026-11-09): the native way to build an application is
+live on the node, so a page must have a home outside a pack. The document is
+that home. `enabled` is its only state: no versions, drafts or publication. -/
+inductive PageDoor | packRecord | document
+  deriving DecidableEq, Repr
+
+/-- A pack page loads from its home record (`documentUxAllowed`); a page
+document loads from any node the reader may read it on, while it is enabled. -/
+def pageLoadable : PageDoor → (hasLocalHome enabled : Bool) → Bool
+  | .packRecord, hasLocalHome, _ => hasLocalHome
+  | .document, _, enabled => enabled
+
+/-- A page may run a datastore tool only when its own declaration names that
+(surface, tool) pair, whichever door it came through. A page document is also
+refused while disabled, so disabling it withdraws its data access at once. The
+node's surface checks and document ACP apply after this and are not widened by
+it. -/
+def pageDataCallAllowed (door : PageDoor) (declared enabled : Bool) : Bool :=
+  declared && (door != .document || enabled)
+
+theorem page_document_needs_no_home (enabled : Bool) :
+    pageLoadable .document false enabled = enabled := rfl
+
+theorem undeclared_page_tool_is_refused (door : PageDoor) (enabled : Bool) :
+    pageDataCallAllowed door false enabled = false := by
+  simp [pageDataCallAllowed]
+
+theorem disabled_page_document_has_no_data (declared : Bool) :
+    pageDataCallAllowed .document declared false = false := by
+  simp [pageDataCallAllowed]
+
+theorem pack_page_data_follows_its_declaration (declared enabled : Bool) :
+    pageDataCallAllowed .packRecord declared enabled = declared := by
+  simp [pageDataCallAllowed]
 
 /-- A written record reads as written. A legacy record reads as `operator` for
 assets and plugins, because the CLI was their only writer, and as `selfConfig`
@@ -70,6 +115,34 @@ def recordAfterInstall (prior : Record) (kind : PackKind) (explicit : Bool)
   if explicit then .written via
   else if provenanceOf kind prior = .operator then .written .operator
   else .written via
+
+/-- The provenance an install records. An installer that holds pack authority
+(`SelfConfig.Grants.packAuthority`) records `operator`; any other installer
+records its own.
+
+Maintainer decision (2026-11-09): the Engineer installs any pack, workflow
+packs included. Reason: pack authority is the node owner's standing consent to
+what a pack's plugins ask for, so an install made under it stands where an
+operator install stands. Its engine passes the guard (`admitStep`) and its job
+block is admitted within the same closure and dynamic bounds
+(`packJobBlockAdmissible`); a separate operator step stopped an Engineer that
+wrote a workflow pack at the last call. An agent without the grant still
+records `selfConfig`, and `self_config_engine_refused` holds for its installs.
+A node owner narrows this by clearing the flag. -/
+def installerProvenance (via : InstallProvenance) (packAuthority : Bool) : InstallProvenance :=
+  if packAuthority then .operator else via
+
+theorem install_without_authority_records_installer (via : InstallProvenance) :
+    installerProvenance via false = via := by
+  simp [installerProvenance]
+
+/-- An explicit install under pack authority reads `operator` whatever was
+recorded before, so its engine is not refused by `self_config_engine_refused`. -/
+theorem authority_install_reads_operator (prior : Record) (k : PackKind)
+    (via : InstallProvenance) :
+    provenanceOf k (recordAfterInstall prior k true (installerProvenance via true)) =
+      .operator := by
+  simp [recordAfterInstall, provenanceOf, installerProvenance]
 
 /-- The origin of one call: a call that carries a `script`
 (`CallArgs.carriesScript`) runs model-authored code and is `dynamic`; any
@@ -127,9 +200,10 @@ structure PackJobBlock where
   dynamic : DynamicMode
   deriving DecidableEq, Repr
 
-/-- A pack-shipped block installs only through an operator install; its
-targets and trusted packs come from `closure`, the pack and its dependencies;
-and it never runs dynamic scripts. -/
+/-- A pack-shipped block installs only through an install that records
+`operator` (`installerProvenance`): an operator's, or one made under pack
+authority. Its targets and trusted packs come from `closure`, the pack and its
+dependencies; and it never runs dynamic scripts. -/
 def packJobBlockAdmissible (via : InstallProvenance) (closure : List String)
     (b : PackJobBlock) : Bool :=
   decide (via = .operator ∧ b.targetsFrom ⊆ closure ∧ b.trusted ⊆ closure ∧
@@ -253,6 +327,14 @@ theorem pack_job_block_requires_operator_install (via : InstallProvenance)
   simp only [packJobBlockAdmissible, decide_eq_true_eq] at h
   exact h.1
 
+/-- Pack authority admits a pack-shipped block exactly where an operator
+install admits it: the closure and dynamic bounds still hold. -/
+theorem authority_install_admits_block_as_operator (via : InstallProvenance)
+    (closure : List String) (b : PackJobBlock) :
+    packJobBlockAdmissible (installerProvenance via true) closure b =
+      packJobBlockAdmissible .operator closure b := by
+  simp [installerProvenance]
+
 theorem pack_job_block_within_closure (via : InstallProvenance) (closure : List String)
     (b : PackJobBlock) (h : packJobBlockAdmissible via closure b = true) :
     b.targetsFrom ⊆ closure ∧ b.trusted ⊆ closure := by
@@ -265,6 +347,29 @@ theorem pack_job_block_never_run (via : InstallProvenance) (closure : List Strin
   simp only [packJobBlockAdmissible, decide_eq_true_eq] at h
   intro hr
   simp [hr] at h
+
+/-- Maintainer decision (2026-11-10, gents-ai/packs#61 items 6 and 7). A pack
+never ships `run` (`pack_job_block_never_run`), and a block at `check` refuses
+every spawn and message a dynamic script asks for, so a workflow pack does
+nothing dynamic until `run` is set. `run` is the node owner's consent to
+model-written scripts starting agents. Approving the pack at init gives it,
+and wiring then raises the shipped `check` to `run`; afterwards whoever may
+write the selecting Tools sets it (job settings are configuration data, see
+`SelfConfig.keepsGrants`). Consent raises `check` only: a block shipped or set
+`off` stays off, and wiring without consent leaves the mode as it is. -/
+def consentedDynamic (consent : Bool) (mode : DynamicMode) : DynamicMode :=
+  if consent && decide (mode = .check) then .run else mode
+
+theorem unconsented_wiring_keeps_dynamic (mode : DynamicMode) :
+    consentedDynamic false mode = mode := by
+  simp [consentedDynamic]
+
+theorem consent_never_enables_off (consent : Bool) :
+    consentedDynamic consent .off = .off := by
+  simp [consentedDynamic]
+
+theorem consent_runs_check : consentedDynamic true .check = .run := by
+  simp [consentedDynamic]
 
 /-- After `wireTargetsFrom pack`, the pack is trusted and the job targets are
 within the caller's targets, so an installed-origin pin spawns exactly the

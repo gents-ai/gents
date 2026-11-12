@@ -7,8 +7,9 @@ use super::{is_valid_pack_name, InstalledPackPlugin, PackKind, PackSource, PackS
 use crate::pack::archive::PackArchive;
 use crate::store::local::file_lock::FileLock;
 
-/// Who installed a pack: the operator through the CLI, or the model through
-/// self-configuration.
+/// The provenance an install records ([`installer_provenance`]): `Operator`
+/// for the operator's CLI and for an agent holding pack authority,
+/// `SelfConfig` for any other agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstalledVia {
@@ -47,6 +48,12 @@ pub struct HomePackInstall {
     pub source: Option<PackSource>,
     #[serde(default)]
     pub source_history: Vec<PackSourceHistory>,
+    /// The application collections this pack's SDL created on the node, which
+    /// are the ones `pack remove --with-collections` may remove. A collection
+    /// that was already there when the pack was installed is never listed, and
+    /// a record written before the field existed lists none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created_collections: Vec<String>,
 }
 
 /// Lean `provenanceOf`. `record` is `None` without a record, `Some(None)` for
@@ -58,6 +65,16 @@ pub fn recorded_provenance(kind: PackKind, record: Option<Option<InstalledVia>>)
         (Some(Some(via)), _) => via,
         (Some(None), PackKind::Assets | PackKind::Plugins) => InstalledVia::Operator,
         _ => InstalledVia::SelfConfig,
+    }
+}
+
+/// Lean `installerProvenance`: an installer holding pack authority
+/// (`self_config.enable_pack_authority`) records `Operator`.
+pub fn installer_provenance(via: InstalledVia, pack_authority: bool) -> InstalledVia {
+    if pack_authority {
+        InstalledVia::Operator
+    } else {
+        via
     }
 }
 
@@ -87,6 +104,13 @@ pub fn record_after_install(
 ) -> Result<()> {
     let prior_record = read_home_install(home, &record.coordinate)?;
     record_source(&mut record, prior_record.as_ref())?;
+    if let Some(prior) = &prior_record {
+        for collection in &prior.created_collections {
+            if !record.created_collections.contains(collection) {
+                record.created_collections.push(collection.clone());
+            }
+        }
+    }
     let prior = prior_record.map(|stored| stored.installed_via);
     record.installed_via = Some(record_after_install_via(
         prior,
@@ -405,6 +429,7 @@ mod tests {
             installed_via: None,
             source: None,
             source_history: Vec::new(),
+            created_collections: Vec::new(),
         }
     }
 

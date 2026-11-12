@@ -198,3 +198,41 @@ impl FakeLaunch {
         self.start_calls.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
+
+/// A restart that fails after the starter packs were installed still says
+/// what happened to them.
+#[test]
+fn a_failed_restart_reports_the_packs_installed_before_it() {
+    let report = serde_json::json!({
+        "installed": [{"pack": "gents/web"}, {"pack": "gents/charts"}],
+        "failed": [
+            {"pack": "gents/script", "error": "simulated", "installed": true},
+            {"pack": "gents/data_tables", "error": "simulated", "installed": false},
+            {"pack": "gents/pack_builder", "error": "simulated"},
+        ],
+    });
+    assert_eq!(
+        installed_before_restart(&report),
+        "Before the local node failed to start again, these starter packs were installed: gents/web, gents/charts. These are installed but not finished: gents/script. Approve them again once the node starts. These were not installed: gents/data_tables, gents/pack_builder."
+    );
+    // A pack that is on the node is never reported under "no starter pack
+    // was installed", and nothing is claimed about what it was granted.
+    assert_eq!(
+        installed_before_restart(&serde_json::json!({
+            "installed": [],
+            "failed": [{"pack": "gents/script", "error": "simulated", "installed": true}],
+        })),
+        "Before the local node failed to start again, these are installed but not finished: gents/script. Approve them again once the node starts."
+    );
+    assert_eq!(
+        installed_before_restart(&serde_json::json!({
+            "installed": [],
+            "failed": [{"pack": "gents/web", "error": "simulated", "installed": false}],
+        })),
+        "Before the local node failed to start again, no starter pack was installed. These were not installed: gents/web."
+    );
+    assert_eq!(
+        installed_before_restart(&serde_json::json!({"installed": [], "failed": []})),
+        "Before the local node failed to start again, no starter pack was installed."
+    );
+}

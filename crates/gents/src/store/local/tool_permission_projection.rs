@@ -10,6 +10,7 @@ use storage::namespace::Namespace;
 const PERMISSIONS: &[NodePermission] = &[
     NodePermission::CollectionGet,
     NodePermission::CollectionPatch,
+    NodePermission::CollectionTruncate,
     NodePermission::MigrationSet,
     NodePermission::ViewAdd,
     NodePermission::DocumentRead,

@@ -4,14 +4,61 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{HomePackInstall, InstalledPackPlugin, PackChangeError, PackIdentity, PackKind};
+use super::{
+    HomePackInstall, InstalledPackPlugin, InstalledVia, PackChangeError, PackIdentity, PackKind,
+};
 use crate::plugin::{install, store};
+pub(super) use store::InstalledPlugin;
+
+/// The published record of the installed plugin `namespace/name`.
+pub(super) fn installed_plugin(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+) -> Result<InstalledPlugin> {
+    store::read_record(home, namespace, name)
+}
 
 /// Reviewed plugin records held by the staging owner until notification finishes.
 /// The private fields prevent a caller from inventing installed manifest facts.
 pub struct PluginStageChanges {
     pub(crate) previous: Vec<store::InstalledPlugin>,
     pub(crate) installed: Vec<store::InstalledPlugin>,
+}
+
+/// How an install of a plugins or assets pack failed, by what it left: the
+/// caller that staged anything for the new digests (a rebuild's moved pins)
+/// keeps it only when the publication stayed.
+#[derive(Debug, thiserror::Error)]
+pub enum InstallError {
+    /// The publication was rolled back or never made: the home holds what it
+    /// held before.
+    #[error(transparent)]
+    NotInstalled(PackChangeError),
+    /// The publication is final: the plugins are installed in the home at
+    /// the new digests, and only the node's record of them was not
+    /// confirmed.
+    #[error("the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record")]
+    Retained(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl<E> From<E> for InstallError
+where
+    E: Into<PackChangeError>,
+{
+    fn from(error: E) -> Self {
+        Self::NotInstalled(error.into())
+    }
+}
+
+impl InstallError {
+    /// The failure for a caller that does not act on what it left.
+    pub fn into_change_error(self) -> PackChangeError {
+        match self {
+            Self::NotInstalled(error) => error,
+            retained @ Self::Retained(_) => PackChangeError::Other(anyhow::Error::new(retained)),
+        }
+    }
 }
 
 /// A local publication and its node notification share one owned task.
@@ -22,9 +69,39 @@ pub async fn install<F>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
+    installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), PackChangeError>
+where
+    F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
+{
+    install_final(
+        home,
+        archive,
+        consent,
+        owner,
+        bindings,
+        installed_via,
+        source,
+        notify,
+    )
+    .await
+    .map_err(InstallError::into_change_error)
+}
+
+/// [`install`], with a failure that says what it left ([`InstallError`]).
+#[allow(clippy::too_many_arguments)]
+pub async fn install_final<F>(
+    home: &Path,
+    archive: &crate::pack::archive::PackArchive,
+    consent: bool,
+    owner: Option<&str>,
+    bindings: &BTreeMap<String, String>,
+    installed_via: InstalledVia,
+    source: super::PackSource,
+    notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), InstallError>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
@@ -35,7 +112,14 @@ where
         return Err(anyhow::anyhow!("expected a plugins or assets pack").into());
     }
     install_owned(
-        home, archive, consent, owner, bindings, false, source, notify,
+        home,
+        archive,
+        consent,
+        owner,
+        bindings,
+        installed_via,
+        source,
+        notify,
     )
     .await
 }
@@ -61,12 +145,12 @@ where
         consent,
         None,
         &BTreeMap::new(),
-        true,
+        InstalledVia::Operator,
         source,
         notify,
     )
     .await
-    .map_err(PackChangeError::into_anyhow)
+    .map_err(|error| error.into_change_error().into_anyhow())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -76,10 +160,10 @@ async fn install_owned<F>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
-    operator: bool,
+    installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
-) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), PackChangeError>
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), InstallError>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
@@ -104,27 +188,55 @@ where
     let bindings = bindings.clone();
     tokio::spawn(async move {
         let _cache_lease = cache_lease;
-        let stage = install::stage_pack_graph(&home, vec![install::PluginStageInput {
-            manifest: manifest.clone(), digest: digest.clone(), assets, bindings,
-        }], consent, &owner).await?;
+        let stage = install::stage_pack_graph(
+            &home,
+            vec![install::PluginStageInput {
+                manifest: manifest.clone(),
+                digest: digest.clone(),
+                assets,
+                bindings,
+            }],
+            consent,
+            &owner,
+        )
+        .await?;
         let plugins = stage.installed.clone();
-        let changes = PluginStageChanges { previous: stage.previous_plugins(), installed: plugins.clone() };
+        let changes = PluginStageChanges {
+            previous: stage.previous_plugins(),
+            installed: plugins.clone(),
+        };
         let record = HomePackInstall {
-            coordinate: coordinate.clone(), version: manifest.version.clone(), digest: digest.clone(),
-            kind: manifest.metadata.kind.clone(), assets: relative_root, dependency_assets: Vec::new(),
-            plugins: plugins.iter().map(|plugin| InstalledPackPlugin { name: plugin.name.clone(), digest: plugin.digest.clone() }).collect(),
+            coordinate: coordinate.clone(),
+            version: manifest.version.clone(),
+            digest: digest.clone(),
+            kind: manifest.metadata.kind.clone(),
+            assets: relative_root,
+            dependency_assets: Vec::new(),
+            plugins: plugins
+                .iter()
+                .map(|plugin| InstalledPackPlugin {
+                    name: plugin.name.clone(),
+                    digest: plugin.digest.clone(),
+                })
+                .collect(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            ux: manifest.metadata.ux.clone(), installed_via: operator.then_some(super::InstalledVia::Operator),
-            source: Some(source), source_history: Vec::new(),
+            ux: manifest.metadata.ux.clone(),
+            installed_via: Some(installed_via),
+            source: Some(source),
+            source_history: Vec::new(),
+            created_collections: Vec::new(),
         };
         let publish_home = home.clone();
         let mut publish_record = record.clone();
         let previous = tokio::task::spawn_blocking(move || -> Result<_> {
             let previous = super::read_home_install(&publish_home, &publish_record.coordinate)?;
             super::home_install::record_source(&mut publish_record, previous.as_ref())?;
-            let result = if operator {
-                super::record_after_install(&publish_home, publish_record.clone(), super::InstalledVia::Operator, true)
-            } else { super::write_home_install(&publish_home, &publish_record) };
+            let result = super::record_after_install(
+                &publish_home,
+                publish_record.clone(),
+                installed_via,
+                true,
+            );
             if let Err(error) = result {
                 match &previous {
                     Some(previous) => super::write_home_install(&publish_home, previous)?,
@@ -133,29 +245,141 @@ where
                 return Err(error);
             }
             Ok((previous, publish_record))
-        }).await.map_err(anyhow::Error::from)?;
+        })
+        .await
+        .map_err(anyhow::Error::from)?;
         let (previous, record) = match previous {
             Ok(previous) => previous,
-            Err(error) => { stage.finish(false).await?; return Err(error.context("publishing the local pack install record").into()); }
+            Err(error) => {
+                stage.finish(false).await?;
+                return Err(error
+                    .context("publishing the local pack install record")
+                    .into());
+            }
         };
-        let notification = if record.plugins.is_empty() { Ok(()) } else {
-            notify(PackIdentity::new(&manifest, &digest, record.plugins.clone()), changes).await
+        let notification = if record.plugins.is_empty() {
+            Ok(())
+        } else {
+            notify(
+                PackIdentity::new(&manifest, &digest, record.plugins.clone()),
+                changes,
+            )
+            .await
         };
-        if matches!(&notification, Err(super::PluginStoreChangeError::PinConflict(_) | super::PluginStoreChangeError::Rejected(_))) {
+        if matches!(
+            &notification,
+            Err(super::PluginStoreChangeError::PinConflict(_)
+                | super::PluginStoreChangeError::Rejected(_))
+        ) {
             let restore_home = home.clone();
             let restore_coordinate = coordinate.clone();
             let restored = tokio::task::spawn_blocking(move || match previous {
                 Some(previous) => super::write_home_install(&restore_home, &previous),
                 None => super::forget_home_install(&restore_home, &restore_coordinate),
-            }).await.map_err(anyhow::Error::from)?;
+            })
+            .await
+            .map_err(anyhow::Error::from)?;
             stage.finish(false).await?;
             restored?;
-            return notification.map(|_| (record, plugins)).map_err(|error| anyhow::Error::from(error).into());
+            return notification
+                .map(|_| (record, plugins))
+                .map_err(|error| anyhow::Error::from(error).into());
         }
         stage.finish(true).await?;
-        notification.context("the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record")?;
+        notification.map_err(|error| InstallError::Retained(anyhow::Error::from(error).into()))?;
         Ok((record, plugins))
-    }).await.context("owned plugin installation task failed")?
+    })
+    .await
+    .context("owned plugin installation task failed")?
+}
+
+/// A plugins or assets pack as installed: its home record and the plugin
+/// records published with it.
+pub struct InstalledHomePack {
+    pub record: HomePackInstall,
+    pub plugins: Vec<store::InstalledPlugin>,
+}
+
+/// What installing `manifest` grants each of its plugins that asks for
+/// anything: a successful install grants exactly what the plugin declares.
+pub fn authority_asked(manifest: &super::PackManifest) -> Result<Vec<serde_json::Value>> {
+    let mut asked = Vec::new();
+    for plugin in &manifest.metadata.plugins {
+        if let Some(description) = install::authority_asked(plugin)? {
+            asked.push(serde_json::json!({
+                "plugin": format!("{}/{}", manifest.metadata.namespace, plugin.name),
+                "granted": description,
+                "manifold": plugin.manifold,
+            }));
+        }
+    }
+    Ok(asked)
+}
+
+/// Why the plugin store refuses `manifest`'s plugins under `consent`: a
+/// plugin that asks for authority needs the operator's consent to it.
+pub fn install_blockers(
+    home: Option<&Path>,
+    manifest: &super::PackManifest,
+    consent: bool,
+) -> Vec<serde_json::Value> {
+    manifest
+        .metadata
+        .plugins
+        .iter()
+        .filter_map(|plugin| {
+            home.context("this runtime has no plugin home")
+                .and_then(|home| {
+                    store::grant_on_install(home, &manifest.metadata.namespace, plugin, consent)
+                        .map_err(anyhow::Error::from)
+                })
+                .err()
+                .map(
+                    |error| serde_json::json!({"plugin":plugin.name,"reason":format!("{error:#}")}),
+                )
+        })
+        .collect()
+}
+
+/// The plugins of `archive` another pack already owns in `home`. An artifact
+/// the plugin runtime does not admit is an error, not a blocker.
+pub fn admission_blockers(
+    home: &Path,
+    archive: &crate::pack::archive::PackArchive,
+) -> Result<Vec<serde_json::Value>> {
+    let manifest = archive.manifest();
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let mut blockers = Vec::new();
+    for plugin in &manifest.metadata.plugins {
+        if let Err(error) = store::check_plugin_ownership(
+            home,
+            &manifest.metadata.namespace,
+            &plugin.name,
+            &coordinate,
+        ) {
+            blockers.push(serde_json::json!({"plugin":plugin.name,"reason":format!("{error:#}")}));
+        }
+        install::admit(archive.asset(&plugin.artifact)?, plugin)?;
+    }
+    Ok(blockers)
+}
+
+/// The digest installing `archive` publishes for each of its plugins.
+pub fn published_digests(
+    archive: &crate::pack::archive::PackArchive,
+) -> Result<BTreeMap<String, String>> {
+    let manifest = archive.manifest();
+    let mut digests = BTreeMap::new();
+    for plugin in &manifest.metadata.plugins {
+        digests.insert(
+            format!("{}/{}", manifest.metadata.namespace, plugin.name),
+            format!(
+                "sha256:{}",
+                store::content_digest_hex(archive.asset(&plugin.artifact)?)
+            ),
+        );
+    }
+    Ok(digests)
 }
 
 /// Releases the plugin store records `coordinate` still owns at the digests its
@@ -174,6 +398,15 @@ pub fn release_plugin_records(
         }
     }
     Ok(released)
+}
+
+/// Deletes the artifact bytes of `plugins` that no plugin record uses any
+/// more, and returns the digests released.
+pub fn release_plugin_bytes(home: &Path, plugins: &[InstalledPackPlugin]) -> Result<Vec<String>> {
+    store::release_unreferenced_bytes(
+        home,
+        &plugins.iter().map(|plugin| plugin.digest.clone()).collect(),
+    )
 }
 
 pub struct LocalPackRemoval {
@@ -273,6 +506,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             local.clone(),
             |_, _| async { Ok(()) },
         )
@@ -284,6 +518,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Store,
             |_, _| async { Ok(()) },
         )
@@ -308,6 +543,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::from([("model".into(), "profile".into())]),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { panic!("refused install must not notify") },
         )
@@ -343,10 +579,24 @@ pub(crate) mod tests {
         std::path::PathBuf,
         crate::pack::archive::PackArchive,
     ) {
+        fixture_with_output(version, authority, br#"{"native_pack_echo":"ok"}"#)
+    }
+
+    /// The fixture pack whose plugin returns `output`: a different output is
+    /// a different artifact digest.
+    pub(crate) fn fixture_with_output(
+        version: &str,
+        authority: bool,
+        output: &[u8],
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        crate::pack::archive::PackArchive,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
         std::fs::create_dir_all(source.join("plugins")).unwrap();
-        let wat = crate::plugin::tests::constant_output_wat(br#"{"native_pack_echo":"ok"}"#);
+        let wat = crate::plugin::tests::constant_output_wat(output);
         let afb = crate::plugin::tests::build_plugin_afb(&wat);
         std::fs::write(source.join("plugins/native_echo.afb"), afb).unwrap();
         let mut plugin = json!({"name":"native_echo","description":"Deterministic sealed native pack fixture","artifact":"plugins/native_echo.afb","language":"rust","input_schema":{"type":"object","properties":{},"additionalProperties":false}});
@@ -376,12 +626,13 @@ pub(crate) mod tests {
         let home = tempfile::tempdir().unwrap();
         let (_dir, _path, archive) = fixture("1.0.0", false);
         let coordinate = "fixture/native_echo_pack";
-        let error = install(
+        let error = install_final(
             home.path(),
             &archive,
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async {
                 Err(super::super::PluginStoreChangeError::Unconfirmed(
@@ -392,6 +643,37 @@ pub(crate) mod tests {
         .await
         .unwrap_err();
         assert!(format!("{error:#}").contains("installed locally"));
+        assert!(
+            matches!(error, InstallError::Retained(_)),
+            "an unconfirmed notification is the typed retained publication"
+        );
+        let (_refused_dir, _, refused) = fixture("3.0.0", false);
+        let rolled_back = install_final(
+            home.path(),
+            &refused,
+            false,
+            None,
+            &BTreeMap::new(),
+            InstalledVia::Operator,
+            super::super::PackSource::Local { file_name: None },
+            |_, _| async {
+                Err(super::super::PluginStoreChangeError::PinConflict(
+                    "pin conflict".into(),
+                ))
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(rolled_back, InstallError::NotInstalled(_)),
+            "a refused notification rolls the publication back"
+        );
+        assert_eq!(
+            store::read_record(home.path(), "fixture", "native_echo")
+                .unwrap()
+                .version,
+            "1.0.0"
+        );
         let first = super::super::read_home_install(home.path(), coordinate)
             .unwrap()
             .expect("local pin survives a failed notification");
@@ -405,6 +687,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
         )
@@ -430,6 +713,7 @@ pub(crate) mod tests {
                     false,
                     None,
                     &BTreeMap::new(),
+                    InstalledVia::Operator,
                     super::super::PackSource::Local { file_name: None },
                     move |_, _| async move {
                         reached.notify_one();
@@ -471,6 +755,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }
         )
@@ -484,6 +769,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
         )
@@ -498,6 +784,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }
         )

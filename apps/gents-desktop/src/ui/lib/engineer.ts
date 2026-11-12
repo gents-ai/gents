@@ -8,7 +8,7 @@ import { defaultAgentOf } from "./agents";
 export const ENGINEER_PROMPT = sharedSetupPrompt;
 
 export const ENGINEER_DESCRIPTION =
-  "Walks you through configuring Gents for the work you want to do.";
+  "Builds what you need on this node: apps, automations and teams of agents.";
 export const ENGINEER_AGENT_TAG = "gents:engineer";
 
 export function engineerAgentOf(deployment: NodeView): AgentView | undefined {

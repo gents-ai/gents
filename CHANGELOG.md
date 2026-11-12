@@ -4,8 +4,116 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
-## Unreleased
+## 1.0.0-rc2 - 2026-11-10
 
+- Breaking: a home created by v1.0.0-rc1 or v1.0.0-rc0 is not opened,
+  converted or migrated. Starting on one stops before any write and says to
+  back it up or delete it and run `gents`; see
+  [docs/upgrade-from-rc1.md](docs/upgrade-from-rc1.md).
+- The Engineer builds what you ask for on its node: the data, the pages you
+  open in the desktop, and the agents and schedules that keep it running. It
+  was a configuration guide; its prompt and description are rewritten for
+  the new role.
+- A page is a `Page` document on the node: its id, display name, module,
+  optional stylesheet, the datastore surfaces and tools it may call, and
+  whether it is enabled. The `config` tool creates, reads, updates and
+  deletes pages and lints one with `page lint ID`, so an agent can add a
+  page without a pack or the filesystem. The desktop lists the selected
+  node's pages beside the home's plugins and loads them under their declared
+  grants, keeping each page's enable choice, storage and notification
+  switches per node. A pack can ship pages in `pack_config.json` (`pages`).
+- A plugin can be written on the node. Its source is a `PluginSource`
+  document: a name, language, one entry file, input schema, data declaration
+  and test cases. `config plugin build NAME` compiles it in the command
+  sandbox, runs its cases and installs it as `node/NAME`; a failed build or
+  case installs nothing and the source stays for the next edit. A pack can
+  ship plugin sources in `pack_config.json` (`plugin_sources`).
+- `pack export NAME` in the config tool and `gents config pack export` write
+  documents that are live on a node, and what they reference, to a new pack
+  directory. Agents become agent slots, DIDs become the variables an install
+  rebinds, prompts and skills become sidecar files, and pages, plugin sources
+  and the application collections they use come along. A plugin built on the
+  node ships as the pack's own plugin source. A reference a pack cannot carry
+  refuses the export by name before anything is written.
+- A plugin can declare the `host_call` import (`host_imports`). The host
+  suspends it for one tool call on the calling agent's own tools, or a bounded
+  sleep, and resumes it with the result. Each call is recorded as a tool call
+  under the plugin's, runs with the caller's authority when the agent's Tools
+  select the plugin with `tool_calls: true`, and stops when the plugin stops.
+  `gents/script` is built on it. A selected plugin that imports `host_call`
+  can be started in the background with `spawn_process`.
+- The config tool gains `pack wire PACKAGE`, with `pack preview wire` and
+  `--remove`: an agent that holds the pack grant wires an installed pack's
+  plugins, job block, agent targets and skills into its own Tools and Context,
+  or into another agent's with the agent catalog grant, as
+  `gents config pack wire` does. A Tools edit that selects a plugin the node
+  has not installed is refused.
+- An installed plugin can be retired: `pack remove` now works for a pack that
+  ships plugins or depends on one that does. It is refused while a Tools
+  document the caller can read still selects the plugin, and names each one
+  and the call that unwires it (`pack wire PACKAGE --remove`).
+- Breaking: a pack's agent slot no longer binds to an existing agent because
+  their names match. It binds only when the installer names the agent's DID in
+  that install's own arguments: `--bind-agent SLOT=AGENT_DID` on
+  `gents config pack install`, or the install variable
+  `GENTS_PACK_BIND_AGENT_<SLOT>` in the config tool's `options.var`. The
+  process environment never binds a slot, and a dependency's same-named slot
+  does not inherit the binding; otherwise the pack provisions its own agent.
+  `pack export` returns both forms for the agents it was exported from
+  (`bind_agents`), and the install preview lists the bindings.
+- A Trigger can open one session per rendered key (`create_session`), and has
+  a fire budget, `max_fires_per_hour` (default 1000): exhausting it disables
+  the Trigger and records why in `last_status` and `last_error`.
+  `trigger explain` in the config tool and `gents config trigger explain`
+  say why a Trigger did or did not deliver a document.
+- A request that meets a provider outage is parked instead of failed, and
+  continues from the turns it already completed once the provider answers
+  again (#3590).
+- After setup the desktop shows a "Starter packs" card listing the
+  Engineer's six starter packs and the permissions each requests. Approve
+  them one by one or all at once; approving restarts the local node for a
+  moment while the packs install. "Not now" closes the card, and the same
+  list stays in the Packs screen.
+- `config plugin run` runs an installed plugin the way its tool call does: the
+  host serves the plugin's data requests under the calling agent's access (and
+  model, HTTP and, when the agent's Tools select the plugin with them, tool
+  calls) and re-invokes it with the answers, and the plugin's writes commit
+  with the call. A request the command cannot serve is an error that names it
+  and the call that does, instead of being returned as the plugin's output.
+- `gents init --engineer` installs the Engineer's default packs into a fresh
+  home: `gents/pack_builder`, `gents/web`, `gents/dynamic_workflows`,
+  `gents/charts`, `gents/data_tables` and `gents/script`, resolved by name
+  from the home's pack store and then the registry (nothing is bundled).
+  `gents/script` runs a short script over the Engineer's own tools (waiting,
+  trying logic, bulk changes); approving it wires it with `tool_calls: true`,
+  and unapproved it is wired without that until the Engineer's own Tools
+  turn it on. Init names them,
+  asks per pack, with yes as the default, before granting the permissions
+  its plugins request, wires
+  plugins into the Engineer's Tools and attaches skills to its Context.
+  Without a terminal, `--approve-default-packs` approves; otherwise a pack
+  that requests permissions, or whose agents would be granted the
+  Engineer's folder, is left uninstalled. `--no-default-packs` skips
+  them. A pack that cannot be resolved or approved never fails init: it is
+  listed under `default_packs.not_installed` with the command that installs
+  it later: `gents config pack starter --approve <pack>`, which installs it
+  as init does (run it with the runtime stopped). Without `--approve`,
+  `gents config pack starter` lists each starter pack and what it requests.
+- The `schema` tool can clean up application collections: `collection empty`
+  deletes every document and keeps the definition, and `collection remove`
+  deletes an empty collection, each behind a preview that states the loss.
+  Both refuse Gents-managed collections. Remove also refuses a collection a
+  datastore surface entry, a page data grant, an event source, an installed
+  pack or a P2P pairing still names; empty lists those users in its preview. The schema tool grant now carries DefraDB's
+  `truncate-collection` node permission. `config pack remove PACKAGE
+  --with-collections` also removes the pack's collections that nothing else
+  uses; the default still keeps them (#3572).
+- A `gents` invocation and the desktop app that first touch one home at the
+  same moment no longer fail with `persisting .../principal.json: No such
+  file or directory`. Client identity metadata is staged under a name no
+  other writer can pick and installed in one rename, so concurrent first-run
+  writers cannot consume each other's staging file and no reader observes
+  the metadata file missing (#3659).
 - Rendered request captures cut the stable request fields (model, tool
   schemas, settings) apart from the message list, and close shared manifest
   groups after four entries at every second content key instead of eight at
@@ -122,6 +230,10 @@ source consistency checks, not a separate runtime compatibility version.
   notice. Codex as a model provider, including `accounts login codex`, is
   unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
+- Stopping the native service waits for the runtime's own shutdown instead of
+  about a second, so a stop that succeeds no longer reports `native supervisor
+  did not confirm that the Gents job unloaded or became inactive`. Stop node in
+  the desktop stops showing that error on macOS (#3652).
 
 ## 1.0.0-rc1 - 2026-11-03
 

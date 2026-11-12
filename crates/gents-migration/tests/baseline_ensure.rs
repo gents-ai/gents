@@ -816,6 +816,12 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
                 ("variables", false),
             ][..],
         ),
+        (
+            schemas::TRIGGER_NAME,
+            schemas::TRIGGER,
+            r#"mutation {create_Trigger(input: {trigger_id: "retained", node_did: "owner"}) {_docID}}"#,
+            &[("create_session", false), ("max_fires_per_hour", false)][..],
+        ),
     ] {
         let node = fresh_node().await;
         let old = sdl

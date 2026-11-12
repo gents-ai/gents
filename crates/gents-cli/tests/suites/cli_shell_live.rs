@@ -131,6 +131,11 @@ async fn start_live() -> Result<Live> {
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
     let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    start_on(&model_endpoint, &model_name).await
+}
+
+/// A fresh home whose Engineer runs `model_name` at `model_endpoint`, and its runtime.
+async fn start_on(model_endpoint: &str, model_name: &str) -> Result<Live> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home = tempdir.path().join("home");
     fs::create_dir_all(&home)?;
@@ -143,9 +148,9 @@ async fn start_live() -> Result<Live> {
             "--node-name",
             "shell-live",
             "--model-name",
-            &model_name,
+            model_name,
             "--inference-url",
-            &model_endpoint,
+            model_endpoint,
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
@@ -308,4 +313,62 @@ async fn the_shell_answers_a_question_and_the_item_is_acted() -> Result<()> {
     wait_gone(&shell, "! Release channel", KEYS)?;
 
     quit_cleanly(&shell)
+}
+
+fn press(shell: &Session, keys: &[&str]) -> Result<()> {
+    for key in keys {
+        shell.execute(Operation::Write {
+            data: key.to_string(),
+        })?;
+    }
+    Ok(())
+}
+
+/// A home whose model does not answer opens on Setup, where a provider added by hand makes
+/// its agent ready, and the open shell then sends to it. The model is a local stand-in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "drives a PTY and a foreground runtime; needs no live model"]
+async fn the_shell_opens_on_setup_without_a_model_and_wakes_when_one_is_added() -> Result<()> {
+    const DOWN: &str = "\x1b[B";
+    const REPLY_TEXT: &str = "pong from the stand-in";
+    let live = start_on("http://127.0.0.1:9/v1", "no-model").await?;
+    let model = MockChatEndpoint::start("stand-in", REPLY_TEXT)?;
+
+    let shell = open_shell(&live.home)?;
+    wait_for(&shell, "Add a provider", SHELL_UP)?;
+    wait_for(&shell, "cannot be reached, so it cannot answer", KEYS)?;
+    wait_for(&shell, "no agent ready", KEYS)?;
+    wait_for(&shell, "Local", KEYS)?;
+
+    // Local is the fourth provider; its one method asks for a key, then the endpoint.
+    press(&shell, &[DOWN, DOWN, DOWN, "\r"])?;
+    wait_for(&shell, "Local: Endpoint + optional key", KEYS)?;
+    press(&shell, &["\t", "\x15", model.endpoint(), "\r"])?;
+    wait_for(&shell, "Choose a model", KEYS)?;
+    wait_for(&shell, "stand-in", KEYS)?;
+    press(&shell, &["\r"])?;
+    wait_for(&shell, "enter save", KEYS)?;
+    press(&shell, &["\r"])?;
+
+    wait_for(&shell, "runtime ready", SHELL_UP)?;
+    wait_gone(&shell, "Add a provider", KEYS)?;
+    shell.execute(Operation::Write {
+        data: format!("{PROMPT}\r"),
+    })?;
+    wait_for(&shell, REPLY_TEXT, REPLY)?;
+
+    // A fresh home has the regular keys, where ctrl-q quits.
+    press(&shell, &["\x11"])?;
+    shell.execute(Operation::WaitExit { timeout_ms: None })?;
+    let state = match shell.execute(Operation::State)? {
+        OperationResult::State(state) => state,
+        other => bail!("State returned {other:?}"),
+    };
+    ensure!(
+        state.exited == Some(0),
+        "exit {:?}:\n{}",
+        state.exited,
+        state.text
+    );
+    Ok(())
 }
