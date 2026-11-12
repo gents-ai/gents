@@ -4,10 +4,12 @@ use std::time::Duration;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use tokio::sync::{watch, Notify};
 
-use crate::support::agent_requests::submit_user_request;
-use crate::support::interrupt::spawn_runtime;
-use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
-use crate::support::test_db;
+use crate::support::agent_requests::{submit_user_request, RequestActors};
+use crate::support::interrupt::{spawn_runtime, BootedAgent};
+use crate::support::live_inference::{
+    bind_target, live_target, wait_for_request_terminal, InferenceTarget,
+};
+use crate::support::{test_db, TestDb};
 
 #[derive(Clone)]
 struct Gate {
@@ -41,18 +43,31 @@ impl ToolDyn for Gate {
     }
 }
 
-struct Release(watch::Sender<bool>);
-impl Drop for Release {
+pub(crate) struct HeldTurn {
+    entered: Arc<Notify>,
+    release: watch::Sender<bool>,
+}
+impl HeldTurn {
+    pub(crate) async fn wait(&self) {
+        tokio::time::timeout(Duration::from_secs(120), self.entered.notified())
+            .await
+            .expect("live model did not reach the held tool");
+    }
+    pub(crate) fn release(&self) {
+        self.release.send_replace(true);
+    }
+}
+impl Drop for HeldTurn {
     fn drop(&mut self) {
-        self.0.send_replace(true);
+        self.release();
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
-    let target = live_target().await;
-    let db = test_db("live-queued-user-messages").await;
-    let actors = bind_target(&db, &target).await;
+pub(crate) async fn boot_held_turn(
+    db: &TestDb,
+    actors: &RequestActors,
+    target: &InferenceTarget,
+) -> (BootedAgent, HeldTurn) {
     gents_inference::backends::registry::set_backend_probe_status_as(
         &actors.fixture.access,
         actors.node_did(),
@@ -63,7 +78,6 @@ async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
     .unwrap();
     let entered = Arc::new(Notify::new());
     let (release, _) = watch::channel(false);
-    let _release = Release(release.clone());
     let built = gents::Gents::builder()
         .node(db.node.clone())
         .identity(db.node_identity.clone())
@@ -84,7 +98,16 @@ async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
         .build()
         .await
         .unwrap();
-    let runtime = spawn_runtime(&db, built).await;
+    let runtime = spawn_runtime(db, built).await;
+    (runtime, HeldTurn { entered, release })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
+    let target = live_target().await;
+    let db = test_db("live-queued-user-messages").await;
+    let actors = bind_target(&db, &target).await;
+    let (runtime, held) = boot_held_turn(&db, &actors, &target).await;
     let mut documents = Vec::new();
     documents.push(
         submit_user_request(
@@ -97,9 +120,7 @@ async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
         )
         .await,
     );
-    tokio::time::timeout(Duration::from_secs(120), entered.notified())
-        .await
-        .expect("live model did not reach the held tool");
+    held.wait().await;
     for (id, prompt) in [
         ("first", "Acknowledge the first queued message briefly."),
         ("second", "Acknowledge the second queued message briefly."),
@@ -116,7 +137,7 @@ async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
             .await,
         );
     }
-    release.send_replace(true);
+    held.release();
     for id in ["active", "first", "second"] {
         assert_eq!(
             wait_for_request_terminal(&actors.fixture.access, id, Duration::from_secs(120)).await,

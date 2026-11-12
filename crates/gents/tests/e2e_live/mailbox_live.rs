@@ -5,10 +5,11 @@ use gents_documents::mailbox_write_decl::{
 };
 use gents_documents::{DatastoreToolSurfaceDocument, DatastoreTools, SurfaceToolDecl, Tools};
 use gents_protocol::mailbox_question::{
-    MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption, MailboxQuestionReply,
-    MAILBOX_QUESTION_VERSION,
+    MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
 };
-use gents_protocol::operations::mailbox::MailboxListInput;
+use gents_protocol::operations::mailbox::{
+    MailboxListInput, MailboxReply, MailboxReplyRoute, MailboxReplySource,
+};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -185,41 +186,77 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         skip: Some(true),
         ..Default::default()
     };
-    let mut create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "live-mailbox-reply",
-        actors.node_did(),
-        actors.fixture.user.did(),
-        actors.agent_did(),
-        SESSION,
-        question.reply_content(&item.title, &answer).unwrap(),
-        "interactive",
-        canonical_now(),
-        AgentRequestAdmissionRecord::client(actors.fixture.user.did()),
+    submit_answer(&actors, item, answer, "live-mailbox-reply").await;
+    assert_eq!(
+        wait_for_request_terminal(
+            &actors.fixture.access,
+            "live-mailbox-reply",
+            Duration::from_secs(120)
+        )
+        .await,
+        "completed"
     );
-    create.caused_by_source_doc_id = Some(item.doc_id.clone());
-    create.input.question_reply = Some(
-        MailboxQuestionReply::new(
-            &item.doc_id,
+    let answered = mailbox::get(&actors.fixture.access, &item.doc_id)
+        .await
+        .unwrap();
+    assert_eq!(answered.status, "acted");
+    assert!(answered.resolved_doc_id.is_some());
+    assert!(
+        !terminal_assistant_answer(&actors.fixture.access, "live-mailbox-reply")
+            .await
+            .trim()
+            .is_empty()
+    );
+    runtime.shutdown().await;
+}
+
+async fn submit_answer(
+    actors: &RequestActors,
+    item: &gents_session::session::mailbox::MailboxItem,
+    mut answer: MailboxQuestionAnswer,
+    request_id: &str,
+) {
+    answer.question_hash = Some(
+        gents_protocol::mailbox_question::question_source_hash(
             &item.title,
             item.summary.as_deref(),
             item.payload.as_deref().unwrap(),
             item.request_id.as_deref(),
-            MailboxQuestionAnswer {
-                question_hash: Some(
-                    gents_protocol::mailbox_question::question_source_hash(
-                        &item.title,
-                        item.summary.as_deref(),
-                        item.payload.as_deref().unwrap(),
-                        item.request_id.as_deref(),
-                    )
-                    .unwrap(),
-                ),
-                ..answer
-            },
         )
         .unwrap(),
     );
+    let reply = mailbox::prepare_reply(
+        MailboxReplySource {
+            doc_id: &item.doc_id,
+            status: &item.status,
+            kind: &item.kind,
+            action: &item.action,
+            title: &item.title,
+            summary: item.summary.as_deref(),
+            payload: item.payload.as_deref(),
+            request_id: item.request_id.as_deref(),
+            session_id: item.session_id.as_deref(),
+            target_node_did: &item.target_node_did,
+            target_agent_did: &item.target_agent_did,
+        },
+        MailboxReply::Answer(answer),
+        &MailboxReplyRoute::default(),
+    )
+    .unwrap();
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        request_id,
+        actors.node_did(),
+        actors.fixture.user.did(),
+        actors.agent_did(),
+        SESSION,
+        reply.content,
+        "interactive",
+        canonical_now(),
+        AgentRequestAdmissionRecord::client(actors.fixture.user.did()),
+    );
+    create.caused_by_source_doc_id = Some(reply.mailbox_item_id);
+    create.input.question_reply = reply.question_reply;
     create.session_doc_id = Some(
         gents_session::request::lifecycle::reserve_goal_session(&actors.fixture.access, &create)
             .await
@@ -254,25 +291,88 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
     gents_session::request::lifecycle::submit_client_request(&actors.fixture.access, &create)
         .await
         .unwrap();
-    assert_eq!(
-        wait_for_request_terminal(
-            &actors.fixture.access,
-            "live-mailbox-reply",
-            Duration::from_secs(120)
-        )
-        .await,
-        "completed"
-    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn() {
+    let db = test_db("live-mailbox-busy").await;
+    let actors = configure(&db, true).await;
+    let runtime = boot_live_agent(&db, db.node_identity.clone())
+        .await
+        .unwrap();
+    let question = MailboxQuestion {
+        version: MAILBOX_QUESTION_VERSION,
+        prompt: "Continue?".into(),
+        options: ["yes", "no"]
+            .map(|id| MailboxQuestionOption {
+                id: id.into(),
+                label: id.into(),
+                description: None,
+                prompt: None,
+            })
+            .to_vec(),
+        multi_select: false,
+        allow_free_text: false,
+        optional: Some(true),
+        recommended_order: None,
+    };
+    file(
+        &actors,
+        json!({"title":"Continue", "payload":serde_json::to_string(&question).unwrap()}),
+    )
+    .await;
+    let items = mailbox::list(
+        &actors.fixture.access,
+        &MailboxListInput {
+            requester_did: Some(actors.fixture.user.did().into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let [item] = items.as_slice() else {
+        panic!("expected the question: {items:?}")
+    };
+    runtime.shutdown().await;
+    let target = live_target().await;
+    let (runtime, held) = super::queued_user_messages::boot_held_turn(&db, &actors, &target).await;
+    submit_user_request(
+        actors.node_did(),
+        &actors.fixture,
+        SESSION,
+        "live-mailbox-busy-turn",
+        "Call hold_turn now. After it returns, acknowledge briefly.",
+        Default::default(),
+    )
+    .await;
+    held.wait().await;
+    submit_answer(
+        &actors,
+        item,
+        MailboxQuestionAnswer {
+            option_ids: vec!["yes".into()],
+            ..Default::default()
+        },
+        "live-mailbox-busy-reply",
+    )
+    .await;
+    let rows = actors.fixture.access.execute(r#"{ AgentRequest(filter: {request_id: {_eq: "live-mailbox-busy-reply"}}) {_docID lifecycle_state} }"#).await.unwrap();
+    let reply = &rows["data"]["AgentRequest"][0];
+    assert_eq!(reply["lifecycle_state"], "pending");
+    held.release();
+    for id in ["live-mailbox-busy-turn", "live-mailbox-busy-reply"] {
+        assert_eq!(
+            wait_for_request_terminal(&actors.fixture.access, id, Duration::from_secs(120)).await,
+            "completed"
+        );
+    }
     let answered = mailbox::get(&actors.fixture.access, &item.doc_id)
         .await
         .unwrap();
     assert_eq!(answered.status, "acted");
-    assert!(answered.resolved_doc_id.is_some());
-    assert!(
-        !terminal_assistant_answer(&actors.fixture.access, "live-mailbox-reply")
-            .await
-            .trim()
-            .is_empty()
+    assert_eq!(
+        answered.resolved_doc_id.as_deref(),
+        reply["_docID"].as_str()
     );
     runtime.shutdown().await;
 }

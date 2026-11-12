@@ -1,4 +1,3 @@
-use gents::defra_node::{EventName, Node as EmbeddedNode};
 use gents_inference::llm::message::{
     AssistantContent, Message, Text, ToolResultContent, UserContent,
 };
@@ -9,7 +8,6 @@ use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
 use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use serde::Deserialize;
 use serde_json::Value;
-use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -266,56 +264,6 @@ async fn fetch_messages(
         messages.push(MessageRow { content });
     }
     messages
-}
-
-async fn bounded_diagnostic<T>(
-    timeout_duration: Duration,
-    diagnostic: impl std::future::Future<Output = T>,
-) -> String
-where
-    T: Debug,
-{
-    match tokio::time::timeout(timeout_duration, diagnostic).await {
-        Ok(value) => format!("{value:?}"),
-        Err(_) => format!("<unavailable: diagnostic query timed out after {timeout_duration:?}>"),
-    }
-}
-
-async fn wait_for_tool_completion_message(
-    node: &EmbeddedNode,
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    tool_call_id: &str,
-) -> MessageRow {
-    let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
-    let mut updates = node.subscribe(&[EventName::Update]);
-    let wait = async {
-        loop {
-            if let Some(message) = fetch_messages(access, session_id)
-                .await
-                .into_iter()
-                .find(|message| message.content.contains(&marker))
-            {
-                return message;
-            }
-            updates
-                .recv()
-                .await
-                .expect("embedded-node update subscription closed");
-        }
-    };
-    match tokio::time::timeout(std::time::Duration::from_secs(5), wait).await {
-        Ok(message) => message,
-        Err(_) => {
-            let messages =
-                bounded_diagnostic(Duration::from_secs(1), fetch_messages(access, session_id))
-                    .await;
-            panic!(
-                "tool completion message for {tool_call_id} was not appended; \
-                 last_messages={messages}"
-            );
-        }
-    }
 }
 
 async fn load_tool_call(

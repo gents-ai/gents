@@ -50,3 +50,6 @@ mod background_live;
 
 #[path = "e2e_runtime/queued_user_messages.rs"]
 mod queued_user_messages;
+
+#[path = "e2e_runtime/field_recovery_turn.rs"]
+mod field_recovery_turn;

@@ -8,8 +8,6 @@ mod completion_retry_tape;
 mod document_config_bootstrap;
 #[path = "e2e_runtime/fork_invariants.rs"]
 mod fork_invariants;
-#[path = "e2e_runtime/mailbox_tool_turn.rs"]
-mod mailbox_tool_turn;
 #[path = "e2e_runtime/provider_fixture_redaction.rs"]
 mod provider_fixture_redaction;
 #[path = "e2e_runtime/rendered_request_capture.rs"]
@@ -28,9 +26,6 @@ fn provider_wire_fixtures_do_not_contain_credentials() {
     provider_fixture_redaction::provider_wire_fixtures_do_not_contain_credentials()
         .expect("provider wire fixtures should be redacted");
 }
-
-#[path = "e2e_runtime/field_recovery_turn.rs"]
-mod field_recovery_turn;
 
 #[path = "e2e_runtime/queue_management.rs"]
 mod queue_management;

@@ -28,7 +28,11 @@ use crate::support::live_inference::{
     live_target, terminal_assistant_answer, wait_for_assistant_answer, wait_for_request_terminal,
     InferenceTarget, LiveAgentSpec, LiveUser,
 };
-use crate::support::{first_optional_row, snapshots::fetch_runtime_snapshot, test_db, TestDb};
+use crate::support::{
+    first_optional_row,
+    snapshots::{fetch_runtime_snapshot, SnapshotReader},
+    test_db, TestDb,
+};
 
 const RESEARCHER_AGENT_NAME: &str = "live-researcher";
 const BACKGROUND_WORKER_AGENT_NAME: &str = "live-background-worker";
@@ -53,10 +57,8 @@ fn completion_marker(tool_call_id: &str, tool_name: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_local_create_session() -> Result<()> {
     let target = live_target().await;
-    target.assert_reachable().await;
 
     let db = test_db("session-message-live-local").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
@@ -219,7 +221,6 @@ async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
     init_live_test_tracing();
 
     let target = live_target().await;
-    assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("backgrounding live workspace");
     let child_release = workspace.path().join("release-child");
@@ -982,7 +983,6 @@ notifications you have received so far in this conversation.";
 async fn live_fan_out_list_and_continue() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
-    assert_model_available(&target).await;
 
     let alpha_first = code_word("ALPHA");
     let alpha_second = code_word("ALPHATWO");
@@ -1260,7 +1260,6 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
 async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
-    assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("interrupt live workspace");
     let release = workspace.path().join("release-blocker");
@@ -1473,7 +1472,6 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
 async fn live_hop_bound_stops_chain() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
-    assert_model_available(&target).await;
 
     let db = test_db("session-message-live-hop").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
@@ -1748,7 +1746,6 @@ const LEAF_AGENT_NAME: &str = "live-leaf";
 async fn live_interrupt_does_not_cascade() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
-    assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("no-cascade workspace");
     let middle_release = workspace.path().join("release-middle");
@@ -2018,7 +2015,6 @@ const STEERED_AGENT_NAME: &str = "live-steered";
 async fn live_agent_message_interrupt_steers() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
-    assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("steer workspace");
     let release = workspace.path().join("release-steered");
@@ -2212,7 +2208,6 @@ with the code word it reports, verbatim.";
 async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
-    assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("goal workspace");
     let release = workspace.path().join("release-goal-worker");
@@ -2589,7 +2584,6 @@ async fn live_randomized_soak() -> Result<()> {
         "[live-soak] start; reproduce with GENTS_LIVE_SOAK_SEED={seed}"
     );
     let target = live_target().await;
-    assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("soak workspace");
     let gates = (0..SOAK_GATES)
@@ -3102,43 +3096,6 @@ tell the user the research is under way without calling any other tool. Do not a
 questions yourself. When a background completion notification arrives, relay its answer to the user \
 without calling any tool.";
 
-async fn assert_model_available(target: &InferenceTarget) {
-    let model = target.model();
-    let url = format!("{}/models", target.endpoint().trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("reqwest client");
-    let mut request = client.get(&url);
-    if let Some(key) = target.auth().resolve_api_key().expect("target credential") {
-        request = request.bearer_auth(key);
-    }
-    let response = tokio::time::timeout(Duration::from_secs(20), request.send())
-        .await
-        .unwrap_or_else(|_| panic!("live endpoint {url} timed out"))
-        .unwrap_or_else(|error| panic!("live endpoint {url} unreachable: {error}"));
-    assert!(
-        response.status().is_success(),
-        "live endpoint {url} returned status {}",
-        response.status()
-    );
-    let payload: serde_json::Value = response
-        .json()
-        .await
-        .unwrap_or_else(|error| panic!("live endpoint {url} returned invalid model JSON: {error}"));
-    let available = payload
-        .get("data")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("id").and_then(serde_json::Value::as_str))
-        .collect::<Vec<_>>();
-    assert!(
-        available.contains(&model),
-        "requested live model {model:?} is not served by {url}; available={available:?}"
-    );
-}
-
 async fn boot_document_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> Result<BootedAgent> {
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
@@ -3556,6 +3513,7 @@ async fn wait_for_caused_request(
     timeout: Duration,
 ) -> Option<CausedRequestRow> {
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = node.subscribe_changes("AgentRequest").await;
     loop {
         if let Some(caused) = fetch_caused_requests(node, parent_request_id)
             .await
@@ -3567,7 +3525,7 @@ async fn wait_for_caused_request(
         if tokio::time::Instant::now() >= deadline {
             return None;
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -3924,6 +3882,8 @@ async fn load_timeline(
     // A published header can name a closing segment whose parent link the
     // writer has not committed yet; that dependency is incomplete, not denied.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut changes = node.subscribe_changes("AgentOutputSegment").await;
+    let mut messages = node.subscribe_changes("AgentMessage").await;
     loop {
         match load_run_timeline_rows(&node.access, request_id).await {
             Ok(rows) => return rows,
@@ -3935,7 +3895,13 @@ async fn load_timeline(
                             .is_some_and(gents_protocol::output::ReconstructionError::is_incomplete)
                     }) =>
             {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                let _ = tokio::time::timeout_at(deadline, async {
+                    tokio::select! {
+                        _ = changes.recv() => (),
+                        _ = messages.recv() => (),
+                    }
+                })
+                .await;
             }
             Err(error) => panic!("load canonical timeline for {request_id}: {error:#}"),
         }
@@ -3979,6 +3945,7 @@ async fn wait_for_tool_call_state(
 ) -> ToolCallRow {
     let deadline = tokio::time::Instant::now() + timeout;
     let mut last = None;
+    let mut changes = node.subscribe_changes("AgentToolCall").await;
     loop {
         if let Some(row) = fetch_tool_call(node, request_id, session_id, tool_call_id).await {
             if row.lifecycle_state == expected_state {
@@ -3990,7 +3957,7 @@ async fn wait_for_tool_call_state(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for tool call {tool_call_id} state={expected_state}; last={last:?}"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -4029,6 +3996,7 @@ async fn wait_for_background_tool_call(
     timeout: Duration,
 ) -> ToolCallRow {
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = node.subscribe_changes("AgentToolCall").await;
     loop {
         if let Some(row) = timeline_tools(node, request_id)
             .await
@@ -4055,7 +4023,7 @@ async fn wait_for_background_tool_call(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for background tool {tool_name} in session {session_id}"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -4261,6 +4229,7 @@ async fn wait_for_message_containing(
     timeout: Duration,
 ) {
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = node.subscribe_changes("AgentMessage").await;
     loop {
         let found = load_session_messages(node, request_id, session_id)
             .await
@@ -4274,7 +4243,7 @@ async fn wait_for_message_containing(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for session {session_id} message containing {needle:?}"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -4301,6 +4270,7 @@ async fn wait_for_background_wake(
             ) {{ request_id input }}
         }}"#
     );
+    let mut changes = node.subscribe_changes("AgentRequest").await;
     loop {
         let response = node.execute(&query).await;
         assert!(
@@ -4335,7 +4305,7 @@ async fn wait_for_background_wake(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for coalesced background wake in session {session_id}"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
