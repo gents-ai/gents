@@ -90,7 +90,21 @@ def fallbackCheckpoint : Conformance.Family FallbackInput (Option FallbackCheckp
     (Compaction.Checkpoint.decode (i.fields.map fun field =>
       (field.name, (Json.parse field.value).toOption.getD Json.null))).map checkpointOf
 
-def listFieldsJson : Json := toJson Compaction.Checkpoint.listFields
+structure ListFieldInput where
+  name : String
+  deriving ToJson
+
+structure ListFieldOutput where
+  listed : Bool
+  inventory : List String
+  deriving ToJson
+
+@[conformance_family]
+def listFields : Conformance.Family ListFieldInput ListFieldOutput where
+  inputs := Compaction.Checkpoint.listFields.map fun name => { name }
+  model := fun i =>
+    { listed := Compaction.Checkpoint.listFields.contains i.name
+      inventory := Compaction.Checkpoint.listFields.mergeSort fun a b => a ≤ b }
 
 private def schema : Json := Json.mkObj [
   ("type", .str "object"), ("additionalProperties", .bool false),

@@ -1,5 +1,4 @@
 use super::*;
-use serde_json::Value;
 
 #[test]
 fn checkpoint_wire_fallback_matches_executed_model() {
@@ -12,22 +11,20 @@ fn checkpoint_wire_fallback_matches_executed_model() {
 
 #[test]
 fn checkpoint_wire_schema_owns_the_list_field_inventory() {
-    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let schema = schemars::schema_for!(ContinuationCheckpoint);
     let lists = schema.as_value()["properties"]
         .as_object()
         .unwrap()
         .iter()
         .filter(|(_, value)| value["type"] == "array" && value["items"]["type"] == "string")
-        .map(|(name, _)| name.as_str())
+        .map(|(name, _)| name.as_str().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
-    let modeled = contract["checkpoint_list_fields"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| value.as_str().unwrap())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(lists, modeled);
+    gents_lean_vocab::families::compaction_checkpoint_list_fields::replay(|i| {
+        gents_lean_vocab::families::compaction_checkpoint_list_fields::ListFieldOutput {
+            listed: lists.contains(i.name.as_str()),
+            inventory: lists.iter().cloned().collect(),
+        }
+    });
     assert_eq!(schema.as_value()["additionalProperties"], false);
 }
 

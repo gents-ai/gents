@@ -256,7 +256,6 @@ def snapshotPromptTailJson : String :=
       ++ promptAssemblyClaudeMapCasesJson ++ ","
     ++ "\"prompt_assembly_claude_body_cases\":"
       ++ promptAssemblyClaudeBodyCasesJson ++ ","
-    ++ "\"checkpoint_list_fields\":" ++ Conformance.CompactionCheckpoint.listFieldsJson.compress ++ ","
     ++ "\"prompt_assembly_claude_stream_cases\":"
       ++ promptAssemblyClaudeStreamCasesJson ++ ","
     ++ "\"prompt_assembly_claude_thinking_stream_cases\":"
