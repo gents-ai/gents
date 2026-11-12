@@ -965,8 +965,8 @@ def caseCoverage : List CoverageEntry :=
       "InvocationCorrelationCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "lsp_action_cases"
-      "LspActionCases")
+      "family"
+      "contracts_lsp_action_authorization")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "self_config_field_tables"

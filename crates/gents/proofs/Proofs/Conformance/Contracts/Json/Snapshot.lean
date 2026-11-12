@@ -823,8 +823,6 @@ def snapshotClientCasesJson : String :=
     ++ "\"invocation_correlation_cases\":" ++ invocationCorrelationCasesJson ++ ","
     ++ "\"goal_capability_resolution_cases\":"
       ++ goalCapabilityResolutionCasesJson ++ ","
-    ++ "\"lsp_action_cases\":"
-      ++ lspActionCasesJson ++ ","
     ++ "\"self_config_field_tables\":"
       ++ selfConfigFieldTablesJson ++ ","
     ++ "\"self_config_resource_read_exposure_cases\":"
