@@ -28,6 +28,7 @@ import {
   partsOf,
   resetInstalledPacks,
   statusOf,
+  sourceOf,
   resourceTree,
   nodeLinks,
   rememberPacksQuery,
@@ -331,6 +332,25 @@ describe("who published a pack", () => {
     expect(publisherOf("unread", "dave")).toBeNull();
     expect(publisherOf({}, "dave")).toBeNull();
   });
+
+  it("says where an installed pack came from, or nothing when its record predates sources", () => {
+    const from = (source: InstalledPack["source"]) => sourceOf({ ...research, source });
+    expect(from({ kind: "local", file_name: "research.pack" })).toBe(
+      "From research.pack",
+    );
+    expect(from({ kind: "local", file_name: null })).toBe("From a file");
+    expect(from({ kind: "store" })).toBe("From this node's pack store");
+    expect(
+      from({
+        kind: "registry",
+        namespace: "demo",
+        name: "research",
+        version: "1.0.0",
+        artifact_digest: "sha256:0",
+      }),
+    ).toBe("From the registry");
+    expect(from(undefined)).toBeNull();
+  });
 });
 
 describe("the Packs page", () => {
@@ -479,6 +499,28 @@ describe("the Packs page", () => {
     const versions = await screen.findByRole("region", { name: "Versions" });
     expect(within(versions).getByText(/Installed/)).toBeInTheDocument();
     expect(within(versions).getByText(/Latest/)).toBeInTheDocument();
+  });
+
+  it("names the file an installed pack came from when the registry has no record of it", async () => {
+    show(RESEARCH, {
+      listInstalledPacks: async () => ({
+        packs: [{ ...research, source: { kind: "local", file_name: "research.pack" } }],
+      }),
+      packInfo: async () => {
+        throw new Error("not in the registry");
+      },
+    });
+    expect(await screen.findByText(/From research\.pack/)).toBeInTheDocument();
+    expect(screen.queryByText(/registry has no record of it/)).toBeNull();
+  });
+
+  it("still says a pack may have come from a file or a link when its source is unknown", async () => {
+    show(RESEARCH, {
+      packInfo: async () => {
+        throw new Error("not in the registry");
+      },
+    });
+    expect(await screen.findByText(/registry has no record of it/)).toBeInTheDocument();
   });
 
   it("opens a pack's page in place, or in a new window on a modified click", async () => {

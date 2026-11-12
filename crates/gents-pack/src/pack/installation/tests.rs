@@ -100,6 +100,18 @@ async fn install_source_is_recorded_and_retained_across_updates() {
     assert_eq!(row["history"], json!([identity("1.0.0").digest]));
     assert_eq!(row["source_history"].as_array().unwrap().len(), 1);
     assert!(!row.to_string().contains("/private/packs"));
+
+    let listed = list_installed_packs(&access, OWNER).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&listed[0].source).unwrap(),
+        row["source"],
+        "the installed list reports the recorded source"
+    );
+    let read = read_installed_pack(&access, OWNER, &unchanged.coordinate)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.source, listed[0].source);
 }
 
 #[test]
@@ -471,6 +483,7 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
             coordinate: "acme/demo".into(),
             version: "1".into(),
             digest: identity("1").digest,
+            source: None,
         }]
     );
     assert_eq!(
@@ -481,6 +494,7 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
             coordinate: "acme/demo".into(),
             version: "1".into(),
             digest: identity("1").digest,
+            source: None,
         })
     );
     assert_eq!(
@@ -1235,7 +1249,6 @@ async fn install_dependee(
     .await
     .unwrap();
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

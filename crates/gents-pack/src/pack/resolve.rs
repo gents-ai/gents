@@ -174,6 +174,7 @@ mod tests {
                         coordinate: format!("gents/{}", pack.name),
                         version: pack.version.text.clone(),
                         digest: header.digest,
+                        source: None,
                     }
                 })
                 .collect();

@@ -466,6 +466,20 @@ export function statusOf(pack: InstalledPack): { text: string; warn: boolean } {
   return { text: pack.installed, warn: false };
 }
 
+export function sourceOf(pack: InstalledPack): string | null {
+  const source = pack.source;
+  switch (source?.kind) {
+    case "local":
+      return source.file_name ? `From ${source.file_name}` : "From a file";
+    case "store":
+      return "From this node's pack store";
+    case "registry":
+      return "From the registry";
+    default:
+      return null;
+  }
+}
+
 /** installed packs in a steady order: ones with an update first, then by
     the name the row shows */
 export function byAttention(a: InstalledPack, b: InstalledPack) {

@@ -61,6 +61,7 @@ pub(crate) async fn outdated_packs_on(
             "pack": pack.coordinate,
             "installed": pack.version,
             "digest": pack.digest,
+            "source": pack.source,
             "latest": latest,
             "outdated": outdated,
             "error": error,
@@ -542,6 +543,10 @@ mod tests {
         let packs = report["packs"].as_array().unwrap();
         assert_eq!(packs.len(), 1, "{packs:?}");
         assert_eq!(packs[0]["pack"], "fixture/assets_fixture");
+        assert_eq!(
+            packs[0]["source"]["kind"], "local",
+            "a pack installed from a path reports that it came from a file: {packs:?}"
+        );
         assert!(
             !home.path().join("data").exists(),
             "outdated never opened a node either"
