@@ -39,3 +39,6 @@ pub mod recovery_fixtures {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod slot_accounting_tests;

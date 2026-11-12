@@ -29,11 +29,11 @@ use admission_slot_accounting::{
 use gents_lean_vocab::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
-    lean_backend_health_cases, lean_client_agent_readiness_cases, lean_command_env_case,
+    lean_client_agent_readiness_cases, lean_command_env_case,
     lean_command_policy_case, lean_command_sandbox_case, lean_compaction_cursor_cases,
     lean_compaction_reducer_cases, lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_inference_slot_accounting_cases, lean_interrupt_disposition_cases, lean_mcp_health_cases,
+    lean_interrupt_disposition_cases, lean_mcp_health_cases,
     lean_queue_deadline_cases, lean_r4c_background_work_cases,
     lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_restart_disposition_cases,
@@ -46,12 +46,9 @@ use support::snapshots::{
     fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
 };
 use support::{
-    build_request, first_optional_row, first_row, test_db, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
-    NODE_DID,
+    build_request, first_optional_row, first_row, test_db, BACKEND_ID, DEADLINE_SECS,
 };
 
-#[path = "conformance/backend_health.rs"]
-mod backend_health;
 #[path = "conformance/background.rs"]
 mod background;
 #[path = "conformance/callback_lifecycle.rs"]
@@ -62,8 +59,6 @@ mod client_runtime;
 mod command_policy;
 #[path = "conformance/compaction_gate.rs"]
 mod compaction_gate;
-#[path = "conformance/completion_retry.rs"]
-mod completion_retry;
 #[path = "conformance/coverage.rs"]
 mod coverage;
 #[path = "conformance/directory_projection.rs"]
@@ -74,14 +69,10 @@ mod enrollment;
 mod eval;
 #[path = "conformance/event_delivery.rs"]
 mod event_delivery;
-#[path = "conformance/fleet.rs"]
-mod fleet;
 #[path = "conformance/goals.rs"]
 mod goals;
 #[path = "conformance/hooks.rs"]
 mod hooks;
-#[path = "conformance/inference_call.rs"]
-mod inference_call;
 #[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
 #[path = "conformance/lsp.rs"]
@@ -206,11 +197,6 @@ fn generated_self_config_cases_fence_patch_merge() {
 }
 
 #[test]
-fn completion_retry_lean_witness_cases_hold() {
-    completion_retry::completion_retry_lean_witness_cases_hold();
-}
-
-#[test]
 fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
     pairing_reconcile::pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep();
 }
@@ -228,11 +214,6 @@ fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {
 #[test]
 fn generated_mcp_health_cases_pin_threshold_projection_shape() {
     mcp_health::generated_mcp_health_cases_pin_threshold_projection_shape();
-}
-
-#[test]
-fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
-    backend_health::generated_backend_health_cases_pin_threshold_and_veto_shape();
 }
 
 #[test]
@@ -283,17 +264,6 @@ fn edit_match_relaxed_rung_hits_respect_the_ambiguity_gate() {
 #[test]
 fn edit_match_insert_before_desugar_applies_to_every_replace_all_site() {
     edit_match::insert_before_desugar_applies_to_every_replace_all_site();
-}
-
-#[tokio::test]
-async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstruction() {
-    inference_call::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction()
-        .await;
-}
-
-#[test]
-fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
-    fleet::generated_slot_accounting_cases_pin_inference_and_fleet_contracts();
 }
 
 #[tokio::test]

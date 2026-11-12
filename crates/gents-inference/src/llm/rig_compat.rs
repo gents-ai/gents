@@ -368,3 +368,6 @@ mod usage_tests {
         assert_eq!(gents_loop::rig_compat::observed_request_id(&bare), None);
     }
 }
+
+#[cfg(test)]
+mod pushdown_tests;

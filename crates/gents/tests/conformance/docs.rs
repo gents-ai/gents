@@ -128,7 +128,7 @@ fn rig_vocabulary_confined_to_the_seam() {
         "crates/gents/src/runtime/agent/stream_processor_tests.rs",
         "crates/gents-inference/src/compaction/tests.rs",
         "crates/gents/src/turn/completion_factory/tests.rs",
-        "crates/gents/src/turn/provider_input/tests.rs",
+        "crates/gents-inference/src/clients/pushdown_tests.rs",
         "crates/gents-protocol/src/message.rs",
     ]
     .into_iter()

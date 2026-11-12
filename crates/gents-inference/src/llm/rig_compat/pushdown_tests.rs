@@ -1,15 +1,13 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use gents_inference::llm::rig_compat::classify_completion_error;
+use crate::llm::rig_compat::classify_completion_error;
 use gents_loop::completion_retry::{
     failure_class, retry_wake_fits_deadline, CompletionRetryPolicy, CompletionRetryState,
     FailureClass, MidStreamDirective, PreStreamDirective, RetryKind,
 };
 use gents_loop::error::InferenceError;
 
-/// A synthetic attempt failure as the loop classifies one: the provider
-/// report reads the attempt text and the error's rendering.
 fn classified(error: &InferenceError, text: &str) -> gents_loop::error::ClassifiedFailure {
     gents_loop::error::ClassifiedFailure {
         error: error.clone(),
@@ -51,7 +49,8 @@ use gents_lean_vocab::{
     LeanContractVocabulary,
 };
 
-pub(super) fn completion_retry_lean_witness_cases_hold() {
+#[test]
+fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
@@ -220,7 +219,7 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
             rig::completion::CompletionError::ProviderError("connection reset".into()),
         ),
         "provider_stream_malformed" => {
-            use gents_inference::clients::claude_messages::{
+            use crate::clients::claude_messages::{
                 parse_messages_sse, parse_messages_sse_typed, MessagesParseError,
                 ThinkingParseCause,
             };
@@ -320,7 +319,7 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
                 case.name
             );
             if origin == "provider_stream_malformed" {
-                let mut parser = gents_inference::clients::claude_messages::MessagesSseState::new(
+                let mut parser = crate::clients::claude_messages::MessagesSseState::new(
                     Default::default(),
                 );
                 let preview_sse = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"partial\"}}\n\n";
@@ -662,8 +661,6 @@ fn account_policy(hops: u32) -> CompletionRetryPolicy {
     }
 }
 
-/// The modeled `schedule` of a retracted account limit with hops left is an
-/// immediate reissue: attempt advances, no backoff, no transport budget.
 fn assert_account_limit_reissues_at_once(case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(account_policy(2));
     match state.on_pre_stream_failure(&account_limited_failure(), now(), None) {
@@ -681,7 +678,6 @@ fn assert_account_limit_reissues_at_once(case: &LeanCompletionRetryCase) {
     assert_eq!(case.expected_attempt, Some(1));
 }
 
-/// With every hop spent the modeled `schedule` is exhausted: the usage-limit reason.
 fn assert_account_hops_exhausted(case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(account_policy(1));
     assert!(matches!(
@@ -700,8 +696,6 @@ fn assert_account_hops_exhausted(case: &LeanCompletionRetryCase) {
     assert_eq!(case.expected_account_used, Some(1));
 }
 
-/// The modeled `schedule` of a retracted overflow is the one compaction;
-/// once spent, the next overflow is exhausted rather than backed off.
 fn assert_context_overflow_compacts_once() {
     let mut state = CompletionRetryState::new(scheduled_like_policy());
     assert!(matches!(

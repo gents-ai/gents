@@ -209,3 +209,6 @@ mod wire_tests;
 
 #[cfg(test)]
 mod sse_tests;
+
+#[cfg(test)]
+mod pushdown_tests;
