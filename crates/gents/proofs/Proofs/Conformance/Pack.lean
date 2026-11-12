@@ -357,6 +357,52 @@ def store : Family StoreScript StoreObservation where
         , did .receive (pack "store_a" (plain "latest")) ], []⟩ ]
   model := observeStore
 
+/-! ## Removing a pack -/
+
+structure RemovalScript where
+  name : String
+  steps : List Step
+  /-- The archives the removed pack and its dependencies used. -/
+  candidates : List Store.Pack
+  /-- The archives the remaining home records and installations reference. -/
+  referenced : List Store.Pack
+  deriving ToJson
+
+structure RemovalView where
+  pack : Store.Pack
+  released : Bool
+  contains : Bool
+  indexed : Bool
+  unpacked : Bool
+  deriving ToJson
+
+def observeRemoval (script : RemovalScript) : List RemovalView :=
+  let state := (run State.empty script.steps).1
+  let removed := state.removePack script.candidates script.referenced
+  (script.steps.map (·.pack) ++ script.candidates ++ script.referenced).eraseDups.map fun pack =>
+    { pack, released := pack ∈ removed.2, contains := removed.1.contains pack
+      indexed := pack ∈ removed.1.index, unpacked := pack ∈ removed.1.unpacked }
+
+private def b1 := pack "store_b" (release 1 0 0)
+
+@[conformance_family]
+def storeRemoval : Family RemovalScript (List RemovalView) where
+  inputs :=
+    [ ⟨"removal deletes an archive nothing else references", [did .receive a1], [a1], []⟩
+    , ⟨"an archive a remaining record references stays", [did .receive a1], [a1], [a1]⟩
+    , ⟨"removal deletes only the removed pack's archives",
+        [did .receive a1, did .receive a2], [a1], []⟩
+    , ⟨"a dependency's archive goes with the pack when nothing else references it",
+        [did .receive a1, did .receive b1], [a1, b1], []⟩
+    , ⟨"a dependency another pack still references stays",
+        [did .receive a1, did .receive b1], [a1, b1], [b1]⟩
+    , ⟨"a released archive takes its unpacked copy and its index entry",
+        [did .receive a1, did .openPack a1], [a1], []⟩
+    , ⟨"a candidate whose archive was already lost releases nothing and loses its index entry",
+        [did .receive a1, did .loseArchive a1], [a1], []⟩
+    , ⟨"a candidate the store never received releases nothing", [], [a1], []⟩ ]
+  model := observeRemoval
+
 
 /-! ## Resolving a pack by name -/
 
