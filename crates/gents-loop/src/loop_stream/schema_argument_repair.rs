@@ -136,50 +136,34 @@ fn repair_with_decoder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Deserialize;
 
-    #[derive(Deserialize)]
-    struct Snapshot {
-        schema_argument_repair_cases: Vec<Case>,
-    }
-
-    #[derive(Deserialize)]
-    struct Case {
-        name: String,
-        schema: Value,
-        input: Value,
-        expected: Value,
-        paths: Vec<String>,
-        parses: Vec<ParseObservation>,
-        native_schema: Value,
-        native_input: Value,
-        native_expected: Value,
-        native_paths: Vec<String>,
-    }
-
-    #[derive(Deserialize)]
-    struct ParseObservation {
-        raw: String,
-        accepted: bool,
-        parsed: Value,
+    fn object(value: &std::collections::BTreeMap<String, Value>) -> Value {
+        Value::Object(
+            value
+                .iter()
+                .map(|(key, field)| (key.clone(), field.clone()))
+                .collect(),
+        )
     }
 
     #[test]
     fn generated_schema_argument_repairs_match_the_executable_model() {
-        let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert!(!snapshot.schema_argument_repair_cases.is_empty());
-        for case in snapshot.schema_argument_repair_cases {
+        let cases = &gents_lean_vocab::lean_contract_snapshot().schema_argument_repair_cases;
+        assert!(!cases.is_empty());
+        for case in cases {
             let mut observations = std::collections::BTreeMap::new();
-            for observed in case.parses {
+            for observed in &case.parses {
                 let actual = serde_json::from_str::<Value>(&observed.raw).ok();
-                let expected = observed.accepted.then_some(observed.parsed);
+                let expected = observed
+                    .accepted
+                    .then(|| observed.parsed.clone().unwrap_or(Value::Null));
                 assert_eq!(
                     actual, expected,
                     "{}: native parse {:?}",
                     case.name, observed.raw
                 );
                 assert!(
-                    observations.insert(observed.raw, actual).is_none(),
+                    observations.insert(observed.raw.clone(), actual).is_none(),
                     "{}: duplicate parse observation",
                     case.name
                 );
@@ -194,20 +178,38 @@ mod tests {
                 );
                 actual
             };
-            let mut value = case.input;
-            let paths = repair_with_decoder(&case.schema, &mut value, &mut parse);
-            assert_eq!(value, case.expected, "{}", case.name);
-            assert_eq!(paths, case.paths, "{}", case.name);
-            assert!(
-                repair_with_decoder(&case.schema, &mut value, &mut parse).is_empty(),
+            let schema = object(&case.schema);
+            let mut value = case.input.clone().unwrap_or(Value::Null);
+            let paths = repair_with_decoder(&schema, &mut value, &mut parse);
+            assert_eq!(
+                value,
+                case.expected.clone().unwrap_or(Value::Null),
                 "{}",
                 case.name
             );
-            assert_eq!(value, case.expected, "{}: second pass", case.name);
-            let mut native = case.native_input;
-            let paths = repair_with_decoder(&case.native_schema, &mut native, &mut parse);
+            assert_eq!(paths, case.paths, "{}", case.name);
+            assert!(
+                repair_with_decoder(&schema, &mut value, &mut parse).is_empty(),
+                "{}",
+                case.name
+            );
             assert_eq!(
-                native, case.native_expected,
+                value,
+                case.expected.clone().unwrap_or(Value::Null),
+                "{}: second pass",
+                case.name
+            );
+            let native_schema = serde_json::json!({
+                "type": case.native_schema.r#type,
+                "properties": { "value": object(&case.native_schema.properties.value) },
+                "required": case.native_schema.required,
+                "additionalProperties": case.native_schema.additional_properties,
+            });
+            let mut native = serde_json::json!({ "value": case.native_input.value });
+            let paths = repair_with_decoder(&native_schema, &mut native, &mut parse);
+            assert_eq!(
+                native,
+                serde_json::json!({ "value": case.native_expected.value }),
                 "{}: tool-call root",
                 case.name
             );

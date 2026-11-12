@@ -45,33 +45,49 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
     let mut tools: Vec<Box<dyn ToolDyn>> = Vec::new();
     let mut turn = Vec::new();
     for (index, case) in cases.iter().enumerate() {
-        for observed in case["parses"].as_array().unwrap() {
-            let parsed =
-                serde_json::from_str::<serde_json::Value>(observed["raw"].as_str().unwrap()).ok();
+        for observed in &case.parses {
+            let parsed = serde_json::from_str::<serde_json::Value>(&observed.raw).ok();
             assert_eq!(
                 parsed.is_some(),
-                observed["accepted"].as_bool().unwrap(),
+                observed.accepted,
                 "{}: native decoder acceptance",
-                case["name"]
+                case.name
             );
             assert_eq!(
                 serde_json::to_value(parsed).unwrap(),
-                observed["parsed"],
+                observed
+                    .parsed
+                    .clone()
+                    .unwrap_or(serde_json::Value::Null),
                 "{}: native decoder",
-                case["name"]
+                case.name
             );
         }
         let name = format!("repair_case_{index}");
         tools.push(Box::new(SchemaArgumentProbe {
             name: name.clone(),
-            schema: case["native_schema"].clone(),
-            expected: case["native_expected"].clone(),
+            schema: serde_json::json!({
+                "type": case.native_schema.r#type,
+                "properties": {
+                    "value": serde_json::Value::Object(
+                        case.native_schema
+                            .properties
+                            .value
+                            .iter()
+                            .map(|(key, field)| (key.clone(), field.clone()))
+                            .collect(),
+                    ),
+                },
+                "required": case.native_schema.required,
+                "additionalProperties": case.native_schema.additional_properties,
+            }),
+            expected: serde_json::json!({ "value": case.native_expected.value }),
             calls: calls.clone(),
         }));
         turn.push(RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
             format!("repair-{index}"),
             name,
-            case["native_input"].clone(),
+            serde_json::json!({ "value": case.native_input.value }),
         )));
     }
     turn.push(RawStreamingChoice::FinalResponse(()));
@@ -119,9 +135,9 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
         .unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&arguments).unwrap(),
-            case["native_expected"],
+            serde_json::json!({ "value": case.native_expected.value }),
             "{}: durable accepted arguments",
-            case["name"]
+            case.name
         );
     }
     let requests = model.seen_requests().await;
@@ -144,9 +160,10 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
     assert_eq!(threaded.len(), cases.len());
     for (call, case) in threaded.iter().zip(cases) {
         assert_eq!(
-            call.function.arguments, case["native_expected"],
+            call.function.arguments,
+            serde_json::json!({ "value": case.native_expected.value }),
             "{}: replay",
-            case["name"]
+            case.name
         );
     }
     node.shutdown().await.expect("node shutdown");
