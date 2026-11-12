@@ -189,8 +189,13 @@ async fn inbound_uri_escape_is_policy_denied() {
 
 #[tokio::test]
 async fn lsp_entries_start_servers_as_the_lean_model() {
-    use gents_lean_vocab::families::lsp_server_start_entries as family;
-    for case in family::cases::<String, String, LspAction, String, String>() {
+    for case in gents_lean_vocab::families::lsp_server_start_entries::cases::<
+        String,
+        String,
+        LspAction,
+        String,
+        String,
+    >() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(
             root.path().join("Cargo.toml"),
@@ -273,11 +278,13 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
             }
             _ => panic!("unknown Lean LSP entry {:?}", case.input),
         };
-        case.check(family::Observation {
-            refusal,
-            starts_server: pool.live_count().await > 0,
-            report,
-        });
+        case.check(
+            gents_lean_vocab::families::lsp_server_start_entries::Observation {
+                refusal,
+                starts_server: pool.live_count().await > 0,
+                report,
+            },
+        );
     }
 }
 
