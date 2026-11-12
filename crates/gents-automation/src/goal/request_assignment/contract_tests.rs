@@ -1,4 +1,8 @@
 use super::*;
+use gents_lean_vocab::{
+    LeanGoalRequestAssignmentCaseEntry, LeanGoalRequestAssignmentCaseExpectedObservation,
+    LeanGoalRequestAssignmentCaseExpectedQueueScope,
+};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -77,28 +81,45 @@ pub(super) async fn entry(value: &Value, identities: &[KeyIdentity]) -> AgentReq
     serde_json::from_value(row).unwrap()
 }
 
+pub(super) fn case_entry_value(case: &LeanGoalRequestAssignmentCaseEntry) -> Value {
+    json!({
+        "doc": case.doc,
+        "owner": case.owner,
+        "session": case.session,
+        "reference": case.reference.as_ref().map(|reference| json!({
+            "goal": reference.goal,
+            "root": reference.root,
+        })),
+        "signature_valid": case.signature_valid,
+    })
+}
+
 #[tokio::test]
 async fn generated_goal_request_assignments_drive_signed_binding() {
-    #[derive(serde::Deserialize)]
-    struct Contracts {
-        goal_request_assignment_cases: Vec<Value>,
-    }
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_request_assignment_cases.len(), 18);
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_assignment_cases;
+    assert_eq!(cases.len(), 18);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("one.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("two.key"), None).unwrap(),
     ];
-    for case in contracts.goal_request_assignment_cases {
-        let entry = entry(&case["entry"], &identities).await;
-        assert_eq!(
-            request_belongs_to_goal(&goal(&case["assignment"], &identities), &entry),
-            case["expected_member"].as_bool().unwrap(),
-            "{}: membership",
-            case["name"]
+    for case in cases {
+        let entry = entry(&case_entry_value(&case.entry), &identities).await;
+        let assignment = goal(
+            &json!({
+                "owner": case.assignment.owner,
+                "session": case.assignment.session,
+                "goal": case.assignment.goal,
+                "root": case.assignment.root,
+            }),
+            &identities,
         );
-        let assignment = goal(&case["assignment"], &identities);
+        assert_eq!(
+            request_belongs_to_goal(&assignment, &entry),
+            case.expected_member,
+            "{}: membership",
+            case.name
+        );
         if assignment.assignment_root_request_doc_id.is_some() {
             assert_eq!(
                 super::super::request_head::latest_goal_request(
@@ -106,46 +127,118 @@ async fn generated_goal_request_assignments_drive_signed_binding() {
                     std::slice::from_ref(&entry)
                 )
                 .map(|row| row.doc_id.as_ref()),
-                case["expected_member"]
-                    .as_bool()
-                    .unwrap()
-                    .then_some(entry.doc_id.as_ref()),
+                case.expected_member.then_some(entry.doc_id.as_ref()),
                 "{}: signed assignment head",
-                case["name"],
+                case.name,
             );
         }
-        let goals = case["observed"]
-            .as_array()
-            .unwrap()
+        let goals = case
+            .observed
             .iter()
-            .map(|value| goal(value, &identities))
+            .map(|value| {
+                goal(
+                    &json!({
+                        "owner": value.owner,
+                        "session": value.session,
+                        "goal": value.goal,
+                        "root": value.root,
+                    }),
+                    &identities,
+                )
+            })
             .collect::<Vec<_>>();
         let observation = observe_request_assignment(&goals, &entry);
-        let scope = request_assignment_scope(&entry, &observation).ok().map(|scope| match scope {
-            RequestAssignmentScope::Unassigned => json!({"kind":"unassigned"}),
-            RequestAssignmentScope::Unresolved { entry_doc_id } => json!({"kind":"unresolved",
-                "entry":entry_doc_id.strip_prefix("physical-").unwrap().parse::<u64>().unwrap()}),
-            RequestAssignmentScope::Referenced(reference) => json!({"kind":"referenced",
-                "goal":reference.goal_id.strip_prefix("goal-").unwrap().parse::<u64>().unwrap(),
-                "root":reference.root_request_doc_id.unwrap().strip_prefix("physical-").unwrap().parse::<u64>().unwrap()}),
-        });
-        assert_eq!(
-            scope.unwrap_or(Value::Null),
-            case["expected_queue_scope"],
-            "{}: queue scope",
-            case["name"]
-        );
+        let scope = request_assignment_scope(&entry, &observation)
+            .ok()
+            .map(|scope| match scope {
+                RequestAssignmentScope::Unassigned => {
+                    LeanGoalRequestAssignmentCaseExpectedQueueScope {
+                        entry: None,
+                        goal: None,
+                        kind: "unassigned".into(),
+                        root: None,
+                    }
+                }
+                RequestAssignmentScope::Unresolved { entry_doc_id } => {
+                    LeanGoalRequestAssignmentCaseExpectedQueueScope {
+                        entry: Some(
+                            entry_doc_id
+                                .strip_prefix("physical-")
+                                .unwrap()
+                                .parse::<u64>()
+                                .unwrap(),
+                        ),
+                        goal: None,
+                        kind: "unresolved".into(),
+                        root: None,
+                    }
+                }
+                RequestAssignmentScope::Referenced(reference) => {
+                    LeanGoalRequestAssignmentCaseExpectedQueueScope {
+                        entry: None,
+                        goal: Some(
+                            reference
+                                .goal_id
+                                .strip_prefix("goal-")
+                                .unwrap()
+                                .parse::<u64>()
+                                .unwrap(),
+                        ),
+                        kind: "referenced".into(),
+                        root: Some(
+                            reference
+                                .root_request_doc_id
+                                .unwrap()
+                                .strip_prefix("physical-")
+                                .unwrap()
+                                .parse::<u64>()
+                                .unwrap(),
+                        ),
+                    }
+                }
+            });
+        assert_eq!(scope, case.expected_queue_scope, "{}: queue scope", case.name);
         let actual = match observation {
-            RequestAssignmentObservation::None => json!({"kind":"unassigned"}),
-            RequestAssignmentObservation::Unknown => json!({"kind":"unknown"}),
-            RequestAssignmentObservation::Assigned(goal) => json!({"kind":"assigned",
-                "goal":goal.goal_id.strip_prefix("goal-").unwrap().parse::<u64>().unwrap(),
-                "root":goal.assignment_root_request_doc_id.as_deref().unwrap().strip_prefix("physical-").unwrap().parse::<u64>().unwrap()}),
+            RequestAssignmentObservation::None => {
+                LeanGoalRequestAssignmentCaseExpectedObservation {
+                    goal: None,
+                    kind: "unassigned".into(),
+                    root: None,
+                }
+            }
+            RequestAssignmentObservation::Unknown => {
+                LeanGoalRequestAssignmentCaseExpectedObservation {
+                    goal: None,
+                    kind: "unknown".into(),
+                    root: None,
+                }
+            }
+            RequestAssignmentObservation::Assigned(goal) => {
+                LeanGoalRequestAssignmentCaseExpectedObservation {
+                    goal: Some(
+                        goal.goal_id
+                            .strip_prefix("goal-")
+                            .unwrap()
+                            .parse::<u64>()
+                            .unwrap(),
+                    ),
+                    kind: "assigned".into(),
+                    root: Some(
+                        goal.assignment_root_request_doc_id
+                            .as_deref()
+                            .unwrap()
+                            .strip_prefix("physical-")
+                            .unwrap()
+                            .parse::<u64>()
+                            .unwrap(),
+                    ),
+                }
+            }
         };
         assert_eq!(
-            actual, case["expected_observation"],
+            actual, case.expected_observation,
             "{}: assignment",
-            case["name"]
+            case.name
         );
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use gents_lean_vocab::LeanGoalRequestAssignmentCaseExpectedQueueScope;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -43,10 +44,7 @@ impl gents_store::config_client::ConfigRead for ReadScope {
 
 #[tokio::test]
 async fn signed_scope_reads_use_the_executed_assignment_contract_without_history() {
-    let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contracts["goal_request_assignment_cases"]
-        .as_array()
-        .unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_assignment_cases;
     assert!(!cases.is_empty());
     let home = tempfile::tempdir().unwrap();
     let identities = [
@@ -54,7 +52,11 @@ async fn signed_scope_reads_use_the_executed_assignment_contract_without_history
         KeyIdentity::load_or_create(home.path().join("two.key"), None).unwrap(),
     ];
     for case in cases {
-        let row = super::contract_tests::entry(&case["entry"], &identities).await;
+        let row = super::contract_tests::entry(
+            &super::contract_tests::case_entry_value(&case.entry),
+            &identities,
+        )
+        .await;
         let explicit = row
             .input
             .as_ref()
@@ -79,11 +81,30 @@ async fn signed_scope_reads_use_the_executed_assignment_contract_without_history
                 .await
                 .unwrap();
             let RequestAssignmentScope::Referenced(reference) = scope else {
-                panic!("{}", case["name"])
+                panic!("{}", case.name)
             };
-            let actual = json!({"kind":"referenced", "goal":reference.goal_id.strip_prefix("goal-").unwrap().parse::<u64>().unwrap(),
-                "root":reference.root_request_doc_id.unwrap().strip_prefix("physical-").unwrap().parse::<u64>().unwrap()});
-            assert_eq!(actual, case["expected_queue_scope"], "{}", case["name"]);
+            let actual = LeanGoalRequestAssignmentCaseExpectedQueueScope {
+                entry: None,
+                goal: Some(
+                    reference
+                        .goal_id
+                        .strip_prefix("goal-")
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap(),
+                ),
+                kind: "referenced".into(),
+                root: Some(
+                    reference
+                        .root_request_doc_id
+                        .unwrap()
+                        .strip_prefix("physical-")
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap(),
+                ),
+            };
+            assert_eq!(Some(actual), case.expected_queue_scope, "{}", case.name);
             assert!(scopes
                 .scope_for_request(&doc, "another-logical-request")
                 .await
@@ -94,7 +115,7 @@ async fn signed_scope_reads_use_the_executed_assignment_contract_without_history
             assert!(
                 result.unwrap().scope(&doc).await.is_err(),
                 "{}",
-                case["name"]
+                case.name
             );
             assert_eq!(
                 reader.history_reads.load(Ordering::Relaxed),
