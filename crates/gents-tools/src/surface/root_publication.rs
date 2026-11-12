@@ -678,7 +678,7 @@ mod tests {
         let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_root_access_cases;
         assert!(!cases.is_empty());
         for case in cases {
-            let key = match case["actor"].as_str().unwrap() {
+            let key = match case.actor.as_str() {
                 "user" => &user as &dyn NodeIdentity,
                 "runtime" => &runtime,
                 "writer" => writer.as_ref(),
@@ -686,7 +686,7 @@ mod tests {
                 "other" => &other,
                 actor => panic!("unknown modeled actor {actor}"),
             };
-            let permission = match case["permission"].as_str().unwrap() {
+            let permission = match case.permission.as_str() {
                 "read" => defra_node::DocumentPermission::Read,
                 "update" => defra_node::DocumentPermission::Update,
                 "delete" => defra_node::DocumentPermission::Delete,
@@ -702,7 +702,7 @@ mod tests {
                     &root_doc,
                 )
                 .await?;
-            assert_eq!(allowed, case["expected"].as_bool().unwrap(), "{case}");
+            assert_eq!(allowed, case.expected, "{case:?}");
             let may_publish = node
                 .document_acp()
                 .check_doc_access(
@@ -713,12 +713,8 @@ mod tests {
                     &node_doc,
                 )
                 .await?;
-            assert_eq!(
-                may_publish,
-                case["may_publish"].as_bool().unwrap(),
-                "{case}"
-            );
-            if case["permission"] == "read" {
+            assert_eq!(may_publish, case.may_publish, "{case:?}");
+            if case.permission == "read" {
                 let guard = crate::surface::RootExecutionGuard {
                     agent_did: writer.did().to_owned(),
                     selected_root: Some(std::path::PathBuf::from(&path)),
@@ -726,8 +722,8 @@ mod tests {
                 };
                 assert_eq!(
                     guard.validate(&node, key).await.is_ok(),
-                    case["writer_execution"].as_bool().unwrap(),
-                    "{case}"
+                    case.writer_execution,
+                    "{case:?}"
                 );
                 let query = format!(
                     "{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
@@ -737,7 +733,7 @@ mod tests {
                 assert_eq!(
                     !value_rows(&response, "WorkspaceRoot")?.is_empty(),
                     allowed,
-                    "{case}"
+                    "{case:?}"
                 );
             }
         }
@@ -764,9 +760,9 @@ mod tests {
         };
         let writer_case = cases
             .iter()
-            .find(|case| case["actor"] == "writer" && case["permission"] == "update")
+            .find(|case| case.actor == "writer" && case.permission == "update")
             .context("missing modeled writer update")?;
-        assert_eq!(changed, writer_case["expected"].as_bool().unwrap());
+        assert_eq!(changed, writer_case.expected);
         let observed = owner
             .execute(&format!(
                 "{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ enabled }} }}",
@@ -837,12 +833,12 @@ mod tests {
         assert!(aborted.is_err());
         assert_eq!(
             !root_row_in_access(&owner, &aborted_path).await?.is_empty(),
-            cases[0]["aborted_document"].as_bool().unwrap()
+            cases[0].aborted_document
         );
         revoke_workspace_root_reader(&owner, &path, writer.did()).await?;
         let writer_case = cases
             .iter()
-            .find(|case| case["actor"] == "writer" && case["permission"] == "read")
+            .find(|case| case.actor == "writer" && case.permission == "read")
             .context("missing modeled writer read")?;
         let guard = crate::surface::RootExecutionGuard {
             agent_did: writer.did().to_owned(),
@@ -851,16 +847,14 @@ mod tests {
         };
         assert_eq!(
             guard.validate(&node, writer.as_ref()).await.is_ok(),
-            writer_case["writer_execution_after_revocation"]
-                .as_bool()
-                .unwrap()
+            writer_case.writer_execution_after_revocation
         );
         assert_eq!(
             set_workspace_root(&owner, runtime.did(), &path, None, true).await?,
             root_doc
         );
         for case in cases {
-            let key = match case["actor"].as_str().unwrap() {
+            let key = match case.actor.as_str() {
                 "user" => &user as &dyn NodeIdentity,
                 "runtime" => &runtime,
                 "writer" => writer.as_ref(),
@@ -868,7 +862,7 @@ mod tests {
                 "other" => &other,
                 actor => panic!("unknown modeled actor {actor}"),
             };
-            let permission = match case["permission"].as_str().unwrap() {
+            let permission = match case.permission.as_str() {
                 "read" => defra_node::DocumentPermission::Read,
                 "update" => defra_node::DocumentPermission::Update,
                 "delete" => defra_node::DocumentPermission::Delete,
@@ -884,11 +878,7 @@ mod tests {
                     &root_doc,
                 )
                 .await?;
-            assert_eq!(
-                allowed,
-                case["after_writer_revocation"].as_bool().unwrap(),
-                "{case}"
-            );
+            assert_eq!(allowed, case.after_writer_revocation, "{case:?}");
         }
         grant_workspace_root_reader(&owner, &path, writer.did()).await?;
         owner
@@ -899,7 +889,7 @@ mod tests {
             root_doc
         );
         for case in cases {
-            let key = match case["actor"].as_str().unwrap() {
+            let key = match case.actor.as_str() {
                 "user" => &user as &dyn NodeIdentity,
                 "runtime" => &runtime,
                 "writer" => writer.as_ref(),
@@ -907,7 +897,7 @@ mod tests {
                 "other" => &other,
                 actor => panic!("unknown modeled actor {actor}"),
             };
-            let permission = match case["permission"].as_str().unwrap() {
+            let permission = match case.permission.as_str() {
                 "read" => defra_node::DocumentPermission::Read,
                 "update" => defra_node::DocumentPermission::Update,
                 "delete" => defra_node::DocumentPermission::Delete,
@@ -923,11 +913,7 @@ mod tests {
                     &root_doc,
                 )
                 .await?;
-            assert_eq!(
-                allowed,
-                case["after_parent_revocation"].as_bool().unwrap(),
-                "{case}"
-            );
+            assert_eq!(allowed, case.after_parent_revocation, "{case:?}");
         }
         let query = format!(
             "{{ Agent(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
@@ -947,7 +933,7 @@ mod tests {
         revoke_workspace_root_reader(&owner, &path, integrator.did()).await?;
         let integrator_case = cases
             .iter()
-            .find(|case| case["actor"] == "integrator" && case["permission"] == "read")
+            .find(|case| case.actor == "integrator" && case.permission == "read")
             .context("missing modeled integrator read")?;
         let allowed = node
             .document_acp()
@@ -959,12 +945,7 @@ mod tests {
                 &root_doc,
             )
             .await?;
-        assert_eq!(
-            allowed,
-            integrator_case["after_integrator_revocation"]
-                .as_bool()
-                .unwrap()
-        );
+        assert_eq!(allowed, integrator_case.after_integrator_revocation);
         delete_workspace_root(&owner, &path).await?;
         assert!(root_row_in_access(&owner, &path).await?.is_empty());
         node.shutdown().await?;

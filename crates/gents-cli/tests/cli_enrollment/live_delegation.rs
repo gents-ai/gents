@@ -348,13 +348,12 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         !modeled_revoked_invoke,
         "model must deny invoke after session_writer revocation"
     );
-    let root_expected = contract["workspace_root_access_cases"]
-        .as_array()
-        .context("modeled WorkspaceRoot cases")?
+    let root_expected = gents_lean_vocab::lean_contract_snapshot()
+        .workspace_root_access_cases
         .iter()
-        .find(|case| case["actor"] == "other" && case["permission"] == "read")
-        .and_then(|case| case["expected"].as_bool())
-        .context("modeled unrelated Agent root access")?;
+        .find(|case| case.actor == "other" && case.permission == "read")
+        .context("modeled unrelated Agent root access")?
+        .expected;
     for (binding, documents) in [
         (
             &bindings[0],
