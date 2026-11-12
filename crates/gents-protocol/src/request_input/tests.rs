@@ -1,4 +1,5 @@
 use super::*;
+use gents_lean_vocab::LeanGoalFreshSessionInputCaseInputReference;
 use serde_json::{json, Value};
 
 fn reference(value: &Value) -> Option<GoalAssignmentInput> {
@@ -8,16 +9,23 @@ fn reference(value: &Value) -> Option<GoalAssignmentInput> {
     })
 }
 
+fn modeled_reference(
+    reference: &LeanGoalFreshSessionInputCaseInputReference,
+) -> GoalAssignmentInput {
+    GoalAssignmentInput {
+        goal_id: format!("goal:{}", reference.goal),
+        root_request_doc_id: reference.root.map(|root| format!("request:{root}")),
+    }
+}
+
 #[test]
 fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["goal_fresh_session_input_cases"]
-        .as_array()
-        .unwrap();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
+    let cases = &snapshot.goal_fresh_session_input_cases;
     assert_eq!(cases.len(), 36);
     for case in cases {
-        let modeled = &case["input"];
-        let payload = modeled["authored"].as_u64().unwrap();
+        let modeled = &case.input;
+        let payload = modeled.authored;
         let mut input: RequestInput = serde_json::from_value(json!({
             "cwd":format!("/workspace/{payload}"), "selected_skill_ids":[format!("skill:{payload}")],
             "initial_title":{"text":format!("Resend {payload}"),"source":"user"},
@@ -26,7 +34,7 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
                 "version":4,"unsaved":true,"range":{"start":{"line":1,"character":0},"end":{"line":2,"character":0}},
                 "content":format!("private unsaved payload {payload}")}]
         })).unwrap();
-        input.session_creation = match modeled["creation"].as_str() {
+        input.session_creation = match modeled.creation.as_deref() {
             None => None,
             Some("agent_new") => Some(SessionCreationIntent::AgentNew),
             Some("plugin_job") => Some(SessionCreationIntent::PluginJob),
@@ -35,10 +43,10 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
         assert_eq!(
             input.reissued("source-doc").session_creation,
             input.session_creation,
-            "{case}"
+            "{case:?}"
         );
-        input.goal_assignment = reference(&modeled["reference"]);
-        input.queue = modeled["queued"].as_bool().unwrap().then(|| RequestQueue {
+        input.goal_assignment = modeled.reference.as_ref().map(modeled_reference);
+        input.queue = modeled.queued.then(|| RequestQueue {
             source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             delivery: QueueDelivery::Steer,
@@ -51,44 +59,38 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
             interrupted_request_id: Some("old-interrupted".into()),
             background_completion_wake_version: Some(1),
         });
-        input.goal_continuation =
-            modeled["continuation"]
-                .as_bool()
-                .unwrap()
-                .then_some(GoalContinuationInput {
-                    sequence: 7,
-                    wrapup: true,
-                });
+        input.goal_continuation = modeled.continuation.then_some(GoalContinuationInput {
+            sequence: 7,
+            wrapup: true,
+        });
         let actual = input.for_fresh_session();
-        let expected = &case["expected"];
+        let expected = &case.expected;
         assert_eq!(
             serde_json::to_value(actual.session_creation).unwrap(),
-            expected["creation"],
-            "{case}"
+            expected.creation.clone().unwrap_or(Value::Null),
+            "{case:?}"
         );
         assert_eq!(
             actual.goal_assignment,
-            reference(&expected["reference"]),
-            "{case}"
+            reference(&expected.reference.clone().unwrap_or(Value::Null)),
+            "{case:?}"
         );
+        assert_eq!(actual.queue.is_some(), expected.queued, "{case:?}");
         assert_eq!(
-            actual.queue.is_some(),
-            expected["queued"].as_bool().unwrap(),
-            "{case}"
+            actual.goal_continuation.is_some(), expected.continuation,
+            "{case:?}"
         );
-        assert_eq!(
-            actual.goal_continuation.is_some(),
-            expected["continuation"].as_bool().unwrap(),
-            "{case}"
-        );
-        assert_eq!(expected["authored"], modeled["authored"], "{case}");
+        assert_eq!(expected.authored, modeled.authored, "{case:?}");
         assert_eq!(
             actual.selected_skill_ids, input.selected_skill_ids,
-            "{case}"
+            "{case:?}"
         );
-        assert_eq!(actual.cwd, input.cwd, "{case}");
-        assert_eq!(actual.initial_title, input.initial_title, "{case}");
-        assert_eq!(actual.captured_context, input.captured_context, "{case}");
-        assert_eq!(actual.for_fresh_session(), actual, "{case}");
+        assert_eq!(actual.cwd, input.cwd, "{case:?}");
+        assert_eq!(actual.initial_title, input.initial_title, "{case:?}");
+        assert_eq!(
+            actual.captured_context, input.captured_context,
+            "{case:?}"
+        );
+        assert_eq!(actual.for_fresh_session(), actual, "{case:?}");
     }
 }
