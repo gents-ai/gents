@@ -2443,19 +2443,14 @@ def caseCoverage : List CoverageEntry :=
       "rendered_capture_cases"
       "RenderedCaptureCases")
       "rendered-capture" [Surface.operatorUi]
-  , tagged (consumerWithFollowUp
-      "event_delivery_transition_cases"
-      "EventDeliveryTransitionCases"
-      "Observes five Watcher rescan/next-request cases, including real cooldown seeding. Native watcher unit consumers observe the two release cases. Eight substrate bookkeeping rows remain unobserved; subscription loss/delivery, queue multiset state, and empty-rescan silence need owner observations rather than a copied World.")
+  , tagged (consumerCoverage "family" "event_delivery_watcher_transitions")
       "event-delivery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "event_delivery_transition_cases"
-      "EventDeliveryTransitionCases")
+  , tagged (consumerCoverage "family" "event_delivery_watcher_releases")
       "event-delivery" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "event_delivery_transition_cases"
-      "EventDeliveryTransitionCases"
-      "Observes the sibling trigger readiness/correlation case. Other transition rows use separate consumers or retain the explicit substrate follow-up.")
+  , tagged (consumerCoverage "family" "event_delivery_event_source_siblings")
+      "event-delivery" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "EventDelivery.substrate"
+      "Persist/depersist and subscription enqueue/drop/consume are database and transport observations. The executable relation checks their input witnesses; native delivery families observe emitted requests and local suppression, not an exposed transport queue multiset.")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

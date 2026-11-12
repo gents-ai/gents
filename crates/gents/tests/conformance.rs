@@ -30,7 +30,7 @@ use gents_lean_vocab::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     lean_compaction_cursor_cases, lean_compaction_reducer_cases, lean_contract_snapshot,
     lean_event_delivery_convergence_traces,
-    lean_event_delivery_transition_cases, lean_queue_deadline_cases, lean_r6_backgrounding_case,
+    lean_queue_deadline_cases, lean_r6_backgrounding_case,
     lean_r6_backgrounding_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
     lean_session_control_cases, lean_startup_readiness_cases, LeanEventDeliveryAction,
     LeanLifecycleTransitionCase,
@@ -146,11 +146,6 @@ async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
 #[tokio::test]
 async fn generated_request_transition_cases_cover_lifecycle_policy() {
     request_lifecycle::generated_request_transition_cases_cover_lifecycle_policy().await;
-}
-
-#[tokio::test]
-async fn event_delivery_transition_cases_match_contract() {
-    event_delivery::event_delivery_transition_cases_match_contract().await;
 }
 
 #[tokio::test]

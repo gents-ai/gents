@@ -26,66 +26,6 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const RESCAN_TEST_INTERVAL: Duration = Duration::from_millis(50);
 const UNADMITTED: &str = "trigger engine did not admit ";
 
-pub(super) async fn event_delivery_transition_cases_match_contract() {
-    const UNOBSERVED: [&str; 8] = [
-        "persist_into_empty",
-        "persist_extends_set",
-        "depersist_removes",
-        "enqueue_from_persistent",
-        "drop_from_queue",
-        "deliver_consumes_queue",
-        "rescan_on_empty",
-        "enqueue_twice_multiset",
-    ];
-    let mut skipped = Vec::new();
-    let mut observed = 0;
-    let mut siblings = 0;
-    let mut releases = 0;
-    for case in lean_event_delivery_transition_cases() {
-        if UNOBSERVED.contains(&case.name.as_str()) {
-            skipped.push(case.name.as_str());
-            continue;
-        }
-        if case.name == "handle_ready_trigger_preserves_pending_sibling" {
-            siblings += 1;
-            continue;
-        }
-        if matches!(&case.action, LeanEventDeliveryAction::Release { .. }) {
-            releases += 1;
-            continue;
-        }
-        let mut runtime = ProductionEventDeliveryDriver::new(
-            runtime_event_delivery_source_contract("Watcher"),
-            &case.pre,
-        )
-        .await;
-        match &case.action {
-            LeanEventDeliveryAction::RescanTick => {
-                let emitted = case
-                    .post
-                    .subscription_queue
-                    .strip_suffix(case.pre.subscription_queue.as_slice())
-                    .expect("rescan witness retains its existing queue suffix");
-                assert!(!emitted.is_empty(), "{} needs a real emission", case.name);
-                runtime.drive_rescan(emitted).await.unwrap();
-            }
-            LeanEventDeliveryAction::Handle { doc } => {
-                let emitted = runtime.drive_handle(doc).await.unwrap();
-                assert_eq!(case.post.handled, vec![emitted], "{}", case.name);
-            }
-            other => panic!("{} needs an owner adapter for {other:?}", case.name),
-        }
-        observed += 1;
-    }
-    skipped.sort_unstable();
-    let mut expected = UNOBSERVED.to_vec();
-    expected.sort_unstable();
-    assert_eq!(skipped, expected);
-    assert_eq!(observed, 5);
-    assert_eq!(releases, 2);
-    assert_eq!(siblings, 1);
-}
-
 pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     let traces = lean_event_delivery_convergence_traces();
     assert!(

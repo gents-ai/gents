@@ -128,39 +128,36 @@ async fn closed_feed_reopens_only_at_fallback_and_wait_is_cancellable() {
 
 #[tokio::test]
 async fn generated_release_cases_preserve_native_session_order() {
-    use gents_lean_vocab::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
-    let mut cases = 0;
-    for case in lean_event_delivery_transition_cases() {
-        let LeanEventDeliveryAction::Release { doc } = &case.action else {
-            continue;
-        };
-        cases += 1;
+    use gents_lean_vocab::families::event_delivery_watcher_releases as family;
+    for case in family::cases::<String>() {
+        let input = &case.input;
+        let doc = &input.document;
         let fixture = ScopedWatcherFixture::new().await;
         let session = format!("session-{doc}");
         let head = fixture
             .insert_request("native-head", &session, "pending", "2026-03-12T00:00:00Z")
             .await;
-        for request_id in &case.pre.persistent_set {
+        for request_id in &input.pre.persistent_set {
             fixture
                 .insert_request(
-                    request_id,
-                    &format!("session-{request_id}"),
+                    &request_id.raw,
+                    &format!("session-{}", request_id.raw),
                     "pending",
                     "2026-03-12T00:00:00Z",
                 )
                 .await;
         }
         let mut watcher = fixture.watcher();
-        watcher.processed_request_ids = case
+        watcher.processed_request_ids = input
             .pre
             .processed_set
             .iter()
             .map(|id| {
                 (
-                    id.clone(),
+                    id.raw.clone(),
                     ProcessedMark {
                         at: Instant::now(),
-                        queue_session: Some(format!("session-{id}")),
+                        queue_session: Some(format!("session-{}", id.raw)),
                         execution_generation: None,
                     },
                 )
@@ -172,7 +169,7 @@ async fn generated_release_cases_preserve_native_session_order() {
                 .unwrap()
                 .unwrap()
                 .unwrap();
-        assert_eq!(selected.request_id, "native-head", "{}", case.name);
+        assert_eq!(selected.request_id, "native-head", "{}", input.name);
         let mut retained = watcher
             .processed_request_ids
             .keys()
@@ -180,9 +177,6 @@ async fn generated_release_cases_preserve_native_session_order() {
             .cloned()
             .collect::<Vec<_>>();
         retained.sort();
-        let mut expected = case.post.processed_set.clone();
-        expected.sort();
-        assert_eq!(retained, expected, "{}", case.name);
         fixture.set_completed(&head).await;
         let released =
             tokio::time::timeout(std::time::Duration::from_secs(2), watcher.next_request())
@@ -190,21 +184,66 @@ async fn generated_release_cases_preserve_native_session_order() {
                 .unwrap()
                 .unwrap()
                 .unwrap();
-        let released_expected = case
+        case.check(family::ReleaseObservation {
+            retained,
+            released: vec![released.request_id],
+        });
+    }
+}
+
+#[tokio::test]
+async fn generated_watcher_transitions_observe_delivery() {
+    use gents_lean_vocab::families::event_delivery_watcher_transitions as family;
+    for case in family::cases::<String>() {
+        let input = &case.input;
+        let fixture = ScopedWatcherFixture::new().await;
+        for (index, id) in input.pre.persistent_set.iter().enumerate() {
+            fixture
+                .insert_request(
+                    &id.raw,
+                    &format!("session-{}", id.raw),
+                    "pending",
+                    &format!("2026-03-12T00:00:{index:02}Z"),
+                )
+                .await;
+        }
+        let mut watcher = fixture.watcher();
+        watcher.processed_request_ids = input
             .pre
             .processed_set
             .iter()
-            .filter(|id| !case.post.processed_set.contains(id))
-            .cloned()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            vec![released.request_id],
-            released_expected,
-            "{}",
-            case.name
-        );
+            .map(|id| {
+                (
+                    id.raw.clone(),
+                    ProcessedMark {
+                        at: Instant::now(),
+                        queue_session: Some(format!("session-{}", id.raw)),
+                        execution_generation: None,
+                    },
+                )
+            })
+            .collect();
+        let mut observed = Vec::new();
+        if input.operation == "handle" {
+            let request = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            observed.push(request.request_id);
+        } else {
+            assert_eq!(input.operation, "rescan");
+            let requests = watcher.pending_requests().await.unwrap();
+            while let Some(request) = super::cooldown::take_next_eligible_pending_request(
+                &mut watcher.processed_request_ids,
+                requests.clone(),
+                Instant::now(),
+            ) {
+                observed.push(request.request_id);
+            }
+        }
+        case.check(observed);
     }
-    assert_eq!(cases, 2);
 }
 
 #[tokio::test]
