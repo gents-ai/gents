@@ -405,3 +405,5 @@ pub fn caller_agent_did(
 ) -> String {
     message.admission.tool.actor().to_string()
 }
+
+pub mod stream_processor;
