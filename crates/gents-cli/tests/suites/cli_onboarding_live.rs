@@ -12,7 +12,6 @@ use crate::support::*;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 use serde_json::json;
