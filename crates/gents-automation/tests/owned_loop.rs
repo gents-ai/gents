@@ -381,7 +381,8 @@ async fn refused_tool_arguments_reach_the_model_and_the_row_as_the_lean_model_re
         case.check(
             gents_lean_vocab::families::argument_failure_refusal::RefusalOutput {
                 notice: rejected_notice(&notice),
-                names_field: notice.contains("`findings`") || notice.contains("`extra`"),
+                names_field: notice.contains("missing field `findings`")
+                    || notice.contains("unknown field `extra`"),
                 lifecycle_state: rows[0]["lifecycle_state"]
                     .as_str()
                     .unwrap_or_default()

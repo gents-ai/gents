@@ -218,6 +218,12 @@ pub async fn owned_tool_result_threaded(
         collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle, profile).await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.final_text.as_deref(), Some("ok"));
+    assert_eq!(
+        collected.tool_results.len(),
+        1,
+        "exactly one threaded tool result: {:?}",
+        collected.tool_results
+    );
     let histories = model.seen_histories().await;
     node.shutdown().await.expect("node shutdown");
     first_tool_result(&histories[1]).expect("the second request carries the tool result")
