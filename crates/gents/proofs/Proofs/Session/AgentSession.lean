@@ -854,4 +854,30 @@ theorem touch_activity_monotone (s : Document) (o : Observation) (now : Time)
   refine ⟨{ o with activity := max now o.activity }, ?_, Nat.le_max_right _ _⟩
   simp [touch, h]
 
+/-- Rows of a session whose observed head is the newer request (created one second
+later) and whose other request is the stale predecessor. -/
+def staleCompletionRows (newer stale : RequestState) : List RequestFact :=
+  [ { purpose := .normal, scope := { node := 1, session := 1, requester := none }, agent := 1,
+      createdAt := 1, observed := ⟨2, 2, newer⟩ }
+  , { purpose := .normal, scope := { node := 1, session := 1, requester := none }, agent := 1,
+      createdAt := 0, observed := ⟨1, 1, stale⟩ } ]
+
+/-- The observation after the stale predecessor terminalizes while the newer request
+is the observed head. The terminal event carries the stale identity, so `refresh`
+leaves the newer request observed whatever state the stale request reached. -/
+def staleCompletionLatest (newer stale : RequestState) : Option RequestObservation :=
+  let rows := staleCompletionRows newer stale
+  match latest rows 1 1 none with
+  | none => none
+  | some head =>
+    let session : Document :=
+      { scope := head.scope, agent := head.agent, createdAt := 0
+        observation := some { activity := 1, preview := none, latest := some head.observed } }
+    (refresh session rows ⟨1, 1, stale⟩ 2).observation.bind (·.latest)
+
+theorem complete_does_not_overwrite_session_observation_for_newer_request
+    (newer stale : RequestState) :
+    staleCompletionLatest newer stale = some ⟨2, 2, newer⟩ := by
+  cases newer <;> cases stale <;> decide
+
 end AgentSession
