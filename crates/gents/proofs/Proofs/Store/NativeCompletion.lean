@@ -45,6 +45,15 @@ def attemptFinalizationAllowed (poisoned : Bool) (nativeOutstanding : Nat)
   nativeAdmissionAllowed poisoned && nativeWorkDrained nativeOutstanding &&
     (!cleanupRequired || rollbackReturned)
 
+/-- The observation a native adapter must await at a caller timeout: the
+caller has stopped waiting for its native statement and the registry is
+poisoned. The transaction owner's `pending_native` write-attempt event is a
+projection of this state and not the state itself — an attempt that already
+recorded a terminal outcome emits no record at all — so a driver that waits
+for that event waits for something no owner promises. -/
+def callerAbandonmentObserved (s : State) : Bool :=
+  s.poisoned && s.caller == .timedOut
+
 def step (s : State) (event : Event) : State :=
   match event with
   | .nativeStarted =>
@@ -147,6 +156,23 @@ theorem periodic_renewal_waits_for_abandoned_native_work :
       [.nativeStarted, .callerTimedOut, .renewalAttemptReturned, .renewalRequested]
     s.nativeOutstanding = 1 ∧ s.renewalAttemptReturned = false ∧
       s.nextRenewalStarted = false := by
+  decide
+
+/-- Every caller timeout is observable as abandonment, whatever the rest of
+the state is: the adapter has a state to await at this step and needs no
+other signal. -/
+theorem caller_timeout_is_observable_abandonment (s : State) :
+    callerAbandonmentObserved (step s .callerTimedOut) = true := by
+  simp [step, callerAbandonmentObserved]
+
+/-- The renewal owner's abandonment is observable strictly before its drain:
+at the timeout the registry is poisoned with the native statement still
+outstanding, and the observation survives the return that drains it. -/
+theorem renewal_abandonment_precedes_drain :
+    let renewal := { transaction with periodicRenewal := true, gateHeld := false }
+    let timedOut := run renewal [.nativeStarted, .callerTimedOut]
+    callerAbandonmentObserved timedOut = true ∧ timedOut.nativeOutstanding = 1 ∧
+      callerAbandonmentObserved (step timedOut .nativeReturned) = true := by
   decide
 
 theorem periodic_renewal_resumes_after_native_return :
