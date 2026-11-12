@@ -1647,8 +1647,8 @@ def caseCoverage : List CoverageEntry :=
       "ToolPolicy.PluginPublication")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_receipt_cases"
-      "PluginReceiptCases")
+      "family"
+      "plugin_receipt_commits")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "plugin_resource_child_admission_cases"

@@ -671,9 +671,6 @@ def pluginResourceNetworkCasesJson : String :=
 def pluginResourceCallAccessCasesJson : String :=
   callAccessJson.compress
 
-def pluginResourceReceiptCasesJson : String :=
-  Conformance.PluginReceipt.casesJson.compress
-
 def pluginResourceHostImportCasesJson : String :=
   hostImportJson.compress
 end Conformance.PluginResources
