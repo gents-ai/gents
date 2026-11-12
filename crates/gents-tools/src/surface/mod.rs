@@ -76,8 +76,10 @@ pub(crate) use root_admission::{
     tools_root_reader_in_txn,
 };
 pub use root_publication::{
-    delete_workspace_root, grant_workspace_root_reader, revoke_workspace_root_reader,
-    set_workspace_root, set_workspace_root_with_readers, WorkspaceRootWriteError,
+    change_workspace_root_reader, delete_workspace_root, grant_workspace_root_reader,
+    list_workspace_roots, publish_workspace_root, remove_workspace_root,
+    revoke_workspace_root_reader, set_workspace_root, set_workspace_root_with_readers,
+    show_workspace_root, WorkspaceRootWriteError,
 };
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::BackgroundToolConfig;
@@ -207,9 +209,7 @@ impl ToolSurface {
         fields
     }
 
-    pub fn output_obligations(
-        &self,
-    ) -> Vec<(String, gents_documents::WriteToolOutputObligation)> {
+    pub fn output_obligations(&self) -> Vec<(String, gents_documents::WriteToolOutputObligation)> {
         self.write_tools
             .iter()
             .filter_map(|decl| {
