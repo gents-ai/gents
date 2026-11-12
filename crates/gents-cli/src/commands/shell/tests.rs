@@ -3203,6 +3203,7 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
     let elsewhere = closed.clone();
     let fake = with_mailbox(move |query| {
         let mut item = mailbox_item("i1", "s1", "ask", "start_request", OWNER, 1);
+        item["target_agent_did"] = json!(did("a"));
         if elsewhere.load(std::sync::atomic::Ordering::SeqCst) {
             item["status"] = json!("acted");
         }
@@ -3226,7 +3227,11 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
         text: "ship it".to_string(),
     });
 
-    let closed = Update::Notice("MailboxItem is no longer open".to_string());
+    let closed = Update::Notice(
+        "mailbox item i1 cannot cause this message: the item is no longer open\n\
+         Next: gents automation mailbox list"
+            .to_string(),
+    );
     assert_eq!(
         shell.until(is_prompts).await,
         [closed, prompts("s1", Vec::new())]
