@@ -126,7 +126,8 @@ where
     config.hidden_title = false;
     config.tabbing_identifier = None;
     config.create = false;
-    config.visible = true;
+    // Shown once it is kept out of window tabs, so it never joins one.
+    config.visible = false;
     let window = gents_desktop_bridge::navigation::restrict_window(
         WebviewWindowBuilder::from_config(app, &config)?,
     )
@@ -139,6 +140,38 @@ where
         }
     });
     tell_main(app, plugin_id, true);
+    show_untabbed(&window)
+}
+
+/// Shows the window as a window of its own. The app lets its views join
+/// window tabs (the main window's New Tab), and macOS can put any new window
+/// into a tab when the person prefers tabs; a plugin's page is never a tab.
+#[cfg(target_os = "macos")]
+fn show_untabbed<R>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()>
+where
+    R: Runtime,
+{
+    use objc2_app_kit::{NSWindow, NSWindowTabbingMode};
+    let target = window.clone();
+    window.run_on_main_thread(move || {
+        if let Ok(pointer) = target.ns_window() {
+            // SAFETY: Tauri keeps the window's NSWindow alive while the
+            // window exists, and this runs on the main thread.
+            let native = unsafe { &*pointer.cast::<NSWindow>() };
+            native.setTabbingMode(NSWindowTabbingMode::Disallowed);
+        }
+        if let Err(error) = target.show().and_then(|()| target.set_focus()) {
+            tracing::warn!(%error, "could not show a plugin window");
+        }
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_untabbed<R>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()>
+where
+    R: Runtime,
+{
+    window.show()?;
     window.set_focus()
 }
 
