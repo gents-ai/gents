@@ -1,4 +1,7 @@
 import Proofs.Conformance.RootCandidates
+import Proofs.Conformance.ToolRoot
+import Proofs.Conformance.MCPHealthShutdown
+import Proofs.Conformance.DatastoreWrite
 import Proofs.Conformance.Views
 import Proofs.Conformance.AgentViews
 import Proofs.Conformance.InferenceViews
