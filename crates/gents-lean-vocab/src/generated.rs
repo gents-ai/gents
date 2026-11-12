@@ -113,7 +113,6 @@ pub fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {
     &lean_contract_snapshot().command_policy_cases
 }
 
-
 pub fn lean_compaction_canonical_projection_cases() -> &'static [LeanCanonicalCompactionCase] {
     &lean_contract_snapshot().compaction_canonical_projection_cases
 }
@@ -613,7 +612,6 @@ pub fn lean_request_lifecycle_operator_ui_cases() -> &'static [LeanClientShellCa
 pub fn lean_request_progress_cases() -> &'static [LeanRequestProgressCase] {
     &lean_contract_snapshot().request_progress_cases
 }
-
 
 pub fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
     &lean_contract_snapshot().request_transition_cases
@@ -2776,17 +2774,6 @@ pub enum LeanCommandResult {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanCommandSandboxCase {
-    pub name: String,
-    pub category: String,
-    pub mode: String,
-    pub workspace_write_sandbox_enforced: bool,
-    pub decision: String,
-    pub sandbox: Option<String>,
-    pub denial_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanCompactionCursorCase {
     pub name: String,
     pub compacted: usize,
@@ -4289,63 +4276,6 @@ pub struct LeanGateRow {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCase {
-    pub entry: LeanGoalAssignmentHistoryCaseEntry,
-    pub expected: LeanGoalAssignmentHistoryCaseExpected,
-    pub expected_handoff_reason: Option<String>,
-    pub name: String,
-    pub retire_documents: Vec<u64>,
-    pub versions: Vec<LeanGoalAssignmentHistoryCaseVersionsItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseEntry {
-    pub doc: u64,
-    pub owner: u64,
-    pub reference: Option<LeanGoalAssignmentHistoryCaseEntryReference>,
-    pub session: u64,
-    pub signature_valid: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseEntryReference {
-    pub goal: u64,
-    pub root: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseExpected {
-    pub goal: Option<u64>,
-    pub kind: String,
-    pub root: Option<u64>,
-    pub status: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseVersionsItem {
-    pub assignment: LeanGoalAssignmentHistoryCaseVersionsItemAssignment,
-    pub commit: u64,
-    pub document: u64,
-    pub height: u64,
-    pub parents: Vec<u64>,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseVersionsItemAssignment {
-    pub goal: u64,
-    pub owner: u64,
-    pub root: Option<u64>,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanGoalBackedRuntimeCase {
     pub goal: bool,
     pub grants: bool,
@@ -5601,64 +5531,6 @@ pub struct LeanGoalRequestAssignmentCaseObservedItem {
     pub goal: u64,
     pub owner: u64,
     pub root: Option<u64>,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestHeadCase {
-    pub assignment_root: Option<u64>,
-    pub expected: Option<LeanGoalRequestHeadCaseExpected>,
-    pub expected_receipt_checks: Option<u64>,
-    pub membership_current: u64,
-    pub membership_entry: Option<u64>,
-    pub membership_members: Vec<u64>,
-    pub membership_parents: Vec<Vec<u64>>,
-    pub membership_receipt_checks: Option<u64>,
-    pub name: String,
-    pub rows: Vec<LeanGoalRequestHeadCaseRowsItem>,
-    pub scope: LeanGoalRequestHeadCaseScope,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestHeadCaseExpected {
-    pub deterministic_identity: bool,
-    pub doc: u64,
-    pub goal: Option<u64>,
-    pub input_disposition: String,
-    pub owner: u64,
-    pub parent_doc: Option<u64>,
-    pub parent_request: Option<u64>,
-    pub purpose: String,
-    pub receipt_valid: bool,
-    pub request: u64,
-    pub sequence: u64,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestHeadCaseRowsItem {
-    pub deterministic_identity: bool,
-    pub doc: u64,
-    pub goal: Option<u64>,
-    pub input_disposition: String,
-    pub owner: u64,
-    pub parent_doc: Option<u64>,
-    pub parent_request: Option<u64>,
-    pub purpose: String,
-    pub receipt_valid: bool,
-    pub request: u64,
-    pub sequence: u64,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestHeadCaseScope {
-    pub goal: u64,
-    pub owner: u64,
     pub session: u64,
 }
 
