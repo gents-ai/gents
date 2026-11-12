@@ -228,6 +228,8 @@ import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
 import Proofs.Documents.ScopeTemplates.Derivation
 
+import Proofs.Conformance.InstallRepair
+
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
