@@ -19,33 +19,19 @@ fn generated_routes_follow_executable_scope_filters() {
         collection: String,
         clauses: Vec<Clause>,
     }
-    #[derive(Deserialize)]
-    struct Case {
-        direction: String,
-        requester: String,
-        owner: String,
-        demand_collection: String,
-        image_collection: String,
-        expected: Option<Predicate>,
-        images_granted: bool,
-        image_filter_installed: bool,
-    }
     fn sorted_conjunction(mut value: Value) -> Value {
         if let Some(clauses) = value.get_mut("_and").and_then(Value::as_array_mut) {
             clauses.sort_by_key(Value::to_string);
         }
         value
     }
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases: Vec<Case> =
-        serde_json::from_value(snapshot["file_review_route_cases"].clone()).unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().file_review_route_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let direction = PairingDirection::parse(&case.direction).unwrap();
         let template = resolve_template(CLIENT_TEMPLATE).unwrap();
         let actual = resolve_template_filters(template, direction, &case.requester, &case.owner);
-        match case.expected {
-            // The model emits null when a route has no demand filter for the collection.
+        match &case.expected {
             None => assert!(
                 !actual.contains_key(&case.demand_collection),
                 "{}: unexpected demand filter for {}",
@@ -53,6 +39,8 @@ fn generated_routes_follow_executable_scope_filters() {
                 case.demand_collection
             ),
             Some(expected_predicate) => {
+                let expected_predicate: Predicate =
+                    serde_json::from_value(expected_predicate.clone()).unwrap();
                 assert_eq!(expected_predicate.collection, case.demand_collection);
                 let mut clauses: Vec<Value> = expected_predicate
                     .clauses
