@@ -429,8 +429,8 @@ fn redaction_and_model_output_have_explicit_byte_bounds() {
 
 #[test]
 fn checked_in_complete_inventory_is_canonical_serializer_output() {
-    let fixtures =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/configuration_discovery");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../gents/tests/fixtures/configuration_discovery");
     let mut inventory = discover_configuration(&DiscoveryRequest {
         sources: vec![
             DiscoverySourceRoot {
