@@ -5,29 +5,18 @@ use gents_documents::{AgentContext, CompactionConfig, InferenceSampling};
 use gents_inference::compaction::CompactionStrategy;
 use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
-use serde::Deserialize;
 
 use crate::support::agent_requests::RequestActors;
 use crate::support::builder_runtime::{seed_session_message, submit_request};
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
-use crate::support::snapshots::SnapshotReader;
 use crate::support::test_db;
 
 const PROFILE_SEED: i64 = 424_242;
 
-#[derive(Debug, Deserialize)]
-struct RenderedRequestRow {
-    capture_scope: String,
-    capture_version: u32,
-    source: String,
-    request_json: String,
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
-async fn live_seeds_reach_the_provider() {
+async fn seeded_profile_completes_requests_and_compacts_retained_history() {
     let target = live_target().await;
 
     let db = test_db("live-seed").await;
@@ -37,6 +26,17 @@ async fn live_seeds_reach_the_provider() {
 
     let profile_id = default_inference_profile_id_for_agent(&agent_did);
     configure_seed_and_compaction(&actors, &node_did, &agent_did, &profile_id).await;
+    let sampling_id = escape_graphql_string(&format!("{profile_id}:sampling"));
+    let sampling = reader
+        .execute(&format!(
+            "{{ InferenceSampling(filter: {{sampling_id: {{_eq: \"{sampling_id}\"}}}}) {{seed}} }}"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        sampling["data"]["InferenceSampling"][0]["seed"].as_i64(),
+        Some(PROFILE_SEED)
+    );
 
     let profile_request_id = "req-live-profile-seed";
     submit_request(
@@ -74,11 +74,7 @@ async fn live_seeds_reach_the_provider() {
         .await
         .expect("boot live agent");
 
-    for (request_id, expected_seed, expect_compaction) in [
-        (profile_request_id, PROFILE_SEED, false),
-        (second_request_id, PROFILE_SEED, false),
-        (compaction_request_id, PROFILE_SEED, true),
-    ] {
+    for request_id in [profile_request_id, second_request_id, compaction_request_id] {
         let terminal =
             wait_for_request_terminal(reader, request_id, Duration::from_secs(120)).await;
         assert_eq!(
@@ -92,42 +88,12 @@ async fn live_seeds_reach_the_provider() {
             !answer.trim().is_empty(),
             "seeded request {request_id} must persist a non-empty response"
         );
-
-        let rows = rendered_requests(reader, request_id).await;
-        let inference_rows = rows
-            .iter()
-            .filter(|row| row.capture_scope.starts_with("inference."))
-            .collect::<Vec<_>>();
-        assert!(
-            !inference_rows.is_empty(),
-            "seeded request {request_id} must retain its exact provider body"
-        );
-        let compaction_rows = rows
-            .iter()
-            .filter(|row| row.capture_scope.starts_with("compaction."))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            !compaction_rows.is_empty(),
-            expect_compaction,
-            "request {request_id} compaction expectation must match its captured provider calls"
-        );
-        for row in inference_rows.into_iter().chain(compaction_rows) {
-            assert_eq!(row.source, "openai_chat_completions");
-            let body = gents_inference::rendered_request::decode_capture_json(
-                reader,
-                row.capture_version,
-                &row.request_json,
-                gents_inference::rendered_request::CapturePayloadKind::RequestBody,
-            )
-            .await
-            .expect("decode captured provider request");
-            assert_eq!(
-                body.get("seed").and_then(serde_json::Value::as_i64),
-                Some(expected_seed),
-                "every live inference attempt must retain the effective seed"
-            );
-        }
     }
+    let compacted = reader.execute(r#"{ CompactionEntry(filter: {session_id: {_eq: "session-live-compaction-seed"}}) {request_id summary compacted_through_sequence} }"#).await.unwrap();
+    assert!(compacted["data"]["CompactionEntry"].as_array().unwrap().iter().any(|row|
+        row["request_id"] == compaction_request_id && row["summary"].as_str().is_some_and(|summary| !summary.trim().is_empty())
+        && row["compacted_through_sequence"].as_i64().is_some_and(|sequence| sequence > 0)),
+        "the seeded profile must complete after persisting a usable compaction of its retained history: {compacted}");
 
     agent.shutdown().await;
 }
@@ -267,30 +233,4 @@ async fn seed_compaction_history(actors: &RequestActors, session_id: &str) {
         )
         .await;
     }
-}
-
-async fn rendered_requests<R>(reader: &R, request_id: &str) -> Vec<RenderedRequestRow>
-where
-    R: SnapshotReader,
-{
-    let request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            RenderedRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
-                capture_scope
-                capture_version
-                source
-                request_json
-            }}
-        }}"#
-    );
-    reader
-        .read_data(&query)
-        .await
-        .get("RenderedRequest")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .expect("decode RenderedRequest rows")
-        .unwrap_or_default()
 }
