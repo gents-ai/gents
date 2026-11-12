@@ -53,36 +53,46 @@ async fn row(
 
 #[tokio::test]
 async fn generated_goal_assignments_bound_fold_and_steering() {
-    #[derive(serde::Deserialize)]
-    struct Contracts {
-        goal_queue_assignment_cases: Vec<Value>,
-    }
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_queue_assignment_cases.len(), 10);
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_queue_assignment_cases;
+    assert_eq!(cases.len(), 10);
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-    for case in contracts.goal_queue_assignment_cases {
-        let head = row(&identity, "head-physical", &case["head_reference"], None).await;
+    for case in cases {
+        let head_reference = match &case.head_reference {
+            Some(reference) => json!({
+                "goal_id": reference.goal_id,
+                "root_request_doc_id": reference.root_request_doc_id,
+            }),
+            None => Value::Null,
+        };
+        let head = row(&identity, "head-physical", &head_reference, None).await;
         let head = AgentRequest::try_from(head).unwrap();
+        let candidate_reference = match &case.candidate_reference {
+            Some(reference) => json!({
+                "goal_id": reference.goal_id,
+                "root_request_doc_id": reference.root_request_doc_id,
+            }),
+            None => Value::Null,
+        };
         let candidate = row(
             &identity,
             "candidate-physical",
-            &case["candidate_reference"],
+            &candidate_reference,
             Some(QueueDelivery::Steer),
         )
         .await;
         let now = chrono::Utc::now();
         assert_eq!(
             folds_into(&head, &candidate, now),
-            case["expected_fold"].as_bool().unwrap(),
+            case.expected_fold,
             "{}: claim folding",
-            case["name"]
+            case.name
         );
         assert_eq!(
             super::super::intake::steering_compatible(&head, &candidate, now),
-            case["expected_steer"].as_bool().unwrap(),
+            case.expected_steer,
             "{}: live steering",
-            case["name"]
+            case.name
         );
     }
 }
