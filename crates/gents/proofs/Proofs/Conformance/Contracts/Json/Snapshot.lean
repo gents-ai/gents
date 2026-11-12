@@ -365,7 +365,6 @@ def snapshotCoverageTailJson : String :=
     ++ "\"trigger_fire_budget_default\":" ++ Conformance.TriggerDelivery.triggerFireBudgetDefaultJson ++ ","
     ++ "\"trigger_fire_budget_status\":" ++ Conformance.TriggerDelivery.triggerFireBudgetStatusJson ++ ","
     ++ "\"trigger_delivery_option_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryOptionCasesJson ++ ","
-    ++ "\"trigger_delivery_latest_admission_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryLatestAdmissionCasesJson ++ ","
     ++ "\"trigger_delivery_self_session_cases\":" ++ Conformance.TriggerDelivery.triggerDeliverySelfSessionCasesJson ++ ","
     ++ "\"event_group_capture_case_count\":" ++ toString Conformance.EventDelivery.eventGroupCaptureCaseCount ++ ","
     ++ "\"event_group_capture_cases\":" ++ Conformance.EventDelivery.eventGroupCaptureCasesJson ++ ","

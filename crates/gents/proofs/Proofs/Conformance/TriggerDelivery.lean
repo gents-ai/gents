@@ -721,17 +721,33 @@ def deliveryOptionCases : List String := do
     ("target_existing", toString target),
     ("allowed", toString (Triggers.deliveryOptionsAllowed kind emit concurrency target))]
 
-def latestAdmissionCases : List String :=
-  let old := { fire "old" with emitOutcome := false, identity := { identity "owner-a" "old" with collection := "Schedule" } }
-  let next := { old with identity := { old.identity with document := "next" } }
-  let pre := admit {} old
-  [("invalid_target_preserves_pending", pre, false),
-   ("valid_target_replaces_pending", pre, true),
-   ("duplicate_preserves_later_work", admit (admit pre next)
-      { old with identity := { old.identity with document := "later" } }, true)].map fun (name, before, allowed) =>
-    object [("name", jsonString name), ("pre", stateJson before),
-      ("fire", fireJson next), ("destination_allowed", toString allowed),
-      ("post", stateJson (admitLatest before next allowed))]
+structure LatestAdmissionInput where
+  name : String
+  pre : StateWire
+  fire : FireWire
+  destinationAllowed : Bool
+  deriving Lean.ToJson
+
+structure LatestAdmissionOutput where
+  post : StateWire
+  deriving Lean.ToJson
+
+/-- A latest-only Trigger's fires are not queued-serial: only `queued_serial`
+concurrency marks a receipt serial. -/
+@[conformance_family]
+def latestAdmission : Family LatestAdmissionInput LatestAdmissionOutput where
+  inputs :=
+    let old := { fire "old" with serial := false, emitOutcome := false, identity := { identity "owner-a" "old" with collection := "Schedule" } }
+    let next := { old with identity := { old.identity with document := "next" } }
+    let pre := admit {} old
+    [("invalid_target_preserves_pending", pre, false),
+     ("valid_target_replaces_pending", pre, true),
+     ("duplicate_preserves_later_work", admit (admit pre next)
+        { old with identity := { old.identity with document := "later" } }, true)].map
+      fun (name, before, destinationAllowed) =>
+        { name, pre := .ofModel before, fire := .ofModel next, destinationAllowed }
+  model := fun i =>
+    { post := .ofModel (admitLatest i.pre.toModel i.fire.toModel i.destinationAllowed) }
 
 def triggerDeliveryObservedClaimCasesJson : String :=
   jsonArray observedClaimCases
@@ -771,9 +787,6 @@ def triggerFireBudgetStatusJson : String :=
 
 def triggerDeliveryOptionCasesJson : String :=
   jsonArray deliveryOptionCases
-
-def triggerDeliveryLatestAdmissionCasesJson : String :=
-  jsonArray latestAdmissionCases
 
 def triggerDeliverySelfSessionCasesJson : String :=
   jsonArray selfCases
