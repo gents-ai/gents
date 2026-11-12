@@ -6,8 +6,7 @@ use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use super::client::scope_call_with_token;
-use super::permit::{dropped_terminal, DroppedTerminal};
+use super::permit::{dropped_terminal, recorded_failure_reason, DroppedTerminal};
 use super::{
     scope_call, scope_call_with_join, scope_call_with_token_and_failure_reason, scope_request,
     set_terminal_failure_reason,
@@ -1200,128 +1199,89 @@ async fn scoped_oneoff_calls_are_persisted_with_oneoff_kind() {
 }
 
 #[tokio::test]
-async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
-    let (db, signer) = test_node().await;
-    let node = db.node.clone();
-    let registry = TestRegistry::new(node.clone(), signer);
-    registry.reconcile(
-        1,
-        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
-    );
-    let context = test_context(&registry, "req-cancel-drop", "backend-a").await;
-
-    let token = CancellationToken::new();
-    token.cancel();
-
-    scope_request(context, async {
-        scope_call_with_token(CallKind::Inference, 1, token, async {
-            let permit = registry.acquire_current_call_for_test().await.unwrap();
-            let rows = call_rows(&node, &registry.signer).await;
-            assert_reconstructed_slot_count(&rows, "backend-a", 1);
-            drop(permit);
+async fn dropped_permit_outcomes_match_lean_model() {
+    for case in
+        gents_lean_vocab::families::inference_dropped_permit_outcomes::cases::<String, String>()
+    {
+        let (db, signer) = test_node().await;
+        let node = db.node.clone();
+        let registry = TestRegistry::new(node.clone(), signer);
+        registry.reconcile(
+            1,
+            &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        );
+        let context = test_context(&registry, "req-dropped-permit", "backend-a").await;
+        let token = CancellationToken::new();
+        if case.input.cancelled {
+            token.cancel();
+        }
+        let observer = terminal_failure_reason_observer();
+        let observer_for_drop = observer.clone();
+        let slots_while_held = scope_request(context, async {
+            scope_call_with_token_and_failure_reason(
+                CallKind::Inference,
+                1,
+                token,
+                observer,
+                async {
+                    let permit = registry.acquire_current_call_for_test().await.unwrap();
+                    let held = running_slot_count_for_backend(
+                        &call_rows(&node, &registry.signer).await,
+                        "backend-a",
+                    );
+                    if let Some(reason) = &case.input.observed {
+                        set_terminal_failure_reason(&observer_for_drop, reason.clone());
+                    }
+                    drop(permit);
+                    held
+                },
+            )
+            .await
         })
         .await;
-    })
-    .await;
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let rows = call_rows(&node, &registry.signer).await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["call_state"], "cancelled");
-    assert_eq!(rows[0]["failure_reason"], "Cancelled");
-    assert_reconstructed_slot_count(&rows, "backend-a", 0);
-}
-
-#[tokio::test]
-async fn dropped_permit_with_terminal_failure_reason_persists_failed_reason() {
-    let (db, signer) = test_node().await;
-    let node = db.node.clone();
-    let registry = TestRegistry::new(node.clone(), signer);
-    registry.reconcile(
-        1,
-        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
-    );
-    let context = test_context(&registry, "req-timeout-drop", "backend-a").await;
-
-    let token = CancellationToken::new();
-    let observer = terminal_failure_reason_observer();
-    let observer_for_scope = observer.clone();
-    let observer_for_drop = observer.clone();
-
-    scope_request(context, async {
-        scope_call_with_token_and_failure_reason(
-            CallKind::Inference,
-            1,
-            token,
-            observer_for_scope,
-            async {
-                let permit = registry.acquire_current_call_for_test().await.unwrap();
-                let rows = call_rows(&node, &registry.signer).await;
-                assert_reconstructed_slot_count(&rows, "backend-a", 1);
-                set_terminal_failure_reason(
-                    &observer_for_drop,
-                    "stream liveness timeout: no data received for 1800s",
-                );
-                drop(permit);
-            },
-        )
-        .await;
-    })
-    .await;
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let rows = call_rows(&node, &registry.signer).await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["call_state"], "failed");
-    assert_eq!(
-        rows[0]["failure_reason"],
-        "stream liveness timeout: no data received for 1800s"
-    );
-    assert_reconstructed_slot_count(&rows, "backend-a", 0);
-}
-
-#[tokio::test]
-async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
-    let (db, signer) = test_node().await;
-    let node = db.node.clone();
-    let registry = TestRegistry::new(node.clone(), signer);
-    registry.reconcile(
-        1,
-        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
-    );
-    let context = test_context(&registry, "req-default-drop", "backend-a").await;
-
-    scope_request(context, async {
-        let permit = registry.acquire_current_call_for_test().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
         let rows = call_rows(&node, &registry.signer).await;
-        assert_reconstructed_slot_count(&rows, "backend-a", 1);
-        drop(permit);
-    })
-    .await;
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let rows = call_rows(&node, &registry.signer).await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["call_state"], "failed");
-    assert_eq!(
-        rows[0]["failure_reason"],
-        "StreamDroppedBeforeTerminalResponse"
-    );
-    assert_reconstructed_slot_count(&rows, "backend-a", 0);
-}
-
-#[test]
-fn dropped_permit_outcomes_match_lean_model() {
-    gents_lean_vocab::families::inference_dropped_permit_outcomes::replay::<String>(|input| {
-        let outcome = match dropped_terminal(input.cancelled, input.observed.clone()) {
+        assert_eq!(rows.len(), 1);
+        if let Some(observed) = &case.input.observed {
+            assert_eq!(
+                &recorded_failure_reason(observed),
+                observed,
+                "the failure-text owner records a short plain reason unchanged"
+            );
+        }
+        let persisted_reason = rows[0]["failure_reason"].as_str().unwrap();
+        let recorded_reason = if persisted_reason == "Cancelled" {
+            "cancelled"
+        } else if persisted_reason == "StreamDroppedBeforeTerminalResponse" {
+            "stream_dropped"
+        } else if case
+            .input
+            .observed
+            .as_deref()
+            .map(recorded_failure_reason)
+            .as_deref()
+            == Some(persisted_reason)
+        {
+            "observed_reason"
+        } else {
+            persisted_reason
+        };
+        let outcome = match dropped_terminal(case.input.cancelled, case.input.observed.clone()) {
             DroppedTerminal::Cancelled => "cancelled",
             DroppedTerminal::Observed(_) => "observed",
             DroppedTerminal::StreamDropped => "stream_dropped",
         };
-        gents_lean_vocab::families::inference_dropped_permit_outcomes::DropOutput {
-            outcome: outcome.to_string(),
-        }
-    });
+        case.check(
+            gents_lean_vocab::families::inference_dropped_permit_outcomes::DropOutput {
+                outcome: outcome.to_string(),
+                call_state: rows[0]["call_state"].as_str().unwrap().to_owned(),
+                failure_reason: recorded_reason.to_owned(),
+                slots_while_held: u64::try_from(slots_while_held).unwrap(),
+                slots_after_drop: u64::try_from(running_slot_count_for_backend(&rows, "backend-a"))
+                    .unwrap(),
+            },
+        );
+    }
 }
 
 async fn pending_call(

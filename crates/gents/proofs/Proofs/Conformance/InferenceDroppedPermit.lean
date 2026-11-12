@@ -4,7 +4,7 @@ import Proofs.Conformance.Family
 namespace Conformance.InferenceDroppedPermit
 open InferenceCall.DroppedPermit
 
-deriving instance Lean.ToJson for DropOutcome
+deriving instance Lean.ToJson for DropOutcome, RecordedReason
 
 structure DropInput where
   cancelled : Bool
@@ -13,6 +13,10 @@ structure DropInput where
 
 structure DropOutput where
   outcome : DropOutcome
+  callState : String
+  failureReason : RecordedReason
+  slotsWhileHeld : Nat
+  slotsAfterDrop : Nat
   deriving Lean.ToJson
 
 @[conformance_family]
@@ -23,6 +27,12 @@ def outcomes : Conformance.Family DropInput DropOutput where
     , { cancelled := false, observed := none }
     , { cancelled := false, observed := some "stream liveness timeout: no data received for 1800s" }
     ]
-  model := fun i => { outcome := outcome i.cancelled i.observed }
+  model := fun i =>
+    let dropped := outcome i.cancelled i.observed
+    { outcome := dropped
+      callState := (recordedState dropped).toDefraDB
+      failureReason := recordedReason dropped
+      slotsWhileHeld := slotsHeld .running
+      slotsAfterDrop := slotsHeld (recordedState dropped) }
 
 end Conformance.InferenceDroppedPermit
