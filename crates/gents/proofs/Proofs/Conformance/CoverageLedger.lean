@@ -2458,8 +2458,8 @@ def caseCoverage : List CoverageEntry :=
       "Observes the sibling trigger readiness/correlation case. Other transition rows use separate consumers or retain the explicit substrate follow-up.")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "event_delivery_source_instances"
-      "EventDeliverySourceInstances")
+      "family"
+      "event_delivery_source_contracts")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "event_delivery_convergence_traces"

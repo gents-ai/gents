@@ -378,8 +378,6 @@ def snapshotCoverageTailJson : String :=
       ++ toString Conformance.EventDelivery.transitionCaseCount ++ ","
     ++ "\"event_delivery_transition_cases\":"
       ++ Conformance.EventDelivery.transitionCasesJson ++ ","
-    ++ "\"event_delivery_source_instances\":"
-      ++ Conformance.EventDelivery.sourceInstancesJson ++ ","
     ++ "\"event_delivery_convergence_traces\":"
       ++ Conformance.EventDelivery.convergenceTracesJson ++ ","
     ++ "\"watcher_actor_cases\":"

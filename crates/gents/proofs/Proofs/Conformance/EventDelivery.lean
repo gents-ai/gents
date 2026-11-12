@@ -1,4 +1,6 @@
 import Proofs.Automation.EventDelivery
+import Proofs.Conformance.Family
+import Proofs.Automation.EventDelivery.Instances
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ContractTypes
 
@@ -136,28 +138,8 @@ def transitionCases : List TransitionCase :=
 
 def transitionCaseCount : Nat := transitionCases.length
 
-structure SourceInstanceRow where
-  name             : String
-  dedupePolicy     : String
-  rescanBoundedBy  : Nat
-  deviation        : Option String
-
-
-
-def sourceInstances : List SourceInstanceRow :=
-  [ { name := "Watcher"
-    , dedupePolicy := DedupePolicy.toContract .ttlCooldown
-    , rescanBoundedBy := 1
-    , deviation := none
-    }
-  , { name := "EventSource"
-    , dedupePolicy := DedupePolicy.toContract .monotoneOnce
-    , rescanBoundedBy := EventSource.eventSourceSrc.rescanBoundedBy
-    , deviation := none
-    }
-  ]
-
-def sourceInstanceCount : Nat := sourceInstances.length
+@[conformance_family] def sourceContracts : Conformance.Family SourceKind SourceContract :=
+  ⟨[.watcher, .eventSource], sourceContract⟩
 
 structure ConvergenceTraceRow where
   name           : String
@@ -232,17 +214,6 @@ def transitionCaseJson (c : TransitionCase) : String :=
 
 def transitionCasesJson : String :=
   jsonArray (transitionCases.map transitionCaseJson)
-
-def sourceInstanceRowJson (r : SourceInstanceRow) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString r.name ++ ","
-    ++ "\"dedupe_policy\":" ++ jsonString r.dedupePolicy ++ ","
-    ++ "\"rescan_bounded_by\":" ++ toString r.rescanBoundedBy ++ ","
-    ++ "\"deviation\":" ++ jsonOptionString r.deviation
-    ++ "}"
-
-def sourceInstancesJson : String :=
-  jsonArray (sourceInstances.map sourceInstanceRowJson)
 
 def convergenceTraceRowJson (r : ConvergenceTraceRow) : String :=
   "{"

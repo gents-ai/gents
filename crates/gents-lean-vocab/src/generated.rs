@@ -169,10 +169,6 @@ pub fn lean_event_delivery_convergence_traces() -> &'static [LeanEventDeliveryCo
     &lean_contract_snapshot().event_delivery_convergence_traces
 }
 
-pub fn lean_event_delivery_source_instances() -> &'static [LeanEventDeliverySourceInstance] {
-    &lean_contract_snapshot().event_delivery_source_instances
-}
-
 pub fn lean_event_delivery_transition_cases() -> &'static [LeanEventDeliveryTransitionCase] {
     &lean_contract_snapshot().event_delivery_transition_cases
 }
@@ -3412,7 +3408,6 @@ pub struct LeanContractSnapshot {
     pub callback_recovery_cases: Vec<LeanCallbackRecoveryCase>,
     pub event_delivery_transition_case_count: usize,
     pub event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
-    pub event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     pub event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
 }
 
@@ -4025,14 +4020,6 @@ pub struct LeanEventDeliveryConvergenceTrace {
     pub actions: Vec<LeanEventDeliveryAction>,
     pub final_world: LeanEventDeliveryWorld,
     pub status: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanEventDeliverySourceInstance {
-    pub name: String,
-    pub dedupe_policy: String,
-    pub rescan_bounded_by: u64,
-    pub deviation: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

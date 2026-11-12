@@ -86,31 +86,10 @@ pub(super) async fn event_delivery_transition_cases_match_contract() {
     assert_eq!(siblings, 1);
 }
 
-pub(super) fn event_delivery_source_instances_match_runtime() {
-    let runtime_by_name = runtime_event_delivery_source_contracts()
-        .iter()
-        .map(|instance| (instance.name, *instance))
-        .collect::<RapidHashMap<_, _>>();
-
-    for lean in lean_event_delivery_source_instances() {
-        let runtime = runtime_by_name
-            .get(lean.name.as_str())
-            .unwrap_or_else(|| panic!("runtime source {:?} must be present", lean.name));
-        assert_eq!(runtime.dedupe_policy, lean.dedupe_policy);
-        assert_eq!(runtime.rescan_bounded_by, lean.rescan_bounded_by);
-        assert_eq!(runtime.deviation, lean.deviation.as_deref());
-    }
-    assert_eq!(
-        runtime_by_name.len(),
-        lean_event_delivery_source_instances().len(),
-        "runtime source introspection should not expose unmodeled sources"
-    );
-}
-
 pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     let traces = lean_event_delivery_convergence_traces();
     assert!(
-        traces.len() >= lean_event_delivery_source_instances().len(),
+        traces.len() >= runtime_event_delivery_source_contracts().len(),
         "Expected at least one convergence trace per source"
     );
 
@@ -177,9 +156,7 @@ pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation
 
     let trace_instances: rapidhash::RapidHashSet<&str> =
         traces.iter().map(|t| t.instance_name.as_str()).collect();
-    for name in lean_event_delivery_source_instances()
-        .iter()
-        .map(|instance| instance.name.as_str())
+    for name in runtime_event_delivery_source_contracts().iter().map(|instance| instance.name)
     {
         assert!(
             trace_instances.contains(name),
