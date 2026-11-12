@@ -1160,8 +1160,16 @@ def caseCoverage : List CoverageEntry :=
       "ClientDataNoticeDeliveryCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_request_patch_publication_cases"
-      "ClientRequestPatchPublicationCases")
+      "family"
+      "request_patch_publication_cases_publications")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "request_patch_publication_cases_reuse")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "request_patch_publication_cases_fresh_read")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_direct_session_read_cases"
@@ -1176,8 +1184,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientRequestClosureCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_request_cache_identity_cases"
-      "ClientRequestCacheIdentityCases")
+      "family"
+      "client_request_cache_identity_merge")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "frontend_client_shell_cases"
@@ -1788,8 +1796,8 @@ def caseCoverage : List CoverageEntry :=
       "GoalDeliveryInputCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_input_binding_cases"
-      "GoalInputBindingCases")
+      "family"
+      "goal_request_assignment_contracts_input_binding")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "goal_fresh_session_input_cases"

@@ -189,7 +189,6 @@ impl ClientStore {
 #[cfg(test)]
 mod overlay_tests {
     use super::*;
-    use gents_lean_vocab::LeanClientRequestCacheIdentityCaseExpectedRowsItem;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
 
     struct IdentityRowInput<'a> {
@@ -246,145 +245,114 @@ mod overlay_tests {
 
     #[test]
     fn generated_request_identity_cases_preserve_physical_twins_and_fold_owners() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().client_request_cache_identity_cases;
-        for case in cases {
+        gents_lean_vocab::families::client_request_cache_identity_merge::replay::<String>(|case| {
             let all_input_rows = case
                 .current
                 .iter()
+                .chain(case.incoming.iter())
                 .map(|row| (row.doc, row.request))
-                .chain(case.incoming.iter().map(|row| (row.doc, row.request)))
                 .collect::<Vec<_>>();
-            let current = case
-                .current
-                .iter()
-                .map(|row| {
-                    identity_request_row(
-                        IdentityRowInput {
-                            doc: row.doc,
-                            request: row.request,
-                            folded_into: row.folded_into,
-                            state: &row.state,
-                            node: row.node,
-                            requester: row.requester,
-                            retry_parent: row
-                                .retry_parent
-                                .as_ref()
-                                .and_then(serde_json::Value::as_u64),
-                        },
-                        &all_input_rows,
-                    )
-                })
-                .collect::<Vec<_>>();
-            let incoming = case
-                .incoming
-                .iter()
-                .map(|row| {
-                    identity_request_row(
-                        IdentityRowInput {
-                            doc: row.doc,
-                            request: row.request,
-                            folded_into: row
-                                .folded_into
-                                .as_ref()
-                                .and_then(serde_json::Value::as_u64),
-                            state: &row.state,
-                            node: row.node,
-                            requester: row.requester,
-                            retry_parent: row
-                                .retry_parent
-                                .as_ref()
-                                .and_then(serde_json::Value::as_u64),
-                        },
-                        &all_input_rows,
-                    )
-                })
-                .collect::<Vec<_>>();
+            let rows = |rows: &[gents_lean_vocab::families::client_request_cache_identity_merge::Row<String>]| {
+                rows.iter()
+                    .map(|row| {
+                        identity_request_row(
+                            IdentityRowInput {
+                                doc: row.doc,
+                                request: row.request,
+                                folded_into: row.folded_into,
+                                state: &row.state,
+                                node: row.node,
+                                requester: row.requester,
+                                retry_parent: row.retry_parent,
+                            },
+                            &all_input_rows,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
             let base = ClientStore::from_rows(ClientStoreRows {
-                requests: current,
+                requests: rows(&case.current),
                 ..Default::default()
             });
             let incoming = ClientStore::from_rows(ClientStoreRows {
-                requests: incoming,
+                requests: rows(&case.incoming),
                 ..Default::default()
             });
             let stores = [
                 base.clone().merge_snapshot(incoming.clone()),
                 base.merge_chat_patch(incoming),
             ];
-            for store in stores {
-                let mut actual_rows = store
-                    .requests
-                    .iter()
-                    .map(|row| {
-                        let parse_num = |value: Option<&str>, prefix: &str| {
-                            value
-                                .and_then(|value| value.strip_prefix(prefix))
-                                .and_then(|value| value.parse::<u64>().ok())
-                        };
-                        let state = if row.lifecycle_state == Some(RequestLifecycleState::Pending) {
-                            "unclaimed"
-                        } else if row.lifecycle_state == Some(RequestLifecycleState::Superseded)
-                            || row.lifecycle_state.is_some_and(|state| state.is_terminal())
-                        {
-                            "terminal"
-                        } else {
-                            "active"
-                        };
-                        LeanClientRequestCacheIdentityCaseExpectedRowsItem {
-                            doc: parse_num(row.doc_id.as_deref(), "doc-"),
-                            node: row
-                                .node_did
-                                .as_deref()
-                                .and_then(|did| did.strip_prefix("did:model:"))
-                                .and_then(|id| id.parse::<u64>().ok()),
-                            requester: row
-                                .requester_did
-                                .as_deref()
-                                .and_then(|did| did.strip_prefix("did:model:"))
-                                .and_then(|id| id.parse::<u64>().ok()),
-                            request: parse_num(Some(&row.request_id), "request-")
-                                .expect("request id"),
-                            state: state.to_owned(),
-                            folded_into: parse_num(
-                                row.superseded_by_request_doc_id.as_deref(),
-                                "doc-",
-                            ),
-                            queued_after: None,
-                            retry_parent: row
-                                .retry_parent_request
-                                .as_deref()
-                                .and_then(|id| parse_num(Some(id), "request-"))
-                                .map(serde_json::Value::from),
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let mut expected_rows = case.expected_rows.clone();
-                actual_rows.sort_by_key(|row| row.doc);
-                expected_rows.sort_by_key(|row| row.doc);
-                assert_eq!(actual_rows, expected_rows, "{}", case.name);
+            let observed = stores
+                .iter()
+                .map(|store| gents_lean_vocab::families::client_request_cache_identity_merge::MergeOutput {
+                    rows: observed_rows(store),
+                    turn_doc: case.selected_doc.map(|selected_doc| {
+                        let selected_doc = format!("doc-{selected_doc}");
+                        let selected = store
+                            .requests
+                            .iter()
+                            .find(|row| row.doc_id.as_deref() == Some(selected_doc.as_str()))
+                            .expect("selected physical request row");
+                        let scoped = store
+                            .requests
+                            .iter()
+                            .filter(|row| {
+                                row.node_did == selected.node_did
+                                    && row.session_id == selected.session_id
+                            })
+                            .collect::<Vec<_>>();
+                        let tip = super::super::turns::session_turn_request(&scoped, selected);
+                        parse_num(tip.doc_id.as_deref(), "doc-").expect("turn document")
+                    }),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                format!("{:?}", observed[0]),
+                format!("{:?}", observed[1]),
+                "{case:?}"
+            );
+            observed.into_iter().next().unwrap()
+        });
+    }
 
-                if let Some(selected_doc) = case.selected_doc {
-                    let expected_turn_doc = case.expected_turn_doc.expect("modeled turn doc");
-                    let selected_doc = format!("doc-{selected_doc}");
-                    let selected = store
-                        .requests
-                        .iter()
-                        .find(|row| row.doc_id.as_deref() == Some(selected_doc.as_str()))
-                        .expect("selected physical request row");
-                    let scoped = store
-                        .requests
-                        .iter()
-                        .filter(|row| {
-                            row.node_did == selected.node_did
-                                && row.session_id == selected.session_id
-                        })
-                        .collect::<Vec<_>>();
-                    let tip = super::super::turns::session_turn_request(&scoped, selected);
-                    let expected_turn_doc = format!("doc-{expected_turn_doc}");
-                    assert_eq!(tip.doc_id.as_deref(), Some(expected_turn_doc.as_str()));
+    fn parse_num(value: Option<&str>, prefix: &str) -> Option<u64> {
+        value
+            .and_then(|value| value.strip_prefix(prefix))
+            .and_then(|value| value.parse::<u64>().ok())
+    }
+
+    fn observed_rows(store: &ClientStore) -> Vec<gents_lean_vocab::families::client_request_cache_identity_merge::Row<String>> {
+        let mut rows = store
+            .requests
+            .iter()
+            .map(|row| {
+                let state = if row.lifecycle_state == Some(RequestLifecycleState::Pending) {
+                    "unclaimed"
+                } else if row.lifecycle_state == Some(RequestLifecycleState::Superseded)
+                    || row.lifecycle_state.is_some_and(|state| state.is_terminal())
+                {
+                    "terminal"
+                } else {
+                    "active"
+                };
+                let model_did = |did: Option<&str>| {
+                    did.and_then(|did| did.strip_prefix("did:model:"))
+                        .and_then(|id| id.parse::<u64>().ok())
+                };
+                gents_lean_vocab::families::client_request_cache_identity_merge::Row {
+                    doc: parse_num(row.doc_id.as_deref(), "doc-"),
+                    node: model_did(row.node_did.as_deref()),
+                    requester: model_did(row.requester_did.as_deref()),
+                    request: parse_num(Some(&row.request_id), "request-").expect("request id"),
+                    state: state.to_owned(),
+                    folded_into: parse_num(row.superseded_by_request_doc_id.as_deref(), "doc-"),
+                    queued_after: None,
+                    retry_parent: parse_num(row.retry_parent_request.as_deref(), "request-"),
                 }
-            }
-        }
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|row| row.doc);
+        rows
     }
 
     #[test]

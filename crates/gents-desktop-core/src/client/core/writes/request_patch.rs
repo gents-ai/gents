@@ -1,6 +1,7 @@
 use std::hash::{Hash, Hasher};
 
 use anyhow::Result;
+use rapidhash::RapidHashMap;
 
 use super::super::bootstrap::normalize_required;
 use super::{find_request_in_scope, ClientCore, RefreshedRequestProjection};
@@ -19,6 +20,20 @@ fn request_patch_cache_reusable(
     rows_current: bool,
 ) -> bool {
     memoized && same_signature && fence_accepted && rows_current
+}
+
+/// Lean `RequestPatchPublication.publish` for an accepted publication: the
+/// signature is memoized under its cache key. A rejected publication never
+/// reaches this and leaves the cache as it was.
+fn record_request_patch_publication(
+    signatures: &mut RapidHashMap<String, (usize, usize, u64)>,
+    cache_key: String,
+    signature: (usize, usize, u64),
+) {
+    if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+        signatures.clear();
+    }
+    signatures.insert(cache_key, signature);
 }
 
 fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
@@ -200,10 +215,7 @@ impl ClientCore {
             return Ok(None);
         };
         let mut signatures = self.request_patch_signatures.lock().await;
-        if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
-            signatures.clear();
-        }
-        signatures.insert(cache_key, signature);
+        record_request_patch_publication(&mut signatures, cache_key, signature);
         drop(signatures);
         tracing::debug!(
             target: "gents_desktop_core::replication",

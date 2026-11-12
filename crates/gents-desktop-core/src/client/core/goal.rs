@@ -1,10 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-#[cfg(test)]
-use gents_automation::goal::bind_goal_input;
 use gents_automation::goal::SessionGoalObservationState;
-#[cfg(test)]
-use gents_protocol::goal_control::SessionGoalObservation;
 use gents_protocol::goal_control::{
     GoalOperation, GoalRevision, SessionGoalControl, SessionGoalControlReceipt,
     SESSION_GOAL_CONTROL_VERSION,
@@ -233,90 +229,8 @@ impl ClientCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_protocol::goal_control::ObservedGoal;
+    use gents_protocol::goal_control::SessionGoalObservation;
     use serde_json::json;
-
-    fn reference(value: Option<(u64, Option<u64>)>) -> Option<GoalAssignmentInput> {
-        value.map(|(goal, root)| GoalAssignmentInput {
-            goal_id: format!("goal:{goal}"),
-            root_request_doc_id: root.map(|root| format!("request-document:{root}")),
-        })
-    }
-
-    fn observation(reference: Option<GoalAssignmentInput>) -> SessionGoalObservation {
-        SessionGoalObservation {
-            version: SESSION_GOAL_CONTROL_VERSION,
-            node_did: "did:key:source".into(),
-            agent_did: "did:key:agent".into(),
-            session_id: "chat".into(),
-            session_doc_id: "session-document".into(),
-            requester_did: Some("did:key:source".into()),
-            observed_at: "2026-10-21T00:00:00Z".into(),
-            goal: reference.map(|reference| {
-                let goal: gents_automation::goal::GoalDocument = serde_json::from_value(json!({
-                    "_docID": "goal-document", "node_did": "did:key:source",
-                    "session_id": "chat", "goal_id": reference.goal_id,
-                    "objective": "Preserve this assignment", "status": "active"
-                }))
-                .unwrap();
-                ObservedGoal {
-                    revision: GoalRevision {
-                        document: goal.doc_id.clone(),
-                        composite: "source-composite".into(),
-                    },
-                    assignment_root_request_doc_id: reference.root_request_doc_id,
-                    snapshot: gents_automation::goal::snapshot(&goal, Utc::now()),
-                }
-            }),
-            signature: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn generated_goal_input_bindings_wait_for_verified_source_state() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().goal_input_binding_cases;
-        assert_eq!(cases.len(), 12);
-        for case in cases {
-            let mut input: RequestInput = serde_json::from_value(json!({
-                "captured_context": [{"kind":"file", "source":"editor",
-                    "capturedAt":"2026-10-21T00:00:00Z", "uri":"file:///workspace/main.rs",
-                    "terminalName":null, "workspaceUri":"file:///workspace", "version":4,
-                    "unsaved":true, "range":null, "content":"private unsaved capture"}]
-            }))
-            .unwrap();
-            input.goal_assignment =
-                reference(case.captured.as_ref().map(|value| (value.goal, value.root)));
-            let original = input.clone();
-            let state = if !case.session_readable {
-                SessionGoalObservationState::NoReadableSession
-            } else if !case.observation_verified {
-                SessionGoalObservationState::Unknown(
-                    gents_automation::goal::SessionGoalUnknownCause::ProjectionUnverified,
-                )
-            } else {
-                SessionGoalObservationState::Observed(Box::new(observation(reference(
-                    case.observed.as_ref().map(|value| (value.goal, value.root)),
-                ))))
-            };
-            let actual = bind_goal_input(input, state);
-            if case.expected.kind == "pending" {
-                assert_eq!(
-                    actual.unwrap_err(),
-                    gents_automation::goal::GoalInputRefused::ProjectionUnverified,
-                    "{case:?}"
-                );
-            } else {
-                let mut expected = original;
-                expected.goal_assignment = reference(
-                    case.expected
-                        .reference
-                        .as_ref()
-                        .map(|value| (value.goal, value.root)),
-                );
-                assert_eq!(actual.unwrap(), expected, "{case:?}");
-            }
-        }
-    }
 
     /// A send to an existing hosted chat binds its Goal assignment only from
     /// the Agent's published, signed projection, read as the User.
