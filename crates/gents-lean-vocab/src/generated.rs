@@ -3115,7 +3115,6 @@ pub struct LeanContractSnapshot {
     pub goal_client_receipt_cases: Vec<LeanGoalClientReceiptCase>,
     pub goal_observation_cases: Vec<serde_json::Value>,
     pub goal_session_observation_cases: Vec<serde_json::Value>,
-    pub goal_session_fold_cases: Vec<serde_json::Value>,
     pub workspace_command_grant_answers: Vec<serde_json::Value>,
     pub workspace_command_grant_lookups: Vec<serde_json::Value>,
     pub workspace_command_grant_revocations: Vec<serde_json::Value>,

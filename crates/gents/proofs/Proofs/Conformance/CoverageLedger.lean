@@ -1898,10 +1898,9 @@ def caseCoverage : List CoverageEntry :=
       "goal_session_observation_cases"
       "GoalSessionObservationCases")
       "durable-goals" [Surface.operatorUi]
-  , tagged (followUpCoverage
-      "goal_session_fold_cases"
-      "GoalSessionFoldCases"
-      "The desktop Goal view test replays these folds from GoalSessionObservationConformance.lean; nothing reads the snapshot's copy.")
+  , tagged (consumerCoverage
+      "Proofs.Conformance.GoalSessionObservation"
+      "GoalSessionFoldCases")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "plugin_approval_cases"
