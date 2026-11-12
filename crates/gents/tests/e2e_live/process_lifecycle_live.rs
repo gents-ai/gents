@@ -150,13 +150,34 @@ impl Processes {
         self.live.request(agent, id, session, &format!("Call {tool} with exactly these arguments: {args}. After it returns, acknowledge briefly and call no other tool.")).await
     }
 
-    async fn call(&self, request: &str, tool: &str) -> Value {
+    fn call_query(request: &str, tool: &str) -> String {
         let escaped_request = escape_graphql_string(request);
         let escaped_tool = escape_graphql_string(tool);
-        let query = format!(
+        format!(
             r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{escaped_request}"}}, tool_name: {{_eq: "{escaped_tool}"}}}}) {{_docID tool_call_id request_doc_id session_id node_did requester_did lifecycle_state cancel_cause completion_notification_delivered_at}}
                 AgentRequest(filter: {{request_id: {{_eq: "{escaped_request}"}}}}) {{lifecycle_state terminal_output}} }}"#
-        );
+        )
+    }
+
+    async fn running_call(&self, request: &str, tool: &str) -> Value {
+        let query = Self::call_query(request, tool);
+        let data = wait_for_rows(&self.live, "AgentToolCall", &query, WAIT, |data| {
+            data["AgentToolCall"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
+        })
+        .await;
+        data["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["lifecycle_state"] == "running")
+            .unwrap()
+            .clone()
+    }
+
+    async fn call(&self, request: &str, tool: &str) -> Value {
+        let query = Self::call_query(request, tool);
         wait_for_rows(&self.live, "AgentToolCall", &query, WAIT, |data| {
             let found = data["AgentToolCall"]
                 .as_array()
@@ -249,7 +270,7 @@ impl Processes {
         } else {
             self.request(agent, id, session, "bash", args).await
         };
-        let call = self.call(id, "bash").await;
+        let call = self.running_call(id, "bash").await;
         self.output(&call, "READY").await;
         if background {
             assert_eq!(
@@ -462,7 +483,7 @@ async fn background_process_survives_creator_and_waiter_deadlines() {
         json!({"tool_call_id":job["tool_call_id"], "timeout_secs":120}),
     )
     .await;
-    let waiter = p.call("wait", "wait_process").await;
+    let waiter = p.running_call("wait", "wait_process").await;
     p.state(&waiter, "running").await;
     assert_eq!(
         wait_for_request_terminal(&p.live, "wait", WAIT).await,
@@ -490,7 +511,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
             json!({"tool_call_id":job["tool_call_id"], "timeout_secs":120}),
         )
         .await;
-    let waiter = p.call("wait", "wait_process").await;
+    let waiter = p.running_call("wait", "wait_process").await;
     p.state(&waiter, "running").await;
     p.interrupt(&request).await;
     assert_eq!(
