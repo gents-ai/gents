@@ -54,14 +54,6 @@ fn tool(value: &Value) -> Admission {
     }
 }
 
-fn window(value: &Value) -> Window {
-    Window {
-        tool: document(&value["tool"]),
-        admitted: value["admitted"].as_u64().unwrap().try_into().unwrap(),
-        delivered: value["delivered"].as_u64().unwrap().try_into().unwrap(),
-    }
-}
-
 fn ids(value: &Value) -> Option<Vec<String>> {
     value
         .as_array()
@@ -381,24 +373,6 @@ fn captured_entries(snapshot: &Value) -> Vec<FileInventoryEntry> {
 #[test]
 fn generated_orders_use_canonical_publication_observations() {
     let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    for case in contracts["file_inventory_order_window_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let selected = selection(case);
-        let expected = admission(&case["snapshot"]["admission"]);
-        let actual = admission(&case["closure"]["request"]);
-        let tools = case["snapshot"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|row| tool(&row["tool"]))
-            .collect::<Vec<_>>();
-        let observed =
-            Publications::new(&expected, &actual, &selected, &tools).window(&tool(&case["tool"]));
-        let expected = (!case["expected"].is_null()).then(|| window(&case["expected"]));
-        assert_eq!(observed, expected, "{}", case["name"]);
-    }
     for case in contracts["file_inventory_order_comparison_cases"]
         .as_array()
         .unwrap()
@@ -446,13 +420,6 @@ fn generated_orders_use_canonical_publication_observations() {
         };
         assert_eq!(observed, ids(&case["expected"]), "{}", case["name"]);
     }
-    assert_eq!(
-        contracts["file_inventory_order_window_cases"]
-            .as_array()
-            .unwrap()
-            .len(),
-        14
-    );
     assert_eq!(
         contracts["file_inventory_order_comparison_cases"]
             .as_array()
@@ -549,5 +516,30 @@ fn order_entry_coherence_follows_the_lean_model() {
             .map(inventory_entry)
             .collect::<Vec<_>>();
         gents_protocol::file_inventory::coherent_inventory_entries(&entries)
+    });
+}
+
+#[test]
+fn order_window_follows_the_lean_model() {
+    gents_lean_vocab::families::file_inventory_contracts_order_window::replay(|input| {
+        let case = serde_json::to_value(input).unwrap();
+        let selected = selection(&case);
+        let expected = admission(&case["snapshot"]["admission"]);
+        let actual = admission(&case["closure"]["request"]);
+        let tools = case["snapshot"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| tool(&row["tool"]))
+            .collect::<Vec<_>>();
+        Publications::new(&expected, &actual, &selected, &tools)
+            .window(&tool(&case["tool"]))
+            .map(|window| {
+                gents_lean_vocab::families::file_inventory_contracts_order_window::Window {
+                    tool: document_number(&window.tool),
+                    admitted: window.admitted.into(),
+                    delivered: window.delivered.into(),
+                }
+            })
     });
 }

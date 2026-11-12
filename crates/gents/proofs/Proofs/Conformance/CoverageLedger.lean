@@ -1562,8 +1562,8 @@ def caseCoverage : List CoverageEntry :=
       "ScopeNodeRouteCases")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_order_window_cases"
-      "FileInventoryOrderWindowCases"
+      "family"
+      "file_inventory_contracts_order_window"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

@@ -289,12 +289,6 @@ def directReaderCasesJson : String :=
       ("wrong_physical_expected", selectionResultJson (directSnapshot source.model actor
           {admission with nativeSession := admission.nativeSession + 1}))])
 
-def orderingWindowCasesJson : String := jsonArray (Order.Examples.windowCases.map
-  fun (name, selected, closure, tool) => object
-    [("name", jsonString name), ("snapshot", snapshotJson selected),
-     ("closure", closureJson closure), ("tool", toolJson tool),
-     ("expected", optional windowJson (Order.window selected closure tool))])
-
 deriving instance Lean.ToJson for Order.Window
 
 structure OrderResolutionInput where
@@ -408,6 +402,370 @@ theorem entry_wire_round_trips :
     Order.Examples.entryCases.all (fun (_, entries) =>
       (entries.map EntryWire.ofModel).map EntryWire.toModel == entries) = true := by
   native_decide
+
+deriving instance Lean.ToJson for FileInventory.Request
+deriving instance Lean.ToJson for CanonicalOutput.PayloadRef
+deriving instance Lean.ToJson for CanonicalOutput.ToolIdentity
+deriving instance Lean.ToJson for CanonicalOutput.DependencyDenial
+deriving instance Lean.ToJson for CanonicalOutput.Hydration.EffectRow
+
+structure DocumentKeyWire where
+  collection : String
+  id : Nat
+  deriving Lean.ToJson
+
+def DocumentKeyWire.ofModel (key : CanonicalOutput.Hydration.DocumentKey) : DocumentKeyWire :=
+  ⟨hydrationCollectionName key.collection, key.id⟩
+
+structure ToolWire where
+  id : Nat
+  request : Nat
+  scope : FileImages.Scope
+  agentDid : String
+  accepted : Bool
+  state : String
+  deriving Lean.ToJson
+
+def ToolWire.ofModel (value : Tool) : ToolWire :=
+  ⟨value.id, value.request, value.scope, value.agentDid, value.accepted, value.state.toDefraDB⟩
+
+structure ProjectionWire where
+  id : Nat
+  observation : Option Nat
+  tool : Nat
+  request : Nat
+  scope : FileImages.Scope
+  owner : String
+  changes : List ChangeWire
+  verifiedUnchanged : Bool
+  deriving Lean.ToJson
+
+def ProjectionWire.ofModel (value : Projection) : ProjectionWire :=
+  ⟨value.id, value.observation, value.tool, value.request, value.scope, value.owner,
+    value.changes.map ChangeWire.ofModel, value.verifiedUnchanged⟩
+
+structure CaptureWire where
+  kind : String
+  projection : Option ProjectionWire
+  deriving Lean.ToJson
+
+def CaptureWire.ofModel : Capture → CaptureWire
+  | .pending => ⟨"pending", none⟩
+  | .unknown => ⟨"unknown", none⟩
+  | .observed projection => ⟨"observed", some (.ofModel projection)⟩
+
+structure ToolFactWire where
+  tool : ToolWire
+  capture : CaptureWire
+  deriving Lean.ToJson
+
+structure SnapshotWire where
+  admission : FileInventory.Request
+  documents : List DocumentKeyWire
+  tools : List ToolFactWire
+  ordering : List (Option Order.Window)
+  deriving Lean.ToJson
+
+def SnapshotWire.ofModel (value : Snapshot) : SnapshotWire :=
+  ⟨value.admission, value.documents.map DocumentKeyWire.ofModel,
+    value.tools.map fun fact => ⟨.ofModel fact.tool, .ofModel fact.capture⟩, value.ordering⟩
+
+structure PublicationWire where
+  kind : String
+  generation : Option Nat
+  call : Option Nat
+  origin : Option Nat
+  deriving Lean.ToJson
+
+def PublicationWire.ofModel : CanonicalOutput.MessagePublication → PublicationWire
+  | .requestExecution generation => ⟨"request_execution", some generation, none, none⟩
+  | .requestRecovery generation => ⟨"request_recovery", some generation, none, none⟩
+  | .toolDelivery call => ⟨"tool_delivery", none, some call, none⟩
+  | .fork origin => ⟨"fork", none, none, some origin⟩
+
+private def outcomeName : CanonicalOutput.Outcome → String
+  | .complete => "complete"
+  | .partial => "partial"
+
+private def roleName : CanonicalOutput.MessageRole → String
+  | .system => "system"
+  | .user => "user"
+  | .assistant => "assistant"
+
+structure HeaderWire where
+  id : Nat
+  session : Nat
+  request : Option Nat
+  origin : Option Nat
+  refs : List CanonicalOutput.PayloadRef
+  outcome : String
+  role : String
+  publication : PublicationWire
+  deriving Lean.ToJson
+
+def HeaderWire.ofModel (value : CanonicalOutput.Header) : HeaderWire :=
+  ⟨value.id, value.session, value.request, value.origin, value.refs, outcomeName value.outcome,
+    roleName value.role, .ofModel value.publication⟩
+
+structure PresentationPartWire where
+  kind : String
+  start : Option Nat
+  stop : Option Nat
+  bytes : List Nat
+  deriving Lean.ToJson
+
+structure PresentationWire where
+  kind : String
+  parts : List PresentationPartWire
+  deriving Lean.ToJson
+
+def PresentationWire.ofModel : CanonicalOutput.Presentation → PresentationWire
+  | .full => ⟨"full", []⟩
+  | .composed parts => ⟨"composed", parts.map fun part => match part with
+      | .range start stop => ⟨"range", some start, some stop, []⟩
+      | .literal bytes => ⟨"literal", none, none, bytes.map (·.toNat)⟩⟩
+
+structure PayloadSpecWire where
+  reference : CanonicalOutput.PayloadRef
+  presentation : PresentationWire
+  deriving Lean.ToJson
+
+def PayloadSpecWire.ofModel (value : CanonicalOutput.PayloadSpec) : PayloadSpecWire :=
+  ⟨value.reference, .ofModel value.presentation⟩
+
+structure ResultPartWire where
+  kind : String
+  payload : Option PayloadSpecWire
+  deriving Lean.ToJson
+
+/-- Media parts carry only their kind: no file inventory case holds one, and
+the native adapter refuses them. -/
+def ResultPartWire.ofModel : CanonicalOutput.ResultPart CanonicalOutput.PayloadSpec → ResultPartWire
+  | .text payload => ⟨"text", some (.ofModel payload)⟩
+  | .media _ => ⟨"media", none⟩
+
+structure BlockWire where
+  kind : String
+  payload : Option PayloadSpecWire
+  docId : Option Nat
+  id : Option String
+  callId : Option String
+  name : Option String
+  arguments : Option PayloadSpecWire
+  signature : Option String
+  additionalParams : Option String
+  parts : List ResultPartWire
+  deriving Lean.ToJson
+
+/-- Reasoning and media blocks carry only their kind: no file inventory case
+holds one, and the native adapter refuses them. -/
+def BlockWire.ofModel : CanonicalOutput.MessageBlock CanonicalOutput.PayloadSpec → BlockWire
+  | .text payload => ⟨"text", some (.ofModel payload), none, none, none, none, none, none, none, []⟩
+  | .reasoning _ _ => ⟨"reasoning", none, none, none, none, none, none, none, none, []⟩
+  | .toolCall docId id callId name arguments signature additionalParams =>
+      ⟨"tool_call", none, some docId, some id, callId, some name, some (.ofModel arguments),
+        signature, additionalParams, []⟩
+  | .toolResult docId id callId parts =>
+      ⟨"tool_result", none, some docId, some id, callId, none, none, none, none,
+        parts.map ResultPartWire.ofModel⟩
+  | .media _ => ⟨"media", none, none, none, none, none, none, none, none, []⟩
+
+structure MessageWire where
+  header : HeaderWire
+  key : String
+  sequence : Nat
+  nativeId : Option String
+  nativeRequestId : Option String
+  blocks : List BlockWire
+  createdAt : Nat
+  deriving Lean.ToJson
+
+def MessageWire.ofModel (value : CanonicalOutput.MessageEnvelope) : MessageWire :=
+  ⟨.ofModel value.header, value.key, value.sequence, value.nativeId, value.nativeRequestId,
+    value.blocks.map BlockWire.ofModel, value.createdAt⟩
+
+structure SegmentSourceWire where
+  kind : String
+  auxiliaryKind : Option String
+  scope : Option Nat
+  turn : Option Nat
+  attempt : Option Nat
+  call : Option Nat
+  key : Option Nat
+  deriving Lean.ToJson
+
+private def auxiliaryName : CanonicalOutput.AuxiliaryKind → String
+  | .compaction => "compaction"
+  | .compactionFallback => "compaction_fallback"
+  | .title => "title"
+  | .accessReview => "access_review"
+
+def SegmentSourceWire.ofModel : CanonicalOutput.Source → SegmentSourceWire
+  | .provider scope turn attempt => ⟨"provider", none, some scope, some turn, some attempt, none, none⟩
+  | .auxiliary kind scope turn attempt =>
+      ⟨"auxiliary", some (auxiliaryName kind), some scope, some turn, some attempt, none, none⟩
+  | .tool call => ⟨"tool", none, none, none, none, some call, none⟩
+  | .toolEffectArguments call => ⟨"tool_effect_arguments", none, none, none, none, some call, none⟩
+  | .authored key => ⟨"authored", none, none, none, none, none, some key⟩
+
+structure CoordinateWire where
+  request : Nat
+  source : SegmentSourceWire
+  deriving Lean.ToJson
+
+structure WriterWire where
+  kind : String
+  generation : Option Nat
+  call : Option Nat
+  deriving Lean.ToJson
+
+def WriterWire.ofModel : CanonicalOutput.Writer → WriterWire
+  | .request generation => ⟨"request", some generation, none⟩
+  | .tool call => ⟨"tool", none, some call⟩
+
+private def payloadKindName : CanonicalOutput.PayloadKind → String
+  | .text => "text" | .reasoning => "reasoning" | .summary => "summary"
+  | .signature => "signature" | .reasoningStop => "reasoning_stop"
+  | .encrypted => "encrypted" | .redacted => "redacted"
+  | .arguments => "arguments" | .toolOutput => "tool_output"
+  | .media => "media"
+
+private def mediaKindName : CanonicalOutput.MediaKind → String
+  | .image => "image" | .audio => "audio" | .video => "video" | .document => "document"
+
+structure DeclarationWire where
+  block : Nat
+  part : Nat
+  kind : String
+  tool : Option CanonicalOutput.ToolIdentity
+  mediaKind : Option String
+  deriving Lean.ToJson
+
+def DeclarationWire.ofModel (value : CanonicalOutput.Declaration) : DeclarationWire :=
+  ⟨value.block, value.part, payloadKindName value.kind, value.tool, value.mediaKind.map mediaKindName⟩
+
+structure RunWire where
+  stream : Nat
+  bytes : Nat
+  declaration : Option DeclarationWire
+  deriving Lean.ToJson
+
+structure FlushWire where
+  ordinal : Nat
+  runs : List RunWire
+  payload : List Nat
+  deriving Lean.ToJson
+
+def FlushWire.ofModel (value : CanonicalOutput.Flush) : FlushWire :=
+  ⟨value.ordinal, value.runs.map fun run => ⟨run.stream, run.bytes, run.declaration.map .ofModel⟩,
+    value.payload.map (·.toNat)⟩
+
+structure CloseWire where
+  kind : String
+  outcome : Option String
+  segments : Option Nat
+  streamBytes : List Nat
+  deriving Lean.ToJson
+
+def CloseWire.ofModel : CanonicalOutput.Closure → CloseWire
+  | .closed outcome segments streamBytes => ⟨"closed", some (outcomeName outcome), some segments, streamBytes⟩
+  | .retracted => ⟨"retracted", none, none, []⟩
+
+structure SegmentWire where
+  id : Nat
+  coordinate : CoordinateWire
+  writer : WriterWire
+  flush : Option FlushWire
+  close : Option CloseWire
+  createdAt : Nat
+  deriving Lean.ToJson
+
+def SegmentWire.ofModel (value : CanonicalOutput.Segment) : SegmentWire :=
+  ⟨value.id, ⟨value.coordinate.request, .ofModel value.coordinate.source⟩, .ofModel value.writer,
+    value.flush.map .ofModel, value.close.map .ofModel, value.createdAt⟩
+
+structure AccessWire where
+  key : DocumentKeyWire
+  state : String
+  requester : String
+  node : String
+  session : String
+  nativeSession : Nat
+  deriving Lean.ToJson
+
+def AccessWire.ofModel (value : CanonicalOutput.Hydration.ProvenanceAccess) : AccessWire :=
+  ⟨.ofModel value.key, accessStateName value.state, value.scope.requester, value.scope.node,
+    value.scope.session, value.scope.nativeSession⟩
+
+structure SelectionWire where
+  kind : String
+  id : Option Nat
+  deriving Lean.ToJson
+
+structure RequirementWire where
+  request : Nat
+  session : Nat
+  selection : Option SelectionWire
+  deriving Lean.ToJson
+
+structure ClosureWire where
+  request : FileInventory.Request
+  bases : List DocumentKeyWire
+  roots : List Nat
+  requirements : List RequirementWire
+  messages : List MessageWire
+  segments : List SegmentWire
+  access : List AccessWire
+  deniedHeaders : List Nat
+  deniedSegments : List Nat
+  dependencyDenials : List CanonicalOutput.DependencyDenial
+  effects : List CanonicalOutput.Hydration.EffectRow
+  deriving Lean.ToJson
+
+def ClosureWire.ofModel (value : FileInventory.ClosureInput) : ClosureWire :=
+  ⟨value.request, value.bases.map (DocumentKeyWire.ofModel ·.key), value.roots,
+    value.requirements.map (fun row => ⟨row.request, row.session, row.selection.map fun
+      | .noMessage => ⟨"no_message", none⟩
+      | .message id => ⟨"message", some id⟩⟩),
+    value.messages.map MessageWire.ofModel, value.segments.map SegmentWire.ofModel,
+    value.access.map AccessWire.ofModel, value.deniedHeaders, value.deniedSegments,
+    value.dependencyDenials, value.effects⟩
+
+structure OrderWindowInput where
+  name : String
+  snapshot : SnapshotWire
+  closure : ClosureWire
+  tool : ToolWire
+  deriving Lean.ToJson
+
+def OrderWindowInput.ofCase : String × Snapshot × FileInventory.ClosureInput × Tool → OrderWindowInput
+  | (name, selected, closure, tool) =>
+    { name, snapshot := .ofModel selected, closure := .ofModel closure, tool := .ofModel tool }
+
+example : (Order.Examples.windowCases.map (·.1)).Nodup := by native_decide
+
+def orderWindowOf (name : String) : Option Order.Window :=
+  (Order.Examples.windowCases.find? (·.1 == name)).bind fun (_, selected, closure, tool) =>
+    Order.window selected closure tool
+
+/-- The wire carries each case to the native adapter; the model evaluates the
+case its unique name selects. -/
+@[conformance_family]
+def orderWindow : Family OrderWindowInput (Option Order.Window) where
+  inputs := Order.Examples.windowCases.map OrderWindowInput.ofCase
+  model := fun i => orderWindowOf i.name
+
+/-- A served node publishes plugin effects under their parent tool, and an
+effect has no canonical invocation and delivery of its own, so this is the one
+window case its scenario can build. -/
+def pluginEffectWindowCases : List (String × Snapshot × FileInventory.ClosureInput × Tool) :=
+  Order.Examples.windowCases.filter (·.1 ∈ ["accepted_effect_without_own_publication"])
+
+/-- Whether the scenario's inventory entries carry a canonical order. -/
+@[conformance_family]
+def orderWindowPluginEffect : Family OrderWindowInput Bool where
+  inputs := pluginEffectWindowCases.map OrderWindowInput.ofCase
+  model := fun i => (orderWindowOf i.name).isSome
 
 /-- IDs, DIDs and image hashes are the existing models' abstract names. Native
 adapters bind them to actual Defra-created physical IDs, authenticated key
