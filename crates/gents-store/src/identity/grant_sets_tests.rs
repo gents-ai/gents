@@ -36,17 +36,19 @@ fn sets_match_lean_owner() {
 async fn native_delegation_follows_modeled_holders() {
     let (directory, runtime, node) = nac_node().await;
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_delegation_cases;
-    assert!(!cases.is_empty());
-    for (index, case) in cases.iter().enumerate() {
+    for (index, case) in gents_lean_vocab::families::identity_delegation_native::cases()
+        .into_iter()
+        .enumerate()
+    {
+        let input = &case.input;
         let (holder, holder_identity) = agent_delegate(&runtime);
         let target = did(&directory, &format!("target-{index}"));
-        for set in recipient_sets(&case.holder) {
+        for set in recipient_sets(&input.holder) {
             set.grant(&admin, &holder).await.unwrap();
         }
-        let permission = (case.relation != "admin")
-            .then(|| NodePermission::parse(&case.relation).expect("modeled permission"));
-        if case.delete {
+        let permission = (input.relation != "admin")
+            .then(|| NodePermission::parse(&input.relation).expect("modeled permission"));
+        if input.delete {
             admin
                 .grant_node_permission(&target, permission.expect("revocable permission"))
                 .await
@@ -55,24 +57,24 @@ async fn native_delegation_follows_modeled_holders() {
         let access =
             ConfigAccess::local_managed_agent(node.clone(), holder, holder_identity.as_ref())
                 .unwrap();
-        let result = match (permission, case.delete) {
+        let result = match (permission, input.delete) {
             (None, false) => access.grant_node_admin(&target).await,
             (None, true) => access.revoke_node_admin(&target).await,
             (Some(permission), false) => access.grant_node_permission(&target, permission).await,
             (Some(permission), true) => access.revoke_node_permission(&target, permission).await,
         };
-        assert_eq!(result.is_ok(), case.expected, "{}: {result:?}", case.name);
-        if let (Some(permission), true) = (permission, case.expected) {
+        if let (Some(permission), true) = (permission, result.is_ok()) {
             assert_eq!(
                 node.nac_manager()
                     .check_permission(&target, permission)
                     .await
                     .unwrap(),
-                !case.delete,
+                !input.delete,
                 "{}",
-                case.name
+                input.name
             );
         }
+        case.check(result.is_ok());
     }
     node.shutdown().await.unwrap();
 }

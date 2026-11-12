@@ -84,6 +84,8 @@ import Proofs.Store.Identity.NodeProvisioningConformance
 import Proofs.Store.Identity.GrantSetsConformance
 import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
+import Proofs.Conformance.Identity.Delegation
+import Proofs.Conformance.Identity.AgentBlockSigning
 import Proofs.ToolCalls.Identity.ClientAgentJournal
 import Proofs.Conformance.Identity.NodeFileRequests
 import Proofs.Conformance.Identity.RevokeFollowsGrant
@@ -691,8 +693,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.PublicationConformance.casesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
-    ++ "\"identity_delegation_cases\":"
-      ++ Identity.GrantSetsConformance.delegationCasesJson ++ ","
     ++ "\"identity_agent_baseline_cases\":"
       ++ Identity.GrantSetsConformance.baselineCasesJson ++ ","
     ++ "\"identity_agent_creator_cases\":"
