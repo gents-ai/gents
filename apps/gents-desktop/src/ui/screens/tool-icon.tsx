@@ -1,5 +1,7 @@
 import {
   Bot,
+  CircleHelp,
+  Inbox,
   Plug,
   FileText,
   PenLine,
@@ -10,6 +12,7 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
+import { mailboxFiling } from "./tool-summary";
 
 type Glyph = ComponentType<{ className?: string }>;
 
@@ -31,6 +34,9 @@ const BY_KIND: Record<string, Glyph> = {
 
 function toolGlyph(tool: RenderedToolCallView): Glyph {
   const name = (tool.toolName ?? "").split(".").pop() ?? "";
+  /* the mailbox tool is drawn as what it filed, as its summary names it */
+  if (name === "file_mailbox_item" && tool.presentation.kind === "generic")
+    return mailboxFiling(tool.presentation.input).kind === "ask" ? CircleHelp : Inbox;
   return BY_NAME[name] ?? BY_KIND[tool.presentation.kind] ?? Wrench;
 }
 
