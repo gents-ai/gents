@@ -48,7 +48,9 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
         gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut request)
             .await
             .unwrap();
-        if !case.input.fresh {
+        let opened_doc_id = if case.input.fresh {
+            None
+        } else {
             let opened = crate::goal::submit_goal_backed_request_with_identity(
                 &node,
                 identity::Did::new(agent.did()).unwrap(),
@@ -91,7 +93,8 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
                 )
                 .await
                 .unwrap();
-        }
+            Some(opened.doc_id)
+        };
         let mut attempt = request.clone();
         let altered = case.input.target_session != case.input.observed_session
             || case.input.target_agent != case.input.observed_agent
@@ -135,7 +138,7 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
         )
         .await;
         let agent_rows = access
-            .execute("{ AgentRequest {_docID} Goal {_docID} }")
+            .execute("{ AgentSession {_docID} AgentRequest {_docID} Goal {_docID} GoalCreationClaim {_docID} }")
             .await
             .unwrap();
         let user_rows = client
@@ -162,6 +165,22 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
             assert!(
                 submitted.is_err(),
                 "{name}: a refused opening reported success"
+            );
+            for collection in ["AgentSession", "GoalCreationClaim"] {
+                assert!(
+                    agent_rows["data"][collection]
+                        .as_array()
+                        .unwrap()
+                        .is_empty(),
+                    "{name}: a refused opening left a {collection} behind"
+                );
+            }
+        }
+        if let Some(opened_doc_id) = &opened_doc_id {
+            assert_eq!(
+                &submitted.as_ref().expect("duplicate opening recovers").doc_id,
+                opened_doc_id,
+                "{name}: a duplicate opening returns the request it opened"
             );
         }
         if name == "created" {
