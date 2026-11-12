@@ -53,6 +53,19 @@ fn backend_health_transitions_follow_the_lean_model() {
     assert!(cases.iter().any(|case| {
         case.input.threshold_k == u64::from(BackendProberOptions::default().failure_threshold_k)
     }));
+    for state in [
+        BackendHealthState::Unknown,
+        BackendHealthState::Healthy,
+        BackendHealthState::Degraded,
+        BackendHealthState::Unhealthy,
+        BackendHealthState::CredentialsRequired,
+        BackendHealthState::SubscriptionNotEntitled,
+    ] {
+        assert!(
+            cases.iter().any(|case| case.input.start_state == state),
+            "no modeled transition starts from {state:?}"
+        );
+    }
     for case in cases {
         let (next_state, next_count) = step_backend(
             (
