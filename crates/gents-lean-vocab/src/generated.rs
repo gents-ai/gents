@@ -2978,8 +2978,6 @@ pub struct LeanContractSnapshot {
     pub plugin_resource_tool_call_cases: serde_json::Value,
     pub plugin_resource_tool_effect_cases: serde_json::Value,
     pub plugin_resource_tool_effect_receipt_cases: serde_json::Value,
-    pub plugin_resource_tool_effect_terminal_cases: serde_json::Value,
-    pub plugin_resource_tool_effect_accounting_cases: serde_json::Value,
     pub plugin_resource_model_slot_cases: serde_json::Value,
     pub plugin_resource_network_cases: serde_json::Value,
     pub plugin_resource_call_access_cases: serde_json::Value,

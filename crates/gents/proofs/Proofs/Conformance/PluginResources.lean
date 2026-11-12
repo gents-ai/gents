@@ -453,12 +453,6 @@ def pluginResourceToolEffectCasesJson : String :=
 def pluginResourceToolEffectReceiptCasesJson : String :=
   PluginEffects.receiptCasesJson.compress
 
-def pluginResourceToolEffectTerminalCasesJson : String :=
-  PluginEffects.terminalCasesJson.compress
-
-def pluginResourceToolEffectAccountingCasesJson : String :=
-  PluginEffects.accountingCasesJson.compress
-
 def pluginResourceModelSlotCasesJson : String :=
   modelSlotsJson.compress
 

@@ -2,6 +2,7 @@ import Proofs.Runtime.CanonicalOutput.Execution.Examples
 import Proofs.Runtime.CanonicalOutput.Execution.Gate
 import Proofs.Runtime.CanonicalOutput.Execution.ToolDeliveryCases
 import Proofs.Conformance.Contracts.Json.ClientRuntime
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.PluginEffects
@@ -107,9 +108,15 @@ theorem terminal_presentation_regressions :
     [terminalCase false false, terminalCase true false, terminalCase true true] =
       [true, true, false] := by native_decide
 
-def terminalCasesJson : Json := toJson <| [(false, false), (true, false), (true, true)].map
-  fun (replay, conflict) => Json.mkObj [("replay", toJson replay), ("conflict", toJson conflict),
-    ("expected", toJson (terminalCase replay conflict))]
+structure TerminalInput where
+  replay : Bool
+  conflict : Bool
+  deriving ToJson
+
+@[conformance_family]
+def terminalPresentation : Family TerminalInput Bool where
+  inputs := [⟨false, false⟩, ⟨true, false⟩, ⟨true, true⟩]
+  model := fun i => terminalCase i.replay i.conflict
 
 private def running : World := match dispatch admitted 7 ⟨601, true, true⟩ with
   | .ok post => post | .error _ => admitted
@@ -186,25 +193,52 @@ theorem live_background_parent_keeps_its_children :
     ((ownedToolByDocument? (accountOwnedTools backgroundRunningChild 7 true) 600).any fun parent =>
       parent.context.state == .running && parent.stuckSince.isSome) = true := by native_decide
 
-def accountingCasesJson : Json := toJson <|
-  [("pending_cancel", admitted, true), ("running_normal", runningWithCompletedParent, false),
-   ("running_exceptional", running, true),
-   ("timed_out_normal", completeParent timedOutChild, false),
-   ("completed_exceptional", completedChild, true),
-   ("background_parent_pending", backgroundAdmitted, true),
-   ("background_parent_running", backgroundRunningChild, true)].map fun (name, before, exceptional) =>
-    let post := if exceptional then accountOwnedTools before 7 exceptional else before
-    let child := (ownedToolByDocument? post 601).getD
-      { document := 601, requestDoc := 10, session := 1, acceptedSequence := 0,
-        context := admission.context }
-    Json.mkObj [("name", toJson name),
-      ("expected_state", toJson (match child.context.state with
-        | .pending => "pending" | .running => "running" | .completed => "completed"
-        | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timedOut")),
-      ("expected_started", toJson child.context.startedAt.isSome),
-      ("expected_stuck", toJson child.stuckSince.isSome),
-      ("expected_terminal_output", toJson child.terminalOutput.isSome),
-      ("expected_normal_ready", toJson (normalCompletionToolsReady post 7))]
+private def accountingWorld : String → World
+  | "pending_cancel" => admitted
+  | "running_normal" => runningWithCompletedParent
+  | "running_exceptional" => running
+  | "timed_out_normal" => completeParent timedOutChild
+  | "completed_exceptional" => completedChild
+  | "background_parent_pending" => backgroundAdmitted
+  | "background_parent_running" => backgroundRunningChild
+  | _ => baseline
+
+structure AccountingInput where
+  name : String
+  exceptional : Bool
+  deriving ToJson
+
+structure AccountingOutput where
+  state : String
+  started : Bool
+  stuck : Bool
+  terminalOutput : Bool
+  normalReady : Bool
+  deriving ToJson
+
+private def accountingObservation (i : AccountingInput) : AccountingOutput :=
+  let before := accountingWorld i.name
+  let post := if i.exceptional then accountOwnedTools before 7 i.exceptional else before
+  let child := (ownedToolByDocument? post 601).getD
+    { document := 601, requestDoc := 10, session := 1, acceptedSequence := 0,
+      context := admission.context }
+  { state := match child.context.state with
+      | .pending => "pending" | .running => "running" | .completed => "completed"
+      | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timedOut"
+    started := child.context.startedAt.isSome
+    stuck := child.stuckSince.isSome
+    terminalOutput := child.terminalOutput.isSome
+    normalReady := normalCompletionToolsReady post 7 }
+
+/-- Exceptional accounting runs first; `normalReady` is then whether normal
+completion of the request would be admitted. -/
+@[conformance_family]
+def childAccounting : Family AccountingInput AccountingOutput where
+  inputs :=
+    [ ⟨"pending_cancel", true⟩, ⟨"running_normal", false⟩, ⟨"running_exceptional", true⟩
+    , ⟨"timed_out_normal", false⟩, ⟨"completed_exceptional", true⟩
+    , ⟨"background_parent_pending", true⟩, ⟨"background_parent_running", true⟩ ]
+  model := accountingObservation
 
 def casesJson : Json := toJson (scenarios.map render)
 
