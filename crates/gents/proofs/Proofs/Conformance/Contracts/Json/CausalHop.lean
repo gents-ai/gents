@@ -271,16 +271,45 @@ def writeCases : List WriteCase :=
   , ⟨"busy_session_queue_keeps_its_higher_hop", .queued, 0, 1⟩
   , ⟨"busy_session_is_steered_past_its_caller", .steering, 3, 1⟩ ]
 
-def writeCaseJson (c : WriteCase) : String :=
-  let write := DurableLineage.sessionMessageWrite c.delivery c.callerHop c.ownHop
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"delivery\":" ++ jsonString (match c.delivery with
-        | .request => "request" | .queued => "queue" | .steering => "steer")
-    ++ ",\"caller_hop\":" ++ toString c.callerHop
-    ++ ",\"own_hop\":" ++ toString c.ownHop
-    ++ ",\"expected_hop\":" ++ toString write.lineage.requestHop
-    ++ ",\"names_caller_tool_call\":" ++ toString write.lineage.hasParentToolCallDocId
-    ++ ",\"queued_after_active\":" ++ toString write.queuedAfterActive ++ "}"
+inductive WriteDelivery where
+  | request
+  | queue
+  | steer
+  deriving Lean.ToJson
+
+def WriteDelivery.ofModel : DurableLineage.Delivery → WriteDelivery
+  | .request => .request
+  | .queued => .queue
+  | .steering => .steer
+
+def WriteDelivery.toModel : WriteDelivery → DurableLineage.Delivery
+  | .request => .request
+  | .queue => .queued
+  | .steer => .steering
+
+structure WriteInput where
+  name : String
+  delivery : WriteDelivery
+  callerHop : Nat
+  ownHop : Nat
+  deriving Lean.ToJson
+
+structure WriteOutput where
+  hop : Nat
+  namesCallerToolCall : Bool
+  queuedAfterActive : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def write : Family WriteInput WriteOutput where
+  inputs := writeCases.map fun c =>
+    { name := c.name, delivery := WriteDelivery.ofModel c.delivery, callerHop := c.callerHop,
+      ownHop := c.ownHop }
+  model := fun i =>
+    let write := DurableLineage.sessionMessageWrite i.delivery.toModel i.callerHop i.ownHop
+    { hop := write.lineage.requestHop
+      namesCallerToolCall := write.lineage.hasParentToolCallDocId
+      queuedAfterActive := write.queuedAfterActive }
 
 structure SessionTargetCase where
   sameRequester : Bool
@@ -380,9 +409,6 @@ def jobCreationCasesJson : String :=
 
 def deferredCreationCasesJson : String :=
   jsonArray (jobCreationCases.map deferredCreationCaseJson)
-
-def writeCasesJson : String :=
-  jsonArray (writeCases.map writeCaseJson)
 
 def sessionTargetCasesJson : String :=
   jsonArray (sessionTargetCases.map sessionTargetCaseJson)

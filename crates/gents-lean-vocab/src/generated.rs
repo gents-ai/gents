@@ -3109,7 +3109,6 @@ pub struct LeanContractSnapshot {
     pub causal_hop_creation_signer_cases: Vec<LeanSessionCreationSignerCase>,
     pub causal_hop_job_creation_cases: Vec<LeanJobCreationCase>,
     pub causal_hop_deferred_creation_cases: Vec<LeanDeferredCreationCase>,
-    pub causal_hop_write_cases: Vec<LeanSessionMessageWriteCase>,
     pub causal_hop_session_target_cases: Vec<LeanSessionTargetCase>,
     pub causal_hop_session_list_cases: Vec<LeanSessionListCase>,
     pub scope_collection_rules: std::collections::BTreeMap<
@@ -11015,18 +11014,6 @@ pub struct LeanSessionMessageGoalInputCaseObserved {
     pub owner: u64,
     pub root: Option<u64>,
     pub session: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionMessageWriteCase {
-    pub name: String,
-    pub delivery: String,
-    pub caller_hop: u32,
-    pub own_hop: u32,
-    pub expected_hop: u32,
-    pub names_caller_tool_call: bool,
-    pub queued_after_active: bool,
 }
 
 #[derive(Debug, Deserialize)]

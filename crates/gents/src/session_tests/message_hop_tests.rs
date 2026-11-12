@@ -31,13 +31,11 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
         agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
-    let cases = &gents_lean_vocab::lean_contract_snapshot().causal_hop_write_cases;
-    assert!(cases.iter().any(|case| case.delivery == "queue"));
-    assert!(cases.iter().any(|case| case.delivery == "steer"));
-    for case in cases {
-        let name = case.name.as_str();
-        assert_eq!(case.own_hop, caused.request_hop, "{name}");
-        let state = if case.delivery == "request" {
+    for case in gents_lean_vocab::families::causal_hop_contracts_write::cases::<String>() {
+        let input = &case.input;
+        let name = input.name.as_str();
+        assert_eq!(input.own_hop, u64::from(caused.request_hop), "{name}");
+        let state = if input.delivery == "request" {
             "pending"
         } else {
             "processing"
@@ -56,7 +54,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             )
             .await
             .unwrap();
-        let cause = cause(&message, case.caller_hop).await;
+        let cause = cause(&message, u32::try_from(input.caller_hop).unwrap()).await;
         let body = RenderedBody {
             content: "again".to_owned(),
             goal: None,
@@ -68,7 +66,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             &target,
             body,
             None,
-            if case.delivery == "steer" {
+            if input.delivery == "steer" {
                 AgentMessageDelivery::Steer
             } else {
                 AgentMessageDelivery::Queue
@@ -78,21 +76,14 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(planned.delivery().as_str(), case.delivery, "{name}");
-        assert_eq!(planned.hop(), case.expected_hop, "{name}");
+        assert_eq!(planned.delivery().as_str(), input.delivery, "{name}");
         let PlannedWrite::Request { create, .. } = &planned.write else {
             panic!("{name}: a message without a Goal is a request");
         };
-        assert_eq!(create.request_hop, case.expected_hop, "{name}");
+        assert_eq!(create.request_hop, planned.hop(), "{name}");
         assert_eq!(
             create.caused_by_parent_request_doc_id.as_deref(),
             Some(cause.caller_request_doc_id.as_str()),
-            "{name}"
-        );
-        assert_eq!(
-            create.caused_by_parent_tool_call_doc_id.as_deref()
-                == Some(cause.tool_call_doc_id.as_str()),
-            case.names_caller_tool_call,
             "{name}"
         );
         let queued_after = create
@@ -100,11 +91,12 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             .queue
             .as_ref()
             .and_then(|queue| queue.queued_after_request_id.as_deref());
-        assert_eq!(
-            queued_after == Some(caused.request_id.as_str()),
-            case.queued_after_active,
-            "{name}"
-        );
+        case.check(gents_lean_vocab::families::causal_hop_contracts_write::WriteOutput {
+            hop: u64::from(planned.hop()),
+            names_caller_tool_call: create.caused_by_parent_tool_call_doc_id.as_deref()
+                == Some(cause.tool_call_doc_id.as_str()),
+            queued_after_active: queued_after == Some(caused.request_id.as_str()),
+        });
     }
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();

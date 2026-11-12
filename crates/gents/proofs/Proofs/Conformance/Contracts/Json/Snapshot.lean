@@ -1074,8 +1074,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.CausalHopContracts.jobCreationCasesJson ++ ","
     ++ "\"causal_hop_deferred_creation_cases\":"
       ++ Conformance.CausalHopContracts.deferredCreationCasesJson ++ ","
-    ++ "\"causal_hop_write_cases\":"
-      ++ Conformance.CausalHopContracts.writeCasesJson ++ ","
     ++ "\"causal_hop_session_target_cases\":"
       ++ Conformance.CausalHopContracts.sessionTargetCasesJson ++ ","
     ++ "\"causal_hop_session_list_cases\":"
