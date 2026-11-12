@@ -1447,8 +1447,8 @@ def caseCoverage : List CoverageEntry :=
       "PackPlacementReaderCases")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
-      "agent_target_access_cases"
-      "AgentTargetAccessCases")
+      "family"
+      "agent_target_access_access")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "native_route_cases"

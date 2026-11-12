@@ -71,20 +71,21 @@ mod agent_target_access {
             bindings.insert(name, binding);
         }
         let did = |name: &str| bindings[name].agent_did.clone();
-        let lead_tools = |case: &gents_lean_vocab::LeanAgentTargetAccessCase| {
-            let mut agents = json!({ "enabled": case.enabled });
-            if !case.target_ids.is_empty() {
-                agents["target_ids"] = json!(case.target_ids);
-            }
-            let mut tools = json!({"node_did": node_did, "tools_id": format!("{}:tools", did("lead")), "agents": agents});
-            if !case.job_target_ids.is_empty() {
-                tools["integrations"] = json!({"plugins": [{
-                    "plugin": "acme/jobs",
-                    "job": {"agent_targets": case.job_target_ids},
-                }]});
-            }
-            (Collection::Tools, tools)
-        };
+        let lead_tools =
+            |input: &gents_lean_vocab::families::agent_target_access_access::AccessInput| {
+                let mut agents = json!({ "enabled": input.enabled });
+                if !input.target_ids.is_empty() {
+                    agents["target_ids"] = json!(input.target_ids);
+                }
+                let mut tools = json!({"node_did": node_did, "tools_id": format!("{}:tools", did("lead")), "agents": agents});
+                if !input.job_target_ids.is_empty() {
+                    tools["integrations"] = json!({"plugins": [{
+                        "plugin": "acme/jobs",
+                        "job": {"agent_targets": input.job_target_ids},
+                    }]});
+                }
+                (Collection::Tools, tools)
+            };
         let mut setup: Vec<_> = bindings
             .iter()
             .flat_map(|(name, binding)| {
@@ -116,16 +117,21 @@ mod agent_target_access {
             db.node.clone(),
             identity::Did::new(node_did.clone()).unwrap(),
         );
-        let cases = &gents_lean_vocab::lean_contract_snapshot().agent_target_access_cases;
-        assert_eq!(cases.len(), 8);
+        let cases = gents_lean_vocab::families::agent_target_access_access::cases();
+        let pairs = [
+            ("lead", "reviewer"),
+            ("lead", "other"),
+            ("other", "reviewer"),
+            ("reviewer", "lead"),
+        ];
         for (index, case) in cases.iter().enumerate() {
-            let state = case.state.as_str();
-            let access = match case.configurer.as_str() {
+            let input = &case.input;
+            let access = match input.configurer.as_str() {
                 "user" => &user_access,
                 "lead" => &lead_access,
                 other => panic!("unmodeled configurer {other}"),
             };
-            let modeled = lead_tools(case);
+            let modeled = lead_tools(input);
             let mut documents = if index == 0 {
                 setup.clone()
             } else {
@@ -137,14 +143,10 @@ mod agent_target_access {
             });
             documents.push(modeled);
             let outcome = apply(access, documents).await;
-            assert_eq!(
-                outcome.is_ok(),
-                case.applied,
-                "{state}: configuration apply: {outcome:?}"
-            );
-            for pair in &case.invokes {
-                let caller = did(pair.caller.as_str());
-                let target = did(pair.target.as_str());
+            let mut invokes = Vec::new();
+            for (caller_name, target_name) in pairs {
+                let caller = did(caller_name);
+                let target = did(target_name);
                 let doc = user_access
                     .transact_readonly("test.agent_target_access.target", |txn| {
                         let (node_did, target) = (&node_did, &target);
@@ -183,15 +185,21 @@ mod agent_target_access {
                     })
                     .await
                     .unwrap();
-                assert_eq!(
-                    matches!(
-                        decision.as_slice(),
-                        [defra_node::DocumentAccessDecision::Allowed]
-                    ),
-                    pair.invoke,
-                    "{state}: {pair:?}"
+                invokes.push(
+                    gents_lean_vocab::families::agent_target_access_access::InvokeRow {
+                        caller: caller_name.to_owned(),
+                        target: target_name.to_owned(),
+                        invoke: matches!(
+                            decision.as_slice(),
+                            [defra_node::DocumentAccessDecision::Allowed]
+                        ),
+                    },
                 );
             }
+            case.check(gents_lean_vocab::families::agent_target_access_access::AccessOutput {
+                applied: outcome.is_ok(),
+                invokes,
+            });
         }
     }
 }

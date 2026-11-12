@@ -268,22 +268,4 @@ def sequence : List (String × String × Config) :=
    ("removed", "user", removedTarget), ("refused", "lead", configured),
    ("job_only", "user", jobOnly), ("job_dropped", "user", disabled)]
 
-def casesJson : String :=
-  let step := fun (acc : List Lean.Json × State × Config) (entry : String × String × Config) =>
-    let (out, state, prior) := acc
-    let (name, configurer, next) := entry
-    let applied := (reconcile state configurer prior next).isSome
-    let state := configure state configurer prior next
-    let lead := (next.selections.find? (·.agent == "lead")).getD ⟨"lead", false, [], []⟩
-    let json := Lean.Json.mkObj
-      [("state", Lean.toJson name), ("configurer", Lean.toJson configurer),
-       ("enabled", Lean.toJson lead.enabled), ("target_ids", Lean.toJson lead.targetIds),
-       ("job_target_ids", Lean.toJson lead.jobTargetIds),
-       ("applied", Lean.toJson applied),
-       ("invokes", Lean.toJson (pairs.map fun (caller, target) => Lean.Json.mkObj
-          [("caller", Lean.toJson caller), ("target", Lean.toJson target),
-           ("invoke", Lean.toJson (invokes state caller target))]))]
-    (out ++ [json], state, if applied then next else prior)
-  (Lean.toJson (sequence.foldl step ([], fixture, unconfigured)).1).compress
-
 end Identity.AgentTargetAccess
