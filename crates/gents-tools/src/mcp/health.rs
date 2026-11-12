@@ -2319,6 +2319,20 @@ mod tests {
         assert_eq!(map.persisted.lock().await.len(), 2);
         node.shutdown().await.expect("shut down test node");
     }
+    /// The distinct services probed. A probe that did not fail is the one in
+    /// flight at shutdown, so it is started at most once.
+    fn started_once(calls: &[String], failing: &[String]) -> u64 {
+        let mut services = Vec::<&String>::new();
+        for call in calls {
+            if services.contains(&call) {
+                assert!(failing.contains(call), "{call} probed again: {calls:?}");
+            } else {
+                services.push(call);
+            }
+        }
+        services.len() as u64
+    }
+
     #[tokio::test]
     async fn probe_shutdown_follows_the_lean_shutdown_model() {
         for case in gents_lean_vocab::families::mcp_health_shutdown_observation::cases::<String>() {
@@ -2335,10 +2349,7 @@ mod tests {
                 let probed = probed.clone();
                 let started = started.clone();
                 move |service_id: String, _| {
-                    let mut seen = probed.lock().unwrap();
-                    if !seen.contains(&service_id) {
-                        seen.push(service_id.clone());
-                    }
+                    probed.lock().unwrap().push(service_id.clone());
                     let fails = failing.contains(&service_id);
                     let started = started.clone();
                     async move {
@@ -2434,7 +2445,11 @@ mod tests {
             let after = sorted(health.snapshot_full(k_max).await);
             case.check(
                 gents_lean_vocab::families::mcp_health_shutdown_observation::Output {
-                    probes_started: probed.lock().unwrap().len() as u64,
+                    probes_started: started_once(
+                        &probed.lock().unwrap(),
+                        &input.registry
+                            [..usize::try_from(input.failing).unwrap().min(input.registry.len())],
+                    ),
                     unchanged: after == before,
                     entries: after
                         .iter()
