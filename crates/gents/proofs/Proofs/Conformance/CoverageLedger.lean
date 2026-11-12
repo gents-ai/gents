@@ -2284,8 +2284,8 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyLayerCases")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "prompt_assembly_repair_cases"
-      "PromptAssemblyRepairCases")
+      "family"
+      "prompt_assembly_repair_args")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_budget_cases"

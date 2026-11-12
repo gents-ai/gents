@@ -149,18 +149,6 @@ def promptAssemblyLayerCaseJson (witness : PromptAssemblyLayerCase) : String :=
 def promptAssemblyLayerCasesJson : String :=
   jsonArray (promptAssemblyLayerCases.map promptAssemblyLayerCaseJson)
 
-def promptAssemblyRepairCaseJson (witness : PromptAssemblyRepairCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"input\":" ++ jsonString witness.input ++ ","
-    ++ "\"expected\":" ++ jsonString witness.expected ++ ","
-    ++ "\"expected_twice\":" ++ jsonString witness.expectedTwice ++ ","
-    ++ "\"payload_only\":" ++ boolString witness.payloadOnly
-    ++ "}"
-
-def promptAssemblyRepairCasesJson : String :=
-  jsonArray (promptAssemblyRepairCases.map promptAssemblyRepairCaseJson)
-
 def promptAssemblyBudgetCaseJson (witness : PromptAssemblyBudgetCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

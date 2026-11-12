@@ -163,6 +163,7 @@ import Proofs.Conformance.TitleAdmission
 import Proofs.Conformance.TitleText
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.PromptAssemblyBudget
+import Proofs.Conformance.PromptAssemblyRepair
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
@@ -1169,8 +1170,6 @@ def snapshotFileCasesJson : String :=
       ++ promptAssemblyModeSanitizeCasesJson ++ ","
     ++ "\"prompt_assembly_layer_cases\":"
       ++ promptAssemblyLayerCasesJson ++ ","
-    ++ "\"prompt_assembly_repair_cases\":"
-      ++ promptAssemblyRepairCasesJson ++ ","
     ++ "\"prompt_assembly_budget_cases\":"
       ++ promptAssemblyBudgetCasesJson ++ ","
     ++ "\"prompt_assembly_turn_budget_cases\":"

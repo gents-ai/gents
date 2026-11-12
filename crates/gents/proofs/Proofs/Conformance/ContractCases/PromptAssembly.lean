@@ -133,14 +133,6 @@ structure PromptAssemblyLayerCase where
   slots : List String
   deriving Repr
 
-structure PromptAssemblyRepairCase where
-  name : String
-  input : String
-  expected : String
-  expectedTwice : String
-  payloadOnly : Bool
-  deriving Repr
-
 structure PromptAssemblyBudgetCase where
   name : String
   contextWindow : Nat
@@ -461,56 +453,6 @@ def promptAssemblyLayerCases : List PromptAssemblyLayerCase :=
     , slots :=
         (PromptAssembly.assemble
           shape.2.1 shape.2.2.1 shape.2.2.2).map slotName }
-
-private inductive Payload where
-  | empty
-  | raw
-  | sanitized
-  deriving DecidableEq, Repr
-
-private def sanitizePayload : Payload → Payload
-  | .empty => .empty
-  | .raw => .sanitized
-  | .sanitized => .sanitized
-
-private instance : PromptAssembly.LeafSanitizer Payload where
-  sanitize := sanitizePayload
-  idempotent := by intro p; cases p <;> rfl
-
-private def argsName : PromptAssembly.ToolArgs Payload → String
-  | .object .empty => "object:empty"
-  | .object .raw => "object:raw"
-  | .object .sanitized => "object:sanitized"
-  | .str none => "str:unparsed"
-  | .str (some .empty) => "str:object:empty"
-  | .str (some .raw) => "str:object:raw"
-  | .str (some .sanitized) => "str:object:sanitized"
-  | .array => "array"
-  | .scalar => "scalar"
-  | .null => "null"
-
-private def repairVectors : List (String × PromptAssembly.ToolArgs Payload) :=
-  [ ("object-passes-through", .object .raw)
-  , ("empty-object-passes-through", .object .empty)
-  , ("stringified-object-salvages", .str (some .raw))
-  , ("unparsable-string-collapses", .str none)
-  , ("array-collapses", .array)
-  , ("scalar-collapses", .scalar)
-  , ("null-collapses", .null)
-  ]
-
-private def isPayloadOnly : PromptAssembly.ToolArgs Payload → Bool
-  | .object _ => true
-  | _ => false
-
-def promptAssemblyRepairCases : List PromptAssemblyRepairCase :=
-  repairVectors.map fun vector =>
-    let once := PromptAssembly.repairArgs Payload.empty vector.2
-    { name := vector.1
-    , input := argsName vector.2
-    , expected := argsName once
-    , expectedTwice := argsName (PromptAssembly.repairArgs Payload.empty once)
-    , payloadOnly := isPayloadOnly vector.2 }
 
 private structure BudgetWitness where
   name : String
