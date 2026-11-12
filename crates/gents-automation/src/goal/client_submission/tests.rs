@@ -1,18 +1,41 @@
 use super::*;
 use crate::goal::operator_resume::support::{Fixture, SESSION};
 use crate::goal::session_goal_control::process_command;
+use gents_lean_vocab::{
+    LeanGoalClientControlCase, LeanGoalClientControlCaseBeforeExecution,
+    LeanGoalClientControlCaseExpectedExecution,
+};
 use gents_protocol::goal_control::{
     GoalControlOutcome, GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-fn modeled_case(name: &str) -> &'static Value {
+fn modeled_case(name: &str) -> &'static LeanGoalClientControlCase {
     gents_lean_vocab::lean_contract_snapshot()
         .goal_client_control_cases
         .iter()
-        .find(|case| case["name"] == name)
+        .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("modeled goal client control case {name}"))
+}
+
+fn before_execution_json(execution: &LeanGoalClientControlCaseBeforeExecution) -> Value {
+    json!({
+        "status": execution.status,
+        "blocked_audits": execution.blocked_audits,
+        "wrapup_requested": execution.wrapup_requested,
+        "wrapup_completed": execution.wrapup_completed,
+        "sequence": execution.sequence,
+        "last_continued_from": execution.last_continued_from,
+        "latest_request": execution.latest_request,
+        "children": execution.children,
+        "tokens_used": execution.tokens_used,
+        "token_budget": execution.token_budget
+    })
+}
+
+fn observed_execution(value: Value) -> LeanGoalClientControlCaseExpectedExecution {
+    serde_json::from_value(value).unwrap()
 }
 
 async fn session_doc_id(fixture: &Fixture) -> String {
@@ -120,17 +143,18 @@ async fn submit_while_runtime_answers(
     (doc_id, receipt)
 }
 
-fn modeled_revision(fixture: &Fixture, case: &Value, current: &str) -> GoalRevision {
+fn modeled_revision(
+    fixture: &Fixture,
+    case: &LeanGoalClientControlCase,
+    current: &str,
+) -> GoalRevision {
     GoalRevision {
-        document: if case["expected_revision"]["document"] == case["before"]["revision"]["document"]
-        {
+        document: if case.expected_revision.document == case.before.revision.document {
             fixture.goal.doc_id.clone()
         } else {
             "foreign-goal-document".into()
         },
-        composite: if case["expected_revision"]["composite"]
-            == case["before"]["revision"]["composite"]
-        {
+        composite: if case.expected_revision.composite == case.before.revision.composite {
             current.to_owned()
         } else {
             "stale-goal-commit".into()
@@ -142,12 +166,14 @@ fn modeled_revision(fixture: &Fixture, case: &Value, current: &str) -> GoalRevis
 async fn authorized_user_pauses_then_resumes_a_running_goal_through_runtime_receipts() {
     let pause = modeled_case("active_authorized_busy_current_pause");
     let resume = modeled_case("paused_authorized_busy_current_resume");
-    assert_eq!(pause["facts"]["unfinished_request"], true);
+    assert!(pause.facts.unfinished_request);
+    let pause_expected = pause.expected.as_ref().unwrap();
     assert_eq!(
-        pause["expected"]["execution"],
-        resume["before"]["execution"]
+        pause_expected.execution,
+        observed_execution(before_execution_json(&resume.before.execution))
     );
-    let fixture = Fixture::new_with_parent_state(&pause["before"]["execution"], false).await;
+    let pause_before = before_execution_json(&pause.before.execution);
+    let fixture = Fixture::new_with_parent_state(&pause_before, false).await;
     let access = fixture.user_access();
     let user = fixture.user.clone();
 
@@ -167,7 +193,10 @@ async fn authorized_user_pauses_then_resumes_a_running_goal_through_runtime_rece
         "{:?}",
         receipt.outcome
     );
-    assert_eq!(fixture.observe().await, pause["expected"]["execution"]);
+    assert_eq!(
+        observed_execution(fixture.observe().await),
+        pause_expected.execution
+    );
 
     let revision = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
     let command = signed_control(
@@ -185,16 +214,20 @@ async fn authorized_user_pauses_then_resumes_a_running_goal_through_runtime_rece
         "{:?}",
         receipt.outcome
     );
-    assert_eq!(fixture.observe().await, resume["expected"]["execution"]);
+    assert_eq!(
+        observed_execution(fixture.observe().await),
+        resume.expected.as_ref().unwrap().execution
+    );
     fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn user_without_session_access_receives_the_modeled_refusal() {
     let case = modeled_case("active_denied_busy_current_pause");
-    assert_eq!(case["facts"]["authorized"], false);
-    assert!(case["expected"].is_null());
-    let fixture = Fixture::new_with_parent_state(&case["before"]["execution"], false).await;
+    assert!(!case.facts.authorized);
+    assert!(case.expected.is_none());
+    let case_before = before_execution_json(&case.before.execution);
+    let fixture = Fixture::new_with_parent_state(&case_before, false).await;
     let owner_access = fixture.user_access();
     let requester = Arc::new(
         tokio::task::spawn_blocking(|| {
@@ -272,14 +305,11 @@ async fn user_without_session_access_receives_the_modeled_refusal() {
 #[tokio::test]
 async fn cross_actor_stale_goal_rejection_is_durable_and_recoverable() {
     let modeled = modeled_case("active_authorized_idle_foreign_document_pause");
-    assert_eq!(modeled["facts"]["authorized"], true);
-    assert_eq!(modeled["facts"]["unfinished_request"], false);
-    assert_eq!(modeled["expected_revision"]["document"], "foreign-goal");
-    assert_eq!(
-        modeled["expected_revision"]["composite"],
-        "revision-current"
-    );
-    assert!(modeled["expected"].is_null());
+    assert!(modeled.facts.authorized);
+    assert!(!modeled.facts.unfinished_request);
+    assert_eq!(modeled.expected_revision.document, "foreign-goal");
+    assert_eq!(modeled.expected_revision.composite, "revision-current");
+    assert!(modeled.expected.is_none());
     let fixture = Fixture::new(&json!({
         "status": "active", "sequence": 0, "blocked_audits": 0,
         "wrapup_requested": false, "wrapup_completed": false,

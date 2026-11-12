@@ -1,25 +1,32 @@
 use super::*;
 use crate::goal::operator_resume::support::{execute, Fixture, SESSION};
 use crate::goal::session_goal_control::process_command;
+use gents_lean_vocab::{
+    LeanGoalClientControlCaseBeforeExecution, LeanGoalClientControlCaseExpectedExecution,
+};
 use gents_protocol::goal_control::{
     GoalRevision, SessionGoalControlReceipt, SESSION_GOAL_CONTROL_VERSION,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::Arc;
 
-#[derive(Deserialize)]
-struct Contracts {
-    goal_client_control_cases: Vec<Case>,
+fn before_execution_json(execution: &LeanGoalClientControlCaseBeforeExecution) -> Value {
+    json!({
+        "status": execution.status,
+        "blocked_audits": execution.blocked_audits,
+        "wrapup_requested": execution.wrapup_requested,
+        "wrapup_completed": execution.wrapup_completed,
+        "sequence": execution.sequence,
+        "last_continued_from": execution.last_continued_from,
+        "latest_request": execution.latest_request,
+        "children": execution.children,
+        "tokens_used": execution.tokens_used,
+        "token_budget": execution.token_budget
+    })
 }
 
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    before: Value,
-    expected_revision: GoalRevision,
-    operation: Value,
-    facts: Value,
-    expected: Option<Value>,
+fn observed_execution(value: Value) -> LeanGoalClientControlCaseExpectedExecution {
+    serde_json::from_value(value).unwrap()
 }
 
 pub(super) async fn persist_command(
@@ -51,16 +58,14 @@ pub(super) async fn receipt(
 
 #[tokio::test]
 async fn generated_goal_client_controls_drive_signed_commands() {
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_client_control_cases.len(), 756);
-    for case in contracts.goal_client_control_cases {
-        let fixture = Fixture::new_with_parent_state(
-            &case.before["execution"],
-            case.facts["unfinished_request"] == false,
-        )
-        .await;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_client_control_cases;
+    assert_eq!(cases.len(), 756);
+    for case in cases {
+        let before_execution = before_execution_json(&case.before.execution);
+        let terminal_parent = !case.facts.unfinished_request;
+        let fixture = Fixture::new_with_parent_state(&before_execution, terminal_parent).await;
         execute(&fixture.agent_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(case.before["objective"].as_str().unwrap()))).await;
+            escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(&case.before.objective))).await;
         let owner_access = fixture.user_access();
         let session = owner_access
             .transact_readonly("test.goal_session", |txn| {
@@ -76,7 +81,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             .await
             .unwrap()
             .unwrap();
-        let (requester, access) = if case.facts["authorized"] == false {
+        let (requester, access) = if !case.facts.authorized {
             let requester = Arc::new(
                 tokio::task::spawn_blocking(|| {
                     gents_store::test_support::test_identity("goal-denied-requester")
@@ -155,10 +160,20 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         };
         let revision = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
         let before = fixture.observe().await;
-        let mut operation = case.operation.clone();
-        if let Some(budget) = operation.as_object_mut().unwrap().remove("budget") {
-            operation["token_budget"] = budget;
-        }
+        let operation = match case.operation.kind.as_str() {
+            "create" => GoalOperation::Create {
+                objective: case.operation.objective.clone().unwrap(),
+                token_budget: case.operation.budget,
+            },
+            "edit" => GoalOperation::Edit {
+                objective: case.operation.objective.clone(),
+                token_budget: case.operation.budget,
+            },
+            "pause" => GoalOperation::Pause {},
+            "resume" => GoalOperation::Resume {},
+            "stop" => GoalOperation::Stop {},
+            other => panic!("unknown modeled goal operation {other}"),
+        };
         let now = Utc::now();
         let mut command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
@@ -178,21 +193,18 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             issued_at: now.to_rfc3339(),
             expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
             expected: Some(GoalRevision {
-                document: if case.expected_revision.document == case.before["revision"]["document"]
-                {
+                document: if case.expected_revision.document == case.before.revision.document {
                     fixture.goal.doc_id.clone()
                 } else {
                     "foreign-goal-document".into()
                 },
-                composite: if case.expected_revision.composite
-                    == case.before["revision"]["composite"]
-                {
+                composite: if case.expected_revision.composite == case.before.revision.composite {
                     revision.clone()
                 } else {
                     "stale-goal-commit".into()
                 },
             }),
-            operation: serde_json::from_value(operation).unwrap(),
+            operation,
             initial_request: None,
             native_evidence: None,
             signature: Vec::new(),
@@ -222,7 +234,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             .await
             .unwrap());
         let current = fixture.current_goal().await;
-        match case.expected {
+        match &case.expected {
             Some(expected) => {
                 assert!(
                     matches!(receipt.outcome, GoalControlOutcome::Applied { .. }),
@@ -231,14 +243,14 @@ async fn generated_goal_client_controls_drive_signed_commands() {
                     receipt.outcome
                 );
                 assert_eq!(
-                    fixture.observe().await,
-                    expected["execution"],
+                    observed_execution(fixture.observe().await),
+                    expected.execution,
                     "{} execution",
                     case.name
                 );
                 assert_eq!(
                     current.objective,
-                    expected["objective"].as_str().unwrap(),
+                    expected.objective,
                     "{} objective",
                     case.name
                 );
@@ -257,7 +269,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
                 );
                 assert_eq!(
                     current.objective,
-                    case.before["objective"].as_str().unwrap(),
+                    case.before.objective,
                     "{} unchanged objective",
                     case.name
                 );
