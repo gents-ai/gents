@@ -3,6 +3,7 @@ import Proofs.Tools.Lsp.Types
 import Proofs.Tools.MCPHealth.Coupling
 import Proofs.Tools.ToolPolicy.OperatorPaths
 import Proofs.Tools.ToolPolicy.PluginCalls
+import Proofs.Tools.WorkspaceRootOperations
 import Proofs.Conformance.Family
 
 namespace Lsp
@@ -24,3 +25,16 @@ attribute [conformance_function]
   ToolPolicy.OperatorPaths.commandGuardAllows
   ToolPolicy.PluginCalls.available
   Proofs.MCPHealth.healthProjection
+
+namespace WorkspaceRootOperations
+
+deriving instance Lean.ToJson for Stored, Toggle, NameUpdate, ReaderSubject, ReaderChange,
+  ReaderDecision, Refusal, Recovery
+
+attribute [conformance_function]
+  enabledAfter
+  writesDisplayName
+  readerDecision
+  Refusal.recovery
+
+end WorkspaceRootOperations

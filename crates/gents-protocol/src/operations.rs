@@ -3,6 +3,10 @@
 //! it needs and its help. Front ends parse into these types and render them.
 
 pub mod agent;
+pub mod p2p;
+pub mod permission;
+pub mod service;
+pub mod workspace_root;
 
 /// Tri-state for an optional text field. A present JSON null is `Clear`;
 /// the property must be absent to stay `Omitted`.

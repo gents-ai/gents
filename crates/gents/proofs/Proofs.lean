@@ -66,6 +66,9 @@ import Proofs.Clients.ClientShell.RequestPatchPublication
 import Proofs.Session.CommandPolicy
 import Proofs.Tools.ToolPolicy
 import Proofs.Tools.Lsp
+import Proofs.Tools.WorkspaceRootOperations
+import Proofs.P2P.Operations
+import Proofs.Clients.ServiceLifecycle
 import Proofs.Session.ToolExecution
 import Proofs.Runtime.CompletionRetry
 import Proofs.Session.ManagedExec
