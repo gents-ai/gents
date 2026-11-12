@@ -278,11 +278,6 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
     let cases = lean_auxiliary_output_cases();
     assert!(!cases.is_empty(), "generated auxiliary cases are empty");
     for case in cases {
-        let path = std::env::temp_dir().join(format!(
-            "auxiliary-owner-{}-{}",
-            case.name,
-            uuid::Uuid::new_v4()
-        ));
         let db = gents_automation::triggers::callback::test_node_builder(
             "generated-auxiliary-cases-drive-owned-be",
         )
@@ -650,7 +645,6 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             case.name
         );
         node.shutdown().await.expect("shut down test node");
-        std::fs::remove_dir_all(path).unwrap();
     }
 }
 
@@ -674,11 +668,6 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             "{}",
             case.name
         );
-        let path = std::env::temp_dir().join(format!(
-            "auxiliary-sink-{}-{}",
-            case.name,
-            uuid::Uuid::new_v4()
-        ));
         let db = gents_automation::triggers::callback::test_node_builder(
             "generated-auxiliary-cases-drive-non-clau",
         )
@@ -882,6 +871,5 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         });
         assert_eq!(view, LiveView::Absent, "{}", case.name);
         node.shutdown().await.expect("shut down test node");
-        std::fs::remove_dir_all(path).unwrap();
     }
 }
