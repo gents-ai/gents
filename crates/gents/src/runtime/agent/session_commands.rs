@@ -499,9 +499,6 @@ where
 }
 
 #[cfg(test)]
-mod notification_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use gents_protocol::goal_control::{

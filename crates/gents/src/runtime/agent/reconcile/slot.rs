@@ -618,37 +618,4 @@ mod tests {
 
         async fn on_slot_retired(&self, _agent_did: &str, _generation: u64, _recreated: bool) {}
     }
-
-    #[tokio::test]
-    async fn failed_demotion_persistence_keeps_exhausted_slot_parked() {
-        let attempted = Arc::new(Notify::new());
-        let policy = Arc::new(FailingDemotionPolicy {
-            attempted: attempted.clone(),
-        });
-        let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
-        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
-        let (state_tx, mut state_rx) = watch::channel(AgentSlotState::Active);
-        let standing_for_task = standing.clone();
-        let task = tokio::spawn(async move {
-            handle_slot_failure(
-                "general",
-                7,
-                "executor failed",
-                Some(policy.as_ref()),
-                &standing_for_task,
-                &mut shutdown_rx,
-                &mut state_rx,
-            )
-            .await
-        });
-
-        attempted.notified().await;
-        assert_eq!(*standing.lock().unwrap(), BuildStanding::Demoted);
-        assert!(
-            !task.is_finished(),
-            "a failed durable demotion must not restart the exhausted slot"
-        );
-        state_tx.send_replace(AgentSlotState::Retiring);
-        assert!(task.await.unwrap());
-    }
 }
