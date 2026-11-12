@@ -1,5 +1,6 @@
 import Proofs.ToolCalls.TaskHooks
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.TaskHooksContracts
 open TaskHooks Conformance.Contracts
@@ -121,12 +122,33 @@ def admissionCases : List AdmissionCase :=
 theorem admissionCases_replay : ∀ c ∈ admissionCases,
     (admitHooks c.hooks).isSome = c.expectedAdmitted := by decide
 
-private def admissionCaseJson (c : AdmissionCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"hooks\":" ++ jsonArray (c.hooks.map hookJson) ++
-    ",\"expected_admitted\":" ++ boolJson c.expectedAdmitted ++ "}"
+deriving instance Lean.ToJson for HookPhase
+deriving instance Lean.ToJson for TaskHook
 
-def admissionCasesJson : String := jsonArray (admissionCases.map admissionCaseJson)
+structure AdmissionInput where
+  name : String
+  taskHooks : List TaskHook
+  deriving Lean.ToJson
+
+structure AdmissionOutput where
+  admitted : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def admission : Family AdmissionInput AdmissionOutput where
+  inputs := admissionCases.map fun c => { name := c.name, taskHooks := c.hooks }
+  model := fun i => { admitted := (admitHooks i.taskHooks).isSome }
+
+structure TimeoutOutput where
+  effectiveTimeoutSecs : Nat
+  deriving Lean.ToJson
+
+/-- Every hook of every admission case, admitted or not: production resolves
+the timeout of a hook before validation decides admission. -/
+@[conformance_family]
+def effectiveTimeout : Family TaskHook TimeoutOutput where
+  inputs := admissionCases.flatMap (·.hooks)
+  model := fun h => { effectiveTimeoutSecs := h.effectiveTimeout }
 
 structure ScriptedResult where
   hookId : String

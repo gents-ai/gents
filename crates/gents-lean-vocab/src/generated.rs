@@ -669,10 +669,6 @@ pub fn lean_task_goal_recovery_cases() -> &'static [LeanTaskGoalRecoveryCase] {
     &lean_contract_snapshot().task_goal_recovery_cases
 }
 
-pub fn lean_task_hook_admission_cases() -> &'static [LeanTaskHookAdmissionCase] {
-    &lean_contract_snapshot().task_hook_admission_cases
-}
-
 pub fn lean_task_hook_recovery_cases() -> &'static [LeanTaskHookRecoveryCase] {
     &lean_contract_snapshot().task_hook_recovery_cases
 }
@@ -3307,7 +3303,6 @@ pub struct LeanContractSnapshot {
     pub capture_scope_cases: Vec<LeanCaptureScopeCase>,
     pub capture_order_cases: Vec<LeanCaptureOrderCase>,
     pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
-    pub task_hook_admission_cases: Vec<LeanTaskHookAdmissionCase>,
     pub native_completion_cases: Vec<LeanNativeCompletionCase>,
     pub native_claim_lifetime_cases: Vec<LeanNativeClaimLifetimeCase>,
     pub families: BTreeMap<String, LeanFamily>,
@@ -11310,14 +11305,6 @@ pub struct LeanTaskHook {
     pub timeout_secs: Option<i64>,
     pub skip_exit_codes: Vec<i64>,
     pub effective_timeout_secs: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTaskHookAdmissionCase {
-    pub name: String,
-    pub hooks: Vec<LeanTaskHook>,
-    pub expected_admitted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

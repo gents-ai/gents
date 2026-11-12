@@ -811,8 +811,12 @@ def caseCoverage : List CoverageEntry :=
       "Exercises charged-usage summation and the owned loop budget ledger. Database selection of restart rows and missing-usage rejection still need completion-owner observations.")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "task_hook_admission_cases"
-      "TaskHookAdmissionCases")
+      "family"
+      "task_hooks_contracts_admission")
+      "task-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "task_hooks_contracts_effective_timeout")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "task_hook_run_cases"

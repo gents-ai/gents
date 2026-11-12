@@ -322,8 +322,6 @@ def snapshotCaptureTailJson : String :=
       ++ captureOrderCasesJson ++ ","
     ++ "\"aggregate_token_budget_cases\":"
       ++ aggregateTokenBudgetCasesJson ++ ","
-    ++ "\"task_hook_admission_cases\":"
-      ++ Conformance.TaskHooksContracts.admissionCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
     ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
