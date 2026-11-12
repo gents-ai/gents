@@ -3081,7 +3081,6 @@ pub struct LeanContractSnapshot {
     pub discovery_guidance_cases: Vec<LeanDiscoveryGuidanceCase>,
     pub goal_decision_cases: Vec<LeanGoalDecisionCase>,
     pub goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,
-    pub goal_claimed_readiness_cases: Vec<LeanGoalClaimedReadinessCase>,
     pub goal_transition_cases: Vec<LeanGoalTransitionCase>,
     pub goal_create_cases: Vec<LeanGoalCreateCase>,
     pub goal_client_delivery_cases: Vec<serde_json::Value>,
@@ -4425,45 +4424,6 @@ pub struct LeanGoalClaimedPublicationCaseRequestBinding {
     pub source_document: String,
     pub trigger_context: String,
     pub workspace_fingerprint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedReadinessCase {
-    pub before: LeanGoalClaimedReadinessCaseBefore,
-    pub child_exists: bool,
-    pub decision: String,
-    pub expected: LeanGoalClaimedReadinessCaseExpected,
-    pub name: String,
-    pub newer_than_terminal: bool,
-    pub observation: String,
-    pub settled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedReadinessCaseBefore {
-    pub blocked_audits: u64,
-    pub continuation_sequence: u64,
-    pub infrastructure_retries: u64,
-    pub last_failure: String,
-    pub parent: String,
-    pub status: String,
-    pub wrapup_completed: bool,
-    pub wrapup_requested: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedReadinessCaseExpected {
-    pub blocked_audits: u64,
-    pub continuation_sequence: u64,
-    pub infrastructure_retries: u64,
-    pub last_failure: String,
-    pub parent: String,
-    pub status: String,
-    pub wrapup_completed: bool,
-    pub wrapup_requested: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

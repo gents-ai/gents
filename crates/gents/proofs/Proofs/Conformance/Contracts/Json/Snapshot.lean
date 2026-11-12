@@ -566,8 +566,6 @@ def snapshotRequestCasesJson : String :=
       ++ goalDecisionCasesJson ++ ","
     ++ "\"goal_readiness_gate_cases\":"
       ++ goalReadinessGateCasesJson ++ ","
-    ++ "\"goal_claimed_readiness_cases\":"
-      ++ Conformance.GoalClaimedReadiness.casesJson ++ ","
     ++ "\"goal_transition_cases\":"
       ++ goalTransitionCasesJson ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
