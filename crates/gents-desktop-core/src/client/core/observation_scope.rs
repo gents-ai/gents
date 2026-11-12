@@ -95,32 +95,27 @@ impl Drop for ClientObservationAttachment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
 
-    fn node(value: &Value) -> Option<String> {
-        value.as_u64().map(|id| format!("did:scope:{id}"))
+    fn node(value: Option<u64>) -> Option<String> {
+        value.map(|id| format!("did:scope:{id}"))
     }
 
     #[test]
     fn generated_attachment_traces_keep_every_frontend_observable() {
-        let snapshot: Value =
-            gents_lean_contract::load_contract_snapshot().expect("executable Lean client contract");
-        let cases = snapshot["client_observation_scope_cases"]
-            .as_array()
-            .expect("observation scope cases");
+        let cases = &gents_lean_vocab::lean_contract_snapshot().client_observation_scope_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let owner = ObservationScope::new();
-            owner.select(node(&case["initial"]["requested"]));
-            let mut attachments = (0..case["initial"]["attachments"].as_u64().unwrap())
+            owner.select(node(case.initial.requested));
+            let mut attachments = (0..case.initial.attachments)
                 .map(|_| owner.attach().unwrap())
                 .collect::<Vec<_>>();
             let mut observations = owner.subscribe();
-            for (index, state) in case["expected"].as_array().unwrap().iter().enumerate() {
+            for (index, state) in case.expected.iter().enumerate() {
                 if index > 0 {
-                    let action = &case["actions"][index - 1];
-                    match action["kind"].as_str().unwrap() {
-                        "select" => owner.select(node(&action["node"])),
+                    let action = &case.actions[index - 1];
+                    match action.kind.as_str() {
+                        "select" => owner.select(node(action.node)),
                         "attach" => attachments.push(owner.attach().unwrap()),
                         "detach" => {
                             attachments.pop();
@@ -128,21 +123,17 @@ mod tests {
                         _ => panic!("unknown generated observation action"),
                     }
                 }
-                assert_eq!(owner.current(), node(&state["effective"]), "{case}");
+                assert_eq!(owner.current(), node(state.effective), "{case:?}");
                 assert_eq!(
                     *observations.borrow_and_update(),
-                    node(&state["effective"]),
-                    "{case}"
+                    node(state.effective),
+                    "{case:?}"
                 );
-                assert_eq!(
-                    attachments.len() as u64,
-                    state["attachments"].as_u64().unwrap(),
-                    "{case}"
-                );
+                assert_eq!(attachments.len() as u64, state.attachments, "{case:?}");
                 assert_eq!(
                     owner.0.focus.lock().unwrap().requested,
-                    node(&state["requested"]),
-                    "{case}"
+                    node(state.requested),
+                    "{case:?}"
                 );
             }
         }

@@ -204,23 +204,24 @@ fn destroying_or_navigating_a_window_retires_only_its_prompt_subscriptions() {
 
 #[tokio::test]
 async fn external_attachment_release_retains_the_current_window_scope() {
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let actions = serde_json::json!([
-        {"kind":"select", "node":null}, {"kind":"detach"}, {"kind":"select", "node":1}
-    ]);
-    let trace = contract["client_observation_scope_cases"]
-        .as_array()
-        .unwrap()
+    let actions = [("select", None), ("detach", None), ("select", Some(1))];
+    let trace = gents_lean_vocab::lean_contract_snapshot()
+        .client_observation_scope_cases
         .iter()
         .find(|case| {
-            case["initial"]["requested"] == 1
-                && case["initial"]["attachments"] == 1
-                && case["actions"] == actions
+            case.initial.requested == Some(1)
+                && case.initial.attachments == 1
+                && case.actions.len() == actions.len()
+                && case
+                    .actions
+                    .iter()
+                    .zip(actions)
+                    .all(|(action, (kind, node))| action.kind == kind && action.node == node)
         })
         .expect("modeled desktop-window and external-attachment trace");
     let expected = |index: usize| {
-        trace["expected"][index]["effective"]
-            .as_u64()
+        trace.expected[index]
+            .effective
             .map(|id| format!("did:scope:{id}"))
     };
     let (_temp, state) = state();
