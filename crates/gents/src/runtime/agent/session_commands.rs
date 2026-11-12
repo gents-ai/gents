@@ -610,7 +610,7 @@ mod tests {
             &gents_lean_vocab::lean_contract_snapshot().session_input_edit_native_discovery_cases;
         assert!(!cases.is_empty());
         for case in cases {
-            let agent = match case["actor"].as_str().unwrap() {
+            let agent = match case.actor.as_str() {
                 "agent" => agent.as_ref(),
                 "other" => other.as_ref(),
                 role => panic!("unknown modeled actor {role}"),
@@ -634,7 +634,7 @@ mod tests {
             )
             .unwrap()
             .is_empty();
-            assert_eq!(visible, case["visible"].as_bool().unwrap());
+            assert_eq!(visible, case.visible);
             let mut actual =
                 unanswered_goal_commands(&node, identity.as_ref(), agent, Sweep::Unverified)
                     .await
@@ -642,7 +642,7 @@ mod tests {
             actual.sort();
             assert_eq!(
                 actual,
-                if case["selected"].as_bool().unwrap() {
+                if case.selected {
                     expected.clone()
                 } else {
                     Vec::new()
