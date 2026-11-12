@@ -16,6 +16,8 @@ pub struct AgentList {
     agent_did: Option<String>,
     after: Option<String>,
     doc_ids: Option<Vec<String>>,
+    name: Option<(String, String)>,
+    oldest_first: bool,
     limit: Option<u64>,
 }
 
@@ -26,6 +28,8 @@ impl AgentList {
             agent_did: None,
             after: None,
             doc_ids: None,
+            name: None,
+            oldest_first: false,
             limit: None,
         }
     }
@@ -37,6 +41,20 @@ impl AgentList {
 
     pub fn after(mut self, agent_did: impl Into<String>) -> Self {
         self.after = Some(agent_did.into());
+        self
+    }
+
+    pub fn named(
+        mut self,
+        display_name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        self.name = Some((display_name.into(), description.into()));
+        self
+    }
+
+    pub fn oldest_first(mut self) -> Self {
+        self.oldest_first = true;
         self
     }
 
@@ -70,8 +88,16 @@ impl View for AgentList {
                 .field(agent::CREATED_AT)
                 .field(agent::UPDATED_AT),
         )
-        .filter(Filter::eq(agent::NODE_DID, &self.node_did))
-        .order_by(agent::AGENT_DID, Direction::Asc);
+        .filter(Filter::eq(agent::NODE_DID, &self.node_did));
+        if self.oldest_first {
+            query = query.order_by(agent::CREATED_AT, Direction::Asc);
+        }
+        query = query.order_by(agent::AGENT_DID, Direction::Asc);
+        if let Some((name, description)) = &self.name {
+            query = query
+                .filter(Filter::eq(agent::DISPLAY_NAME, name))
+                .filter(Filter::eq(agent::DESCRIPTION, description));
+        }
         if let Some(agent_did) = &self.agent_did {
             query = query.filter(Filter::eq(agent::AGENT_DID, agent_did));
         }

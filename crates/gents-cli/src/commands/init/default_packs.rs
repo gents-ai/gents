@@ -242,24 +242,20 @@ async fn engineer_of(
     let Ok(agent) = crate::commands::start::default_agent(access, owner).await else {
         return Ok(None);
     };
-    let rendered = {
-        use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
-        Query::select(Selection::new().field(fields::TAGS))
-            .filter(Filter::eq(fields::AGENT_DID, &agent).and(Filter::eq(fields::NODE_DID, owner)))
-            .limit(1)
-            .render()
-    };
-    let rows = gents_protocol::graphql::graphql_rows_from_response(
-        &access.read(&rendered).await?,
-        "Agent",
-    );
-    let engineer = rows.first().is_some_and(|row| {
-        row["tags"].as_array().is_some_and(|tags| {
-            tags.iter().any(|tag| {
-                tag.as_str() == Some(gents_tools::builtin::self_config::ENGINEER_AGENT_TAG)
-            })
-        })
-    });
+    let engineer = access
+        .read_view(
+            &gents_documents::views::agents::AgentList::new(owner)
+                .agent_did(&agent)
+                .limit(1),
+        )
+        .await?
+        .first()
+        .is_some_and(|row| {
+            row.agent
+                .tags
+                .iter()
+                .any(|tag| tag == gents_tools::builtin::self_config::ENGINEER_AGENT_TAG)
+        });
     Ok(engineer.then_some(agent))
 }
 
@@ -710,22 +706,17 @@ async fn agent_identity_binding(
     owner: &str,
     agent_did: &str,
 ) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
-    access
-        .transact_readonly("cli.init.agent_binding", |txn| {
-            Box::pin(async move {
-                let (_, value) = gents_documents::read_desired_state_record_in_txn(
-                    txn,
-                    gents_store::collection::Collection::Agent,
-                    owner,
-                    agent_did,
-                )
-                .await?
-                .with_context(|| format!("agent {agent_did:?} missing for {owner:?}"))?;
-                let agent: gents_documents::Agent = serde_json::from_value(value)?;
-                Ok(agent.identity_binding())
-            })
-        })
-        .await
+    let row = access
+        .read_view(
+            &gents_documents::views::agents::AgentList::new(owner)
+                .agent_did(agent_did)
+                .limit(1),
+        )
+        .await?
+        .into_iter()
+        .next()
+        .with_context(|| format!("agent {agent_did:?} missing for {owner:?}"))?;
+    Ok(row.agent.identity_binding())
 }
 
 /// The config tool as the runtime gives it to the Engineer `engineer`, with
