@@ -94,9 +94,11 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
         .find(|case| case.name == "claimed_active_publishes_without_reclaim")
         .unwrap();
     let before = before_value(&located.before);
-    for case in &gents_lean_vocab::lean_contract_snapshot().goal_claimed_target_cases {
+    for case in
+        gents_lean_vocab::families::goal_claimed_publication_contracts_claimed_target::cases()
+    {
         let fixture = Fixture::new(&before).await;
-        let name = case.name.as_str();
+        let name = case.input.name.as_str();
         let duplicate = name == "duplicate-after-revocation";
         let forged = matches!(
             name,
@@ -119,7 +121,7 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
             .unwrap()
             .request_id;
         let filter = format!(
-            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID session_doc_id agent_doc_id}} }}",
             escape_graphql_string(&request_id)
         );
         if duplicate {
@@ -166,13 +168,13 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
             &std::sync::Mutex::new(None),
         )
         .await;
-        if forged {
+        let committed = if forged {
             assert!(
                 result.is_err(),
                 "{name} must not recover a foreign signed target"
             );
-            assert!(!case.committed);
             txn.discard().await.unwrap();
+            false
         } else {
             let receipt = result.unwrap().expect("matching claimed publication");
             assert_eq!(receipt.created, !duplicate);
@@ -203,18 +205,27 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
                 owners[0].owner.as_ref().map(identity::Did::as_str),
                 Some(fixture.agent.did())
             );
-            if case.commit {
+            if case.input.commit {
                 txn.commit().await.unwrap();
             } else {
                 txn.discard().await.unwrap();
             }
-            let user = fixture.user_access().execute(&filter).await.unwrap();
-            let visible = !user["data"]["AgentRequest"].as_array().unwrap().is_empty();
-            assert_eq!(
-                visible, case.grants,
-                "{name}: User visibility follows modeled grants"
-            );
-        }
+            case.input.commit
+        };
+        let user = fixture.user_access().execute(&filter).await.unwrap();
+        case.check(
+            gents_lean_vocab::families::goal_claimed_publication_contracts_claimed_target::TargetOutput {
+                committed,
+                grants: user["data"]["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| {
+                        row["session_doc_id"] == fixture.session_doc_id.as_str()
+                            && row["agent_doc_id"] == fixture.agent_doc_id.as_str()
+                    }),
+            },
+        );
         fixture.node.shutdown().await.expect("node shutdown");
     }
 }
@@ -802,11 +813,7 @@ async fn run_generated_wait_observations() {
             }
             turn += 1;
         }
-        let unstarted_wait = case
-            .observation
-            .waits
-            .iter()
-            .any(|wait| !wait.replied);
+        let unstarted_wait = case.observation.waits.iter().any(|wait| !wait.replied);
         let (outcome, failure) = if unstarted_wait {
             (
                 RequestTerminalOutcome::Failed,
@@ -1038,11 +1045,10 @@ async fn run_historical_publication_cases() {
         let mut observed = fixture.current_goal().await;
         observed.status = case.request.expected_status.clone();
         observed.continuation_sequence = i64::try_from(case.request.expected_sequence).ok();
-        observed.last_continued_from_request_id =
-            match case.request.expected_last_continued_from {
-                10 => Some(PARENT.into()),
-                value => panic!("unmapped observed watermark {value:?}"),
-            };
+        observed.last_continued_from_request_id = match case.request.expected_last_continued_from {
+            10 => Some(PARENT.into()),
+            value => panic!("unmapped observed watermark {value:?}"),
+        };
         let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
         let txn = ConfigApplyTxn::begin_local_with_signer(
             &fixture.node,

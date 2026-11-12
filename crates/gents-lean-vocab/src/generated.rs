@@ -2879,7 +2879,6 @@ pub struct LeanContractSnapshot {
     pub pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
     pub goal_claimed_publication_cases: Vec<LeanGoalClaimedPublicationCase>,
     pub goal_claimed_identity_cases: Vec<LeanGoalClaimedIdentityCase>,
-    pub goal_claimed_target_cases: Vec<LeanGoalClaimedTargetCase>,
     pub goal_wake_coalescing_cases: Vec<serde_json::Value>,
     pub goal_wake_ancestry_cases: Vec<LeanGoalWakeAncestryCase>,
     pub goal_request_scope_cases: Vec<serde_json::Value>,
@@ -4479,20 +4478,6 @@ pub struct LeanGoalClaimedReadinessCaseExpected {
     pub status: String,
     pub wrapup_completed: bool,
     pub wrapup_requested: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedTargetCase {
-    pub agent: String,
-    pub commit: bool,
-    pub committed: bool,
-    pub fresh: bool,
-    pub grants: bool,
-    pub name: String,
-    pub observed_agent: String,
-    pub observed_session: String,
-    pub session: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
