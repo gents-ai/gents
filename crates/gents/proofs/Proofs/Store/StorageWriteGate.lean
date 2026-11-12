@@ -278,6 +278,29 @@ theorem shared_store_claim_outlives_released_permit :
     activeCount permitReleased = 0 ∧ permitReleased.storeClaimHeld = true := by
   decide
 
+/-- The ways a configuration owner reaches the local store. -/
+inductive Operation where
+  | write
+  | readOnly
+  deriving DecidableEq, Repr
+
+/-- Decision: a read-only transaction cannot mutate, so it takes no write
+permit and never queues behind writers. -/
+def needsPermit : Operation → Bool
+  | .write => true
+  | .readOnly => false
+
+/-- Whether an operation proceeds without waiting while `held` permits are
+active. -/
+def proceedsImmediately (operation : Operation) (held : Nat) : Bool :=
+  !needsPermit operation || held < capacity
+
+theorem config_access_readonly_does_not_wait_for_the_embedded_mutation_gate (held : Nat) :
+    proceedsImmediately .readOnly held = true := rfl
+
+theorem a_write_waits_at_capacity : proceedsImmediately .write capacity = false := by
+  decide
+
 end Admission
 
 end StorageWriteGate

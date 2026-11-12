@@ -119,4 +119,17 @@ theorem capacity_trace_keeps_sixty_fifth_waiting :
       final.storeClaimHeld := by
   decide
 
+deriving instance Lean.ToJson for StorageWriteGate.Admission.Operation
+
+structure EntryInput where
+  operation : Operation
+  held : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def entry : Conformance.Family EntryInput Bool where
+  inputs := [Operation.write, .readOnly].flatMap fun operation =>
+    [0, capacity - 1, capacity].map fun held => { operation, held }
+  model := fun i => proceedsImmediately i.operation i.held
+
 end Conformance.StorageWriteGateAdmission

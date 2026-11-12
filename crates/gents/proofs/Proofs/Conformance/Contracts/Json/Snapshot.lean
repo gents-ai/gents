@@ -91,6 +91,9 @@ import Proofs.Conformance.PairingOwnedDiff
 import Proofs.Conformance.PairingDataPlane
 import Proofs.Conformance.PairingTick
 import Proofs.Conformance.SchemaObligations
+import Proofs.Conformance.DesiredStatePlan
+import Proofs.Conformance.PluginStoreNotice
+import Proofs.Conformance.NativeCompletionTrace
 import Proofs.Store.Identity.MailboxAccess
 import Proofs.Store.Identity.WorkspaceAndFileRequests
 import Proofs.Store.Identity.PackPlacementReaders
