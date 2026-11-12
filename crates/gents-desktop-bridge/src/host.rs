@@ -223,7 +223,7 @@ impl ClientHost {
                     &request.node_did, request.method, provider, request.label.as_deref(), &cancel,
                     async |url| crate::host_browser::open_url(url).await.map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
                 ).await?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account saved; its client observation is unavailable");
                 }
                 encode(crate::accounts::SignInView::from(&signed))
@@ -247,7 +247,7 @@ impl ClientHost {
                 )
                 .await
                 .map_err(backend_error)?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account disconnected; its client observation is unavailable");
                 }
                 encode(())
@@ -271,7 +271,7 @@ impl ClientHost {
                 )
                 .await
                 .map_err(backend_error)?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account renamed; its client observation is unavailable");
                 }
                 encode(())
@@ -296,7 +296,7 @@ impl ClientHost {
                 )
                 .await
                 .map_err(backend_error)?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account removed; its client observation is unavailable");
                 }
                 encode(())
@@ -317,7 +317,7 @@ impl ClientHost {
                     &request.provider,
                 )
                 .await?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account saved; its client observation is unavailable");
                 }
                 encode(crate::accounts::ProviderAccountView::from(&credential))
