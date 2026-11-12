@@ -53,7 +53,6 @@ fn task_template_renders_per_invocation() {
     assert_eq!(replay, first);
 }
 
-
 #[test]
 fn authoring_rejects_invalid_rendering_syntax_without_invocation_values() {
     for source in ["{{.message}}", "{{ doc.message", "{% if doc.message %}"] {
