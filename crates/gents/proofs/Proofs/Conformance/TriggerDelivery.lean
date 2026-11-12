@@ -424,11 +424,23 @@ def sessionCases : List String :=
      ("owned", toString owned), ("create_missing", toString create),
      ("resolved", jsonOptionalString (resolveSession id target owned create))]
 
-def sessionConfigCases : List String :=
-  [(none, false), (none, true), (some "game:{{ doc.id }}", false),
-   (some "game:{{ doc.id }}", true)].map fun (template, create) => object [
-     ("template", jsonOptionalString template), ("create_session", toString create),
-     ("allowed", toString (Triggers.SessionKey.configValid template create))]
+structure SessionConfigInput where
+  template : Option String
+  createSession : Bool
+  deriving Lean.ToJson
+
+structure SessionConfigOutput where
+  allowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def sessionConfig : Family SessionConfigInput SessionConfigOutput where
+  inputs := [
+    { template := none, createSession := false },
+    { template := none, createSession := true },
+    { template := some "game:{{ doc.id }}", createSession := false },
+    { template := some "game:{{ doc.id }}", createSession := true }]
+  model := fun i => { allowed := Triggers.SessionKey.configValid i.template i.createSession }
 
 structure BudgetScenario where
   name : String
@@ -583,9 +595,6 @@ def triggerDeliveryIdentityCasesJson : String :=
 
 def triggerDeliverySessionCasesJson : String :=
   jsonArray sessionCases
-
-def triggerDeliverySessionConfigCasesJson : String :=
-  jsonArray sessionConfigCases
 
 def triggerFireBudgetCasesJson : String :=
   jsonArray budgetCases

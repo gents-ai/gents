@@ -1370,23 +1370,17 @@ fn trigger_with_options(
 
 #[test]
 fn generated_session_key_cases_match_admission_and_config() {
-    let cases = contract();
-    for case in cases["trigger_delivery_session_config_cases"]
-        .as_array()
-        .unwrap()
-    {
+    gents_lean_vocab::families::trigger_delivery_session_config::replay(|case| {
         let trigger = trigger_with_options(
-            case["template"].as_str(),
-            case["create_session"].as_bool(),
+            case.template.as_deref(),
+            Some(case.create_session),
             None,
             true,
         );
-        assert_eq!(
-            trigger.validate_options().is_ok(),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+        gents_lean_vocab::families::trigger_delivery_session_config::SessionConfigOutput {
+            allowed: trigger.validate_options().is_ok(),
+        }
+    });
 }
 
 /// A signed Node whose Agent admits fires of the User-owned Trigger `handoff`.
