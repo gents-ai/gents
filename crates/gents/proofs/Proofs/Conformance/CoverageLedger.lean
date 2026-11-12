@@ -2415,8 +2415,8 @@ def caseCoverage : List CoverageEntry :=
       "contract_cases_reduction_engine_outcome")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "budget_rehydration_cases"
-      "BudgetRehydrationCases"
+      "family"
+      "budget_rehydration_ledger"
       "Drives absent, zero and positive pinned limits with inference/compaction rows through the real physical-request query and ledger factory. Full process restart and InferenceCall write ownership remain separate boundaries.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage

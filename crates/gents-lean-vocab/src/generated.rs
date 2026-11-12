@@ -41,10 +41,6 @@ pub fn lean_backend_probe_schedule_cases() -> &'static [LeanBackendProbeSchedule
     &lean_contract_snapshot().backend_probe_schedule_cases
 }
 
-pub fn lean_budget_rehydration_cases() -> &'static [LeanBudgetRehydrationCase] {
-    &lean_contract_snapshot().budget_rehydration_cases
-}
-
 pub fn lean_callback_cases() -> &'static [LeanCallbackCase] {
     &lean_contract_snapshot().callback_cases
 }
@@ -1326,16 +1322,6 @@ pub struct LeanBoundary {
     pub statement: String,
     pub accepted_failure_mode: Option<String>,
     pub accepted_follow_up: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanBudgetRehydrationCase {
-    pub name: String,
-    pub request_doc_id: String,
-    pub pinned_limit: Option<u64>,
-    pub rows: Vec<LeanDurableUsageRow>,
-    pub ledger: Option<LeanRehydratedBudget>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3103,7 +3089,6 @@ pub struct LeanContractSnapshot {
     pub background_wake_row_cases: Vec<serde_json::Value>,
     pub discovery_scope_cases: Vec<serde_json::Value>,
     pub discovery_guidance_cases: Vec<LeanDiscoveryGuidanceCase>,
-    pub budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub goal_decision_cases: Vec<LeanGoalDecisionCase>,
     pub goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,
     pub goal_claimed_readiness_cases: Vec<LeanGoalClaimedReadinessCase>,
@@ -3679,15 +3664,6 @@ pub struct LeanDurableReductionCase {
     pub durable_after: bool,
     pub send_permitted: bool,
     pub consumed: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDurableUsageRow {
-    pub request_doc_id: String,
-    pub kind: String,
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -9980,13 +9956,6 @@ pub struct LeanRecoverySweepCase {
 pub struct LeanReductionAdmission {
     pub input_tokens: usize,
     pub input_budget: usize,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRehydratedBudget {
-    pub limit: u64,
-    pub used: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

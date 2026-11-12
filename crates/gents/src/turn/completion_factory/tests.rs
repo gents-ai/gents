@@ -647,13 +647,7 @@ fn prior_usage_decode_rejects_partial_or_negative_components() {
 
 #[tokio::test]
 async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
-    let cases = gents_lean_vocab::lean_budget_rehydration_cases();
-    assert_eq!(
-        cases.len(),
-        5,
-        "all nullable restart witnesses must be exercised"
-    );
-    for case in cases {
+    for case in gents_lean_vocab::families::budget_rehydration_ledger::cases::<String>() {
         let (db, user, owner, binding) =
             crate::test_support::root::signed_test_node("completion-budget-rehydration").await;
         let node = db.node.clone();
@@ -727,13 +721,15 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             .bind_managed_agent(agent.agent_identity.as_ref())
             .unwrap();
         lifecycle.set_client_claim_admission(admission);
-        lifecycle.set_configured_max_total_tokens(case.pinned_limit.filter(|limit| *limit != 0));
+        lifecycle.set_configured_max_total_tokens(
+            case.input.pinned_limit.filter(|limit| *limit != 0),
+        );
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
             gents_session::request::lifecycle::ClaimOutcome::Claimed
         );
         let mut request = lifecycle.request().clone();
-        if case.pinned_limit == Some(0) {
+        if case.input.pinned_limit == Some(0) {
             let doc_id = escape_graphql_string(&request.doc_id);
             access
                 .write(
@@ -754,8 +750,8 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             request = row.try_into().unwrap();
         }
         let did = escape_graphql_string(agent.node_did());
-        for (index, row) in case.rows.iter().enumerate() {
-            let doc_id = escape_graphql_string(if row.request_doc_id == case.request_doc_id {
+        for (index, row) in case.input.rows.iter().enumerate() {
+            let doc_id = escape_graphql_string(if row.request_doc_id == case.input.request_doc_id {
                 &request.doc_id
             } else {
                 &row.request_doc_id
@@ -808,26 +804,20 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     })
                 })
                 .await
-                .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                .unwrap_or_else(|error| panic!("{}: {error}", case.input.name));
         }
         let budget = aggregate_token_budget_for_request(&access, &request)
             .await
-            .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.name));
-        match (&case.ledger, budget) {
-            (None, None) => {}
-            (Some(expected), Some(budget)) => {
-                let ledger = budget.snapshot().expect("ledger");
-                assert_eq!(ledger.used, expected.used, "{}", case.name);
-                assert_eq!(ledger.limit, expected.limit, "{}", case.name);
+            .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.input.name));
+        let observed = budget.map(|budget| {
+            let ledger = budget.snapshot().expect("ledger");
+            gents_lean_vocab::families::budget_rehydration_ledger::Ledger {
+                limit: ledger.limit,
+                used: ledger.used,
             }
-            (expected, actual) => panic!(
-                "{}: ledger presence expected {}, got {}",
-                case.name,
-                expected.is_some(),
-                actual.is_some()
-            ),
-        }
+        });
         node.shutdown().await.expect("node shutdown");
+        case.check(observed);
     }
 }
 
