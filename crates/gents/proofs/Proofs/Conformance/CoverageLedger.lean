@@ -2406,8 +2406,8 @@ def caseCoverage : List CoverageEntry :=
       "The native consumer checks full and delta codec reconstruction with an injected base and witness. It does not exercise DefraDB base lookup, authorization, or provider-send ordering.")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "durable_reduction_cases"
-      "DurableReductionCases"
+      "family"
+      "contract_cases_durable_reduction"
       "Checks durable create/load/conflict and capture citations. The exported send_permitted fence is not exercised: validate actual provider dispatch against durable reduction facts through the owned completion loop.")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage

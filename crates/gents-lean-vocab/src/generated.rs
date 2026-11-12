@@ -137,10 +137,6 @@ pub fn lean_desktop_client_shell_cases() -> &'static [LeanClientShellCase] {
     &lean_contract_snapshot().desktop_client_shell_cases
 }
 
-pub fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {
-    &lean_contract_snapshot().durable_reduction_cases
-}
-
 pub fn lean_enrollment_cases() -> &'static [LeanEnrollmentCase] {
     &lean_contract_snapshot().enrollment_cases
 }
@@ -3353,8 +3349,6 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_replay_prefix_cases: Vec<LeanPromptAssemblyReplayPrefixCase>,
     pub protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
-    pub durable_reduction_cases: Vec<LeanDurableReductionCase>,
-    pub compaction_projection_join_cases: Vec<LeanCompactionProjectionJoinCase>,
     pub compaction_canonical_projection_cases: Vec<LeanCanonicalCompactionCase>,
     pub repaired_projection_admission_cases: Vec<LeanRepairedProjectionCase>,
     pub rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
@@ -3660,26 +3654,6 @@ pub struct LeanDurableObservationCase {
     pub feed_open: bool,
     pub now: u64,
     pub rescan_at: u64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanDurableReductionCase {
-    pub name: String,
-    pub request_doc_id: u64,
-    pub turn_index: usize,
-    pub ordinal: usize,
-    pub checkpoint: u64,
-    pub claim_commit: u64,
-    pub prior_checkpoint: Option<u64>,
-    pub prior_claim_commit: Option<u64>,
-    pub pair_closed: bool,
-    pub inference_cites: bool,
-    pub inference_supported: bool,
-    pub title_cites: bool,
-    pub outcome: String,
-    pub durable_after: bool,
-    pub send_permitted: bool,
-    pub consumed: bool,
 }
 
 #[derive(Debug, Deserialize)]

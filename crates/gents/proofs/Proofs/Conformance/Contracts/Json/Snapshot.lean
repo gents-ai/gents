@@ -163,7 +163,7 @@ import Proofs.Conformance.TitleAdmission
 import Proofs.Conformance.TitleText
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
-import Proofs.Conformance.Contracts.Json.DurableReduction
+import Proofs.Conformance.ContractCases.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
 import Proofs.Conformance.Contracts.Json.SessionDocuments
 import Proofs.Conformance.Contracts.Json.RequestInput
@@ -300,10 +300,6 @@ def snapshotCaptureTailJson : String :=
   ""
     ++ "\"rendered_capture_cases\":"
       ++ renderedCaptureCasesJson ++ ","
-    ++ "\"durable_reduction_cases\":"
-      ++ durableReductionCasesJson ++ ","
-    ++ "\"compaction_projection_join_cases\":"
-      ++ compactionProjectionJoinCasesJson ++ ","
     ++ "\"compaction_canonical_projection_cases\":"
       ++ compactionCanonicalProjectionCasesJson ++ ","
     ++ "\"repaired_projection_admission_cases\":"
