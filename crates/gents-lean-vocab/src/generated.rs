@@ -293,10 +293,6 @@ pub fn lean_lifecycle_hook_rerun_cases() -> &'static [LeanLifecycleHookRerunCase
     &lean_contract_snapshot().lifecycle_hook_rerun_cases
 }
 
-pub fn lean_lifecycle_hook_stage_cases() -> &'static [LeanLifecycleHookStageCase] {
-    &lean_contract_snapshot().lifecycle_hook_stage_cases
-}
-
 pub fn lean_lifecycle_hook_supersede_cases() -> &'static [LeanLifecycleHookSupersedeCase] {
     &lean_contract_snapshot().lifecycle_hook_supersede_cases
 }
@@ -3351,7 +3347,6 @@ pub struct LeanContractSnapshot {
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
-    pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
     pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
     pub lifecycle_hook_rerun_cases: Vec<LeanLifecycleHookRerunCase>,
     pub lifecycle_hook_goal_resume_cases: Vec<LeanLifecycleHookGoalResumeCase>,
@@ -6894,23 +6889,6 @@ pub enum LeanLifecycleHookScopeAnswer {
 pub struct LeanLifecycleHookScopeKey {
     pub plugin: String,
     pub key: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookStageCase {
-    pub name: String,
-    pub world: LeanLifecycleHookWorld,
-    pub plugins: Vec<LeanLifecycleHookScript<String>>,
-    pub result: LeanLifecycleHookStageResult,
-    pub settled: LeanLifecycleHookState,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookStageResult {
-    Ok { state: LeanLifecycleHookState, values: Vec<String> },
-    Error { refusal: LeanLifecycleHookRefusal },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

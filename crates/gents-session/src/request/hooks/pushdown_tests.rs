@@ -22,17 +22,16 @@ use gents_lean_vocab::families::hooks_contracts_owed_derive::{self as owed_deriv
 use gents_lean_vocab::families::hooks_contracts_owed_prune::{self as owed_prune};
 use gents_lean_vocab::families::hooks_contracts_owed_trace::{self as owed_trace};
 use gents_lean_vocab::families::hooks_contracts_prepared_admission::{self as admission};
+use gents_lean_vocab::families::hooks_contracts_refusable_staging::{self as staging};
 use gents_lean_vocab::families::hooks_contracts_verdict_combination::{self as combination};
 use gents_lean_vocab::{
     
     lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_must_commit_cases,
-    lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
-    LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
+    lean_lifecycle_hook_queue_scope_cases, LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
     LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
     LeanLifecycleHookPartition,
     LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
-    LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookStageResult,
-    LeanLifecycleHookState, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
+    LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookState, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
 use serde_json::Value;
 
@@ -290,6 +289,30 @@ impl StoreDouble {
             }
         }
         Ok(next)
+    }
+
+    fn refusal_wire(&self, error: &HookError) -> staging::RefusalWire {
+        let (kind, plugin, reason) = match error {
+            HookError::Refused { plugin, reason } => ("refused", *plugin, Some(reason.clone())),
+            HookError::Invalid { plugin, .. } | HookError::GateEffects { plugin } => {
+                ("invalid", *plugin, None)
+            }
+            HookError::Conflict { plugin, .. } => ("conflict", *plugin, None),
+            HookError::Operation(_) => (
+                "conflict",
+                self.failed_operation
+                    .lock()
+                    .unwrap()
+                    .expect("a failed core operation records its plugin"),
+                None,
+            ),
+            other => panic!("the model has no refusal for {other:?}"),
+        };
+        staging::RefusalWire {
+            kind: kind.to_owned(),
+            plugin: Some(plugin.to_owned()),
+            reason,
+        }
     }
 
     fn refusal(&self, error: &HookError) -> LeanLifecycleHookRefusal {
@@ -676,42 +699,103 @@ fn create_grant_validation_follows_the_lean_model() {
     );
 }
 
+fn effects_of<T>(wires: &T) -> Vec<Effect>
+where
+    T: serde::Serialize,
+{
+    let wires: Vec<effect_commit::EffectWire> = gents_lean_vocab::family::recode(wires);
+    wires.iter().map(effect_of).collect()
+}
+
+fn scripted<V, F>(script: &staging::ScriptWire, value: F) -> Plugin<(), V>
+where
+    V: Clone + Send + Sync + 'static,
+    F: Fn(&staging::ValueWire) -> V,
+{
+    let decision = &script.decision;
+    let choice = |choice: &Option<staging::ChoiceWire>| {
+        let choice = choice.as_ref().expect("a shown-count decision has both choices");
+        (value(&choice.value), effects_of(&choice.effects))
+    };
+    let decision = match decision.kind.as_str() {
+        "refuse" => Scripted::Refuse(decision.reason.clone().expect("a refusal has a reason")),
+        "proceed" => Scripted::Proceed(
+            value(decision.value.as_ref().expect("a proceed carries its value")),
+            effects_of(&decision.effects),
+        ),
+        "by_shown" => Scripted::ByShown {
+            count: usize::try_from(decision.count.expect("a shown-count decision has a count"))
+                .expect("a modeled count fits"),
+            matching: choice(&decision.matching),
+            otherwise: choice(&decision.otherwise),
+        },
+        other => panic!("the model has no decision {other}"),
+    };
+    Arc::new(ScriptedHook {
+        manifest: manifest(&script.name, &script.owns, bound_of(script.bound)),
+        reads: script.reads.clone(),
+        decision,
+    })
+}
+
+fn text_plugins(scripts: &[staging::ScriptWire]) -> Vec<Plugin<(), String>> {
+    scripts
+        .iter()
+        .map(|script| {
+            scripted(script, |value| {
+                value.text.clone().expect("a staging value is text")
+            })
+        })
+        .collect()
+}
+
+fn host_of<T>(world: &T, core: Option<Vec<String>>, unreadable: &[String]) -> StoreDouble
+where
+    T: serde::Serialize,
+{
+    let world: effect_commit::WorldWire = gents_lean_vocab::family::recode(world);
+    let core = core.unwrap_or_else(|| world.core.clone());
+    StoreDouble::of_wire(&world, core, unreadable)
+}
+
+fn state_of<T>(snapshot: &Snapshot) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
+    gents_lean_vocab::family::recode(&state_wire(snapshot))
+}
+
 #[tokio::test]
-async fn generated_lifecycle_hook_stage_cases_drive_refusable_staging() {
-    let cases = lean_lifecycle_hook_stage_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let host = StoreDouble::of(&case.world);
+async fn refusable_staging_follows_the_lean_model() {
+    for case in gents_lean_vocab::families::hooks_contracts_refusable_staging::cases() {
+        let host = host_of(&case.input.world, None, &[]);
         let initial = host.snapshot();
-        let plugins = string_plugins(&case.plugins);
+        let plugins = text_plugins(&case.input.plugins);
         let staged = stage(&host, &plugins, &()).await;
-        // The caller's transaction commits only an `Ok`; an error rolls back.
-        let settled = match (&staged, &case.result) {
-            (
-                Ok(values),
-                LeanLifecycleHookStageResult::Ok {
-                    state,
-                    values: expected,
+        let (result, settled) = match staged {
+            Ok(values) => (
+                staging::StageResultWire {
+                    kind: "ok".to_owned(),
+                    state: Some(state_of(&host.snapshot())),
+                    values,
+                    refusal: None,
                 },
-            ) => {
-                assert_eq!(values, expected, "{}: values", case.name);
-                assert_eq!(host.snapshot(), snapshot_of(state), "{}: state", case.name);
-                host.snapshot()
-            }
-            (Err(error), LeanLifecycleHookStageResult::Error { refusal }) => {
-                assert_eq!(&host.refusal(error), refusal, "{}: {error:?}", case.name);
-                initial
-            }
-            (actual, expected) => {
-                panic!("{}: staged {actual:?}, model {expected:?}", case.name)
-            }
+                host.snapshot(),
+            ),
+            Err(error) => (
+                staging::StageResultWire {
+                    kind: "error".to_owned(),
+                    state: None,
+                    values: Vec::new(),
+                    refusal: Some(host.refusal_wire(&error)),
+                },
+                initial,
+            ),
         };
-        assert_eq!(
-            settled,
-            snapshot_of(&case.settled),
-            "{}: settled",
-            case.name
-        );
+        case.check(staging::StageOutput {
+            result,
+            settled: state_of(&settled),
+        });
     }
 }
 

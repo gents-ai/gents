@@ -587,20 +587,150 @@ def stageCases : List StageCase :=
   , { name := "earlier_staged_effects_are_not_shown_in_either_order", world := stageWorld
     , plugins := [readerPlugin, writerPlugin] } ]
 
-private def stageResultJson : Except Refusal (HookState × List String) → String
-  | .ok (state, values) =>
-      "{\"kind\":\"ok\",\"state\":" ++ stateJson state ++
-        ",\"values\":" ++ jsonStringArray values ++ "}"
-  | .error refusal => "{\"kind\":\"error\",\"refusal\":" ++ refusalJson refusal ++ "}"
+structure SuccessorWire where
+  requestId : String
+  requestDocId : String
+  deriving ToJson
 
-private def stageCaseJson (c : StageCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"world\":" ++ worldJson c.world ++
-    ",\"plugins\":" ++ jsonArray (c.plugins.map (scriptJson jsonString)) ++
-    ",\"result\":" ++ stageResultJson c.result ++
-    ",\"settled\":" ++ stateJson (Hooks.settle c.world.state c.result) ++ "}"
+structure VerdictWire where
+  kind : String
+  reason : Option String
+  successor : Option SuccessorWire
+  deriving ToJson
 
-def stageCasesJson : String := jsonArray (stageCases.map stageCaseJson)
+def VerdictWire.ofModel : ClaimVerdict → VerdictWire
+  | .allow => ⟨"allow", none, none⟩
+  | .leaveQueued => ⟨"leave_queued", none, none⟩
+  | .retire reason successor =>
+      ⟨"retire", some reason, some ⟨successor.request, successor.doc⟩⟩
+  | .reject reason => ⟨"reject", some reason, none⟩
+
+def VerdictWire.toModel (wire : VerdictWire) : ClaimVerdict :=
+  match wire.kind, wire.reason, wire.successor with
+  | "leave_queued", _, _ => .leaveQueued
+  | "retire", some reason, some successor =>
+      .retire reason ⟨successor.requestId, successor.requestDocId⟩
+  | "reject", some reason, _ => .reject reason
+  | _, _, _ => .allow
+
+structure AnswerWire where
+  kind : String
+  key : Option String
+  reason : Option String
+  deriving ToJson
+
+/-- A scripted plugin's returned value at any point: `text` at a staging
+point, `verdict` at the claim gate, `answers` at the queue scope. -/
+structure ValueWire where
+  text : Option String
+  verdict : Option VerdictWire
+  answers : List AnswerWire
+  deriving ToJson
+
+def ValueWire.ofText (text : String) : ValueWire := ⟨some text, none, []⟩
+
+def ValueWire.toText (wire : ValueWire) : String := wire.text.getD ""
+
+structure ChoiceWire where
+  value : ValueWire
+  effects : List EffectWire
+  deriving ToJson
+
+structure DecisionWire where
+  kind : String
+  reason : Option String
+  value : Option ValueWire
+  effects : List EffectWire
+  count : Option Nat
+  matching : Option ChoiceWire
+  otherwise : Option ChoiceWire
+  deriving ToJson
+
+def ChoiceWire.ofModel {V : Type} (valueWire : V → ValueWire) (choice : V × List HookEffect) :
+    ChoiceWire :=
+  ⟨valueWire choice.1, choice.2.map EffectWire.ofModel⟩
+
+def ChoiceWire.toModel {V : Type} (valueOf : ValueWire → V) (wire : ChoiceWire) :
+    V × List HookEffect :=
+  (valueOf wire.value, wire.effects.map EffectWire.toModel)
+
+def DecisionWire.ofModel {V : Type} (valueWire : V → ValueWire) : Decision V → DecisionWire
+  | .refuse reason => ⟨"refuse", some reason, none, [], none, none, none⟩
+  | .proceed value effects =>
+      ⟨"proceed", none, some (valueWire value), effects.map EffectWire.ofModel, none, none, none⟩
+  | .byShown count matching otherwise =>
+      ⟨"by_shown", none, none, [], some count, some (ChoiceWire.ofModel valueWire matching),
+        some (ChoiceWire.ofModel valueWire otherwise)⟩
+
+def DecisionWire.toModel {V : Type} (valueOf : ValueWire → V) (wire : DecisionWire) :
+    Decision V :=
+  match wire.kind, wire.value, wire.matching, wire.otherwise with
+  | "proceed", some value, _, _ => .proceed (valueOf value) (wire.effects.map EffectWire.toModel)
+  | "by_shown", _, some matching, some otherwise =>
+      .byShown (wire.count.getD 0) (matching.toModel valueOf) (otherwise.toModel valueOf)
+  | _, _, _, _ => .refuse (wire.reason.getD "")
+
+structure ScriptWire where
+  name : String
+  owns : List String
+  bound : Nat
+  reads : List String
+  decision : DecisionWire
+  deriving ToJson
+
+def ScriptWire.ofModel {V : Type} (valueWire : V → ValueWire) (script : Script V) : ScriptWire :=
+  ⟨script.name, script.owns, script.bound, script.reads,
+    DecisionWire.ofModel valueWire script.decision⟩
+
+def ScriptWire.toModel {V : Type} (valueOf : ValueWire → V) (wire : ScriptWire) : Script V :=
+  { name := wire.name, owns := wire.owns, bound := wire.bound, reads := wire.reads
+  , decision := wire.decision.toModel valueOf }
+
+structure RefusalWire where
+  kind : String
+  plugin : Option String
+  reason : Option String
+  deriving ToJson
+
+def RefusalWire.ofModel : Refusal → RefusalWire
+  | .core => ⟨"core", none, none⟩
+  | .refused plugin reason => ⟨"refused", some plugin, some reason⟩
+  | .invalid plugin => ⟨"invalid", some plugin, none⟩
+  | .conflict plugin => ⟨"conflict", some plugin, none⟩
+
+structure StageResultWire where
+  kind : String
+  state : Option StateWire
+  values : List String
+  refusal : Option RefusalWire
+  deriving ToJson
+
+def StageResultWire.ofModel : Except Refusal (HookState × List String) → StageResultWire
+  | .ok (state, values) => ⟨"ok", some (StateWire.ofModel state), values, none⟩
+  | .error refusal => ⟨"error", none, [], some (RefusalWire.ofModel refusal)⟩
+
+structure StageInput where
+  name : String
+  world : WorldWire
+  plugins : List ScriptWire
+  deriving ToJson
+
+structure StageOutput where
+  result : StageResultWire
+  settled : StateWire
+  deriving ToJson
+
+@[conformance_family]
+def refusableStaging : Family StageInput StageOutput where
+  inputs := stageCases.map fun c =>
+    { name := c.name, world := WorldWire.ofModel c.world
+    , plugins := c.plugins.map (ScriptWire.ofModel ValueWire.ofText) }
+  model := fun i =>
+    let c : StageCase :=
+      { name := i.name, world := i.world.toModel
+      , plugins := i.plugins.map (ScriptWire.toModel ValueWire.toText) }
+    { result := StageResultWire.ofModel c.result
+      settled := StateWire.ofModel (Hooks.settle c.world.state c.result) }
 
 /-! Must-commit points: `Hooks.mustCommit`, `Hooks.stageDropping`, `Hooks.owed`. -/
 
@@ -837,32 +967,6 @@ def combineCases : List CombineCase :=
   , { name := "equal_reasons_first_successor_wins"
     , verdicts := [.retire "superseded" (successorOf "r3"), .retire "superseded" (successorOf "r2")] }
   , { name := "single_leave_queued", verdicts := [.leaveQueued] } ]
-
-structure SuccessorWire where
-  requestId : String
-  requestDocId : String
-  deriving ToJson
-
-structure VerdictWire where
-  kind : String
-  reason : Option String
-  successor : Option SuccessorWire
-  deriving ToJson
-
-def VerdictWire.ofModel : ClaimVerdict → VerdictWire
-  | .allow => ⟨"allow", none, none⟩
-  | .leaveQueued => ⟨"leave_queued", none, none⟩
-  | .retire reason successor =>
-      ⟨"retire", some reason, some ⟨successor.request, successor.doc⟩⟩
-  | .reject reason => ⟨"reject", some reason, none⟩
-
-def VerdictWire.toModel (wire : VerdictWire) : ClaimVerdict :=
-  match wire.kind, wire.reason, wire.successor with
-  | "leave_queued", _, _ => .leaveQueued
-  | "retire", some reason, some successor =>
-      .retire reason ⟨successor.requestId, successor.requestDocId⟩
-  | "reject", some reason, _ => .reject reason
-  | _, _, _ => .allow
 
 structure CombinationInput where
   name : String

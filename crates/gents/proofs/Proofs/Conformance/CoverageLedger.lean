@@ -1284,8 +1284,8 @@ def caseCoverage : List CoverageEntry :=
       "Production validate decides every case; application runs through the conformance test's in-memory Host, whose all-or-none apply mirrors Hooks.applyEffects. The DefraDB transaction host (request::hooks::native) is crate-private and is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_stage_cases"
-      "LifecycleHookStageCases")
+      "family"
+      "hooks_contracts_refusable_staging")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "lifecycle_hook_must_commit_cases"
