@@ -6,4 +6,10 @@ export type PackInstallRequest = { package: string, registry?: string | null, in
  * The content digest the install must have: the one its preview
  * reported, so what installs is what was reviewed.
  */
-expectDigest?: string | null, };
+expectDigest?: string | null,
+/**
+ * The folder access the review showed, as `PACK=AGENT` for each of its
+ * rows: an allowed install lets only these agents into the folder. An
+ * install from a review always sends it, empty when none was shown.
+ */
+rootAgents?: Array<string> | null, };

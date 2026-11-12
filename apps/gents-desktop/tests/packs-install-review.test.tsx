@@ -87,6 +87,7 @@ type Request = {
   expectDigest?: string | null;
   edited?: string;
   grantAuthority?: boolean;
+  rootAgents?: string[];
   inferenceSlots?: string[];
 };
 
@@ -300,6 +301,14 @@ describe("the install review", () => {
         host_tool_roots: {
           tools: ["hands-tools"],
           agents: ["Hands worker"],
+          rows: [
+            {
+              pack: "acme/docs",
+              agent: "hands-worker",
+              name: "Hands worker",
+              tools: "hands-tools",
+            },
+          ],
           root: "/home/me/work",
           reader_on: "/home/me",
           granted_with: "--grant-authority",
@@ -338,6 +347,14 @@ describe("the install review", () => {
         host_tool_roots: {
           tools: ["hands-tools"],
           agents: ["Hands worker"],
+          rows: [
+            {
+              pack: "acme/docs",
+              agent: "hands-worker",
+              name: "Hands worker",
+              tools: "hands-tools",
+            },
+          ],
           root: "/home/me/work",
           reader_on: "/home/me",
           granted_with: "--grant-authority",
@@ -360,7 +377,10 @@ describe("the install review", () => {
     );
     await user.click(installButton(review));
     await waitFor(() => expect(installs(installPack)).toHaveLength(1));
-    expect(installs(installPack)[0]).toMatchObject({ grantAuthority: true });
+    expect(installs(installPack)[0]).toMatchObject({
+      grantAuthority: true,
+      rootAgents: ["acme/docs=hands-worker"],
+    });
     expect(within(review).queryByRole("alert")).toBeNull();
   });
 
@@ -370,6 +390,7 @@ describe("the install review", () => {
         host_tool_roots: {
           tools: ["hands-tools"],
           agents: ["Hands worker"],
+          rows: [],
           root: "/home/me/work",
           unpublished_root: "/home/me/work",
         },
