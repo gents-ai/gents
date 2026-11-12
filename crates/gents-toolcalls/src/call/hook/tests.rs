@@ -2757,8 +2757,8 @@ async fn generated_background_process_identity_cases_cancel_only_the_physical_in
     for case in cases {
         let registry = BackgroundExecutionRegistry::default();
         let token = CancellationToken::new();
-        let owned_id = case["owned_id"].as_str().unwrap();
-        let owned_doc = case["owned_doc"].as_str().unwrap();
+        let owned_id = case.owned_id.as_str();
+        let owned_doc = case.owned_doc.as_str();
         let reservation = registry
             .reserve(owned_id.into(), owned_doc.into(), token.clone())
             .unwrap();
@@ -2768,7 +2768,7 @@ async fn generated_background_process_identity_cases_cancel_only_the_physical_in
             .reserve(owned_id.into(), sibling_doc.clone(), sibling.clone())
             .unwrap();
         let worker_token = token.clone();
-        let expected = case["expected_cancel"].as_bool().unwrap();
+        let expected = case.expected_cancel;
         let worker = tokio::spawn(async move {
             if expected {
                 worker_token.cancelled().await;
@@ -2776,20 +2776,17 @@ async fn generated_background_process_identity_cases_cancel_only_the_physical_in
             drop(reservation);
         });
         let outcome = registry
-            .stop_execution(
-                case["requested_id"].as_str().unwrap(),
-                case["requested_doc"].as_str().unwrap(),
-            )
+            .stop_execution(case.requested_id.as_str(), case.requested_doc.as_str())
             .await;
-        assert_eq!(token.is_cancelled(), expected, "{case}");
+        assert_eq!(token.is_cancelled(), expected, "{case:?}");
         assert_eq!(
             outcome == gents_session::exec::ProcessStopOutcome::Stopped,
             expected,
-            "{case}"
+            "{case:?}"
         );
         assert!(
             !sibling.is_cancelled(),
-            "a repeated provider call ID must not alias its sibling: {case}"
+            "a repeated provider call ID must not alias its sibling: {case:?}"
         );
         worker.await.unwrap();
         assert_eq!(registry.active_tool_call_doc_ids(), vec![sibling_doc]);
