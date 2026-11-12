@@ -54,7 +54,9 @@ pub async fn build_session_live_delta(
     base_reasoning_hash: &str,
 ) -> anyhow::Result<SessionLiveDeltaView> {
     let started = std::time::Instant::now();
-    let (observed, revision) = core.store().snapshot_with_revision();
+    let (observed, revision) = core
+        .stores()
+        .snapshot_with_revision(node_did.unwrap_or_default());
     let mut live_store = ClientStore::default();
     if let Some(node_did) = node_did {
         if let Some(reason) = core.session_unreadable_reason(node_did) {
@@ -102,7 +104,7 @@ pub async fn build_session_live_delta(
                         core, request, node, session_id, request_id,
                     )
                     .await?;
-                    let latest = core.store().snapshot();
+                    let latest = core.stores().snapshot(node);
                     let current = latest
                         .requests
                         .iter()

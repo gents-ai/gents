@@ -136,7 +136,7 @@ mod tests {
         gents_session::request::lifecycle::submit_client_request(&access, &create)
             .await
             .unwrap();
-        core.refresh_store().await.unwrap();
+        core.refresh_node(&node_did).await.unwrap();
         assert_eq!(
             request_attachments(
                 &core,

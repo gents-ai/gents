@@ -1,12 +1,12 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use gents_protocol::operations::task::{TaskOperationError, TaskRunInput};
 #[cfg(test)]
 use gents_automation::triggers::task_run::{
     lookup_request_by_retry_key, prepare_task_run_goal_id, prepare_task_run_input,
     resolve_invocation_key,
 };
+use gents_protocol::operations::task::{TaskOperationError, TaskRunInput};
 #[cfg(test)]
 use gents_protocol::request_input::RequestInput;
 #[cfg(test)]

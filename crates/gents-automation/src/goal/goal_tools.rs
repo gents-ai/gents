@@ -3,8 +3,7 @@ use serde_json::json;
 
 use crate::goal::{
     create_goal_for_request_from_access, load_goal_tool_context, refresh_goal_usage_from_access,
-    CreateGoalForSessionError, GoalAction, GoalState, RequestAssignmentObservation,
-    BLOCKED_AUDIT_THRESHOLD,
+    CreateGoalForSessionError, RequestAssignmentObservation, BLOCKED_AUDIT_THRESHOLD,
 };
 use crate::operations::goal::set_as_working_agent;
 use gents_protocol::operations::goal::{GoalOperationError, GoalSetInput};
@@ -262,120 +261,50 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
         unreachable!("only a current assigned caller can update a Goal");
     };
 
-    let Some(pre) = goal.state() else {
-        let result = json_string(
-            json!({"error": format!("durable goal has unknown status {:?}", goal.status)}),
-        );
-        return Ok(GoalToolReply::Complete(result));
+    let status = match parsed.status.as_deref().map(str::trim) {
+        None => None,
+        Some(name) => match GoalStatus::parse(name) {
+            Some(status) => Some(status),
+            None => {
+                let result = json_string(json!({
+                    "accepted": false,
+                    "error": format!(
+                        "unsupported goal status {name:?}; expected active, complete or blocked"
+                    ),
+                }));
+                return Ok(GoalToolReply::Complete(result));
+            }
+        },
     };
-    let route = update_route(
-        parsed.status.as_deref(),
-        parsed.objective.is_some() || parsed.token_budget.is_some(),
-        parsed.reason.as_deref(),
-        pre,
-    );
-    let outcome = match route {
-        UpdateRoute::ReasonOutsideCompletion => {
-            json!({"accepted": false, "error": "reason is only accepted with status complete or blocked"})
+    let unmet = match (status, call.output_obligation_gate()) {
+        (Some(GoalStatus::Complete), Some(gate)) => {
+            let unmet = gate.unmet().await?;
+            (!unmet.is_empty())
+                .then(|| gents_loop::output_obligation::continuation_message(&unmet))
         }
-        UpdateRoute::NotActiveResumable | UpdateRoute::NotActiveFinal => {
-            let hint = match (route, pre.status) {
-                (UpdateRoute::NotActiveResumable, _) => {
-                    "an operator resumes it with `gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)"
-                }
-                (_, GoalStatus::Complete) => "a complete goal is terminal and has no resume path",
-                (_, GoalStatus::BudgetLimited) => {
-                    "a budget_limited goal cannot be reactivated and has no resume path"
-                }
-                _ => "the goal was removed by its operator and cannot be resumed",
-            };
-            json!({
-                "accepted": false,
-                "error": format!(
-                    "update_goal edits require an active goal; the current goal status is {} and {}",
-                    pre.status.as_str(),
-                    hint
-                ),
-            })
-        }
-        UpdateRoute::Edit => {
-            let input = GoalSetInput {
-                objective: parsed.objective,
-                token_budget: parsed.token_budget.map(Some),
-                ..Default::default()
-            };
-            match write_through_handler(call, &goal, &input, None).await? {
-                Ok(updated) => {
-                    json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())})
-                }
-                Err(answer) => answer,
+        _ => None,
+    };
+    let input = GoalSetInput {
+        objective: parsed.objective,
+        token_budget: parsed.token_budget.map(Some),
+        status,
+        reason: parsed.reason,
+        ..Default::default()
+    };
+    let outcome = match write_through_handler(call, &goal, &input, unmet.as_deref()).await? {
+        Err(answer) => answer,
+        Ok(updated) => match status {
+            Some(GoalStatus::Complete) => {
+                json!({"accepted": true, "status": GoalStatus::Complete.as_str()})
             }
-        }
-        UpdateRoute::FieldsOutsideActive => {
-            json!({"accepted": false, "error": "objective and token_budget can only be edited while status is active"})
-        }
-        UpdateRoute::CompleteIllegal => {
-            let result = json_string(
-                json!({"error": "complete is not legal from the goal's current status"}),
-            );
-            return Ok(GoalToolReply::Complete(result));
-        }
-        UpdateRoute::Complete => {
-            let unmet = match call.output_obligation_gate() {
-                Some(gate) => {
-                    let unmet = gate.unmet().await?;
-                    (!unmet.is_empty())
-                        .then(|| gents_loop::output_obligation::continuation_message(&unmet))
-                }
-                None => None,
-            };
-            let input = GoalSetInput {
-                status: Some(GoalStatus::Complete),
-                reason: parsed.reason,
-                ..Default::default()
-            };
-            match write_through_handler(call, &goal, &input, unmet.as_deref()).await? {
-                Ok(_) => json!({"accepted": true, "status": GoalStatus::Complete.as_str()}),
-                Err(answer) => answer,
-            }
-        }
-        UpdateRoute::BlockedNotActive => {
-            let result = json_string(json!({
-                "error": format!(
-                    "blocked audit is legal only from active; current status is {}",
-                    pre.status.as_str()
-                )
-            }));
-            return Ok(GoalToolReply::Complete(result));
-        }
-        UpdateRoute::BlockedNeedsReason => {
-            let result = json_string(
-                json!({"error": "blocked requires a non-empty reason identifying the repeated condition"}),
-            );
-            return Ok(GoalToolReply::Complete(result));
-        }
-        UpdateRoute::BlockedAudit => {
-            let input = GoalSetInput {
-                status: Some(GoalStatus::Blocked),
-                reason: parsed.reason,
-                ..Default::default()
-            };
-            match write_through_handler(call, &goal, &input, None).await? {
-                Ok(updated) => json!({
-                    "accepted": updated.parsed_status() == Some(GoalStatus::Blocked),
-                    "status": updated.status,
-                    "consecutive_blocked_audits": updated.consecutive_blocked_audits.unwrap_or_default(),
-                    "required_blocked_audits": BLOCKED_AUDIT_THRESHOLD,
-                }),
-                Err(answer) => answer,
-            }
-        }
-        UpdateRoute::Unsupported => json!({
-            "error": format!(
-                "unsupported goal status {:?}; expected active, complete or blocked",
-                parsed.status.as_deref().map(str::trim).unwrap_or_default()
-            )
-        }),
+            Some(GoalStatus::Blocked) => json!({
+                "accepted": updated.parsed_status() == Some(GoalStatus::Blocked),
+                "status": updated.status,
+                "consecutive_blocked_audits": updated.consecutive_blocked_audits.unwrap_or_default(),
+                "required_blocked_audits": BLOCKED_AUDIT_THRESHOLD,
+            }),
+            _ => json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())}),
+        },
     };
     let result = gents_session::session::output_render::render(
         &outcome,
@@ -384,7 +313,7 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
     Ok(GoalToolReply::Complete(result))
 }
 
-/// Writes an `update_goal` route through the Goal handler as the working
+/// Writes an `update_goal` call through the Goal handler as the working
 /// Agent; a refusal becomes the tool's answer.
 async fn write_through_handler(
     call: &GoalToolCall<'_>,
@@ -407,75 +336,6 @@ async fn write_through_handler(
             json!({"accepted": false, "error": "goal changed since this request observed it; reload with get_goal"}),
         )),
         Err(refusal) => Ok(Err(json!({"accepted": false, "error": refusal.to_string()}))),
-    }
-}
-
-/// What `update_goal` does with a call from the Goal's current assigned
-/// caller (Lean `GoalAutomation.UpdateGoal.route`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-enum UpdateRoute {
-    Edit,
-    ReasonOutsideCompletion,
-    NotActiveResumable,
-    NotActiveFinal,
-    FieldsOutsideActive,
-    Complete,
-    CompleteIllegal,
-    BlockedAudit,
-    BlockedNotActive,
-    BlockedNeedsReason,
-    Unsupported,
-}
-
-fn update_route(
-    requested: Option<&str>,
-    fields: bool,
-    reason: Option<&str>,
-    pre: GoalState,
-) -> UpdateRoute {
-    let reason_given = reason.map(str::trim).is_some_and(|reason| !reason.is_empty());
-    match requested.map(str::trim).unwrap_or("active") {
-        "active" if reason.is_some() => UpdateRoute::ReasonOutsideCompletion,
-        "active" if pre.status == GoalStatus::Active => UpdateRoute::Edit,
-        "active" if pre.step(GoalAction::Resume).is_some() => UpdateRoute::NotActiveResumable,
-        "active" => UpdateRoute::NotActiveFinal,
-        "complete" | "blocked" if fields => UpdateRoute::FieldsOutsideActive,
-        "complete" if pre.step(GoalAction::Complete).is_some() => UpdateRoute::Complete,
-        "complete" => UpdateRoute::CompleteIllegal,
-        "blocked" if pre.status != GoalStatus::Active => UpdateRoute::BlockedNotActive,
-        "blocked" if !reason_given => UpdateRoute::BlockedNeedsReason,
-        "blocked" => UpdateRoute::BlockedAudit,
-        _ => UpdateRoute::Unsupported,
-    }
-}
-
-#[cfg(test)]
-mod update_route_conformance {
-    use super::{update_route, GoalState, GoalStatus};
-    use gents_lean_vocab::families::goal_automation_update_goal_route as family;
-
-    #[test]
-    fn update_route_matches_lean() {
-        family::replay(|case: &family::Input<String, String, GoalStatus>| {
-            let requested = match case.requested.as_str() {
-                "omitted" => None,
-                "unsupported" => Some("paused"),
-                status => Some(status),
-            };
-            let reason = match case.reason.as_str() {
-                "absent" => None,
-                "blank" => Some("  "),
-                _ => Some("needs approval"),
-            };
-            let pre = GoalState {
-                status: case.status,
-                blocked_audits: 0,
-                wrapup_requested: false,
-                wrapup_completed: false,
-            };
-            update_route(requested, case.fields, reason, pre)
-        });
     }
 }
 

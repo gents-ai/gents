@@ -27,11 +27,14 @@ export function createMailboxActions({
 }: MailboxActionParams) {
   const store = stores.selection;
   const delivery = createChatDelivery(api, stores);
-  async function openMailboxItem(itemId: string): Promise<MailboxItemView | null> {
+  async function openMailboxItem(
+    itemId: string,
+    nodeDid?: string | null,
+  ): Promise<MailboxItemView | null> {
     selection.advanceIntent(store);
     const captured = selection.captureIntent(store);
     try {
-      const item = await api.startMailboxRequest(itemId);
+      const item = await api.startMailboxRequest(itemId, nodeDid);
       if (!selection.acceptsIntent(store, captured)) return null;
       selection.openMailboxRoute(store, {
         itemId: item.itemId,
@@ -48,11 +51,11 @@ export function createMailboxActions({
     }
   }
 
-  async function dismissMailboxItem(itemId: string) {
+  async function dismissMailboxItem(itemId: string, nodeDid?: string | null) {
     const clientDid = stores.client.getState().snapshot?.client?.clientDid;
     const intent = selection.captureIntent(store);
     try {
-      await api.dismissMailboxItem(itemId);
+      await api.dismissMailboxItem(itemId, nodeDid);
       if (stores.client.getState().snapshot?.client?.clientDid !== clientDid) return;
       for (const draft of loadChatDrafts().chatDrafts) {
         if (

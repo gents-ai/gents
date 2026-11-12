@@ -152,7 +152,7 @@ pub(super) async fn wait_for_live_documents(
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         desktop_core.refresh_node(node_did).await?;
-        let snapshot = desktop_core.store().snapshot();
+        let snapshot = desktop_core.stores().snapshot(node_did);
         let has_node = snapshot.nodes.iter().any(|row| row.node_did == node_did);
         let has_agent = snapshot
             .agents

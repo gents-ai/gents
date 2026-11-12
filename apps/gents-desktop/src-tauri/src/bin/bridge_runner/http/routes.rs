@@ -362,7 +362,7 @@ pub(super) async fn handle_request(
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty());
             let core = fixture.desktop_core();
-            core.set_selected_node_did(did.clone());
+            fixture.select_node(did.clone());
             if let Some(did) = did {
                 if let Err(error) = core.refresh_node(&did).await {
                     tracing::warn!(
@@ -494,16 +494,7 @@ pub(super) async fn handle_request(
         ("POST", "/desktop/session/reload") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
                 .context("decoding session hydration retry request")?;
-            let node_did = request.node_did.or_else(|| {
-                fixture
-                    .desktop_core()
-                    .store()
-                    .snapshot()
-                    .sessions
-                    .iter()
-                    .find(|session| session.session_id == request.session_id)
-                    .map(|session| session.node_did.clone())
-            });
+            let node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let node_did = node_did
                 .as_deref()
                 .ok_or_else(|| anyhow!("session reload requires a node"))?;
@@ -561,28 +552,28 @@ pub(super) async fn handle_request(
                 &request.body,
                 "decoding session provenance request",
             )?;
-            // The runner serves one frontend, whose selection is the core's.
-            request.node_did = request
-                .node_did
-                .or_else(|| fixture.desktop_core().selected_node_did());
+            // The runner serves one frontend, as one window with its selection.
+            request.node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let view = session_provenance_request(fixture.desktop_core(), request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&view)?))
         }
         ("GET", "/desktop/backend-health") => {
-            // The runner serves one frontend, whose selection is the core's.
+            // The runner serves one frontend, as one window with its selection.
             let core = fixture.desktop_core();
             let rows =
-                list_backends_with_health_for_core(Arc::clone(core), core.selected_node_did())
+                list_backends_with_health_for_core(Arc::clone(core), fixture.selected_node_did())
                     .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("GET", "/desktop/mcp-health") => {
             let core = fixture.desktop_core();
-            let rows =
-                load_mcp_services_with_health(core.as_ref(), core.selected_node_did().as_deref())
-                    .await?;
+            let rows = load_mcp_services_with_health(
+                core.as_ref(),
+                fixture.selected_node_did().as_deref(),
+            )
+            .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("POST", "/desktop/mcp/probe") => {
@@ -676,10 +667,11 @@ pub(super) async fn handle_request(
                     "clear-client-store is only available in live test mode (GENTS_TAURI_LIVE=1)",
                 ));
             }
-            fixture
-                .desktop_core()
-                .store()
-                .replace_snapshot(Default::default());
+            for node_did in fixture.desktop_core().stores().node_dids() {
+                if let Some(store) = fixture.desktop_core().stores().store(&node_did) {
+                    store.replace_snapshot(Default::default());
+                }
+            }
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
@@ -853,8 +845,10 @@ pub(super) async fn handle_request(
             snapshot_response(fixture).await
         }
         ("POST", "/desktop/schedule/run") => {
-            let request =
+            let mut request =
                 decode::<ScheduleRunRequest>(&request.body, "decoding schedule run request")?;
+            // The runner serves one frontend, as one window with its selection.
+            request.node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let result = run_schedule_config(fixture.desktop_core().as_ref(), request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
@@ -887,7 +881,9 @@ pub(super) async fn handle_request(
             snapshot_response(fixture).await
         }
         ("POST", "/desktop/task/run") => {
-            let request = decode::<TaskRunRequest>(&request.body, "decoding task run request")?;
+            let mut request = decode::<TaskRunRequest>(&request.body, "decoding task run request")?;
+            // The runner serves one frontend, as one window with its selection.
+            request.node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let result = run_task_config(fixture.desktop_core().as_ref(), request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
@@ -903,10 +899,8 @@ pub(super) async fn handle_request(
         ("POST", "/desktop/interrupt/request") => {
             let mut request =
                 decode::<DesktopInterruptRequest>(&request.body, "decoding interrupt request")?;
-            // The runner serves one frontend, whose selection is the core's.
-            request.node_did = request
-                .node_did
-                .or_else(|| fixture.desktop_core().selected_node_did());
+            // The runner serves one frontend, as one window with its selection.
+            request.node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let result = interrupt_request(fixture.desktop_core(), &request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;

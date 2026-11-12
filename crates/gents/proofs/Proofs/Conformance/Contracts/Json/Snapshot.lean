@@ -66,7 +66,6 @@ import Proofs.Conformance.CommandIsolation
 import Proofs.Conformance.CompactionCheckpoint
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry
-import Proofs.Conformance.ClientObservationScope
 import Proofs.Conformance.InferenceObservation
 import Proofs.Store.Identity.PublicationConformance
 import Proofs.Session.Identity.DelegatedPublicationCases
@@ -678,8 +677,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"client_telemetry_cases\":" ++ Conformance.ClientTelemetry.casesJson ++ ","
-    ++ "\"client_observation_scope_cases\":"
-      ++ Conformance.ClientObservationScope.casesJson ++ ","
     ++ "\"inference_observation_cases\":"
       ++ Conformance.InferenceObservation.casesJson ++ ","
     ++ "\"inference_visibility_cases\":"

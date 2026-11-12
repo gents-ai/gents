@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gents_desktop_core::client::ClientCore;
-use tauri::State;
+use tauri::{Runtime, State};
 
 use crate::commands::{dismiss_mailbox, observe_mailbox_item, start_mailbox_request};
 use crate::error::BridgeError;
@@ -12,6 +12,18 @@ use crate::types::{
 
 fn running_core(state: &State<'_, DesktopAppState>) -> Result<Arc<ClientCore>, BridgeError> {
     current_core(state).ok_or_else(|| BridgeError::untyped("desktop client is not running"))
+}
+
+/// The node whose store lists the item: the one the request names, else the
+/// calling window's own node (`ClientWindowScope.commandNode`).
+fn item_node(
+    state: &State<'_, DesktopAppState>,
+    window: &str,
+    request: &MailboxItemRequest,
+) -> Result<String, BridgeError> {
+    state
+        .window_command_node(window, request.node_did.as_deref())
+        .ok_or_else(|| BridgeError::untyped("a mailbox item names its node"))
 }
 
 #[tauri::command]
@@ -25,20 +37,30 @@ pub async fn desktop_mailbox_observe(
 }
 
 #[tauri::command]
-pub fn desktop_mailbox_start_request(
+pub fn desktop_mailbox_start_request<R>(
+    window: tauri::WebviewWindow<R>,
     request: MailboxItemRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<MailboxItemView, BridgeError> {
-    start_mailbox_request(running_core(&state)?.as_ref(), &request.item_id)
+) -> Result<MailboxItemView, BridgeError>
+where
+    R: Runtime,
+{
+    let node_did = item_node(&state, window.label(), &request)?;
+    start_mailbox_request(running_core(&state)?.as_ref(), &node_did, &request.item_id)
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
-pub async fn desktop_mailbox_dismiss(
+pub async fn desktop_mailbox_dismiss<R>(
+    window: tauri::WebviewWindow<R>,
     request: MailboxItemRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
-    dismiss_mailbox(running_core(&state)?.as_ref(), &request.item_id)
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
+    let node_did = item_node(&state, window.label(), &request)?;
+    dismiss_mailbox(running_core(&state)?.as_ref(), &node_did, &request.item_id)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }

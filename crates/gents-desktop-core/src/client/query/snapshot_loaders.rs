@@ -57,29 +57,13 @@ pub(crate) fn snapshot_query(node_did: &str) -> Result<String> {
 
 pub(super) fn snapshot_rows_with_requests(
     data: &Value,
-    node_did: &str,
     requests: Vec<AgentRequestRow>,
 ) -> Result<ClientStore> {
-    let (trigger_observations, trigger_observation_source_node_dids): (
-        Vec<TriggerObservation>,
-        Vec<Option<String>>,
-    ) = parse_observation_query_rows_with_source(
-        data,
-        "triggers",
-        TRIGGER_OBSERVATION_FIELDS,
-        Some("node_did"),
-    )?;
-    let (schedule_observations, schedule_observation_source_node_dids): (
-        Vec<ScheduleObservation>,
-        Vec<Option<String>>,
-    ) = parse_observation_query_rows_with_source(
-        data,
-        "triggers",
-        SCHEDULE_OBSERVATION_FIELDS,
-        Some("node_did"),
-    )?;
-    let (backend_observations, backend_observation_source_node_dids) =
-        parse_backend_observation_rows(data, "backend_observations")?;
+    let trigger_observations: Vec<TriggerObservation> =
+        parse_observation_query_rows(data, "triggers", TRIGGER_OBSERVATION_FIELDS)?;
+    let schedule_observations: Vec<ScheduleObservation> =
+        parse_observation_query_rows(data, "triggers", SCHEDULE_OBSERVATION_FIELDS)?;
+    let backend_observations = parse_backend_observation_rows(data, "backend_observations")?;
     let triggers: Vec<Trigger> = parse_projected_query_rows(
         data,
         "triggers",
@@ -92,46 +76,11 @@ pub(super) fn snapshot_rows_with_requests(
         .into_iter()
         .map(|metadata| metadata.into_backend().map_err(anyhow::Error::from))
         .collect::<Result<_>>()?;
-    let scope = |len: usize| vec![Some(node_did.to_owned()); len];
-    let trigger_source_node_dids = scope(triggers.len());
-    let inference_backend_source_node_dids = scope(inference_backends.len());
     macro_rules! rows {
         ($ty:ty, $key:literal) => {
             parse_query_rows::<$ty>(data, $key)?
         };
     }
-    let sessions: Vec<AgentSession> = rows!(AgentSession, "sessions");
-    let tasks: Vec<Task> = rows!(Task, "tasks");
-    let schedules: Vec<Schedule> = rows!(Schedule, "schedules");
-    let skills: Vec<SkillDocument> = rows!(SkillDocument, "skills");
-    let tools: Vec<Tools> = rows!(Tools, "tools");
-    let contexts: Vec<AgentContext> = rows!(AgentContext, "contexts");
-    let compactions: Vec<CompactionConfig> = rows!(CompactionConfig, "compactions");
-    let inference_profiles: Vec<InferenceProfile> = rows!(InferenceProfile, "inference_profiles");
-    let inference_sampling: Vec<InferenceSampling> = rows!(InferenceSampling, "inference_sampling");
-    let inference_execution: Vec<InferenceExecution> =
-        rows!(InferenceExecution, "inference_execution");
-    let tool_service_registries: Vec<ToolServiceRegistry> =
-        rows!(ToolServiceRegistry, "tool_service_registries");
-    let event_sources: Vec<EventSource> = rows!(EventSource, "event_sources");
-    let agent_targets: Vec<AgentTargetDocument> = rows!(AgentTargetDocument, "agent_targets");
-    let datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument> =
-        rows!(DatastoreToolSurfaceDocument, "datastore_tool_surfaces");
-    let source = |len| scope(len);
-    let session_source_node_dids = source(sessions.len());
-    let task_source_node_dids = source(tasks.len());
-    let schedule_source_node_dids = source(schedules.len());
-    let skill_source_node_dids = source(skills.len());
-    let tools_source_node_dids = source(tools.len());
-    let context_source_node_dids = source(contexts.len());
-    let compaction_source_node_dids = source(compactions.len());
-    let inference_profile_source_node_dids = source(inference_profiles.len());
-    let inference_sampling_source_node_dids = source(inference_sampling.len());
-    let inference_execution_source_node_dids = source(inference_execution.len());
-    let tool_service_registry_source_node_dids = source(tool_service_registries.len());
-    let event_source_source_node_dids = source(event_sources.len());
-    let agent_target_source_node_dids = source(agent_targets.len());
-    let datastore_tool_surface_source_node_dids = source(datastore_tool_surfaces.len());
     Ok(ClientStore::from_rows(ClientStoreRows {
         nodes: rows!(Node, "nodes"),
         default_agent_selections: rows!(DefaultAgentSelection, "default_agent_selections"),
@@ -141,44 +90,25 @@ pub(super) fn snapshot_rows_with_requests(
         requests,
         mailbox_items: rows!(MailboxItemRow, "mailbox_items"),
         goals: rows!(GoalRow, "goals"),
-        sessions,
-        session_source_node_dids,
-        tasks,
-        task_source_node_dids,
-        schedules,
-        schedule_source_node_dids,
+        sessions: rows!(AgentSession, "sessions"),
+        tasks: rows!(Task, "tasks"),
+        schedules: rows!(Schedule, "schedules"),
         schedule_observations,
-        schedule_observation_source_node_dids,
         triggers,
-        trigger_source_node_dids,
         trigger_observations,
-        trigger_observation_source_node_dids,
-        skills,
-        skill_source_node_dids,
-        tools,
-        tools_source_node_dids,
-        contexts,
-        context_source_node_dids,
-        compactions,
-        compaction_source_node_dids,
+        skills: rows!(SkillDocument, "skills"),
+        tools: rows!(Tools, "tools"),
+        contexts: rows!(AgentContext, "contexts"),
+        compactions: rows!(CompactionConfig, "compactions"),
         inference_backends,
-        inference_backend_source_node_dids,
         backend_observations,
-        backend_observation_source_node_dids,
-        inference_profiles,
-        inference_profile_source_node_dids,
-        inference_sampling,
-        inference_sampling_source_node_dids,
-        inference_execution,
-        inference_execution_source_node_dids,
-        tool_service_registries,
-        tool_service_registry_source_node_dids,
-        event_sources,
-        event_source_source_node_dids,
-        agent_targets,
-        agent_target_source_node_dids,
-        datastore_tool_surfaces,
-        datastore_tool_surface_source_node_dids,
+        inference_profiles: rows!(InferenceProfile, "inference_profiles"),
+        inference_sampling: rows!(InferenceSampling, "inference_sampling"),
+        inference_execution: rows!(InferenceExecution, "inference_execution"),
+        tool_service_registries: rows!(ToolServiceRegistry, "tool_service_registries"),
+        event_sources: rows!(EventSource, "event_sources"),
+        agent_targets: rows!(AgentTargetDocument, "agent_targets"),
+        datastore_tool_surfaces: rows!(DatastoreToolSurfaceDocument, "datastore_tool_surfaces"),
         ..ClientStoreRows::default()
     }))
 }
@@ -497,82 +427,37 @@ pub(crate) fn parse_projected_query_rows<T>(
 where
     T: DeserializeOwned,
 {
-    parse_projected_query_rows_with_source(data, root, fields, sibling_fields, None)
-        .map(|(rows, _)| rows)
-}
-
-pub(crate) fn parse_projected_query_rows_with_source<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-    sibling_fields: &str,
-    source_field: Option<&str>,
-) -> Result<(Vec<T>, Vec<Option<String>>)>
-where
-    T: DeserializeOwned,
-{
-    parse_rows_with_source(data, root, fields, sibling_fields, source_field, false)
+    parse_rows_with_completeness(data, root, fields, sibling_fields, false).map(|(rows, _)| rows)
 }
 
 pub(super) fn parse_backend_observation_rows(
     data: &Value,
     root: &str,
-) -> Result<(Vec<InferenceBackendObservation>, Vec<Option<String>>)> {
-    let (rows, sources): (Vec<Value>, _) = parse_observation_query_rows_with_source(
-        data,
-        root,
-        INFERENCE_BACKEND_OBSERVATION_FIELDS,
-        Some("node_did"),
-    )?;
+) -> Result<Vec<InferenceBackendObservation>> {
+    let rows: Vec<Value> =
+        parse_observation_query_rows(data, root, INFERENCE_BACKEND_OBSERVATION_FIELDS)?;
     let mut observations = Vec::with_capacity(rows.len());
-    let mut observation_sources = Vec::with_capacity(rows.len());
-    for (row, source) in rows.into_iter().zip(sources) {
+    for row in rows {
         match gents_inference::backends::registry::decode_backend_observation(row) {
-            Ok(observation) => {
-                observations.push(observation);
-                observation_sources.push(source);
-            }
+            Ok(observation) => observations.push(observation),
             Err(error) => {
                 tracing::warn!(target: "gents_desktop_core::query", root, error = %error,
                     "backend catalog observation unavailable");
             }
         }
     }
-    Ok((observations, observation_sources))
+    Ok(observations)
 }
 
-pub(crate) fn parse_observation_query_rows_with_source<T>(
+pub(crate) fn parse_observation_query_rows<T>(
     data: &Value,
     root: &str,
     fields: &str,
-    source_field: Option<&str>,
-) -> Result<(Vec<T>, Vec<Option<String>>)>
+) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
 {
-    parse_rows_with_source(data, root, fields, "", source_field, true)
-}
-
-fn parse_rows_with_source<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-    sibling_fields: &str,
-    source_field: Option<&str>,
-    exact_projection: bool,
-) -> Result<(Vec<T>, Vec<Option<String>>)>
-where
-    T: DeserializeOwned,
-{
-    let (parsed, sources, _) = parse_rows_with_source_completeness(
-        data,
-        root,
-        fields,
-        sibling_fields,
-        source_field,
-        exact_projection,
-    )?;
-    Ok((parsed, sources))
+    parse_rows_with_completeness(data, root, fields, "", true).map(|(rows, _)| rows)
 }
 
 pub(super) fn parse_query_rows_with_completeness<T>(
@@ -582,8 +467,7 @@ pub(super) fn parse_query_rows_with_completeness<T>(
 where
     T: DeserializeOwned,
 {
-    let (rows, _, complete) = parse_rows_with_source_completeness(data, root, "", "", None, false)?;
-    Ok((rows, complete))
+    parse_rows_with_completeness(data, root, "", "", false)
 }
 
 fn parse_projected_query_rows_with_completeness<T>(
@@ -595,19 +479,16 @@ fn parse_projected_query_rows_with_completeness<T>(
 where
     T: DeserializeOwned,
 {
-    let (rows, _, complete) =
-        parse_rows_with_source_completeness(data, root, fields, sibling_fields, None, false)?;
-    Ok((rows, complete))
+    parse_rows_with_completeness(data, root, fields, sibling_fields, false)
 }
 
-fn parse_rows_with_source_completeness<T>(
+fn parse_rows_with_completeness<T>(
     data: &Value,
     root: &str,
     fields: &str,
     sibling_fields: &str,
-    source_field: Option<&str>,
     exact_projection: bool,
-) -> Result<(Vec<T>, Vec<Option<String>>, bool)>
+) -> Result<(Vec<T>, bool)>
 where
     T: DeserializeOwned,
 {
@@ -615,18 +496,13 @@ where
         .get(root)
         .ok_or_else(|| anyhow!("query result missing root field {root}"))?;
     match rows {
-        Value::Null => Ok((Vec::new(), Vec::new(), true)),
+        Value::Null => Ok((Vec::new(), true)),
         Value::Array(rows) => {
             let fields: Vec<&str> = fields.split_whitespace().collect();
             let sibling_fields: Vec<&str> = sibling_fields.split_whitespace().collect();
             let mut parsed = Vec::with_capacity(rows.len());
-            let mut sources = Vec::with_capacity(rows.len());
             let mut complete = true;
             for row in rows {
-                let source = source_field
-                    .and_then(|field| row.get(field))
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned);
                 let Some(object) = row.as_object() else {
                     complete = false;
                     tracing::warn!(target: "gents_desktop_core::query", root, "skipping malformed query row");
@@ -647,57 +523,19 @@ where
                         .collect(),
                 );
                 match serde_json::from_value(projected) {
-                    Ok(row) => {
-                        parsed.push(row);
-                        sources.push(source);
-                    }
+                    Ok(row) => parsed.push(row),
                     Err(error) => {
                         complete = false;
                         tracing::warn!(target: "gents_desktop_core::query", root, error = %error, "skipping malformed query row")
                     }
                 }
             }
-            Ok((parsed, sources, complete))
+            Ok((parsed, complete))
         }
         other => Err(anyhow!(
             "query result for {root} returned non-array payload: {other}"
         )),
     }
-}
-
-/// Every reachable runtime's snapshot merged by node. A runtime that refuses
-/// the read is listed in `refused` and contributes no rows; it does not
-/// discard another runtime's snapshot.
-#[derive(Default)]
-pub struct PeerSnapshots {
-    pub store: ClientStore,
-    pub refused: Vec<String>,
-}
-
-pub async fn load_full_snapshot_with_peer_records(
-    peers: &[PeerRecord],
-    capability: &gents_store::config_client::ClientSigningCapability,
-) -> PeerSnapshots {
-    let mut snapshots = PeerSnapshots::default();
-    for peer in peers {
-        let Some(graphql) = crate::local_runtime::operator_endpoint(peer, capability) else {
-            continue;
-        };
-        let access = gents_store::config_client::ConfigAccess::Graphql(graphql);
-        match load_node_snapshot_on(&access, &peer.node_did).await {
-            Ok(remote) => {
-                snapshots.store = snapshots.store.replace_node_scope(&peer.node_did, remote)
-            }
-            Err(error) => {
-                tracing::warn!(node_did = %peer.node_did, error = %error,
-                    "runtime snapshot unavailable");
-                if error.refused() {
-                    snapshots.refused.push(peer.node_did.clone());
-                }
-            }
-        }
-    }
-    snapshots
 }
 
 /// The top-level aliases of [`snapshot_query`]; a served runtime omits the
@@ -793,7 +631,7 @@ pub async fn load_node_snapshot_on(
     Ok(if access.actor_did().is_some() {
         authenticated_node_snapshot_rows(&data, node_did, requests)?
     } else {
-        snapshot_rows_with_requests(&data, node_did, requests)?
+        snapshot_rows_with_requests(&data, requests)?
     })
 }
 
@@ -802,7 +640,7 @@ pub(super) fn authenticated_node_snapshot_rows(
     node_did: &str,
     requests: Vec<AgentRequestRow>,
 ) -> Result<ClientStore> {
-    let mut snapshot = snapshot_rows_with_requests(data, node_did, requests)?;
+    let mut snapshot = snapshot_rows_with_requests(data, requests)?;
     let config = operator_config_store_from_data(data, node_did)?;
     snapshot.operator_config_authoritative_node_dids =
         config.operator_config_authoritative_node_dids;
@@ -845,8 +683,7 @@ fn operator_config_store_from_data(data: &Value, node_did: &str) -> Result<Clien
         .into_iter()
         .map(|metadata| metadata.into_backend().map_err(anyhow::Error::from))
         .collect::<Result<_>>()?;
-    let (backend_observations, backend_observation_source_node_dids) =
-        parse_backend_observation_rows(data, "backend_observations")?;
+    let backend_observations = parse_backend_observation_rows(data, "backend_observations")?;
     let mut common = ClientStoreRows {
         nodes,
         default_agent_selections,
@@ -854,7 +691,6 @@ fn operator_config_store_from_data(data: &Value, node_did: &str) -> Result<Clien
         inference_profiles,
         inference_backends,
         backend_observations,
-        backend_observation_source_node_dids,
         ..Default::default()
     };
     if nodes_complete && agents_complete && profiles_complete && backends_complete {
@@ -900,74 +736,4 @@ pub(crate) async fn load_agent_tool_calls(node: &EmbeddedNode) -> Result<Vec<Age
         &format!("query {{ {AGENT_TOOL_CALL_NAME} {{ {AGENT_TOOL_CALL_FIELDS} }} }}"),
     )
     .await
-}
-
-#[cfg(test)]
-mod remote_failure_tests {
-    use super::*;
-    use gents_store::identity::KeyIdentity;
-    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
-
-    #[tokio::test]
-    async fn full_snapshot_isolates_one_runtime_denial() {
-        let directory = tempfile::tempdir().unwrap();
-        let key_path = directory.path().join("client.key");
-        let client = tokio::task::spawn_blocking(move || {
-            KeyIdentity::load_or_create(key_path, None).unwrap()
-        })
-        .await
-        .unwrap();
-        let healthy_did = "did:test:healthy";
-        let source =
-            std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::client::schema::ensure_runtime_schemas(&source)
-            .await
-            .unwrap();
-        gents_store::config_client::ConfigAccess::local(source.clone())
-            .write(
-                "test.snapshot.healthy",
-                &format!("mutation {{ create_Node(input: {{node_did: \"{healthy_did}\", display_name: \"healthy\", enabled: true, created_at: \"now\", created_by: \"test\"}}) {{ _docID }} }}"),
-            )
-            .await
-            .unwrap();
-        let healthy_data = execute_local_graphql_query(
-            &source,
-            &snapshot_query(healthy_did).unwrap(),
-            "test snapshot",
-        )
-        .await
-        .unwrap();
-        let healthy = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "data": healthy_data })),
-            )
-            .mount(&healthy)
-            .await;
-        let denied = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "errors": [{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]
-            })))
-            .expect(1)
-            .mount(&denied)
-            .await;
-        let mut denied_peer = PeerRecord::new("denied", "", "did:test:denied");
-        denied_peer.graphql = Some(format!("{}/api/v0/graphql", denied.uri()));
-        let mut healthy_peer = PeerRecord::new("healthy", "", healthy_did);
-        healthy_peer.graphql = Some(format!("{}/api/v0/graphql", healthy.uri()));
-        let snapshots = load_full_snapshot_with_peer_records(
-            &[denied_peer, healthy_peer],
-            &client.client_signing_capability().unwrap(),
-        )
-        .await;
-        assert_eq!(snapshots.refused, vec!["did:test:denied".to_owned()]);
-        assert!(snapshots
-            .store
-            .nodes
-            .iter()
-            .any(|node| node.node_did == healthy_did));
-        source.shutdown().await.unwrap();
-    }
 }

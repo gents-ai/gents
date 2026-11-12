@@ -228,7 +228,7 @@ pub(crate) async fn submit_goal_backed_request(
         gents_protocol::operations::goal::GoalOperationError,
     >,
 > {
-    use crate::operations::goal::{acting_in_txn, admit_start_in_txn};
+    use crate::operations::goal::{acting_in_txn, admit_start_in_txn, check_first_request};
     use gents_protocol::operations::goal::GoalOperationError;
     let result = access
         .transact_write("goal.submit_backed_request", move |txn| {
@@ -256,6 +256,21 @@ pub(crate) async fn submit_goal_backed_request(
                 )
                 .await?
                 {
+                    return Ok(Err(refusal));
+                }
+                let Some(signer) = txn.actor_did() else {
+                    return Ok(Err(GoalOperationError::Denied));
+                };
+                if let Err(refusal) = check_first_request(
+                    request,
+                    node_did,
+                    session_id,
+                    &session.session.agent_did,
+                    session.session.requester_did.as_deref(),
+                    signer,
+                    &gents_protocol::goal::deterministic_goal_id(node_did, session_id),
+                    None,
+                ) {
                     return Ok(Err(refusal));
                 }
                 stage_goal_backed_request(

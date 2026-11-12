@@ -3,7 +3,9 @@ use chrono::Utc;
 use gents_automation::goal::GoalDocument;
 use gents_protocol::goal::GOAL_FIELDS;
 use gents_protocol::goal_status::GoalStatus;
-use gents_protocol::operations::goal::{GoalOperationError, GoalSetInput, GoalStartInput};
+use gents_protocol::operations::goal::{
+    GoalExpected, GoalOperationError, GoalSetInput, GoalStartInput,
+};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 
@@ -68,6 +70,11 @@ async fn goal_set_value(
     node_did: &str,
     args: &GoalSetArgs,
 ) -> Result<serde_json::Value> {
+    let session_id = args.scope.session.as_str();
+    let observed =
+        gents_automation::operations::goal::observe_revision(access, node_did, session_id)
+            .await?
+            .ok_or_else(|| failure(GoalOperationError::NoGoal(session_id.to_owned()), session_id))?;
     let input = GoalSetInput {
         objective: args.objective.clone(),
         token_budget: if args.clear_token_budget {
@@ -77,6 +84,7 @@ async fn goal_set_value(
         },
         status: args.status.map(GoalStatus::from),
         auto_resume: args.auto_resume,
+        expected: Some(GoalExpected::Revision(observed)),
         ..Default::default()
     };
     let goal =
@@ -272,8 +280,6 @@ impl From<GoalStatusArg> for GoalStatus {
             GoalStatusArg::Active => Self::Active,
             GoalStatusArg::Paused => Self::Paused,
             GoalStatusArg::Blocked => Self::Blocked,
-            GoalStatusArg::UsageLimited => Self::UsageLimited,
-            GoalStatusArg::BudgetLimited => Self::BudgetLimited,
             GoalStatusArg::Complete => Self::Complete,
         }
     }

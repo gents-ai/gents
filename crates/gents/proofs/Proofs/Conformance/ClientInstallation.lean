@@ -70,11 +70,11 @@ private def runSteps : State → List Action → List TraceStep
     let result := step state action
     let next := result.getD state
     ({ accepted := result.isSome,
-       state := { phase := next.phase, attachments := next.observation.attachments } } : TraceStep)
+       state := { phase := next.phase, attachments := next.attachments } } : TraceStep)
       :: runSteps next rest
 
 private def initialState (phase : Phase) (attachments : Nat) : State :=
-  { phase, history := 11, observation := { requested := some 7, attachments } }
+  { phase, history := 11, attachments }
 
 private def act (kind : ActionKind) : ActionWire := { kind, startupReserved := false }
 

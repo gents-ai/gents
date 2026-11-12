@@ -4,10 +4,10 @@ use gents_protocol::agent_identity::AgentIdentityBinding;
 use gents_protocol::operations::agent::{
     AgentCreateInput, AgentCreateOperation, AgentOperationError,
 };
-use gents_protocol::operations::NextCall;
 use gents_protocol::operations::permission::{
     AgentPermission, AgentPermissionInput, AgentPermissionReceipt, PermissionChange,
 };
+use gents_protocol::operations::NextCall;
 use gents_protocol::operations::StringUpdate;
 use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
@@ -376,7 +376,10 @@ const CANONICAL_AGENT_SHOW_FIELDS: &str = "agent_did creation_nonce node_did dis
 const CANONICAL_PROFILE_SHOW_FIELDS: &str = "profile_id display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";
 
 pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
-    let AgentShowArgs { show: args, node_did } = args;
+    let AgentShowArgs {
+        show: args,
+        node_did,
+    } = args;
     let id = resolve_dual_id("agent", "--id", args.id.as_deref(), args.id_flag.as_deref())?;
     args.output
         .ensure_supported("config agent show", &[OutputFormat::Json])?;
@@ -400,7 +403,9 @@ pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
         &id,
     )
     .await?
-    .ok_or_else(|| anyhow::anyhow!("not found: no Agent document with agent_did {id} on {owner}"))?;
+    .ok_or_else(|| {
+        anyhow::anyhow!("not found: no Agent document with agent_did {id} on {owner}")
+    })?;
 
     let node_did = row
         .get("node_did")

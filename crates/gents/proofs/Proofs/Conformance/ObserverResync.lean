@@ -2,10 +2,10 @@ import Proofs.Clients.ClientShell.ObservationOrdering
 import Lean
 
 /-! Executes `ObserverResync` and `ClientDataPublication` on the observer
-traces a native test serializes. After every operation it reports the slot of
-the operation's node; a finished load also reports its settlement and the
-patch fence's decision for its read. The final report adds every node's slot
-and the store's rows. -/
+traces a native test serializes. Each node has its own store. After every
+operation it reports the slot of the operation's node; a finished load also
+reports its settlement and the patch fence's decision for its read. The final
+report adds every node's slot and every node's store rows. -/
 namespace Conformance.ObserverResync
 open Lean
 open _root_.ClientDataPublication
@@ -24,44 +24,38 @@ structure Trace where
   deriving FromJson
 
 structure Machine where
-  pub : State
+  pubs : Nat → State
   slots : Nat → Slot
   reads : Nat → Option Read
-  rows : List FootprintRow
+  rows : Nat → List String
+
+def emptyStore : State :=
+  { dataEpoch := 0, provenanceEpoch := 0, requestEventEpoch := 0, transcriptEpoch := 0 }
 
 def initialMachine : Machine :=
-  { pub := { dataEpoch := 0, provenanceEpoch := 0, requestEventEpoch := 0, transcriptEpoch := 0 },
-    slots := fun _ => initial, reads := fun _ => none, rows := [] }
+  { pubs := fun _ => emptyStore, slots := fun _ => initial, reads := fun _ => none,
+    rows := fun _ => [] }
 
 def update {α : Type} (f : Nat → α) (node : Nat) (value : α) : Nat → α :=
   fun other => if other = node then value else f other
 
-/-- The node's own row, the other node's row and the row shared by key with an
-unowned row the trace may seed. -/
-def ownRow (node : Nat) : FootprintRow := { key := s!"session-{node}", owner := some node }
+/-- The rows a load or direct reload of `node` reads from its runtime. -/
+def snapshot (node : Nat) : List String := [s!"session-{node}"]
 
-def sharedKey : String := "shared"
+def onStore (m : Machine) (node : Nat) (step : State → State) : Machine :=
+  { m with pubs := Fleet.on m.pubs node step }
 
-/-- The rows a load or direct reload of `node` reads: `rows`, `foreign` (with a
-row the runtime returns for another node) or `shared` (with the node's row
-under the shared key). -/
-def snapshot (node : Nat) : String → List FootprintRow
-  | "foreign" => [ownRow node, ownRow (1 - node)]
-  | "shared" => [ownRow node, { key := sharedKey, owner := some node }]
-  | _ => [ownRow node]
-
-/-- A reload publishing `incoming` through the fence, captured at `read`. -/
-def reload (m : Machine) (read : Read) (node : Nat) (incoming : List FootprintRow) :
+/-- A reload of `node`'s store publishing `incoming`, captured at `read`. -/
+def reloadNode (m : Machine) (read : Read) (node : Nat) (incoming : List String) :
     Settlement × Machine :=
-  let outcome := settlement m.pub read (reloadCheck node m.rows incoming) .rows
+  let outcome := settlement (m.pubs node) read .rows
   if outcome = .published then
-    (outcome, { m with pub := dataChange m.pub (reloadFootprint node m.rows incoming),
-                       rows := reloadRows node m.rows incoming })
+    (outcome, { onStore m node dataChange with rows := update m.rows node incoming })
   else (outcome, m)
 
-/-- The observer clears a refused node with a fresh capture. -/
+/-- The observer clears a refused node's store with a fresh capture. -/
 def clear (m : Machine) (node : Nat) : Machine :=
-  (reload m (beginRead m.pub) node []).2
+  (reloadNode m (beginRead (m.pubs node)) node []).2
 
 def loadResult : String → LoadResult
   | "transport_failed" => .transportFailed
@@ -103,29 +97,25 @@ def step (m : Machine) (op : Op) : Machine × Option Json :=
   | "armed" => (withSlot m n (armed slot), none)
   | "start" =>
       if startable slot then
-        ({ withSlot m n (start slot) with reads := update m.reads n (some (beginRead m.pub)) },
-          none)
+        ({ withSlot m n (start slot) with
+            reads := update m.reads n (some (beginRead (m.pubs n))) }, none)
       else (m, none)
-  | "deliver" => (withSlot { m with pub := observerEvent m.pub n } n (queue slot), none)
-  | "tool_call_event" => ({ m with pub := provenanceInvalidation m.pub }, none)
-  | "transcript_event" => ({ m with pub := transcriptInvalidation m.pub }, none)
+  | "deliver" => (withSlot (onStore m n requestEvent) n (queue slot), none)
+  | "tool_call_event" => (onStore m n provenanceInvalidation, none)
+  | "transcript_event" => (onStore m n transcriptInvalidation, none)
   | "stream_failed" =>
-      (dropRead (withSlot { m with pub := requestEvent m.pub } n (streamFailed slot)) n, none)
+      (dropRead (withSlot (onStore m n requestEvent) n (streamFailed slot)) n, none)
   | "stream_refused" =>
-      let m := clear { m with pub := requestEvent m.pub } n
+      let m := clear (onStore m n requestEvent) n
       (dropRead (withSlot m n (streamRefused slot)) n, none)
-  | "publish" => ((reload m (beginRead m.pub) n (snapshot n op.result)).2, none)
-  | "seed_unowned" =>
-      ({ m with pub := dataChange m.pub .all,
-                rows := m.rows.filter (fun row => row.key != sharedKey) ++
-                  [{ key := sharedKey, owner := none }] }, none)
+  | "publish" => ((reloadNode m (beginRead (m.pubs n)) n (snapshot n)).2, none)
   | "timer" => (withSlot m n (timer slot), none)
   | "finish" =>
       match slot.loading, m.reads n with
       | true, some read =>
-          let patch := acceptsFor m.pub read (.nodes [n])
+          let patch := accepts (m.pubs n) read
           let (outcome, next) := match loadResult op.result with
-            | .rows => reload m read n (snapshot n op.result)
+            | .rows => reloadNode m read n (snapshot n)
             | .transportFailed => (.transportFailed, m)
             | .refused => (.refused, clear m n)
           (dropRead (withSlot next n (settle slot outcome)) n,
@@ -140,9 +130,6 @@ def slotJson (slot : Slot) : Json :=
     ("status", toJson (statusName slot.status)),
     ("presentation", toJson (presentationName (present slot)))]
 
-def rowJson (row : FootprintRow) : Json :=
-  Json.mkObj [("key", toJson row.key), ("owner", toJson row.owner)]
-
 def execute (trace : Trace) : Json := Id.run do
   let mut machine := initialMachine
   let mut steps : Array Json := #[]
@@ -153,7 +140,7 @@ def execute (trace : Trace) : Json := Id.run do
       ("result", result.getD Json.null)])
   return Json.mkObj [("steps", Json.arr steps),
     ("slots", Json.arr ((List.range trace.nodes).map (fun n => slotJson (machine.slots n))).toArray),
-    ("rows", Json.arr (machine.rows.map rowJson).toArray)]
+    ("rows", Json.arr ((List.range trace.nodes).map (fun n => toJson (machine.rows n))).toArray)]
 
 end Conformance.ObserverResync
 

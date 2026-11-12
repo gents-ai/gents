@@ -41,7 +41,7 @@ async fn observe_submitted_request(
 ) -> SubmittedRequest {
     store.set_focused_request_id(Some(receipt.request_id.clone()));
     if let Err(error) = refresh.await {
-        store.request_resync(Some(&receipt.node_did));
+        store.request_resync();
         tracing::warn!(
             node_did = %receipt.node_did,
             session_id = %receipt.session_id,
@@ -231,13 +231,9 @@ impl ClientCore {
     }
 
     /// A superseded node read is not read again here: the observer owns that
-    /// node's next load (`ObserverResync` `RefreshFallback`).
+    /// node's next load.
     async fn refresh_config_source(&self, source_node_did: &str) -> Result<u64> {
-        let refresh = match self.refresh_node(source_node_did).await? {
-            Some(refresh) => refresh,
-            None => self.refresh_store().await?,
-        };
-        Ok(refresh.version())
+        Ok(self.refresh_node(source_node_did).await?.version())
     }
 
     #[cfg(test)]

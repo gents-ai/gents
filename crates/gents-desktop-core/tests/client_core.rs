@@ -98,7 +98,7 @@ async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Res
         "/tmp/test-hosted-message-home",
     )
     .await?;
-    assert!(core.store().snapshot().requests.is_empty());
+    assert!(core.stores().snapshot(node_did).requests.is_empty());
     let input = core
         .prepare_user_message_input_with_delivery(
             node_did,

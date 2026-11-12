@@ -126,13 +126,13 @@ export function createDesktopApiAdapter(
       }),
     observeMailboxItem: (request) =>
       invokeDesktop("desktop_mailbox_observe", { request }),
-    startMailboxRequest: (itemId) =>
+    startMailboxRequest: (itemId, nodeDid) =>
       invokeDesktop("desktop_mailbox_start_request", {
-        request: { itemId },
+        request: { itemId, nodeDid: nodeDid ?? null },
       }),
-    dismissMailboxItem: (itemId) =>
+    dismissMailboxItem: (itemId, nodeDid) =>
       invokeDesktop("desktop_mailbox_dismiss", {
-        request: { itemId },
+        request: { itemId, nodeDid: nodeDid ?? null },
       }),
     forkSessionBeforeMessage: (request) =>
       invokeDesktop("desktop_session_fork_before_message", { request }),

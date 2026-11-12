@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gents_automation::goal::{load_canonical_goal_in_txn, set_goal};
+use gents_automation::goal::{load_canonical_goal_in_txn, seed_goal_from_access};
 use gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME;
 use gents_protocol::goal_status::GoalStatus;
 use gents_store::graphql::escape_graphql_string;
@@ -90,9 +90,14 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
             },
         }))
         .await;
-    let goal = set_goal(
-        &db.node,
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        actors.agent().did().parse().expect("agent DID"),
         actors.agent().as_ref(),
+    )
+    .expect("agent access");
+    let goal = seed_goal_from_access(
+        &agent_access,
         &node_did,
         session_id,
         Some(
@@ -100,6 +105,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
         ),
         Some(GoalStatus::Active),
         Some(Some(20_000)),
+        None,
     )
     .await
     .expect("create durable goal");

@@ -37,9 +37,9 @@ pub async fn interrupt_request(
     )
     .await
     .map_err(|error| {
-        BridgeError::classify_transport_error(
-            gents_desktop_core::error::request_operation_failure(error),
-        )
+        BridgeError::classify_transport_error(gents_desktop_core::error::request_operation_failure(
+            error,
+        ))
     })?;
     Ok(InterruptRequestResult {
         request_id: receipt.request_id,

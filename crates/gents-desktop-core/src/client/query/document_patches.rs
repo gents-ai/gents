@@ -177,25 +177,16 @@ pub async fn fetch_doc_patch(
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len),
             );
-            (rows.triggers, rows.trigger_source_node_dids) = parse_projected_query_rows_with_source(
+            rows.triggers = parse_projected_query_rows(
                 &data,
                 TRIGGER_NAME,
                 TRIGGER_FIELDS,
                 &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
-                Some("node_did"),
             )?;
-            (rows.trigger_observations, rows.trigger_observation_source_node_dids) = parse_observation_query_rows_with_source(
-                &data,
-                TRIGGER_NAME,
-                TRIGGER_OBSERVATION_FIELDS,
-                Some("node_did"),
-            )?;
-            (rows.schedule_observations, rows.schedule_observation_source_node_dids) = parse_observation_query_rows_with_source(
-                &data,
-                TRIGGER_NAME,
-                SCHEDULE_OBSERVATION_FIELDS,
-                Some("node_did"),
-            )?;
+            rows.trigger_observations =
+                parse_observation_query_rows(&data, TRIGGER_NAME, TRIGGER_OBSERVATION_FIELDS)?;
+            rows.schedule_observations =
+                parse_observation_query_rows(&data, TRIGGER_NAME, SCHEDULE_OBSERVATION_FIELDS)?;
         }
         SKILL_NAME => {
             rows.skills = load_rows(
@@ -224,15 +215,9 @@ pub async fn fetch_doc_patch(
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len),
             );
-            let (metadata, sources): (Vec<gents_documents::InferenceBackendMetadata>, _) = parse_projected_query_rows_with_source(
-                &data,
-                INFERENCE_BACKEND_NAME,
-                INFERENCE_BACKEND_FIELDS,
-                "",
-                Some("node_did"),
-            )?;
+            let metadata: Vec<gents_documents::InferenceBackendMetadata> =
+                parse_projected_query_rows(&data, INFERENCE_BACKEND_NAME, INFERENCE_BACKEND_FIELDS, "")?;
             rows.inference_backends = metadata.into_iter().map(|metadata| metadata.into_backend().map_err(anyhow::Error::from)).collect::<Result<_>>()?;
-            rows.inference_backend_source_node_dids = sources;
         }
         INFERENCE_BACKEND_OBSERVATION_NAME => {
             let data = execute_local_graphql_query(
@@ -241,7 +226,7 @@ pub async fn fetch_doc_patch(
                 "inference backend observation patch",
             ).await?;
             observed_physical_documents = Some(data.get(INFERENCE_BACKEND_OBSERVATION_NAME).and_then(Value::as_array).map_or(0, Vec::len));
-            (rows.backend_observations, rows.backend_observation_source_node_dids) =
+            rows.backend_observations =
                 parse_backend_observation_rows(&data, INFERENCE_BACKEND_OBSERVATION_NAME)?;
         }
         "AgentContext" => rows.contexts = load_rows(node, "AgentContext", &format!("query {{ AgentContext(docIDs: [{in_clause}]) {{ {AGENT_CONTEXT_FIELDS} }} }}")).await?,
@@ -269,51 +254,6 @@ pub async fn fetch_doc_patch(
         }
         other => bail!("fetch_doc_patch: unknown collection {other}"),
     }
-    rows.context_source_node_dids = rows
-        .contexts
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.compaction_source_node_dids = rows
-        .compactions
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.inference_sampling_source_node_dids = rows
-        .inference_sampling
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.inference_execution_source_node_dids = rows
-        .inference_execution
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.event_source_source_node_dids = rows
-        .event_sources
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.agent_target_source_node_dids = rows
-        .agent_targets
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.datastore_tool_surface_source_node_dids = rows
-        .datastore_tool_surfaces
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.tool_service_registry_source_node_dids = rows
-        .tool_service_registries
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.inference_profile_source_node_dids = rows
-        .inference_profiles
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
     let request_count = rows.requests.len();
     let missing_doc_ids = (collection_name == AGENT_REQUEST_NAME).then(|| {
         let found_doc_ids: rapidhash::RapidHashSet<&str> = rows

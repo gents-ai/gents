@@ -355,23 +355,9 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     preferred_request_id: Option<&str>,
     request_projection: Option<&[AgentRequestRow]>,
 ) -> Option<DesktopSessionSnapshot> {
-    let session_row = store
-        .sessions
-        .iter()
-        .enumerate()
-        .find(|(index, row)| {
-            row.session_id == session_id
-                && node_did.is_none_or(|node_did| {
-                    row.node_did == node_did
-                        && source_matches_node(
-                            &store.session_source_node_dids,
-                            *index,
-                            node_did,
-                            false,
-                        )
-                })
-        })
-        .map(|(_index, row)| row);
+    let session_row = store.sessions.iter().find(|row| {
+        row.session_id == session_id && node_did.is_none_or(|node_did| row.node_did == node_did)
+    });
     let requests = request_projection.map_or_else(
         || {
             node_did.map_or_else(
