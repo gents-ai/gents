@@ -1,3 +1,5 @@
+import Proofs.Conformance.PluginDataWrites
+import Proofs.Conformance.PluginHostCalls
 import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.Views
 import Proofs.Conformance.AgentViews
