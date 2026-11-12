@@ -1053,58 +1053,52 @@ pub(crate) mod tests {
 
     #[test]
     fn generated_enrollment_route_readiness_matches_lean() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["enrollment_route_readiness_cases"]
-            .as_array()
-            .unwrap();
+        let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_route_readiness_cases;
         assert!(!cases.is_empty());
         let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
         for case in cases {
-            let flag = |name: &str| case[name].as_bool().unwrap();
             let mut peer = PeerRecord::base("runtime", "peer", "node");
-            peer.source = flag("enrollment").then(|| "enrollment".into());
-            peer.pairing_ready = flag("route_applied");
-            peer.pairing_network_id = flag("network").then(|| "network".into());
-            peer.enrollment_request_digest = flag("digest").then(|| "digest".into());
-            peer.enrollment_authorization_sequence = flag("sequence_fresh").then_some(1);
-            peer.enrollment_authorization_expires_at = Some(if flag("lease_fresh") {
+            peer.source = case.enrollment.then(|| "enrollment".into());
+            peer.pairing_ready = case.route_applied;
+            peer.pairing_network_id = case.network.then(|| "network".into());
+            peer.enrollment_request_digest = case.digest.then(|| "digest".into());
+            peer.enrollment_authorization_sequence = case.sequence_fresh.then_some(1);
+            peer.enrollment_authorization_expires_at = Some(if case.lease_fresh {
                 "2026-01-02T00:00:00Z".into()
             } else {
                 "2025-12-31T00:00:00Z".into()
             });
-            if flag("operator_endpoint") {
+            if case.operator_endpoint {
                 peer.graphql = Some("http://127.0.0.1:9191/api/v0/graphql".into());
                 peer.local_node_home = Some("/runtime".into());
             }
             assert_eq!(
                 peer.is_enrollment_ready_at(now),
-                flag("expected_ready"),
+                case.expected_ready,
                 "{}",
-                case["name"]
+                case.name
             );
         }
     }
 
     /// Materializes a Lean `ClientChatReadiness.Route` as the record the
-    /// native directory holds; `null` is no route.
-    pub(crate) fn chat_case_record(route: &serde_json::Value) -> Option<PeerRecord> {
-        if route.is_null() {
-            return None;
-        }
-        let flag = |name: &str| route[name].as_bool().unwrap();
+    /// native directory holds.
+    pub(crate) fn chat_case_record(
+        route: &gents_lean_vocab::LeanClientChatReadinessCaseRoute,
+    ) -> PeerRecord {
         let mut peer = PeerRecord::base("runtime", "peer", "did:key:runtime");
-        peer.source = route["source"].as_str().map(str::to_owned);
-        peer.graphql = match (flag("operator_endpoint"), flag("managed")) {
+        peer.source = route.source.clone();
+        peer.graphql = match (route.operator_endpoint, route.managed) {
             (true, _) => Some("http://127.0.0.1:9191/api/v0/graphql".into()),
             (false, true) => Some("http://127.0.0.1:9191/graphql".into()),
             (false, false) => None,
         };
-        peer.local_node_home = flag("managed").then(|| "/runtime/home".into());
-        assert_eq!(peer.operator_graphql().is_some(), flag("operator_endpoint"));
-        assert_eq!(peer.is_managed_runtime(), flag("managed"));
-        Some(peer)
+        peer.local_node_home = route.managed.then(|| "/runtime/home".into());
+        assert_eq!(peer.operator_graphql().is_some(), route.operator_endpoint);
+        assert_eq!(peer.is_managed_runtime(), route.managed);
+        peer
     }
 
     /// The P2P route observations the Lean route does not carry. Each Lean
@@ -1134,20 +1128,15 @@ pub(crate) mod tests {
     /// Every Lean `ClientChatReadiness` fence case as (record, refusal), each
     /// record under every route observation.
     pub(crate) fn chat_readiness_cases() -> Vec<(Option<PeerRecord>, Option<String>)> {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        snapshot["client_chat_readiness_cases"]
-            .as_array()
-            .unwrap()
+        gents_lean_vocab::lean_contract_snapshot()
+            .client_chat_readiness_cases
             .iter()
-            .flat_map(|case| {
-                let refusal = case["refusal"].as_str().map(str::to_owned);
-                match chat_case_record(&case["route"]) {
-                    None => vec![(None, refusal)],
-                    Some(record) => with_route_observations(&record)
-                        .into_iter()
-                        .map(|peer| (Some(peer), refusal.clone()))
-                        .collect(),
-                }
+            .flat_map(|case| match case.route.as_ref() {
+                None => vec![(None, case.refusal.clone())],
+                Some(route) => with_route_observations(&chat_case_record(route))
+                    .into_iter()
+                    .map(|peer| (Some(peer), case.refusal.clone()))
+                    .collect(),
             })
             .collect()
     }
@@ -1175,8 +1164,7 @@ pub(crate) mod tests {
 
     #[test]
     fn chat_refusal_causes_match_lean() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let causes = snapshot["client_chat_readiness_causes"].as_array().unwrap();
+        let causes = &gents_lean_vocab::lean_contract_snapshot().client_chat_readiness_causes;
         let native = [
             ChatRouteCause::NoRoute,
             ChatRouteCause::NoEndpoint,
@@ -1184,8 +1172,8 @@ pub(crate) mod tests {
         ];
         assert_eq!(causes.len(), native.len());
         for (case, cause) in causes.iter().zip(native) {
-            assert_eq!(case["cause"], cause.token());
-            assert_eq!(case["next_action"], cause.next_action().token());
+            assert_eq!(case.cause, cause.token());
+            assert_eq!(case.next_action, cause.next_action().token());
         }
     }
 
