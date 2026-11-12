@@ -15,6 +15,7 @@ structure Input where
 
 structure Observation where
   accepted : Bool
+  storageFull : Bool
   process : String
   sourceGeneration : Nat
   demotions : List String
@@ -23,13 +24,21 @@ structure Observation where
 
 /-- The ordered writer bounds a command to five attempts. Full storage is fatal
 on its first observation. Only a successful write publishes the candidate;
-a failed command leaves the admission observation and committed state intact. -/
+a failed command leaves the admission observation and committed state intact.
+A command stopped by full storage reports that cause to its caller. -/
 def succeeds : Nat → List String → Bool
   | 0, _ => false
   | _, [] => false
   | fuel + 1, result :: rest =>
     if result == "ok" then true else if result == "full" then false
     else succeeds fuel rest
+
+def fullStorage : Nat → List String → Bool
+  | 0, _ => false
+  | _, [] => false
+  | fuel + 1, result :: rest =>
+    if result == "ok" then false else if result == "full" then true
+    else fullStorage fuel rest
 
 def run (input : Input) : List Observation := Id.run do
   let mut process := "uninitialized"
@@ -40,7 +49,8 @@ def run (input : Input) : List Observation := Id.run do
     if accepted then
       if process != update.process then persisted := persisted ++ [update.process]
       process := update.process
-    result := result ++ [⟨accepted, process, 0, [], persisted⟩]
+    let storageFull := !accepted && !update.cancelled && fullStorage 5 update.writes
+    result := result ++ [⟨accepted, storageFull, process, 0, [], persisted⟩]
   return result
 
 end Runtime.ReadinessPersistence

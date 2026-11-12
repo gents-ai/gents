@@ -48,6 +48,12 @@ private def cases : List Input :=
    { calls := [{ usage := some ⟨1000, 1000, 2000⟩ }, chargedDone], limit := some 5000 },
    { calls := [{ text := ["invalid"], usage := some ⟨100, 100, 200⟩ },
                { text := ["{\"answer\":\"done\"}"], usage := some ⟨100, 100, 200⟩ }], limit := some 5000, structured := true }] ++
+  [{ calls := [failure "overflow", done], compactor := true },
+   { calls := [failure "overflow"] },
+   { calls := [failure "overflow", failure "overflow"], compactor := true },
+   { calls := [failure "overflow", { tool := true, poison := false }, { tool := true, poison := false },
+               failure "overflow", done], compactor := true, maxTurns := 4 },
+   { calls := [{ tool := true, poison := false }, failure "overflow"], maxTurns := 4 }] ++
   [0, 1, 2, 3].flatMap (fun transport => [false, true].map fun repair =>
     { calls := [failure "transport", failure "parse", failure "reasoning", done], transport, repair })
 
