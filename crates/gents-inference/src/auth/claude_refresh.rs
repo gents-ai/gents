@@ -147,9 +147,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_401_is_expired() {
-        let (result, _) = refresh_against(401, r#"{"error":"invalid_token"}"#).await;
-        assert_eq!(result.unwrap_err(), OAuthAuthProblem::Expired);
+    async fn claude_refresh_failure_class_matches_the_lean_model() {
+        let http = reqwest::Client::new();
+        for case in gents_lean_vocab::families::claude_refresh_failure_class::cases::<String>() {
+            let body: &'static str = Box::leak(
+                match &case.input.error_code {
+                    Some(code) => serde_json::json!({ "error": code }).to_string(),
+                    None => "{}".to_owned(),
+                }
+                .into_boxed_str(),
+            );
+            let status = u16::try_from(case.input.status).unwrap();
+            let (url, handle) = one_shot_token_server(status, body).await;
+            let result = refresh_claude_token_at(&url, "refresh-OLD", &http).await;
+            handle.await.expect("server");
+            let class = match result {
+                Err(OAuthAuthProblem::Expired) => "expired",
+                Err(OAuthAuthProblem::NotEntitled) => "not_entitled",
+                Err(OAuthAuthProblem::Other(_)) => "other",
+                other => panic!("unexpected refresh outcome {other:?} for {:?}", case.input),
+            };
+            case.check(class.to_owned());
+        }
     }
 
     #[tokio::test]
@@ -164,12 +183,6 @@ mod tests {
         assert!(
             matches!(result.unwrap_err(), OAuthAuthProblem::Other(text) if text.contains("400") && text.contains("invalid_request"))
         );
-    }
-
-    #[tokio::test]
-    async fn refresh_403_is_not_entitled() {
-        let (result, _) = refresh_against(403, r#"{"error":"forbidden"}"#).await;
-        assert_eq!(result.unwrap_err(), OAuthAuthProblem::NotEntitled);
     }
 
     #[tokio::test]
