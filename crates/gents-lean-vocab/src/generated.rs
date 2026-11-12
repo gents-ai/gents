@@ -2479,37 +2479,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +3004,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3190,7 +3158,6 @@ pub struct LeanContractSnapshot {
     pub causal_hop_chain_cases: Vec<LeanCausalHopChainCase>,
     pub causal_hop_call_cases: Vec<LeanCausalHopCallCase>,
     pub causal_hop_interrupt_cases: Vec<LeanAgentInterruptCase>,
-    pub causal_hop_creation_cases: Vec<LeanSessionCreationCase>,
     pub causal_hop_creation_signer_cases: Vec<LeanSessionCreationSignerCase>,
     pub causal_hop_job_creation_cases: Vec<LeanJobCreationCase>,
     pub causal_hop_deferred_creation_cases: Vec<LeanDeferredCreationCase>,
@@ -10939,17 +10906,6 @@ pub struct LeanSessionClosureSegment {
 pub struct LeanSessionClosureTool {
     pub id: String,
     pub name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionCreationCase {
-    pub name: String,
-    pub signature_valid: bool,
-    pub scope_matches: bool,
-    pub physical_matches: bool,
-    pub cause_matches: bool,
-    pub expected: bool,
 }
 
 #[derive(Debug, Deserialize)]

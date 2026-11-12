@@ -1078,8 +1078,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.CausalHopContracts.callCasesJson ++ ","
     ++ "\"causal_hop_interrupt_cases\":"
       ++ Conformance.CausalHopContracts.interruptCasesJson ++ ","
-    ++ "\"causal_hop_creation_cases\":"
-      ++ Conformance.CausalHopContracts.creationCasesJson ++ ","
     ++ "\"causal_hop_creation_signer_cases\":"
       ++ Conformance.CausalHopContracts.creationSignerCasesJson ++ ","
     ++ "\"causal_hop_job_creation_cases\":"
