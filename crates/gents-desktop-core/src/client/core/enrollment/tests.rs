@@ -29,30 +29,32 @@ use gents_protocol::enrollment::{
     EnrollmentRouteReceiptDirection, EnrollmentRouteReceiptRecord, ENROLLMENT_PROTOCOL_VERSION,
 };
 use p2p::iroh::parse_public_peer_addr;
-use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PendingRequestCase {
-    name: String,
-    requested: gents_p2p::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
-    current: gents_p2p::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
-    has_decision: bool,
-    current_approval: bool,
-    route_applied: bool,
-    expected_satisfied: bool,
-    request_fresh: bool,
-    expected_visible: bool,
+fn enrollment_authority(
+    network_id: &str,
+    admin_did: &str,
+    server_peer: &str,
+    candidate_did: &str,
+    candidate_peer: &str,
+    owner_node: &str,
+    profile: &str,
+) -> gents_p2p::p2p_reconcile::enrollment::EnrollmentRequestAuthority {
+    gents_p2p::p2p_reconcile::enrollment::EnrollmentRequestAuthority {
+        network_id: network_id.into(),
+        admin_did: admin_did.into(),
+        server_peer: server_peer.into(),
+        candidate_did: candidate_did.into(),
+        candidate_peer: candidate_peer.into(),
+        owner_node: owner_node.into(),
+        profile: profile.into(),
+    }
 }
 
-fn pending_request_cases() -> Vec<PendingRequestCase> {
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot()
-        .expect("Lean pending enrollment request cases");
-    serde_json::from_value(snapshot["enrollment_pending_request_cases"].clone())
-        .expect("decode pending enrollment request cases")
+fn pending_request_cases() -> &'static [gents_lean_vocab::LeanEnrollmentPendingRequestCase] {
+    &gents_lean_vocab::lean_contract_snapshot().enrollment_pending_request_cases
 }
 
 #[test]
@@ -62,8 +64,24 @@ fn generated_pending_request_satisfaction_matches_lean() {
     for case in cases {
         assert_eq!(
             gents_p2p::p2p_reconcile::enrollment::pending_request_satisfied(
-                &case.requested,
-                &case.current,
+                &enrollment_authority(
+                    &case.requested.network_id,
+                    &case.requested.admin_did,
+                    &case.requested.server_peer,
+                    &case.requested.candidate_did,
+                    &case.requested.candidate_peer,
+                    &case.requested.owner_node,
+                    &case.requested.profile,
+                ),
+                &enrollment_authority(
+                    &case.current.network_id,
+                    &case.current.admin_did,
+                    &case.current.server_peer,
+                    &case.current.candidate_did,
+                    &case.current.candidate_peer,
+                    &case.current.owner_node,
+                    &case.current.profile,
+                ),
                 case.has_decision,
                 case.current_approval,
                 case.route_applied,
@@ -2135,21 +2153,9 @@ async fn malformed_authority_rows_are_skipped_by_the_active_listing() {
     Arc::new(core).shutdown().await.unwrap();
 }
 
-#[derive(Deserialize)]
-struct AbsentEnrollmentPeerCase {
-    managed: bool,
-    initial_ready: bool,
-    expected_present: bool,
-    expected_ready: bool,
-}
-
 #[tokio::test]
 async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() {
-    let snapshot: Value =
-        gents_lean_contract::load_contract_snapshot().expect("Lean absent enrollment peer cases");
-    let cases: Vec<AbsentEnrollmentPeerCase> =
-        serde_json::from_value(snapshot["enrollment_absent_peer_cases"].clone())
-            .expect("decode absent enrollment peer cases");
+    let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_absent_peer_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let temp = tempfile::tempdir().unwrap();
@@ -2622,15 +2628,12 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
     let nodes = local.execute("{ Node { _docID } }").await?;
     assert!(gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node").is_empty());
     let doc = write_enrollment_request(&core.node, &request).await?;
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
-    let cases = snapshot["identity_enrollment_policy_cases"]
-        .as_array()
-        .context("missing enrollment policy cases")?;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_enrollment_policy_cases;
     let expected = |name: &str| -> Result<bool> {
         cases
             .iter()
-            .find(|case| case["name"] == name)
-            .and_then(|case| case["allowed"].as_bool())
+            .find(|case| case.name == name)
+            .map(|case| case.allowed)
             .with_context(|| format!("missing enrollment policy case {name}"))
     };
     let acp = core.node.document_acp();
@@ -2865,15 +2868,12 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
         .context("received-decision notification closed")?;
     drop(arrivals);
 
-    let model: Value = gents_lean_contract::load_contract_snapshot()?;
-    let cases = model["identity_client_transport_cases"]
-        .as_array()
-        .context("missing client transport cases")?;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_client_transport_cases;
     let expected = |name: &str| -> Result<bool> {
         cases
             .iter()
-            .find(|case| case["name"] == name)
-            .and_then(|case| case["allowed"].as_bool())
+            .find(|case| case.name == name)
+            .map(|case| case.allowed)
             .with_context(|| format!("missing client transport case {name}"))
     };
     let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
