@@ -92,12 +92,13 @@ fn dispatch_capacity_matches_the_lean_model() {
         );
         let request = sized_request(&config, i.raw as usize, i.max_output_tokens);
         match prepare_dispatch_attempt(&request, &config, None) {
-            Ok(prepared) => Some(
+            Ok(prepared) => Some({
+                assert_eq!(prepared.context().raw, i.raw as usize, "{i:?}");
                 gents_lean_vocab::families::request_assembly_dispatch_capacity::Dispatched {
                     max_output_tokens: prepared.request().max_tokens.expect("output cap"),
                     context_tokens: prepared.context().tokens as u64,
-                },
-            ),
+                }
+            }),
             Err(error) => {
                 assert!(
                     gents_protocol::error_chain::find_source::<

@@ -884,7 +884,11 @@ mod tests {
                 ToolOutcome::TimedOut {
                     deadline_at: Some(recorded),
                 } if recorded == deadline_at => ReadySettlement::TimedOut,
-                ToolOutcome::Failed { .. } => ReadySettlement::EarlyFailure,
+                ToolOutcome::Failed {
+                    class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                    denial: None,
+                    text,
+                } if text == "tool failed" => ReadySettlement::EarlyFailure,
                 ToolOutcome::Completed(_) => ReadySettlement::Completed,
                 other => panic!("{:?}: unexpected outcome {other:?}", case.input),
             };
