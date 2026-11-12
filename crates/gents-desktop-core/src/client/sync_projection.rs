@@ -183,20 +183,6 @@ fn discovery_cause(
 mod tests {
     use super::*;
     use crate::client::core::{ClientPeerStatus, EnrollmentActivationError, P2PHealth};
-    use serde::Deserialize;
-
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct SyncHealthCase {
-        runtimes: Vec<Option<String>>,
-        enrollment: Vec<String>,
-        transport: String,
-        configured_peers: usize,
-        dialed_peers: usize,
-        state: String,
-        cause: Option<String>,
-        next_action: Option<String>,
-    }
 
     fn status(name: &str) -> RuntimeConnectionStatus {
         match name {
@@ -222,7 +208,7 @@ mod tests {
         }
     }
 
-    fn snapshot(case: &SyncHealthCase) -> ClientSyncStateSnapshot {
+    fn snapshot(case: &gents_lean_vocab::LeanClientSyncHealthCase) -> ClientSyncStateSnapshot {
         let status = match case.transport.as_str() {
             "healthy" => P2PHealthStatus::Healthy,
             "degraded" => P2PHealthStatus::Degraded,
@@ -257,21 +243,17 @@ mod tests {
                 .collect(),
             directory: Vec::new(),
             peers: (0..case.configured_peers)
-                .map(|index| peer(index, index < case.dialed_peers))
+                .map(|index| peer(index as usize, index < case.dialed_peers))
                 .collect(),
         }
     }
 
     #[test]
     fn generated_sync_health_cases_match_lean() {
-        let contract: serde_json::Value =
-            gents_lean_contract::load_contract_snapshot().expect("Lean client sync health cases");
-        let cases: Vec<SyncHealthCase> =
-            serde_json::from_value(contract["client_sync_health_cases"].clone())
-                .expect("decode client sync health cases");
+        let cases = &gents_lean_vocab::lean_contract_snapshot().client_sync_health_cases;
         assert!(!cases.is_empty());
         for case in cases {
-            let sync = snapshot(&case);
+            let sync = snapshot(case);
             let health = project_sync_health(
                 &sync,
                 case.runtimes
@@ -286,7 +268,7 @@ mod tests {
                 case.configured_peers,
                 case.dialed_peers
             );
-            assert_eq!(health.state.as_str(), case.state, "{label}");
+            assert_eq!(health.state.as_str(), case.state.as_str(), "{label}");
             assert_eq!(
                 health.cause.map(SyncHealthCause::as_str),
                 case.cause.as_deref(),
@@ -303,7 +285,7 @@ mod tests {
                 "{label}"
             );
             assert_eq!(health.activation_error_count, case.enrollment.len());
-            assert_eq!(health.connected_peer_count, case.dialed_peers);
+            assert_eq!(health.connected_peer_count, case.dialed_peers as usize);
         }
     }
 }
