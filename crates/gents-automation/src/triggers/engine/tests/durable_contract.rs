@@ -218,7 +218,9 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
 
 #[tokio::test]
 async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_work() {
-    for (case_index, case) in gents_lean_vocab::families::trigger_delivery_latest_admission::cases()
+    for (case_index, case) in contract()["trigger_delivery_latest_admission_cases"]
+        .as_array()
+        .unwrap()
         .iter()
         .enumerate()
     {
@@ -235,9 +237,9 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
             let access = agent_access(&node, &behavior);
             let owner = behavior.node_did().to_owned();
             let agent_did = behavior.agent_did.clone();
-            let pre: State = gents_lean_vocab::family::recode(&case.input.pre);
-            let next: Fire = gents_lean_vocab::family::recode(&case.input.fire);
-            let allowed = case.input.destination_allowed;
+            let pre: State = decode(&case["pre"]);
+            let next: Fire = decode(&case["fire"]);
+            let allowed = case["destination_allowed"].as_bool().unwrap();
             let mut task = resolved_task("replace work");
             task.agent_did = agent_did.clone();
             if allowed {
@@ -267,7 +269,6 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                 fire.fire_key = fire.identity.fire_key();
                 fire.request_id = fire.identity.request_id();
                 fire.task_id = task.task_id.clone();
-                fire.created_at = format!("2020-01-01T00:00:{index:02}Z");
                 access.transact_write(
                 "test.seed_latest_delivery", |txn| {
                     let fire = &fire;
@@ -324,41 +325,41 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                     FireResult::Fired { .. } | FireResult::Duplicate { .. }
                 ),
                 allowed,
-                "{}: {result:?}",
-                case.input.name
+                "{case}: {result:?}"
             );
             let response = access
-                .execute("{ AgentRequest { request_id lifecycle_state } }")
+                .execute("{ TriggerFire { fire_key } AgentRequest { request_id lifecycle_state } }")
                 .await
                 .unwrap();
-            for row in response["data"]["AgentRequest"].as_array().unwrap() {
-                let existed = pre.requests.iter().any(|prior| {
-                    let mut id = prior.fire.identity.clone();
-                    id.owner_did = owner.clone();
-                    row["request_id"] == id.request_id()
-                });
-                let state = row["lifecycle_state"].as_str().unwrap();
-                assert!(
-                    state == "superseded"
-                        || state == if existed { pending_state.as_str() } else { "pending" },
-                    "{}: {row}",
-                    case.input.name
+            let post: State = decode(&case["post"]);
+            let data = &response["data"];
+            assert_eq!(
+                data["TriggerFire"].as_array().unwrap().len(),
+                post.receipts.len(),
+                "{case}"
+            );
+            let rows = data["AgentRequest"].as_array().unwrap();
+            assert_eq!(rows.len(), post.requests.len(), "{case}");
+            for request in post.requests {
+                let mut id = request.fire.identity;
+                let existed = pre.requests.iter().any(|prior| prior.fire.identity == id);
+                id.owner_did = owner.clone();
+                let row = rows
+                    .iter()
+                    .find(|row| row["request_id"] == id.request_id())
+                    .unwrap();
+                assert_eq!(
+                    row["lifecycle_state"],
+                    if request.terminal {
+                        "superseded"
+                    } else if existed {
+                        pending_state.as_str()
+                    } else {
+                        "pending"
+                    },
+                    "{case}"
                 );
             }
-            let modeled_owner = next.identity.owner_did.clone();
-            let post = observed_delivery_state(&access, |id| {
-                let mut id = id.clone();
-                if id.owner_did == owner {
-                    id.owner_did = modeled_owner.clone();
-                }
-                id
-            })
-            .await;
-            case.check(
-                gents_lean_vocab::families::trigger_delivery_latest_admission::LatestAdmissionOutput {
-                    post: gents_lean_vocab::family::recode(&post),
-                },
-            );
         }
     }
 }

@@ -2943,6 +2943,7 @@ pub struct LeanContractSnapshot {
     pub trigger_fire_budget_default: serde_json::Value,
     pub trigger_fire_budget_status: serde_json::Value,
     pub trigger_delivery_option_cases: serde_json::Value,
+    pub trigger_delivery_latest_admission_cases: serde_json::Value,
     pub trigger_delivery_self_session_cases: serde_json::Value,
     pub operator_base_freeze_cases: Vec<serde_json::Value>,
     pub workspace_path_capability_cases: Vec<LeanWorkspacePathCapabilityCase>,
