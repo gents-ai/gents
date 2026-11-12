@@ -236,42 +236,51 @@ mod tests {
         assert!(registry.snapshot(&key()).is_none());
     }
 
-    #[test]
-    fn concurrent_tool_activity_is_removed_per_call() {
+    fn activity_of(registry: &InferenceObservationRegistry) -> Option<String> {
+        registry
+            .snapshot(&key())
+            .and_then(|snapshot| serde_json::to_value(snapshot.activity).ok())
+            .and_then(|value| value.as_str().map(str::to_owned))
+    }
+
+    fn observe_run(
+        run: &gents_lean_vocab::families::inference_observation_registry_activity::Run<String>,
+    ) -> gents_lean_vocab::families::inference_observation_registry_activity::Outcome<String> {
         let registry = InferenceObservationRegistry::default();
-        let guard = Arc::new(registry.begin(key()).unwrap());
-        let first = guard.begin_tool("first");
-        let second = guard.begin_tool("second");
-        drop(first);
-        assert!(matches!(
-            registry.snapshot(&key()).unwrap().activity,
-            InferenceActivity::Working
-        ));
-        drop(second);
-        assert!(matches!(
-            registry.snapshot(&key()).unwrap().activity,
-            InferenceActivity::AwaitingProvider
-        ));
-        drop(guard);
-        assert!(registry.snapshot(&key()).is_none());
+        let mut requests: RapidHashMap<u64, Arc<InferenceObservationGuard>> =
+            RapidHashMap::default();
+        let mut tools: RapidHashMap<(u64, String), ToolObservationGuard> = RapidHashMap::default();
+        let mut activities = Vec::with_capacity(run.steps.len());
+        for step in &run.steps {
+            match step.kind.as_str() {
+                "open_request" => {
+                    if let Some(guard) = registry.begin(key()) {
+                        requests.insert(step.request, Arc::new(guard));
+                    }
+                }
+                "close_request" => {
+                    requests.remove(&step.request);
+                }
+                "open_tool" => {
+                    if let Some(request) = requests.get(&step.request) {
+                        let guard = request.begin_tool(&step.tool);
+                        tools.insert((step.request, step.tool.clone()), guard);
+                    }
+                }
+                "close_tool" => {
+                    tools.remove(&(step.request, step.tool.clone()));
+                }
+                other => unreachable!("unknown step kind {other}"),
+            }
+            activities.push(activity_of(&registry));
+        }
+        gents_lean_vocab::families::inference_observation_registry_activity::Outcome { activities }
     }
 
     #[test]
-    fn handed_off_tool_does_not_keep_request_or_remove_replacement_activity() {
-        let registry = InferenceObservationRegistry::default();
-        let request = Arc::new(registry.begin(key()).unwrap());
-        let handed_off = request.begin_tool("call");
-        drop(request);
-        assert!(registry.snapshot(&key()).is_none());
-
-        let next = Arc::new(registry.begin(key()).unwrap());
-        let active = next.begin_tool("call");
-        drop(handed_off);
-        assert!(matches!(
-            registry.snapshot(&key()).unwrap().activity,
-            InferenceActivity::Working
-        ));
-        drop(active);
-        drop(next);
+    fn observation_registry_matches_the_lean_model() {
+        gents_lean_vocab::families::inference_observation_registry_activity::replay::<String, String>(
+            observe_run,
+        );
     }
 }
