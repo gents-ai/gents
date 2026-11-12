@@ -1499,8 +1499,8 @@ def caseCoverage : List CoverageEntry :=
       "Tests selection of the held completion writer; workspace read isolation and cross-Agent relationship publication remain separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_root_completeness_cases"
-      "WorkspaceRootCompletenessCases"
+      "family"
+      "workspace_root_completeness"
       "Checks root projection for incomplete views; an ACL-bound authoritative root publication contract remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

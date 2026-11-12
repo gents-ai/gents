@@ -523,10 +523,8 @@ mod tests {
 
     #[test]
     fn workspace_root_fallback_requires_complete_visibility() {
-        for case in &gents_lean_vocab::lean_contract_snapshot().workspace_root_completeness_cases {
-            let complete = case["complete"].as_bool().unwrap();
-            let visible_configured = case["visible_configured"].as_bool().unwrap();
-            let documents = if visible_configured {
+        gents_lean_vocab::families::workspace_root_completeness::replay(|i| {
+            let documents = if i.visible_configured {
                 vec![WorkspaceRootDocument {
                     root_path: None,
                     enabled: Some(false),
@@ -534,13 +532,10 @@ mod tests {
             } else {
                 Vec::new()
             };
-            let policy = project_workspace_root_policy_with_completeness(documents, None, complete);
-            assert_eq!(
-                !policy.configured && policy.published.is_empty(),
-                case["fallback_allowed"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
+            let policy =
+                project_workspace_root_policy_with_completeness(documents, None, i.complete);
+            !policy.configured && policy.published.is_empty()
+        });
     }
 
     #[tokio::test]
