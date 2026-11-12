@@ -90,7 +90,32 @@ def edit : Family EditInput (Option Assignment) where
       observed := c.observed, current := c.current, fields := c.fields }
   model := fun i => apply? i.observed i.current i.fields i.origin
 
-def whitespaceCodepointsJson : String :=
-  jsonArray (TextNormalization.objectiveWhitespaceCodepoints.map toString)
+/-- The last Unicode scalar value. -/
+def lastCodepoint : Nat := 0x10FFFF
+
+structure WhitespaceRun where
+  first : Nat
+  last : Nat
+  deriving ToJson
+
+/-- The code space split at every boundary of
+`TextNormalization.objectiveWhitespaceRanges`: each run is wholly whitespace or
+wholly content. -/
+def whitespaceRuns : List WhitespaceRun :=
+  let (runs, next) := TextNormalization.objectiveWhitespaceRanges.foldl
+    (fun (runs, next) (first, last) =>
+      (runs ++ (if next < first then [⟨next, first - 1⟩] else []) ++ [⟨first, last⟩], last + 1))
+    ([], 0)
+  runs ++ (if next ≤ lastCodepoint then [⟨next, lastCodepoint⟩] else [])
+
+@[conformance_family]
+def objectiveWhitespaceRuns : Family WhitespaceRun Bool where
+  inputs := whitespaceRuns
+  model := fun run => TextNormalization.objectiveWhitespace (Char.ofNat run.first)
+
+example : (whitespaceRuns.flatMap fun run =>
+    if TextNormalization.objectiveWhitespace (Char.ofNat run.first) then
+      (List.range (run.last - run.first + 1)).map (run.first + ·) else []) =
+    TextNormalization.objectiveWhitespaceCodepoints := by native_decide
 
 end Conformance.GoalEditContracts

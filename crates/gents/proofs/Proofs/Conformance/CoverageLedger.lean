@@ -1913,8 +1913,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginApprovalCases")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_objective_whitespace_codepoints"
-      "GoalObjectiveWhitespace")
+      "family"
+      "goal_edit_contracts_objective_whitespace_runs")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_operator_resume_cases"

@@ -492,8 +492,6 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"workspace_command_grant_answers\":" ++ Conformance.WorkspaceCommandGrants.answersJson.compress ++ ","
     ++ "\"workspace_command_grant_lookups\":" ++ Conformance.WorkspaceCommandGrants.lookupsJson.compress ++ ","
     ++ "\"workspace_command_grant_revocations\":" ++ Conformance.WorkspaceCommandGrants.revocationsJson.compress ++ ","
-    ++ "\"goal_objective_whitespace_codepoints\":"
-      ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
     ++ "\"goal_claimed_publication_cases\":"
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
     ++ "\"goal_claimed_identity_cases\":"
