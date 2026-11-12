@@ -207,57 +207,103 @@ def runtimeSchemaPublication : Family SchemaPublicationInput SchemaPublicationOu
   inputs := schemaPublicationInputs.filter (·.nativeAllowed)
   model := schemaPublicationOutcome
 
-/-- Edit authority by category, scope and held self-config categories. -/
-def selfConfigScopeEditCasesJson : String := Id.run do
-  let categorySets : List (String × List String) :=
-    [("none", []), ("agent-only", ["agent"]), ("tools-only", ["tools"]),
-     ("catalog-only", ["node"]), ("catalog-and-agent", ["node", "agent"]),
-     ("catalog-and-tools", ["node", "tools"]), ("agent-and-tools", ["agent", "tools"]),
-     ("engineer", SelfConfig.effectiveCategories SelfConfig.engineerGroup)]
-  let documents := ["agent", "tools", "profile", "backend", "automation", "policy"]
-  let scopes : List (String × SelfConfig.Scope) := [("own", .own), ("foreign", .foreign)]
-  let mut rows : List String := []
-  for (setName, categories) in categorySets do
-    for document in documents do
-      for (scopeName, scope) in scopes do
-        rows := rows ++ ["{\"name\":" ++ jsonString (setName ++ "/" ++ document ++ "/" ++ scopeName)
-          ++ ",\"categories\":" ++ jsonStringArray categories
-          ++ ",\"category\":" ++ jsonString document
-          ++ ",\"scope\":" ++ jsonString scopeName
-          ++ ",\"allowed\":" ++ scBool (SelfConfig.mayEdit categories document scope) ++ "}"]
-  return jsonArray rows
+structure EditInput where
+  name : String
+  categories : List String
+  category : String
+  scope : String
+  deriving Lean.ToJson
 
-def selfConfigScopeGroupCasesJson : String := Id.run do
-  let groups : List (String × SelfConfig.SelfConfigGroup) :=
-    [("created", SelfConfig.createdGroup), ("clone-of-engineer", SelfConfig.cloneGroup SelfConfig.engineerGroup),
-     ("engineer", SelfConfig.engineerGroup), ("yolo", SelfConfig.yoloGroup),
-     ("enabled-default", ⟨true, none⟩),
-     ("disabled-with-list", ⟨false, some ["node", "tools"]⟩),
-     ("enabled-catalog", ⟨true, some ["node"]⟩)]
-  let rows := groups.map fun (name, g) =>
-    "{\"name\":" ++ jsonString name
-      ++ ",\"enabled\":" ++ scBool g.enabled
-      ++ ",\"categories\":" ++ jsonOptionalStringArray g.categories
-      ++ ",\"effective\":" ++ jsonStringArray (SelfConfig.effectiveCategories g)
-      ++ ",\"may_create_agent\":" ++ scBool (SelfConfig.mayCreateAgent (SelfConfig.effectiveCategories g)) ++ "}"
-  return jsonArray rows
+structure GroupInput where
+  name : String
+  enabled : Bool
+  categories : Option (List String)
+  deriving Lean.ToJson
 
-def selfConfigScopeOfCasesJson : String := Id.run do
-  let rows : List (String × String × String × Bool) :=
-    [("self-exclusive", "agent-a", "agent-a", false), ("self-shared", "agent-a", "agent-a", true),
-     ("other-exclusive", "agent-a", "agent-b", false), ("other-shared", "agent-a", "agent-b", true)]
-  return jsonArray (rows.map fun (name, invoking, target, shared) =>
-    "{\"name\":" ++ jsonString name
-      ++ ",\"invoking_agent\":" ++ jsonString invoking
-      ++ ",\"target_agent\":" ++ jsonString target
-      ++ ",\"shared\":" ++ scBool shared
-      ++ ",\"scope\":" ++ jsonString (if SelfConfig.scopeOf invoking target shared == .own then "own" else "foreign") ++ "}")
+structure ScopeOfInput where
+  name : String
+  invokingAgent : String
+  targetAgent : String
+  shared : Bool
+  deriving Lean.ToJson
 
-def selfConfigScopeCasesJson : String :=
-  "{\"categories\":" ++ jsonStringArray SelfConfig.selfConfigCategories
-    ++ ",\"default_categories\":" ++ jsonStringArray SelfConfig.defaultCategories
-    ++ ",\"edit\":" ++ selfConfigScopeEditCasesJson
-    ++ ",\"groups\":" ++ selfConfigScopeGroupCasesJson
-    ++ ",\"scope_of\":" ++ selfConfigScopeOfCasesJson ++ "}"
+structure ScopeInput where
+  edit : List EditInput
+  groups : List GroupInput
+  scopeOf : List ScopeOfInput
+  deriving Lean.ToJson
+
+structure GroupOutput where
+  effective : List String
+  mayCreateAgent : Bool
+  deriving Lean.ToJson
+
+structure PresetOutput where
+  enabled : Bool
+  effective : List String
+  editsOwnTools : Bool
+  createsAgents : Bool
+  deriving Lean.ToJson
+
+structure ScopeOutput where
+  categories : List String
+  defaultCategories : List String
+  allowed : List Bool
+  groups : List GroupOutput
+  scope : List String
+  engineer : PresetOutput
+  yolo : PresetOutput
+  deriving Lean.ToJson
+
+private def sortedNames (names : List String) : List String :=
+  names.eraseDups.mergeSort fun a b => a ≤ b
+
+private def scopeName (scope : SelfConfig.Scope) : String :=
+  if scope == .own then "own" else "foreign"
+
+def presetOutput (group : SelfConfig.SelfConfigGroup) : PresetOutput :=
+  let effective := SelfConfig.effectiveCategories group
+  { enabled := group.enabled, effective := sortedNames effective
+    editsOwnTools := SelfConfig.mayEdit effective "tools" .own
+    createsAgents := SelfConfig.mayCreateAgent effective }
+
+/-- Self-config edit authority by category and scope, the effective categories
+of a group, whose configuration an edit touches, the category vocabulary and the
+bundled Engineer and yolo presets, replayed as one table. -/
+@[conformance_family]
+def selfConfigScope : Family ScopeInput ScopeOutput where
+  inputs :=
+    let categorySets : List (String × List String) :=
+      [("none", []), ("agent-only", ["agent"]), ("tools-only", ["tools"]),
+       ("catalog-only", ["node"]), ("catalog-and-agent", ["node", "agent"]),
+       ("catalog-and-tools", ["node", "tools"]), ("agent-and-tools", ["agent", "tools"]),
+       ("engineer", SelfConfig.effectiveCategories SelfConfig.engineerGroup)]
+    let documents := ["agent", "tools", "profile", "backend", "automation", "policy"]
+    let groups : List (String × SelfConfig.SelfConfigGroup) :=
+      [("created", SelfConfig.createdGroup), ("clone-of-engineer", SelfConfig.cloneGroup SelfConfig.engineerGroup),
+       ("engineer", SelfConfig.engineerGroup), ("yolo", SelfConfig.yoloGroup),
+       ("enabled-default", ⟨true, none⟩),
+       ("disabled-with-list", ⟨false, some ["node", "tools"]⟩),
+       ("enabled-catalog", ⟨true, some ["node"]⟩)]
+    [{ edit := categorySets.flatMap fun (setName, categories) =>
+          documents.flatMap fun document =>
+            ["own", "foreign"].map fun scope =>
+              { name := setName ++ "/" ++ document ++ "/" ++ scope, categories, category := document, scope }
+       groups := groups.map fun (name, g) => { name, enabled := g.enabled, categories := g.categories }
+       scopeOf :=
+         [("self-exclusive", "agent-a", "agent-a", false), ("self-shared", "agent-a", "agent-a", true),
+          ("other-exclusive", "agent-a", "agent-b", false), ("other-shared", "agent-a", "agent-b", true)].map
+           fun (name, invokingAgent, targetAgent, shared) => { name, invokingAgent, targetAgent, shared } }]
+  model := fun i =>
+    { categories := sortedNames SelfConfig.selfConfigCategories
+      defaultCategories := sortedNames SelfConfig.defaultCategories
+      allowed := i.edit.map fun e =>
+        SelfConfig.mayEdit e.categories e.category (if e.scope == "own" then .own else .foreign)
+      groups := i.groups.map fun g =>
+        let effective := SelfConfig.effectiveCategories ⟨g.enabled, g.categories⟩
+        { effective := sortedNames effective, mayCreateAgent := SelfConfig.mayCreateAgent effective }
+      scope := i.scopeOf.map fun c => scopeName (SelfConfig.scopeOf c.invokingAgent c.targetAgent c.shared)
+      engineer := presetOutput SelfConfig.engineerGroup
+      yolo := presetOutput SelfConfig.yoloGroup }
 
 end Conformance.Contracts

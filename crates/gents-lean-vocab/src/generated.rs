@@ -3155,8 +3155,6 @@ pub struct LeanContractSnapshot {
     pub self_config_resource_read_exposure_cases: Vec<
         LeanSelfConfigResourceReadExposureCase,
     >,
-    pub self_config_scope_cases: LeanSelfConfigScopeCases,
-    pub policy_lockout_cases: LeanPolicyLockoutCases,
     pub self_config_cases: Vec<LeanSelfConfigCase>,
     pub agent_decision_cases: Vec<LeanAgentDecisionCase>,
     pub agent_materialization_cases: Vec<LeanAgentMaterializationCase>,
@@ -9163,23 +9161,6 @@ pub struct LeanPluginTargetResolutionCaseBindingsItem {
     pub wire: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPolicyLockoutCases {
-    pub protected: Vec<String>,
-    pub rows: Vec<LeanPolicyLockoutCasesRowsItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPolicyLockoutCasesRowsItem {
-    pub delete: bool,
-    pub is_self: bool,
-    pub kept: bool,
-    pub no_lockout: bool,
-    pub permission: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LeanPresentation {
@@ -10642,15 +10623,6 @@ pub struct LeanSelfConfigGrants {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct LeanSelfConfigGroupCase {
-    pub name: String,
-    pub enabled: bool,
-    pub categories: Option<Vec<String>>,
-    pub effective: Vec<String>,
-    pub may_create_agent: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanSelfConfigLookupCase {
     pub name: String,
@@ -10674,33 +10646,6 @@ pub struct LeanSelfConfigResourceReadExposureCase {
     pub categories: Vec<String>,
     pub exposed: bool,
     pub resource: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanSelfConfigScopeCases {
-    pub categories: Vec<String>,
-    pub default_categories: Vec<String>,
-    pub edit: Vec<LeanSelfConfigScopeEditCase>,
-    pub groups: Vec<LeanSelfConfigGroupCase>,
-    pub scope_of: Vec<LeanSelfConfigScopeOfCase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanSelfConfigScopeEditCase {
-    pub name: String,
-    pub categories: Vec<String>,
-    pub category: String,
-    pub scope: String,
-    pub allowed: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanSelfConfigScopeOfCase {
-    pub name: String,
-    pub invoking_agent: String,
-    pub target_agent: String,
-    pub shared: bool,
-    pub scope: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
