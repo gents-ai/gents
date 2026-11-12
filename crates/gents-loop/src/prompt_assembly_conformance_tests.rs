@@ -821,3 +821,132 @@ fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
         }
     });
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct ReasoningWitness {
+    block_index: u64,
+    parts: Vec<gents_lean_vocab::claude_replay::Part>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Resolution {
+    tag: gents_lean_vocab::claude_replay::Tag,
+    origin: String,
+    issuer_family: String,
+    issuer_endpoint: String,
+    wire: String,
+    physical_header: String,
+    complete: bool,
+    captured: Option<Vec<FlatItem>>,
+    expected_reasoning: Vec<ReasoningWitness>,
+}
+
+fn native_replay_wire(wire: &str) -> crate::claude_messages_body::ReplayWire {
+    use crate::claude_messages_body::ReplayWire;
+    match wire {
+        "claude_messages" => ReplayWire::ClaudeMessages,
+        "responses" => ReplayWire::Responses,
+        other => panic!("unmodeled replay wire {other}"),
+    }
+}
+
+fn native_replay_resolution(
+    entry: &Resolution,
+) -> crate::claude_messages_body::ResolvedReplayEvidence {
+    use crate::claude_messages_body::{ReplayIssuer, ReplayOrigin, ResolvedReplayEvidence};
+    ResolvedReplayEvidence {
+        origin: match entry.origin.as_str() {
+            "claudeSubscription" => ReplayOrigin::ClaudeSubscription,
+            "acceptedProvider" => ReplayOrigin::AcceptedProvider,
+            "recoveredProvider" => ReplayOrigin::RecoveredProvider,
+            "foreign" => ReplayOrigin::Foreign,
+            "missing" => ReplayOrigin::Missing,
+            "ambiguous" => ReplayOrigin::Ambiguous,
+            other => panic!("unmodeled replay origin {other}"),
+        },
+        issuer: ReplayIssuer {
+            family: entry.issuer_family.clone(),
+            endpoint: entry.issuer_endpoint.clone(),
+        },
+        wire: native_replay_wire(&entry.wire),
+        physical_header: entry.physical_header.clone(),
+        complete: entry.complete,
+        captured: entry.captured.as_deref().map(native_flat_items),
+        reasoning: entry
+            .expected_reasoning
+            .iter()
+            .map(|block| {
+                (
+                    usize::try_from(block.block_index).expect("block index fits"),
+                    gents_lean_vocab::claude_replay::reasoning_parts(&block.parts),
+                )
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn generated_reasoning_suffix_cases_bind_native_selection() {
+    use crate::claude_messages_body::{
+        project_recovered_prefix, replay_stage, select_replay, ReplayIssuer, TaggedAssistantRow,
+    };
+    gents_lean_vocab::families::contracts_prompt_assembly_reasoning_suffix::replay(|case| {
+        let rows: Vec<gents_lean_vocab::claude_replay::Row> = recode(&case.rows);
+        let entries: Vec<Resolution> = recode(&case.resolutions);
+        let native_rows = rows
+            .iter()
+            .map(|row| TaggedAssistantRow {
+                source: row.source.as_ref().map(native_replay_tag),
+                physical_header: row.physical_header.clone(),
+                block_indices: row.block_indices(),
+                id: None,
+                content: gents_lean_vocab::claude_replay::assistant_content(&row.blocks),
+            })
+            .collect::<Vec<_>>();
+        let issuer = ReplayIssuer {
+            family: case.issuer_family.clone(),
+            endpoint: case.issuer_endpoint.clone(),
+        };
+        let wire = native_replay_wire(&case.wire);
+        let resolutions = entries
+            .iter()
+            .map(|entry| {
+                (
+                    native_replay_tag(&entry.tag),
+                    native_replay_resolution(entry),
+                )
+            })
+            .collect::<Vec<_>>();
+        let resolve = |tag: &crate::claude_messages_body::ReplayTag| {
+            resolutions
+                .iter()
+                .filter(|(candidate, _)| candidate == tag)
+                .map(|(_, evidence)| evidence.clone())
+                .collect::<Vec<_>>()
+        };
+        let projected = project_recovered_prefix(&native_rows, resolve);
+        let stage = replay_stage(&projected, &issuer, wire, resolve);
+        let replayed = select_replay(
+            &projected,
+            &issuer,
+            wire,
+            resolve,
+            &native_flat_items(&recode::<_, Vec<FlatItem>>(&case.assembled)),
+        );
+        let mut tags = known_tags(&rows);
+        tags.extend(entries.iter().map(|entry| entry.tag.clone()));
+        let wire_rows = |native: &[TaggedAssistantRow]| {
+            wire_assistant_rows(native, &rows, &tags)
+                .into_iter()
+                .map(|(row, id)| {
+                    assert_eq!(id, None, "{}: replay rows carry no message id", case.name);
+                    row
+                })
+                .collect::<Vec<_>>()
+        };
+        gents_lean_vocab::families::contracts_prompt_assembly_reasoning_suffix::ReasoningSuffixOutput {
+            stage: recode(&wire_rows(&stage)),
+            replay: recode(&wire_rows(&replayed)),
+        }
+    });
+}

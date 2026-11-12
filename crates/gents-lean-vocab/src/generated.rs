@@ -461,10 +461,6 @@ pub fn lean_prompt_assembly_layer_cases() -> &'static [LeanPromptAssemblyLayerCa
     &lean_contract_snapshot().prompt_assembly_layer_cases
 }
 
-pub fn lean_prompt_assembly_reasoning_suffix_cases() -> &'static [LeanPromptAssemblyReasoningSuffixCase] {
-    &lean_contract_snapshot().prompt_assembly_reasoning_suffix_cases
-}
-
 pub fn lean_prompt_assembly_repair_cases() -> &'static [LeanPromptAssemblyRepairCase] {
     &lean_contract_snapshot().prompt_assembly_repair_cases
 }
@@ -1970,21 +1966,6 @@ pub enum LeanClaimedDid {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClaudeCheckpointResolution {
-    pub tag: LeanCanonicalCoordinate,
-    pub origin: LeanClaudeReplayOrigin,
-    pub issuer_family: String,
-    pub issuer_endpoint: String,
-    pub wire: LeanReasoningReplayWire,
-    pub physical_header: String,
-    pub complete: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub captured: Option<Vec<LeanReplayFlatItem>>,
-    pub expected_reasoning: Vec<LeanClaudeReasoningWitness>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct LeanClaudeContentStep {
     #[serde(deserialize_with = "required_nullable")]
     pub provisional_thinking: Option<String>,
@@ -2000,13 +1981,6 @@ pub struct LeanClaudeReasoningPart {
     pub kind: String,
     pub payload: String,
     pub signature: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClaudeReasoningWitness {
-    pub block_index: usize,
-    pub parts: Vec<LeanClaudeReplayInputPart>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -2028,17 +2002,6 @@ pub struct LeanClaudeReplayInputPart {
     pub kind: String,
     pub payload: Vec<u8>,
     pub signature: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum LeanClaudeReplayOrigin {
-    ClaudeSubscription,
-    AcceptedProvider,
-    RecoveredProvider,
-    Foreign,
-    Missing,
-    Ambiguous,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -3267,9 +3230,6 @@ pub struct LeanContractSnapshot {
         LeanPromptAssemblyClaudeThinkingStreamCase,
     >,
     pub prompt_assembly_service_tier_cases: Vec<LeanPromptAssemblyServiceTierCase>,
-    pub prompt_assembly_reasoning_suffix_cases: Vec<
-        LeanPromptAssemblyReasoningSuffixCase,
-    >,
     pub protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub durable_reduction_cases: Vec<LeanDurableReductionCase>,
@@ -9367,20 +9327,6 @@ pub struct LeanPromptAssemblyLayerCase {
     pub slots: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyReasoningSuffixCase {
-    pub name: String,
-    pub issuer_family: String,
-    pub issuer_endpoint: String,
-    pub wire: LeanReasoningReplayWire,
-    pub rows: Vec<LeanClaudeTaggedReplayRow>,
-    pub resolutions: Vec<LeanClaudeCheckpointResolution>,
-    pub stage: Vec<LeanClaudeTaggedReplayRow>,
-    pub assembled: Vec<LeanReplayFlatItem>,
-    pub replay: Vec<LeanClaudeTaggedReplayRow>,
-}
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct LeanPromptAssemblyRepairCase {
     pub name: String,
@@ -9717,13 +9663,6 @@ pub enum LeanReasoningDeltaPart {
     Text { bytes: Vec<u8> },
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanReasoningReplayWire {
-    ClaudeMessages,
-    Responses,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanReasoningSignatureCase {
@@ -9957,20 +9896,6 @@ pub struct LeanRepairedProjectionObservation {
     pub result: String,
     pub output_tokens: Option<u64>,
     pub projected_source: Option<Vec<u64>>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanReplayFlatItem {
-    pub kind: LeanReplayFlatKind,
-    pub bytes: Vec<u8>,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanReplayFlatKind {
-    Ordinary,
-    Reasoning,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

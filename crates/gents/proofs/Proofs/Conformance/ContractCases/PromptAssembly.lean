@@ -1469,6 +1469,7 @@ def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCas
 
 structure PromptAssemblyReasoningSuffixCase where
   name : String
+  context : List UInt8
   issuer : PromptAssembly.ClaudeMap.ReplayIssuer
   wire : PromptAssembly.ClaudeMap.ReplayWire
   rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
@@ -1478,7 +1479,7 @@ structure PromptAssemblyReasoningSuffixCase where
   replay : List PromptAssembly.ClaudeMap.TaggedReplayRow
   deriving Repr
 
-private def resolveFrom (resolutions : List PromptAssemblyClaudeCheckpointResolution)
+def resolveFrom (resolutions : List PromptAssemblyClaudeCheckpointResolution)
     (tag : PromptAssembly.ClaudeMap.ReplayTag) :
     List PromptAssembly.ClaudeMap.ResolvedReplayEvidence :=
   (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
@@ -1492,7 +1493,7 @@ private def reasoningSuffixCase (name : String) (context : List UInt8)
   let resolve := resolveFrom resolutions
   let projected := rows.map (PromptAssembly.ClaudeMap.projectRecoveredPrefix resolve)
   let stage := PromptAssembly.ClaudeMap.replayStage projected issuer wire resolve
-  { name, issuer, wire, rows, resolutions, stage,
+  { name, context, issuer, wire, rows, resolutions, stage,
     assembled := replayCaseAssemble wire context stage,
     replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix projected issuer wire
       resolve (replayCaseAssemble wire context) }

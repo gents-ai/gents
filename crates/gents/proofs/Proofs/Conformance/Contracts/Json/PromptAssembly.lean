@@ -870,25 +870,6 @@ private def claudeCheckpointResolutionJson
     ",\"expected_reasoning\":" ++
       claudeReasoningWitnessJson resolution.evidence.reasoning ++ "}"
 
-def promptAssemblyReasoningSuffixCaseJson
-    (witness : PromptAssemblyReasoningSuffixCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"issuer_family\":" ++ jsonString witness.issuer.family ++
-    ",\"issuer_endpoint\":" ++ jsonString witness.issuer.endpoint ++
-    ",\"wire\":" ++
-      (match witness.wire with
-       | .claudeMessages => jsonString "claude_messages"
-       | .responses => jsonString "responses") ++
-    ",\"rows\":" ++ jsonArray (witness.rows.map claudeTaggedReplayRowJson) ++
-    ",\"resolutions\":" ++
-      jsonArray (witness.resolutions.map claudeCheckpointResolutionJson) ++
-    ",\"stage\":" ++ jsonArray (witness.stage.map claudeTaggedReplayRowJson) ++
-    ",\"assembled\":" ++ replayFlatItemsJson witness.assembled ++
-    ",\"replay\":" ++ jsonArray (witness.replay.map claudeTaggedReplayRowJson) ++ "}"
-
-def promptAssemblyReasoningSuffixCasesJson : String :=
-  jsonArray (promptAssemblyReasoningSuffixCases.map promptAssemblyReasoningSuffixCaseJson)
-
 def auxiliaryKindName : CanonicalOutput.AuxiliaryKind → String
   | .compaction => "compaction"
   | .compactionFallback => "compaction_fallback"
@@ -1138,6 +1119,48 @@ def promptAssemblyClaudeCheckpoint : Family ClaudeCheckpointInput ClaudeCheckpoi
           | .ok replay => ("ok", replay.map (·.map ReplayBlockWire.ofModel))
         { outcome, prefixRows := checkpoint.prefixRows.map .ofModel, prefixCarriers
           retained := checkpoint.retained.map .ofModel, retainedCarriers, replay }
+
+structure ReasoningSuffixInput where
+  name : String
+  issuerFamily : String
+  issuerEndpoint : String
+  wire : String
+  context : List Nat
+  rows : List ReplayRowWire
+  resolutions : List ReplayResolutionWire
+  /-- The flattened request the stage rows assemble into, which production
+  compares a captured prefix against. -/
+  assembled : List ReplayFlatItemWire
+  deriving Lean.ToJson
+
+structure ReasoningSuffixOutput where
+  stage : List ReplayRowWire
+  replay : List ReplayRowWire
+  deriving Lean.ToJson
+
+/-- The rows a request stages for reasoning replay and the rows it replays
+after restoring the historical reasoning suffix: production
+`project_recovered_prefix`, `replay_stage` and `select_replay`. -/
+@[conformance_family]
+def promptAssemblyReasoningSuffix : Family ReasoningSuffixInput ReasoningSuffixOutput where
+  inputs := promptAssemblyReasoningSuffixCases.map fun c =>
+    { name := c.name, issuerFamily := c.issuer.family, issuerEndpoint := c.issuer.endpoint
+      wire := replayWireName c.wire, context := natsOfBytes c.context
+      rows := c.rows.map .ofModel, resolutions := c.resolutions.map ReplayResolutionWire.ofModel
+      assembled := c.assembled.map ReplayFlatItemWire.ofModel }
+  model := fun i =>
+    let issuer : PromptAssembly.ClaudeMap.ReplayIssuer :=
+      { family := i.issuerFamily, endpoint := i.issuerEndpoint }
+    let wire := replayWireOfName i.wire
+    let resolve := resolveFrom (i.resolutions.map ReplayResolutionWire.toModel)
+    let projected := (i.rows.map ReplayRowWire.toModel).map
+      (PromptAssembly.ClaudeMap.projectRecoveredPrefix resolve)
+    { stage := (PromptAssembly.ClaudeMap.replayStage projected issuer wire resolve).map .ofModel
+      replay := (PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix projected issuer wire
+        resolve (replayCaseAssemble wire (bytesOfNats i.context))).map .ofModel }
+
+example : promptAssemblyReasoningSuffixCases.any
+    (fun c => (c.name.splitOn "/before-turn-").length > 1) = true := by native_decide
 
 def protectedReplayCompactionCaseJson
     (witness : Compaction.ProtectedReplayCompactionCase) : String :=

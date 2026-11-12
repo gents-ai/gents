@@ -1,7 +1,7 @@
 use gents_inference::llm::message::{AssistantContent, Message, ToolCall, ToolResult, UserContent};
 
 use gents_lean_vocab::{
-    native_claude_reasoning_parts, native_claude_replay_content,
+    native_claude_replay_content,
 };
 
 fn native_replay_tag(
@@ -58,73 +58,6 @@ fn native_replay_tag(
         request_doc_id: format!("request-{}", tag.request),
         source,
     }
-}
-
-fn native_replay_origin(
-    origin: &gents_lean_vocab::LeanClaudeReplayOrigin,
-) -> gents_loop::claude_messages_body::ReplayOrigin {
-    use gents_lean_vocab::LeanClaudeReplayOrigin as Lean;
-    use gents_loop::claude_messages_body::ReplayOrigin as Native;
-    match origin {
-        Lean::ClaudeSubscription => Native::ClaudeSubscription,
-        Lean::AcceptedProvider => Native::AcceptedProvider,
-        Lean::RecoveredProvider => Native::RecoveredProvider,
-        Lean::Foreign => Native::Foreign,
-        Lean::Missing => Native::Missing,
-        Lean::Ambiguous => Native::Ambiguous,
-    }
-}
-
-fn native_replay_wire(
-    wire: gents_lean_vocab::LeanReasoningReplayWire,
-) -> gents_loop::claude_messages_body::ReplayWire {
-    use gents_lean_vocab::LeanReasoningReplayWire as Lean;
-    use gents_loop::claude_messages_body::ReplayWire as Native;
-    match wire {
-        Lean::ClaudeMessages => Native::ClaudeMessages,
-        Lean::Responses => Native::Responses,
-    }
-}
-
-fn native_replay_resolution(
-    entry: &gents_lean_vocab::LeanClaudeCheckpointResolution,
-) -> gents_loop::claude_messages_body::ResolvedReplayEvidence {
-    use gents_loop::claude_messages_body::{ReplayIssuer, ResolvedReplayEvidence};
-    ResolvedReplayEvidence {
-        origin: native_replay_origin(&entry.origin),
-        issuer: ReplayIssuer {
-            family: entry.issuer_family.clone(),
-            endpoint: entry.issuer_endpoint.clone(),
-        },
-        wire: native_replay_wire(entry.wire),
-        physical_header: entry.physical_header.clone(),
-        complete: entry.complete,
-        captured: entry.captured.as_deref().map(native_flat_items),
-        reasoning: entry
-            .expected_reasoning
-            .iter()
-            .map(|block| {
-                (
-                    block.block_index,
-                    native_claude_reasoning_parts(&block.parts),
-                )
-            })
-            .collect(),
-    }
-}
-
-fn native_flat_items(
-    items: &[gents_lean_vocab::LeanReplayFlatItem],
-) -> Vec<gents_loop::provider_input::replay_frontier::FlatItem> {
-    use gents_lean_vocab::LeanReplayFlatKind;
-    use gents_loop::provider_input::replay_frontier::FlatItem;
-    items
-        .iter()
-        .map(|item| match item.kind {
-            LeanReplayFlatKind::Ordinary => FlatItem::Ordinary(item.bytes.clone()),
-            LeanReplayFlatKind::Reasoning => FlatItem::Reasoning(item.bytes.clone()),
-        })
-        .collect()
 }
 
 fn native_tagged_replay_row(
@@ -208,68 +141,6 @@ fn native_modeled_provider_view(
         "every modeled row needs an assistant position"
     );
     view
-}
-
-#[test]
-fn generated_reasoning_suffix_cases_bind_native_selection() {
-    use gents_lean_vocab::lean_prompt_assembly_reasoning_suffix_cases;
-    use gents_loop::claude_messages_body::{replay_stage, select_replay, ReplayIssuer};
-
-    let cases = lean_prompt_assembly_reasoning_suffix_cases();
-    assert!(
-        cases.iter().any(|case| case.name.contains("/before-turn-")),
-        "Lean emitted no replay scenario steps"
-    );
-    for case in cases {
-        let rows = case
-            .rows
-            .iter()
-            .map(native_tagged_replay_row)
-            .collect::<Vec<_>>();
-        let issuer = ReplayIssuer {
-            family: case.issuer_family.clone(),
-            endpoint: case.issuer_endpoint.clone(),
-        };
-        let wire = native_replay_wire(case.wire);
-        let resolutions = case
-            .resolutions
-            .iter()
-            .map(|entry| {
-                (
-                    native_replay_tag(&entry.tag),
-                    native_replay_resolution(entry),
-                )
-            })
-            .collect::<Vec<_>>();
-        let resolve = |tag: &gents_loop::claude_messages_body::ReplayTag| {
-            resolutions
-                .iter()
-                .filter(|(candidate, _)| candidate == tag)
-                .map(|(_, evidence)| evidence.clone())
-                .collect::<Vec<_>>()
-        };
-        let rows = gents_loop::claude_messages_body::project_recovered_prefix(&rows, resolve);
-        let stage = replay_stage(&rows, &issuer, wire, resolve);
-        let expected_stage = case
-            .stage
-            .iter()
-            .map(native_tagged_replay_row)
-            .collect::<Vec<_>>();
-        assert_eq!(stage, expected_stage, "{}: stage rows", case.name);
-        let actual = select_replay(
-            &rows,
-            &issuer,
-            wire,
-            resolve,
-            &native_flat_items(&case.assembled),
-        );
-        let expected = case
-            .replay
-            .iter()
-            .map(native_tagged_replay_row)
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected, "{}", case.name);
-    }
 }
 
 fn replay_codec_outcome(
