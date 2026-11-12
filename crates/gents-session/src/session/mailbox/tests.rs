@@ -955,6 +955,11 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
                 .unwrap()
                 .unwrap()
                 .status;
+            assert!(
+                status == "open" || status == "acted",
+                "the sweep closes a due row as acted, got {status} for row {}",
+                row.doc_id
+            );
             final_rows.push(RowStatus {
                 doc_id: row.doc_id,
                 is_open: status == "open",
