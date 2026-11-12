@@ -224,6 +224,51 @@ theorem grant_derives_all (s : State) (request member : String)
   · refine Or.inr (List.mem_map.mpr ⟨t, List.mem_filter.mpr ⟨?_, by rw [Bool.not_eq_true']; exact Bool.eq_false_iff.mpr h⟩, rfl⟩)
     exact List.mem_filter.mpr ⟨d, by simp [independent, h]⟩
 
+/-- Revoking a membership withdraws every live receipt its member holds,
+whichever request issued it, and every tuple only those receipts accounted
+for. A renewal is a new request with its own receipt, so withdrawing by
+request alone would leave the earlier generation's receipt accounting for
+the member's Node administration after revocation. Decision (maintainer,
+2026-11-11, #3681): a revoked member keeps no authority any enrollment of
+its membership derived. -/
+def revokeMember (s : State) (member : String) : State :=
+  { held := s.held.filter (fun a =>
+      !(a.subject == member && s.receipts.any (accounts · member a.tuple)))
+    receipts := s.receipts.map (fun r =>
+      if r.member == member then { r with withdrawn := true } else r) }
+
+/-- After a membership is revoked no live receipt accounts for its member. -/
+theorem revokeMember_leaves_no_live_receipt (s : State) (member : String) (t : Tuple) :
+    accounted (revokeMember s member) member t = false := by
+  simp only [accounted, revokeMember, List.any_map, Bool.eq_false_iff]
+  intro h
+  obtain ⟨r, _, hr⟩ := List.any_eq_true.mp h
+  by_cases hm : r.member = member
+  · simp [Function.comp, accounts, hm] at hr
+  · simp [Function.comp, accounts, hm] at hr
+
+/-- After a membership is revoked its member holds no tuple any of its
+enrollments accounted for. -/
+theorem revokeMember_withdraws_every_generation (s : State) (member : String) (t : Tuple)
+    (acc : accounted s member t = true) : holds (revokeMember s member) member t = false := by
+  simp only [holds, revokeMember, Bool.eq_false_iff]
+  intro h
+  rw [List.contains_iff_mem, List.mem_filter] at h
+  simp only [accounted] at acc
+  simp [acc] at h
+
+/-- Revoking a membership never removes an independent grant. -/
+theorem revokeMember_preserves_independent (s : State) (member subject : String) (t : Tuple)
+    (indep : independent s subject t = true) :
+    (revokeMember s member).held.contains ⟨subject, t⟩ = true := by
+  simp only [independent, holds, accounted, Bool.and_eq_true, Bool.not_eq_true'] at indep
+  rw [List.contains_iff_mem] at indep ⊢
+  simp only [revokeMember, List.mem_filter]
+  refine ⟨indep.1, ?_⟩
+  by_cases hs : subject = member
+  · subst hs; simp [indep.2]
+  · simp [hs]
+
 /-! ### Operator decisions -/
 
 /-- An operator's decision on a pending client enrollment. Only a client
@@ -245,11 +290,16 @@ request's live receipt. -/
 inductive Decision where
   | approve
   | deny
+  | revoke
   deriving DecidableEq, Repr
 
+/-- Denying withdraws only the denied request's grant: the member's current
+membership, if any, stands. Revoking ends the membership and withdraws every
+generation's grant (`revokeMember`). -/
 def applyDecision (s : State) (request member : String) : Decision → State
   | .approve => grant s request member
   | .deny => revoke s request
+  | .revoke => revokeMember s member
 
 /-- An approval leaves its member holding every derived tuple. -/
 theorem approve_derives_all (s : State) (request member : String)
@@ -304,6 +354,15 @@ theorem deny_withdraws_an_unapproved_grant :
 /-- Denying a request nothing was granted for grants nothing. -/
 theorem deny_grants_nothing :
     heldOf (applyDecision fresh "request" "member" .deny) "member" = [] := by decide
+
+/-- A renewed membership: revoking only the current request's receipt leaves
+the first generation's receipt holding every derived tuple, which revoking
+the membership withdraws. -/
+theorem revoke_after_renewal_withdraws_every_generation :
+    let s := grant (grant fresh "first" "member") "renewal" "member"
+    heldOf (revoke s "renewal") "member" = derived.map Tuple.name ∧
+      heldOf (revokeMember s "member") "member" = [] ∧
+      heldOf (revokeMember s "member") "owner" = ["node-administrator"] := by decide
 
 /-! ### Who may approve
 

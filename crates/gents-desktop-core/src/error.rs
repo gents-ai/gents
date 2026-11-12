@@ -413,6 +413,29 @@ impl std::error::Error for OperationCause {
     }
 }
 
+/// A mailbox operation the shared handler refused or failed, as the message
+/// the UI shows: what happened, then the next step in desktop terms.
+pub fn mailbox_operation_failure(
+    error: gents_protocol::operations::mailbox::MailboxOperationError,
+) -> anyhow::Error {
+    use gents_protocol::operations::NextCall;
+    let next = match error.recovery() {
+        NextCall::List { .. } => "Reload the mailbox; this item may already be closed.",
+        NextCall::Inspect { .. } => "Open the item again and reply to what it now shows.",
+        NextCall::VerbHelp { .. } | NextCall::Preview { .. } | NextCall::Verb { .. } => {
+            "Answer the question, or skip it when it is optional."
+        }
+        NextCall::ResourceHelp { .. } => "Check the runtime connection and try again.",
+    };
+    let message = format!(
+        "{}. {next}",
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .trim_end_matches('.')
+    );
+    anyhow::Error::new(error).context(message)
+}
+
 fn refusal_message(message: &str, next_call: gents_protocol::operations::NextCall) -> String {
     use gents_protocol::operations::NextCall;
     let next = match next_call {

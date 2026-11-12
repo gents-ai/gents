@@ -1138,9 +1138,10 @@ def caseCoverage : List CoverageEntry :=
       "inference_visibility_cases"
       "InferenceVisibilityCases")
       "client-shell" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "client_optimistic_send_cases"
-      "ClientOptimisticSendCases")
+      "ClientOptimisticSendCases"
+      "The desktop chat-send replay was removed when desktop sends moved onto the shared request handler; the replay must be rebuilt against that handler.")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_telemetry_cases"

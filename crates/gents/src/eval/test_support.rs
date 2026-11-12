@@ -1,5 +1,5 @@
-use crate::eval::documents::*;
-use crate::eval::{OutcomeKind, ProviderReason, TAXONOMY_VERSION};
+use gents::eval::documents::*;
+use gents::eval::{OutcomeKind, ProviderReason, TAXONOMY_VERSION};
 use gents_documents::{EvalSplit, EvalTier};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ pub(crate) struct HeldEvalFixture {
     pub(crate) node_did: String,
     pub(crate) user_did: String,
     pub(crate) other_did: String,
-    _node: Arc<crate::defra_node::Node>,
+    _node: Arc<gents::defra_node::Node>,
     _user: gents_store::identity::KeyIdentity,
     _other: gents_store::identity::KeyIdentity,
     _runtime: gents_store::identity::KeyIdentity,
@@ -37,10 +37,10 @@ impl HeldEvalFixture {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
         let node = Arc::new(
-            crate::defra_node::Node::builder()
+            gents::defra_node::Node::builder()
                 .enable_signing()
                 .with_node_identity_did(runtime.did())
-                .with_http(crate::defra_node::HttpConfig::with_listener(listener)?)
+                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
                 .build()
                 .await?,
         );

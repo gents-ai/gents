@@ -159,7 +159,6 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         include_str!("../../../gents-cli/src/request_helpers.rs"),
         include_str!("../../../gents-cli/src/commands/config/task_run.rs"),
         include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"),
-        include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/retry.rs"),
     ];
     for source in writers {
         assert!(
@@ -220,9 +219,6 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
                 include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
                 include_str!(
                     "../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"
-                ),
-                include_str!(
-                    "../../../gents-desktop-core/src/client/mutations/chat/request/retry.rs"
                 ),
             ),
         ),

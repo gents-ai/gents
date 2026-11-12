@@ -27,7 +27,8 @@ pub use enrollment_approval::{
     EnrollmentApprovalError,
 };
 pub use enrollment_grant::{
-    grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant, plan_withdrawal,
+    grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant,
+    plan_membership_withdrawal, plan_withdrawal,
     EnrollmentGrantError, EnrollmentGrantOutcome, EnrollmentGrantReceipt, EnrollmentGrantTuple,
     EnrollmentGrantWithdrawal,
 };

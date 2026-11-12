@@ -46,6 +46,7 @@ def tupleOf (name : String) : Tuple :=
 def applyStep (s : State) (step : StepInput) : State :=
   if step.action == "grant" then grant s step.request step.member
   else if step.action == "independent" then grantIndependent s ⟨step.member, tupleOf step.tuple⟩
+  else if step.action == "revoke_member" then revokeMember s step.member
   else revoke s step.request
 
 def observe (subjects : List String) (s : State) : StepObservation :=
@@ -69,6 +70,9 @@ def independentStep (member tuple : String) : StepInput :=
 def revokeStep (request : String) : StepInput :=
   { action := "revoke", request, member := "", tuple := "" }
 
+def revokeMemberStep (member : String) : StepInput :=
+  { action := "revoke_member", request := "", member, tuple := "" }
+
 def traceCases : List (String × List StepInput) :=
   [("grant-then-revoke-restores",
       [independentStep "other" "node-administrator", grantStep "a" "member", revokeStep "a"]),
@@ -80,7 +84,13 @@ def traceCases : List (String × List StepInput) :=
    ("revoke-is-idempotent", [grantStep "a" "member", revokeStep "a", revokeStep "a"]),
    ("grant-is-idempotent", [grantStep "a" "member", grantStep "a" "member", revokeStep "a"]),
    ("revoke-without-receipt-changes-nothing",
-      [independentStep "member" "update-document", revokeStep "a"])]
+      [independentStep "member" "update-document", revokeStep "a"]),
+   ("revoking-a-renewed-membership-withdraws-every-generation",
+      [independentStep "other" "node-administrator", grantStep "first" "member",
+       grantStep "renewal" "member", revokeMemberStep "member"]),
+   ("revoking-a-membership-preserves-independent-and-other-members",
+      [independentStep "member" "read-document", grantStep "a" "member",
+       grantStep "b" "other", revokeMemberStep "member"])]
 
 @[conformance_family]
 def cases : Family CaseInput TraceOutput where

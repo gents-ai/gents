@@ -16,11 +16,17 @@ pub async fn observe_mailbox_item(
         !request.item_id.trim().is_empty(),
         "a mailbox item is required"
     );
-    gents_session::session::mailbox::load_mailbox_item_with_access(
+    use gents_protocol::operations::mailbox::MailboxOperationError;
+    let item = gents_session::operations::mailbox::get(
         &core.operator_access(&request.node_did)?,
         &request.item_id,
     )
-    .await?
+    .await;
+    match item {
+        Ok(item) => Some(item),
+        Err(MailboxOperationError::ItemMissing) => None,
+        Err(error) => return Err(gents_desktop_core::error::mailbox_operation_failure(error)),
+    }
     .map(|item| {
         anyhow::ensure!(
             item.node_did == request.node_did,
@@ -69,68 +75,31 @@ pub(crate) fn question_reply_content(
     node_did: &str,
     agent_did: Option<&str>,
     answer: &gents_protocol::mailbox_question::MailboxQuestionAnswer,
-) -> Result<(
-    String,
-    Option<gents_protocol::mailbox_question::MailboxQuestionReply>,
-)> {
+) -> Result<gents_protocol::operations::mailbox::PreparedMailboxReply> {
+    use gents_protocol::operations::mailbox::{MailboxReply, MailboxReplyRoute};
     let item_id = item_id
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .context("an answer requires causedBySourceDocId")?;
-    let item = start_mailbox_request(core, item_id)?;
-    if gents_protocol::mailbox_question::question_requires_reply_receipt(
-        item.payload.as_deref().unwrap_or_default(),
-    ) {
-        anyhow::ensure!(
-            agent_did == Some(item.target_agent_did.as_str()),
-            "an answer must name the agent that asked the question"
-        );
-    }
-    let content = question_reply_for_item(&item, session_id, node_did, answer)?;
-    let payload = item
-        .payload
-        .as_deref()
-        .context("question payload is unavailable")?;
-    let evidence = if gents_protocol::mailbox_question::question_requires_reply_receipt(payload) {
-        Some(gents_protocol::mailbox_question::MailboxQuestionReply::new(
-            &item.item_id,
-            &item.title,
-            item.summary.as_deref(),
-            payload,
-            item.request_id.as_deref(),
-            answer.clone(),
-        )?)
-    } else {
-        None
-    };
-    Ok((content, evidence))
-}
-
-fn question_reply_for_item(
-    item: &MailboxItemView,
-    session_id: Option<&str>,
-    node_did: &str,
-    answer: &gents_protocol::mailbox_question::MailboxQuestionAnswer,
-) -> Result<String> {
-    if item.kind != "ask" || item.action != "start_request" {
-        bail!("MailboxItem is not a question");
-    }
-    if item.session_id.is_none() || item.session_id.as_deref() != session_id.map(str::trim) {
-        bail!("an answer must be sent to the question's session");
-    }
-    if item.target_node_did != node_did {
-        bail!("an answer must be sent to the agent that asked");
-    }
-    let question = gents_protocol::mailbox_question::MailboxQuestion::from_payload(
-        item.payload.as_deref().unwrap_or_default(),
-    )?;
-    if question.version >= 2 {
-        anyhow::ensure!(
-            answer.question_hash.is_some() && answer.question_hash == item.question_hash,
-            "the question changed; reload its current prompt before replying"
-        );
-    }
-    Ok(question.reply_content(&item.title, answer)?)
+    let snapshot = core.store().snapshot();
+    let row = snapshot
+        .mailbox_items
+        .iter()
+        .find(|row| row.doc_id == item_id)
+        .context("MailboxItem not found")?;
+    gents_session::operations::mailbox::prepare_reply(
+        row.into(),
+        MailboxReply::Answer(answer.clone()),
+        &MailboxReplyRoute {
+            session_id: Some(session_id.unwrap_or_default().to_owned()),
+            node_did: Some(node_did.to_owned()),
+            agent_did: agent_did
+                .map(str::trim)
+                .filter(|agent| !agent.is_empty())
+                .map(ToOwned::to_owned),
+        },
+    )
+    .map_err(gents_desktop_core::error::mailbox_operation_failure)
 }
 
 pub async fn dismiss_mailbox(core: &ClientCore, item_id: &str) -> Result<()> {
@@ -140,40 +109,6 @@ pub async fn dismiss_mailbox(core: &ClientCore, item_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_protocol::mailbox_question::{
-        MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
-    };
-
-    fn question_item() -> MailboxItemView {
-        let question = MailboxQuestion {
-            version: MAILBOX_QUESTION_VERSION,
-            prompt: "Ship it?".into(),
-            options: ["yes", "no"]
-                .map(|id| MailboxQuestionOption {
-                    id: id.into(),
-                    label: id.to_uppercase(),
-                    description: None,
-                    prompt: None,
-                })
-                .to_vec(),
-            multi_select: false,
-            allow_free_text: false,
-            optional: None,
-            recommended_order: None,
-        };
-        let row: gents_protocol::row::MailboxItemRow = serde_json::from_value(serde_json::json!({
-            "_docID": "item-1", "item_key": "k", "requester_did": "did:person",
-            "node_did": "did:agent", "status": "open", "kind": "ask",
-            "action": "start_request", "title": "Release",
-            "payload": serde_json::to_string(&question).unwrap(),
-            "source_kind": "agent", "source_id": "s", "session_id": "session-1",
-            "target_node_did": "did:agent", "target_agent_did": "engineer",
-            "created_at": "2026-09-29T00:00:00Z"
-        }))
-        .unwrap();
-        MailboxItemView::from(&row)
-    }
-
     #[test]
     fn exact_observation_preserves_closed_items_and_requester_provenance() {
         let mut item: gents_session::session::mailbox::MailboxItem =
@@ -202,64 +137,5 @@ mod tests {
             }))
             .is_err()
         );
-    }
-
-    #[test]
-    fn answer_renders_from_the_question_and_addresses_its_session() {
-        let item = question_item();
-        let answer = MailboxQuestionAnswer {
-            option_ids: vec!["yes".into()],
-            free_text: None,
-            skip: None,
-            question_hash: item.question_hash.clone(),
-        };
-        assert_eq!(
-            question_reply_for_item(&item, Some("session-1"), "did:agent", &answer).unwrap(),
-            "Decision on Release: YES (yes)"
-        );
-        assert!(question_reply_for_item(&item, Some("other"), "did:agent", &answer).is_err());
-        assert!(question_reply_for_item(&item, None, "did:agent", &answer).is_err());
-        assert!(question_reply_for_item(&item, Some("session-1"), "did:other", &answer).is_err());
-        let unknown = MailboxQuestionAnswer {
-            option_ids: vec!["maybe".into()],
-            free_text: None,
-            skip: None,
-            question_hash: item.question_hash.clone(),
-        };
-        assert!(question_reply_for_item(&item, Some("session-1"), "did:agent", &unknown).is_err());
-        let mut flag = item.clone();
-        flag.kind = "flag".into();
-        assert!(question_reply_for_item(&flag, Some("session-1"), "did:agent", &answer).is_err());
-    }
-
-    #[test]
-    fn skip_is_optional_and_keeps_the_original_question_scope() {
-        let mut item = question_item();
-        let mut skip = MailboxQuestionAnswer {
-            question_hash: item.question_hash.clone(),
-            skip: Some(true),
-            ..Default::default()
-        };
-        assert!(question_reply_for_item(&item, Some("session-1"), "did:agent", &skip).is_err());
-        let mut question = MailboxQuestion::from_payload(item.payload.as_deref().unwrap()).unwrap();
-        question.optional = Some(true);
-        item.payload = Some(serde_json::to_string(&question).unwrap());
-        item.question_hash = Some(
-            gents_protocol::mailbox_question::question_source_hash(
-                &item.title,
-                item.summary.as_deref(),
-                item.payload.as_deref().unwrap(),
-                item.request_id.as_deref(),
-            )
-            .unwrap(),
-        );
-        assert!(question_reply_for_item(&item, Some("session-1"), "did:agent", &skip).is_err());
-        skip.question_hash = item.question_hash.clone();
-        assert_eq!(
-            question_reply_for_item(&item, Some("session-1"), "did:agent", &skip).unwrap(),
-            "Skipped optional decision on Release."
-        );
-        assert!(question_reply_for_item(&item, Some("other"), "did:agent", &skip).is_err());
-        assert!(question_reply_for_item(&item, Some("session-1"), "did:other", &skip).is_err());
     }
 }

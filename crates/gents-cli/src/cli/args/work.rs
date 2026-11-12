@@ -15,9 +15,9 @@ pub(crate) enum JobCommand {
         about = "Follow one plugin job until it ends, is paused or awaits an answer; needs a running server"
     )]
     Watch(JobWatchArgs),
-    #[command(about = "Stop one plugin job and interrupt its children; local only")]
+    #[command(about = "Stop one plugin job and interrupt its children; needs a running server")]
     Stop(JobControlArgs),
-    #[command(about = "Pause one plugin job and interrupt its children; local only")]
+    #[command(about = "Pause one plugin job and interrupt its children; needs a running server")]
     Pause(JobControlArgs),
     #[command(
         about = "Turn a finished dynamic workflow run into an installed tool, wired into an agent"

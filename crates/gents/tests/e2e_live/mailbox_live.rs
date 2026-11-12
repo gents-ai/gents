@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents_session::session::mailbox::{list_mailbox_items_on, MailboxStatus};
+use gents_protocol::operations::mailbox::MailboxListInput;
+use gents_session::operations::mailbox::list;
 use gents_store::identity::NodeIdentity;
 
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
@@ -49,7 +50,13 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
         "completed"
     );
 
-    let items = list_mailbox_items_on(&turn.client, turn.user.did(), Some(MailboxStatus::Open))
+    let items = list(
+        &turn.client,
+        &MailboxListInput {
+            requester_did: Some(turn.user.did().to_owned()),
+            ..Default::default()
+        },
+    )
         .await
         .unwrap();
     assert_eq!(items.len(), 1);

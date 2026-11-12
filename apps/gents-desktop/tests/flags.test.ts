@@ -85,7 +85,7 @@ describe("flags read back from storage", () => {
     navWidth: 304,
     zoom: 1,
     sentTurn: "follow",
-    followUp: "steer",
+    followUp: "queue",
     pinnedSessions: [],
     flags: {},
     navLayout: { order: [], shown: {} },

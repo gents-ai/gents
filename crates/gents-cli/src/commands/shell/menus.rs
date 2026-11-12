@@ -30,7 +30,6 @@ use crate::commands::config::crud::{
     SCHEDULE_SPEC, SKILL_SPEC, TOOLS_SPEC, TRIGGER_SPEC,
 };
 use crate::commands::config::task_run::{enqueue_task_run_on, TaskRunOutput};
-use crate::commands::mailbox::served_items;
 use crate::commands::status::load_runtime_status_output;
 use crate::commands::task::load_task_inventory;
 
@@ -85,9 +84,12 @@ pub(super) async fn read_menu(
         MenuId::Tasks => load_task_inventory(&access, None)
             .await
             .map(|inventory| tasks(&inventory.tasks)),
-        MenuId::Mailbox => served_items(&access, false)
-            .await
-            .map(|items| mailbox(&items)),
+        MenuId::Mailbox => {
+            gents_session::operations::mailbox::list(&access, &Default::default())
+                .await
+                .map(|items| mailbox(&items))
+                .map_err(crate::commands::mailbox::failure)
+        }
         MenuId::Status => load_runtime_status_output(Some(home), &work.endpoint, node_did)
             .await
             .map(|output| status(&output)),
@@ -197,10 +199,15 @@ pub(super) async fn act(
                 .map_err(|error| format!("Couldn’t delete {label}: {error:#}"))
         }
         MenuAct::Dismiss { item } => {
-            gents_session::session::mailbox::dismiss_mailbox_item_on(&access, item)
+            gents_session::operations::mailbox::dismiss(&access, item)
                 .await
                 .map(|_| "dismissed".to_string())
-                .map_err(|error| format!("could not dismiss it: {error:#}"))
+                .map_err(|error| {
+                    format!(
+                        "could not dismiss it: {:#}",
+                        crate::commands::mailbox::failure(error)
+                    )
+                })
         }
         MenuAct::SetFolderAccess { path, access } => grant(home, path, access)
             .await

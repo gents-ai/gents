@@ -102,6 +102,18 @@ fn grant_and_revocation_planners_replay_lean_traces() {
                         }
                     }
                 }
+                "revoke_member" => {
+                    let member = step.member.as_str();
+                    let withdrawn = plan_membership_withdrawal(member, &receipts);
+                    held.retain(|(subject, tuple)| {
+                        !(subject == member && withdrawn.contains(tuple))
+                    });
+                    for receipt in &mut receipts {
+                        if receipt.member_did == member {
+                            receipt.withdrawn = true;
+                        }
+                    }
+                }
                 other => panic!("{}: unknown action {other}", input.name),
             }
             steps.push(observe(&input.subjects, &held, &receipts));
@@ -128,7 +140,7 @@ fn withdrawal_plan_retires_only_the_live_receipt_for_its_request() {
     let planned = EnrollmentGrantWithdrawal::plan("a", &[receipt("a", false), receipt("b", false)])
         .unwrap()
         .unwrap();
-    assert_eq!(planned.receipt_doc_id, "doc-a");
+    assert_eq!(planned.receipt_doc_ids, ["doc-a"]);
     assert!(
         planned.tuples.is_empty(),
         "b still accounts for every tuple"
