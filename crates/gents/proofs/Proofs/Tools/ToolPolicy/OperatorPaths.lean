@@ -130,4 +130,38 @@ theorem command_protection_rejects_existing_and_late_aliases :
       ∧ runProtection false [.capture, .addAlias, .revalidate] = [.allowed, .applied, .refused] := by
   decide
 
+inductive StagedObject where
+  | staged
+  | stagedAlias
+  | ordinary
+  deriving DecidableEq, Repr
+
+def StagedObject.isNamed : StagedObject → Bool
+  | .staged => true
+  | .stagedAlias => false
+  | .ordinary => false
+
+def StagedObject.sharesObject : StagedObject → Option Bool
+  | .staged => some true
+  | .stagedAlias => some true
+  | .ordinary => some false
+
+/-- A native path refuses an existing object exactly when the operator guard
+protects it; `ToolContext::resolve_path` and `resolve_path_allow_create` both
+apply that rule. -/
+def nativePathRefused (object : StagedObject) : Bool :=
+  isProtected object.isNamed object.sharesObject
+
+/-- Each mount in the cases holds exactly its own object, so the mount is refused
+exactly when that object is protected. Production inspects every regular file
+under the mount; a mount holding no other protected object is the premise. -/
+def mountRefused (object : StagedObject) : Bool :=
+  nativePathRefused object
+
+theorem staged_permission_objects_are_rejected_by_native_paths_and_plugin_mounts :
+    nativePathRefused .staged = true ∧ nativePathRefused .stagedAlias = true ∧
+      mountRefused .staged = true ∧ mountRefused .stagedAlias = true ∧
+      nativePathRefused .ordinary = false ∧ mountRefused .ordinary = false := by
+  decide
+
 end ToolPolicy.OperatorPaths
