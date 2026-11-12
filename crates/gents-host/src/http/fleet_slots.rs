@@ -196,58 +196,78 @@ struct SlotCounts {
 pub async fn load_fleet_slot_snapshot(graphql: &GraphqlEndpoint) -> Result<FleetSlotSnapshot> {
     let generated_at = Utc::now();
     let access = ConfigAccess::Graphql(graphql.clone());
-    let envelope = access.transact_readonly("views.http.fleet_slots", |txn| {
-        Box::pin(async move {
-            let nodes = txn.read_view(&gents_documents::views::config::VisibleNodes::new()).await?;
-            let mut data = FleetSlotQueryEnvelope {
-                agents: Vec::new(), profiles: Vec::new(), backends: Vec::new(),
-                calls: Vec::new(), requests: Vec::new(), node_readiness: Vec::new(),
-            };
-            for node in nodes {
-                let node_did = node.document.node_did;
-                let (agents, profiles, readiness, requests, calls) = txn.read_views(&(
-                    gents_documents::views::agents::AgentList::new(&node_did),
-                    gents_inference::views::profiles::ProfileList::new(&node_did),
-                    gents_store::views::runtime::NodeReadinessList::new(&node_did),
-                    gents_session::views::requests::RequestRows::new(
-                        gents_session::views::transcript::Scope::Node(node_did.clone()),
-                    ).processing(),
-                    gents_inference::views::activity::InferenceCalls::new(&node_did).active(),
-                )).await?;
-                data.agents.extend(agents.into_iter().map(|row| AgentRow {
-                    agent_did: row.agent.agent_did,
-                    node_did: row.agent.node_did,
-                    inference_profile_id: Some(row.agent.inference_profile_id),
-                    enabled: Some(row.agent.enabled),
-                }));
-                data.profiles.extend(profiles.into_iter().map(|row| InferenceProfileRow {
-                    profile_id: row.profile.profile_id,
-                    node_did: row.profile.node_did,
-                    backend_id: row.profile.backend_id,
-                }));
-                data.calls.extend(calls.into_iter().map(|row| InferenceCallRow {
-                    backend_id: row.backend_id,
-                    agent_did: row.agent_did,
-                    node_did: Some(row.node_did),
-                    call_state: row.call_state,
-                }));
-                data.requests.extend(requests);
-                data.node_readiness.extend(readiness);
-                let backends = gents_inference::views::backends::read_inventory_in_txn(
-                    txn, &gents_inference::views::backends::BackendList::new(&node_did),
-                ).await?;
-                data.backends.extend(backends.into_iter().map(|row| BackendRow {
-                    backend_id: row.metadata.backend_id,
-                    node_did: row.metadata.node_did,
-                    enabled: Some(row.metadata.enabled),
-                    max_concurrent: row.metadata.max_concurrent,
-                    max_queue_depth: row.metadata.max_queue_depth,
-                    probe_status: row.observation.and_then(|observation| observation.probe_status),
-                }));
-            }
-            Ok::<_, anyhow::Error>(data)
+    let envelope = access
+        .transact_readonly("views.http.fleet_slots", |txn| {
+            Box::pin(async move {
+                let nodes = txn
+                    .read_view(&gents_documents::views::config::VisibleNodes::new())
+                    .await?;
+                let mut data = FleetSlotQueryEnvelope {
+                    agents: Vec::new(),
+                    profiles: Vec::new(),
+                    backends: Vec::new(),
+                    calls: Vec::new(),
+                    requests: Vec::new(),
+                    node_readiness: Vec::new(),
+                };
+                for node in nodes {
+                    let node_did = node.document.node_did;
+                    let (agents, profiles, readiness, requests, calls) = txn
+                        .read_views(&(
+                            gents_documents::views::agents::AgentList::new(&node_did),
+                            gents_inference::views::profiles::ProfileList::new(&node_did),
+                            gents_store::views::runtime::NodeReadinessList::new(&node_did),
+                            gents_session::views::requests::RequestRows::new(
+                                gents_session::views::transcript::Scope::Node(node_did.clone()),
+                            )
+                            .processing(),
+                            gents_inference::views::activity::InferenceCalls::new(&node_did)
+                                .active(),
+                        ))
+                        .await?;
+                    data.agents.extend(agents.into_iter().map(|row| AgentRow {
+                        agent_did: row.agent.agent_did,
+                        node_did: row.agent.node_did,
+                        inference_profile_id: Some(row.agent.inference_profile_id),
+                        enabled: Some(row.agent.enabled),
+                    }));
+                    data.profiles
+                        .extend(profiles.into_iter().map(|row| InferenceProfileRow {
+                            profile_id: row.profile.profile_id,
+                            node_did: row.profile.node_did,
+                            backend_id: row.profile.backend_id,
+                        }));
+                    data.calls
+                        .extend(calls.into_iter().map(|row| InferenceCallRow {
+                            backend_id: row.backend_id,
+                            agent_did: row.agent_did,
+                            node_did: Some(row.node_did),
+                            call_state: row.call_state,
+                        }));
+                    data.requests.extend(requests);
+                    data.node_readiness.extend(readiness);
+                    let backends = gents_inference::views::backends::read_inventory_in_txn(
+                        txn,
+                        &gents_inference::views::backends::BackendList::new(&node_did),
+                    )
+                    .await?;
+                    data.backends.extend(backends.into_iter().map(|row| {
+                        BackendRow {
+                            backend_id: row.metadata.backend_id,
+                            node_did: row.metadata.node_did,
+                            enabled: Some(row.metadata.enabled),
+                            max_concurrent: row.metadata.max_concurrent,
+                            max_queue_depth: row.metadata.max_queue_depth,
+                            probe_status: row
+                                .observation
+                                .and_then(|observation| observation.probe_status),
+                        }
+                    }));
+                }
+                Ok::<_, anyhow::Error>(data)
+            })
         })
-    }).await?;
+        .await?;
     Ok(build_fleet_slot_snapshot(generated_at, envelope))
 }
 

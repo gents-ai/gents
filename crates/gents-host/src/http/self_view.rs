@@ -49,41 +49,46 @@ pub async fn load_self_view(
     node_did: &str,
 ) -> Result<(Vec<SelfAgent>, ContextBudget, ContextIndicator)> {
     let access = ConfigAccess::Graphql(graphql.clone());
-    access.transact_readonly("views.http.self", |txn| {
-        Box::pin(async move {
-            let (agents, backends, profiles, contexts, configs, requests) = txn.read_views(&(
-                gents_documents::views::agents::AgentList::new(node_did),
-                gents_inference::views::backends::BackendList::new(node_did),
-                gents_inference::views::profiles::ProfileList::new(node_did),
-                gents_documents::views::config::AgentContextList::new(node_did),
-                gents_documents::views::config::CompactionConfigList::new(node_did),
-                gents_session::views::requests::RequestRows::new(
-                    gents_session::views::transcript::Scope::Node(node_did.to_owned()),
-                ).limit(RECENT_REQUEST_SCAN as u64),
-            )).await?;
-            let agents = build_agents(
-                agents.into_iter().map(|row| row.agent).collect(),
-                backends.into_iter().map(|row| row.metadata).collect(),
-                profiles.into_iter().map(|row| row.profile).collect(),
-                contexts.into_iter().map(|row| row.document).collect(),
-                configs.into_iter().map(|row| row.document).collect(),
-            );
-            let session_ids = distinct_session_ids(&requests);
-            let mut budget = if session_ids.is_empty() {
-                ContextBudget::default()
-            } else {
-                let mut view = gents_session::views::transcript::CompactionRows::new(
-                    gents_session::views::transcript::Scope::Node(node_did.to_owned()),
+    access
+        .transact_readonly("views.http.self", |txn| {
+            Box::pin(async move {
+                let (agents, backends, profiles, contexts, configs, requests) = txn
+                    .read_views(&(
+                        gents_documents::views::agents::AgentList::new(node_did),
+                        gents_inference::views::backends::BackendList::new(node_did),
+                        gents_inference::views::profiles::ProfileList::new(node_did),
+                        gents_documents::views::config::AgentContextList::new(node_did),
+                        gents_documents::views::config::CompactionConfigList::new(node_did),
+                        gents_session::views::requests::RequestRows::new(
+                            gents_session::views::transcript::Scope::Node(node_did.to_owned()),
+                        )
+                        .limit(RECENT_REQUEST_SCAN as u64),
+                    ))
+                    .await?;
+                let agents = build_agents(
+                    agents.into_iter().map(|row| row.agent).collect(),
+                    backends.into_iter().map(|row| row.metadata).collect(),
+                    profiles.into_iter().map(|row| row.profile).collect(),
+                    contexts.into_iter().map(|row| row.document).collect(),
+                    configs.into_iter().map(|row| row.document).collect(),
                 );
-                view.session_ids = Some(session_ids.clone());
-                aggregate_compaction(txn.read_view(&view).await?)
-            };
-            budget.sessions_considered = session_ids.len() as i64;
-            budget.request_scan_limit = RECENT_REQUEST_SCAN as i64;
-            let context = build_context_indicator(&agents, &budget);
-            Ok::<_, anyhow::Error>((agents, budget, context))
+                let session_ids = distinct_session_ids(&requests);
+                let mut budget = if session_ids.is_empty() {
+                    ContextBudget::default()
+                } else {
+                    let mut view = gents_session::views::transcript::CompactionRows::new(
+                        gents_session::views::transcript::Scope::Node(node_did.to_owned()),
+                    );
+                    view.session_ids = Some(session_ids.clone());
+                    aggregate_compaction(txn.read_view(&view).await?)
+                };
+                budget.sessions_considered = session_ids.len() as i64;
+                budget.request_scan_limit = RECENT_REQUEST_SCAN as i64;
+                let context = build_context_indicator(&agents, &budget);
+                Ok::<_, anyhow::Error>((agents, budget, context))
+            })
         })
-    }).await
+        .await
 }
 
 fn build_agents(
@@ -131,10 +136,7 @@ fn build_agents(
             if agent_did.is_empty() {
                 return None;
             }
-            let inference_profile_id = agent_config
-                .inference_profile_id
-                .trim()
-                .to_string();
+            let inference_profile_id = agent_config.inference_profile_id.trim().to_string();
             let context_id = agent_config
                 .context_id
                 .as_deref()

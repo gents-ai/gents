@@ -81,21 +81,10 @@ impl EnrollmentDecisionService {
             self.node.clone(),
             identity::Did::new(signer_did)?,
         );
-        let rendered = {
-            use gents_protocol::document_query::{
-                fields::node as fields, Filter, Query, Selection,
-            };
-            Query::select(Selection::doc_id())
-                .filter(Filter::eq(fields::NODE_DID, self.identity.did()))
-                .render()
-        };
-        let response = access.read(&rendered).await?;
-        anyhow::ensure!(
-            response["data"]["Node"]
-                .as_array()
-                .is_some_and(|rows| rows.len() == 1),
-            "the client cannot read this Node"
-        );
+        let rows = access
+            .read_view(&gents_documents::views::config::NodeList::new(self.identity.did()).limit(2))
+            .await?;
+        anyhow::ensure!(rows.len() == 1, "the client cannot read this Node");
         gents_p2p::p2p_reconcile::consume_operator_nonce(&self.node, signer_did, nonce, Utc::now())
             .await
     }

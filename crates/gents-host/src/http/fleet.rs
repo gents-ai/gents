@@ -35,24 +35,34 @@ struct FleetEnvelope {
 pub async fn load_fleet_snapshot(graphql: &GraphqlEndpoint) -> Result<FleetSnapshot> {
     let generated_at = Utc::now();
     let access = ConfigAccess::Graphql(graphql.clone());
-    let envelope = access.transact_readonly("views.http.fleet", |txn| {
-        Box::pin(async move {
-            let nodes = txn.read_view(&gents_documents::views::config::VisibleNodes::new()).await?;
-            let mut envelope = FleetEnvelope { readiness: Vec::new(), requests: Vec::new() };
-            for node in nodes {
-                let node_did = node.document.node_did;
-                let (readiness, requests) = txn.read_views(&(
-                    gents_store::views::runtime::NodeReadinessList::new(&node_did),
-                    gents_session::views::requests::RequestRows::new(
-                        gents_session::views::transcript::Scope::Node(node_did.clone()),
-                    ).active_runtime(),
-                )).await?;
-                envelope.readiness.extend(readiness);
-                envelope.requests.extend(requests);
-            }
-            Ok::<_, anyhow::Error>(envelope)
+    let envelope = access
+        .transact_readonly("views.http.fleet", |txn| {
+            Box::pin(async move {
+                let nodes = txn
+                    .read_view(&gents_documents::views::config::VisibleNodes::new())
+                    .await?;
+                let mut envelope = FleetEnvelope {
+                    readiness: Vec::new(),
+                    requests: Vec::new(),
+                };
+                for node in nodes {
+                    let node_did = node.document.node_did;
+                    let (readiness, requests) = txn
+                        .read_views(&(
+                            gents_store::views::runtime::NodeReadinessList::new(&node_did),
+                            gents_session::views::requests::RequestRows::new(
+                                gents_session::views::transcript::Scope::Node(node_did.clone()),
+                            )
+                            .active_runtime(),
+                        ))
+                        .await?;
+                    envelope.readiness.extend(readiness);
+                    envelope.requests.extend(requests);
+                }
+                Ok::<_, anyhow::Error>(envelope)
+            })
         })
-    }).await?;
+        .await?;
     Ok(build_fleet_snapshot(generated_at, envelope))
 }
 

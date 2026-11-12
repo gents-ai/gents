@@ -69,35 +69,40 @@ pub async fn load_mcp_pool_snapshot(
 ) -> Result<McpPoolSnapshot> {
     let generated_at = Utc::now();
     let access = ConfigAccess::Graphql(graphql.clone());
-    let (registry, health) = access.read_views(&(
-        gents_tools::mcp::views::ServiceInventory {
-            node_did,
-            service_id: None,
-            enabled_only: false,
-        },
-        gents_tools::mcp::views::Health { node_did },
-    )).await?;
+    let (registry, health) = access
+        .read_views(&(
+            gents_tools::mcp::views::ServiceInventory {
+                node_did,
+                service_id: None,
+                enabled_only: false,
+            },
+            gents_tools::mcp::views::Health { node_did },
+        ))
+        .await?;
     let envelope = McpPoolEnvelope {
-        registry: registry.into_iter().map(|row| {
-            let config = row.config;
-            ToolServiceRegistryRow {
-                service_id: config.service_id,
-                enabled: Some(config.enabled),
-                display_name: config.display_name,
-                description: config.description,
-                hostname: config.hostname,
-                tailscale_ip: config.tailscale_ip,
-                lan_ip: config.lan_ip,
-                mcp_port: config.mcp_port,
-                mcp_path: config.mcp_path,
-                endpoint_url: config.endpoint_url,
-                send_node_did: config.send_node_did,
-                tools: Vec::new(),
-                status: row.status,
-                version: row.version,
-                updated_at: row.updated_at,
-            }
-        }).collect(),
+        registry: registry
+            .into_iter()
+            .map(|row| {
+                let config = row.config;
+                ToolServiceRegistryRow {
+                    service_id: config.service_id,
+                    enabled: Some(config.enabled),
+                    display_name: config.display_name,
+                    description: config.description,
+                    hostname: config.hostname,
+                    tailscale_ip: config.tailscale_ip,
+                    lan_ip: config.lan_ip,
+                    mcp_port: config.mcp_port,
+                    mcp_path: config.mcp_path,
+                    endpoint_url: config.endpoint_url,
+                    send_node_did: config.send_node_did,
+                    tools: Vec::new(),
+                    status: row.status,
+                    version: row.version,
+                    updated_at: row.updated_at,
+                }
+            })
+            .collect(),
         health,
     };
     Ok(build_mcp_pool_snapshot(
@@ -219,7 +224,6 @@ mod tests {
             Some("healthy")
         );
         assert_eq!(snapshot.totals.online, 1);
-
     }
 
     #[test]

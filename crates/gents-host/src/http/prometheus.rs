@@ -2,7 +2,7 @@ use gents_store::config_client::GraphqlEndpoint;
 use rapidhash::RapidHashMap;
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use gents_protocol::row::{
     decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
@@ -10,14 +10,14 @@ use gents_protocol::row::{
 };
 use gents_protocol::usage::{TokenUsageColumns, TokenUsageSummary};
 use serde::{Deserialize, Deserializer, Serialize};
+#[cfg(test)]
 use serde_json::Value;
 
 use crate::http::liveness::{
     compute_request_liveness_summary, owns_liveness_row, with_active_native_executors,
     LivenessActivityRow, LivenessRequestRow, LivenessToolCallRow, RuntimeLivenessSnapshot,
 };
-use gents_store::config_client::post_graphql;
-use gents_store::graphql::escape_graphql_string;
+use gents_store::config_client::ConfigAccess;
 
 mod p2p_sync;
 mod process;
@@ -82,16 +82,6 @@ struct InferenceMetricsQueryData {
     agents: Vec<InferenceAgentRow>,
     calls: Vec<InferenceCallMetricRow>,
     window_seconds: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct InferenceMetricsPageData {
-    #[serde(rename = "Node", default)]
-    nodes: Vec<InferenceNodeRow>,
-    #[serde(rename = "Agent", default)]
-    agents: Vec<InferenceAgentRow>,
-    #[serde(rename = "InferenceCall", default)]
-    calls: Vec<InferenceCallMetricRow>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -983,114 +973,83 @@ async fn load_inference_metrics_query_data(
     graphql: &GraphqlEndpoint,
 ) -> Result<InferenceMetricsQueryData> {
     let window_started_at = Utc::now() - Duration::seconds(INFERENCE_METRICS_WINDOW_SECS);
-    let mut result = InferenceMetricsQueryData {
-        nodes: Vec::new(),
-        agents: Vec::new(),
-        calls: Vec::new(),
-        window_seconds: INFERENCE_METRICS_WINDOW_SECS,
-    };
-    let mut offset = 0usize;
-
-    loop {
-        let query = inference_metrics_query(
-            INFERENCE_METRICS_PAGE_SIZE,
-            offset,
-            offset == 0,
-            &window_started_at,
-        );
-        let page = load_inference_metrics_page(graphql, &query).await?;
-        if offset == 0 {
-            result.nodes = page.nodes;
-            result.agents = page.agents;
-        }
-
-        let page_len = page.calls.len();
-        let (recent_calls, reached_window_start) =
-            retain_windowed_inference_calls(page.calls, &window_started_at);
-        result.calls.extend(recent_calls);
-
-        if page_len < INFERENCE_METRICS_PAGE_SIZE || reached_window_start {
-            break;
-        }
-        offset += INFERENCE_METRICS_PAGE_SIZE;
-    }
-
-    Ok(result)
+    let ended_after = inference_metrics_ended_lower_bound(&window_started_at);
+    let access = ConfigAccess::Graphql(graphql.clone());
+    access
+        .transact_readonly("views.http.inference_metrics", |txn| {
+            let window_started_at = &window_started_at;
+            let ended_after = &ended_after;
+            Box::pin(async move {
+                let nodes = txn
+                    .read_view(&gents_documents::views::config::VisibleNodes::new())
+                    .await?;
+                let mut result = InferenceMetricsQueryData {
+                    nodes: Vec::new(),
+                    agents: Vec::new(),
+                    calls: Vec::new(),
+                    window_seconds: INFERENCE_METRICS_WINDOW_SECS,
+                };
+                for row in nodes {
+                    let node = row.document;
+                    let agents = txn
+                        .read_view(&gents_documents::views::agents::AgentList::new(
+                            &node.node_did,
+                        ))
+                        .await?;
+                    result
+                        .agents
+                        .extend(agents.into_iter().map(|row| InferenceAgentRow {
+                            agent_did: row.agent.agent_did,
+                            node_did: row.agent.node_did,
+                            display_name: row.agent.display_name.unwrap_or_default(),
+                        }));
+                    let mut offset = 0;
+                    loop {
+                        let calls = txn
+                            .read_view(
+                                &gents_inference::views::activity::InferenceCalls::new(
+                                    &node.node_did,
+                                )
+                                .completed_since(ended_after)
+                                .limit(INFERENCE_METRICS_PAGE_SIZE as u64)
+                                .offset(offset as u64),
+                            )
+                            .await?;
+                        let page_len = calls.len();
+                        let calls = calls
+                            .into_iter()
+                            .map(|row| InferenceCallMetricRow {
+                                node_did: row.node_did,
+                                agent_did: row.agent_did.unwrap_or_default(),
+                                backend_id: row.backend_id.unwrap_or_default(),
+                                call_state: row.call_state,
+                                ended_at: row.ended_at.unwrap_or_default(),
+                                model_name: row.model_name.unwrap_or_else(|| "unknown".to_owned()),
+                                call_kind: row.call_kind.unwrap_or_default(),
+                                usage: row.usage,
+                            })
+                            .collect();
+                        let (calls, reached_window_start) =
+                            retain_windowed_inference_calls(calls, window_started_at);
+                        result.calls.extend(calls);
+                        if page_len < INFERENCE_METRICS_PAGE_SIZE || reached_window_start {
+                            break;
+                        }
+                        offset += INFERENCE_METRICS_PAGE_SIZE;
+                    }
+                    result.nodes.push(InferenceNodeRow {
+                        node_did: node.node_did,
+                        display_name: node.display_name.unwrap_or_default(),
+                    });
+                }
+                Ok::<_, anyhow::Error>(result)
+            })
+        })
+        .await
 }
 
-async fn load_inference_metrics_page(
-    graphql: &GraphqlEndpoint,
-    query: &str,
-) -> Result<InferenceMetricsPageData> {
-    let response = post_graphql(graphql, query).await?;
-    let data = response
-        .get("data")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Default::default()));
-    serde_json::from_value(data).context("decoding inference metrics query response")
-}
-
-/// `ended_at` is stored as RFC 3339 UTC text. The bound keeps whole seconds
-/// and no offset, so it sorts before every timestamp inside the window; rows
-/// are still checked exactly by `retain_windowed_inference_calls`.
 fn inference_metrics_ended_lower_bound(window_started_at: &DateTime<Utc>) -> String {
     window_started_at.format("%Y-%m-%dT%H:%M:%S").to_string()
-}
-
-fn inference_metrics_query(
-    limit: usize,
-    offset: usize,
-    include_metadata: bool,
-    window_started_at: &DateTime<Utc>,
-) -> String {
-    let ended_after = inference_metrics_ended_lower_bound(window_started_at);
-    let metadata = if include_metadata {
-        r#"
-        Node {
-            node_did
-            display_name
-        }
-        Agent {
-            agent_did: agent_did
-            node_did
-            display_name
-        }
-
-"#
-    } else {
-        ""
-    };
-
-    format!(
-        r#"{{
-        {metadata}
-        InferenceCall(
-            filter: {{
-                call_kind: {{ _in: ["inference", "compaction", "scheduled", "oneoff"] }},
-                call_state: {{ _in: ["completed", "failed", "cancelled"] }},
-                ended_at: {{ _ge: "{ended_after}" }}
-            }},
-            order: [{{ ended_at: DESC }}, {{ call_id: DESC }}],
-            limit: {limit},
-            offset: {offset}
-        ) {{
-            node_did
-            agent_did
-            backend_id
-            call_state
-            ended_at
-            model_name
-            call_kind
-            prompt_tokens
-            completion_tokens
-            cached_input_tokens
-            cache_creation_input_tokens
-            reasoning_output_tokens
-            provider_total_tokens
-            usage_completeness
-        }}
-    }}"#
-    )
 }
 
 fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQueryData) {
@@ -1347,65 +1306,80 @@ pub async fn load_metrics_core_data(
     graphql: &GraphqlEndpoint,
     local_node_did: &str,
 ) -> Result<MetricsCoreData> {
-    let response = post_graphql(
-        graphql,
-        r#"{
-            NodeRuntime {
-                node_did
-                reconcile_phase
-                last_reconcile_result
-                last_reconcile_completed_at
-            }
-            NodeReadiness {
-                node_did
-                snapshot_json
-                updated_at
-            }
-            InferenceBackendMetadata {
-                _docID
-                backend_id
-                node_did
-                enabled
-                max_concurrent
-                max_queue_depth
-            }
-            InferenceBackendObservation { node_did backend_id metadata_doc_id probe_status last_probe }
-            AgentRequest(filter: {
-                lifecycle_state: { _eq: "processing" }
-            }) {
-                _docID
-                request_id
-                node_did
-                claimed_at
-                deadline
-                request_hop
-                caused_by_parent_request_id
-                caused_by_trigger_kind
-            }
-            AgentToolCall(filter: {
-                lifecycle_state: { _eq: "running" }
-            }) {
-                request_id
-                node_did
-                tool_call_id
-                tool_name
-                started_at
-                deadline_at
-                await_mode
-            }
-        }"#,
-    )
-    .await?;
-    let mut data = response
-        .get("data")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Default::default()));
-    super::fleet_slots::attach_backend_observations(&mut data);
-    let envelope: MetricsQueryEnvelope =
-        serde_json::from_value(data).context("decoding runtime HTTP query response")?;
+    let access = ConfigAccess::Graphql(graphql.clone());
+    let envelope = access
+        .transact_readonly("views.http.metrics_core", |txn| {
+            Box::pin(async move {
+                let (runtimes, readiness, requests, tools) = txn
+                    .read_views(&(
+                        gents_store::views::runtime::NodeRuntimeList::new(local_node_did),
+                        gents_store::views::runtime::NodeReadinessList::new(local_node_did),
+                        gents_session::views::requests::RequestRows::new(
+                            gents_session::views::transcript::Scope::Node(
+                                local_node_did.to_owned(),
+                            ),
+                        )
+                        .processing(),
+                        gents_session::views::transcript::ToolCallRows::running(
+                            gents_session::views::transcript::Scope::Node(
+                                local_node_did.to_owned(),
+                            ),
+                        ),
+                    ))
+                    .await?;
+                let backends = gents_inference::views::backends::read_inventory_in_txn(
+                    txn,
+                    &gents_inference::views::backends::BackendList::new(local_node_did),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(MetricsQueryEnvelope {
+                    node_runtimes: runtimes
+                        .into_iter()
+                        .map(|row| MetricsRuntimeRow {
+                            node_did: row.node_did,
+                            reconcile_phase: row.reconcile_phase.unwrap_or_default(),
+                            last_reconcile_result: row.last_reconcile_result.unwrap_or_default(),
+                            last_reconcile_completed_at: row
+                                .last_reconcile_completed_at
+                                .unwrap_or_default(),
+                        })
+                        .collect(),
+                    node_readiness: readiness,
+                    inference_backends: backends
+                        .into_iter()
+                        .map(|row| MetricsBackendRow {
+                            backend_id: row.metadata.backend_id,
+                            enabled: row.metadata.enabled,
+                            max_concurrent: row.metadata.max_concurrent,
+                            max_queue_depth: row.metadata.max_queue_depth,
+                            probe_status: row
+                                .observation
+                                .as_ref()
+                                .and_then(|row| row.probe_status.clone())
+                                .unwrap_or_else(|| "unknown".to_owned()),
+                            last_probe: row.observation.and_then(|row| row.last_probe),
+                        })
+                        .collect(),
+                    requests,
+                    tool_calls: tools
+                        .into_iter()
+                        .map(|row| LivenessToolCallRow {
+                            request_id: row.request_id.unwrap_or_default(),
+                            node_did: row.node_did.unwrap_or_default(),
+                            tool_call_id: row.tool_call_id.unwrap_or_default(),
+                            tool_name: row.tool_name.unwrap_or_default(),
+                            started_at: row.started_at,
+                            deadline_at: row.deadline_at,
+                            await_mode: row.await_mode,
+                        })
+                        .collect(),
+                })
+            })
+        })
+        .await?;
     Ok(MetricsCoreData {
         envelope,
-        local_node_did: local_node_did.to_string(),
+        local_node_did: local_node_did.to_owned(),
     })
 }
 
@@ -1487,56 +1461,65 @@ async fn load_liveness_activity_chunk(
     graphql: &GraphqlEndpoint,
     requests: &[(&str, &str)],
 ) -> Result<Vec<LivenessActivityRow>> {
-    let response = post_graphql(graphql, &liveness_activity_query(requests)).await?;
-    let data = response
-        .get("data")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Default::default()));
-    let pages: BTreeMap<String, Vec<LivenessActivityRow>> =
-        serde_json::from_value(data).context("decoding liveness activity response")?;
-    Ok(pages.into_values().flatten().collect())
-}
-
-fn liveness_activity_query(requests: &[(&str, &str)]) -> String {
-    let mut selections = String::new();
-    for (index, (request_doc_id, node_did)) in requests.iter().enumerate() {
-        let request_doc_id = escape_graphql_string(request_doc_id);
-        let node_did = escape_graphql_string(node_did);
-        for (alias, collection, field, fields) in [
-            (
-                "ts",
-                "AgentToolCall",
-                "started_at",
-                "started_at completed_at",
-            ),
-            (
-                "tc",
-                "AgentToolCall",
-                "completed_at",
-                "started_at completed_at",
-            ),
-            ("is", "InferenceCall", "started_at", "started_at ended_at"),
-            ("ie", "InferenceCall", "ended_at", "started_at ended_at"),
+    let mut tools = Vec::with_capacity(requests.len() * 2);
+    let mut calls = Vec::with_capacity(requests.len() * 2);
+    for (request_doc_id, node_did) in requests {
+        for completed in [false, true] {
+            let mut view = gents_session::views::transcript::ToolCallRows::new(
+                gents_session::views::transcript::Scope::Node((*node_did).to_owned()),
+            );
+            view.request_doc_ids = Some(vec![(*request_doc_id).to_owned()]);
+            view.started_only = !completed;
+            view.completed_only = completed;
+            view.order = if completed {
+                gents_session::views::transcript::ToolOrder::Completed
+            } else {
+                gents_session::views::transcript::ToolOrder::Started
+            };
+            view.direction = gents_protocol::document_query::Direction::Desc;
+            view.limit = Some(1);
+            tools.push(view);
+        }
+        for edge in [
+            gents_inference::views::activity::ActivityEdge::Started,
+            gents_inference::views::activity::ActivityEdge::Ended,
         ] {
-            selections.push_str(&format!(
-                r#"
-            {alias}{index}: {collection}(
-                filter: {{
-                    request_doc_id: {{ _eq: "{request_doc_id}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    {field}: {{ _ne: null }}
-                }},
-                order: {{ {field}: DESC }},
-                limit: 1
-            ) {{
-                request_doc_id
-                node_did
-                {fields}
-            }}"#
-            ));
+            calls.push(
+                gents_inference::views::activity::InferenceCalls::new(*node_did)
+                    .latest_activity(*request_doc_id, edge),
+            );
         }
     }
-    format!("{{{selections}\n}}")
+    let access = ConfigAccess::Graphql(graphql.clone());
+    access
+        .transact_readonly("views.http.liveness_activity", |txn| {
+            let tools = &tools;
+            let calls = &calls;
+            Box::pin(async move {
+                let tools = txn.read_views(tools).await?;
+                let calls = txn.read_views(calls).await?;
+                let mut activity = tools
+                    .into_iter()
+                    .flatten()
+                    .map(|row| LivenessActivityRow {
+                        request_doc_id: row.request_doc_id,
+                        node_did: row.node_did,
+                        started_at: row.started_at,
+                        completed_at: row.completed_at,
+                        ended_at: None,
+                    })
+                    .collect::<Vec<_>>();
+                activity.extend(calls.into_iter().flatten().map(|row| LivenessActivityRow {
+                    request_doc_id: row.request_doc_id,
+                    node_did: Some(row.node_did),
+                    started_at: row.started_at,
+                    completed_at: None,
+                    ended_at: row.ended_at,
+                }));
+                Ok::<_, anyhow::Error>(activity)
+            })
+        })
+        .await
 }
 
 pub fn with_local_native_executors(mut data: MetricsQueryData) -> MetricsQueryData {
@@ -2692,8 +2675,6 @@ mod tests {
         let inside = (start + Duration::milliseconds(1)).to_rfc3339();
         assert!(bound.as_str() <= inside.as_str());
         assert!(bound.as_str() <= "2026-10-22T21:15:00+00:00");
-        let query = inference_metrics_query(500, 0, false, &start);
-        assert!(query.contains(r#"ended_at: { _ge: "2026-10-22T21:15:00" }"#));
     }
 
     #[test]
