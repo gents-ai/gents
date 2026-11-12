@@ -185,6 +185,8 @@ pub struct SequencedMessage {
 }
 
 #[cfg(test)]
+mod revoke_follows_grant_tests;
+#[cfg(test)]
 mod user_title_tests;
 
 pub use sessions::stage_session_relationships_in_txn;
