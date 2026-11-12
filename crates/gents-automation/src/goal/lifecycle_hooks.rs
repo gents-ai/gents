@@ -952,4 +952,6 @@ pub fn register(registry: &mut Registry) {
 }
 
 #[cfg(test)]
+mod goal_assignment_wakes_tests;
+#[cfg(test)]
 mod resume_conformance;
