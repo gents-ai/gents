@@ -376,10 +376,10 @@ mod conformance {
     fn a_profile_choice_is_decided_as_the_model_decides_it() {
         families::inference_operations_profile_write_decision::replay(
             |i: &families::inference_operations_profile_write_decision::Input<
-                ProfileRoute,
                 InferenceActor,
                 AuthClass,
                 CurrentBackend,
+                ProfileRoute,
             >| {
                 let (current, next, default) = choice(i.next, i.current, i.is_default);
                 assert_eq!(AuthClass::of(&next.auth), i.next);
@@ -430,8 +430,8 @@ mod conformance {
     fn account_operations_are_admitted_as_the_model_admits_them() {
         families::inference_operations_account_operation_admitted::replay(
             |i: &families::inference_operations_account_operation_admitted::Input<
-                InferenceActor,
                 AccountOperation,
+                InferenceActor,
             >| account_operation_admitted(i.actor, i.operation),
         );
     }

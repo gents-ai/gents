@@ -36,6 +36,5 @@ pub async fn interrupt(
     access: &ConfigAccess,
     input: RequestInterruptInput,
 ) -> Result<RequestInterruptReceipt, RequestOperationError> {
-    crate::runtime::lifecycle_hooks::compose_client();
     gents_session::operations::request::interrupt(access, input).await
 }
