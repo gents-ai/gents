@@ -46,21 +46,19 @@ fn applied_receipt() -> SessionInputEditReceipt {
     }
 }
 
-fn modeled_command_outcome(case: &serde_json::Value) -> SessionInputEditOutcome {
-    serde_json::from_value(case["command_outcome"].clone()).expect("modeled receipt outcome")
+fn modeled_command_outcome(
+    case: &gents_lean_vocab::LeanSessionInputEditClientObservationCase,
+) -> SessionInputEditOutcome {
+    serde_json::from_value(serde_json::Value::String(case.command_outcome.clone()))
+        .expect("modeled receipt outcome")
 }
 
 #[tokio::test]
 async fn generated_accepted_receipt_survives_projection_refresh_failure() {
-    let contracts: serde_json::Value =
-        gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
-    let case = contracts["session_input_edit_client_observation_cases"]
-        .as_array()
-        .and_then(|cases| {
-            cases
-                .iter()
-                .find(|case| case["name"] == "applied_receipt_projection_failure")
-        })
+    let case = gents_lean_vocab::lean_contract_snapshot()
+        .session_input_edit_client_observation_cases
+        .iter()
+        .find(|case| case.name == "applied_receipt_projection_failure")
         .expect("modeled applied receipt with failed projection");
     let (store, _version) = ObservedStore::new(ClientStore::default());
     let before = store.projection_revision().store_version;
@@ -82,7 +80,7 @@ async fn generated_accepted_receipt_survives_projection_refresh_failure() {
         serde_json::to_value(accepted.outcome).expect("serialize outcome"),
         serde_json::to_value(modeled_command_outcome(case)).expect("serialize modeled outcome")
     );
-    assert_eq!(case["projection_fresh"], false);
+    assert!(!case.projection_fresh);
     assert_eq!(store.projection_revision().store_version, before);
     assert!(store.snapshot().requests.is_empty());
 }
