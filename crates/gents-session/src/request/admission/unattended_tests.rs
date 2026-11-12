@@ -1,5 +1,5 @@
 use gents_documents::observe_unattended_agent_in_txn;
-use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
 
 async fn observe(access: &ConfigAccess, owner: &str, selected: &str) -> bool {
@@ -34,28 +34,13 @@ async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> 
     .await;
     let node = db.node.clone();
     let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-    let owner_binding = gents_store::identity::provision_agent_identity(&root)?;
+    let home = tempfile::tempdir()?;
+    let user =
+        gents_store::identity::KeyIdentity::load_or_create(home.path().join("user.key"), None)?;
     let agent_binding = gents_store::identity::provision_agent_identity(&root)?;
-    let owner = gents_store::identity::resolve_agent_identity(&root, &owner_binding)?;
     let selected = gents_store::identity::resolve_agent_identity(&root, &agent_binding)?;
-    let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
-    for did in [owner.did(), selected.did()] {
-        for permission in [
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-            NodePermission::DacRelationDelete,
-        ] {
-            runtime
-                .grant_node_permission(&identity::Did::new(did)?, permission)
-                .await?;
-        }
-    }
-    let owner_access = ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(owner.did())?,
-        owner.as_ref(),
-    )?;
+    crate::test_support::grant_operator_user(&node, &root, &user).await;
+    let owner_access = db.client_access(&user);
     let agent_access = ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(selected.did())?,
@@ -64,28 +49,22 @@ async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> 
     let root_did = root.did();
     let selected_did = selected.did();
     let nonce = &agent_binding.creation_nonce;
-    let node_doc = owner_access
-        .transact_write("test.unattended.node", |txn| {
-            Box::pin(async move {
-                let response = txn
-                    .execute(&format!(
-                        "mutation {{create_Node(input:{{node_did:\"{}\"}}){{_docID}}}}",
-                        gents_store::graphql::escape_graphql_string(root_did)
-                    ))
-                    .await?;
-                let doc = gents_store::graphql::created_doc_id(&response, "Node")?;
-                Ok::<_, anyhow::Error>(doc)
-            })
-        })
-        .await?;
     let agent_doc = owner_access.transact_write("test.unattended.agent", |txn| {
-        let node_doc = &node_doc;
         Box::pin(async move {
-            let response = txn.execute(&format!("mutation {{create_Agent(input:{{node_did:\"{}\",agent_did:\"{}\",creation_nonce:\"{}\",inference_profile_id:\"profile\",enabled:true}}){{_docID}}}}",
-                gents_store::graphql::escape_graphql_string(root_did), gents_store::graphql::escape_graphql_string(selected_did),
-                gents_store::graphql::escape_graphql_string(nonce))).await?;
+            let response = txn.execute_client_signed_create(
+                "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did": root_did}}),
+                gents_protocol::schemas::NODE,
+            ).await?;
+            let node_doc = gents_store::graphql::created_doc_id(&response, "Node")?;
+            let response = txn.execute_client_signed_create(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did": root_did, "agent_did": selected_did,
+                    "creation_nonce": nonce, "inference_profile_id": "profile", "enabled": true}}),
+                gents_protocol::schemas::AGENT,
+            ).await?;
             let doc = gents_store::graphql::created_doc_id(&response, "Agent")?;
-            txn.add_resource_relationship("Agent", &doc, "parent", "nodes", node_doc).await?;
+            txn.add_resource_relationship("Agent", &doc, "parent", "nodes", &node_doc).await?;
             txn.add_actor_relationship("Agent", &doc, "executor", &identity::Did::new(selected_did)?).await?;
             Ok::<_, anyhow::Error>(doc)
         })
@@ -99,26 +78,40 @@ async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> 
         expected("wrong_actor")
     );
     owner_access
-        .write(
-            "test.unattended.disable",
-            &format!(
-                "mutation {{update_Agent(docID:\"{}\",input:{{enabled:false}}){{_docID}}}}",
-                gents_store::graphql::escape_graphql_string(&agent_doc)
-            ),
-        )
+        .transact_write("test.unattended.disable", |txn| {
+            let agent_doc = &agent_doc;
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(
+                        "mutation($input: AgentMutationInputArg!) {{update_Agent(docID:\"{}\",input:$input){{_docID}}}}",
+                        gents_store::graphql::escape_graphql_string(agent_doc)
+                    ),
+                    &serde_json::json!({"input": {"enabled": false}}),
+                    gents_protocol::schemas::AGENT,
+                )
+                .await
+            })
+        })
         .await?;
     assert_eq!(
         observe(&agent_access, root.did(), selected.did()).await,
         expected("disabled")
     );
     owner_access
-        .write(
-            "test.unattended.enable",
-            &format!(
-                "mutation {{update_Agent(docID:\"{}\",input:{{enabled:true}}){{_docID}}}}",
-                gents_store::graphql::escape_graphql_string(&agent_doc)
-            ),
-        )
+        .transact_write("test.unattended.enable", |txn| {
+            let agent_doc = &agent_doc;
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(
+                        "mutation($input: AgentMutationInputArg!) {{update_Agent(docID:\"{}\",input:$input){{_docID}}}}",
+                        gents_store::graphql::escape_graphql_string(agent_doc)
+                    ),
+                    &serde_json::json!({"input": {"enabled": true}}),
+                    gents_protocol::schemas::AGENT,
+                )
+                .await
+            })
+        })
         .await?;
     owner_access
         .add_actor_relationship(
@@ -173,7 +166,7 @@ async fn missing_native_node_authority_is_not_treated_as_invoke() -> anyhow::Res
     let response = owner.write("test.unattended.no_nac", &format!(
         "mutation {{create_Agent(input:{{node_did:\"{}\",agent_did:\"{}\",creation_nonce:\"{}\",inference_profile_id:\"profile\",enabled:true}}){{_docID}}}}",
         gents_store::graphql::escape_graphql_string(root.did()), gents_store::graphql::escape_graphql_string(agent.did()),
-        gents_store::graphql::escape_graphql_string(&binding.creation_nonce))).await?;
+        gents_store::graphql::escape_graphql_string(&"0".repeat(64)))).await?;
     let doc = gents_store::graphql::created_doc_id(&response, "Agent")?;
     owner
         .add_actor_relationship("Agent", &doc, "executor", &identity::Did::new(agent.did())?)

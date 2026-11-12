@@ -30,13 +30,8 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         node.clone(),
         runtime.did().parse().unwrap(),
     );
-    for actor in [
-        user.did(),
-        agent.did(),
-        writer.did(),
-        reader.did(),
-        outsider.did(),
-    ] {
+    crate::test_support::grant_operator_user(&node, &runtime, &user).await;
+    for actor in [agent.did(), writer.did(), reader.did(), outsider.did()] {
         for permission in [
             gents_store::config_client::NodePermission::DocumentRead,
             gents_store::config_client::NodePermission::DocumentUpdate,

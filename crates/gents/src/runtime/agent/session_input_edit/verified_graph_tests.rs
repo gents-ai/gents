@@ -40,7 +40,10 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         let binding = gents_store::identity::provision_agent_identity(root.as_ref())?;
         let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding)?;
         let admin = ConfigAccess::local_as(node.clone(), root.did().parse()?);
-        for did in [user.did(), collaborator.did(), binding.agent_did.as_str()] {
+        gents_store::identity::GrantSet::OperatorUser
+            .grant(&admin, &::identity::Did::new(user.did())?)
+            .await?;
+        for did in [collaborator.did(), binding.agent_did.as_str()] {
             for permission in [
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,

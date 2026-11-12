@@ -305,22 +305,14 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         .execute("{ AgentSession { _docID } }")
         .await
         .is_err());
+    gents_session::test_support::grant_operator_user(&node, &runtime, &user).await;
     let client = reqwest::Client::new();
     for did in [
-        user.did(),
         agent.agent_did.as_str(),
         sibling.agent_did.as_str(),
         other_user.did(),
     ] {
-        for relation in [
-            "read-document",
-            "update-document",
-            "add-dac-relation",
-            "delete-dac-relation",
-        ] {
-            if relation == "delete-dac-relation" && did != user.did() {
-                continue;
-            }
+        for relation in ["read-document", "update-document", "add-dac-relation"] {
             let response = node_endpoint
                 .authorize(
                     client

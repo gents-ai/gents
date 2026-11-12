@@ -29,7 +29,8 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     let binding = gents_store::identity::provision_agent_identity(runtime.as_ref())?;
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
-    for did in [owner.did(), user.did(), outsider.did(), agent.did()] {
+    grant_operator_user(&node, runtime.as_ref(), &owner).await;
+    for did in [user.did(), outsider.did(), agent.did()] {
         for permission in [
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
