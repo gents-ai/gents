@@ -37,7 +37,13 @@ def initial : ServiceModel := { state := .healthy, failureCount := 0 }
 end ServiceModel
 
 /-- Events are completed observations. Cancelling an in-flight probe supplies no
-event: it is neither failure evidence nor a complete registry observation. -/
+event: it is neither failure evidence nor a complete registry observation.
+
+External premise for `probeSuccess`: its staleness flag is the age of the node's
+last successful observation of the service, never the age of the service's
+configuration document. `ToolServiceRegistry.updated_at` is a create-time
+identity stamp that no writer refreshes, so it carries no liveness and cannot
+supply this flag. A service with no prior observation has no age and is fresh. -/
 inductive Event where
   | probeSuccess (staleness : Bool)
   | probeFail
