@@ -1,15 +1,26 @@
 import Proofs.Clients.ClientShell.ObservationOrdering
+import Proofs.Conformance.Family
 
 namespace Conformance.ClientLiveDeltaContracts
 
-def casesJson : String :=
-  let cursors : List (Option Nat) := [none, some 0, some 1]
-  let encodeCursor := fun (value : Option Nat) => value.elim "null" toString
-  let rows := cursors.flatMap fun base => cursors.flatMap fun current =>
-    [false, true].map fun terminal =>
-      "{\"base\":" ++ encodeCursor base ++ ",\"current\":" ++ encodeCursor current ++
-      ",\"terminal\":" ++ toString terminal ++ ",\"accepted\":" ++
-      toString (ClientLiveDelta.accepts base current terminal) ++ "}"
-  "[" ++ String.intercalate "," rows ++ "]"
+open Lean
+
+structure CursorInput where
+  base : Option Nat
+  current : Option Nat
+  terminal : Bool
+  deriving ToJson
+
+structure CursorOutput where
+  accepted : Bool
+  deriving ToJson
+
+@[conformance_family]
+def cursor : Family CursorInput CursorOutput where
+  inputs :=
+    let cursors : List (Option Nat) := [none, some 0, some 1]
+    cursors.flatMap fun base => cursors.flatMap fun current =>
+      [false, true].map fun terminal => { base, current, terminal }
+  model := fun i => { accepted := ClientLiveDelta.accepts i.base i.current i.terminal }
 
 end Conformance.ClientLiveDeltaContracts

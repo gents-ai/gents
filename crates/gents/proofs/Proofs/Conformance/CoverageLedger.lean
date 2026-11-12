@@ -1201,8 +1201,8 @@ def caseCoverage : List CoverageEntry :=
       "LiveOverlayCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_live_delta_cases"
-      "ClientLiveDeltaCases")
+      "family"
+      "client_live_delta_contracts_cursor")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "request_lifecycle_operator_ui_cases"

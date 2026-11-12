@@ -794,8 +794,6 @@ def snapshotClientCasesJson : String :=
       ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
-    ++ "\"client_live_delta_cases\":"
-      ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
     ++ "\"plugin_reference_cases\":"
       ++ PackInstallation.casesJson ++ ","
     ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
