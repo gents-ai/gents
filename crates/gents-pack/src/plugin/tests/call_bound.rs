@@ -1,4 +1,6 @@
-use crate::plugin::test_fixtures::{build_plugin_pack, create_file_wat, open_and_copy_wat, plugin_named, source_only_afb, ECHO_WAT};
+use crate::plugin::test_fixtures::{
+    build_plugin_pack, create_file_wat, open_and_copy_wat, plugin_named, source_only_afb, ECHO_WAT,
+};
 use crate::plugin::{BoundDir, PluginBudget, PluginOutcome, PluginRunner, PluginVerdict};
 
 #[test]

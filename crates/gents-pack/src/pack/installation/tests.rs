@@ -4587,4 +4587,3 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
     assert_eq!(record.plugins.len(), 1);
     Ok(())
 }
-

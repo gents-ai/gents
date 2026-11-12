@@ -371,7 +371,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         InstalledWorkflowSummary,
         DynamicWorkflowView,
         WorkflowPromoteView,
-        gents_server::packs::EditedDocuments,
+        gents_protocol::operations::pack::EditedDocuments,
         RequestTimelineView,
         BackendDisplayState,
         InstalledPacksView,

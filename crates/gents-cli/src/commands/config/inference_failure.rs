@@ -38,6 +38,9 @@ impl std::fmt::Display for InferenceFailure {
                 verb: "accounts",
             } => "gents accounts list".to_owned(),
             NextCall::Verb { resource, verb } => format!("gents config {resource} {verb}"),
+            NextCall::Preview { resource, verb } => {
+                format!("gents config {resource} {verb} --preview")
+            }
         };
         write!(formatter, "{}\nNext: {next}", ErrorChain(&self.error))
     }

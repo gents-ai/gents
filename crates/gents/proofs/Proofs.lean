@@ -136,3 +136,4 @@ import Proofs.ToolCalls.PluginJob
 import Proofs.Shared.ToolExecution.Parallel
 
 import Proofs.Automation.Hooks
+import Proofs.Pack.Operations

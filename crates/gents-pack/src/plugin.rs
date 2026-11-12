@@ -708,11 +708,11 @@ pub mod host_imports;
 pub mod http_calls;
 pub mod install;
 pub mod model_binding;
+#[cfg(test)]
+mod profile_switch_tests;
 pub mod script_engine;
 pub mod store;
 pub mod ux;
-#[cfg(test)]
-mod profile_switch_tests;
 mod wasi_runtime;
 
 pub use afterburner_core::manifold::Manifold;

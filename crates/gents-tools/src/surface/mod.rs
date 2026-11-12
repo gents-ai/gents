@@ -4,6 +4,7 @@ mod build;
 mod explain;
 mod modes;
 mod output_budget;
+mod pack_readers;
 mod policy;
 pub mod presets;
 mod root_admission;
@@ -63,6 +64,7 @@ pub(crate) fn configured_plugin_refs(
         .collect())
 }
 
+pub use pack_readers::{pack_root_readers, PackRootReader};
 pub use root_admission::RootExecutionGuard;
 #[doc(hidden)]
 pub use root_admission::{
@@ -207,9 +209,7 @@ impl ToolSurface {
         fields
     }
 
-    pub fn output_obligations(
-        &self,
-    ) -> Vec<(String, gents_documents::WriteToolOutputObligation)> {
+    pub fn output_obligations(&self) -> Vec<(String, gents_documents::WriteToolOutputObligation)> {
         self.write_tools
             .iter()
             .filter_map(|decl| {

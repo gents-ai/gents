@@ -2,36 +2,20 @@
 //! and its dependencies once both are resolved, and the checks and previews
 //! it reports before writing.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde_json::json;
 
+use gents_protocol::operations::pack::{EditedDocuments, PackActor, PackVariables, VariableSource};
+
+use crate::operations::pack::{
+    dependency_overrides, drift_policy, install_value, parse_inference_slots, parse_variables,
+    variable_source,
+};
 use crate::pack::install_review;
 use crate::pack::resolved_pack::ResolvedPack;
 use crate::pack::{PackChangeError, PackKind, PackManifest};
-
-/// How an install treats installed documents someone edited.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct InstallDrift {
-    /// Replace edited pack documents.
-    pub overwrite: bool,
-    /// Leave edited pack documents as they are.
-    pub keep: bool,
-}
-
-impl InstallDrift {
-    pub fn policy(self) -> crate::pack::DriftPolicy {
-        if self.overwrite {
-            crate::pack::DriftPolicy::Overwrite
-        } else if self.keep {
-            crate::pack::DriftPolicy::Keep
-        } else {
-            crate::pack::DriftPolicy::Refuse
-        }
-    }
-}
 
 /// What a documents pack install was asked for, as its engine reads it.
 #[derive(Clone, Debug)]
@@ -44,12 +28,13 @@ pub struct DocumentsInstallRequest {
     pub remote: bool,
     /// `NAME=PROFILE_ID` bindings of declared inference slots.
     pub inference_slots: Vec<String>,
-    /// `NAMESPACE/PACK:NAME=VALUE` install variables of dependencies.
+    /// Install variables: `NAME=VALUE` for every pack of the install,
+    /// `NAMESPACE/PACK:NAME=VALUE` for one of them.
     pub dependency_variables: Vec<String>,
     /// Report what the install would write, writing nothing.
     pub preview: bool,
     pub force_rebind_concrete_did: bool,
-    pub drift: InstallDrift,
+    pub edited: EditedDocuments,
     /// Allow the files, network or environment the pack's plugins ask for.
     pub grant_authority: bool,
     /// Agents to wire the pack's plugins into after the install.
@@ -75,55 +60,6 @@ pub fn has_plugin_references(config: &serde_json::Value) -> bool {
                     .is_some_and(|plugins| !plugins.is_empty())
             })
         })
-}
-
-pub fn parse_dependency_variables(
-    values: &[String],
-) -> Result<crate::pack::DependencyVariableOverrides> {
-    let mut result = crate::pack::DependencyVariableOverrides::new();
-    for item in values {
-        let (key, value) = item
-            .split_once('=')
-            .context("dependency variable must be NAMESPACE/PACK:NAME=VALUE")?;
-        let (coordinate, name) = key
-            .rsplit_once(':')
-            .context("dependency variable must include its pack coordinate and name")?;
-        anyhow::ensure!(
-            !coordinate.is_empty() && !name.is_empty(),
-            "dependency variable needs a pack coordinate and name"
-        );
-        anyhow::ensure!(
-            result
-                .entry(coordinate.to_owned())
-                .or_default()
-                .insert(name.to_owned(), Some(value.to_owned()))
-                .is_none(),
-            "dependency variable {key:?} was provided more than once"
-        );
-    }
-    Ok(result)
-}
-
-pub fn parse_inference_slot_bindings(
-    values: &[String],
-) -> Result<crate::pack::PackInferenceBindings> {
-    let mut bindings = BTreeMap::new();
-    for value in values {
-        let (slot, profile_id) = value.split_once('=').with_context(|| {
-            format!("invalid inference slot binding {value:?}; expected NAME=PROFILE_ID")
-        })?;
-        anyhow::ensure!(
-            !slot.trim().is_empty() && !profile_id.trim().is_empty(),
-            "invalid inference slot binding {value:?}; slot and profile ID must not be blank"
-        );
-        anyhow::ensure!(
-            bindings
-                .insert(slot.trim().to_owned(), profile_id.trim().to_owned())
-                .is_none(),
-            "inference slot {slot:?} was bound more than once"
-        );
-    }
-    Ok(bindings)
 }
 
 pub fn reused_variable_preview(
@@ -195,10 +131,46 @@ fn installed_variables(
         .collect()
 }
 
-pub fn install_variable_preview(pack: &ResolvedPack, owner: &str) -> Result<serde_json::Value> {
+/// What a User's install of `pack` would resolve each install variable from.
+pub fn install_variable_preview(
+    pack: &ResolvedPack,
+    owner: &str,
+    supplied: &PackVariables,
+) -> Result<serde_json::Value> {
+    let coordinate = format!(
+        "{}/{}",
+        pack.manifest().metadata.namespace,
+        pack.manifest().name
+    );
     install_variable_preview_with(pack, owner, &|name| {
-        std::env::var(name).ok().map(|value| (value, "environment"))
+        supplied_value(supplied, &coordinate, name)
     })
+}
+
+/// The value a User's install of `coordinate` reads for `name`, and where
+/// it came from.
+fn supplied_value(
+    variables: &PackVariables,
+    coordinate: &str,
+    name: &str,
+) -> Option<(String, &'static str)> {
+    let scoped = variables
+        .scoped
+        .get(coordinate)
+        .and_then(|values| values.get(name));
+    let shared = variables.shared.get(name);
+    let environment = std::env::var(name).ok();
+    match variable_source(
+        PackActor::User,
+        scoped.is_some(),
+        shared.is_some(),
+        environment.is_some(),
+    ) {
+        VariableSource::Scoped => scoped.cloned().map(|value| (value, "provided")),
+        VariableSource::Shared => shared.cloned().map(|value| (value, "provided")),
+        VariableSource::Environment => environment.map(|value| (value, "environment")),
+        VariableSource::Unset => None,
+    }
 }
 
 fn install_variable_preview_with(
@@ -311,7 +283,9 @@ pub async fn install_documents_pack_resolved_inner(
     local: Option<&LocalPackAccess>,
 ) -> Result<serde_json::Value, PackChangeError> {
     let home = args.home.clone();
-    let requested = parse_inference_slot_bindings(&args.inference_slots)?;
+    let requested = parse_inference_slots(&args.inference_slots)?;
+    let supplied = parse_variables(&args.dependency_variables)?;
+    let environment = |name: &str| install_value(PackActor::User, &supplied, name);
     let temp = tempfile::tempdir().map_err(anyhow::Error::from)?;
     crate::pack::materialize::materialize(pack.archive(), temp.path())?;
     let origin_tag = crate::pack::pack_origin_tag(&format!(
@@ -353,7 +327,7 @@ pub async fn install_documents_pack_resolved_inner(
         );
         Ok::<_, anyhow::Error>(preview)
     };
-    let overrides = parse_dependency_variables(&args.dependency_variables)?;
+    let overrides = dependency_overrides(&supplied);
     let dependency_archives = dependencies
         .iter()
         .map(ResolvedPack::archive)
@@ -366,7 +340,7 @@ pub async fn install_documents_pack_resolved_inner(
             &requested,
             &dependency_archives,
             Some(home.as_path()),
-            &|name| std::env::var(name).ok(),
+            &environment,
             local.runtime.as_ref(),
             &overrides,
         )
@@ -380,7 +354,7 @@ pub async fn install_documents_pack_resolved_inner(
             &dependency_archives,
             crate::pack::InstalledVia::Operator,
             (!args.remote).then_some(home.as_path()),
-            &|name| std::env::var(name).ok(),
+            &environment,
             &overrides,
         )
         .await
@@ -408,9 +382,9 @@ pub async fn install_documents_pack_resolved_inner(
                     node_did: owner.to_owned(),
                 },
                 &|path| Ok(pack.asset(path)?.to_vec()),
-                &|name| std::env::var(name).ok(),
+                &environment,
             )?;
-            let variables = vec![install_variable_preview(pack, owner)?];
+            let variables = vec![install_variable_preview(pack, owner, &supplied)?];
             let mut preview = review(
                 install_review::authored_documents(
                     &authored,
@@ -441,13 +415,8 @@ pub async fn install_documents_pack_resolved_inner(
                     Ok(value)
                 } else if let Some(config) = prepared.reused_dependency_config(&coordinate) {
                     reused_variable_preview(source, config)
-                } else if let Some(values) = overrides.get(&coordinate) {
-                    install_variable_preview_with(source, owner, &|name| match values.get(name) {
-                        Some(value) => value.clone().map(|value| (value, "provided")),
-                        None => std::env::var(name).ok().map(|value| (value, "environment")),
-                    })
                 } else {
-                    install_variable_preview(source, owner)
+                    install_variable_preview(source, owner, &supplied)
                 }
             })
             .collect::<Result<Vec<_>>>()?;
@@ -526,7 +495,7 @@ pub async fn install_documents_pack_resolved_inner(
         owner,
         pack.archive(),
         &prepared,
-        args.drift.policy(),
+        drift_policy(args.edited),
         (!args.remote).then_some(home.as_path()),
         args.grant_authority,
         explicit,
@@ -598,18 +567,6 @@ pub fn merge(into: &mut serde_json::Value, from: serde_json::Value) {
     }
 }
 
-/// Refuses, before any write, a pack whose content digest is not the one the
-/// operator reviewed with `gents config pack show`.
-pub fn check_expected_digest(expected: Option<&str>, actual: &str) -> Result<()> {
-    match expected {
-        Some(expected) if expected != actual => anyhow::bail!(
-            "the pack's digest is {actual}, not the expected {expected}. Nothing was installed. \
-             Next: gents config pack show ./dir"
-        ),
-        _ => Ok(()),
-    }
-}
-
 /// `--wire` acts on plugins this install places, so a pack that cannot ship
 /// one refuses it before any write.
 pub fn check_wire_target(manifest: &PackManifest, wire: &[String]) -> Result<()> {
@@ -637,16 +594,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dependency_variable_overrides_are_scoped_and_reject_duplicates() {
-        let parse = parse_dependency_variables;
-        let values = parse(&["acme/alpha:HOST=one=two".into(), "acme/beta:HOST=".into()]).unwrap();
-        assert_eq!(values["acme/alpha"]["HOST"].as_deref(), Some("one=two"));
-        assert_eq!(values["acme/beta"]["HOST"].as_deref(), Some(""));
-        assert!(parse(&["acme/alpha:HOST=one".into(), "acme/alpha:HOST=two".into()]).is_err());
-        assert!(parse(&["HOST=one".into()]).is_err());
-    }
-
-    #[test]
     fn remote_plugin_routing_does_not_resolve_install_variables() {
         let config =
             json!({"tools": [{"integrations": {"plugins": [{"plugin": "${UNSET_PLUGIN}"}]}}]});
@@ -654,22 +601,5 @@ mod tests {
         assert!(!has_plugin_references(
             &json!({"tools": [{"integrations": {"plugins": []}}]})
         ));
-    }
-
-    #[test]
-    fn expect_digest_match_passes() {
-        check_expected_digest(Some("sha256:abc"), "sha256:abc").unwrap();
-        check_expected_digest(None, "sha256:abc").unwrap();
-    }
-
-    #[test]
-    fn expect_digest_mismatch_names_both_digests_and_pack_show() {
-        let error = format!(
-            "{:#}",
-            check_expected_digest(Some("sha256:expected"), "sha256:actual").unwrap_err()
-        );
-        for needle in ["sha256:expected", "sha256:actual", "gents config pack show"] {
-            assert!(error.contains(needle), "{needle} missing from {error}");
-        }
     }
 }

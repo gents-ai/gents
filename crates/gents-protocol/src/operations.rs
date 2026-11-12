@@ -6,6 +6,7 @@ pub mod agent;
 pub mod document;
 pub mod inference;
 pub mod mcp_service;
+pub mod pack;
 pub mod request;
 pub mod schema;
 pub mod session;
@@ -30,6 +31,12 @@ pub enum NextCall {
     /// List `resource`, which shows the documents the caller may name.
     List {
         resource: &'static str,
+    },
+    /// Preview `verb` on the same target, which reports what the commit
+    /// would do and the values the commit takes.
+    Preview {
+        resource: &'static str,
+        verb: &'static str,
     },
     /// Run `verb` of `resource`, which takes no further input.
     Verb {

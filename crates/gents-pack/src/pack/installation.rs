@@ -1094,6 +1094,12 @@ impl PackChangeError {
     }
 }
 
+impl From<gents_protocol::operations::pack::PackOperationError> for PackChangeError {
+    fn from(error: gents_protocol::operations::pack::PackOperationError) -> Self {
+        Self::Other(anyhow::Error::new(error))
+    }
+}
+
 impl From<PackRemovalError> for PackChangeError {
     fn from(error: PackRemovalError) -> Self {
         Self::Other(error.into())

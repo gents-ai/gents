@@ -5,10 +5,10 @@ impl PackInstaller {
     pub async fn documents(
         &self,
         operation: &str,
-        args: &PackChange,
+        args: &PackChangeInput,
         distribution: &Distribution,
         commit: bool,
-        edited: DriftPolicy,
+        edited: EditedDocuments,
     ) -> anyhow::Result<String> {
         let access = self.core.access()?;
         let packs = self.packs(&access);
@@ -81,7 +81,7 @@ impl PackInstaller {
                 "ready": blockers.is_empty(), "committed": false,
                 "apply_with": blockers.is_empty().then(|| json!({
                     "argv_prefix": ["pack", operation, distribution.pinned_spec(&args.package), "--digest", distribution.digest()],
-                    "repeat_inference_slots": args.inference_slots, "repeat_variables": args.variables,
+                    "repeat_inference_slots": args.inference_slots, "repeat_variables": repeat_variables(&args.variables),
                 })),
                 "installation_blockers": blockers,
                 "edited_documents": self.edited_documents(&distribution.coordinate(), false).await?,
@@ -109,35 +109,25 @@ impl PackInstaller {
                 distribution,
                 &dependencies,
                 &prepared,
-                edited,
+                gents_pack::operations::pack::drift_policy(edited),
                 &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await?;
         // Reader on a published root is the User's to grant, so an agent the
         // pack ships with host tools waits for it; the receipt names the step.
-        let shipped_agents: Vec<String> = node_packs::installed_pack_documents(
+        let host_root_access = crate::surface::pack_root_readers(
             &access,
             self.core.node_did(),
             &distribution.coordinate(),
+            PackActor::Agent,
         )
         .await?
         .into_iter()
-        .filter(|(collection, _)| *collection == gents_store::collection::Collection::Agent)
-        .map(|(_, agent)| agent)
-        .collect();
-        let host_root_access = crate::surface::agents_tool_root_readers(
-            &access,
-            self.core.node_did(),
-            &shipped_agents,
-        )
-        .await?
-        .into_iter()
-        .map(|(agent, reader)| {
-            let published = match &reader {
-                crate::surface::ToolRootReader::Published(root) => Some(root.as_str()),
-                _ => None,
-            };
-            crate::surface::reader_grant_step(&agent, published, prior.is_none())
+        .map(|reader| {
+            let published = (reader.action
+                == gents_protocol::operations::pack::ReaderAction::ReportGrantStep)
+                .then_some(reader.root.as_str());
+            crate::surface::reader_grant_step(&reader.agent, published, prior.is_none())
         })
         .collect::<Vec<_>>();
         ordered! {
@@ -156,6 +146,20 @@ impl PackInstaller {
         }
         .pretty()
     }
+}
+
+/// The supplied variables as the `--var` values that repeat them.
+fn repeat_variables(variables: &gents_protocol::operations::pack::PackVariables) -> Vec<String> {
+    let shared = variables
+        .shared
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"));
+    let scoped = variables.scoped.iter().flat_map(|(coordinate, values)| {
+        values
+            .iter()
+            .map(move |(name, value)| format!("{coordinate}:{name}={value}"))
+    });
+    shared.chain(scoped).collect()
 }
 
 /// Every slot is bound, so the receipt keeps the bindings and slots and leaves

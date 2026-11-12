@@ -51,7 +51,8 @@ pub fn fixture_pack_names() -> Vec<String> {
         "job_plugin_fixture",
         "plugin_documents_fixture",
     ];
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/tests/fixtures/packs");
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/tests/fixtures/packs");
     let mut names = Vec::new();
     for entry in std::fs::read_dir(&root)
         .unwrap_or_else(|error| panic!("reading {}: {error}", root.display()))

@@ -26,8 +26,10 @@ mod pack_catalog;
 mod pack_documents;
 pub mod pack_installer;
 use gents_pack::pack::node_packs::{
-    self, Distribution, DriftPolicy, HomePackRemovalError, LocalPackError, NodePacks, PackChange,
-    PluginPinConflict,
+    self, Distribution, HomePackRemovalError, LocalPackError, NodePacks, PluginPinConflict,
+};
+use gents_protocol::operations::pack::{
+    EditedDocuments, PackActor, PackChangeInput, PackOperation, PackOperationError,
 };
 use pack_installer::{pin_edit, pin_move_call, PackInstaller};
 mod pack_plugins;

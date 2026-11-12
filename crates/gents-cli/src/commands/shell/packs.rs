@@ -23,7 +23,7 @@ use crate::commands::config::crud::{
     query_collection_sorted, EVENT_SOURCE_SPEC, SCHEDULE_SPEC, SKILL_SPEC, TOOLS_SPEC,
 };
 use crate::commands::task::load_task_inventory;
-use crate::packs::EditedDocuments;
+use gents_protocol::operations::pack::EditedDocuments;
 
 #[cfg(test)]
 mod tests;

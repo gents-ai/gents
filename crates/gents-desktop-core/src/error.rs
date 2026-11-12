@@ -280,6 +280,7 @@ pub fn inference_operation_failure(
         NextCall::Verb { .. } | NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } => {
             "Review the fields and save again."
         }
+        NextCall::Preview { .. } => "Review the change again, then confirm it.",
     };
     let message = format!(
         "{}. {next}",
@@ -420,6 +421,7 @@ fn refusal_message(message: &str, next_call: gents_protocol::operations::NextCal
         NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } | NextCall::Verb { .. } => {
             "Review the agent's fields and save again."
         }
+        NextCall::Preview { .. } => "Review the change again, then confirm it.",
     };
     format!("{}. {next}", message.trim_end_matches('.'))
 }

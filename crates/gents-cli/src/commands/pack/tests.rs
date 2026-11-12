@@ -2,12 +2,12 @@ use super::install::install_documents_command_with_local;
 use super::scope::resolve_plugin_slot_owner;
 use super::source::names_a_directory;
 use super::*;
-use crate::packs::EditedDocuments;
 use anyhow::Context;
 use gents_pack::pack::install_flow::check_wire_target;
 use gents_pack::pack::resolved_pack::{materialize_cached_pack, resolve_pack_source, ResolvedPack};
 use gents_pack::pack::{PackChangeError, PackKind, PackManifest};
 use gents_pack::plugin::authority::GrantError;
+use gents_protocol::operations::pack::EditedDocuments;
 use std::collections::BTreeMap;
 
 #[tokio::test]
@@ -175,8 +175,12 @@ fn document_pack_preview_shows_the_install_variable_and_its_target() {
     let (bytes, _) = gents_pack::pack::archive::pack_dir(dir.path()).unwrap();
     let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let source = ResolvedPack::received(archive, gents_pack::pack::PackSource::Installed).unwrap();
-    let preview =
-        gents_pack::pack::install_flow::install_variable_preview(&source, "did:key:node").unwrap();
+    let preview = gents_pack::pack::install_flow::install_variable_preview(
+        &source,
+        "did:key:node",
+        &Default::default(),
+    )
+    .unwrap();
     assert_eq!(preview["kind"], "install_literal");
     assert_eq!(preview["uses"][0]["path"], "/node/node_did");
     assert_eq!(

@@ -57,7 +57,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             dependency_variables: Vec::new(),
             preview: false,
             force_rebind_concrete_did: false,
-            drift: Default::default(),
+            edited: Default::default(),
             grant_authority: args.grant_authority,
             wire: Vec::new(),
         };

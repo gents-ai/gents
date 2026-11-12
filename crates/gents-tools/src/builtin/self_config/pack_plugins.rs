@@ -5,7 +5,7 @@ impl PackInstaller {
     pub async fn plugins_pack(
         &self,
         operation: &str,
-        args: &PackChange,
+        args: &PackChangeInput,
         distribution: &Distribution,
         commit: bool,
     ) -> Result<String> {

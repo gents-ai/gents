@@ -137,6 +137,9 @@ impl std::fmt::Display for AgentFailure {
             NextCall::ResourceHelp { resource } => format!("gents config {resource} --help"),
             NextCall::Inspect { resource } => format!("gents config {resource} show <AGENT_DID>"),
             NextCall::List { resource } => format!("gents config {resource} list"),
+            NextCall::Preview { resource, verb } => {
+                format!("gents config {resource} {verb} --preview")
+            }
             NextCall::Verb { resource, verb } => format!("gents config {resource} {verb}"),
         };
         write!(formatter, "{}\nNext: {next}", self.error)?;

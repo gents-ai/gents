@@ -1,6 +1,6 @@
-use crate::plugin::store::{self, InstalledPlugin};
 use crate::pack::archive::pack_dir;
 use crate::pack::PackPlugin;
+use crate::plugin::store::{self, InstalledPlugin};
 use crate::plugin::Manifold;
 
 pub(crate) fn wat(src: &str) -> Vec<u8> {

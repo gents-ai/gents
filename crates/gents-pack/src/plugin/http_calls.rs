@@ -514,11 +514,7 @@ impl Session {
         }))
     }
 
-    pub async fn serve(
-        &mut self,
-        requests: Vec<Request>,
-        deadline: Instant,
-    ) -> Map<String, Value> {
+    pub async fn serve(&mut self, requests: Vec<Request>, deadline: Instant) -> Map<String, Value> {
         let mut room = self.max_requests.saturating_sub(self.requests_sent);
         let plan: Vec<(Request, Option<Refusal>)> = requests
             .into_iter()

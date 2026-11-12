@@ -512,7 +512,20 @@ async fn install_one(
     expect_digest: Option<&str>,
 ) -> Result<Outcome> {
     let Resolved { source, requested } = resolve(home, pack, registry).await?;
-    gents_pack::pack::install_flow::check_expected_digest(expect_digest, source.digest())?;
+    gents_pack::operations::pack::admit_digest(
+        gents_protocol::operations::pack::PackActor::User,
+        gents_protocol::operations::pack::PackOperation::Install,
+        true,
+        expect_digest,
+        source.digest(),
+    )
+    .map_err(|error| {
+        command::refusal(
+            gents_protocol::operations::pack::PackOperation::Install,
+            pack,
+            error,
+        )
+    })?;
     let wire = !source.manifest().metadata.plugins.is_empty();
     let asks = requested.as_array().is_some_and(|asks| !asks.is_empty());
     let tool_calls = TOOL_CALLS_ON_APPROVAL.contains(&pack);
