@@ -6,7 +6,9 @@ use serde_json::json;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 
-use super::{read_record, remove_record_in_txn, DriftPolicy, RemoveReport, RECORD};
+use super::{
+    read_record, remove_record_in_txn, DriftPolicy, PackChangeError, RemoveReport, RECORD,
+};
 
 async fn update_required_by(
     txn: &ConfigApplyTxn<'_>,
@@ -44,7 +46,7 @@ pub(super) async fn claim_in_txn(
     dependent: &str,
     dependencies: &[String],
     policy: DriftPolicy,
-) -> Result<()> {
+) -> Result<(), PackChangeError> {
     for coordinate in dependencies {
         let record = read_record(txn, owner, coordinate).await?;
         let doc_id = record
@@ -55,12 +57,20 @@ pub(super) async fn claim_in_txn(
             update_required_by(txn, &doc_id, &required_by).await?;
         }
     }
-    let response = txn
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
-            escape_graphql_string(owner)
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::pack_installation as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::COORDINATE)
+                .field(fields::REQUIRED_BY)
+                .field(fields::EXPLICIT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, owner))
+        .render();
+        txn.run(&query).await?
+    };
     for row in response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?
@@ -109,13 +119,21 @@ pub(super) async fn release_in_txn(
     owner: &str,
     dependent: &str,
     policy: DriftPolicy,
-) -> Result<Vec<RemoveReport>> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
-            escape_graphql_string(owner)
-        ))
-        .await?;
+) -> Result<Vec<RemoveReport>, PackChangeError> {
+    let response = {
+        use gents_protocol::document_query::{
+            fields::pack_installation as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::COORDINATE)
+                .field(fields::REQUIRED_BY)
+                .field(fields::EXPLICIT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, owner))
+        .render();
+        txn.run(&query).await?
+    };
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?

@@ -1,5 +1,6 @@
 use crate::inference::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+#[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
 use anyhow::{anyhow, Context, Result};
 use gents_protocol::output::{
@@ -29,6 +30,13 @@ impl ReadSource<'_, '_> {
         match self {
             Self::Access(access) => Ok(access.execute(query).await?),
             Self::Txn(txn) => Ok(txn.execute(query).await?),
+        }
+    }
+
+    async fn run(self, rendered: &gents_protocol::document_query::Rendered) -> Result<Value> {
+        match self {
+            Self::Access(access) => Ok(access.read(rendered).await?),
+            Self::Txn(txn) => Ok(txn.run(rendered).await?),
         }
     }
 
@@ -211,10 +219,23 @@ async fn load_tool_file_change_observation_source(
     {
         return Ok(ToolFileChangeRead::Unsupported);
     }
-    let response = source.execute(&format!(
-        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id node_did session_id requester_did file_changes }} }}"#,
-        escape_graphql_string(tool_call_doc_id),
-    )).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::tool_file_change as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::NODE_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::FILE_CHANGES),
+        )
+        .filter(Filter::eq(fields::TOOL_CALL_DOC_ID, tool_call_doc_id))
+        .limit(2)
+        .render()
+    };
+    let response = source.run(&rendered).await?;
     let rows = response["data"]["ToolFileChange"]
         .as_array()
         .context("file change lookup omitted observations")?;
@@ -405,6 +426,33 @@ async fn load_tool_call_read_source(
                 }),
                 Some(output.text),
             )
+        } else if call.await_mode.as_deref() == Some("background") && !lifecycle_state.is_terminal()
+        {
+            let receipt_source =
+                super::super::plugin_effect::receipt_source(session_id, tool_call_doc_id);
+            let query = gents_protocol::output::rows::source_output_segments_query(
+                &request_doc_id,
+                &receipt_source,
+            )?;
+            let response = source.execute(&query).await?;
+            let rows = response["data"]["AgentOutputSegment"]
+                .as_array()
+                .context("plugin receipt read omitted segments")?;
+            let receipt = super::super::plugin_effect::receipt_from_rows(
+                rows,
+                node_did,
+                session_id,
+                requester_did,
+                &request_doc_id,
+                tool_call_doc_id,
+            )?;
+            let result = receipt.as_ref().map(|text| Message::User {
+                content: vec![UserContent::tool_result(
+                    call.tool_call_id.clone(),
+                    vec![ToolResultContent::text(text.clone())],
+                )],
+            });
+            (result, receipt)
         } else {
             anyhow::ensure!(
                 !lifecycle_state.is_terminal()
@@ -454,9 +502,16 @@ async fn load_tool_call_read_source(
          {} eligible replies in session_id={session_id}",
         replies.len()
     );
+    let spawned = call.spawned_by_tool_call_doc_id.is_some();
+    if spawned {
+        anyhow::ensure!(
+            replies.is_empty() && delivery_rows.len() <= 1,
+            "spawned process must not fabricate a native ToolResult delivery or duplicate its notification"
+        );
+    }
     let Some(row) = replies.into_iter().next() else {
         anyhow::ensure!(
-            delivery_rows.is_empty(),
+            spawned || delivery_rows.is_empty(),
             "a ToolDelivery publication exists for tool_call_doc_id={tool_call_doc_id} but carries no native tool-result invocation reply"
         );
         return Ok(CanonicalToolCallRead {
@@ -695,6 +750,37 @@ async fn load_accepted_tool_call(
     String,
     gents_protocol::output::rows::TranscriptMessageRow,
 )> {
+    use rapidhash::{HashSetExt, RapidHashSet};
+    let mut seen = RapidHashSet::new();
+    load_accepted_tool_call_inner(
+        source,
+        tool_call_doc_id,
+        node_did,
+        session_id,
+        requester_did,
+        &mut seen,
+    )
+    .await
+}
+
+async fn load_accepted_tool_call_inner(
+    source: ReadSource<'_, '_>,
+    tool_call_doc_id: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    seen: &mut rapidhash::RapidHashSet<String>,
+) -> Result<(
+    ToolCallIdentityRow,
+    Vec<gents_protocol::output::rows::TranscriptMessageRow>,
+    Option<String>,
+    String,
+    gents_protocol::output::rows::TranscriptMessageRow,
+)> {
+    anyhow::ensure!(
+        seen.insert(tool_call_doc_id.to_owned()),
+        "cyclic tool invocation ancestry"
+    );
     let call = load_tool_call_identity(
         source,
         tool_call_doc_id,
@@ -709,41 +795,76 @@ async fn load_accepted_tool_call(
         call.spawned_by_tool_call_doc_id.is_some(),
         &call.tool_call_id,
     )?;
-    let parent = if let Some(effect) = effect.as_ref() {
-        let parent = load_tool_call_identity(
+    let parent_doc = effect
+        .as_ref()
+        .map(|effect| effect.parent_tool_call_doc_id.as_str())
+        .or(call.spawned_by_tool_call_doc_id.as_deref());
+    if let Some(parent_doc) = parent_doc {
+        let (parent, headers, _, parent_args, accepted) = Box::pin(load_accepted_tool_call_inner(
             source,
-            &effect.parent_tool_call_doc_id,
+            parent_doc,
             node_did,
             session_id,
             requester_did,
-        )
+            seen,
+        ))
         .await?;
         anyhow::ensure!(
-            call.await_mode.as_deref() == Some("foreground")
-                && call.tool_call_key.as_deref() == Some(call.tool_call_id.as_str())
-                && call.request_doc_id == parent.request_doc_id
-                && call.message_sequence == parent.message_sequence
-                && parent.spawned_by_tool_call_doc_id.is_none()
-                && parent.plugin_parent_tool_call_doc_id.is_none()
-                && parent.plugin_effect_ordinal.is_none(),
-            "plugin effect presentation has incoherent direct-parent provenance"
-        );
-        Some(parent)
-    } else if let Some(parent_doc_id) = call.spawned_by_tool_call_doc_id.as_deref() {
-        let parent =
-            load_tool_call_identity(source, parent_doc_id, node_did, session_id, requester_did)
-                .await?;
-        anyhow::ensure!(
             call.request_doc_id == parent.request_doc_id
-                && call.message_sequence == parent.message_sequence
-                && parent.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
-            "spawned tool presentation has incoherent accepted-parent provenance"
+                && call.message_sequence == parent.message_sequence,
+            "derived tool changed its parent request or sequence"
         );
-        Some(parent)
-    } else {
-        None
-    };
-    let admission = parent.as_ref().unwrap_or(&call);
+        let args = if effect.is_some() {
+            anyhow::ensure!(
+                call.tool_call_key.as_deref() == Some(call.tool_call_id.as_str())
+                    && accepted.message.outcome == OutputOutcome::Complete,
+                "plugin effect lacks exact accepted provenance"
+            );
+            let MessagePublication::RequestExecution {
+                execution_generation,
+            } = &accepted.message.publication
+            else {
+                unreachable!()
+            };
+            let request = call
+                .request_doc_id
+                .as_deref()
+                .context("plugin effect lacks request")?;
+            let response = source
+                .execute(&gents_protocol::output::rows::request_output_segments_query(request))
+                .await?;
+            let rows = response["data"]["AgentOutputSegment"]
+                .as_array()
+                .context("plugin arguments omitted segments")?;
+            super::super::plugin_effect::arguments_from_rows(
+                rows,
+                node_did,
+                session_id,
+                requester_did,
+                request,
+                &call.doc_id,
+                execution_generation,
+                &call.tool_call_id,
+                &call.tool_name,
+            )?
+            .1
+        } else {
+            anyhow::ensure!(
+                parent.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME
+                    && call.await_mode.as_deref() == Some("background"),
+                "spawned tool lacks its spawn_process owner"
+            );
+            let input: crate::tools::background::status::BackgroundToolArgs =
+                serde_json::from_str(&parent_args)?;
+            anyhow::ensure!(
+                input.tool_name == call.tool_name,
+                "spawned tool differs from admitted target"
+            );
+            serde_json::to_string(&input.args)?
+        };
+        return Ok((call, headers, None, args, accepted));
+    }
+    let admission = &call;
     let expected_request_doc_id = call.request_doc_id.as_deref().ok_or_else(|| {
         anyhow!("AgentToolCall tool_call_doc_id={tool_call_doc_id} carries no request document")
     })?;
@@ -791,7 +912,7 @@ async fn load_accepted_tool_call(
         bindings.len() == 1,
         "admission header does not uniquely bind the physical tool"
     );
-    let mut call_id = bindings.into_iter().next().expect("one binding checked");
+    let call_id = bindings.into_iter().next().expect("one binding checked");
     let Message::Assistant { content, .. } = accepted_message else {
         anyhow::bail!("accepted tool publication is not an assistant message");
     };
@@ -811,54 +932,8 @@ async fn load_accepted_tool_call(
         arguments.len() == 1,
         "accepted native message does not uniquely bind tool arguments"
     );
-    let arguments = if call.plugin_parent_tool_call_doc_id.is_some() {
-        anyhow::ensure!(
-            accepted[0].message.outcome == OutputOutcome::Complete,
-            "plugin effect requires a complete parent admission"
-        );
-        let generation = match &accepted[0].message.publication {
-            MessagePublication::RequestExecution {
-                execution_generation,
-            } => execution_generation,
-            _ => unreachable!("accepted header requires request execution"),
-        };
-        let response = source
-            .execute(
-                &gents_protocol::output::rows::request_output_segments_query(
-                    expected_request_doc_id,
-                ),
-            )
-            .await?;
-        let rows = response["data"]["AgentOutputSegment"]
-            .as_array()
-            .context("plugin effect arguments query omitted segments")?;
-        let (_, arguments) = super::super::plugin_effect::arguments_from_rows(
-            rows,
-            node_did,
-            session_id,
-            requester_did,
-            expected_request_doc_id,
-            &call.doc_id,
-            generation,
-            &call.tool_call_id,
-            &call.tool_name,
-        )?;
-        arguments
-    } else if call.spawned_by_tool_call_doc_id.is_some() {
-        let input: crate::tools::background::status::BackgroundToolArgs =
-            serde_json::from_value(arguments[0].clone())
-                .context("decoding accepted spawn_process arguments")?;
-        anyhow::ensure!(
-            input.tool_name == call.tool_name,
-            "spawned tool name differs from accepted spawn_process input"
-        );
-        serde_json::to_string(&input.args).context("serializing accepted spawned-tool arguments")?
-    } else {
-        serde_json::to_string(arguments[0]).context("serializing accepted native tool arguments")?
-    };
-    if call.spawned_by_tool_call_doc_id.is_some() || call.plugin_parent_tool_call_doc_id.is_some() {
-        call_id = None;
-    }
+    let arguments = serde_json::to_string(arguments[0])
+        .context("serializing accepted native tool arguments")?;
     let accepted_header = accepted[0].clone();
     Ok((call, headers, call_id, arguments, accepted_header))
 }
@@ -885,14 +960,19 @@ async fn scoped_canonical_headers(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<gents_protocol::output::rows::TranscriptMessageRow>> {
-    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-    let query = format!(
-        r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {fields} }} }}"#,
-        scope = scope,
-        fields = gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
-    );
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_message as fields, session_scope, Direction, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
+        ))
+        .filter(session_scope(node_did, session_id, requester_did))
+        .order_by(fields::SEQUENCE, Direction::Asc)
+        .render()
+    };
 
-    let resp = source.execute(&query).await?;
+    let resp = source.run(&rendered).await?;
     if resp
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))
@@ -945,21 +1025,22 @@ async fn load_tool_call_identity(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<ToolCallIdentityRow> {
-    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-    let escaped_doc_id = escape_graphql_string(tool_call_doc_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ {scope}, _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                limit: 2
-            ) {{
-                _docID node_did requester_did session_id tool_call_id tool_call_key tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal await_mode terminal_output started_at lifecycle_state
-            }}
-        }}"#,
-        scope = scope,
-    );
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, session_scope, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            "_docID node_did requester_did session_id tool_call_id tool_call_key tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal await_mode terminal_output started_at lifecycle_state",
+        ))
+        .filter(
+            session_scope(node_did, session_id, requester_did)
+                .and(Filter::eq(fields::DOC_ID, tool_call_doc_id)),
+        )
+        .limit(2)
+        .render()
+    };
 
-    let resp = source.execute(&query).await?;
+    let resp = source.run(&rendered).await?;
     if resp
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))

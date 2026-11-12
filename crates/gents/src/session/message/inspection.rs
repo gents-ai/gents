@@ -432,7 +432,24 @@ pub(crate) async fn agent_session_read(
         let observation_started_at = observation_started_at.clone();
         Box::pin(async move {
             let scope = gents_protocol::session::session_scope_filter(&target.node_did, &target.session_id, target.requester_did.as_deref());
-            let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", gents_protocol::session::AGENT_SESSION_FIELDS)).await?;
+            let response = {
+                use gents_protocol::document_query::{
+                    fields::agent_session::Doc as AgentSession, session_scope, Query, Selection,
+                };
+                txn.run(
+                    &Query::select(Selection::<AgentSession>::owned(
+                        gents_protocol::session::AGENT_SESSION_FIELDS,
+                    ))
+                    .filter(session_scope(
+                        &target.node_did,
+                        &target.session_id,
+                        target.requester_did.as_deref(),
+                    ))
+                    .limit(2)
+                    .render(),
+                )
+                .await?
+            };
             let sessions = rows(&response, "AgentSession")?;
             anyhow::ensure!(sessions.len() == 1, "inspected session is unavailable or ambiguous");
             let session = gents_protocol::session::decode_session_row(&sessions[0])?.session;

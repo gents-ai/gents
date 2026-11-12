@@ -21,7 +21,8 @@ pub use build::resolve_effective_tool_root;
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub(crate) use output_budget::configured_output_budget;
-pub(crate) use policy::{configured_self_config_category_set, ToolNodeOperationSource};
+pub use policy::configured_self_config_category_set;
+pub(crate) use policy::ToolNodeOperationSource;
 pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
@@ -64,7 +65,9 @@ pub use root_admission::{
     refuse_too_broad_root, resolve_configured_tool_root, TooBroadRoot, WorkspaceRootDocument,
     WorkspaceRootPolicy,
 };
-pub use root_admission::{agent_tool_root_reader, ToolRootReader};
+pub use root_admission::{
+    agent_tool_root_reader, agents_tool_root_readers, tool_root_reader, ToolRootReader,
+};
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
     resolve_admitted_tool_root, tools_root_reader_in_txn, RootExecutionGuard,
@@ -145,7 +148,15 @@ pub struct SelfConfigToolConfig {
     pub no_lockout: bool,
     pub preview: bool,
     pub enable_pack_install: bool,
+    pub enable_pack_authority: bool,
     pub process_ceiling: SelfConfigProcessCeiling,
+    /// The request's selected plugin tools, which `config plugin run` calls
+    /// as the agent's own tool call would.
+    pub selected_plugins: Vec<crate::documents::PluginToolRef>,
+    /// The plugin tool names the process ceiling admits; `None` when it
+    /// admits every plugin. `config plugin run` calls no plugin outside it,
+    /// selected or not: an installed plugin runs with its installed grants.
+    pub ceiling_plugins: Option<std::collections::BTreeSet<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
@@ -422,8 +433,13 @@ impl ToolSurface {
             tools.push(Box::new(
                 crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
                     runtime.node.clone(),
+                    &runtime.node_did,
+                    runtime.plugin_home(),
                     agent.as_ref(),
-                )?,
+                )?
+                .with_tools_category(
+                    self.self_config.enabled && self.self_config.categories.contains("tools"),
+                ),
             ));
         }
         if self.enable_p2p_tool {
@@ -468,6 +484,7 @@ impl ToolSurface {
                 runtime.node.clone(),
                 self.defra_query_scope.clone(),
                 datastore_actor.clone().expect("query actor was validated"),
+                self.self_config.enabled && self.self_config.categories.contains("tools"),
             ));
         }
         if !self.application_write_collections.is_empty() {
@@ -522,7 +539,10 @@ impl ToolSurface {
                 runtime.node_did.clone(),
                 runtime.agent_identity.clone(),
                 runtime.identity.clone(),
-                &self.self_config,
+                &SelfConfigToolConfig {
+                    selected_plugins: self.plugin_tools.clone(),
+                    ..self.self_config.clone()
+                },
                 runtime.plugins.clone(),
                 node_binding,
             ),

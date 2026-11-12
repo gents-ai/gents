@@ -220,22 +220,26 @@ theorem runStep_identity_immutable (validate guard : Doc → Bool) (t : Target)
       simp [runStep, hstep, hm, himm]
 
 theorem Grants.le_refl (g : Grants) : g.le g = true := by
-  cases h : g.packInstall <;> cases h2 : g.policy <;> simp [Grants.le, h, h2]
+  cases h : g.packInstall <;> cases h2 : g.policy <;> cases h3 : g.packAuthority <;>
+    simp [Grants.le, h, h2, h3]
 
 theorem Grants.boundedBy_self (g held : Grants) : g.boundedBy g held = true := by
-  cases h : g.packInstall <;> cases h2 : g.policy <;> simp [Grants.boundedBy, h, h2]
+  cases h : g.packInstall <;> cases h2 : g.policy <;> cases h3 : g.packAuthority <;>
+    simp [Grants.boundedBy, h, h2, h3]
 
 theorem Grants.boundedBy_of_le_stored {c s : Grants} (held : Grants)
     (h : c.le s = true) : c.boundedBy s held = true := by
-  cases hc : c.packInstall <;> cases hs : s.packInstall <;>
-    cases hcp : c.policy <;> cases hsp : s.policy <;>
-    simp_all [Grants.le, Grants.boundedBy]
+  simp only [Grants.le, Grants.boundedBy, Bool.and_eq_true, Bool.or_eq_true,
+    Bool.not_eq_true'] at h ⊢
+  exact ⟨⟨Or.inl h.1.1, Or.inl h.1.2⟩, Or.inl h.2⟩
 
 theorem Grants.boundedBy_of_le_held {c held : Grants} (s : Grants)
     (h : c.le held = true) : c.boundedBy s held = true := by
-  cases hc : c.packInstall <;> cases hh : held.packInstall <;>
-    cases hcp : c.policy <;> cases hhp : held.policy <;>
-    simp_all [Grants.le, Grants.boundedBy]
+  simp only [Grants.le, Grants.boundedBy, Bool.and_eq_true, Bool.or_eq_true,
+    Bool.not_eq_true'] at h ⊢
+  exact ⟨⟨h.1.1.elim (fun l => Or.inl (Or.inl l)) Or.inr,
+    h.1.2.elim (fun l => Or.inl (Or.inl l)) Or.inr⟩,
+    h.2.elim (fun l => Or.inl (Or.inl l)) Or.inr⟩
 
 theorem grant_widening_requires_held (decode : Doc → Option Grants) (held : Grants)
     (stored candidate : Doc) (s c : Grants)
@@ -244,7 +248,16 @@ theorem grant_widening_requires_held (decode : Doc → Option Grants) (held : Gr
     (h : keepsGrants decode held stored candidate = true) :
     held.packInstall = true := by
   simp [keepsGrants, Grants.boundedBy, hs, hc, hcp, hsp] at h
-  exact h.1
+  exact h.1.1
+
+theorem authority_widening_requires_held (decode : Doc → Option Grants) (held : Grants)
+    (stored candidate : Doc) (s c : Grants)
+    (hs : decode stored = some s) (hc : decode candidate = some c)
+    (hcp : c.packAuthority = true) (hsp : s.packAuthority = false)
+    (h : keepsGrants decode held stored candidate = true) :
+    held.packAuthority = true := by
+  simp [keepsGrants, Grants.boundedBy, hs, hc, hcp, hsp] at h
+  simp_all
 
 /-- The policy category is held-bounded exactly like pack installation: a Tools
 write that newly selects it needs the stored Tools or the invoker to hold it. -/
@@ -255,7 +268,7 @@ theorem policy_widening_requires_held (decode : Doc → Option Grants) (held : G
     (h : keepsGrants decode held stored candidate = true) :
     held.policy = true := by
   simp [keepsGrants, Grants.boundedBy, hs, hc, hcp, hsp] at h
-  exact h.2
+  exact h.1.2
 
 theorem unrelated_edit_preserves_grants (decode : Doc → Option Grants) (held : Grants)
     (stored candidate : Doc) (g : Grants)
@@ -311,7 +324,7 @@ theorem reselection_from_nothing_requires_held (decode : Doc → Option Grants)
     (h : reselectionKeepsGrants decode held none (some tools) = true) :
     held.packInstall = true := by
   simp [reselectionKeepsGrants, hd, Grants.boundedBy, Grants.bot, hcp] at h
-  exact h.1
+  exact h.1.1
 
 
 end SelfConfig

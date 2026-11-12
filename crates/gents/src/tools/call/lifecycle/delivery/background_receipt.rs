@@ -5,7 +5,7 @@ use crate::store::config_client::session_children::{
 use crate::store::config_client::ConfigApplyTxn;
 #[cfg(test)]
 use crate::store::config_client::IdempotentTransactionRetry;
-use crate::store::graphql::{created_doc_id, escape_graphql_string};
+use crate::store::graphql::created_doc_id;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
@@ -83,6 +83,7 @@ impl ToolCallLifecycle {
             call_id: self.call_id.clone(),
             tool_name: self.tool_name.clone(),
             message_sequence: self.message_sequence,
+            effect: self.plugin_effect_terminal()?,
         })
     }
 }
@@ -110,15 +111,20 @@ pub(super) async fn ensure_background_receipt_before_bridge_close(
         tool_call_id,
         call_id,
     } = key;
-    let key = escape_graphql_string(&format!(
-        "{session_id}:background-receipt:{tool_call_doc_id}"
-    ));
-    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{key}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-        ))
-        .await?;
+    let key = format!("{session_id}:background-receipt:{tool_call_doc_id}");
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_message as message, session_scope, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+                .filter(session_scope(node_did, session_id, requester_did))
+                .filter(Filter::eq(message::MESSAGE_KEY, &key))
+                .limit(2)
+                .render(),
+        )
+        .await?
+    };
     let rows = response["data"]["AgentMessage"]
         .as_array()
         .context("background receipt lookup omitted AgentMessage rows")?;
@@ -160,6 +166,8 @@ pub(crate) struct BackgroundReceiptBinding {
     pub(crate) call_id: Option<String>,
     pub(crate) tool_name: String,
     pub(crate) message_sequence: u32,
+    pub(in crate::tools::call::lifecycle) effect:
+        Option<super::super::plugin_effect::PluginEffectTerminal>,
 }
 
 pub(crate) async fn publish_background_receipt_in_txn(
@@ -167,6 +175,9 @@ pub(crate) async fn publish_background_receipt_in_txn(
     binding: &BackgroundReceiptBinding,
     receipt: &str,
 ) -> Result<bool> {
+    if binding.effect.is_some() {
+        return super::super::plugin_effect::publish_receipt_in_txn(txn, binding, receipt).await;
+    }
     let BackgroundReceiptBinding {
         tool_doc_id,
         request_doc_id,
@@ -180,23 +191,27 @@ pub(crate) async fn publish_background_receipt_in_txn(
         call_id,
         tool_name,
         message_sequence,
+        effect: _,
     } = binding.clone();
     let receipt = receipt.to_owned();
     let key = format!("{session_id}:background-receipt:{tool_doc_id}");
-    let tool = escape_graphql_string(&tool_doc_id);
-    let request = escape_graphql_string(&request_doc_id);
-    let agent = escape_graphql_string(&node_did);
-    let session = escape_graphql_string(&session_id);
-    let requester_filter = requester_did
-        .as_deref()
-        .map(|value| {
-            format!(
-                r#", requester_did: {{ _eq: "{}" }}"#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
-    let existing = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#, escape_graphql_string(&key))).await?;
+    let existing = {
+        use gents_protocol::document_query::{
+            fields::agent_message as message, session_scope, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+                .filter(Filter::eq(message::MESSAGE_KEY, &key))
+                .filter(session_scope(
+                    &node_did,
+                    &session_id,
+                    requester_did.as_deref(),
+                ))
+                .limit(2)
+                .render(),
+        )
+        .await?
+    };
     let existing_rows = existing["data"]["AgentMessage"]
         .as_array()
         .context("background receipt lookup omitted messages")?;
@@ -227,7 +242,24 @@ pub(crate) async fn publish_background_receipt_in_txn(
             },
             _ => unreachable!("physical binding guard established one ToolResult"),
         };
-        let close = txn.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#, escape_graphql_string(close_doc_id))).await?;
+        let close = {
+            use gents_protocol::document_query::{
+                fields::agent_output_segment as segment, session_scope, Filter, Query, Selection,
+            };
+            txn.run(
+                &Query::select(Selection::owned(AGENT_OUTPUT_SEGMENT_FIELDS))
+                    .filter(Filter::eq(segment::DOC_ID, close_doc_id))
+                    .filter(Filter::eq(segment::REQUEST_DOC_ID, &request_doc_id))
+                    .filter(session_scope(
+                        &node_did,
+                        &session_id,
+                        requester_did.as_deref(),
+                    ))
+                    .limit(2)
+                    .render(),
+            )
+            .await?
+        };
         let close_rows = close["data"]["AgentOutputSegment"]
             .as_array()
             .context("background receipt replay omitted authored close")?;
@@ -270,7 +302,29 @@ pub(crate) async fn publish_background_receipt_in_txn(
                     && name == &tool_name && accepted_arguments == &arguments)),
         "background receipt lacks exact accepted invocation"
     );
-    let bridge = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}, tool_call_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }}, message_sequence: {{ _eq: {message_sequence} }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}{requester_filter} }}, limit: 2) {{ _docID }} }}"#, escape_graphql_string(&tool_call_id), escape_graphql_string(&tool_name))).await?;
+    let bridge = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as call, session_scope, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::doc_id())
+                .filter(Filter::eq(call::DOC_ID, &tool_doc_id))
+                .filter(Filter::eq(call::REQUEST_DOC_ID, &request_doc_id))
+                .filter(session_scope(
+                    &node_did,
+                    &session_id,
+                    requester_did.as_deref(),
+                ))
+                .filter(Filter::eq(call::TOOL_CALL_ID, &tool_call_id))
+                .filter(Filter::eq(call::TOOL_NAME, &tool_name))
+                .filter(Filter::eq(call::MESSAGE_SEQUENCE, message_sequence))
+                .filter(Filter::eq(call::LIFECYCLE_STATE, "running"))
+                .filter(Filter::eq(call::AWAIT_MODE, "background"))
+                .limit(2)
+                .render(),
+        )
+        .await?
+    };
     anyhow::ensure!(
         bridge["data"]["AgentToolCall"]
             .as_array()
@@ -315,7 +369,25 @@ pub(crate) async fn publish_background_receipt_in_txn(
         )
         .await?;
     let close_doc_id = created_doc_id(&segment_response, "AgentOutputSegment")?;
-    let receipt_fence = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{tool}", filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}{requester_filter} }}, input: {{ status: "running" }}) {{ _docID }} }}"#)).await?;
+    let receipt_fence = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as call, session_scope, Filter, Input, Update,
+        };
+        txn.run(
+            &Update::doc(&tool_doc_id, Input::new().set(call::STATUS, "running"))
+                .filter(Filter::eq(call::DOC_ID, &tool_doc_id))
+                .filter(Filter::eq(call::REQUEST_DOC_ID, &request_doc_id))
+                .filter(session_scope(
+                    &node_did,
+                    &session_id,
+                    requester_did.as_deref(),
+                ))
+                .filter(Filter::eq(call::LIFECYCLE_STATE, "running"))
+                .filter(Filter::eq(call::AWAIT_MODE, "background"))
+                .render(),
+        )
+        .await?
+    };
     anyhow::ensure!(
         receipt_fence["data"]["update_AgentToolCall"]
             .as_array()

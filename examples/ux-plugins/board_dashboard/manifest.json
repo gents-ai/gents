@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "name": "board_dashboard",
+  "version": "0.1.0",
+  "description": "A read-only dashboard over the board: stats, charts and a table assembled from SDK blocks, reading the `board` surface that ../board_docs installs on the node.",
+  "namespace": "examples",
+  "authors": ["gents"],
+  "tags": ["example", "ux", "dashboard"],
+  "kind": "assets",
+  "assets": [
+    "README.md",
+    "ux/dashboard/plugin.js"
+  ],
+  "ux": [
+    {
+      "name": "dashboard",
+      "description": "A Dashboard nav row and the page it opens: stats, a line, bar and donut chart, and a sortable table.",
+      "entry": "ux/dashboard/plugin.js",
+      "contributes": {
+        "areas": ["nav", "plugin.pages"]
+      },
+      "data": [
+        { "surface": "board", "tools": ["list_tasks", "list_moves"] }
+      ]
+    }
+  ]
+}

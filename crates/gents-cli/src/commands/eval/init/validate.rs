@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use gents::documents::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
-use gents::eval::checks::CheckRegistry;
+use gents_eval::checks::CheckRegistry;
 use serde_json::{json, Value};
 
 use super::dossier::{runtime_collections, Dossier};

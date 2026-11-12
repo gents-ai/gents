@@ -348,6 +348,11 @@ impl Gents {
         &self.node
     }
 
+    /// Operator callers must authenticate before obtaining this node-local write capability.
+    pub fn operator_config_access(&self) -> crate::store::config_client::ConfigAccess {
+        crate::store::config_client::ConfigAccess::local(self.node.clone())
+    }
+
     /// Start an operator-authorized observation of a declared pack query.
     pub async fn watch_ux_data(
         &self,
@@ -699,3 +704,5 @@ pub(crate) fn tool_selection_from_document(
 ) -> anyhow::Result<ResolvedToolSelection> {
     ResolvedToolSelection::from_document(selection)
 }
+
+pub use loop_stream::REPEATED_TOOL_FAILURE_PREFIX;

@@ -1,6 +1,6 @@
 # Eval-runner canary pack
 
-The subject under evaluation in `crates/gents/tests/eval_runner_canary.rs`.
+The subject under evaluation in `crates/gents-eval/tests/eval_runner_canary.rs`.
 
 One agent (`canary`), one context, and one `Tools` document that grants
 read-only file access and no bash: an embedded trial shares the runner's host,

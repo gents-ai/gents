@@ -916,7 +916,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         ])
         .arg(provider.endpoint());
     if matches!(journey, Journey::EditorQuestions) {
-        init.arg("--engineer");
+        init.args(["--engineer", "--no-default-packs"]);
     }
     let output = initialization::Initialization::spawn(&mut init, root)?
         .wait(Duration::from_secs(30))
@@ -2948,8 +2948,7 @@ fn runtime_server_command(binary: &Path, root: &Path, home: &Path, port: u16) ->
         .args(["server", "--home"])
         .arg(home)
         .arg("--http-port")
-        .arg(port.to_string())
-        .arg("--no-codex-shim");
+        .arg(port.to_string());
     command
 }
 

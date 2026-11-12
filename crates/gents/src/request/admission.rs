@@ -16,7 +16,7 @@ use gents_protocol::row::{AgentRequest, AgentRequestRow};
 use serde::Deserialize;
 
 use crate::runtime::agent::p2p_reconcile::EnrollmentAuthorityHandle;
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::request_receipt::{
     row_admission, row_signing_fields, verify_auxiliary_request_shape,
 };
@@ -440,11 +440,21 @@ impl ClientClaimAdmission {
         txn: &crate::store::config_client::ConfigApplyTxn<'_>,
         request: &AgentRequest,
     ) -> Result<ClientClaimAuthorization> {
+        use gents_protocol::document_query::{
+            fields::{
+                agent as agent_fields, agent_request as request_fields,
+                agent_session as session_fields,
+            },
+            Filter, Query, Selection,
+        };
         use ClientClaimAuthorization::{Allowed, Denied, Unavailable};
-        let doc = escape_graphql_string(&request.doc_id);
-        let response = txn.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ {SIGNED_REQUEST_FIELDS} relationships_pending }} }}"#,
-        )).await?;
+        let rendered = Query::select(
+            Selection::owned(SIGNED_REQUEST_FIELDS).field(request_fields::RELATIONSHIPS_PENDING),
+        )
+        .filter(Filter::eq(request_fields::DOC_ID, &request.doc_id))
+        .limit(2)
+        .render();
+        let response = txn.run(&rendered).await?;
         let rows = response["data"]["AgentRequest"]
             .as_array()
             .context("claim admission query omitted rows")?;
@@ -462,10 +472,12 @@ impl ClientClaimAdmission {
         let Some(agent_doc) = self.row.agent_doc_id.as_deref() else {
             return Ok(Unavailable);
         };
-        let session = escape_graphql_string(session_doc);
-        let response = txn.execute(&format!(
-            r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID relationships_pending }} }}"#,
-        )).await?;
+        let rendered =
+            Query::select(Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING))
+                .filter(Filter::eq(session_fields::DOC_ID, session_doc))
+                .limit(2)
+                .render();
+        let response = txn.run(&rendered).await?;
         let Some(sessions) = response["data"]["AgentSession"].as_array() else {
             return Ok(Unavailable);
         };
@@ -516,8 +528,16 @@ impl ClientClaimAdmission {
         }
         let session_matches = session.session.agent_did == request.agent_did
             && session.session.requester_did == request.requester_did;
-        let agent = escape_graphql_string(agent_doc);
-        let target = txn.execute(&format!(r#"{{ Agent(filter: {{ _docID: {{ _eq: "{agent}" }} }}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#)).await?;
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(agent_fields::NODE_DID)
+                .field(agent_fields::AGENT_DID)
+                .field(agent_fields::ENABLED),
+        )
+        .filter(Filter::eq(agent_fields::DOC_ID, agent_doc))
+        .limit(2)
+        .render();
+        let target = txn.run(&rendered).await?;
         let agents = target["data"]["Agent"]
             .as_array()
             .context("claim agent query omitted rows")?;
@@ -700,7 +720,17 @@ impl AgentRequestAdmissionVerifier {
             && validate_signing_fields(&signing_fields).is_ok();
         observation.branch_fields_exact = admission.validate_canonical_fields().is_ok()
             && admission.validate_branch_fields().is_ok();
-        observation.pending_deadline_absent = row.deadline.is_none();
+        // The existing admission projection accepts the owner-installed deadline
+        // only after reconstructing its exact, immutable claim version.
+        observation.pending_deadline_absent =
+            if row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend) {
+                let actor = identity::Did::new(target_agent_did)
+                    .map_err(AgentRequestAdmissionError::denied)?;
+                let access = crate::ConfigAccess::local_as(self.node.clone(), actor);
+                verify_resumed_claim_version(&access, &row).await?
+            } else {
+                row.deadline.is_none()
+            };
         observation.hop_within_bound = request_hop_admitted(self.node.as_ref(), &row).await?;
         if !observation.signature_valid
             || !observation.signed_fields_match
@@ -1076,7 +1106,10 @@ pub(crate) fn validate_authored_content(
     input: &gents_protocol::request_input::RequestInput,
 ) -> AdmissionResult<()> {
     deny_if(
-        input.captured_context.iter().all(|context| context.is_well_formed()),
+        input
+            .captured_context
+            .iter()
+            .all(|context| context.is_well_formed()),
         "captured context requires an ordered UTF-16 range and a positive buffer version when present",
     )?;
     input
@@ -1333,16 +1366,31 @@ async fn verify_automated_trigger_source(
         agent_did: String,
         enabled: bool,
     }
+    use gents_protocol::document_query::{
+        fields::{task as task_fields, trigger as trigger_fields},
+        Filter, Query, Selection,
+    };
     let doc = required_row_string(trigger_doc_id, "trigger document ID")?;
-    let response = graphql_with_transaction_retry(node, &format!(
-        r#"{{ Trigger(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ trigger_id node_did task_id source enabled }} }}"#,
-        escape_graphql_string(doc),
-    ), "reload runtime trigger").await.map_err(AgentRequestAdmissionError::unavailable)?;
+    let trigger_query = Query::select(
+        Selection::new()
+            .field(trigger_fields::TRIGGER_ID)
+            .field(trigger_fields::NODE_DID)
+            .field(trigger_fields::TASK_ID)
+            .field(trigger_fields::SOURCE)
+            .field(trigger_fields::ENABLED),
+    )
+    .filter(Filter::eq(trigger_fields::DOC_ID, doc))
+    .limit(1)
+    .render();
+    let response =
+        crate::store::graphql::read_rendered(node, &trigger_query, "reload runtime trigger")
+            .await
+            .map_err(AgentRequestAdmissionError::unavailable)?;
     let triggers: Vec<TriggerRow> = crate::store::graphql::rows(&response, "Trigger")
         .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
         triggers.len() == 1,
-        "runtime trigger is missing or ambiguous",
+        "runtime trigger no longer exists; it was removed before this fire ran",
     )?;
     let trigger = &triggers[0];
     deny_if(
@@ -1356,10 +1404,19 @@ async fn verify_automated_trigger_source(
             ),
         "runtime trigger physical source, node, kind, or availability changed",
     )?;
-    let response = graphql_with_transaction_retry(node, &format!(
-        r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did enabled }} }}"#,
-        escape_graphql_string(&trigger.task_id), escape_graphql_string(node_did),
-    ), "reload runtime trigger task").await.map_err(AgentRequestAdmissionError::unavailable)?;
+    let task_query = Query::select(
+        Selection::new()
+            .field(task_fields::AGENT_DID)
+            .field(task_fields::ENABLED),
+    )
+    .filter(Filter::eq(task_fields::TASK_ID, &trigger.task_id))
+    .filter(Filter::eq(task_fields::NODE_DID, node_did))
+    .limit(2)
+    .render();
+    let response =
+        crate::store::graphql::read_rendered(node, &task_query, "reload runtime trigger task")
+            .await
+            .map_err(AgentRequestAdmissionError::unavailable)?;
     let tasks: Vec<TaskRow> = crate::store::graphql::rows(&response, "Task")
         .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
@@ -1390,18 +1447,21 @@ async fn load_signed_request_as(
     doc_id: &str,
     actor: &str,
 ) -> AdmissionResult<AgentRequestRow> {
+    use gents_protocol::document_query::{
+        fields::agent_request as request_fields, Filter, Query, Selection,
+    };
     let actor = identity::Did::new(actor).map_err(AgentRequestAdmissionError::denied)?;
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {SIGNED_REQUEST_FIELDS} }} }}"#,
-        escape_graphql_string(doc_id),
-    );
+    let query = Query::select(Selection::owned(SIGNED_REQUEST_FIELDS))
+        .filter(Filter::eq(request_fields::DOC_ID, doc_id))
+        .limit(1)
+        .render();
     let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         Some(actor),
         "request.admission.read_as_agent",
         |txn| {
             let query = &query;
-            Box::pin(async move { txn.execute(query).await })
+            Box::pin(async move { txn.run(query).await })
         },
     )
     .await
@@ -1422,18 +1482,17 @@ async fn load_signed_request(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> AdmissionResult<AgentRequestRow> {
-    let doc_id = escape_graphql_string(doc_id);
-    let response = graphql_with_transaction_retry(
-        node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                {SIGNED_REQUEST_FIELDS}
-            }} }}"#,
-        ),
-        "reload AgentRequest admission row",
-    )
-    .await
-    .map_err(AgentRequestAdmissionError::unavailable)?;
+    use gents_protocol::document_query::{
+        fields::agent_request as request_fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::owned(SIGNED_REQUEST_FIELDS))
+        .filter(Filter::eq(request_fields::DOC_ID, doc_id))
+        .limit(1)
+        .render();
+    let response =
+        crate::store::graphql::read_rendered(node, &query, "reload AgentRequest admission row")
+            .await
+            .map_err(AgentRequestAdmissionError::unavailable)?;
     crate::store::graphql::first_row(&response, "AgentRequest")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
@@ -1441,6 +1500,126 @@ async fn load_signed_request(
                 "AgentRequest disappeared before admission"
             ))
         })
+}
+
+#[derive(Debug)]
+struct ResumeClaimFacts {
+    waiting: bool,
+    version_present: bool,
+    claimed: bool,
+    same_identity: bool,
+    same_deadline: bool,
+    same_backend: bool,
+}
+
+fn resume_claim_valid(facts: &ResumeClaimFacts) -> bool {
+    facts.waiting
+        && facts.version_present
+        && facts.claimed
+        && facts.same_identity
+        && facts.same_deadline
+        && facts.same_backend
+}
+
+/// Reads as the Agent that parked the request: it owns both the wait record
+/// and the claim version being reconstructed.
+pub(crate) async fn verify_resumed_claim_version(
+    access: &crate::ConfigAccess,
+    current: &AgentRequestRow,
+) -> AdmissionResult<bool> {
+    let Some(doc) = current.doc_id.as_deref() else {
+        return Ok(false);
+    };
+    let doc_gql = escape_graphql_string(doc);
+    let wait = access
+        .execute(&format!(r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{doc_gql}" }} }}, limit: 1) {{ node_did claim_cid }} }}"#))
+        .await
+        .map_err(AgentRequestAdmissionError::unavailable)?;
+    let Some(wait) = wait.pointer("/data/AgentRequestBackendWait/0") else {
+        return Ok(false);
+    };
+    if wait.get("node_did").and_then(serde_json::Value::as_str) != current.node_did.as_deref() {
+        return Ok(false);
+    }
+    let Some(cid) = wait
+        .get("claim_cid")
+        .and_then(serde_json::Value::as_str)
+        .filter(|cid| !cid.trim().is_empty())
+    else {
+        return Ok(false);
+    };
+    let cid_gql = escape_graphql_string(cid);
+    let response = access
+        .execute(&format!(r#"query {{ AgentRequest(cid: ["{cid_gql}"], docID: "{doc_gql}", showDeleted: true) {{ {SIGNED_REQUEST_FIELDS} }} }}"#))
+        .await
+        .map_err(AgentRequestAdmissionError::unavailable)?;
+    let versions: Vec<AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
+    )
+    .map_err(AgentRequestAdmissionError::denied)?;
+    if versions.is_empty() {
+        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
+            "original request claim version is unavailable"
+        )));
+    }
+    if versions.len() != 1 {
+        return Ok(false);
+    }
+    let claimed = &versions[0];
+    let current_admission = row_admission(current).map_err(AgentRequestAdmissionError::denied)?;
+    let claimed_admission = row_admission(claimed).map_err(AgentRequestAdmissionError::denied)?;
+    let current_fields = row_signing_fields(current).map_err(AgentRequestAdmissionError::denied)?;
+    let claimed_fields = row_signing_fields(claimed).map_err(AgentRequestAdmissionError::denied)?;
+    let facts = ResumeClaimFacts {
+        waiting: current.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend),
+        version_present: claimed.doc_id.as_deref() == Some(doc),
+        claimed: claimed.lifecycle_state == Some(RequestLifecycleState::Claimed)
+            && claimed
+                .execution_generation
+                .as_deref()
+                .is_some_and(|generation| !generation.trim().is_empty()),
+        same_identity: current_admission.signature == claimed_admission.signature
+            && current_admission.signing_payload(&current_fields)
+                == claimed_admission.signing_payload(&claimed_fields)
+            && current.max_total_tokens == claimed.max_total_tokens
+            && current.execution_lease_secs == claimed.execution_lease_secs
+            && current.background_completion_input_through_sequence
+                == claimed.background_completion_input_through_sequence
+            && current.background_completion_notification_keys_json
+                == claimed.background_completion_notification_keys_json,
+        same_deadline: current
+            .deadline
+            .as_deref()
+            .is_some_and(|deadline| !deadline.trim().is_empty())
+            && current.deadline == claimed.deadline,
+        same_backend: current
+            .backend_id
+            .as_deref()
+            .is_some_and(|backend| !backend.trim().is_empty())
+            && current.backend_id == claimed.backend_id,
+    };
+    Ok(resume_claim_valid(&facts))
+}
+
+#[cfg(test)]
+#[test]
+fn resumed_claim_admission_matches_the_generated_model() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_resume_admission_cases;
+    assert!(!cases.is_empty());
+    for case in cases {
+        let facts = ResumeClaimFacts {
+            waiting: case.waiting,
+            version_present: case.version_present,
+            claimed: case.claimed,
+            same_identity: case.same_identity,
+            same_deadline: case.same_deadline,
+            same_backend: case.same_backend,
+        };
+        assert_eq!(resume_claim_valid(&facts), case.admitted, "{case:?}");
+    }
 }
 
 #[cfg(test)]

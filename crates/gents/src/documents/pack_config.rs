@@ -194,4 +194,20 @@ pub struct PackConfig {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<EvalDefinition>>", optional = nullable))]
     #[schemars(transform = crate::documents::accepts_null)]
     pub eval_definitions: Vec<EvalDefinition>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<PageDocument>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
+    pub pages: Vec<PageDocument>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<PluginSourceDocument>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
+    pub plugin_sources: Vec<PluginSourceDocument>,
 }

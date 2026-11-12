@@ -43,7 +43,6 @@ pub const MAX_MODEL_INVENTORY_JSON_BYTES: usize = 8 * 1_048_576;
 pub enum DiscoverySourceKind {
     Claude,
     Codex,
-    Grok,
 }
 
 impl DiscoverySourceKind {
@@ -54,9 +53,6 @@ impl DiscoverySourceKind {
             }
             Self::Codex => {
                 "Parsed subset: config.toml, AGENTS.md, and SKILL.md; Codex layered configuration, requirements, trust, and policy semantics are not reproduced."
-            }
-            Self::Grok => {
-                "Parsed subset: config.toml, AGENTS.md, MCP JSON, and SKILL.md; Grok CLI/environment/managed precedence and permission semantics are not reproduced."
             }
         }
     }
@@ -361,7 +357,6 @@ struct SourceScan {
 enum ConfigFormat {
     ClaudeJson,
     CodexToml,
-    GrokToml,
     McpJson,
 }
 

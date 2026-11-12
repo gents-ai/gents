@@ -206,8 +206,8 @@ function hostOrThrow(): UxHost {
   return installedHost;
 }
 
-function createStorage(pluginId: string): UxStorage {
-  const scoped = (key: string) => `gents.ux.${pluginId}.${key}`;
+function createStorage(scope: string): UxStorage {
+  const scoped = (key: string) => `gents.ux.${scope}.${key}`;
   return {
     get(key, fallback) {
       try {
@@ -361,6 +361,8 @@ export interface CreateContextOptions {
   notifications?: readonly UxNotificationKind[];
   /** the pack it shipped in (`<ns>/<pack>`); absent outside a pack */
   pack?: string;
+  /** what its storage is kept under; its id when absent */
+  storage?: string;
 }
 
 export function createUxContext(
@@ -430,7 +432,7 @@ export function createUxContext(
     get shell(): UxShell {
       return { ...host().shell, send };
     },
-    storage: createStorage(pluginId),
+    storage: createStorage(options.storage ?? pluginId),
     get os() {
       return host().os;
     },

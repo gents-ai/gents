@@ -4,10 +4,10 @@ use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
 use gents::documents::EvalSplit;
-use gents::eval::report::{load_report, EvalReport, SlotClass};
-use gents::eval::runner::{self, Capture, TrialLocator};
 use gents::eval::scoring::PILOT_PURPOSE;
 use gents::eval::OutcomeKind;
+use gents_eval::report::{load_report, EvalReport, SlotClass};
+use gents_eval::runner::{self, Capture, TrialLocator};
 use serde_json::{json, Value};
 
 use super::draft::parse_reply;
@@ -187,7 +187,7 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
     )
     .await
     .context(
-        "installing the pilot definition; choose a new --definition-id if this home already has it",
+        "installing the pilot definition; eval init takes no --overwrite or --keep, so choose a new --definition-id if this home already has it",
     )?;
     Ok(())
 }
@@ -437,8 +437,8 @@ async fn revise(
 mod tests {
     use std::path::Path;
 
-    use gents::eval::checks::CheckRegistry;
-    use gents::eval::report::load_runs;
+    use gents_eval::checks::CheckRegistry;
+    use gents_eval::report::load_runs;
     use serde_json::json;
 
     use super::super::tests::draft_block;

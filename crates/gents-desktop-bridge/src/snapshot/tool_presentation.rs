@@ -181,48 +181,14 @@ fn split_at_marker(bytes: &[u8], marker_start: usize) -> Option<Streams> {
 }
 
 fn normalize_stream(value: &str) -> String {
-    let stripped = strip_ansi(value).trim_end().to_string();
+    let stripped = gents_desktop_core::ansi::strip_ansi(value)
+        .trim_end()
+        .to_string();
     if stripped == "(empty)" {
         String::new()
     } else {
         stripped
     }
-}
-
-fn strip_ansi(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(character) = chars.next() {
-        if character != '\u{1b}' {
-            output.push(character);
-            continue;
-        }
-        match chars.peek().copied() {
-            Some('[') => {
-                chars.next();
-                for next in chars.by_ref() {
-                    if ('@'..='~').contains(&next) {
-                        break;
-                    }
-                }
-            }
-            Some(']') => {
-                chars.next();
-                let mut previous_escape = false;
-                for next in chars.by_ref() {
-                    if next == '\u{7}' || (previous_escape && next == '\\') {
-                        break;
-                    }
-                    previous_escape = next == '\u{1b}';
-                }
-            }
-            Some(_) => {
-                chars.next();
-            }
-            None => {}
-        }
-    }
-    output
 }
 
 fn project_command(tool: &ToolCallView) -> ToolPresentationView {

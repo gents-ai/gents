@@ -273,6 +273,18 @@ pub trait CommandRunner {
     fn background_item_status(&self, _definition: &Path) -> BackgroundItemStatus {
         BackgroundItemStatus::Unavailable
     }
+
+    /// Let `delay` pass between supervisor probes and report what passed.
+    /// launchd and systemd offer no unload notification, so the wait polls;
+    /// this is the seam that lets a test elapse a virtual clock instead.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "synchronous service-manager probe run off the runtime; launchd and systemd offer no unload notification"
+    )]
+    fn elapse(&self, delay: Duration) -> Duration {
+        std::thread::sleep(delay);
+        delay
+    }
 }
 
 pub struct ProcessCommandRunner;
@@ -412,11 +424,16 @@ mod macos_background {
     }
 }
 
+/// A stop gets a longer window to allow runtime shutdown and store release.
+/// It bounds both the supervisor's own stop command and the wait for the job
+/// to leave the supervisor; launchd (no `ExitTimeOut`: 20 s) and systemd (no
+/// `TimeoutStopSec`: `DefaultTimeoutStopSec`) force the job gone well inside
+/// it, so reaching it means the job really is still loaded.
+const STOP_TIMEOUT: Duration = Duration::from_secs(120);
+
 fn command_timeout(program: &OsStr, args: &[OsString]) -> Duration {
     /// Bound waits on external service manager commands.
     const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
-    /// A stop gets a longer window to allow runtime shutdown and store release.
-    const STOP_TIMEOUT: Duration = Duration::from_secs(120);
 
     let is_stop = (program == OsStr::new("systemctl")
         && args.iter().any(|arg| arg == OsStr::new("stop")))
@@ -655,7 +672,11 @@ where
                     self.run_allow_failure("launchctl", &["print".into(), target.clone().into()])?;
                 ensure_launchd_print_result(&loaded)?;
                 if loaded.success {
-                    self.run_checked("launchctl", &["bootout".into(), target.clone().into()])?;
+                    let booted_out = self.run_allow_failure(
+                        "launchctl",
+                        &["bootout".into(), target.clone().into()],
+                    )?;
+                    ensure_bootout_result(&booted_out)?;
                     self.wait_unloaded_or_inactive()?;
                 }
             }
@@ -938,40 +959,64 @@ where
     /// Confirm the service-manager transition: launchd no longer has the job
     /// label loaded, or systemd reports the unit inactive. This does not claim
     /// an independent observation of the former child PID.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "synchronous service-manager probe run off the runtime; launchd and systemd offer no unload notification"
-    )]
     fn wait_unloaded_or_inactive(&self) -> Result<()> {
-        for _ in 0..20 {
-            match self.platform {
-                NativeServicePlatform::Macos => {
-                    let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
-                    let output =
-                        self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
-                    ensure_launchd_print_result(&output)?;
-                    if !output.success {
-                        return Ok(());
-                    }
-                }
-                NativeServicePlatform::Linux => {
-                    let output = self.run_allow_failure(
-                        "systemctl",
-                        &["--user".into(), "is-active".into(), SYSTEMD_UNIT.into()],
-                    )?;
-                    match output.stdout.as_str() {
-                        "inactive" | "failed" | "unknown" => return Ok(()),
-                        "active" | "activating" | "deactivating" | "reloading" => {}
-                        _ => bail!(
-                            "systemctl could not confirm that the Gents unit became inactive: {}",
-                            output_detail(&output)
-                        ),
-                    }
+        /// First gap after the stop command, so a job that is already gone is
+        /// confirmed by the probe before it.
+        const FIRST_DELAY: Duration = Duration::from_millis(50);
+        /// Cap the gap so a long shutdown costs about a probe a second.
+        const MAX_DELAY: Duration = Duration::from_secs(1);
+
+        // The uid cannot change during a stop, and a probe a second must not
+        // also spawn `id`.
+        let target = match self.platform {
+            NativeServicePlatform::Macos => {
+                Some(format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL))
+            }
+            NativeServicePlatform::Linux => None,
+        };
+        let mut waited = Duration::ZERO;
+        let mut delay = FIRST_DELAY;
+        loop {
+            if self.job_left_the_supervisor(target.as_deref())? {
+                return Ok(());
+            }
+            if waited >= STOP_TIMEOUT {
+                bail!(
+                    "native supervisor did not confirm within {} seconds that the Gents job unloaded or became inactive",
+                    STOP_TIMEOUT.as_secs()
+                );
+            }
+            waited += self.runner.elapse(delay.min(STOP_TIMEOUT - waited));
+            delay = (delay * 2).min(MAX_DELAY);
+        }
+    }
+
+    /// One probe of the stop: `true` once launchd no longer has the job or
+    /// systemd no longer runs the unit.
+    fn job_left_the_supervisor(&self, target: Option<&str>) -> Result<bool> {
+        match self.platform {
+            NativeServicePlatform::Macos => {
+                let target = target.context("launchd probe without a resolved job target")?;
+                let output =
+                    self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
+                ensure_launchd_print_result(&output)?;
+                Ok(!output.success)
+            }
+            NativeServicePlatform::Linux => {
+                let output = self.run_allow_failure(
+                    "systemctl",
+                    &["--user".into(), "is-active".into(), SYSTEMD_UNIT.into()],
+                )?;
+                match output.stdout.as_str() {
+                    "inactive" | "failed" | "unknown" => Ok(true),
+                    "active" | "activating" | "deactivating" | "reloading" => Ok(false),
+                    _ => bail!(
+                        "systemctl could not confirm that the Gents unit became inactive: {}",
+                        output_detail(&output)
+                    ),
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        bail!("native supervisor did not confirm that the Gents job unloaded or became inactive")
     }
 
     fn run_checked(&self, program: &str, args: &[OsString]) -> Result<()> {
@@ -1511,6 +1556,21 @@ fn launchd_is_disabled(output: &str) -> Result<bool> {
         };
     }
     Ok(false)
+}
+
+/// launchd answers `Boot-out failed: 36: Operation now in progress` when a
+/// removal of this job is already under way: 36 is POSIX `EINPROGRESS`, so the
+/// stop was accepted and only the wait can decide its outcome. Every other
+/// refusal stays an error.
+fn ensure_bootout_result(output: &CommandOutput) -> Result<()> {
+    if output.success
+        || output.stderr.contains("36: Operation now in progress")
+        || output.stdout.contains("36: Operation now in progress")
+    {
+        Ok(())
+    } else {
+        bail!("launchctl failed: {}", output_detail(output))
+    }
 }
 
 /// External premise: `launchctl print` reports an unloaded service only as

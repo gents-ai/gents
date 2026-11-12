@@ -99,9 +99,17 @@ pub const BEHAVIOR_NOT_ASSIGNED_MESSAGE: &str = "behavior is not assigned to thi
 /// exactly.
 pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
     failure_reason == BEHAVIOR_NOT_ASSIGNED_MESSAGE
-        || AgentReadinessUnavailableReason::ALL
-            .iter()
-            .any(|reason| reason.public_message() == failure_reason)
+        || unavailable_rejection_reason(failure_reason).is_some()
+}
+
+/// The readiness reason a rejection's `failure_reason` states, on the external
+/// premise of [`is_behavior_unavailable_rejection`].
+pub fn unavailable_rejection_reason(
+    failure_reason: &str,
+) -> Option<AgentReadinessUnavailableReason> {
+    AgentReadinessUnavailableReason::ALL
+        .into_iter()
+        .find(|reason| reason.public_message() == failure_reason)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -16,6 +16,7 @@ use super::records::read_progress;
 use crate::plugin::store::{parse_coordinate, read_published_record};
 use crate::request::binding::load_agent_request_by_doc_id_with_access;
 use crate::store::config_client::ConfigAccess;
+#[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
 
 /// Lean `PluginJobRow` for one job row.
@@ -130,15 +131,22 @@ pub fn step_invocation_allowed(row_running: bool, session_stopped: bool) -> bool
 pub async fn redrive_running_jobs(driver: &Arc<JobDriver>, actor: &identity::Did) -> Result<usize> {
     let runtime = driver.runtime();
     let access = runtime.agent_access(actor)?;
-    let local = match runtime.node.node_identity_did() {
-        Some(did) => format!(r#", node_did: {{ _eq: "{}" }}"#, escape_graphql_string(did)),
-        None => String::new(),
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        let mut query = Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::JOB_PIN),
+        )
+        .filter(Filter::eq(fields::LIFECYCLE_STATE, "running"));
+        if let Some(did) = runtime.node.node_identity_did() {
+            query = query.filter(Filter::eq(fields::NODE_DID, did));
+        }
+        let rendered = query.render();
+        access.read(&rendered).await?
     };
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ lifecycle_state: {{ _eq: "running" }}{local} }}) {{ _docID request_doc_id job_pin }} }}"#
-        ))
-        .await?;
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)
@@ -319,12 +327,20 @@ pub async fn wake_jobs_after_request_update(
     let actor = access
         .actor_did()
         .context("job wake requires a selected agent")?;
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state caused_by_parent_tool_call_doc_id }} }}"#,
-            escape_graphql_string(request_doc_id)
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::new()
+                .field(fields::LIFECYCLE_STATE)
+                .field(fields::CAUSED_BY_PARENT_TOOL_CALL_DOC_ID),
+        )
+        .filter(Filter::eq(fields::DOC_ID, request_doc_id))
+        .limit(1)
+        .render();
+        access.read(&rendered).await?
+    };
     let Some(request) = response.pointer("/data/AgentRequest/0") else {
         return Ok(());
     };
@@ -340,16 +356,19 @@ pub async fn wake_jobs_after_request_update(
     };
     // Embedded nodes carry an identity; a replicated row of another node is
     // not this runtime's to drive.
-    let local = match driver.runtime().node.node_identity_did() {
-        Some(did) => format!(r#", node_did: {{ _eq: "{}" }}"#, escape_graphql_string(did)),
-        None => String::new(),
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        let mut query = Query::select(Selection::new().field(fields::JOB_PIN))
+            .filter(Filter::eq(fields::DOC_ID, row_doc_id))
+            .filter(Filter::eq(fields::LIFECYCLE_STATE, "running"));
+        if let Some(did) = driver.runtime().node.node_identity_did() {
+            query = query.filter(Filter::eq(fields::NODE_DID, did));
+        }
+        let rendered = query.limit(1).render();
+        access.read(&rendered).await?
     };
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }}{local} }}, limit: 1) {{ job_pin }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
-        .await?;
     let is_job = response
         .pointer("/data/AgentToolCall/0/job_pin")
         .is_some_and(|pin| !pin.is_null());

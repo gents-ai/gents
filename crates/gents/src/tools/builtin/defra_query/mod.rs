@@ -99,6 +99,9 @@ pub struct DefraQueryTool {
     node: Arc<EmbeddedNode>,
     scope: CollectionScope,
     actor: Option<::identity::Did>,
+    /// Whether the calling agent holds the `tools` category of `config`,
+    /// which decides who a refused write verb is told can grant writes.
+    holds_tools: bool,
 }
 
 impl DefraQueryTool {
@@ -107,7 +110,12 @@ impl DefraQueryTool {
             node,
             scope,
             actor: None,
+            holds_tools: false,
         }
+    }
+    pub fn with_tools_category(mut self, held: bool) -> Self {
+        self.holds_tools = held;
+        self
     }
     pub fn with_actor(mut self, actor: ::identity::Did) -> Self {
         self.actor = Some(actor);
@@ -124,6 +132,12 @@ impl Tool for DefraQueryTool {
         ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [search], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string","description":"GraphQL collection name. Discover with schema collection list. Surface IDs belong to config datastore get."},"options":{"type":"object"}}})}
     }
     async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
+        if let Some(verb) = command::write_verb(&args) {
+            return Err(anyhow!("{}", json!({
+                "error": format!("query only reads; it has no {verb} command. Writes go through the write tool"),
+                "recovery": crate::tools::builtin::defra_write::write_grant_guidance(self.holds_tools, None, args.collection.as_slice()),
+            })).into());
+        }
         let result = if let Some(actor) = &self.actor {
             crate::store::config_client::ConfigAccess::transact_local_readonly(
                 &self.node,
@@ -152,9 +166,16 @@ pub fn build_defra_query_tool(
     node: Arc<EmbeddedNode>,
     scope: CollectionScope,
     actor: ::identity::Did,
+    holds_tools: bool,
 ) -> Box<dyn ToolDyn> {
-    Box::new(DefraQueryTool::new(node, scope).with_actor(actor))
+    Box::new(
+        DefraQueryTool::new(node, scope)
+            .with_actor(actor)
+            .with_tools_category(holds_tools),
+    )
 }
 
 #[cfg(test)]
 mod tests;
+
+pub use query::collect_filter_field_keys;

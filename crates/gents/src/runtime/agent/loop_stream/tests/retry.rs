@@ -304,6 +304,7 @@ async fn deadline_fail_fast_pre_sleep() {
     loop_config.retry_policy = crate::runtime::agent::completion_retry::CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(30)],
         max_resample: 0,
+        max_empty_resample: 0,
         allow_repair: false,
         account_hops: 0,
     };

@@ -12,6 +12,117 @@ source consistency checks, not a separate runtime compatibility version.
   (`desktop_node_reconnect`), which asks the client's observer and answers
   with the node's runtime connection; the `fleet-read` grant still governs
   what the client snapshot shows.
+
+## 1.0.0-rc2 - 2026-11-10
+
+- Breaking: a home created by v1.0.0-rc1 or v1.0.0-rc0 is not opened,
+  converted or migrated. Starting on one stops before any write and says to
+  back it up or delete it and run `gents`; see
+  [docs/upgrade-from-rc1.md](docs/upgrade-from-rc1.md).
+- The Engineer builds what you ask for on its node: the data, the pages you
+  open in the desktop, and the agents and schedules that keep it running. It
+  was a configuration guide; its prompt and description are rewritten for
+  the new role.
+- A page is a `Page` document on the node: its id, display name, module,
+  optional stylesheet, the datastore surfaces and tools it may call, and
+  whether it is enabled. The `config` tool creates, reads, updates and
+  deletes pages and lints one with `page lint ID`, so an agent can add a
+  page without a pack or the filesystem. The desktop lists the selected
+  node's pages beside the home's plugins and loads them under their declared
+  grants, keeping each page's enable choice, storage and notification
+  switches per node. A pack can ship pages in `pack_config.json` (`pages`).
+- A plugin can be written on the node. Its source is a `PluginSource`
+  document: a name, language, one entry file, input schema, data declaration
+  and test cases. `config plugin build NAME` compiles it in the command
+  sandbox, runs its cases and installs it as `node/NAME`; a failed build or
+  case installs nothing and the source stays for the next edit. A pack can
+  ship plugin sources in `pack_config.json` (`plugin_sources`).
+- `pack export NAME` in the config tool and `gents config pack export` write
+  documents that are live on a node, and what they reference, to a new pack
+  directory. Agents become agent slots, DIDs become the variables an install
+  rebinds, prompts and skills become sidecar files, and pages, plugin sources
+  and the application collections they use come along. A plugin built on the
+  node ships as the pack's own plugin source. A reference a pack cannot carry
+  refuses the export by name before anything is written.
+- A plugin can declare the `host_call` import (`host_imports`). The host
+  suspends it for one tool call on the calling agent's own tools, or a bounded
+  sleep, and resumes it with the result. Each call is recorded as a tool call
+  under the plugin's, runs with the caller's authority when the agent's Tools
+  select the plugin with `tool_calls: true`, and stops when the plugin stops.
+  `gents/script` is built on it. A selected plugin that imports `host_call`
+  can be started in the background with `spawn_process`.
+- The config tool gains `pack wire PACKAGE`, with `pack preview wire` and
+  `--remove`: an agent that holds the pack grant wires an installed pack's
+  plugins, job block, agent targets and skills into its own Tools and Context,
+  or into another agent's with the agent catalog grant, as
+  `gents config pack wire` does. A Tools edit that selects a plugin the node
+  has not installed is refused.
+- An installed plugin can be retired: `pack remove` now works for a pack that
+  ships plugins or depends on one that does. It is refused while a Tools
+  document the caller can read still selects the plugin, and names each one
+  and the call that unwires it (`pack wire PACKAGE --remove`).
+- Breaking: a pack's agent slot no longer binds to an existing agent because
+  their names match. It binds only when the installer names the agent's DID in
+  that install's own arguments: `--bind-agent SLOT=AGENT_DID` on
+  `gents config pack install`, or the install variable
+  `GENTS_PACK_BIND_AGENT_<SLOT>` in the config tool's `options.var`. The
+  process environment never binds a slot, and a dependency's same-named slot
+  does not inherit the binding; otherwise the pack provisions its own agent.
+  `pack export` returns both forms for the agents it was exported from
+  (`bind_agents`), and the install preview lists the bindings.
+- A Trigger can open one session per rendered key (`create_session`), and has
+  a fire budget, `max_fires_per_hour` (default 1000): exhausting it disables
+  the Trigger and records why in `last_status` and `last_error`.
+  `trigger explain` in the config tool and `gents config trigger explain`
+  say why a Trigger did or did not deliver a document.
+- A request that meets a provider outage is parked instead of failed, and
+  continues from the turns it already completed once the provider answers
+  again (#3590).
+- After setup the desktop shows a "Starter packs" card listing the
+  Engineer's six starter packs and the permissions each requests. Approve
+  them one by one or all at once; approving restarts the local node for a
+  moment while the packs install. "Not now" closes the card, and the same
+  list stays in the Packs screen.
+- `config plugin run` runs an installed plugin the way its tool call does: the
+  host serves the plugin's data requests under the calling agent's access (and
+  model, HTTP and, when the agent's Tools select the plugin with them, tool
+  calls) and re-invokes it with the answers, and the plugin's writes commit
+  with the call. A request the command cannot serve is an error that names it
+  and the call that does, instead of being returned as the plugin's output.
+- `gents init --engineer` installs the Engineer's default packs into a fresh
+  home: `gents/pack_builder`, `gents/web`, `gents/dynamic_workflows`,
+  `gents/charts`, `gents/data_tables` and `gents/script`, resolved by name
+  from the home's pack store and then the registry (nothing is bundled).
+  `gents/script` runs a short script over the Engineer's own tools (waiting,
+  trying logic, bulk changes); approving it wires it with `tool_calls: true`,
+  and unapproved it is wired without that until the Engineer's own Tools
+  turn it on. Init names them,
+  asks per pack, with yes as the default, before granting the permissions
+  its plugins request, wires
+  plugins into the Engineer's Tools and attaches skills to its Context.
+  Without a terminal, `--approve-default-packs` approves; otherwise a pack
+  that requests permissions, or whose agents would be granted the
+  Engineer's folder, is left uninstalled. `--no-default-packs` skips
+  them. A pack that cannot be resolved or approved never fails init: it is
+  listed under `default_packs.not_installed` with the command that installs
+  it later: `gents config pack starter --approve <pack>`, which installs it
+  as init does (run it with the runtime stopped). Without `--approve`,
+  `gents config pack starter` lists each starter pack and what it requests.
+- The `schema` tool can clean up application collections: `collection empty`
+  deletes every document and keeps the definition, and `collection remove`
+  deletes an empty collection, each behind a preview that states the loss.
+  Both refuse Gents-managed collections. Remove also refuses a collection a
+  datastore surface entry, a page data grant, an event source, an installed
+  pack or a P2P pairing still names; empty lists those users in its preview. The schema tool grant now carries DefraDB's
+  `truncate-collection` node permission. `config pack remove PACKAGE
+  --with-collections` also removes the pack's collections that nothing else
+  uses; the default still keeps them (#3572).
+- A `gents` invocation and the desktop app that first touch one home at the
+  same moment no longer fail with `persisting .../principal.json: No such
+  file or directory`. Client identity metadata is staged under a name no
+  other writer can pick and installed in one rename, so concurrent first-run
+  writers cannot consume each other's staging file and no reader observes
+  the metadata file missing (#3659).
 - Rendered request captures cut the stable request fields (model, tool
   schemas, settings) apart from the message list, and close shared manifest
   groups after four entries at every second content key instead of eight at
@@ -69,7 +180,7 @@ source consistency checks, not a separate runtime compatibility version.
   | `query`, `write`, `export`, `document`, `schema` | `utils data query`, and so on |
   | `request`, `response`, `trace`, `background`, `fleet` | `utils debug request`, and so on |
   | `eval`, `optimization` | `utils eval`, `utils optimization` |
-  | `codex` | hidden, still works; bare `gents` opens it |
+  | `codex` | removed; bare `gents` opens the built-in shell |
   | `init`, `prepare-runtime` | hidden, still work |
 
   `gents server` and `gents service` also still work, hidden: installed service
@@ -79,48 +190,59 @@ source consistency checks, not a separate runtime compatibility version.
   `--agent DID`, prints only the reply and exits, as `claude -p` does. It brings
   up the runtime as bare `gents` does, needs no terminal on a home that is set
   up, and denies any approval the turn asks for.
-- `gents PROMPT` opens the configured interface, Codex or Grok, with PROMPT as
-  its first message, as `claude "query"` does. A PROMPT that is only a former
-  command's name, such as `reset`, is refused with the command's new name rather
-  than sent. Codex and Grok get the prompt after `--`, so one that names their
-  own subcommand, such as `update`, is sent instead of run; this also covers
-  `gents codex PROMPT`.
+- `gents PROMPT` opens the built-in shell with PROMPT as its first message, as
+  `claude "query"` does. A PROMPT that is only a former command's name, such as
+  `reset` or `codex`, is refused with the command's new name rather than sent.
 - `gents --continue SESSION_ID` picks a session back up with the agent it had:
-  in Codex through `codex resume`, or for one more turn with `-p MESSAGE`, which
-  waits for a turn still running in that session. Grok cannot open a session at
-  launch, so a home set to Grok refuses it and names `-p` or Codex instead.
-  When Codex or Grok closes, `gents` prints the `--continue` command for the
-  session that window last gave a turn to.
+  in the built-in shell's first tab, or for one more turn with `-p MESSAGE`,
+  which waits for a turn still running in that session. The shell takes no
+  PROMPT with it; type the next turn once the session opens. When the shell
+  closes, `gents` prints the `--continue` command for the session its center
+  pane showed.
 - `gents --yolo` opens the yolo agent, and `gents --yolo -p MESSAGE` messages it:
   a general-purpose agent with a copy of the default agent's tools, The
   Engineer's on a home `gents` set up. The first use makes it, later uses reuse
   it.
 - `gents` with no command sets up a home on first run, brings up its runtime
   through the native service without enabling it at login, and opens the
-  configured interface. Setup seeds The Engineer with the desktop's default
-  authority (the `yolo` tool package; commands run as you and the tool root is
-  not a sandbox) and asks for a provider, then its connection method, from the
-  desktop's catalog. After sign-in it lists the provider's models and asks each
+  built-in shell. Setup seeds The
+  Engineer with the desktop's default authority (the `yolo` tool package;
+  commands run as you and the tool root is not a sandbox) and asks for a
+  provider, then its connection method, from the desktop's catalog. After
+  sign-in it lists the provider's models and asks each
   value the desktop offers for the chosen model, showing its default. Without a terminal it prints help and exits 2, as a missing
-  subcommand did. `gents` refuses a Codex endpoint that does not identify
-  itself as this home's, and the shim answers that question at `GET /runtime`.
-- `gents --agent DID` and `gents codex --agent DID` open any runnable agent side by
-  side with no restart, with no saved agent setting. For Codex this needs a local
-  runtime with no pinned agent, and `--agent` is refused for any other endpoint.
-- When `gents` opens Codex from a directory inside the tool root, the thread starts
-  there. From outside it, `gents` prints the directory the thread will use, before
-  Codex opens and again after it exits. Threads default to the tool root.
+  subcommand did.
+- `gents --agent DID` opens any runnable agent in the shell's first tab, in as
+  many terminals side by side as you like, with no restart and no saved agent
+  setting.
 - First-run setup asks which folder agents should work in.
   It refuses the filesystem root and anything above the person's home, as the desktop
   does, and asks for confirmation before using the whole home.
-- `gents config client set codex|grok` chooses the interface a home opens, and
-  `config client show` reads it. A home set to Grok serves the Grok socket. `gents`
-  opens the socket the runtime reports and refuses one its runtime does not hold.
+- The Grok Build interface is removed. The runtime no longer serves the Grok
+  socket, `gents runtime server` no longer takes `--grok-shim`,
+  `--grok-shim-socket-path` or `--grok-shim-agent-id`. Agents' `config
+  discovery scan` no longer reads Grok CLI configuration and refuses a `grok`
+  source. Grok as a model provider, including `accounts login grok`, is
+  unchanged.
+- The Codex interface and the runtime's Codex app-server are removed. Bare
+  `gents`, `gents PROMPT`, `gents --agent DID` and `gents --continue SESSION_ID`
+  open the built-in shell, which reads and writes the runtime over its signed
+  GraphQL endpoint, as the desktop does; `gents` waits for that endpoint and for
+  an agent the runtime reports ready. Removed: `gents codex`, `gents config
+  client set` and `show`, `gents runtime server --no-codex-shim` and its
+  `--codex-shim-bind-addr`, `--codex-shim-port`, `--codex-shim-auth-token-env`,
+  `--codex-shim-public-url`, `--codex-shim-agent-did`, `--codex-shim-timeout-secs`
+  and `--codex-shim-poll-ms`, `gents shell --codex-remote`, the server's
+  `codex_shim` ready output and `/healthz` `checks.codex_shim`. Scripts that pass
+  `--no-codex-shim` must drop it. A `client.json` left in a home, naming Codex or
+  Grok, is named when `gents` opens and otherwise ignored; delete it to stop the
+  notice. Codex as a model provider, including `accounts login codex`, is
+  unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
-- The shim answers `config/read` for a directory inside the tool root as trusted, so
-  Codex does not ask about it on every open. Outside the tool root Codex still asks.
-- The shim refuses a WebSocket handshake carrying `Origin`. With a loopback bind and no
-  public URL, `GET /runtime` answers only a loopback `Host`.
+- Stopping the native service waits for the runtime's own shutdown instead of
+  about a second, so a stop that succeeds no longer reports `native supervisor
+  did not confirm that the Gents job unloaded or became inactive`. Stop node in
+  the desktop stops showing that error on macOS (#3652).
 
 ## 1.0.0-rc1 - 2026-11-03
 

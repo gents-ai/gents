@@ -257,7 +257,7 @@ impl ToolCallLifecycle {
             .map(|effect| effect.parent_tool_call_doc_id.as_str())
             .or(spawned_by_tool_call_doc_id.as_deref())
             .unwrap_or(&row.doc_id);
-        let accepted = Self::load_direct_binding_in_txn(
+        let accepted = Self::load_accepted_binding_in_txn(
             txn,
             admission_doc_id,
             owner,
@@ -333,12 +333,6 @@ impl ToolCallLifecycle {
                 "spawned lifecycle must be background work"
             );
         }
-        if plugin_effect.is_some() {
-            anyhow::ensure!(
-                await_mode == AwaitMode::Foreground,
-                "plugin effect must remain foreground work"
-            );
-        }
         let arguments = if let Some(effect) = &plugin_effect {
             let binding = super::delivery::ToolOutputBinding {
                 actor: accepted.actor.clone(),
@@ -382,15 +376,21 @@ impl ToolCallLifecycle {
         let selected_tool_identity =
             decode_selected_tool_identity(row.selected_service_id, row.selected_tool_name)?;
 
-        let scope = gents_protocol::session::session_scope_filter(
-            owner,
-            &row.session_id,
-            row.requester_did.as_deref(),
-        );
-        let request_doc = escape_graphql_string(&accepted.request_doc_id);
-        let request_response = txn.execute_local_response(&format!(
-            r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{request_doc}" }} }}, limit: 2) {{ request_id }} }}"#
-        )).await?;
+        let request_response = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, session_scope, Filter, Query, Selection,
+            };
+            let rendered = Query::select(Selection::new().field(fields::REQUEST_ID))
+                .filter(session_scope(
+                    owner,
+                    &row.session_id,
+                    row.requester_did.as_deref(),
+                ))
+                .filter(Filter::eq(fields::DOC_ID, &accepted.request_doc_id))
+                .limit(2)
+                .render();
+            txn.run_local_response(&rendered).await?
+        };
         anyhow::ensure!(
             !request_response.has_errors(),
             "tool owner request lookup failed: {:?}",

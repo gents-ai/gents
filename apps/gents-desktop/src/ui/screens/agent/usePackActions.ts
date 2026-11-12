@@ -23,6 +23,9 @@ export type PackInstallChoice = {
   pack: string;
   edited: PackEditedChoice;
   grantAuthority: boolean;
+  /** the folder access the review showed, as `PACK=AGENT` rows: only these
+      agents are let into the folder */
+  rootAgents: string[];
   /** the `NAME=PROFILE` model bindings the review previewed */
   inferenceSlots: string[];
 };
@@ -72,6 +75,7 @@ export function usePackActions(refresh: () => Promise<void>) {
         package: request.package,
         edited: choice.edited,
         grantAuthority: choice.grantAuthority,
+        rootAgents: choice.rootAgents,
         expectDigest: choice.digest,
         inferenceSlots: choice.inferenceSlots,
       });

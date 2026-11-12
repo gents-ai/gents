@@ -110,6 +110,8 @@ pub fn config_projection(
         Collection::CallbackModule => project::<CallbackModule>(value),
         Collection::RepositoryPlacement => project::<RepositoryPlacement>(value),
         Collection::EvalDefinition => project::<EvalDefinition>(value),
+        Collection::Page => project::<PageDocument>(value),
+        Collection::PluginSource => project::<PluginSourceDocument>(value),
     }
 }
 

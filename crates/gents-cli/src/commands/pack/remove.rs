@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::pack::{InstalledPackPlugin, PackKind, RemoveReport};
+use gents::pack::{InstalledPackPlugin, PackChangeError, PackKind, RemoveReport};
 use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::cli::PackRemoveArgs;
 
-pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
+pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> {
     let (namespace, name) = super::split_namespace(&args.package);
     let coordinate = format!("{namespace}/{name}");
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
@@ -19,20 +19,24 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     if args.scope.graphql.is_none() {
         if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
             if matches!(record.kind, PackKind::Assets | PackKind::Plugins) {
-                anyhow::ensure!(
-                    args.scope.node_did.is_none(),
-                    "asset and plugins packs are removed locally with --home; identity flags do not apply"
-                );
+                if args.scope.node_did.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "asset and plugins packs are removed locally with --home; identity flags do not apply"
+                    )
+                    .into());
+                }
                 let removed = remove_home_install(&home, &coordinate).await?;
-                return crate::print_json(&json!({ "pack": coordinate, "removed": removed }));
+                return Ok(crate::print_json(
+                    &json!({ "pack": coordinate, "removed": removed }),
+                )?);
             }
             documents_record = true;
         }
-        anyhow::ensure!(
-            gents::store::local::home::init_config_path(&home).is_file(),
-            "{coordinate} is not installed in {}",
-            home.display()
-        );
+        if !gents::store::local::home::init_config_path(&home).is_file() {
+            return Err(
+                anyhow::anyhow!("{coordinate} is not installed in {}", home.display()).into(),
+            );
+        }
     }
 
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
@@ -88,7 +92,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
             &plugin_bytes,
             &archives,
         )?;
-        Ok::<_, anyhow::Error>(json!({ "pack": coordinate, "owner": owner, "removed": removed }))
+        Ok::<_, PackChangeError>(json!({ "pack": coordinate, "owner": owner, "removed": removed }))
     }
     .await;
     if let Some(node) = access.local_node() {
@@ -96,7 +100,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
         }
     }
-    crate::print_json(&result?)
+    Ok(crate::print_json(&result?)?)
 }
 
 fn augment_report(
@@ -193,7 +197,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
         return Ok(());
     }
     if !gents::store::local::home::init_config_path(home).is_file() {
-        return Err(gents::pack::PackRemovalError::ReferenceInventoryUnavailable.into());
+        return Err(gents::pack::PackRemovalError::NodeUnobserved.into());
     }
     #[cfg(test)]
     {
@@ -285,7 +289,7 @@ pub(crate) async fn remove_home_install_with_guard(
     if !record.plugins.is_empty() {
         super::warn_on_unrecorded_removal(
             coordinate,
-            super::record_plugin_store_change(home, coordinate, None).await,
+            super::record_plugin_retirement(home, coordinate).await,
         );
     }
 

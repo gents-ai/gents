@@ -6,7 +6,8 @@ use serde_json::Value;
 
 use crate::runtime::agent::loop_stream::TaggedMessage;
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
+#[cfg(test)]
+use crate::store::graphql::escape_graphql_string;
 
 fn current_keys(claimed: &[String], acknowledged: &[String]) -> Vec<String> {
     let acknowledged = acknowledged.iter().collect::<BTreeSet<_>>();
@@ -61,71 +62,201 @@ pub(super) async fn load(
     let Some(cutoff) = cutoff else {
         return Ok(Vec::new());
     };
-    let scope = gents_protocol::session::session_scope_filter(
-        &request.node_did,
-        &request.session_id,
-        request.requester_did.as_deref(),
-    );
-    access.transact_readonly("request.wake_input", |txn| {
-        let scope = scope.clone();
-        Box::pin(async move {
-            let mut assignments = crate::goal::load_request_assignment_scopes(txn, &request.node_did, &request.session_id).await?;
-            let validate_wake = |row: &gents_protocol::row::AgentRequestRow| -> Result<()> {
-                anyhow::ensure!(row.input.as_ref().is_some_and(crate::request::lifecycle::is_background_completion_request), "notification receipt does not belong to a background wake");
-                crate::store::identity::request_receipt::verify_runtime_local_control_receipt(row, &request.node_did,
-                    row.caused_by_parent_request_id.as_deref().context("background wake receipt has no signed parent")?,
-                    request.requester_did.as_deref().unwrap_or(&request.node_did))?;
-                Ok(())
-            };
-            validate_wake(assignments.request(&request.doc_id)?)?;
-            assignments.scope(&request.doc_id).await?;
-            let doc = escape_graphql_string(&request.doc_id);
-            let response = txn.execute(&format!(r#"{{
-                current: AgentRequest(filter: {{{scope}, _docID: {{_eq: "{doc}"}}, background_completion_input_through_sequence: {{_eq: {cutoff}}}}}, limit: 1) {{background_completion_notification_keys_json}}
-                acknowledged: AgentRequest(filter: {{{scope}, _docID: {{_ne: "{doc}"}}, lifecycle_state: {{_eq: "{completed}"}}, background_completion_notification_keys_json: {{_ne: null}}, background_completion_input_through_sequence: {{_le: {cutoff}}}}}) {{_docID background_completion_input_through_sequence background_completion_notification_keys_json}}
-            }}"#, completed = RequestLifecycleState::Completed.as_str())).await?;
-            let current = rows(&response, "current")?.first().context("current wake claim receipt is unavailable")?;
-            let claimed = receipt_keys(current)?;
-            if claimed.is_empty() { return Ok(Vec::new()); }
-            let mut acknowledged = std::collections::BTreeMap::<String, u64>::new();
-            for receipt in rows(&response, "acknowledged")? {
-                let keys = receipt_keys(receipt)?;
-                if !keys.iter().any(|key| claimed.contains(key)) { continue; }
-                let receipt_doc = receipt["_docID"].as_str().context("completed wake receipt has no physical request")?;
-                validate_wake(assignments.request(receipt_doc)?)?;
-                assignments.scope(receipt_doc).await?;
-                let through = receipt["background_completion_input_through_sequence"].as_u64().context("completed wake receipt lacks its revision cutoff")?;
-                for key in keys {
-                    acknowledged.entry(key).and_modify(|prior| *prior = (*prior).max(through)).or_insert(through);
+    access
+        .transact_readonly("request.wake_input", |txn| {
+            Box::pin(async move {
+                let mut assignments = crate::goal::load_request_assignment_scopes(
+                    txn,
+                    &request.node_did,
+                    &request.session_id,
+                )
+                .await?;
+                let validate_wake = |row: &gents_protocol::row::AgentRequestRow| -> Result<()> {
+                    anyhow::ensure!(
+                        row.input.as_ref().is_some_and(
+                            crate::request::lifecycle::is_background_completion_request
+                        ),
+                        "notification receipt does not belong to a background wake"
+                    );
+                    crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                        row,
+                        &request.node_did,
+                        row.caused_by_parent_request_id
+                            .as_deref()
+                            .context("background wake receipt has no signed parent")?,
+                        request
+                            .requester_did
+                            .as_deref()
+                            .unwrap_or(&request.node_did),
+                    )?;
+                    Ok(())
+                };
+                validate_wake(assignments.request(&request.doc_id)?)?;
+                assignments.scope(&request.doc_id).await?;
+                let response = {
+                    use gents_protocol::document_query::{
+                        fields::agent_request as fields, session_scope, Filter, Query, QuerySet,
+                        Selection,
+                    };
+                    let current_query = Query::select(
+                        Selection::new()
+                            .field(fields::BACKGROUND_COMPLETION_NOTIFICATION_KEYS_JSON),
+                    )
+                    .filter(session_scope(
+                        &request.node_did,
+                        &request.session_id,
+                        request.requester_did.as_deref(),
+                    ))
+                    .filter(Filter::eq(fields::DOC_ID, &request.doc_id))
+                    .filter(Filter::eq(
+                        fields::BACKGROUND_COMPLETION_INPUT_THROUGH_SEQUENCE,
+                        cutoff,
+                    ))
+                    .limit(1);
+                    let acknowledged_query = Query::select(
+                        Selection::doc_id()
+                            .field(fields::BACKGROUND_COMPLETION_INPUT_THROUGH_SEQUENCE)
+                            .field(fields::BACKGROUND_COMPLETION_NOTIFICATION_KEYS_JSON),
+                    )
+                    .filter(session_scope(
+                        &request.node_did,
+                        &request.session_id,
+                        request.requester_did.as_deref(),
+                    ))
+                    .filter(Filter::ne(fields::DOC_ID, &request.doc_id))
+                    .filter(Filter::eq(
+                        fields::LIFECYCLE_STATE,
+                        RequestLifecycleState::Completed.as_str(),
+                    ))
+                    .filter(Filter::not_null(
+                        fields::BACKGROUND_COMPLETION_NOTIFICATION_KEYS_JSON,
+                    ))
+                    .filter(Filter::le(
+                        fields::BACKGROUND_COMPLETION_INPUT_THROUGH_SEQUENCE,
+                        cutoff,
+                    ));
+                    let rendered = QuerySet::new()
+                        .root("current", &current_query)
+                        .root("acknowledged", &acknowledged_query)
+                        .render();
+                    txn.run(&rendered).await?
+                };
+                let current = rows(&response, "current")?
+                    .first()
+                    .context("current wake claim receipt is unavailable")?;
+                let claimed = receipt_keys(current)?;
+                if claimed.is_empty() {
+                    return Ok(Vec::new());
                 }
-            }
-            let keys = &claimed;
-            let mut headers = Vec::new();
-            for batch in keys.chunks(128) {
-                let response = txn.execute(&format!("{{AgentMessage(filter: {{{scope}, sequence: {{_le: {cutoff}}}, message_key: {{_in: {}}}}}) {{{}}}}}", graphql_string_list_literal(batch.iter().map(String::as_str)), gents_protocol::output::rows::AGENT_MESSAGE_FIELDS)).await?;
-                headers.extend(rows(&response, "AgentMessage")?.iter().map(|row| gents_protocol::output::rows::decode_transcript_message_row(row).map_err(anyhow::Error::from)).collect::<Result<Vec<_>>>()?);
-            }
-            anyhow::ensure!(headers.len() == keys.len() && headers.iter().map(|row| &row.message.message_key).collect::<BTreeSet<_>>().len() == keys.len(), "current wake notifications are missing or ambiguous");
-            headers.sort_by_key(|row| row.message.sequence);
-            anyhow::ensure!(headers.windows(2).all(|pair| pair[0].message.sequence < pair[1].message.sequence), "current wake notifications have ambiguous sequence order");
-            let settled = headers.iter().filter(|header| acknowledged.get(&header.message.message_key)
-                .is_some_and(|cutoff| u64::from(header.message.sequence) <= *cutoff))
-                .map(|header| header.message.message_key.clone()).collect::<Vec<_>>();
-            let current = current_keys(&claimed, &settled).into_iter().collect::<BTreeSet<_>>();
-            headers.retain(|header| current.contains(&header.message.message_key));
-            let mut reader = crate::session::TxnCanonicalReader::new(txn, &request.node_did, request.requester_did.as_deref());
-            reader.observe_headers(&headers);
-            let mut notifications = Vec::with_capacity(headers.len());
-            for header in headers {
-                let (_, message) = reader.load_message(&header.doc_id).await?;
-                anyhow::ensure!(matches!(message, crate::inference::llm::message::Message::User { .. }), "wake notification is not user input");
-                let mut row = TaggedMessage::unassociated(message);
-                row.physical_header = Some(header.doc_id);
-                notifications.push(row);
-            }
-            Ok(notifications)
+                let mut acknowledged = std::collections::BTreeMap::<String, u64>::new();
+                for receipt in rows(&response, "acknowledged")? {
+                    let keys = receipt_keys(receipt)?;
+                    if !keys.iter().any(|key| claimed.contains(key)) {
+                        continue;
+                    }
+                    let receipt_doc = receipt["_docID"]
+                        .as_str()
+                        .context("completed wake receipt has no physical request")?;
+                    validate_wake(assignments.request(receipt_doc)?)?;
+                    assignments.scope(receipt_doc).await?;
+                    let through = receipt["background_completion_input_through_sequence"]
+                        .as_u64()
+                        .context("completed wake receipt lacks its revision cutoff")?;
+                    for key in keys {
+                        acknowledged
+                            .entry(key)
+                            .and_modify(|prior| *prior = (*prior).max(through))
+                            .or_insert(through);
+                    }
+                }
+                let keys = &claimed;
+                let mut headers = Vec::new();
+                for batch in keys.chunks(128) {
+                    let response = {
+                        use gents_protocol::document_query::{
+                            fields::agent_message as message, session_scope, Filter, Query,
+                            Selection,
+                        };
+                        let rendered = Query::select(Selection::owned(
+                            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
+                        ))
+                        .filter(session_scope(
+                            &request.node_did,
+                            &request.session_id,
+                            request.requester_did.as_deref(),
+                        ))
+                        .filter(Filter::le(message::SEQUENCE, cutoff))
+                        .filter(Filter::any_of(
+                            message::MESSAGE_KEY,
+                            batch.iter().map(String::as_str),
+                        ))
+                        .render();
+                        txn.run(&rendered).await?
+                    };
+                    headers.extend(
+                        rows(&response, "AgentMessage")?
+                            .iter()
+                            .map(|row| {
+                                gents_protocol::output::rows::decode_transcript_message_row(row)
+                                    .map_err(anyhow::Error::from)
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                    );
+                }
+                anyhow::ensure!(
+                    headers.len() == keys.len()
+                        && headers
+                            .iter()
+                            .map(|row| &row.message.message_key)
+                            .collect::<BTreeSet<_>>()
+                            .len()
+                            == keys.len(),
+                    "current wake notifications are missing or ambiguous"
+                );
+                headers.sort_by_key(|row| row.message.sequence);
+                anyhow::ensure!(
+                    headers
+                        .windows(2)
+                        .all(|pair| pair[0].message.sequence < pair[1].message.sequence),
+                    "current wake notifications have ambiguous sequence order"
+                );
+                let settled = headers
+                    .iter()
+                    .filter(|header| {
+                        acknowledged
+                            .get(&header.message.message_key)
+                            .is_some_and(|cutoff| u64::from(header.message.sequence) <= *cutoff)
+                    })
+                    .map(|header| header.message.message_key.clone())
+                    .collect::<Vec<_>>();
+                let current = current_keys(&claimed, &settled)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                headers.retain(|header| current.contains(&header.message.message_key));
+                let mut reader = crate::session::TxnCanonicalReader::new(
+                    txn,
+                    &request.node_did,
+                    request.requester_did.as_deref(),
+                );
+                reader.observe_headers(&headers);
+                let mut notifications = Vec::with_capacity(headers.len());
+                for header in headers {
+                    let (_, message) = reader.load_message(&header.doc_id).await?;
+                    anyhow::ensure!(
+                        matches!(
+                            message,
+                            crate::inference::llm::message::Message::User { .. }
+                        ),
+                        "wake notification is not user input"
+                    );
+                    let mut row = TaggedMessage::unassociated(message);
+                    row.physical_header = Some(header.doc_id);
+                    notifications.push(row);
+                }
+                Ok(notifications)
+            })
         })
-    }).await
+        .await
 }
 
 #[cfg(test)]

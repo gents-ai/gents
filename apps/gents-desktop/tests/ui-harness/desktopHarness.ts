@@ -2121,6 +2121,12 @@ export function createDesktopUiHarness(
     async listPackWireSources() {
       return { plugins: [], target_packs: [] };
     },
+    async listDefaultPacks() {
+      return { packs: [] };
+    },
+    async approveDefaultPacks() {
+      return { packs: [], failed: [] };
+    },
     async listDynamicWorkflows() {
       return { workflows: [], installed: [] };
     },

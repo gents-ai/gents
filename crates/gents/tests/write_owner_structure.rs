@@ -100,10 +100,12 @@ fn production_sources(root: &Path) -> Vec<PathBuf> {
 fn cfg_test(attributes: &[syn::Attribute]) -> bool {
     attributes.iter().any(|attribute| {
         attribute.path().is_ident("cfg")
-            && attribute
-                .meta
-                .require_list()
-                .is_ok_and(|list| list.tokens.to_string() == "test")
+            && attribute.meta.require_list().is_ok_and(|list| {
+                matches!(
+                    list.tokens.to_string().replace(' ', "").as_str(),
+                    "test" | "any(test,feature=\"test-fixtures\")"
+                )
+            })
     })
 }
 
@@ -691,6 +693,7 @@ fn snippet_sites(source: &str) -> usize {
 fn read_fence_counts_direct_node_execution() {
     for source in [
         "fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
+        r#"#[cfg(any(test, feature = "production"))] fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }"#,
         "fn f(db: &EmbeddedNode, q: &str) { db.execute(q); }",
         "fn f(db: Arc<defra_node::Node>, q: &str) { db.as_ref().execute(q); }",
         "impl S { fn f(&self, q: &str) { self.node.execute(q); } }",
@@ -725,6 +728,7 @@ fn read_fence_ignores_owner_wrappers_and_tests() {
         "fn f(node: &EmbeddedNode) { let db = node; } fn g(db: &Access, q: &str) { db.execute(q); }",
         "#[cfg(test)] mod tests { fn f(node: &EmbeddedNode, q: &str) { node.execute(q); } }",
         "#[cfg(test)] fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
+        r#"#[cfg(any(test, feature = "test-fixtures"))] fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }"#,
     ] {
         assert_eq!(snippet_sites(source), 0, "{source}");
     }
@@ -802,6 +806,169 @@ fn dependency_reachability_resolves_renamed_packages() {
         dependency_names(&manifest, &inherited),
         BTreeSet::from(["defra-node", "gents", "plain"].map(str::to_string))
     );
+}
+
+const GENTS_TEST_FIXTURES: &str = "test-fixtures";
+
+/// `cfg_test` treats `test-fixtures` items as test code, which holds only
+/// while no production build can enable the feature.
+fn test_fixtures_leaks(manifest: &toml::Table, inherited: &toml::Table) -> Vec<String> {
+    let mut tables = vec![(
+        "workspace.dependencies",
+        manifest
+            .get("workspace")
+            .and_then(|workspace| workspace.get("dependencies")),
+    )];
+    for kind in ["dependencies", "build-dependencies"] {
+        tables.push((kind, manifest.get(kind)));
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            tables.extend(targets.values().map(|target| (kind, target.get(kind))));
+        }
+    }
+    let mut leaks = Vec::new();
+    for (kind, table) in tables {
+        for (key, specification) in table.and_then(toml::Value::as_table).into_iter().flatten() {
+            if package_name(key, specification, inherited) == "gents"
+                && specification
+                    .get("features")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|features| {
+                        features
+                            .iter()
+                            .any(|feature| feature.as_str() == Some(GENTS_TEST_FIXTURES))
+                    })
+            {
+                leaks.push(format!("[{kind}] {key}"));
+            }
+        }
+    }
+    let own = manifest
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml::Value::as_str)
+        == Some("gents");
+    for (feature, enabled) in manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+    {
+        if enabled
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .any(|entry| {
+                matches!(entry, "gents/test-fixtures" | "gents?/test-fixtures")
+                    || (own && entry == GENTS_TEST_FIXTURES)
+            })
+        {
+            leaks.push(format!("[features] {feature}"));
+        }
+    }
+    leaks
+}
+
+#[test]
+fn gents_test_fixtures_stay_dev_only() {
+    let root = repo_root();
+    let workspace = toml_file(&root.join("Cargo.toml"));
+    let inherited = workspace["workspace"]
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .cloned()
+        .unwrap_or_default();
+    let mut leaks = test_fixtures_leaks(&workspace, &inherited)
+        .into_iter()
+        .map(|site| format!("Cargo.toml {site}"))
+        .collect::<Vec<_>>();
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let member = member.as_str().expect("member path");
+        let manifest = toml_file(&root.join(member).join("Cargo.toml"));
+        leaks.extend(
+            test_fixtures_leaks(&manifest, &inherited)
+                .into_iter()
+                .map(|site| format!("{member}/Cargo.toml {site}")),
+        );
+    }
+    assert!(
+        leaks.is_empty(),
+        "the gents `test-fixtures` feature is enabled only from [dev-dependencies]:\n{}",
+        leaks.join("\n")
+    );
+}
+
+#[test]
+fn test_fixtures_fence_flags_production_and_default_enablement() {
+    let leaks = |manifest: &str| {
+        let manifest: toml::Table = manifest.parse().expect("parse manifest");
+        let inherited = manifest
+            .get("workspace")
+            .and_then(|workspace| workspace.get("dependencies"))
+            .and_then(toml::Value::as_table)
+            .cloned()
+            .unwrap_or_default();
+        test_fixtures_leaks(&manifest, &inherited)
+    };
+    for (manifest, expected) in [
+        (
+            r#"[dependencies]
+            gents = { path = "../gents", features = ["test-fixtures"] }"#,
+            "[dependencies] gents",
+        ),
+        (
+            r#"[build-dependencies]
+            core = { package = "gents", path = "../gents", features = ["test-fixtures"] }"#,
+            "[build-dependencies] core",
+        ),
+        (
+            r#"[target.'cfg(unix)'.dependencies]
+            gents = { path = "../gents", features = ["test-fixtures"] }"#,
+            "[dependencies] gents",
+        ),
+        (
+            r#"[workspace.dependencies]
+            gents = { path = "crates/gents", features = ["test-fixtures"] }"#,
+            "[workspace.dependencies] gents",
+        ),
+        (
+            r#"[features]
+            fixtures = ["gents/test-fixtures"]"#,
+            "[features] fixtures",
+        ),
+        (
+            r#"[package]
+            name = "gents"
+            [features]
+            default = ["test-fixtures"]
+            test-fixtures = []"#,
+            "[features] default",
+        ),
+    ] {
+        assert_eq!(leaks(manifest), [expected], "{manifest}");
+    }
+    for manifest in [
+        r#"[dev-dependencies]
+        gents = { path = "../gents", features = ["test-fixtures"] }"#,
+        r#"[dependencies]
+        gents = { path = "../gents", features = ["live-e2e"] }
+        other = { path = "../other", features = ["test-fixtures"] }"#,
+        r#"[package]
+        name = "gents-desktop-core"
+        [features]
+        default = ["test-fixtures"]
+        test-fixtures = []"#,
+        r#"[package]
+        name = "gents"
+        [features]
+        test-home-guard = []
+        test-fixtures = ["test-home-guard"]"#,
+    ] {
+        assert!(leaks(manifest).is_empty(), "{manifest}");
+    }
 }
 
 const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents/src/inference/auth/credential";
@@ -1595,6 +1762,7 @@ const OWNER_MODULES: &[&str] = &[
     "crates/gents-protocol/src",
     "crates/gents-loop/src",
     "crates/gents-migration/src",
+    "crates/gents/src/operations",
     "crates/gents/src/store/config_client/common.rs",
     "crates/gents/src/store/config_client/error.rs",
     "crates/gents/src/store/config_client/graphql.rs",
@@ -1771,19 +1939,16 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/commands/eval/manage.rs", 1),
-    ("crates/gents-cli/src/commands/grok_shim/acp/errors.rs", 2),
-    ("crates/gents-cli/src/commands/grok_shim/job_runs.rs", 2),
-    ("crates/gents-cli/src/commands/grok_shim/workflow_command.rs", 1),
     ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
     ("crates/gents-client-host/src/editor_store.rs", 1),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
-    ("crates/gents-desktop-bridge/src/inference_setup.rs", 2),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
     ("crates/gents-desktop-core/src/error.rs", 1),
+    ("crates/gents-desktop-core/src/inference.rs", 2),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
     ("crates/gents-protocol/src/error_chain.rs", 1),
@@ -1801,10 +1966,10 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/store/config_client/schema_install.rs", 2),
     ("crates/gents/src/tools/builtin/defra_query/mod.rs", 1),
     ("crates/gents/src/eval/documents.rs", 3),
-    ("crates/gents/src/eval/report/mod.rs", 1),
-    ("crates/gents/src/eval/report/store.rs", 1),
-    ("crates/gents/src/eval/runner/freeze.rs", 1),
-    ("crates/gents/src/eval/runner/mod.rs", 1),
+    ("crates/gents-eval/src/report/mod.rs", 1),
+    ("crates/gents-eval/src/report/store.rs", 1),
+    ("crates/gents-eval/src/runner/freeze.rs", 1),
+    ("crates/gents-eval/src/runner/mod.rs", 1),
     ("crates/gents/src/goal/creation.rs", 2),
     ("crates/gents/src/store/graphql.rs", 1),
     ("crates/gents/src/store/local/home.rs", 3),
@@ -1817,9 +1982,9 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/request/lifecycle/execution_renewal.rs", 1),
     ("crates/gents/src/request/lifecycle/queue/position.rs", 1),
     ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
-    ("crates/gents/src/eval/optimization/driver.rs", 2),
-    ("crates/gents/src/eval/optimization/job.rs", 1),
-    ("crates/gents/src/eval/optimization/promote.rs", 2),
+    ("crates/gents-eval/src/optimization/driver.rs", 2),
+    ("crates/gents-eval/src/optimization/job.rs", 1),
+    ("crates/gents-eval/src/optimization/promote.rs", 2),
     ("crates/gents/src/tools/builtin/p2p.rs", 1),
     ("crates/gents/src/pack/resolve.rs", 1),
     ("crates/gents/src/plugin/allowed.rs", 2),
@@ -1994,7 +2159,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/store/config_client/retry.rs", 3),
     // JSON-RPC node pruned-history wording
     // persisted AgentRequest failure_reason
-    ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),
+    ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
     ("crates/gents/src/tools/mcp/health.rs", 8),
     // display only: appends a next-call hint when absent
@@ -2390,6 +2555,7 @@ const LAYERS: &[&[&str]] = &[
     &[
         "request", "session", "goal", "triggers", "tools", "plugin", "pack",
     ],
+    &["operations"],
     &["observe"],
     &["turn"],
     &["runtime"],
@@ -2424,7 +2590,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("pack", "tools", 2),
     ("plugin", "pack", 40),
     ("plugin", "session", 1),
-    ("plugin", "tools", 29),
+    ("plugin", "tools", 28),
     ("plugin", "triggers", 2),
     ("request", "goal", 10),
     ("request", "runtime", 3),
@@ -2441,11 +2607,11 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("store", "inference", 2),
     ("tools", "goal", 35),
     ("tools", "observe", 4),
-    ("tools", "pack", 85),
-    ("tools", "plugin", 77),
-    ("tools", "request", 44),
+    ("tools", "pack", 14),
+    ("tools", "plugin", 73),
+    ("tools", "request", 43),
     ("tools", "runtime", 17),
-    ("tools", "session", 93),
+    ("tools", "session", 90),
     ("tools", "turn", 1),
     ("triggers", "goal", 27),
     ("triggers", "plugin", 16),
@@ -2629,5 +2795,7 @@ fn layer_edges_count_upward_and_peer_references_outside_tests() {
         ]
     );
     assert!(!layer_edge_violates("eval", "store"));
+    assert!(layer_edge_violates("tools", "operations"));
+    assert!(!layer_edge_violates("operations", "tools"));
     assert!(!layer_edge_violates("request", "agent"));
 }

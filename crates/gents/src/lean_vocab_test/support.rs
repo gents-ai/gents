@@ -448,6 +448,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) plugin_pin_cases: Vec<serde_json::Value>,
     pub(crate) pack_document_ownership_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_lock_cases: Vec<serde_json::Value>,
+    pub(crate) pack_operator_wire_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_target_cases: Vec<serde_json::Value>,
     pub(crate) pack_finality_cases: Vec<serde_json::Value>,
     pub(crate) hosted_pack_evidence_cases: Vec<serde_json::Value>,
@@ -497,6 +498,14 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
+    pub(crate) backend_wake_cases: Vec<LeanBackendWakeCase>,
+    pub(crate) backend_capture_scope_cases: Vec<LeanBackendCaptureScopeCase>,
+    pub(crate) backend_health_wake_cases: Vec<LeanBackendHealthWakeCase>,
+    pub(crate) backend_generation_mark_cases: Vec<LeanBackendGenerationMarkCase>,
+    pub(crate) backend_resume_admission_cases: Vec<LeanBackendResumeAdmissionCase>,
+    pub(crate) backend_repark_cases: Vec<LeanBackendReparkCase>,
+    pub(crate) backend_parked_finalize_cases: Vec<LeanBackendParkedFinalizeCase>,
+    pub(crate) backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
     pub(crate) account_rotation_select_cases: Vec<LeanAccountRotationSelectCase>,
     pub(crate) account_rotation_attempt_cases: Vec<LeanAccountRotationAttemptCase>,
     pub(crate) account_rotation_observe_cases: Vec<LeanAccountRotationObserveCase>,
@@ -533,16 +542,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub(crate) tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
     pub(crate) interrupt_disposition_cases: Vec<LeanInterruptDispositionCase>,
-    pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
-    pub(crate) codex_shim_reasoning_projection_cases: Vec<LeanCodexShimReasoningProjectionCase>,
-    pub(crate) codex_shim_thread_status_cases: Vec<LeanCodexShimThreadStatusCase>,
-    pub(crate) codex_shim_agent_selection_cases: Vec<LeanCodexShimAgentSelectionCase>,
-    pub(crate) codex_shim_tool_metadata_cases: Vec<LeanCodexShimToolMetadataCase>,
-    pub(crate) codex_shim_context_usage_cases: Vec<LeanCodexShimContextUsageCase>,
-    pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
-    pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
-    pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
-    pub(crate) codex_shim_connection_admission_cases: Vec<LeanCodexShimConnectionAdmissionCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
@@ -1414,6 +1413,12 @@ pub(crate) enum LeanPluginJobAuthorityCase {
         via: String,
         expected: Box<LeanPluginJobInstallExpected>,
     },
+    Installer {
+        name: String,
+        via: String,
+        pack_authority: bool,
+        expected: Box<LeanPluginJobProvenanceExpected>,
+    },
     Origin {
         name: String,
         call: LeanPluginJobCall,
@@ -1431,6 +1436,12 @@ pub(crate) enum LeanPluginJobAuthorityCase {
         agent_targets: Vec<String>,
         policy: Box<LeanPluginJobPolicy>,
         expected: Box<LeanPluginJobValidExpected>,
+    },
+    ConsentedDynamic {
+        name: String,
+        consent: bool,
+        mode: String,
+        expected: LeanPluginJobModeExpected,
     },
     PublishedRead {
         name: String,
@@ -1453,9 +1464,11 @@ impl LeanPluginJobAuthorityCase {
         match self {
             Self::Provenance { name, .. }
             | Self::Install { name, .. }
+            | Self::Installer { name, .. }
             | Self::Origin { name, .. }
             | Self::PackJobBlock { name, .. }
             | Self::PolicyValid { name, .. }
+            | Self::ConsentedDynamic { name, .. }
             | Self::WireTargetsFrom { name, .. }
             | Self::PublishedRead { name, .. } => name,
         }
@@ -1508,6 +1521,12 @@ pub(crate) struct LeanPluginJobPackBlock {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobAdmissibleExpected {
     pub(crate) admissible: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobModeExpected {
+    pub(crate) mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2765,8 +2784,6 @@ mod canonical_output;
 pub(crate) mod canonical_presentation;
 #[path = "client_session.rs"]
 mod client_session;
-#[path = "codex_shim.rs"]
-mod codex_shim;
 #[path = "command_identity_queue.rs"]
 mod command_identity_queue;
 #[path = "compaction_canonical_projection.rs"]
@@ -2816,7 +2833,6 @@ pub(crate) use canonical_execution::*;
 pub(crate) use canonical_output::*;
 pub(crate) use canonical_presentation::*;
 pub(crate) use client_session::*;
-pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
 pub(crate) use compaction_canonical_projection::*;
 pub(crate) use compaction_projection_join::*;
@@ -3265,60 +3281,6 @@ pub(crate) fn lean_r4c_background_work_case(witness: &str) -> &'static LeanR4cBa
         .iter()
         .find(|case| case.witness() == witness)
         .unwrap_or_else(|| panic!("Lean R4c background-work witness {witness:?} was not emitted"))
-}
-
-pub(crate) fn lean_codex_shim_projection_cases() -> &'static [LeanCodexShimProjectionCase] {
-    &lean_contract_snapshot().codex_shim_projection_cases
-}
-
-pub(crate) fn lean_codex_shim_projection_case(
-    witness: &str,
-) -> &'static LeanCodexShimProjectionCase {
-    lean_contract_snapshot()
-        .codex_shim_projection_cases
-        .iter()
-        .find(|case| case.witness == witness)
-        .unwrap_or_else(|| panic!("Lean Codex shim projection witness {witness:?} was not emitted"))
-}
-
-pub(crate) fn lean_codex_shim_reasoning_projection_cases(
-) -> &'static [LeanCodexShimReasoningProjectionCase] {
-    &lean_contract_snapshot().codex_shim_reasoning_projection_cases
-}
-
-pub(crate) fn lean_codex_shim_thread_status_cases() -> &'static [LeanCodexShimThreadStatusCase] {
-    &lean_contract_snapshot().codex_shim_thread_status_cases
-}
-
-pub(crate) fn lean_codex_shim_agent_selection_cases() -> &'static [LeanCodexShimAgentSelectionCase]
-{
-    &lean_contract_snapshot().codex_shim_agent_selection_cases
-}
-
-pub(crate) fn lean_codex_shim_tool_metadata_cases() -> &'static [LeanCodexShimToolMetadataCase] {
-    &lean_contract_snapshot().codex_shim_tool_metadata_cases
-}
-
-pub(crate) fn lean_codex_shim_context_usage_cases() -> &'static [LeanCodexShimContextUsageCase] {
-    &lean_contract_snapshot().codex_shim_context_usage_cases
-}
-
-pub(crate) fn lean_codex_shim_compaction_projection_cases(
-) -> &'static [LeanCodexShimCompactionProjectionCase] {
-    &lean_contract_snapshot().codex_shim_compaction_projection_cases
-}
-
-pub(crate) fn lean_codex_shim_turn_lifecycle_cases() -> &'static [LeanCodexShimTurnLifecycleCase] {
-    &lean_contract_snapshot().codex_shim_turn_lifecycle_cases
-}
-
-pub(crate) fn lean_codex_shim_binding_cases() -> &'static [LeanCodexShimBindingCase] {
-    &lean_contract_snapshot().codex_shim_binding_cases
-}
-
-pub(crate) fn lean_codex_shim_connection_admission_cases(
-) -> &'static [LeanCodexShimConnectionAdmissionCase] {
-    &lean_contract_snapshot().codex_shim_connection_admission_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
@@ -4790,4 +4752,68 @@ pub(crate) fn lean_pack_identity_reference_cases() -> &'static [LeanPackIdentity
 
 pub(crate) fn lean_pack_eval_subject_cases() -> &'static [LeanPackEvalSubjectCase] {
     &lean_contract_snapshot().pack_eval_subject_cases
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendWakeCase {
+    pub(crate) now_ms: i64,
+    pub(crate) deadline_ms: i64,
+    pub(crate) attempts: u32,
+    pub(crate) wake_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendCaptureScopeCase {
+    pub(crate) persisted: Vec<u64>,
+    pub(crate) next: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendHealthWakeCase {
+    pub(crate) started_ms: i64,
+    pub(crate) now_ms: i64,
+    pub(crate) observed_ms: Option<i64>,
+    pub(crate) fresh: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendGenerationMarkCase {
+    pub(crate) marked: Option<u64>,
+    pub(crate) observed: Option<u64>,
+    pub(crate) applies: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendResumeAdmissionCase {
+    pub(crate) waiting: bool,
+    pub(crate) version_present: bool,
+    pub(crate) claimed: bool,
+    pub(crate) same_identity: bool,
+    pub(crate) same_deadline: bool,
+    pub(crate) same_backend: bool,
+    pub(crate) admitted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendParkedFinalizeCase {
+    pub(crate) request: gents_protocol::request_lifecycle::RequestLifecycleState,
+    pub(crate) outcome: gents_protocol::request_lifecycle::RequestLifecycleState,
+    pub(crate) allowed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendResumedTurnCase {
+    pub(crate) completed: Vec<u32>,
+    pub(crate) next: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendReparkCase {
+    pub(crate) resuming: bool,
+    pub(crate) observed_generation: u64,
+    pub(crate) observed_expiry: i64,
+    pub(crate) expected_generation: u64,
+    pub(crate) expected_expiry: i64,
+    pub(crate) now: i64,
+    pub(crate) allowed: bool,
 }

@@ -961,11 +961,14 @@ pub(super) async fn callback_agent_parent_in_txn(
         txn.actor_did() == Some(agent_did),
         "callback creation requires the selected agent as its authenticated actor"
     );
-    let query = format!(
-        "{{ Agent(filter: {{ node_did: {{ _eq: \"{}\" }}, agent_did: {{ _eq: \"{}\" }} }}, limit: 2) {{ _docID }} }}",
-        escape_graphql_string(node_did), escape_graphql_string(agent_did),
-    );
-    let response = txn.execute(&query).await?;
+    use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+    let rendered = Query::select(Selection::doc_id())
+        .filter(
+            Filter::eq(fields::NODE_DID, node_did).and(Filter::eq(fields::AGENT_DID, agent_did)),
+        )
+        .limit(2)
+        .render();
+    let response = txn.run(&rendered).await?;
     let rows = response["data"]["Agent"]
         .as_array()
         .context("callback Agent lookup omitted its result")?;
@@ -1303,17 +1306,17 @@ pub(crate) async fn load_isolated_workspace(
         !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),
         "callback workspace actor mismatch"
     );
-    let query = format!(
-        r#"{{
-            IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
-                limit: 2
-            ) {{ {ISOLATED_WORKSPACE_FIELDS} }}
-        }}"#,
-        id = escape_graphql_string(workspace_id),
-        owner = escape_graphql_string(owner),
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::isolated_workspace as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::owned(ISOLATED_WORKSPACE_FIELDS))
+        .filter(
+            Filter::eq(fields::WORKSPACE_ID, workspace_id)
+                .and(Filter::eq(fields::OWNER_NODE_DID, owner)),
+        )
+        .limit(2)
+        .render();
+    let response = access.read(&rendered).await?;
     let mut found: Vec<IsolatedWorkspaceDoc> =
         serde_json::from_value(response["data"]["IsolatedWorkspace"].clone())?;
     anyhow::ensure!(
@@ -1333,17 +1336,17 @@ pub(crate) async fn load_workspace_placement(
         !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),
         "callback workspace actor mismatch"
     );
-    let query = format!(
-        r#"{{
-            WorkspacePlacement(
-                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
-                limit: 2
-            ) {{ {PLACEMENT_FIELDS} }}
-        }}"#,
-        id = escape_graphql_string(workspace_id),
-        owner = escape_graphql_string(owner),
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::workspace_placement as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::owned(PLACEMENT_FIELDS))
+        .filter(
+            Filter::eq(fields::WORKSPACE_ID, workspace_id)
+                .and(Filter::eq(fields::OWNER_NODE_DID, owner)),
+        )
+        .limit(2)
+        .render();
+    let response = access.read(&rendered).await?;
     let mut found: Vec<WorkspacePlacementDoc> =
         serde_json::from_value(response["data"]["WorkspacePlacement"].clone())?;
     anyhow::ensure!(

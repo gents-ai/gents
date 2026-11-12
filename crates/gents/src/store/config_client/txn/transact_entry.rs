@@ -154,7 +154,7 @@ impl ConfigAccess {
         }
     }
 
-    pub(crate) async fn transact_write_with_finality<'a, T, E, F>(
+    pub async fn transact_write_with_finality<'a, T, E, F>(
         &'a self,
         operation: &'static str,
         callback: F,

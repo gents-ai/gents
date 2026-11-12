@@ -17,6 +17,9 @@ pub const NODE_DIRECTORY_ENTRY: &str =
     include_str!("../schemas/agent/node_directory_entry.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
+pub const AGENT_REQUEST_BACKEND_WAIT_NAME: &str = "AgentRequestBackendWait";
+pub const AGENT_REQUEST_BACKEND_WAIT: &str =
+    include_str!("../schemas/agent/agent_request_backend_wait.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
@@ -76,6 +79,10 @@ pub const TOOLS_NAME: &str = "Tools";
 pub const TOOLS: &str = include_str!("../schemas/agent/tools.graphql");
 pub const SKILL_NAME: &str = "Skill";
 pub const SKILL: &str = include_str!("../schemas/agent/skill.graphql");
+pub const PAGE_NAME: &str = "Page";
+pub const PAGE: &str = include_str!("../schemas/agent/page.graphql");
+pub const PLUGIN_SOURCE_NAME: &str = "PluginSource";
+pub const PLUGIN_SOURCE: &str = include_str!("../schemas/agent/plugin_source.graphql");
 pub const DATASTORE_TOOL_SURFACE_NAME: &str = "DatastoreToolSurface";
 pub const DATASTORE_TOOL_SURFACE: &str =
     include_str!("../schemas/agent/datastore_tool_surface.graphql");
@@ -212,6 +219,8 @@ pub const ALL: &[&str] = &[
     TOOLS,
     SKILL,
     DATASTORE_TOOL_SURFACE,
+    PAGE,
+    PLUGIN_SOURCE,
     PENDING_CHAT_SUBMISSION,
     WORKSPACE_ROOT,
     ISOLATED_WORKSPACE,
@@ -230,6 +239,7 @@ pub const ALL: &[&str] = &[
     CALLBACK_INVOCATION,
     CALLBACK_RESULT,
     AGENT_REQUEST,
+    AGENT_REQUEST_BACKEND_WAIT,
     AGENT_OUTPUT_SEGMENT,
     AGENT_SESSION,
     GOAL,
@@ -292,6 +302,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     TOOLS_NAME,
     SKILL_NAME,
     DATASTORE_TOOL_SURFACE_NAME,
+    PAGE_NAME,
+    PLUGIN_SOURCE_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
     WORKSPACE_ROOT_NAME,
     ISOLATED_WORKSPACE_NAME,
@@ -310,6 +322,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_INVOCATION_NAME,
     CALLBACK_RESULT_NAME,
     AGENT_REQUEST_NAME,
+    AGENT_REQUEST_BACKEND_WAIT_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
@@ -411,4 +424,115 @@ pub fn is_local_audit_collection(name: &str) -> bool {
 
 pub fn is_local_only_collection(name: &str) -> bool {
     !is_replicated_protocol_collection(name)
+}
+
+/// A schema collection, named exactly as its SDL `type`.
+pub trait Collection {
+    const NAME: &'static str;
+}
+
+/// A collection keyed by the node, session and requester that own a session.
+/// Implemented by the generator for every type that declares all three.
+pub trait SessionScoped: Collection + Sized {
+    const NODE_DID: Field<Self, kind::Str>;
+    const SESSION_ID: Field<Self, kind::Str>;
+    const REQUESTER_DID: Field<Self, kind::Str>;
+}
+
+/// Scalar kinds a schema field can declare. They select which Rust values a
+/// field accepts in filters and inputs, and the GraphQL variable type that
+/// carries them.
+pub mod kind {
+    pub trait Kind {
+        const GRAPHQL: &'static str;
+    }
+
+    macro_rules! kinds {
+        ($($name:ident => $graphql:literal),* $(,)?) => {
+            $(
+                #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+                pub enum $name {}
+                impl Kind for $name {
+                    const GRAPHQL: &'static str = $graphql;
+                }
+            )*
+        };
+    }
+
+    kinds! {
+        Str => "String",
+        Int => "Int",
+        Float => "Float",
+        Bool => "Boolean",
+        DateTime => "DateTime",
+        Json => "JSON",
+        Blob => "Blob",
+        StrList => "[String!]",
+        DocId => "String",
+    }
+}
+
+/// One field of collection `C` holding a value of kind `K`. Generated from the
+/// SDL, so a name that leaves the schema stops compiling at every use.
+pub struct Field<C, K> {
+    name: &'static str,
+    marker: std::marker::PhantomData<fn() -> (C, K)>,
+}
+
+impl<C, K> Field<C, K> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
+impl<C, K> Clone for Field<C, K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C, K> Copy for Field<C, K> {}
+
+impl<C, K> std::fmt::Debug for Field<C, K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
+/// Field constants for every collection in the bundle, one module per type.
+pub mod fields {
+    include!(concat!(env!("OUT_DIR"), "/fields.rs"));
+}
+
+#[cfg(test)]
+mod field_tests {
+    use super::fields::{agent_request, callback_invocation};
+    use super::Collection;
+
+    #[test]
+    fn generated_fields_follow_the_sdl() {
+        assert_eq!(
+            <agent_request::Doc as Collection>::NAME,
+            AGENT_REQUEST_NAME_CHECK
+        );
+        assert_eq!(agent_request::LIFECYCLE_STATE.name(), "lifecycle_state");
+        assert_eq!(agent_request::DOC_ID.name(), "_docID");
+        for name in agent_request::FIELD_NAMES {
+            assert!(super::AGENT_REQUEST.contains(&format!("{name}:")));
+        }
+        assert_eq!(
+            <callback_invocation::Doc as Collection>::NAME,
+            "CallbackInvocation"
+        );
+        assert!(callback_invocation::FIELD_NAMES.contains(&"invocation_id"));
+    }
+
+    const AGENT_REQUEST_NAME_CHECK: &str = super::AGENT_REQUEST_NAME;
 }

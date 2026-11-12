@@ -130,6 +130,8 @@ where
             tauri_commands::ux_plugins::desktop_ux_data_watch,
             tauri_commands::ux_plugins::desktop_ux_data_unwatch,
             tauri_commands::packs::desktop_pack_wire,
+            tauri_commands::packs::desktop_default_packs,
+            tauri_commands::managed_server::desktop_default_packs_approve,
             tauri_commands::packs::desktop_pack_wire_sources,
             tauri_commands::packs::desktop_workflows_dynamic,
             tauri_commands::packs::desktop_workflow_dynamic,

@@ -8,7 +8,7 @@ theorem terminal_implies_released_local
     (h_term : isTerminal r.state) :
     r.admission = .released := by
   cases r with
-  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil requestHop causedByParentRequestId causedByParentToolCallId =>
+  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil requestHop causedByParentRequestId causedByParentToolCallId backendAttempts backendRetryAt =>
     cases h_term with
     | inl h =>
       cases h
@@ -89,6 +89,27 @@ theorem transition_produces_coherent
   | continue_processing h_state h_admission h_post =>
     rw [coherent, h_post]
     simp [coherentStateAdmission, h_state, h_admission]
+  | park_backend _ _ _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | resume_backend _ _ _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | begin_resumed _ _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | interrupt_resuming _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | expire_resuming _ _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | interrupt_backend_wait _ h_release _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission, h_release]
+  | expire_backend_wait _ h_release _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission, h_release]
   | finish _ _ h_post =>
     rw [coherent, h_post]
     simp [coherentStateAdmission]
@@ -117,7 +138,7 @@ theorem claimed_coherent_cases
     (h_coherent : r.coherent) :
     r.admission = .waiting ∨ r.admission = .acquired := by
   cases r with
-  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil requestHop causedByParentRequestId causedByParentToolCallId =>
+  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil requestHop causedByParentRequestId causedByParentToolCallId backendAttempts backendRetryAt =>
     cases h_state
     cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent ⊢
 
@@ -139,6 +160,20 @@ theorem claim_requires_ttl_open
       simp [h_post] at h_claimed
   | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
+  | park_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | resume_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | begin_resumed _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_resuming _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_resuming _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_backend_wait _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_backend_wait _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed
   | fail _ _ h_post =>
@@ -185,6 +220,20 @@ theorem claim_deadline_explicit
       simp [h_post] at h_claimed
   | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
+  | park_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | resume_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | begin_resumed _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_resuming _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_resuming _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_backend_wait _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_backend_wait _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed
   | fail _ _ h_post =>
@@ -219,6 +268,20 @@ theorem claim_deadline_default
       simp [h_post] at h_claimed
   | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
+  | park_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | resume_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | begin_resumed _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_resuming _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_resuming _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_backend_wait _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire_backend_wait _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed
   | fail _ _ h_post =>

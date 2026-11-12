@@ -66,19 +66,56 @@ where
     .map_err(failed)
 }
 
+/// The local home's listings, then the page documents of `node_did` (the
+/// window's selected node) read as the operator. A node whose pages cannot be
+/// read contributes none and is reported in `pagesError`, so one unreachable
+/// node never hides the home's plugins.
 #[tauri::command]
-pub fn desktop_ux_plugins_list(state: State<'_, DesktopAppState>) -> Result<Value, BridgeError> {
-    let plugins = packs::ux_list(&home(&state)?).map_err(failed)?;
-    Ok(serde_json::json!({ "plugins": plugins }))
+pub async fn desktop_ux_plugins_list(
+    node_did: Option<String>,
+    state: State<'_, DesktopAppState>,
+) -> Result<Value, BridgeError> {
+    let mut plugins = match home(&state) {
+        Ok(home) => packs::ux_list(&home).map_err(failed)?,
+        Err(error) if node_did.is_none() => return Err(error),
+        Err(_) => Vec::new(),
+    };
+    let mut pages_error = None;
+    if let Some(node_did) = node_did {
+        match operator_access(&state, &node_did) {
+            Ok(access) => match packs::ux_pages(access, node_did).await {
+                Ok(pages) => plugins.extend(pages),
+                Err(error) => pages_error = Some(format!("{error:#}")),
+            },
+            Err(error) => pages_error = Some(error.message),
+        }
+    }
+    Ok(serde_json::json!({ "plugins": plugins, "pagesError": pages_error }))
 }
 
+/// One module: a page document's from `node_did`, read as the operator; any
+/// other listing's from the local home.
 #[tauri::command]
 pub async fn desktop_ux_plugin_source(
     id: String,
+    node_did: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Value, BridgeError> {
-    let home = home(&state)?;
-    let module = run(move || packs::ux_module(home, id)).await?;
+    let module = if gents::plugin::ux::page::page_id(&id).is_some() {
+        let node_did = node_did.ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Unsupported,
+                "a page document is read from a node; name the selected node",
+            )
+        })?;
+        let access = operator_access(&state, &node_did)?;
+        packs::ux_page_module(access, node_did, id)
+            .await
+            .map_err(failed)?
+    } else {
+        let home = home(&state)?;
+        run(move || packs::ux_module(home, id)).await?
+    };
     serde_json::to_value(module).map_err(|error| BridgeError::untyped(error.to_string()))
 }
 

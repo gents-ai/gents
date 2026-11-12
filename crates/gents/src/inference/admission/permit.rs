@@ -40,6 +40,7 @@ impl AdmissionPermit {
         doc_id: String,
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
+        runtime: DropCleanup,
     ) -> Self {
         Self {
             node,
@@ -51,7 +52,7 @@ impl AdmissionPermit {
             cancel_observer,
             terminal_failure_observer,
             provider_activity: None,
-            runtime: DropCleanup::current(),
+            runtime,
         }
     }
 

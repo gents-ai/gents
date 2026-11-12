@@ -80,12 +80,24 @@ async fn retained_control(
     access: &ConfigAccess,
     command: &SessionGoalControl,
 ) -> Result<Option<serde_json::Value>> {
-    let response = access.execute(&format!(
-        r#"{{ AgentSessionGoalControl(filter: {{ command_id: {{ _eq: "{}" }} }}, limit: 2) {{
-            _docID command_id requester_did requester_peer_id node_did agent_did session_id session_doc_id intent_json
-        }} }}"#,
-        escape_graphql_string(&command.command_id),
-    )).await?;
+    use gents_protocol::document_query::{
+        fields::agent_session_goal_control as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::COMMAND_ID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::REQUESTER_PEER_ID)
+            .field(fields::NODE_DID)
+            .field(fields::AGENT_DID)
+            .field(fields::SESSION_ID)
+            .field(fields::SESSION_DOC_ID)
+            .field(fields::INTENT_JSON),
+    )
+    .filter(Filter::eq(fields::COMMAND_ID, &command.command_id))
+    .limit(2)
+    .render();
+    let response = access.read(&query).await?;
     let rows = response["data"]["AgentSessionGoalControl"]
         .as_array()
         .context("goal command observation omitted its records")?;
@@ -141,10 +153,14 @@ async fn receipt_row(
     access: &ConfigAccess,
     command_doc_id: &str,
 ) -> Result<Option<serde_json::Value>> {
-    let response = access.execute(&format!(
-        r#"{{ AgentSessionGoalReceipt(filter: {{ command_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ receipt_json }} }}"#,
-        escape_graphql_string(command_doc_id),
-    )).await?;
+    use gents_protocol::document_query::{
+        fields::agent_session_goal_receipt as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::new().field(fields::RECEIPT_JSON))
+        .filter(Filter::eq(fields::COMMAND_DOC_ID, command_doc_id))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let rows = response["data"]["AgentSessionGoalReceipt"]
         .as_array()
         .context("goal receipt observation omitted its records")?;
@@ -211,13 +227,17 @@ pub async fn submit_prepared_session_goal_control(
         }
         anyhow::bail!("Goal creation was saved but remains pending: it lacks the requester's native request evidence that the runtime needs to create the Goal.");
     }
-    let query = format!(
-        r#"{{ AgentSessionGoalReceipt(filter: {{ command_doc_id: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#,
-        escape_graphql_string(&document)
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_session_goal_receipt as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::RECEIPT_JSON))
+            .filter(Filter::eq(fields::COMMAND_DOC_ID, &document))
+            .render()
+    };
     let answered = async {
         loop {
-            let response = access.execute(&query).await?;
+            let response = access.read(&query).await?;
             let rows = response["data"]["AgentSessionGoalReceipt"]
                 .as_array()
                 .context("goal receipt observation omitted its records")?;

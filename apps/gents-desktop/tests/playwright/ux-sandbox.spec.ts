@@ -117,6 +117,52 @@ test.describe("the plugin frame", () => {
     for (const line of refusals) browserLogs.splice(browserLogs.indexOf(line), 1);
   });
 
+  test("draws the dashboard example's blocks in the frame, in the app's light and dark themes", async ({
+    page,
+  }, testInfo) => {
+    await page.evaluate(() => window.__UX_HARNESS__.loadDashboard());
+    await expect
+      .poll(
+        async () =>
+          (await page.evaluate(() => window.__UX_HARNESS__.records())) as Records,
+        { timeout: 10_000 },
+      )
+      .toMatchObject({ board_dashboard: { status: "loaded" } });
+    await page.setViewportSize({ width: page.viewportSize()!.width, height: 1000 });
+    await page.evaluate(() => {
+      document
+        .querySelector<HTMLElement>('[data-testid="page-viewport"]')!
+        .style.setProperty("height", "900px");
+    });
+    const frame = page.frameLocator('iframe[data-ux-frame="harness/dashboard"]');
+    const frameHandle = page.locator('iframe[data-ux-frame="harness/dashboard"]');
+    await expect(frame.getByRole("heading", { name: "Board dashboard" })).toBeVisible();
+    await expect(frame.locator('[data-slot="stat"]')).toHaveCount(3);
+    await expect(frame.locator('[data-slot="chart"] svg[role="img"]')).toHaveCount(3);
+
+    const frameEval = async <T>(fn: () => T): Promise<T> => {
+      const frameHost = page.frames().find((f) => f.parentFrame() === page.mainFrame());
+      return frameHost!.evaluate(fn);
+    };
+    /* the frame paints the app's roles, not the marketing fallback */
+    const ground = () =>
+      getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    expect(await frameEval(ground)).toMatch(/^#f2f2f2$/);
+    await frameHandle.screenshot({ path: testInfo.outputPath("dashboard-light.png") });
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "dark";
+    });
+    await expect.poll(() => frameEval(ground)).toMatch(/^#111(?:111)?$/);
+    await frameHandle.screenshot({ path: testInfo.outputPath("dashboard-dark.png") });
+
+    await frame.getByRole("tab", { name: "Tasks" }).click();
+    const header = frame.locator('[data-slot="data-table"] th').first();
+    await expect(header).toHaveCSS("position", "sticky");
+    await frameHandle.screenshot({
+      path: testInfo.outputPath("dashboard-table-dark.png"),
+    });
+  });
+
   test("renders the page in the frame, keeps its state across a shell re-render, and answers verbs under its own identity", async ({
     page,
   }) => {

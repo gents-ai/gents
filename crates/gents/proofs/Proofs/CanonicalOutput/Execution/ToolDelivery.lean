@@ -569,6 +569,20 @@ def publishBackgroundReceipt (world : World) (document : DocId)
     (closing : Segment) (message : MessageEnvelope) : Except Error World :=
   ToolWrite.lift world (publishBackgroundReceiptWrite world document closing message)
 
+/-- A composed asynchronous tool returns its acknowledgement to the script.
+Its receipt is durable canonical output, without an unmatched provider message. -/
+def publishPluginReceipt (world : World) (document : DocId)
+    (closing : Segment) : Except Error World := do
+  let tool ← match ownedToolByDocument? world document with
+    | some tool => pure tool
+    | none => throw .missingTool
+  if !(match tool.provenance with | .pluginEffect _ _ => true | _ => false) ||
+      !bindingValid world tool || tool.context.state != .running ||
+      tool.context.awaitMode != .background then throw .ownership
+  if closing ∈ world.segments && exactIdentityAt world.segments closing then return world
+  if !backgroundReceiptRecordValid world tool closing then throw .publication
+  return { world with segments := world.segments ++ [closing] }
+
 private def publishToolDeliveryWrite (world : World) (document : DocId)
     (message : MessageEnvelope) : Except Error ToolWrite :=
   if !toolProjectionCoherent world then .error .ownership

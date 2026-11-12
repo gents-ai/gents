@@ -11,7 +11,7 @@ use crate::{print_json, resolve_config_access};
 
 const TASK_FIELDS: &str = "task_id node_did display_name description agent_did prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
 const BEHAVIOR_FIELDS: &str = "agent_did: agent_did node_did display_name description context_id inference_profile_id enabled tags created_at updated_at";
-const TRIGGER_FIELDS: &str = "trigger_id node_did display_name description task_id source session_id_template enabled concurrency next_run_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at tags";
+const TRIGGER_FIELDS: &str = "trigger_id node_did display_name description task_id source session_id_template create_session max_fires_per_hour enabled concurrency next_run_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at tags";
 const SCHEDULE_FIELDS: &str =
     "schedule_id node_did display_name cadence created_at updated_at tags";
 const EVENT_SOURCE_FIELDS: &str = "event_source_id node_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
@@ -50,12 +50,12 @@ pub(crate) async fn task_show(args: TaskShowArgs) -> Result<()> {
     Ok(())
 }
 
-struct TaskInventory {
-    tasks: Vec<Value>,
+pub(crate) struct TaskInventory {
+    pub(crate) tasks: Vec<Value>,
     agents_by_id: BTreeMap<String, Value>,
-    triggers: Vec<Value>,
-    schedules_by_id: BTreeMap<String, Value>,
-    event_sources_by_id: BTreeMap<String, Value>,
+    pub(crate) triggers: Vec<Value>,
+    pub(crate) schedules_by_id: BTreeMap<String, Value>,
+    pub(crate) event_sources_by_id: BTreeMap<String, Value>,
 }
 
 impl TaskInventory {
@@ -143,7 +143,7 @@ impl TaskInventory {
     }
 }
 
-async fn load_task_inventory(
+pub(crate) async fn load_task_inventory(
     access: &ConfigAccess,
     task_id_filter: Option<&str>,
 ) -> Result<TaskInventory> {

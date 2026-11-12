@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gents::documents::BackendAuth;
-use gents::eval::runner::embedded::EmbeddedHome;
+use gents::runtime::embedded::EmbeddedHome;
 use gents::BackendProviderKind;
 
 use crate::support::fixtures::{test_agent_with_identity, test_node_for};

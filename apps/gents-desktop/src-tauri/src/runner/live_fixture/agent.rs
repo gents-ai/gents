@@ -2,7 +2,7 @@
 mod inference;
 
 use anyhow::{Context, Result};
-use gents::eval::runner::embedded::EmbeddedHome;
+use gents::runtime::embedded::EmbeddedHome;
 use gents::{
     cli_tool, default_inference_profile_id_for_agent, DocumentRuntimeOptions, Gents,
     InferenceBackend, ToolCeiling,

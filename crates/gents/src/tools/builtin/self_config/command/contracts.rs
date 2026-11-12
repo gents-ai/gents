@@ -49,6 +49,30 @@ pub(in crate::tools::builtin::self_config) fn help_patch_contracts(
                 "tags":"array<string>; default []"
             }),
         )],
+        Some("page") => vec![patch_contract(
+            SelfConfigTarget::Page,
+            json!({
+                "display_name":"string|null; the label people see",
+                "description":"string|null; what the page is for",
+                "module":"string (required); one plain ES module, at most 1024 KiB. Its default export is {id, name, register(ctx)} and id equals the page ID. See [\"help\",\"page\",\"contributions\"]",
+                "css":"string|null; a stylesheet for the page's frame, at most 1024 KiB",
+                "data":"array<{surface: DatastoreToolSurface ID, tools: [tool_name]}>|null; the only datastore tools the page may run",
+                "enabled":"boolean; default true. false unloads the page and withdraws its data access",
+                "tags":"array<string>; default []"
+            }),
+        )],
+        Some("plugin-source") => vec![patch_contract(
+            SelfConfigTarget::PluginSource,
+            json!({
+                "description":"string|null; what a model is shown for the tool",
+                "language":"string (required); rust, go, c, cpp, js, ts, python or ruby",
+                "source":"string (required); the text of the one entry file, at most 1024 KiB. js/ts: module.exports = (input) => output. Others read JSON on stdin and write JSON on stdout",
+                "input_schema":"object|null; JSON Schema of the input, default {type: object}",
+                "data":"{collections: [string], ops: [query|insert|update|delete], stamped?: object}|null; absent means no data access",
+                "tests":"array<{name?: string, input: any, expect?: any}>|null; each case must succeed, and return expect when given; at most 64",
+                "tags":"array<string>; default []"
+            }),
+        )],
         Some("datastore") => vec![patch_contract(
             SelfConfigTarget::DatastoreToolSurface,
             json!({
@@ -93,7 +117,7 @@ pub(in crate::tools::builtin::self_config) fn help_patch_contracts(
                 "built_ins": {"enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_session_history_tool":"boolean|null","enable_schema_tool":"boolean|null","enable_p2p_tool":"boolean|null","enable_p2p_mutations":"boolean|null","enable_context_budget":"boolean|null"},
                 "datastore": {"enable_defra_query":"boolean|null","defra_query_collections":"array<string>|null","write_collections":"array<exact application collection>|null (empty denies all)","datastore_tool_surface_ids":"array<existing same-node DatastoreToolSurface ID>|null"},
                 "integrations": {"lsp":{"config":"JSON encoded as a string|null","timeout_secs":"positive integer|null; default 20","max_timeout_secs":"positive integer|null; default 300; clamped to 300"},"plugins":"array<{plugin: installed namespace/name, digest: sha256:<hex>|null, job: {agent_targets: non-empty array<existing AgentTarget ID>, max_live: 1..64; default 8, max_spawns: 1..1024; default 128, max_messages_per_slot: 0..16; default 4, result_bytes: 1024..1048576; default 65536, max_wall_secs: 60..86400; default 7200, policy: {dynamic: off|check|run; default check, dynamic_targets: array<ID> within agent_targets unless dynamic is off, trusted_packs: array<pack coordinate>}}|null}>|null; the plugin must declare job: true; Tools updates require native document authorization"},
-                "self_config": {"enable_self_config":"boolean|null; absent is disabled","self_config_categories":"array<node|agent|tools|profile|backend|mcp_service|automation|policy>|null; absent selects agent, tools, profile; node grants the agent catalog; agent permits only current-agent configuration","self_config_no_lockout":"boolean|null","self_config_preview":"boolean|null; grants the preview verb","enable_pack_install":"boolean|null; raise it only if you hold it; keep a stored true when rewriting self_config"},
+                "self_config": {"enable_self_config":"boolean|null; absent is disabled","self_config_categories":"array<node|agent|tools|profile|backend|mcp_service|automation|policy>|null; absent selects agent, tools, profile; node grants the agent catalog; agent permits only current-agent configuration","self_config_no_lockout":"boolean|null","self_config_preview":"boolean|null; grants the preview verb","enable_pack_install":"boolean|null; raise it only if you hold it; keep a stored true when rewriting self_config","enable_pack_authority":"boolean|null; pack installs grant what plugins ask for and pack build and test compile plugin source in the command sandbox; raise it only if you hold it; keep a stored true when rewriting self_config"},
                 "tags": "array<string>; default []",
             }),
         )],
@@ -157,7 +181,7 @@ pub(in crate::tools::builtin::self_config) fn help_patch_contracts(
             patch_contract(
                 SelfConfigTarget::Trigger,
                 json!({
-                    "display_name":"string|null","description":"string|null","task_id":"existing task ID owned by selected agent","source":"{kind:schedule,schedule_id:string}|{kind:event,event_source_id:string}","enabled":"boolean; default true","concurrency":"parallel|queued_serial|serial|latest_only|null; default parallel; controls overlap, not session destination; queued_serial needs an event source or an explicit scheduled session destination","session_id_template":"string|null; template rendering an existing session ID; event or schedule sources; target must be open and use the Task agent. Null creates a session per fire. Independent of concurrency","tags":"array<string>; default []"
+                    "display_name":"string|null","description":"string|null","task_id":"existing task ID owned by selected agent","source":"{kind:schedule,schedule_id:string}|{kind:event,event_source_id:string}","enabled":"boolean; default true","concurrency":"parallel|queued_serial|serial|latest_only|null; default parallel; controls overlap, not session destination; queued_serial needs an event source or an explicit scheduled session destination","session_id_template":"string|null; template rendering an existing session ID; event or schedule sources; target must be open and use the Task agent. Null creates a session per fire. Independent of concurrency","create_session":"boolean|null; create the rendered session on first fire instead of refusing a missing one","max_fires_per_hour":"positive integer|null; default 1000; at the limit the Trigger disables itself and records why","tags":"array<string>; default []"
                 }),
             ),
             patch_contract(
@@ -194,6 +218,8 @@ pub(in crate::tools::builtin::self_config) fn field_shape(
         "tools",
         "datastore",
         "skill",
+        "page",
+        "plugin-source",
         "profile",
         "backend",
         "mcp-service",

@@ -9,6 +9,7 @@ import Proofs.ClientShell.OptimisticSend
 import Proofs.Conformance.ClientChatReadinessCases
 import Proofs.Conformance.ClientSyncHealthCases
 import Proofs.Conformance.AccessReview
+import Proofs.Conformance.BackendWake
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.CommandIsolation
@@ -84,7 +85,6 @@ import Proofs.Conformance.Contracts.Json.Lsp
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
-import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
@@ -768,6 +768,7 @@ def snapshotClientCasesJson : String :=
     ++ "\"pack_document_ownership_cases\":" ++ PackInstallation.ownershipCasesJson ++ ","
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_wire_target_cases\":" ++ PackInstallation.wireTargetCasesJson ++ ","
+    ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
     ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","
     ++ "\"hosted_plugin_cases\":" ++ PackInstallation.hostedPluginCasesJson ++ ","
     ++ "\"hosted_pack_evidence_cases\":" ++ PackInstallation.evidenceCasesJson ++ ","
@@ -876,6 +877,14 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"
       ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
+    ++ "\"backend_wake_cases\":" ++ Conformance.BackendWake.casesJson ++ ","
+    ++ "\"backend_capture_scope_cases\":" ++ Conformance.BackendWake.captureScopeCasesJson ++ ","
+    ++ "\"backend_health_wake_cases\":" ++ Conformance.BackendWake.healthCasesJson ++ ","
+    ++ "\"backend_generation_mark_cases\":" ++ Conformance.BackendWake.generationCasesJson ++ ","
+    ++ "\"backend_resume_admission_cases\":" ++ Conformance.BackendWake.admissionCasesJson ++ ","
+    ++ "\"backend_repark_cases\":" ++ Conformance.BackendWake.reparkCasesJson ++ ","
+    ++ "\"backend_parked_finalize_cases\":" ++ Conformance.BackendWake.parkedFinalizeCasesJson ++ ","
+    ++ "\"backend_resumed_turn_cases\":" ++ Conformance.BackendWake.resumedTurnCasesJson ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
     ++ "\"account_rotation_select_cases\":"
@@ -960,26 +969,6 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"interrupt_disposition_cases\":"
       ++ jsonArray
         (interruptDispositionCases.map interruptDispositionCaseJson) ++ ","
-    ++ "\"codex_shim_projection_cases\":"
-      ++ codexShimProjectionCasesJson ++ ","
-    ++ "\"codex_shim_reasoning_projection_cases\":"
-      ++ codexShimReasoningProjectionCasesJson ++ ","
-    ++ "\"codex_shim_thread_status_cases\":"
-      ++ codexShimThreadStatusCasesJson ++ ","
-    ++ "\"codex_shim_agent_selection_cases\":"
-      ++ codexShimAgentSelectionCasesJson ++ ","
-    ++ "\"codex_shim_tool_metadata_cases\":"
-      ++ codexShimToolMetadataCasesJson ++ ","
-    ++ "\"codex_shim_context_usage_cases\":"
-      ++ codexShimContextUsageCasesJson ++ ","
-    ++ "\"codex_shim_compaction_projection_cases\":"
-      ++ codexShimCompactionProjectionCasesJson ++ ","
-    ++ "\"codex_shim_turn_lifecycle_cases\":"
-      ++ codexShimTurnLifecycleCasesJson ++ ","
-    ++ "\"codex_shim_binding_cases\":"
-      ++ codexShimBindingCasesJson ++ ","
-    ++ "\"codex_shim_connection_admission_cases\":"
-      ++ codexShimConnectionAdmissionCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","

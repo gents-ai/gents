@@ -44,6 +44,7 @@ const EXAMPLES = {
   hello_runtime: "examples/ux-plugins/hello_runtime/plugin.js",
   focus_timer: "examples/ux-plugins/focus_timer/plugin.js",
   board: "examples/ux-plugins/board_pack/ux/board/plugin.js",
+  dashboard: "examples/ux-plugins/board_dashboard/ux/dashboard/plugin.js",
   badge: "crates/gents/tests/fixtures/packs/ux_fixture/ux/badge/plugin.js",
 };
 
@@ -346,6 +347,102 @@ describe("example plugins", () => {
     );
     /* both queries run again after the write */
     expect(calls.filter((c) => c[3] === "list_tasks").length).toBeGreaterThanOrEqual(2);
+    view.unmount();
+  });
+
+  it("the dashboard is assembled from blocks over the surface its manifest declares", async () => {
+    const manifest = JSON.parse(
+      read("examples/ux-plugins/board_dashboard/manifest.json"),
+    ) as {
+      ux: Array<{ css?: string; data: Array<{ surface: string; tools: string[] }> }>;
+    };
+    expect(manifest.ux[0]?.css).toBeUndefined();
+    expect(manifest.ux[0]?.data).toEqual([
+      { surface: "board", tools: ["list_tasks", "list_moves"] },
+    ]);
+    expect(read(EXAMPLES.dashboard)).not.toMatch(/\bstyle:|\bclassName:/);
+
+    const day = (n: number) => `2026-10-0${n}T09:00:00Z`;
+    const tasks = [
+      { task_id: "t1", title: "one", lane: "triage", created_at: day(1) },
+      { task_id: "t2", title: "two", lane: "ready", created_at: day(1) },
+      { task_id: "t3", title: "three", lane: "ready", created_at: day(2) },
+      { task_id: "t4", title: "four", lane: "done", created_at: day(3) },
+    ];
+    const moves = [{ task_id: "t1", lane: "running", moved_at: day(4) }];
+    const calls: string[] = [];
+    installUxHost({
+      ...host,
+      shell: {
+        ...host.shell,
+        selectedDeployment: () => ({ nodeDid: "did:key:n" }) as never,
+      },
+      data: {
+        call: async (_listing, _node, _surface, tool) => {
+          calls.push(tool);
+          const results = tool === "list_tasks" ? tasks : moves;
+          return { kind: "query", output: { results, count: results.length } };
+        },
+        surfaces: async () => [],
+      },
+    });
+    await loadRuntimeUxPlugin(
+      { source: read(EXAMPLES.dashboard) },
+      {
+        origin: "examples/board_dashboard/dashboard",
+        door: "pack",
+        pack: "examples/board_dashboard",
+        listing: "examples/board_dashboard/dashboard",
+        declared: { areas: [NAV_AREA, PLUGIN_PAGE_AREA], directives: [] },
+      },
+    );
+    expect(uxPluginRecords().board_dashboard?.status).toBe("loaded");
+    const view = render(
+      createElement(Fragment, null, registry.getArea(PLUGIN_PAGE_AREA)[0]!.render!()),
+    );
+    await settle();
+    expect([...new Set(calls)].sort()).toEqual(["list_moves", "list_tasks"]);
+    const mount = frameMount("examples/board_dashboard/dashboard")!;
+    const stats = [...mount.querySelectorAll('[data-slot="stat"]')].map(
+      (el) => el.textContent,
+    );
+    /* t1 moved to running, so three open and one done of four */
+    expect(stats).toEqual([
+      "Open tasks3",
+      "Running1",
+      "Done1↑ 25% of the board".replace("↑ ", ""),
+    ]);
+    const charts = mount.querySelectorAll('[data-slot="chart"] svg[role="img"]');
+    expect([...charts].map((svg) => svg.getAttribute("aria-label"))).toEqual([
+      "Tasks created",
+      "Tasks by lane",
+      "Share of the board",
+    ]);
+    /* the bars, one per lane, in the chart's table view for a screen reader */
+    const laneRows = charts[1]!.parentElement!.parentElement!.querySelectorAll(
+      "table.sr-only tbody tr",
+    );
+    expect([...laneRows].map((tr) => tr.textContent)).toEqual([
+      "triage0",
+      "ready2",
+      "running1",
+      "done1",
+    ]);
+    expect(mount.querySelector('[data-slot="last-updated"]')?.textContent).toMatch(
+      /^Updated/,
+    );
+
+    const tasksTab = [...mount.querySelectorAll('[role="tab"]')].find(
+      (el) => el.textContent === "Tasks",
+    )!;
+    fireEvent.click(tasksTab);
+    await settle();
+    const rows = () =>
+      [...mount.querySelectorAll('[data-slot="data-table"] tbody tr')].map(
+        (tr) => tr.firstElementChild?.textContent,
+      );
+    /* newest first, by the default sort */
+    expect(rows()).toEqual(["four", "three", "one", "two"]);
     view.unmount();
   });
 

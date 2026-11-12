@@ -6,9 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::{
-    documents::skills::prompt_slash_skill_selection, store::graphql::escape_graphql_string,
-};
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use gents_protocol::request_admission::AgentRequestCreate;
@@ -28,7 +26,6 @@ pub(crate) struct SubmittedRequest {
     pub(crate) request_doc_id: String,
     pub(crate) requester_did: Option<String>,
     pub(crate) input: Option<RequestInput>,
-    pub(crate) created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,44 +397,6 @@ pub(crate) async fn prepare_cli_goal_input(
     gents::goal::prepare_client_goal_input(access, &verifier, node_did, session_id, input).await
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(unix)]
-pub(crate) async fn create_goal_backed_agent_request_local(
-    node: &std::sync::Arc<defra_node::Node>,
-    actor: identity::Did,
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    objective: &str,
-    token_budget: Option<i64>,
-    session_id: &str,
-    agent_did: &str,
-    request_id: String,
-    mut options: RequestSubmitOptions,
-) -> Result<SubmittedRequest> {
-    options.retry_key = Some(format!("goal-request:{request_id}"));
-    let prepared = prepare_agent_request_with_input(
-        graphql,
-        node_did,
-        objective,
-        Some(session_id),
-        Some(agent_did),
-        Some(request_id),
-        options,
-    )
-    .await?;
-    gents::goal::submit_goal_backed_request_local(
-        node,
-        actor,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-        &prepared.create,
-    )
-    .await?;
-    committed_submitted_request(graphql, &prepared.create).await
-}
-
 pub(crate) async fn submit_prepared_agent_request_committed(
     graphql: &GraphqlEndpoint,
     prepared: &PreparedAgentRequest,
@@ -462,16 +421,6 @@ pub(crate) async fn submit_prepared_agent_request_committed(
     submitted_from_receipt(row)
 }
 
-async fn committed_submitted_request(
-    graphql: &GraphqlEndpoint,
-    create: &AgentRequestCreate,
-) -> Result<SubmittedRequest> {
-    let row = read_submitted_receipt(graphql, create)
-        .await?
-        .context("committed signed request receipt is missing")?;
-    submitted_from_receipt(row)
-}
-
 fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
     Ok(SubmittedRequest {
         request_doc_id: row
@@ -484,7 +433,6 @@ fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
         requester_did: row.requester_did,
         agent_did: row.agent_did,
         input: row.input,
-        created_at: row.created_at,
     })
 }
 
@@ -637,19 +585,7 @@ async fn resolve_request_agent_did(
     Ok(agent_did)
 }
 
-pub(crate) fn content_and_input_with_prompt_selected_skill_ids(
-    input: Option<RequestInput>,
-    content: &str,
-) -> (String, RequestInput) {
-    let selection = prompt_slash_skill_selection(content);
-    let mut input = input.unwrap_or_default();
-    for id in selection.selected_skill_ids {
-        if !input.selected_skill_ids.contains(&id) {
-            input.selected_skill_ids.push(id);
-        }
-    }
-    (selection.prompt, input)
-}
+pub(crate) use gents::documents::skills::content_and_input_with_prompt_selected_skill_ids;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WaitProgressMarker {
@@ -1019,16 +955,17 @@ pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
         .context("writing NDJSON record to stdout")
 }
 
-pub(crate) async fn capture_report<F>(command: F) -> Result<Value>
+pub(crate) async fn capture_report<F, E>(command: F) -> Result<Value, E>
 where
-    F: std::future::Future<Output = Result<()>>,
+    F: std::future::Future<Output = Result<(), E>>,
+    E: From<anyhow::Error>,
 {
     CAPTURED_REPORT
         .scope(std::cell::RefCell::new(None), async move {
             command.await?;
             CAPTURED_REPORT
                 .with(|report| report.borrow_mut().take())
-                .ok_or_else(|| anyhow::anyhow!("the command produced no report"))
+                .ok_or_else(|| anyhow::anyhow!("the command produced no report").into())
         })
         .await
 }

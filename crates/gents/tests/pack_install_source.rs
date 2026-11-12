@@ -129,6 +129,7 @@ async fn asset_install_keeps_portable_source_across_reinstall() {
             false,
             None,
             &BTreeMap::new(),
+            gents::pack::InstalledVia::Operator,
             source,
             |_, _| async { Ok(()) },
         )

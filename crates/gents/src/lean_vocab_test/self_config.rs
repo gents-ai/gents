@@ -34,6 +34,7 @@ pub(crate) struct LeanSelfConfigBackend {
 pub(crate) struct LeanSelfConfigGrants {
     pub(crate) pack_install: bool,
     pub(crate) policy: bool,
+    pub(crate) pack_authority: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

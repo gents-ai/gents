@@ -40,6 +40,8 @@ impl DefraWatcher {
         let mut positions = rapidhash::RapidHashMap::default();
         let mut seen = RapidHashSet::default();
         let mut failure = None;
+        let mut has_parked = false;
+        let mut wait_metadata = rapidhash::RapidHashMap::default();
         for identity in &self.agents {
             let actor = identity::Did::new(identity.did())?;
             let access = crate::ConfigAccess::local_managed_agent(
@@ -106,8 +108,18 @@ impl DefraWatcher {
                     continue;
                 }
             };
+            has_parked |= observed
+                .iter()
+                .any(|row| row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend));
             for row in malformed {
                 self.terminalize_malformed_pending_request(&row).await;
+            }
+            self.maintain_parked_requests(&access, &observed).await;
+            match load_backend_waits(&access, &observed).await {
+                Ok(waits) => wait_metadata.extend(waits),
+                Err(error) => {
+                    tracing::warn!(agent_did = %actor, %error, "could not load backend wait metadata");
+                }
             }
             for row in &observed {
                 if is_pending(row) {
@@ -164,19 +176,172 @@ impl DefraWatcher {
                 .as_ref()
                 .and_then(|id| positions.get(id).copied())
         });
-        let requests = prioritize_aged_background_wakes(
-            claimable_pending_rows_from_rows(rows),
-            chrono::Utc::now(),
-        )
-        .into_iter()
-        .map(AgentRequest::try_from)
-        .collect::<Result<Vec<_>, AgentRequestRowError>>()?;
+        self.has_parked
+            .store(has_parked, std::sync::atomic::Ordering::Relaxed);
+        let now = chrono::Utc::now();
+        let mut candidates = self.due_parked_rows(&rows, &wait_metadata, now).await;
+        candidates.extend(claimable_pending_rows_from_rows(rows));
+        let requests = prioritize_aged_background_wakes(candidates, now)
+            .into_iter()
+            .map(AgentRequest::try_from)
+            .collect::<Result<Vec<_>, AgentRequestRowError>>()?;
         if requests.is_empty() {
             if let Some(error) = failure {
                 return Err(error.into());
             }
         }
         Ok(requests)
+    }
+
+    /// Recovery of a parked request acts as the Agent that owns it: an expired
+    /// resume returns to the wait, and an interrupted or expired wait settles.
+    async fn maintain_parked_requests(
+        &self,
+        access: &crate::ConfigAccess,
+        rows: &[AgentRequestRow],
+    ) {
+        let now = chrono::Utc::now();
+        for row in rows {
+            let (Some(doc), Some(generation)) =
+                (row.doc_id.as_deref(), row.execution_generation.as_deref())
+            else {
+                continue;
+            };
+            match row.lifecycle_state {
+                Some(RequestLifecycleState::ResumingBackend) => {
+                    let Some(expiry) = row.execution_lease_expires_at.as_deref() else {
+                        continue;
+                    };
+                    if chrono::DateTime::parse_from_rfc3339(expiry)
+                        .ok()
+                        .is_none_or(|time| time.with_timezone(&chrono::Utc) > now)
+                    {
+                        continue;
+                    }
+                    if let Err(error) = crate::request::lifecycle::repark_expired_resume(
+                        access, doc, generation, expiry,
+                    )
+                    .await
+                    {
+                        tracing::warn!(request_doc_id = %doc, %error, "could not recover expired backend resume");
+                    }
+                }
+                Some(RequestLifecycleState::WaitingForBackend) => {
+                    let interrupted = row
+                        .interrupt_requested_at
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty());
+                    let expired = row
+                        .deadline
+                        .as_deref()
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                        .is_some_and(|deadline| now >= deadline.with_timezone(&chrono::Utc));
+                    if !interrupted && !expired {
+                        continue;
+                    }
+                    if let Err(error) = crate::request::lifecycle::terminalize_parked_request(
+                        access,
+                        doc,
+                        generation,
+                        interrupted,
+                    )
+                    .await
+                    {
+                        tracing::warn!(request_doc_id = %doc, %error, "could not settle parked request");
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Parked requests whose fallback is due or whose backend has a healthy
+    /// observation newer than the wait; also schedules the next timed rescan.
+    async fn due_parked_rows(
+        &self,
+        rows: &[AgentRequestRow],
+        wait_metadata: &rapidhash::RapidHashMap<String, (Option<String>, Option<String>)>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<AgentRequestRow> {
+        let mut parked = Vec::new();
+        let mut next_wait_ms = super::GOSSIP_FALLBACK_POLL.as_millis() as u64;
+        for row in rows
+            .iter()
+            .filter(|row| row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend))
+        {
+            let parse_time = |value: Option<&str>| {
+                value
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .map(|time| time.with_timezone(&chrono::Utc))
+            };
+            let Some(doc) = row.doc_id.as_deref() else {
+                continue;
+            };
+            let Some((retry, started)) = wait_metadata.get(doc) else {
+                continue;
+            };
+            let (Some(deadline), Some(retry), Some(started), Some(backend_id)) = (
+                parse_time(row.deadline.as_deref()),
+                parse_time(retry.as_deref()),
+                parse_time(started.as_deref()),
+                row.backend_id.as_deref().filter(|id| !id.is_empty()),
+            ) else {
+                continue;
+            };
+            for time in [deadline, retry] {
+                if time > now {
+                    let millis = (time - now).num_milliseconds().max(1) as u64;
+                    next_wait_ms = next_wait_ms.min(millis);
+                }
+            }
+            if deadline <= now
+                || row
+                    .interrupt_requested_at
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+            {
+                continue;
+            }
+            let other_active_in_session = !row
+                .purpose
+                .is_some_and(gents_protocol::request_admission::RequestPurpose::is_auxiliary)
+                && rows.iter().any(|other| {
+                    other.doc_id.as_deref() != Some(doc)
+                        && other.session_id == row.session_id
+                        && !is_pending(other)
+                        && !other.purpose.is_some_and(
+                            gents_protocol::request_admission::RequestPurpose::is_auxiliary,
+                        )
+                });
+            if other_active_in_session {
+                continue;
+            }
+            let healthy = if retry > now {
+                match &self.backend_health {
+                    Some(health) => match health
+                        .healthy_observed_at(&self.node, &self.node_did, backend_id)
+                        .await
+                    {
+                        Ok(observed) => {
+                            crate::request::lifecycle::fresh_healthy(started, now, observed)
+                        }
+                        Err(error) => {
+                            tracing::warn!(%backend_id, %error, "could not inspect provider health for parked request");
+                            false
+                        }
+                    },
+                    None => false,
+                }
+            } else {
+                false
+            };
+            if (retry <= now || healthy) && AgentRequest::try_from(row.clone()).is_ok() {
+                parked.push(row.clone());
+            }
+        }
+        self.parked_wait_ms
+            .store(next_wait_ms, std::sync::atomic::Ordering::Relaxed);
+        parked
     }
 
     fn managed_agent_for_rejection(
@@ -272,6 +437,46 @@ impl DefraWatcher {
                 "failed to terminalize malformed AgentRequest");
         }
     }
+}
+
+/// Wait metadata is owned by the Agent that parked the request, so it is read
+/// through that Agent's access.
+async fn load_backend_waits(
+    access: &crate::ConfigAccess,
+    rows: &[AgentRequestRow],
+) -> anyhow::Result<Vec<(String, (Option<String>, Option<String>))>> {
+    let parked_ids: Vec<_> = rows
+        .iter()
+        .filter(|row| row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend))
+        .filter_map(|row| row.doc_id.as_deref())
+        .map(|doc| format!("\"{}\"", crate::store::graphql::escape_graphql_string(doc)))
+        .collect();
+    if parked_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = parked_ids.join(", ");
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _in: [{ids}] }} }}) {{ request_doc_id retry_at wait_started_at }} }}"#
+        ))
+        .await?;
+    let string = |row: &serde_json::Value, name: &str| {
+        row.get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    Ok(response
+        .pointer("/data/AgentRequestBackendWait")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("backend wait metadata query omitted rows"))?
+        .iter()
+        .filter_map(|row| {
+            Some((
+                string(row, "request_doc_id")?,
+                (string(row, "retry_at"), string(row, "wait_started_at")),
+            ))
+        })
+        .collect())
 }
 
 #[cfg(test)]

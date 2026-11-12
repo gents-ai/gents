@@ -123,6 +123,9 @@ import type {
   WorkflowPromoted,
   PackWireResult,
   PackWireSources,
+  DefaultPacks,
+  DefaultPackApproval,
+  DefaultPacksApproval,
 } from "../types/packs.js";
 import type {
   AllowedFolderAccess,
@@ -486,6 +489,10 @@ export type DesktopApiAdapter = {
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
   wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
   listPackWireSources: () => Promise<PackWireSources>;
+  /** the packs the Engineer starts with on the local node, and how each stands */
+  listDefaultPacks: () => Promise<DefaultPacks>;
+  /** installs the approved packs; the local node restarts around the install */
+  approveDefaultPacks: (packs: DefaultPackApproval[]) => Promise<DefaultPacksApproval>;
   listDynamicWorkflows: () => Promise<DynamicWorkflows>;
   getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
   promoteWorkflow: (
@@ -508,8 +515,11 @@ export type DesktopApiAdapter = {
     id: string,
     decision: PluginApprovalDecision,
   ) => Promise<void>;
-  listUxPlugins: () => Promise<{ plugins: UxPluginListing[] }>;
-  readUxPluginSource: (id: string) => Promise<UxPluginSource>;
+  /** the local home's plugins, then the page documents of `nodeDid` */
+  listUxPlugins: (
+    nodeDid?: string | null,
+  ) => Promise<{ plugins: UxPluginListing[]; pagesError?: string | null }>;
+  readUxPluginSource: (id: string, nodeDid?: string | null) => Promise<UxPluginSource>;
   callPackPlugin: (
     request: PackPluginCallRequest,
   ) => Promise<{ output: unknown }>;
@@ -535,6 +545,8 @@ export type PackCommand =
   | "bindPackPlugin"
   | "wirePack"
   | "listPackWireSources"
+  | "listDefaultPacks"
+  | "approveDefaultPacks"
   | "listDynamicWorkflows"
   | "getDynamicWorkflow"
   | "promoteWorkflow"

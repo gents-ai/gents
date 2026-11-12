@@ -83,6 +83,8 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
             "pending",
             "claimed",
             "processing",
+            "waitingForBackend",
+            "resumingBackend",
             "completed",
             "failed",
             "superseded",
@@ -123,7 +125,10 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert!(!lean_contract_snapshot().root_admission_cases.is_empty());
-    assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
+    assert_eq!(
+        lean_contract_snapshot().request_transition_cases.len(),
+        lean_vocabulary_values("RequestState").len().pow(2)
+    );
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
     assert_eq!(lean_contract_snapshot().eval_outcome_cases.len(), 33);
@@ -1289,6 +1294,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             ][..],
         ),
         ("Triggers.Types", &["delivery_options"][..]),
+        ("Triggers.SessionKey", &["session_config"][..]),
+        (
+            "Triggers.FireBudget",
+            &["fire_budget", "fire_budget_config"][..],
+        ),
         ("Triggers.Queue", &["queues", "observed_claims"][..]),
         ("EventDelivery.Durable", &["cursors"][..]),
         (
@@ -2180,60 +2190,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R4cBackgroundWorkCases".to_string(),
         ));
     }
-    if !lean_codex_shim_projection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_projection_cases".to_string(),
-            "CodexShimProjectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_reasoning_projection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_reasoning_projection_cases".to_string(),
-            "CodexShimReasoningProjectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_thread_status_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_thread_status_cases".to_string(),
-            "CodexShimThreadStatusCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_agent_selection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_agent_selection_cases".to_string(),
-            "CodexShimAgentSelectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_tool_metadata_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_tool_metadata_cases".to_string(),
-            "CodexShimToolMetadataCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_context_usage_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_context_usage_cases".to_string(),
-            "CodexShimContextUsageCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_compaction_projection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_compaction_projection_cases".to_string(),
-            "CodexShimCompactionProjectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_binding_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_binding_cases".to_string(),
-            "CodexShimBindingCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_connection_admission_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_connection_admission_cases".to_string(),
-            "CodexShimConnectionAdmissionCases".to_string(),
-        ));
-    }
     if !lean_plugin_reference_cases().is_empty() {
         emitted.insert((
             "plugin_reference_cases".to_string(),
@@ -2250,12 +2206,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "startup_readiness_cases".to_string(),
             "StartupReadinessCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_turn_lifecycle_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_turn_lifecycle_cases".to_string(),
-            "CodexShimTurnLifecycleCases".to_string(),
         ));
     }
     if !lean_r6_backgrounding_cases().is_empty() {

@@ -1,0 +1,14 @@
+[package]
+name = "gents-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache", "unstable-rendered-line-info"] }
+rapidhash = { workspace = true }
+
+[dev-dependencies]
+tui-test-rs = "0.1.1"

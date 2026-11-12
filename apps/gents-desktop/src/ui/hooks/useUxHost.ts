@@ -22,6 +22,8 @@ import { followOtherWindowsDecisions } from "@/contrib/plugins-store";
 import {
   configureUxDoors,
   followOtherWindowsPackChanges,
+  followSelectedUxNode,
+  rescanRuntimeUxPluginsSoon,
   scanRuntimeUxPlugins,
 } from "@/contrib/runtime-door";
 import type { DesktopClientUpdatedEvent } from "@source-inc/gents-desktop-client";
@@ -155,14 +157,33 @@ let following: Array<() => void> = [];
 export function openUxDoors(app: DesktopApp): void {
   if (opened) return;
   opened = true;
+  /* page documents are read from the selected node, by the same rule the
+     plugin host's selectedDeployment applies */
+  const nodeDid = () => {
+    const fleet = app.stores.fleet.getState();
+    const selected =
+      nodeOf(fleet, app.stores.selection.getState().nodeDid) ?? fleetNodes(fleet)[0];
+    return selected?.nodeDid ?? null;
+  };
   configureUxDoors({
-    list: () => app.actions.listUxPlugins(),
-    source: (id) => app.actions.readUxPluginSource(id),
+    list: (node) => app.actions.listUxPlugins(node),
+    source: (id, node) => app.actions.readUxPluginSource(id, node),
+    node: nodeDid,
   });
   discoverBundledUxPlugins();
   void scanRuntimeUxPlugins();
-  following = [followOtherWindowsDecisions(), followOtherWindowsPackChanges()];
+  /* another node's pages replace this one's when the selection moves */
+  const followNode = () => void followSelectedUxNode().catch(() => undefined);
+  following = [
+    followOtherWindowsDecisions(),
+    followOtherWindowsPackChanges(),
+    app.stores.selection.subscribe(followNode),
+    app.stores.fleet.subscribe(followNode),
+  ];
 }
+
+const showsPages = (route: Route): boolean =>
+  route.name === "plugin" || route.name === "packs";
 
 export function useUxHost(
   app: DesktopApp,
@@ -173,6 +194,7 @@ export function useUxHost(
   routeRef.current = route;
   useEffect(() => {
     notifyRouteChanged();
+    if (showsPages(route)) rescanRuntimeUxPluginsSoon();
   }, [route]);
   useEffect(() => {
     installUxHost(buildUxHost(app, () => routeRef.current));
@@ -182,7 +204,13 @@ export function useUxHost(
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     void Promise.resolve(
-      listenToUpdates((event: DesktopClientUpdatedEvent) => emitClientUpdated(event)),
+      listenToUpdates((event: DesktopClientUpdatedEvent) => {
+        emitClientUpdated(event);
+        /* An agent editing a page document is client activity, and so is
+           every streamed token. Only a screen that shows pages follows it, so
+           a chat turn adds no bridge calls (the mobile performance gate). */
+        if (showsPages(routeRef.current)) rescanRuntimeUxPluginsSoon();
+      }),
     ).then((stop: () => void) => {
       if (cancelled) stop();
       else unlisten = stop;

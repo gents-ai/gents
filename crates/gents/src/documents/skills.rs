@@ -213,6 +213,22 @@ pub fn prompt_slash_skill_selection(prompt: &str) -> PromptSlashSkillSelection {
     }
 }
 
+/// A prompt with any `/skill` selection resolved: the text to send and the
+/// input that carries the selected skills.
+pub fn content_and_input_with_prompt_selected_skill_ids(
+    input: Option<gents_protocol::request_input::RequestInput>,
+    content: &str,
+) -> (String, gents_protocol::request_input::RequestInput) {
+    let selection = prompt_slash_skill_selection(content);
+    let mut input = input.unwrap_or_default();
+    for id in selection.selected_skill_ids {
+        if !input.selected_skill_ids.contains(&id) {
+            input.selected_skill_ids.push(id);
+        }
+    }
+    (selection.prompt, input)
+}
+
 pub fn selected_skill_ids_from_prompt_slash_commands(prompt: &str) -> Vec<String> {
     prompt_slash_skill_selection(prompt).selected_skill_ids
 }

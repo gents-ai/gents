@@ -839,10 +839,19 @@ async fn spawned_background_admission_rejects_a_stale_parent_generation() {
             .map(Vec::len),
         Some(1)
     );
-    assert!(parent
+    let Err(refusal) = parent
         .admit_spawned_background(admission(deadline), "receipt")
         .await
-        .is_err());
+    else {
+        panic!("a stale generation holds no request lease")
+    };
+    assert!(
+        matches!(
+            refusal.downcast_ref::<crate::tools::call::hook::persistence::BackgroundSlotRefusal>(),
+            Some(crate::tools::call::hook::persistence::BackgroundSlotRefusal::RequestStopped)
+        ),
+        "the refusal is the typed slot refusal its callers classify: {refusal:#}"
+    );
     let parent_doc_id = crate::store::graphql::escape_graphql_string(parent.doc_id().unwrap());
     let children = observe(&parent, &format!(
         r#"{{ AgentToolCall(filter: {{ spawned_by_tool_call_doc_id: {{ _eq: "{parent_doc_id}" }} }}) {{ _docID }} }}"#,

@@ -20,10 +20,11 @@ pub(crate) async fn plugin_notification_scope(
     .map(Some)
 }
 
-pub(crate) async fn record_plugin_store_change(
+/// Tells the home's node that `coordinate`'s plugins were retired, which
+/// releases the node's record of them.
+pub(crate) async fn record_plugin_retirement(
     home: &std::path::Path,
     coordinate: &str,
-    installed: Option<&gents::pack::PackIdentity>,
 ) -> Result<()> {
     if !gents::store::local::home::init_config_path(home).is_file() {
         return Ok(());
@@ -35,7 +36,7 @@ pub(crate) async fn record_plugin_store_change(
     })
     .await?;
     let result =
-        gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await;
+        gents::pack::record_plugin_retirement_as(&access, &owner, None, home, coordinate).await;
     if let Some(node) = access.local_node() {
         if let Err(error) = node.shutdown().await {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
@@ -82,7 +83,7 @@ pub(super) async fn resolve_plugin_slot_owner(
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
         }
     }
-    result?;
+    result.map_err(|error| error.into_anyhow())?;
     Ok(Some(owner))
 }
 

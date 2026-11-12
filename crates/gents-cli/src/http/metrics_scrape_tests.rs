@@ -201,7 +201,6 @@ fn runtime_state(graphql: &str, node_did: &str) -> crate::http::router::RuntimeH
         None,
         None,
         None,
-        None,
         crate::http::enrollment::empty_issuer_handle(),
         crate::http::enrollment::empty_decision_service_handle(),
         runtime,

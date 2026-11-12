@@ -18,7 +18,7 @@ use crate::store::config_client::session_children::{
     output_segment_bound_variables, transcript_message_bound_variables,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::store::graphql::{escape_graphql_string, response_has_documents};
+use crate::store::graphql::response_has_documents;
 use gents_protocol::output::rows::{
     OutputSegmentRow, TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -134,12 +134,14 @@ async fn ensure_auxiliary_has_no_tools(
     txn: &ConfigApplyTxn<'_>,
     request_doc_id: &str,
 ) -> Result<()> {
-    let request = escape_graphql_string(request_doc_id);
-    let response = txn
-        .execute_local_response(&format!(
-            "{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: \"{request}\" }} }}, limit: 1) {{ _docID }} }}"
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::doc_id())
+        .filter(Filter::eq(fields::REQUEST_DOC_ID, request_doc_id))
+        .limit(1)
+        .render();
+    let response = txn.run_local_response(&rendered).await?;
     let rows = response
         .data
         .as_ref()
@@ -276,12 +278,26 @@ async fn recover_expired_generation_with_access_and_facts(
             let fresh_generation = fresh_generation.clone();
             let selection_choice = selection_choice.clone();
             Box::pin(async move {
-            let request_id = escape_graphql_string(&request_doc_id);
-            let value = txn.execute_local_response(&format!(r#"{{ AgentRequest(
-                filter: {{ _docID: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                _docID request_id purpose node_did requester_did session_id lifecycle_state interrupt_requested_at
-                execution_generation execution_lease_expires_at terminal_output
-            }} }}"#)).await?;
+            let rendered = {
+                use gents_protocol::document_query::{fields::agent_request as fields, Filter, Query, Selection};
+                Query::select(
+                    Selection::doc_id()
+                        .field(fields::REQUEST_ID)
+                        .field(fields::PURPOSE)
+                        .field(fields::NODE_DID)
+                        .field(fields::REQUESTER_DID)
+                        .field(fields::SESSION_ID)
+                        .field(fields::LIFECYCLE_STATE)
+                        .field(fields::INTERRUPT_REQUESTED_AT)
+                        .field(fields::EXECUTION_GENERATION)
+                        .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+                        .field(fields::TERMINAL_OUTPUT),
+                )
+                .filter(Filter::eq(fields::DOC_ID, request_doc_id.as_str()))
+                .limit(1)
+                .render()
+            };
+            let value = txn.run_local_response(&rendered).await?;
             let row = crate::store::graphql::first_row::<AgentRequestRow>(&value, "AgentRequest")?
                 .context("execution request disappeared")?;
             let purpose = row.purpose.context("recovery request purpose missing")?;
@@ -540,18 +556,23 @@ async fn recover_expired_generation_with_access_and_facts(
             if expected_outcome.is_some_and(|expected| target_state != expected) {
                 return Err(RecoverySelectionRejected.into());
             }
-            let generation = escape_graphql_string(expected_generation);
-            let expiry = escape_graphql_string(expected_expiry);
-            let fresh = escape_graphql_string(&fresh_generation);
-            let target = escape_graphql_string(target_state.as_str());
-            let old_state = escape_graphql_string(state.as_str());
-            let now = escape_graphql_string(&timestamp);
-            let response = txn.execute_with_variables(&format!(r#"mutation($terminal_output: JSON) {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{request_id}" }}, lifecycle_state: {{ _eq: "{old_state}" }},
-                    execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
-                input: {{ lifecycle_state: "{target}", execution_generation: "{fresh}", execution_lease_expires_at: "{now}",
-                    failure_reason: "execution lease expired", terminalized_at: "{now}", terminal_redrive_attempts: 0,
-                    terminal_output: $terminal_output }}) {{ _docID }} }}"#), &serde_json::json!({"terminal_output": selection})).await?;
+            let response = {
+                use gents_protocol::document_query::{fields::agent_request as fields, Filter, Input, Selection, Update};
+                let filter = Filter::eq(fields::DOC_ID, request_doc_id.as_str())
+                    .and(Filter::eq(fields::LIFECYCLE_STATE, state.as_str()))
+                    .and(Filter::eq(fields::EXECUTION_GENERATION, expected_generation))
+                    .and(Filter::eq(fields::EXECUTION_LEASE_EXPIRES_AT, expected_expiry));
+                let input = Input::new()
+                    .set(fields::LIFECYCLE_STATE, target_state.as_str())
+                    .set(fields::EXECUTION_GENERATION, fresh_generation.as_str())
+                    .set(fields::EXECUTION_LEASE_EXPIRES_AT, timestamp.as_str())
+                    .set(fields::FAILURE_REASON, "execution lease expired")
+                    .set(fields::TERMINALIZED_AT, timestamp.as_str())
+                    .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i64)
+                    .set(fields::TERMINAL_OUTPUT, serde_json::to_value(&selection)?);
+                let rendered = Update::matching(filter, input).returning(Selection::doc_id()).render();
+                txn.run(&rendered).await?
+            };
             if !response.get("data").and_then(|data| data.get("update_AgentRequest")).is_some_and(response_has_documents) {
                 anyhow::bail!("expired-generation recovery lost request CAS");
             }

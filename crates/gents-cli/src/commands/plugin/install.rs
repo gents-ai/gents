@@ -52,6 +52,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             package: args.name.clone(),
             inference_slots: Vec::new(),
             dependency_variables: Vec::new(),
+            bind_agents: Vec::new(),
             preview: false,
             scope: crate::cli::ScopeArgs {
                 home: Some(home.clone()),
@@ -65,6 +66,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             grant_authority: args.grant_authority,
             wire: Vec::new(),
             expect_digest: None,
+            root_agents: None,
             explicit: true,
         };
         let result = crate::http::pack_install_client::install_remote(
@@ -223,24 +225,16 @@ mod tests {
             records().await,
             serde_json::json!([{ "coordinate": format!("{namespace}/echo") }])
         );
-        // Retiring a plugin needs a complete reference inventory, which no
-        // document reader can prove under ACP: the removal refuses and leaves
-        // both the store and the Node's record in place.
-        let error = super::super::remove(crate::cli::args::PluginRemoveArgs {
+        // No Tools selects the plugin, so the removal retires it: the
+        // store record goes and the Node releases its record.
+        super::super::remove(crate::cli::args::PluginRemoveArgs {
             name: format!("{namespace}/echo"),
             home: Some(home.path().to_owned()),
         })
         .await
-        .unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<gents::pack::PackRemovalError>(),
-            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
-        ));
-        assert!(store::read_record(home.path(), &namespace, "echo").is_ok());
-        assert_eq!(
-            records().await,
-            serde_json::json!([{ "coordinate": format!("{namespace}/echo") }])
-        );
+        .unwrap();
+        assert!(store::read_record(home.path(), &namespace, "echo").is_err());
+        assert_eq!(records().await, serde_json::json!([]));
     }
 
     #[tokio::test]

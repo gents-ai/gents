@@ -372,6 +372,25 @@ struct PartialHeaderInputs<'a> {
     replay: bool,
 }
 
+/// Published transcript headers of one request, read in the caller's
+/// transaction.
+pub(crate) async fn request_headers_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    request_doc_id: &str,
+) -> Result<Vec<gents_protocol::output::rows::TranscriptMessageRow>> {
+    crate::session::load_request_headers_in_txn(
+        txn,
+        session_id,
+        node_did,
+        requester_did,
+        request_doc_id,
+    )
+    .await
+}
+
 async fn partial_header_in_txn(
     txn: &ConfigApplyTxn<'_>,
     inputs: PartialHeaderInputs<'_>,
@@ -390,7 +409,7 @@ async fn partial_header_in_txn(
         return Ok(None);
     }
     let message_key = partial_message_key(&prepared.request_doc_id, &prepared.source)?;
-    let headers = crate::session::load_request_headers_in_txn(
+    let headers = request_headers_in_txn(
         txn,
         &prepared.session_id,
         &prepared.node_did,

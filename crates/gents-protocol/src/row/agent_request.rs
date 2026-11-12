@@ -21,6 +21,7 @@ pub const AGENT_REQUEST_FIELDS: &str = r#"
                     execution_generation
                     execution_lease_secs
                     execution_lease_expires_at
+                    backend_id
                     request_hop
                     caused_by_parent_request_id
                     caused_by_parent_request_doc_id

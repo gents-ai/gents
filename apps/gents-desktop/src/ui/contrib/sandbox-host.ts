@@ -202,12 +202,16 @@ export interface SandboxHostOptions {
   css?: string | null;
   listing?: string;
   declared?: UxDeclaredContributions;
+  /** what the shell keeps its storage under; its id when absent */
+  scope?: string;
 }
 
-/* storage as the shell keeps it, for the init message */
-function readStorage(pluginId: string): Record<string, unknown> {
+/* storage as the shell keeps it, for the init message. The frame reads its
+   mirror under its own plugin id, so what the shell keeps under another
+   scope is handed over renamed to that id. */
+function readStorage(pluginId: string, scope: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  const prefix = `gents.ux.${pluginId}.`;
+  const prefix = `gents.ux.${scope}.`;
   try {
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i);
@@ -215,7 +219,7 @@ function readStorage(pluginId: string): Record<string, unknown> {
       const raw = window.localStorage.getItem(key);
       if (raw === null) continue;
       try {
-        out[key] = JSON.parse(raw);
+        out[`gents.ux.${pluginId}.${key.slice(prefix.length)}`] = JSON.parse(raw);
       } catch {
         /* not ours to repair */
       }
@@ -332,7 +336,10 @@ export class SandboxHost {
         t: "init",
         source: this.source,
         css: this.options.css,
-        storage: readStorage(this.options.pluginId),
+        storage: readStorage(
+          this.options.pluginId,
+          this.options.scope ?? this.options.pluginId,
+        ),
         shell: snapshot(host),
         theme: currentTheme(),
       });

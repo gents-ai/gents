@@ -69,10 +69,18 @@ pub async fn resolve_graphql_endpoint(
     target_node_did: &str,
     caller: &dyn NodeIdentity,
 ) -> std::result::Result<crate::store::config_client::GraphqlEndpoint, EndpointError> {
-    let escaped = escape_graphql_string(target_node_did);
-    let value = access.execute(&format!(
-        "query {{ PeerRegistry(filter: {{node_did: {{_eq: \"{escaped}\"}}}}, limit: 2) {{ did: node_did node_id: peer_id address: endpoint_address graphql_url updated_at: endpoint_updated_at binding_sig }} }}"
-    )).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::peer_registry as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            "did: node_did node_id: peer_id address: endpoint_address graphql_url updated_at: endpoint_updated_at binding_sig",
+        ))
+        .filter(Filter::eq(fields::NODE_DID, target_node_did))
+        .limit(2)
+        .render()
+    };
+    let value = access.read(&rendered).await?;
     let rows = value
         .get("data")
         .unwrap_or(&value)

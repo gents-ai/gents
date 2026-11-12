@@ -285,22 +285,10 @@ impl StagedProviderContextReduction {
         }
 
         let created_at = chrono::Utc::now().to_rfc3339();
-        let producer_call_id = graphql_optional_string(intended.producer_call_id.as_deref());
-        let producer_call_seq = intended
-            .producer_call_seq
-            .map(|seq| seq.to_string())
-            .unwrap_or_else(|| "null".to_string());
-        let parent_reduction_key =
-            graphql_optional_string(intended.parent_reduction_key.as_deref());
-        let requester_did = graphql_optional_string(intended.requester_did.as_deref());
         access
             .transact_write("provider_context.create_reduction", |txn| {
                 let intended = &intended;
                 let created_at = &created_at;
-                let producer_call_id = &producer_call_id;
-                let producer_call_seq = &producer_call_seq;
-                let parent_reduction_key = &parent_reduction_key;
-                let requester_did = &requester_did;
                 Box::pin(async move {
                     let (session_doc_id, agent_did) =
                         crate::store::config_client::session_children::agent_session_child_binding_in_txn(
@@ -332,60 +320,53 @@ impl StagedProviderContextReduction {
                             &intended.retained_suffix_json,
                         )
                         .await?;
-                    let mutation = format!(
-                        r#"mutation {{
-            create_ProviderContextReduction(input: {{
-                reduction_key: "{reduction_key}"
-                node_did: "{node_did}"
-                requester_did: {requester_did}
-                session_id: "{session_id}"
-                session_doc_id: "{session_doc_id}"
-                agent_did: "{agent_did}"
-                request_id: "{request_id}"
-                request_doc_id: "{request_doc_id}"
-                request_commit_cid: "{request_commit_cid}"
-                reduction_index: {reduction_index}
-                turn_index: {turn_index}
-                parent_reduction_key: {parent_reduction_key}
-                producer_call_id: {producer_call_id}
-                producer_call_seq: {producer_call_seq}
-                source_boundary_json: "{source_boundary_json}"
-                compacted_prefix_json: "{compacted_prefix_json}"
-                retained_suffix_json: "{retained_suffix_json}"
-                pair_closed: true
-                checkpoint_messages_json: "{checkpoint_messages_json}"
-                replay_associations_json: "{replay_associations_json}"
-                summary: "{summary}"
-                messages_compacted: {messages_compacted}
-                original_tokens: {original_tokens}
-                compacted_tokens: {compacted_tokens}
-                created_at: "{created_at}"
-            }}) {{ _docID }}
-        }}"#,
-                        reduction_key = escape_graphql_string(&intended.reduction_key),
-                        node_did = escape_graphql_string(&intended.node_did),
-                        session_id = escape_graphql_string(&intended.session_id),
-                        session_doc_id = escape_graphql_string(&block_scope.session_doc_id),
-                        agent_did = escape_graphql_string(&block_scope.agent_did),
-                        request_id = escape_graphql_string(&intended.request_id),
-                        request_doc_id = escape_graphql_string(&intended.request_doc_id),
-                        request_commit_cid = escape_graphql_string(&intended.request_commit_cid),
-                        reduction_index = intended.reduction_index,
-                        turn_index = intended.turn_index,
-                        source_boundary_json =
-                            escape_graphql_string(&intended.source_boundary_json),
-                        compacted_prefix_json = escape_graphql_string(&compacted_prefix_json),
-                        retained_suffix_json = escape_graphql_string(&retained_suffix_json),
-                        checkpoint_messages_json =
-                            escape_graphql_string(&intended.checkpoint_messages_json),
-                        replay_associations_json =
-                            escape_graphql_string(&intended.replay_associations_json),
-                        summary = escape_graphql_string(&intended.summary),
-                        messages_compacted = intended.messages_compacted,
-                        original_tokens = intended.original_tokens,
-                        compacted_tokens = intended.compacted_tokens,
-                    );
-                    let response = txn.execute(&mutation).await?;
+                    let rendered = {
+                        use gents_protocol::document_query::{
+                            fields::provider_context_reduction as fields, Create, Input,
+                        };
+                        Create::new(
+                            Input::new()
+                                .set(fields::REDUCTION_KEY, &intended.reduction_key)
+                                .set(fields::NODE_DID, &intended.node_did)
+                                .set_optional(fields::REQUESTER_DID, intended.requester_did.as_deref())
+                                .set(fields::SESSION_ID, &intended.session_id)
+                                .set(fields::SESSION_DOC_ID, &block_scope.session_doc_id)
+                                .set(fields::AGENT_DID, &block_scope.agent_did)
+                                .set(fields::REQUEST_ID, &intended.request_id)
+                                .set(fields::REQUEST_DOC_ID, &intended.request_doc_id)
+                                .set(fields::REQUEST_COMMIT_CID, &intended.request_commit_cid)
+                                .set(fields::REDUCTION_INDEX, intended.reduction_index)
+                                .set(fields::TURN_INDEX, intended.turn_index)
+                                .set_optional(
+                                    fields::PARENT_REDUCTION_KEY,
+                                    intended.parent_reduction_key.as_deref(),
+                                )
+                                .set_optional(
+                                    fields::PRODUCER_CALL_ID,
+                                    intended.producer_call_id.as_deref(),
+                                )
+                                .set_optional(fields::PRODUCER_CALL_SEQ, intended.producer_call_seq)
+                                .set(fields::SOURCE_BOUNDARY_JSON, &intended.source_boundary_json)
+                                .set(fields::COMPACTED_PREFIX_JSON, &compacted_prefix_json)
+                                .set(fields::RETAINED_SUFFIX_JSON, &retained_suffix_json)
+                                .set(fields::PAIR_CLOSED, true)
+                                .set(
+                                    fields::CHECKPOINT_MESSAGES_JSON,
+                                    &intended.checkpoint_messages_json,
+                                )
+                                .set(
+                                    fields::REPLAY_ASSOCIATIONS_JSON,
+                                    &intended.replay_associations_json,
+                                )
+                                .set(fields::SUMMARY, &intended.summary)
+                                .set(fields::MESSAGES_COMPACTED, intended.messages_compacted)
+                                .set(fields::ORIGINAL_TOKENS, intended.original_tokens)
+                                .set(fields::COMPACTED_TOKENS, intended.compacted_tokens)
+                                .set(fields::CREATED_AT, created_at),
+                        )
+                        .render()
+                    };
+                    let response = txn.run(&rendered).await?;
                     let doc_id = crate::store::graphql::created_doc_id(
                         &response,
                         "ProviderContextReduction",
@@ -735,13 +716,14 @@ async fn load_by_key(
     access: &crate::store::config_client::ConfigAccess,
     reduction_key: &str,
 ) -> Result<Vec<ProviderContextReduction>> {
-    let query = format!(
-        r#"{{ ProviderContextReduction(filter: {{ reduction_key: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-        escape_graphql_string(reduction_key),
-        REDUCTION_FIELDS
-    );
+    use gents_protocol::document_query::{
+        fields::provider_context_reduction as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::owned(REDUCTION_FIELDS))
+        .filter(Filter::eq(fields::REDUCTION_KEY, reduction_key))
+        .render();
     let response = access
-        .execute(&query)
+        .read(&query)
         .await
         .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
     let mut rows = serde_json::from_value(
@@ -1138,12 +1120,6 @@ pub(crate) fn validate_source_boundary(
         }
     }
     Ok(())
-}
-
-fn graphql_optional_string(value: Option<&str>) -> String {
-    value
-        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-        .unwrap_or_else(|| "null".to_string())
 }
 
 fn required_str<'a>(row: &'a Value, field: &str) -> Result<&'a str> {

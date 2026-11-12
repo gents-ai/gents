@@ -175,7 +175,6 @@ export async function createIosReconnectFixture(
         String(runtimePort),
         "--advertise-graphql-url",
         advertised,
-        "--no-codex-shim",
         "--p2p-port",
         "0",
       ],

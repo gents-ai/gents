@@ -301,6 +301,19 @@ impl TriggerSource for ScheduleSource {
                                         last_error: Some(error.clone()),
                                         fire_count_delta: None,
                                     },
+                                    FireResult::BudgetExhausted { reason } => {
+                                        TriggerRuntimeUpdate {
+                                            last_fired_source_doc_id: None,
+                                            next_run_at: None,
+                                            last_attempt_at: Some(last_attempt_at.clone()),
+                                            last_status: Some(
+                                                crate::documents::BUDGET_EXHAUSTED_STATUS
+                                                    .to_string(),
+                                            ),
+                                            last_error: Some(reason.clone()),
+                                            fire_count_delta: None,
+                                        }
+                                    }
                                 };
                                 tokio::spawn(async move {
                                     if let Err(e) = update_trigger_runtime_fields(

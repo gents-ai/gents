@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
-use gents::eval::checks::CheckRegistry;
+use gents_eval::checks::CheckRegistry;
 
 use self::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
 use self::dossier::Dossier;
@@ -388,7 +388,8 @@ pub(crate) async fn install_pack_slot(
         &|_| None,
         &Default::default(),
     )
-    .await?;
+    .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)?;
     gents::pack::install_prepared_document_graph(
         access,
         owner,

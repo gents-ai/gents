@@ -3,11 +3,23 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::authority::describe_plugin_authority;
+use super::authority::{describe_plugin_authority, GrantError};
 use super::model_calls::ModelBinding;
 use super::store::{self, InstalledPlugin};
 use super::{Manifold, PluginRunner};
 use crate::pack::{PackManifest, PackPlugin};
+
+/// What a consenting install grants `plugin`, described; `None` when it asks
+/// for nothing.
+pub fn authority_asked(plugin: &PackPlugin) -> Result<Option<String>> {
+    let declared = super::authority::declared_manifold(plugin)?;
+    Ok(describe_plugin_authority(plugin, &declared))
+}
+
+/// Whether the plugin runtime admits `artifact` as `plugin`.
+pub fn admit(artifact: &[u8], plugin: &PackPlugin) -> Result<()> {
+    PluginRunner::compile(artifact, plugin).map(|_| ())
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn install_from_pack(
@@ -39,6 +51,7 @@ pub fn install_from_pack(
         BTreeMap::new(),
         consent,
     )
+    .map_err(Into::into)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -56,7 +69,7 @@ fn install_from_pack_locked(
     data_collection_fields: BTreeMap<String, Vec<String>>,
     data_collection_schemas: BTreeMap<String, String>,
     consent: bool,
-) -> Result<InstalledPlugin> {
+) -> Result<InstalledPlugin, GrantError> {
     // The pack lifecycle already holds this lock across its transaction window; flock does not re-enter.
     lock.for_home(home)?;
     store::check_plugin_ownership(home, pack_namespace, &plugin.name, pack_coordinate)?;
@@ -175,7 +188,7 @@ fn install_pack_plugins_locked<'a>(
     pack_digest: &str,
     asset: impl Fn(&str) -> Result<&'a [u8]>,
     consent: bool,
-) -> Result<Vec<InstalledPlugin>> {
+) -> Result<Vec<InstalledPlugin>, GrantError> {
     lock.for_home(home)?;
     let pack_coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     manifest
@@ -420,11 +433,10 @@ pub(crate) async fn stage_pack_graph(
     inputs: Vec<PluginStageInput>,
     consent: bool,
     owner: &str,
-) -> Result<StagedPluginInstall> {
-    anyhow::ensure!(
-        !owner.is_empty() || inputs.iter().all(|input| input.bindings.is_empty()),
-        "plugin slot bindings require an owner"
-    );
+) -> Result<StagedPluginInstall, GrantError> {
+    if owner.is_empty() && inputs.iter().any(|input| !input.bindings.is_empty()) {
+        return Err(anyhow::anyhow!("plugin slot bindings require an owner").into());
+    }
     let cleanup = crate::drop_cleanup::DropCleanup::current();
     let home = home.to_owned();
     let owner = owner.to_owned();
@@ -435,12 +447,14 @@ pub(crate) async fn stage_pack_graph(
         let mut seen = std::collections::BTreeSet::new();
         for input in &inputs {
             for record in snapshot_pack_plugin_records(&home, &input.manifest)? {
-                anyhow::ensure!(
-                    seen.insert((record.0.clone(), record.1.clone())),
-                    "pack graph names plugin {}/{} more than once",
-                    record.0,
-                    record.1
-                );
+                if !seen.insert((record.0.clone(), record.1.clone())) {
+                    return Err(anyhow::anyhow!(
+                        "pack graph names plugin {}/{} more than once",
+                        record.0,
+                        record.1
+                    )
+                    .into());
+                }
                 previous.push(record);
             }
         }
@@ -491,5 +505,6 @@ pub(crate) async fn stage_pack_graph(
             }
         }
     })
-    .await?
+    .await
+    .map_err(anyhow::Error::from)?
 }
