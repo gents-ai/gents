@@ -3,7 +3,7 @@
 //! policy: a duplicate create is an error.
 
 use anyhow::{ensure, Context, Result};
-use gents::defra_node::{Node as EmbeddedNode, QueryRequest, QueryResponse};
+use defra_node::{Node as EmbeddedNode, QueryRequest, QueryResponse};
 use gents_protocol::output::rows::{
     decode_output_segment_row, output_segment_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -12,7 +12,10 @@ use gents_protocol::output::{
     OutputOutcome, OutputSegment, OutputSource, OutputWriter, PayloadRef, ReconstructionError,
     SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
 };
+use rapidhash::RapidHashSet;
 use std::sync::Arc;
+
+use super::ensure_runtime_schemas;
 
 fn segment(payload: &str) -> OutputSegment {
     OutputSegment {
@@ -61,7 +64,7 @@ fn created_id(response: &QueryResponse) -> Result<Option<String>> {
         return Ok(None);
     }
     let row =
-        gents_store::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
+        crate::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
             .context("successful create omitted its row")?;
     Ok(Some(
         row.get("_docID")
@@ -95,17 +98,17 @@ async fn rows(node: &EmbeddedNode) -> Result<Vec<(String, OutputSegment)>> {
 async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_create() -> Result<()>
 {
     let directory = tempfile::tempdir()?;
-    let identity = gents_store::identity::KeyIdentity::load_or_create(
+    let identity = crate::identity::KeyIdentity::load_or_create(
         directory.path().join("node.key"),
         None,
     )?;
     let node = Arc::new(
         EmbeddedNode::builder()
-            .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
+            .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
             .build()
             .await?,
     );
-    gents_store::schema::ensure_runtime_schemas(&node).await?;
+    ensure_runtime_schemas(&node).await?;
     let original = segment("original");
 
     let (first, second) = tokio::join!(create(&node, &original), create(&node, &original));
@@ -192,4 +195,68 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
         observed.reverse();
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn agent_tool_call_carries_only_generic_background_fields() {
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    ensure_runtime_schemas(&node)
+        .await
+        .expect("runtime schemas");
+    let response = node
+        .execute(
+            r#"{
+                __type(name: "AgentToolCall") {
+                    fields { name }
+                }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "introspection errors: {:?}",
+        response.errors
+    );
+    let names: RapidHashSet<String> = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("__type"))
+        .and_then(|t| t.get("fields"))
+        .and_then(|fs| fs.as_array())
+        .map(|fs| {
+            fs.iter()
+                .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    for field in [
+        "await_mode",
+        "cancel_cause",
+        "stuck_since",
+        "spawned_by_tool_call_doc_id",
+        "completion_notification_delivered_at",
+    ] {
+        assert!(names.contains(field), "AgentToolCall missing field {field}");
+    }
+    for field in [
+        "child_request_id",
+        "spawn_target_did",
+        "spawn_agent_did",
+        "delegated_input",
+        "delegated_workspace",
+        "cancel_policy",
+        "cancel_cascade_intent_at",
+        "cancel_pending_remote_ack",
+        "unclaimed_deadline_at",
+    ] {
+        assert!(
+            !names.contains(field),
+            "AgentToolCall retains field {field}"
+        );
+    }
 }

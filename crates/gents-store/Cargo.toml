@@ -69,3 +69,4 @@ security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
 axum = { version = "0.8", features = ["ws"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
+tokio-util.workspace = true

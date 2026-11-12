@@ -1,5 +1,8 @@
 use serde_json::Value;
 
+#[cfg(test)]
+mod pushdown_tests;
+
 /// One installed plugin as the native document projector sees it. The host
 /// builds these from its plugin store while it holds that store's lease.
 #[derive(Debug, Clone, PartialEq, Eq)]
