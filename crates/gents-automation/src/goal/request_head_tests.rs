@@ -5,11 +5,6 @@ use gents_store::identity::{KeyIdentity, NodeIdentity};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::Deserialize;
 
-#[derive(Deserialize)]
-struct Snapshot {
-    goal_request_head_cases: Vec<Case>,
-}
-
 #[tokio::test]
 async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations() {
     #[derive(Deserialize)]
@@ -315,6 +310,63 @@ struct Case {
     expected_receipt_checks: Option<usize>,
 }
 
+fn head_case(case: &gents_lean_vocab::LeanGoalRequestHeadCase) -> Case {
+    Case {
+        name: case.name.clone(),
+        scope: Scope {
+            owner: case.scope.owner,
+            session: case.scope.session,
+            goal: case.scope.goal,
+        },
+        rows: case.rows.iter().map(head_row).collect(),
+        expected: case.expected.as_ref().map(head_expected),
+        assignment_root: case.assignment_root,
+        expected_receipt_checks: case
+            .expected_receipt_checks
+            .map(|checks| usize::try_from(checks).unwrap()),
+    }
+}
+
+fn head_row(row: &gents_lean_vocab::LeanGoalRequestHeadCaseRowsItem) -> ModelRow {
+    ModelRow {
+        purpose: serde_json::from_value(serde_json::Value::String(row.purpose.clone())).unwrap(),
+        doc: row.doc,
+        request: row.request,
+        owner: row.owner,
+        session: row.session,
+        goal: row.goal,
+        parent_doc: row.parent_doc,
+        parent_request: row.parent_request,
+        sequence: row.sequence,
+        receipt_valid: row.receipt_valid,
+        deterministic_identity: row.deterministic_identity,
+        input_disposition: serde_json::from_value(serde_json::Value::String(
+            row.input_disposition.clone(),
+        ))
+        .unwrap(),
+    }
+}
+
+fn head_expected(row: &gents_lean_vocab::LeanGoalRequestHeadCaseExpected) -> ModelRow {
+    ModelRow {
+        purpose: serde_json::from_value(serde_json::Value::String(row.purpose.clone())).unwrap(),
+        doc: row.doc,
+        request: row.request,
+        owner: row.owner,
+        session: row.session,
+        goal: row.goal,
+        parent_doc: row.parent_doc,
+        parent_request: row.parent_request,
+        sequence: row.sequence,
+        receipt_valid: row.receipt_valid,
+        deterministic_identity: row.deterministic_identity,
+        input_disposition: serde_json::from_value(serde_json::Value::String(
+            row.input_disposition.clone(),
+        ))
+        .unwrap(),
+    }
+}
+
 pub(crate) fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
     AgentRequestRow {
         purpose: Some(create.purpose),
@@ -543,14 +595,15 @@ impl Fixture<'_> {
 
 #[tokio::test]
 async fn generated_goal_request_head_cases_drive_signed_row_selector() {
-    let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(snapshot.goal_request_head_cases.len(), 27);
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_head_cases;
+    assert_eq!(cases.len(), 27);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
     ];
-    for case in snapshot.goal_request_head_cases {
+    for typed in cases {
+        let case = head_case(typed);
         let goal: GoalDocument = serde_json::from_value(serde_json::json!({
             "_docID": "goal-doc", "goal_id": format!("goal-{}", case.scope.goal),
             "node_did": identities[(case.scope.owner - 1) as usize].did(),

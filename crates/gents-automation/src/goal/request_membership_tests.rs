@@ -2,19 +2,15 @@ use super::*;
 
 #[tokio::test]
 async fn generated_membership_observations_keep_model_roots_and_linear_receipt_work() {
-    #[derive(Deserialize)]
-    struct Contracts {
-        goal_request_head_cases: Vec<serde_json::Value>,
-    }
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_head_cases;
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
     ];
     let mut profiles = Vec::new();
-    for value in contracts.goal_request_head_cases {
-        let case: Case = serde_json::from_value(value.clone()).unwrap();
+    for typed in cases {
+        let case = head_case(typed);
         let mut fixture = Fixture {
             case: &case,
             identities: &identities,
@@ -29,12 +25,12 @@ async fn generated_membership_observations_keep_model_roots_and_linear_receipt_w
         }
         let owner = identities[(case.scope.owner - 1) as usize].did();
         let session = format!("session-{}", case.scope.session);
-        let current = format!("physical-{}", value["membership_current"].as_u64().unwrap());
+        let current = format!("physical-{}", typed.membership_current);
         let (observed, checks) =
             gents_store::identity::request_receipt::count_request_receipt_verifications(|| {
                 authenticated_goal_request_members(owner, &session, &current, &rows)
             });
-        if let Some(root) = value["membership_entry"].as_u64() {
+        if let Some(root) = typed.membership_entry {
             let observed = observed.unwrap_or_else(|error| panic!("{}: {error:#}", case.name));
             assert_eq!(
                 observed.entry.doc_id.as_deref(),
@@ -42,24 +38,17 @@ async fn generated_membership_observations_keep_model_roots_and_linear_receipt_w
                 "{}: executed model entry",
                 case.name,
             );
-            let mut expected_members = value["membership_members"]
-                .as_array()
-                .unwrap()
+            let mut expected_members = typed
+                .membership_members
                 .iter()
-                .map(|doc| format!("physical-{}", doc.as_u64().unwrap()))
+                .map(|doc| format!("physical-{doc}"))
                 .collect::<Vec<_>>();
             expected_members.sort_unstable();
             assert_eq!(observed.member_doc_ids, expected_members, "{}", case.name);
-            let expected_parents = value["membership_parents"]
-                .as_array()
-                .unwrap()
+            let expected_parents = typed
+                .membership_parents
                 .iter()
-                .map(|edge| {
-                    (
-                        format!("physical-{}", edge[0].as_u64().unwrap()),
-                        format!("physical-{}", edge[1].as_u64().unwrap()),
-                    )
-                })
+                .map(|edge| (format!("physical-{}", edge[0]), format!("physical-{}", edge[1])))
                 .collect::<std::collections::BTreeMap<_, _>>();
             let observed_parents = rows
                 .iter()
@@ -85,7 +74,7 @@ async fn generated_membership_observations_keep_model_roots_and_linear_receipt_w
                 case.name
             );
         }
-        if let Some(budget) = value["membership_receipt_checks"].as_u64() {
+        if let Some(budget) = typed.membership_receipt_checks {
             profiles.push((rows.len(), checks, usize::try_from(budget).unwrap()));
         }
     }
