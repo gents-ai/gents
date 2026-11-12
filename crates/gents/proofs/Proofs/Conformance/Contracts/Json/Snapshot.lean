@@ -1,3 +1,4 @@
+import Proofs.Conformance.Identity.DelegatedPublicationRecovery
 import Proofs.Conformance.SelfConfigStructured
 import Proofs.Conformance.Recovery.PeriodicRegistry
 import Proofs.Conformance.ProcessControlTerminal
