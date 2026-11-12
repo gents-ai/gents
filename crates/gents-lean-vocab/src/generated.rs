@@ -1981,13 +1981,6 @@ pub struct LeanCausalHopStepCase {
     pub expected_admitted: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCausedFacts {
-    pub terminal: bool,
-    pub this_runtime: bool,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum LeanClaimedDid {
@@ -3255,8 +3248,6 @@ pub struct LeanContractSnapshot {
     pub agent_folded_binding_cases: Vec<LeanAgentFoldedBindingCase>,
     pub queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
-    pub session_message_kill_cases: Vec<LeanKillCase>,
-    pub session_message_kill_observation_cases: Vec<LeanKillObservationCase>,
     pub restart_disposition_cases: Vec<LeanRestartDispositionCase>,
     pub r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
@@ -6721,20 +6712,6 @@ pub struct LeanJobGuardCase {
     pub stored_integrations: Option<serde_json::Value>,
     pub candidate_integrations: serde_json::Value,
     pub accepted: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanKillCase {
-    pub observation: String,
-    pub action: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanKillObservationCase {
-    pub caused: Option<LeanCausedFacts>,
-    pub observation: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

@@ -1,3 +1,4 @@
+use crate::background::job::control::{KillAction, KillObservation};
 use crate::call::lifecycle::admission_fixture::{
     complete_child_managed_verified, published_admission, published_session_message,
     PublishedAdmission, PublishedAdmissionOptions,
@@ -6,9 +7,9 @@ use gents_protocol::tool_call::AwaitMode;
 
 use crate::call::lifecycle::admission_fixture::completion_obligations;
 
-async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>) {
+async fn kill_fixture(observation: KillObservation) -> (PublishedAdmission, Option<String>) {
     let options = |start_running| PublishedAdmissionOptions {
-        name: format!("kill-session-message-{observation}"),
+        name: format!("kill-session-message-{observation:?}"),
         real_identity: true,
         await_mode: AwaitMode::Background,
         tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.to_owned()),
@@ -16,10 +17,10 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
         ..Default::default()
     };
     match observation {
-        "unresolved" => (published_admission(options(true)).await.unwrap(), None),
-        "causedLiveLocal" | "causedTerminal" => {
+        KillObservation::Unresolved => (published_admission(options(true)).await.unwrap(), None),
+        KillObservation::CausedLiveLocal | KillObservation::CausedTerminal => {
             let message = published_session_message(options(false)).await.unwrap();
-            if observation == "causedTerminal" {
+            if observation == KillObservation::CausedTerminal {
                 complete_child_managed_verified(
                     &message.admission.node,
                     &message.caused_request_id,
@@ -37,7 +38,6 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
             }
             (message.admission, Some(message.caused_request_id))
         }
-        other => panic!("unknown Lean kill observation {other}"),
     }
 }
 
@@ -45,10 +45,11 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
 async fn generated_kill_cases_drive_the_session_message_kill() {
     use crate::background::caused::KillOutcome;
     use gents_session::session::tool_call_state::ToolCallState;
-    let cases = &gents_lean_vocab::lean_contract_snapshot().session_message_kill_cases;
-    assert_eq!(cases.len(), 3);
-    for case in cases {
-        let (admission, caused_request_id) = kill_fixture(&case.observation).await;
+    for case in gents_lean_vocab::families::session_message_kill_drive::cases::<
+        KillAction,
+        KillObservation,
+    >() {
+        let (admission, caused_request_id) = kill_fixture(case.input.observation).await;
         let node = admission.node.clone();
         let did = admission.node_did.clone();
         let session_id = admission.tool.session_id().to_owned();
@@ -67,32 +68,31 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
             tool.requester_did(),
         )
         .await;
-        match case.action.as_str() {
-            "settle" => {
-                assert_eq!(outcome, KillOutcome::Settled, "{case:?}");
-                assert_eq!(tool.state(), ToolCallState::Completed, "{case:?}");
+        let action = match &outcome {
+            KillOutcome::Settled => {
+                assert_eq!(tool.state(), ToolCallState::Completed);
                 assert_eq!(notifications.len(), 1, "{notifications:?}");
                 assert!(notifications[0].contains("finished before the kill"));
+                KillAction::Settle
             }
-            "interruptCaused" => {
-                assert_eq!(
-                    outcome,
-                    KillOutcome::Interrupting {
-                        request_id: caused_request_id.unwrap()
-                    },
-                    "{case:?}"
-                );
-                assert!(tool.is_running(), "{case:?}");
+            KillOutcome::Interrupting { request_id } => {
+                assert_eq!(Some(request_id), caused_request_id.as_ref());
                 assert!(notifications.is_empty(), "{notifications:?}");
+                KillAction::InterruptCaused
             }
-            "cancelRow" => {
-                assert_eq!(outcome, KillOutcome::Cancelled, "{case:?}");
-                assert_eq!(tool.state(), ToolCallState::Cancelled, "{case:?}");
+            KillOutcome::Cancelled => {
+                assert_eq!(tool.state(), ToolCallState::Cancelled);
                 assert_eq!(notifications.len(), 1, "{notifications:?}");
                 assert!(notifications[0].contains("explicit_cancel"));
+                KillAction::CancelRow
             }
-            other => panic!("unknown Lean kill action {other}"),
-        }
+        };
+        case.check(
+            gents_lean_vocab::families::session_message_kill_drive::DriveOutput {
+                action,
+                ends_row_now: !tool.is_running(),
+            },
+        );
         node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(admission.path).unwrap();
     }

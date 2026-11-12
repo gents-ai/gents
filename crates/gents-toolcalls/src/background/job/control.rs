@@ -949,7 +949,10 @@ mod tests {
             let committed = read_step_row(&access, &doc).await.unwrap();
             assert_eq!(committed.children.len(), 1);
             let killed = kill(&access, &mut admission.tool, cause).await.unwrap();
-            assert_eq!(serde_json::to_value(killed.row.state).unwrap(), case.row_state);
+            assert_eq!(
+                serde_json::to_value(killed.row.state).unwrap(),
+                case.row_state
+            );
             let kills = killed
                 .killed
                 .iter()
@@ -1060,31 +1063,31 @@ mod tests {
     }
 
     #[test]
-    fn generated_kill_actions_are_lean_kill_action() {
-        let snapshot = gents_lean_vocab::lean_contract_snapshot();
-        assert_eq!(snapshot.session_message_kill_cases.len(), 3);
-        for case in &snapshot.session_message_kill_cases {
-            let observation: KillObservation =
-                serde_json::from_value(json!(case.observation)).unwrap();
-            let action: KillAction = serde_json::from_value(json!(case.action)).unwrap();
-            assert_eq!(observation.action(), action, "{case:?}");
-        }
-    }
-
-    #[test]
-    fn generated_kill_observations_are_lean_observe_caused() {
-        let cases =
-            &gents_lean_vocab::lean_contract_snapshot().session_message_kill_observation_cases;
-        assert_eq!(cases.len(), 5);
-        for case in cases {
-            let caused = case.caused.as_ref().map(|facts| CausedFacts {
-                terminal: facts.terminal,
-                this_runtime: facts.this_runtime,
-            });
-            let expected: KillObservation =
-                serde_json::from_value(json!(case.observation)).unwrap();
-            assert_eq!(KillObservation::observe(caused), expected, "{case:?}");
-        }
+    fn kill_observations_and_actions_are_the_lean_kill_rules() {
+        use gents_lean_vocab::families;
+        families::recovery_kill_observation_vocabulary::replay(&[
+            KillObservation::CausedTerminal,
+            KillObservation::CausedLiveLocal,
+            KillObservation::Unresolved,
+        ]);
+        families::recovery_kill_action_vocabulary::replay(&[
+            KillAction::Settle,
+            KillAction::InterruptCaused,
+            KillAction::CancelRow,
+        ]);
+        families::session_message_kill_action::replay::<KillAction, KillObservation>(|i| {
+            families::session_message_kill_action::ActionOutput {
+                action: i.observation.action(),
+            }
+        });
+        families::session_message_kill_observed::replay::<KillObservation>(|i| {
+            families::session_message_kill_observed::ObservationOutput {
+                observation: KillObservation::observe(i.caused.as_ref().map(|facts| CausedFacts {
+                    terminal: facts.terminal,
+                    this_runtime: facts.this_runtime,
+                })),
+            }
+        });
     }
 
     #[tokio::test]

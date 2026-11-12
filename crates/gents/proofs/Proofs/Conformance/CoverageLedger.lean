@@ -1402,6 +1402,18 @@ def caseCoverage : List CoverageEntry :=
       "RecoverySweepCases")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "family"
+      "session_message_kill_action")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_message_kill_drive")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_message_kill_observed")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "artifact_mode_meet_cases"
       "ArtifactModeMeetCases")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]

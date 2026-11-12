@@ -5,6 +5,7 @@ import Proofs.Conformance.PluginGrantDeclaration
 import Proofs.Conformance.EnrollmentRenewalNotices
 import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.UsageWrite
+import Proofs.Conformance.SessionMessageKill
 import Proofs.Conformance.InferenceObservationRegistry
 import Proofs.Conformance.EagerStreaming
 import Proofs.Conformance.BackendHealthRetention
@@ -963,17 +964,6 @@ def snapshotRecoveryCasesJson : String :=
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
     ++ "\"recovery_sweep_ids\":"
       ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
-    ++ "\"session_message_kill_cases\":"
-      ++ jsonArray (Recovery.killCases.map fun (observation, action) =>
-        "{\"observation\":" ++ jsonString observation.toContract
-          ++ ",\"action\":" ++ jsonString action.toContract ++ "}") ++ ","
-    ++ "\"session_message_kill_observation_cases\":"
-      ++ jsonArray (Recovery.killObservationCases.map fun (caused, observation) =>
-        "{\"caused\":" ++ (match caused with
-          | none => "null"
-          | some facts => "{\"terminal\":" ++ toString facts.terminal
-              ++ ",\"this_runtime\":" ++ toString facts.thisRuntime ++ "}")
-          ++ ",\"observation\":" ++ jsonString observation.toContract ++ "}") ++ ","
     ++ "\"restart_disposition_cases\":"
       ++ jsonArray
         (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
