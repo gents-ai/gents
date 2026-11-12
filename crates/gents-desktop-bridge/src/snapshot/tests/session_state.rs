@@ -3,8 +3,8 @@ use crate::types::ReconstructionState;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use gents_lean_vocab::{
-    lean_client_session_queue_order_cases, lean_desktop_client_shell_cases,
-    lean_live_overlay_cases, lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
+    lean_desktop_client_shell_cases, lean_live_overlay_cases,
+    lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
 };
 
 fn session(requester_did: Option<&str>) -> AgentSession {
@@ -461,9 +461,9 @@ fn session_snapshot_binds_generated_session_turn_cases() {
 
 #[test]
 fn session_queue_order_matches_native_arrival_model_after_claim() {
-    for case in lean_client_session_queue_order_cases() {
+    gents_lean_vocab::families::session_queue_order_arrival::replay::<String>(|i| {
         let modeled: Vec<gents_lean_vocab::LeanSessionTurnRow> =
-            serde_json::from_value(case["rows"].clone()).unwrap();
+            gents_lean_vocab::family::recode(&i.rows);
         let rows = lean_session_rows("session-1", &modeled);
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
@@ -475,26 +475,23 @@ fn session_queue_order_matches_native_arrival_model_after_claim() {
             ..Default::default()
         });
         let mut snapshot = build_session_snapshot_from_store(&store, "session-1", None).unwrap();
-        let docs = |field: &str| {
-            case[field]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|id| format!("doc-{}", id.as_u64().unwrap()))
-                .collect::<Vec<_>>()
-        };
-        super::super::session::order_queued_turns(&mut snapshot, &docs("arrivals"));
-        assert_eq!(
-            snapshot
-                .queued_turns
-                .iter()
-                .filter_map(|turn| turn.request_doc_id.clone())
-                .collect::<Vec<_>>(),
-            docs("expected"),
-            "{}",
-            case["name"]
-        );
-    }
+        let arrivals = i
+            .arrivals
+            .iter()
+            .map(|id| format!("doc-{id}"))
+            .collect::<Vec<_>>();
+        super::super::session::order_queued_turns(&mut snapshot, &arrivals);
+        snapshot
+            .queued_turns
+            .iter()
+            .filter_map(|turn| turn.request_doc_id.as_deref())
+            .map(|doc| {
+                doc.strip_prefix("doc-")
+                    .and_then(|id| id.parse().ok())
+                    .unwrap_or_else(|| panic!("queued turn {doc:?} is not a contract row"))
+            })
+            .collect()
+    });
 }
 
 /// Only the Agent's verified observation shows a Goal (Lean

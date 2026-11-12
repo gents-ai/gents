@@ -1188,8 +1188,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientSessionTurnCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_session_queue_order_cases"
-      "ClientSessionQueueOrderCases")
+      "family"
+      "session_queue_order_arrival")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "client_agent_readiness_cases"

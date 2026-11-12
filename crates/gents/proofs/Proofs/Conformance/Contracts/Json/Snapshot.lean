@@ -788,8 +788,6 @@ def snapshotClientCasesJson : String :=
       ++ Conformance.ClientRequestClosure.casesJson ++ ","
     ++ "\"client_request_cache_identity_cases\":"
       ++ Conformance.ClientRequestCacheIdentity.casesJson ++ ","
-    ++ "\"client_session_queue_order_cases\":"
-      ++ Conformance.SessionQueueOrder.casesJson ++ ","
     ++ "\"client_session_turn_cases\":"
       ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"

@@ -93,10 +93,6 @@ pub fn lean_client_agent_readiness_cases() -> &'static [LeanClientAgentReadiness
     &lean_contract_snapshot().client_agent_readiness_cases
 }
 
-pub fn lean_client_session_queue_order_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().client_session_queue_order_cases
-}
-
 pub fn lean_client_session_turn_cases() -> &'static [LeanSessionTurnCase] {
     &lean_contract_snapshot().client_session_turn_cases
 }
@@ -3067,7 +3063,6 @@ pub struct LeanContractSnapshot {
     pub storage_failure_cases: Vec<serde_json::Value>,
     pub client_request_closure_cases: Vec<serde_json::Value>,
     pub client_request_cache_identity_cases: Vec<LeanClientRequestCacheIdentityCase>,
-    pub client_session_queue_order_cases: Vec<serde_json::Value>,
     pub request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub provider_eof_cases: Vec<LeanProviderEofCase>,
