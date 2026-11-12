@@ -39,9 +39,15 @@ where
 {
     assert_shape_is_checked_in("vocabularies", key);
     let lean = &crate::lean_contract_snapshot().family_vocabularies[key]["values"];
-    let lean: Vec<&Value> = lean.as_array().expect("vocabulary values").iter().collect();
+    let mutated = !mutated_cases(key, 1).is_empty();
+    let lean: Vec<Value> = lean
+        .as_array()
+        .expect("vocabulary values")
+        .iter()
+        .map(|name| if mutated { perturbed(name) } else { name.clone() })
+        .collect();
     for name in &lean {
-        let decoded: T = serde_json::from_value((*name).clone()).unwrap_or_else(|error| {
+        let decoded: T = serde_json::from_value(name.clone()).unwrap_or_else(|error| {
             panic!("vocabulary {key}: {name} is not a production value: {error}")
         });
         assert!(
@@ -52,7 +58,7 @@ where
     for value in all {
         let name = serde_json::to_value(value).expect("vocabulary value encodes");
         assert!(
-            lean.contains(&&name),
+            lean.contains(&name),
             "vocabulary {key}: production {name} is not a Lean value"
         );
     }
@@ -88,18 +94,69 @@ where
     assert_shape_is_checked_in("functions", key);
     let family = &crate::lean_contract_snapshot().families[key];
     assert!(!family.cases.is_empty(), "family {key} has no cases");
+    let mutated = mutated_cases(key, family.cases.len());
     family
         .cases
         .iter()
-        .map(|case| Case {
+        .enumerate()
+        .map(|(index, case)| Case {
             input: serde_json::from_value(case.input.clone())
                 .unwrap_or_else(|error| panic!("family {key} input {}: {error}", case.input)),
             key: key.to_owned(),
             raw_input: case.input.clone(),
-            expected: case.expected.clone(),
+            expected: if mutated.contains(&index) {
+                perturbed(&case.expected)
+            } else {
+                case.expected.clone()
+            },
             output: std::marker::PhantomData,
         })
         .collect()
+}
+
+/// A consumer that passes while its expectations are wrong compares nothing.
+/// `GENTS_FAMILY_MUTATION=<key>` perturbs every expectation of that family and
+/// `<key>#<n>` only case `n` (modulo the case count); the consumer must then
+/// fail. Nothing in the repository sets it: the conversion gate does.
+const MUTATION_ENV: &str = "GENTS_FAMILY_MUTATION";
+
+fn mutated_cases(key: &str, count: usize) -> std::ops::Range<usize> {
+    let Ok(mutation) = std::env::var(MUTATION_ENV) else {
+        return 0..0;
+    };
+    let (family, case) = match mutation.split_once('#') {
+        Some((family, case)) => (family, Some(case)),
+        None => (mutation.as_str(), None),
+    };
+    if family != key {
+        return 0..0;
+    }
+    match case {
+        None => 0..count,
+        Some(case) => {
+            let index = case.parse::<usize>().expect("mutated case index") % count;
+            index..index + 1
+        }
+    }
+}
+
+fn perturbed(value: &Value) -> Value {
+    match value {
+        Value::Null => Value::Bool(true),
+        Value::Bool(flag) => Value::Bool(!flag),
+        Value::Number(number) => Value::from(number.as_u64().unwrap_or(0) + 1),
+        Value::String(text) => Value::String(format!("{text}~")),
+        Value::Array(items) if items.is_empty() => Value::Array(vec![Value::Null]),
+        Value::Array(items) => Value::Array(items[1..].to_vec()),
+        Value::Object(fields) => match fields.iter().next() {
+            None => Value::Null,
+            Some((name, first)) => {
+                let mut fields = fields.clone();
+                fields.insert(name.clone(), perturbed(first));
+                Value::Object(fields)
+            }
+        },
+    }
 }
 
 pub fn recode<T, U>(value: &T) -> U
