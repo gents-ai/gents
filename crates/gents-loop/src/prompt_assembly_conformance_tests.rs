@@ -423,3 +423,97 @@ fn generated_replay_prefix_cases_bind_acceptance_checks() {
         }
     });
 }
+
+fn claude_request(history: &[Message]) -> rig::completion::CompletionRequest {
+    rig::completion::CompletionRequest {
+        model: None,
+        preamble: None,
+        chat_history: rig::OneOrMany::many(crate::rig_compat::to_rig_messages(history))
+            .expect("at least one history row"),
+        documents: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_tokens: Some(128),
+        tool_choice: None,
+        additional_params: None,
+        output_schema: None,
+    }
+}
+
+fn native_messages_body(
+    history: &[Message],
+) -> Result<serde_json::Value, crate::claude_messages_body::MessagesBodyError> {
+    if history.is_empty() {
+        return Ok(serde_json::json!({"messages": []}));
+    }
+    crate::claude_messages_body::build_messages_body("claude-sonnet-5", &claude_request(history))
+}
+
+fn replay_codec_outcome(error: &crate::claude_messages_body::AssistantCodecError) -> &'static str {
+    use crate::claude_messages_body::AssistantCodecError as Error;
+    match error {
+        Error::UnsupportedImage => "unsupportedReplayBlock",
+        Error::MissingSignature => "missingSignature",
+        Error::EmptyRedacted => "malformedRedacted",
+        Error::UnsupportedReasoning => "unsupportedReasoning",
+        Error::UnencodableToolInput => "unencodableToolInput",
+    }
+}
+
+fn body_replay_blocks(message: &serde_json::Value) -> Vec<gents_lean_vocab::claude_replay::Block> {
+    let blocks = message["content"]
+        .as_array()
+        .unwrap_or_else(|| panic!("assistant content: {message}"));
+    assert!(
+        !blocks.is_empty(),
+        "an assistant message is never sent empty: {message}"
+    );
+    blocks
+        .iter()
+        .map(|block| {
+            let mut block = block.clone();
+            block
+                .as_object_mut()
+                .expect("content object")
+                .remove("cache_control");
+            gents_lean_vocab::claude_replay::Block::of_native_json(&block)
+        })
+        .collect()
+}
+
+#[test]
+fn generated_claude_replay_cases_drive_native_messages_body() {
+    gents_lean_vocab::families::contracts_prompt_assembly_claude_replay::replay(|case| {
+        let content = gents_lean_vocab::claude_replay::assistant_content(&recode::<
+            _,
+            Vec<gents_lean_vocab::claude_replay::InputBlock>,
+        >(&case.blocks));
+        let history = [Message::Assistant {
+            request_id: None,
+            id: None,
+            content,
+        }];
+        let (outcome, replay) = match native_messages_body(&history) {
+            Err(crate::claude_messages_body::MessagesBodyError::Codec(error)) => {
+                (replay_codec_outcome(&error).to_owned(), Vec::new())
+            }
+            Err(other) => panic!("{}: replay failed outside the codec: {other}", case.name),
+            Ok(body) => {
+                let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                assert!(
+                    messages.len() <= 1,
+                    "{}: one assistant turn: {body}",
+                    case.name
+                );
+                (
+                    "ok".to_owned(),
+                    messages.first().map(body_replay_blocks).unwrap_or_default(),
+                )
+            }
+        };
+        gents_lean_vocab::families::contracts_prompt_assembly_claude_replay::ClaudeReplayOutput {
+            outcome,
+            replay: recode(&replay),
+        }
+    });
+}

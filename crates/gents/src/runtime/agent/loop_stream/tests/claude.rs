@@ -177,29 +177,17 @@ async fn signed_claude_tool_round_trip_with_scope(
 
 #[tokio::test]
 async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop() {
-    let case = gents_lean_vocab::lean_prompt_assembly_claude_replay_cases()
-        .iter()
-        .find(|case| case.name == "streamed-signed-redacted-tool")
-        .expect("Lean streamed signed/redacted/tool replay case");
-    assert_eq!(case.outcome, "ok", "{}", case.name);
-    let expected_content = gents_lean_vocab::native_claude_replay_content(&case.blocks);
+    let [case] =
+        gents_lean_vocab::families::contracts_prompt_assembly_claude_replay_round_trip::cases()
+            .try_into()
+            .unwrap_or_else(|_| panic!("the owned-loop round trip replays one modeled turn"));
+    let expected_content =
+        gents_lean_vocab::claude_replay::assistant_content(&gents_lean_vocab::family::recode::<
+            _,
+            Vec<gents_lean_vocab::claude_replay::InputBlock>,
+        >(&case.input.blocks));
     let blocks = gents_loop::claude_messages_body::encode_assistant_content(&expected_content)
         .expect("modeled canonical blocks render as Messages input");
-    let expected = case
-        .replay
-        .iter()
-        .map(gents_lean_vocab::LeanClaudeReplayBlock::native_json)
-        .collect::<Vec<_>>();
-    let kinds = expected
-        .iter()
-        .map(|block| block["type"].as_str().expect("block type"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        kinds,
-        ["thinking", "redacted_thinking", "tool_use"],
-        "{}: the model case must keep its ordered shape",
-        case.name
-    );
     let first_turn = claude_sse_for_blocks(&blocks);
 
     let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
@@ -267,9 +255,19 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
             .remove("cache_control");
     }
     assert_eq!(
-        replayed, expected,
+        replayed
+            .iter()
+            .map(|block| block["type"].as_str().expect("block type"))
+            .collect::<Vec<_>>(),
+        ["thinking", "redacted_thinking", "tool_use"],
         "the continuation must replay signed, redacted, and tool blocks in stream order"
     );
+    case.check(gents_lean_vocab::family::recode(
+        &replayed
+            .iter()
+            .map(gents_lean_vocab::claude_replay::Block::of_native_json)
+            .collect::<Vec<_>>(),
+    ));
 }
 
 fn claude_sse_for_blocks(blocks: &[serde_json::Value]) -> String {

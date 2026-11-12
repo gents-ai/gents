@@ -453,10 +453,6 @@ pub fn lean_prompt_assembly_claude_map_cases() -> &'static [LeanPromptAssemblyCl
     &lean_contract_snapshot().prompt_assembly_claude_map_cases
 }
 
-pub fn lean_prompt_assembly_claude_replay_cases() -> &'static [LeanPromptAssemblyClaudeReplayCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_replay_cases
-}
-
 pub fn lean_prompt_assembly_claude_stream_cases() -> &'static [LeanPromptAssemblyClaudeStreamCase] {
     &lean_contract_snapshot().prompt_assembly_claude_stream_cases
 }
@@ -3289,7 +3285,6 @@ pub struct LeanContractSnapshot {
         LeanPromptAssemblyClaudeThinkingStreamCase,
     >,
     pub prompt_assembly_service_tier_cases: Vec<LeanPromptAssemblyServiceTierCase>,
-    pub prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
     pub prompt_assembly_claude_checkpoint_cases: Vec<
         LeanPromptAssemblyClaudeCheckpointCase,
     >,
@@ -9379,14 +9374,6 @@ pub struct LeanPromptAssemblyClaudeMapCase {
     pub blocks: Vec<String>,
     pub outcome: String,
     pub ids: Vec<u64>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyClaudeReplayCase {
-    pub name: String,
-    pub blocks: Vec<LeanClaudeReplayInputBlock>,
-    pub outcome: String,
-    pub replay: Vec<LeanClaudeReplayBlock>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

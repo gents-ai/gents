@@ -2344,13 +2344,11 @@ def caseCoverage : List CoverageEntry :=
       "Drives modeled nonempty thinking-start text through the native parser and canonical accumulator, checking exact sealed content. Owned-loop persistence and provider continuation remain unbound.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_replay_cases"
-      "PromptAssemblyClaudeReplayCases"
+      "family" "contracts_prompt_assembly_claude_replay"
       "Reconstructs native assistant blocks and checks exact Claude body replay or fail-closed error, including empty text and unsupported assistant image. Actual HTTP transport and request budgeting are not exercised here.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_replay_cases"
-      "PromptAssemblyClaudeReplayCases"
+      "family" "contracts_prompt_assembly_claude_replay_round_trip"
       "Drives the streamed-signed-redacted-tool case through the owned loop: its canonical blocks become turn-1 SSE, the persisted message must retain their exact grouping and payloads, and the turn-2 capture must equal the modeled replay. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

@@ -151,6 +151,7 @@ mod compaction_projection_join;
 pub mod consumer_scan;
 pub mod family;
 mod hooks;
+pub mod claude_replay;
 mod prompt_assembly;
 mod request_execution_lease;
 mod session_documents;

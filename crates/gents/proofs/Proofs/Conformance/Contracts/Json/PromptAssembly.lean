@@ -689,14 +689,130 @@ private def claudeReplayBlockJson : PromptAssembly.ClaudeMap.ReplayBlock → Str
       ",\"name\":" ++ jsonString name ++
       ",\"arguments\":" ++ claudeBytesJson arguments ++ "}"
 
-def promptAssemblyClaudeReplayCaseJson (witness : PromptAssemblyClaudeReplayCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"blocks\":" ++ jsonArray (witness.blocks.map claudeReplayInputBlockJson) ++
-    ",\"outcome\":" ++ jsonString witness.outcome ++
-    ",\"replay\":" ++ jsonArray (witness.replay.map claudeReplayBlockJson) ++ "}"
+def natsOfBytes (bytes : List UInt8) : List Nat := bytes.map UInt8.toNat
 
-def promptAssemblyClaudeReplayCasesJson : String :=
-  jsonArray (promptAssemblyClaudeReplayCases.map promptAssemblyClaudeReplayCaseJson)
+def bytesOfNats (values : List Nat) : List UInt8 := values.map Nat.toUInt8
+
+structure ReplayPartWire where
+  kind : String
+  payload : List Nat
+  signature : Option String
+  deriving Lean.ToJson
+
+def ReplayPartWire.ofModel : CanonicalOutput.ReasoningPart (List UInt8) → ReplayPartWire
+  | .text payload signature => { kind := "text", payload := natsOfBytes payload, signature }
+  | .redacted payload => { kind := "redacted", payload := natsOfBytes payload, signature := none }
+  | .encrypted payload => { kind := "encrypted", payload := natsOfBytes payload, signature := none }
+  | .summary payload => { kind := "summary", payload := natsOfBytes payload, signature := none }
+
+def ReplayPartWire.toModel (part : ReplayPartWire) : CanonicalOutput.ReasoningPart (List UInt8) :=
+  match part.kind with
+  | "text" => .text (bytesOfNats part.payload) part.signature
+  | "redacted" => .redacted (bytesOfNats part.payload)
+  | "encrypted" => .encrypted (bytesOfNats part.payload)
+  | _ => .summary (bytesOfNats part.payload)
+
+/-- A canonical message block as replay input. A tool result and a media block
+carry no fields here: the replay cases hold no tool result, and their media is
+an image of unknown data. -/
+structure ReplayInputBlockWire where
+  kind : String
+  payload : Option (List Nat)
+  id : Option String
+  parts : Option (List ReplayPartWire)
+  docId : Option Nat
+  callId : Option String
+  name : Option String
+  arguments : Option (List Nat)
+  signature : Option String
+  additionalParams : Option String
+  deriving Lean.ToJson
+
+def ReplayInputBlockWire.bare (kind : String) : ReplayInputBlockWire :=
+  { kind, payload := none, id := none, parts := none, docId := none, callId := none
+    name := none, arguments := none, signature := none, additionalParams := none }
+
+def ReplayInputBlockWire.ofModel :
+    CanonicalOutput.MessageBlock (List UInt8) → ReplayInputBlockWire
+  | .text payload => { ReplayInputBlockWire.bare "text" with payload := some (natsOfBytes payload) }
+  | .reasoning id parts =>
+      { ReplayInputBlockWire.bare "reasoning" with
+        id, parts := some (parts.map ReplayPartWire.ofModel) }
+  | .toolCall docId id callId name arguments signature additionalParams =>
+      { ReplayInputBlockWire.bare "toolCall" with
+        docId := some docId, id := some id, callId, name := some name
+        arguments := some (natsOfBytes arguments), signature, additionalParams }
+  | .toolResult .. => ReplayInputBlockWire.bare "unsupportedToolResult"
+  | .media .. => ReplayInputBlockWire.bare "unsupportedMedia"
+
+def ReplayInputBlockWire.toModel (block : ReplayInputBlockWire) :
+    CanonicalOutput.MessageBlock (List UInt8) :=
+  match block.kind with
+  | "text" => .text (bytesOfNats (block.payload.getD []))
+  | "reasoning" => .reasoning block.id ((block.parts.getD []).map ReplayPartWire.toModel)
+  | "toolCall" =>
+      .toolCall (block.docId.getD 0) (block.id.getD "") block.callId (block.name.getD "")
+        (bytesOfNats (block.arguments.getD [])) block.signature block.additionalParams
+  | "unsupportedMedia" => .media { kind := .image, data := .unknown }
+  | _ => .toolResult (block.docId.getD 0) (block.id.getD "") block.callId []
+
+structure ReplayBlockWire where
+  kind : String
+  payload : Option (List Nat)
+  signature : Option String
+  id : Option String
+  name : Option String
+  arguments : Option (List Nat)
+  deriving Lean.ToJson
+
+def ReplayBlockWire.ofModel : PromptAssembly.ClaudeMap.ReplayBlock → ReplayBlockWire
+  | .text payload =>
+      { kind := "text", payload := some (natsOfBytes payload), signature := none, id := none
+        name := none, arguments := none }
+  | .signedThinking payload signature =>
+      { kind := "signedThinking", payload := some (natsOfBytes payload), signature := some signature
+        id := none, name := none, arguments := none }
+  | .redactedThinking payload =>
+      { kind := "redactedThinking", payload := some (natsOfBytes payload), signature := none
+        id := none, name := none, arguments := none }
+  | .toolUse id name arguments =>
+      { kind := "toolUse", payload := none, signature := none, id := some id, name := some name
+        arguments := some (natsOfBytes arguments) }
+
+structure ClaudeReplayInput where
+  name : String
+  blocks : List ReplayInputBlockWire
+  deriving Lean.ToJson
+
+structure ClaudeReplayOutput where
+  outcome : String
+  replay : List ReplayBlockWire
+  deriving Lean.ToJson
+
+def ClaudeReplayInput.ofCase (c : PromptAssemblyClaudeReplayCase) : ClaudeReplayInput :=
+  { name := c.name, blocks := c.blocks.map ReplayInputBlockWire.ofModel }
+
+def ClaudeReplayInput.replayed (i : ClaudeReplayInput) : ClaudeReplayOutput :=
+  match PromptAssembly.ClaudeMap.replayBlocks (i.blocks.map ReplayInputBlockWire.toModel) with
+  | .ok replay => { outcome := "ok", replay := replay.map ReplayBlockWire.ofModel }
+  | .error error => { outcome := PromptAssembly.ClaudeMap.errorName error, replay := [] }
+
+/-- One assistant turn's canonical blocks replayed as a Messages body:
+production `build_messages_body`. -/
+@[conformance_family]
+def promptAssemblyClaudeReplay : Family ClaudeReplayInput ClaudeReplayOutput where
+  inputs := promptAssemblyClaudeReplayCases.map ClaudeReplayInput.ofCase
+  model := ClaudeReplayInput.replayed
+
+/-- The owned loop streams a Claude turn, persists it and replays it in the
+next send. Only the streamed signed, redacted and tool case is built: a turn the
+stream accepts is one the encoder can render, so the rejected cases never reach
+a second send. -/
+@[conformance_family]
+def promptAssemblyClaudeReplayRoundTrip : Family ClaudeReplayInput (List ReplayBlockWire) where
+  inputs := (promptAssemblyClaudeReplayCases.filter
+    (·.name == "streamed-signed-redacted-tool")).map ClaudeReplayInput.ofCase
+  model := fun i => i.replayed.replay
 
 private def claudeReplayOriginJson : PromptAssembly.ClaudeMap.ReplayOrigin → String
   | .claudeSubscription => jsonString "claudeSubscription"

@@ -2,8 +2,7 @@ use gents_inference::llm::message::{AssistantContent, Message, ToolCall, ToolRes
 use gents_loop::claude_messages_body::MessagesBodyError;
 
 use gents_lean_vocab::{
-    lean_prompt_assembly_claude_replay_cases, native_claude_reasoning_parts,
-    native_claude_replay_content, LeanClaudeReplayBlock,
+    native_claude_reasoning_parts, native_claude_replay_content, LeanClaudeReplayBlock,
 };
 
 fn native_replay_tag(
@@ -574,54 +573,6 @@ fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
                 assert_eq!(actual, expected, "{}", case.name);
             }
         }
-    }
-}
-
-#[test]
-fn generated_claude_replay_cases_drive_native_messages_body() {
-    let cases = lean_prompt_assembly_claude_replay_cases();
-    assert!(!cases.is_empty(), "Lean emitted no Claude replay cases");
-    for case in cases {
-        let content = native_claude_replay_content(&case.blocks);
-        let history = [Message::Assistant {
-            request_id: None,
-            id: None,
-            content,
-        }];
-        let result = native_messages_body(&history);
-        if case.outcome != "ok" {
-            let Err(MessagesBodyError::Codec(error)) = result else {
-                panic!("modeled unsupported replay must fail closed: {}", case.name);
-            };
-            assert_eq!(replay_codec_outcome(&error), case.outcome, "{}", case.name);
-            continue;
-        }
-        let body = result.unwrap_or_else(|error| panic!("{}: {error}", case.name));
-        let mut actual = if case.replay.is_empty() {
-            assert!(
-                body["messages"].as_array().is_none_or(Vec::is_empty),
-                "{}: empty replay must omit assistant message: {body}",
-                case.name
-            );
-            Vec::new()
-        } else {
-            body["messages"][0]["content"]
-                .as_array()
-                .unwrap_or_else(|| panic!("{}: missing assistant content: {body}", case.name))
-                .clone()
-        };
-        for block in &mut actual {
-            block
-                .as_object_mut()
-                .expect("content object")
-                .remove("cache_control");
-        }
-        let expected = case
-            .replay
-            .iter()
-            .map(LeanClaudeReplayBlock::native_json)
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected, "replay ({})", case.name);
     }
 }
 
