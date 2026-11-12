@@ -1,3 +1,4 @@
+import Proofs.Conformance.Recovery.PeriodicRegistry
 import Proofs.Conformance.ProcessControlTerminal
 import Proofs.Conformance.ToolCallTimeoutAfterSweep
 import Proofs.Conformance.PluginJobCallerInterrupt
