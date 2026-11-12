@@ -168,13 +168,12 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
             &std::sync::Mutex::new(None),
         )
         .await;
-        let committed = if forged {
+        if forged {
             assert!(
                 result.is_err(),
                 "{name} must not recover a foreign signed target"
             );
             txn.discard().await.unwrap();
-            false
         } else {
             let receipt = result.unwrap().expect("matching claimed publication");
             assert_eq!(receipt.created, !duplicate);
@@ -210,20 +209,23 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
             } else {
                 txn.discard().await.unwrap();
             }
-            case.input.commit
+        }
+        let bound = |rows: serde_json::Value| {
+            rows["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| {
+                    row["session_doc_id"] == fixture.session_doc_id.as_str()
+                        && row["agent_doc_id"] == fixture.agent_doc_id.as_str()
+                })
         };
+        let owned = fixture.agent_access().execute(&filter).await.unwrap();
         let user = fixture.user_access().execute(&filter).await.unwrap();
         case.check(
             gents_lean_vocab::families::goal_claimed_publication_contracts_claimed_target::TargetOutput {
-                committed,
-                grants: user["data"]["AgentRequest"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|row| {
-                        row["session_doc_id"] == fixture.session_doc_id.as_str()
-                            && row["agent_doc_id"] == fixture.agent_doc_id.as_str()
-                    }),
+                committed: bound(owned),
+                grants: bound(user),
             },
         );
         fixture.node.shutdown().await.expect("node shutdown");
