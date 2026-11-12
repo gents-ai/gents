@@ -7,7 +7,6 @@ use gents_protocol::job::{JobChildState, JobControlKind, JobControlRequest, JobS
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::NodeIdentity;
 use gents_toolcalls::background::job::view::{load_job_view, JobKey};
 use gents_toolcalls::call::control::{
     cancel_background_tool_call, CancelBackgroundToolCallOutcome,
