@@ -720,11 +720,7 @@ async fn validate_steer_in_txn(
         .filter(Filter::eq(fields::PURPOSE, "normal"))
         .filter(Filter::any_of(
             fields::LIFECYCLE_STATE,
-            [
-                RequestLifecycleState::Claimed,
-                RequestLifecycleState::Processing,
-            ]
-            .map(RequestLifecycleState::as_str),
+            RequestLifecycleState::unsettled_execution().map(RequestLifecycleState::as_str),
         ))
         .limit(2)
         .render()

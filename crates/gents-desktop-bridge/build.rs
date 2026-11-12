@@ -42,6 +42,8 @@ const COMMANDS: &[&str] = &[
     "desktop_ux_data_unwatch",
     "desktop_pack_wire",
     "desktop_pack_wire_sources",
+    "desktop_default_packs",
+    "desktop_default_packs_approve",
     "desktop_workflows_dynamic",
     "desktop_workflow_dynamic",
     "desktop_workflow_promote",

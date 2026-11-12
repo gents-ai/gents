@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
+use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, linkable_offer_length,
@@ -23,7 +24,7 @@ pub const MAX_OFFER_VALIDITY: Duration = Duration::hours(24);
 
 #[derive(Clone)]
 pub struct EnrollmentOfferIssuer {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     p2p: Arc<dyn P2POperations>,
     network_id: String,
@@ -39,7 +40,7 @@ pub struct EnrollmentOfferStatus {
 
 impl EnrollmentOfferIssuer {
     pub fn new(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<EmbeddedNode>,
         identity: Arc<dyn NodeIdentity>,
         p2p: Arc<dyn P2POperations>,
         network_id: String,
@@ -57,7 +58,7 @@ impl EnrollmentOfferIssuer {
     }
 
     pub async fn mint(&self) -> Result<EnrollmentOfferStatus> {
-        self.mint_inner(Duration::minutes(5)).await
+        self.mint_valid_for(Duration::minutes(5)).await
     }
 
     pub async fn mint_valid_for(&self, validity: Duration) -> Result<EnrollmentOfferStatus> {

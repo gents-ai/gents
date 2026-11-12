@@ -242,6 +242,7 @@ pub async fn promote(
         package: dir.display().to_string(),
         inference_slots: Vec::new(),
         dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
         preview: false,
         scope: ScopeArgs {
             home: Some(home.to_path_buf()),
@@ -298,6 +299,8 @@ pub async fn promote(
             targets_from: run.owners.clone(),
             remove: false,
             preview: false,
+            dynamic_consent: false,
+            tool_calls_consent: false,
         },
     )
     .await

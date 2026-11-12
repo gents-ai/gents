@@ -90,6 +90,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     };
     let reader = identity::Did::new(admin.did())?;
     let issuer = crate::runtime::agent::p2p_reconcile::EnrollmentOfferIssuer::new(
+        admin_node.clone(),
         Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
         crate::store::identity::node_p2p(admin_node).context("admin P2P unavailable")?,
         "transport-test".into(),

@@ -1078,7 +1078,7 @@ async fn serve_foreground(
                     );
                 }
                 tracing::info!(
-                    "gents server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `gents-desktop init`, launch `gents-desktop`, wait for `replication: subscriptions armed`, then chat."
+                    "gents server is running with IROH P2P. Press Ctrl-C to stop. Open the desktop app to use this node, or run `gents` in another terminal."
                 );
             } else {
                 tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");

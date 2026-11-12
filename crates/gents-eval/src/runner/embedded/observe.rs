@@ -122,6 +122,7 @@ async fn await_terminal_inner(
     let mut changes = gents::subscribe_collections(node, ["AgentRequest"])?;
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
+    let mut interrupted_for_backend = false;
     let mut session_id = None;
     let mut last_progress: Option<(String, Option<String>)> = None;
     loop {
@@ -156,7 +157,16 @@ async fn await_terminal_inner(
         }
         let elapsed = started.elapsed();
         hook.on_tick(elapsed).await;
-        if !interrupted_on_deadline && deadline.is_some_and(|deadline| elapsed >= deadline) {
+        let at_deadline =
+            !interrupted_on_deadline && deadline.is_some_and(|deadline| elapsed >= deadline);
+        // A trial does not wait out a provider outage. A request parked for
+        // its backend would otherwise spend the stage deadline and grade as
+        // the subject's; interrupted here, it ends on the provider failures
+        // already recorded.
+        let parked_for_backend = !interrupted_on_deadline
+            && !interrupted_for_backend
+            && observed_state == RequestLifecycleState::WaitingForBackend.as_str();
+        if at_deadline || parked_for_backend {
             hook.on_interrupt_requested().await;
             let row = row
                 .as_ref()
@@ -172,8 +182,13 @@ async fn await_terminal_inner(
                 row.requester_did.as_deref(),
             )
             .await
-            .context("interrupt request after evaluation deadline")?;
-            interrupted_on_deadline = true;
+            .context(if at_deadline {
+                "interrupt request after evaluation deadline"
+            } else {
+                "interrupt request parked for its backend"
+            })?;
+            interrupted_on_deadline |= at_deadline;
+            interrupted_for_backend = true;
         }
         let boundary = deadline.map(|deadline| {
             if interrupted_on_deadline {

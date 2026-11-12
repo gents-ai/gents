@@ -609,7 +609,7 @@ export function OnboardingWizard({
                 </div>
               )}
               <p className="break-all text-xs text-muted-foreground">
-                Node data:{" "}
+                Gents home:{" "}
                 <span className="font-mono" title={root}>
                   {shortPath(root, { home })}
                 </span>

@@ -34,7 +34,7 @@ import {
 } from "@gents/ui/components/select";
 import type { PackInstallChoice } from "../agent/usePackActions";
 import { ItemIcon } from "./PackPage";
-import { ErrorDetail, Section } from "./PackCard";
+import { AccessAsks, ErrorDetail, FolderAccess, Section } from "./PackCard";
 import {
   bytes,
   otherLabel,
@@ -47,6 +47,7 @@ import {
 import type { NodeView } from "../../../hooks/fleetStore";
 import {
   fileName,
+  folderAccessOf,
   overlapsOf,
   previewParts,
   previewPlugins,
@@ -74,10 +75,12 @@ const DT = "text-muted-foreground";
     registry, a file or a link: it previews the install, which writes
     nothing, and shows what that reports (the pack, its version and digest,
     what it adds, the collections its schemas declare, the authority its
-    plugins ask for, the models its slots need) and says what the preview
+    plugins ask for, the folder of this node its agents would work in, the
+    models its slots need) and says what the preview
     can't know. Choosing a model previews again with it. Install writes
     exactly the archive previewed, by its digest, with the models previewed;
-    the person allows any authority, agrees to replace documents they made
+    the person allows any authority and any folder its agents are let into,
+    each named beside the one checkbox, agrees to replace documents they made
     with the same ids, and says what happens to edited documents here; a
     document another pack installed refuses the install, and the review says
     so before it's tried. Each document it adds opens its own page, where
@@ -228,7 +231,11 @@ export function PackInstallReview({
   const already = installed?.find((p) => p.pack === pack) ?? null;
   const why = refusal ? refusalOf(refusal) : null;
   const choosesEdits = already !== null || why === "edited";
-  const needsAllow = asks.length > 0 || why === "authority";
+  const folder = folderAccessOf(report);
+  /* the published folder an allowed install lets its agents into: the same
+     consent as the plugins' asks, so it's named with them */
+  const grants = folder?.reader_on ?? null;
+  const needsAllow = asks.length > 0 || grants !== null || why === "authority";
   const overlaps =
     report?.documents && node ? overlapsOf(report.documents, node, pack) : [];
   const yours = overlaps.filter((overlap) => overlap.owner === null);
@@ -491,31 +498,38 @@ export function PackInstallReview({
                 </Section>
               )}
 
-              {needsAllow && (
+              {(needsAllow || folder) && (
                 <Section title="Access it asks for">
-                  {asks.length > 0 ? (
-                    <ul className="grid gap-1 text-sm">
-                      {asks.map((ask) => (
-                        <li key={ask.plugin}>
-                          <span className="font-medium">{ask.plugin}</span>{" "}
-                          <span className="text-muted-foreground">{ask.asks}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
+                  {asks.length > 0 && <AccessAsks asks={asks} />}
+                  {folder && <FolderAccess access={folder} />}
+                  {folder && grants === null && (
+                    <p className="text-sm text-muted-foreground">
+                      This node shares no folder with agents that covers it, so they
+                      can't run until you share one. Installing grants nothing there.
+                    </p>
+                  )}
+                  {asks.length === 0 && !folder && (
                     <p className="text-sm text-muted-foreground">
                       A plugin it installs asks for more than the review could list.
                     </p>
                   )}
-                  <label className="flex items-start gap-2 text-sm">
-                    <Checkbox
-                      className="mt-0.5"
-                      checked={allow}
-                      disabled={installing}
-                      onCheckedChange={(checked) => setAllow(checked === true)}
-                    />
-                    Allow this access
-                  </label>
+                  {needsAllow && (
+                    <label className="flex items-start gap-2 text-sm">
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={allow}
+                        disabled={installing}
+                        onCheckedChange={(checked) => setAllow(checked === true)}
+                      />
+                      <span className="min-w-0 wrap-break-word">
+                        {grants === null
+                          ? "Allow this access"
+                          : asks.length > 0
+                            ? `Allow this access, and let its agents work in ${grants}`
+                            : `Let its agents work in ${grants}`}
+                      </span>
+                    </label>
+                  )}
                 </Section>
               )}
 

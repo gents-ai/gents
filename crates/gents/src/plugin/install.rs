@@ -9,6 +9,18 @@ use super::store::{self, InstalledPlugin};
 use super::{Manifold, PluginRunner};
 use crate::pack::{PackManifest, PackPlugin};
 
+/// What a consenting install grants `plugin`, described; `None` when it asks
+/// for nothing.
+pub fn authority_asked(plugin: &PackPlugin) -> Result<Option<String>> {
+    let declared = super::authority::declared_manifold(plugin)?;
+    Ok(describe_plugin_authority(plugin, &declared))
+}
+
+/// Whether the plugin runtime admits `artifact` as `plugin`.
+pub fn admit(artifact: &[u8], plugin: &PackPlugin) -> Result<()> {
+    PluginRunner::compile(artifact, plugin).map(|_| ())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn install_from_pack(
     home: &Path,

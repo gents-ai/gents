@@ -285,6 +285,7 @@ mod tests {
                     installed_via: Some(crate::pack::InstalledVia::Operator),
                     source: None,
                     source_history: Vec::new(),
+                    created_collections: Vec::new(),
                 },
                 leases: Vec::new(),
             };

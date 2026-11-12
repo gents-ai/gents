@@ -8,6 +8,7 @@ pub mod support;
 
 pub mod claude_gateway_login;
 mod claude_request_context;
+mod collection_use;
 pub mod documents;
 pub mod drop_cleanup;
 pub mod error;
@@ -715,8 +716,8 @@ pub use documents::automation::{
     MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
 pub use documents::template::{
-    check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
-    TemplateScope, VariableRef,
+    check_template_vocabulary, parse_template_for_validation, render_manual_template,
+    render_template, TemplateError, TemplateScope, VariableRef,
 };
 pub use documents::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
@@ -848,9 +849,9 @@ pub use tools::mcp::health::{
 pub use tools::mcp::meta::build_meta_tools;
 pub use tools::mcp::pool::McpPool;
 pub use tools::native::{
-    build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, ToolSet,
-    ToolSetBuilder,
+    build_native_tools, enable_self_runner, run_plugin_build, CliToolConfig, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, PluginBuildOutcome,
+    ToolSet, ToolSetBuilder, PLUGIN_BUILD_COMMAND,
 };
 pub use tools::surface::{
     cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
@@ -871,6 +872,47 @@ pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 
 #[doc(hidden)]
 pub mod __test_internals {
+    pub async fn park_backend(
+        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    ) -> anyhow::Result<bool> {
+        lifecycle.park_for_backend().await
+    }
+
+    pub async fn wake_backend(
+        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    ) -> anyhow::Result<bool> {
+        Ok(lifecycle
+            .wake_for_backend(Some(chrono::Utc::now()))
+            .await?
+            .resumed())
+    }
+
+    pub fn backend_generation(
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    ) -> anyhow::Result<&str> {
+        lifecycle.execution_generation()
+    }
+
+    pub fn backend_deadline(
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        lifecycle.claimed_deadline_at()
+    }
+
+    pub async fn settle_parked_backend(
+        access: &crate::ConfigAccess,
+        request_doc_id: &str,
+        generation: &str,
+        interrupted: bool,
+    ) -> anyhow::Result<crate::request::lifecycle::TerminalizeResult> {
+        crate::request::lifecycle::terminalize_parked_request(
+            access,
+            request_doc_id,
+            generation,
+            interrupted,
+        )
+        .await
+    }
     pub use crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity;
     pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::request::lifecycle::queue::{

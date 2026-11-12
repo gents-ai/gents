@@ -710,6 +710,8 @@ fn active_snapshot_with_event_trigger(
         event_source_doc_id: source_doc_id.to_owned(),
         event_source_id: EVENT_SOURCE_ID.to_owned(),
         task_doc_id: task_doc_id.to_owned(),
+        create_session: false,
+        max_fires_per_hour: gents::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_id: EVENT_SOURCE_TRIGGER_ID.to_string(),
         task_id: task.task_id.clone(),
         task: task.clone(),

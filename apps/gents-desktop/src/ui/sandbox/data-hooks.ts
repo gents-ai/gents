@@ -25,6 +25,8 @@ export interface QueryState<T = unknown> {
   stream: QueryStream;
   /** why the stream ended, when it is `unavailable` */
   streamError: string | null;
+  /** when `data` was last read (ms since the epoch); null before the first read */
+  updatedAt: number | null;
   /** run again now */
   refresh: () => void;
 }
@@ -210,10 +212,12 @@ export function useQuery<T = unknown>(
     data: T | null;
     error: string | null;
     loading: boolean;
+    updatedAt: number | null;
   }>({
     data: null,
     error: null,
     loading: enabled,
+    updatedAt: null,
   });
   const [tick, setTick] = useState(0);
   const currentNode = () => ctx.shell?.selectedDeployment?.()?.nodeDid ?? null;
@@ -245,7 +249,8 @@ export function useQuery<T = unknown>(
   useEffect(() => {
     const nodeChanged = loadedNode.current !== node;
     loadedNode.current = node;
-    if (nodeChanged) setState({ data: null, error: null, loading: enabled });
+    if (nodeChanged)
+      setState({ data: null, error: null, loading: enabled, updatedAt: null });
     if (!enabled) return;
     const mine = ++generation.current;
     setState((s) => ({ ...s, loading: true }));
@@ -258,12 +263,17 @@ export function useQuery<T = unknown>(
     })()
       .then((result) => {
         if (generation.current !== mine) return;
-        setState({ data: result as T, error: null, loading: false });
+        setState({
+          data: result as T,
+          error: null,
+          loading: false,
+          updatedAt: Date.now(),
+        });
       })
       .catch((error: unknown) => {
         if (generation.current !== mine) return;
         setState((s) => ({
-          data: s.data,
+          ...s,
           error: error instanceof Error ? error.message : String(error),
           loading: false,
         }));

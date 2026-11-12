@@ -39,11 +39,7 @@ pub(crate) fn is_distributable_asset(path: &str) -> bool {
         })
 }
 
-pub(crate) fn is_snake_case_name(name: &str) -> bool {
-    let mut bytes = name.bytes();
-    bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
-        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-}
+pub(crate) use crate::documents::is_snake_case_name;
 
 pub(crate) fn has_canonical_asset_spelling(path: &str) -> bool {
     let mut parts = path.split('/').peekable();

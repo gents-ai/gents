@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use super::{
     PackAccountArgs, PackBuildArgs, PackFetchArgs, PackInfoArgs, PackInitArgs, PackInstallArgs,
     PackLoginArgs, PackOutdatedArgs, PackOwnerArgs, PackPruneArgs, PackPublishArgs, PackRemoveArgs,
-    PackRunArgs, PackSearchArgs, PackSeedArgs, PackUpdateArgs, PackWireArgs, PackYankArgs,
-    PluginCommand, UxCommand,
+    PackRunArgs, PackSearchArgs, PackSeedArgs, PackStarterArgs, PackUpdateArgs, PackWireArgs,
+    PackYankArgs, PluginCommand, ScopeArgs, UxCommand,
 };
 
 #[derive(clap::Args)]
@@ -143,6 +143,8 @@ pub(crate) enum PackAddCommand {
     },
     /// A collection schema under schemas/.
     Schema { collection: String },
+    /// A UX page under ux/<name>/plugin.js, declared in the manifest.
+    Page { name: String },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -265,6 +267,9 @@ pub(crate) enum PackCommand {
     RemovePart(PackRemovePartArgs),
     /// Rewrite manifest.json and pack_config.json in canonical form.
     Fmt(PackFmtArgs),
+    /// Write documents that are live on a node, and what they reference, to a
+    /// new pack directory.
+    Export(PackExportArgs),
     /// List the files and documents that differ between two packs.
     Diff(PackDiffArgs),
     /// Check and build a pack, then run every plugin's test cases.
@@ -276,6 +281,9 @@ pub(crate) enum PackCommand {
     /// Wire an installed plugin into an agent's Tools and Context, or with
     /// `--remove` take it back out.
     Wire(PackWireArgs),
+    /// List the Engineer's starter packs and what each requests, or with
+    /// `--approve` install the ones you name.
+    Starter(PackStarterArgs),
     /// Remove an installed pack of any kind, and whatever nothing else still uses.
     Remove(PackRemoveArgs),
     /// List installed packs with a newer version in the registry.
@@ -328,4 +336,28 @@ pub(crate) enum PackScenarioCommand {
     Init(PackInitArgs),
     /// Seed an installed scenario against an already-serving node.
     Seed(PackSeedArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackExportArgs {
+    /// The snake_case pack name.
+    pub(crate) name: String,
+    /// The pack directory to create; defaults to ./<name>.
+    #[arg(long)]
+    pub(crate) out: Option<PathBuf>,
+    #[arg(long, default_value = "gents")]
+    pub(crate) namespace: String,
+    /// A document to export as KIND=ID: agent, context, tools, skill,
+    /// compaction, datastore, agent-target, task, trigger, event-source or
+    /// schedule. Repeatable; what a selected document references comes along.
+    #[arg(long = "select", value_name = "KIND=ID")]
+    pub(crate) select: Vec<String>,
+    /// An application collection whose schema to export. Repeatable.
+    #[arg(long)]
+    pub(crate) collection: Vec<String>,
+    /// Export every document carrying this tag, such as gents:pack:<name>.
+    #[arg(long)]
+    pub(crate) tag: Vec<String>,
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
 }

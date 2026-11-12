@@ -995,6 +995,10 @@ def installCases : List InstallCase :=
   , ⟨"explicit_self_config_lowers_operator", .written .operator, .plugins, true, .selfConfig⟩
   , ⟨"explicit_operator_raises_self_config", .written .selfConfig, .assets, true, .operator⟩ ]
 
+/-- Every installer with and without pack authority. -/
+def installerCases : List (InstallProvenance × Bool) :=
+  [(.operator, false), (.operator, true), (.selfConfig, false), (.selfConfig, true)]
+
 private def fixturePack : String := "job_plugin_fixture"
 private def scriptDigest : String := "sha256-flow"
 
@@ -1048,6 +1052,13 @@ def policyCases : List PolicyCase :=
   , ⟨"default_empty_dynamic_targets_valid", [],
       { context.policy with dynamicTargets := [] }⟩ ]
 
+/-- `consentedDynamic` over every mode with consent, and `check` without. -/
+def consentCases : List (String × Bool × DynamicMode) :=
+  [ ("consent_raises_check_to_run", true, .check)
+  , ("consent_keeps_off", true, .off)
+  , ("consent_keeps_run", true, .run)
+  , ("no_consent_keeps_check", false, .check) ]
+
 structure WireCase where
   name : String
   pack : String
@@ -1078,6 +1089,8 @@ theorem authority_regressions :
     installCases.map (fun c => recordAfterInstall c.prior c.kind c.explicit c.via) =
       [ .written .operator, .written .operator, .written .selfConfig, .written .operator
       , .written .selfConfig, .written .operator ] ∧
+    installerCases.map (fun c => installerProvenance c.1 c.2) =
+      [.operator, .operator, .selfConfig, .operator] ∧
     originCases.map originVerdict = [.installed, .installed, .dynamic, .installed] ∧
     packBlockCases.map (fun c => packJobBlockAdmissible c.via blockClosure c.block) =
       [true, false, false, false, false] ∧
@@ -1123,6 +1136,13 @@ private def renderInstall (c : InstallCase) : Json :=
     ("expected", Json.mkObj [("record", recordJson r),
       ("provenance", provenanceJson (provenanceOf c.kind r))])]
 
+private def renderInstaller (c : InstallProvenance × Bool) : Json :=
+  let name := (if c.1 = .operator then "operator" else "self_config") ++
+    (if c.2 then "_with_pack_authority" else "_without_pack_authority")
+  Json.mkObj [("name", toJson name), ("kind", toJson "installer"),
+    ("via", provenanceJson c.1), ("pack_authority", toJson c.2),
+    ("expected", Json.mkObj [("provenance", provenanceJson (installerProvenance c.1 c.2))])]
+
 private def renderOrigin (c : OriginCase) : Json :=
   Json.mkObj [("name", toJson c.name), ("kind", toJson "origin"), ("call", callArgsJson c.call),
     ("expected", Json.mkObj [("origin", originJson (originVerdict c))])]
@@ -1140,6 +1160,11 @@ private def renderPolicy (c : PolicyCase) : Json :=
     ("agent_targets", toJson c.agentTargets), ("policy", policyJson c.policy),
     ("expected", Json.mkObj [("valid", toJson (c.policy.valid c.agentTargets))])]
 
+private def renderConsent (c : String × Bool × DynamicMode) : Json :=
+  Json.mkObj [("name", toJson c.1), ("kind", toJson "consented_dynamic"),
+    ("consent", toJson c.2.1), ("mode", modeJson c.2.2),
+    ("expected", Json.mkObj [("mode", modeJson (consentedDynamic c.2.1 c.2.2))])]
+
 private def renderWire (c : WireCase) : Json :=
   let (p, job, caller) := wired c
   Json.mkObj [("name", toJson c.name), ("kind", toJson "wire_targets_from"),
@@ -1156,8 +1181,8 @@ private def renderPublishedRead (publicationInProgress : Bool) : Json :=
 
 def authorityCasesJson : String :=
   (toJson (provenanceCases.map renderProvenance ++ installCases.map renderInstall ++
-    originCases.map renderOrigin ++ packBlockCases.map renderPackBlock ++
-    policyCases.map renderPolicy ++ wireCases.map renderWire ++
+    installerCases.map renderInstaller ++ originCases.map renderOrigin ++ packBlockCases.map renderPackBlock ++
+    policyCases.map renderPolicy ++ consentCases.map renderConsent ++ wireCases.map renderWire ++
     [true, false].map renderPublishedRead)).compress
 
 /-- A target's wire spelling is its AgentTarget id; the host resolves it to the

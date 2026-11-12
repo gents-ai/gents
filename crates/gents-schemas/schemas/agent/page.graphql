@@ -1,0 +1,16 @@
+# A desktop page held on the node: one ES module and an optional stylesheet the
+# desktop evaluates in a sandboxed frame. `data` holds {"surfaces": [{surface,
+# tools}]}: the only datastore tools the page may run.
+type Page @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "configuration") @index(fields: ["node_did", "page_id"], unique: true) {
+    page_id: String @index
+    node_did: String @index
+    display_name: String
+    description: String
+    module: String
+    css: String
+    data: JSON
+    enabled: Boolean @index
+    created_at: String
+    updated_at: DateTime @index(direction: DESC)
+    tags: [String]
+}

@@ -83,7 +83,7 @@ describe("remote onboarding", () => {
     renderIn(app, <SetupScreen onDone={onDone} />);
     expect(screen.queryByText("Local node")).not.toBeInTheDocument();
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Server address" }),
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
       "https://my-node.example:8787{enter}",
     );
     expect(enroll).toHaveBeenCalledWith("https://my-node.example:8787");
@@ -191,7 +191,7 @@ describe("remote onboarding", () => {
     );
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Server address" }),
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
       "https://my-node.example:8787",
     );
     await userEvent.click(screen.getByRole("button", { name: "Request access" }));
@@ -211,7 +211,7 @@ describe("remote onboarding", () => {
     const onDone = vi.fn();
     renderIn(app, <SetupScreen onDone={onDone} />);
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Server address" }),
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
       "https://my-node.example:8787",
     );
     await userEvent.click(screen.getByRole("button", { name: "Request access" }));
@@ -236,7 +236,7 @@ describe("remote onboarding", () => {
     );
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Server address" }),
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
       "https://other.example",
     );
     await userEvent.click(screen.getByRole("button", { name: "Request access" }));

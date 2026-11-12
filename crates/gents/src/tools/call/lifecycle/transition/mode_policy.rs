@@ -55,7 +55,7 @@ impl ToolCallLifecycle {
     ) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         anyhow::ensure!(
-            self.await_mode == AwaitMode::Foreground && self.plugin_effect.is_none(),
+            self.await_mode == AwaitMode::Foreground,
             "only a running direct foreground tool can be backgrounded"
         );
         let mut adopted = self.clone();
@@ -110,10 +110,6 @@ impl ToolCallLifecycle {
 
     pub async fn background(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
-        anyhow::ensure!(
-            self.plugin_effect.is_none(),
-            "plugin effects cannot detach from their parent invocation"
-        );
         if self.await_mode == AwaitMode::Background {
             return Err(IllegalToolCallTransition::ModeAlreadyBackground.into());
         }
@@ -158,7 +154,7 @@ impl ToolCallLifecycle {
     ) -> Result<Option<Self>> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         anyhow::ensure!(
-            self.plugin_effect.is_none() && self.await_mode == AwaitMode::Foreground,
+            self.await_mode == AwaitMode::Foreground,
             "only a running foreground call can move to the background"
         );
         let doc_id = self

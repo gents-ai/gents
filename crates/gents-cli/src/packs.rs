@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents::pack::PackChangeError;
 use gents::ConfigAccess;
 use serde_json::Value;
@@ -96,6 +96,7 @@ pub async fn install(
         package,
         inference_slots,
         dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
         preview,
         scope: scope(home),
         output: OutputFormat::Json,
@@ -107,6 +108,40 @@ pub async fn install(
         expect_digest,
         explicit: true,
     }))
+    .await
+}
+
+/// The Engineer's default packs as `home` has them: installed, waiting on an
+/// approval (with what its plugins request and the archive an approval
+/// installs), ready to install, or unavailable. Read through whatever serves
+/// the home, so it works while the runtime runs.
+pub async fn default_packs(home: PathBuf, registry: Option<String>) -> Result<Value> {
+    use crate::commands::init::default_packs as owner;
+    let packs = owner::status(&home, owner::ENGINEER_DEFAULT_PACKS, registry.as_deref()).await?;
+    Ok(serde_json::json!({ "packs": packs }))
+}
+
+/// Installs each `(pack, digest)` of `approved` for `home`'s Engineer, as
+/// `init --engineer` installs a default pack it was told to approve: the
+/// Engineer owns what the pack ships, its plugins are wired and its skills
+/// attached. Only a default pack, at the archive its status showed. The
+/// home's own store is opened, so the caller stops the runtime first.
+pub async fn approve_default_packs(
+    home: PathBuf,
+    approved: Vec<(String, String)>,
+    registry: Option<String>,
+) -> Result<Value> {
+    use crate::commands::init::default_packs as owner;
+    let approved: Vec<_> = approved
+        .into_iter()
+        .map(|(pack, digest)| (pack, Some(digest)))
+        .collect();
+    owner::approve(
+        &home,
+        owner::ENGINEER_DEFAULT_PACKS,
+        &approved,
+        registry.as_deref(),
+    )
     .await
 }
 
@@ -374,6 +409,28 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
     .await
 }
 
+/// The body of `__plugin-build`, which the runtime starts under the command
+/// sandbox: builds the pack's plugins, runs their cases when asked, and prints
+/// one JSON object on stdout.
+pub async fn plugin_build(dir: PathBuf, run_cases: bool) -> Result<()> {
+    let build_dir = dir.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let manifest = gents::pack::authoring::read_manifest(&build_dir)?;
+        for plugin in &manifest.metadata.plugins {
+            command::build::build_plugin(&build_dir, &manifest, plugin)?;
+        }
+        Ok(())
+    })
+    .await
+    .context("the plugin build task did not finish")??;
+    let cases = if run_cases {
+        Some(gents::pack::authoring::run_plugin_cases(&dir).await?)
+    } else {
+        None
+    };
+    crate::print_json(&serde_json::json!({ "cases": cases }))
+}
+
 /* ---- UX plugins: what the desktop's doors read ---- */
 
 /// Every UX plugin on disk under `home` (dev folder and installed packs).
@@ -396,6 +453,26 @@ pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::plugin::ux::U
         .await
     })
     .await
+}
+
+/// The page documents of `node_did` that `access` may read, as listings: the
+/// document door (`gents::plugin::ux::page`), beside what [`ux_list`] reads
+/// from a home.
+pub async fn ux_pages(
+    access: gents::ConfigAccess,
+    node_did: String,
+) -> Result<Vec<gents::plugin::ux::UxListing>> {
+    gents::plugin::ux::page::list(&access, &node_did).await
+}
+
+/// The module of the page document listed as `id` on `node_did`.
+pub async fn ux_page_module(
+    access: gents::ConfigAccess,
+    node_did: String,
+    id: String,
+) -> Result<gents::plugin::ux::UxModule> {
+    let page = gents::plugin::ux::page::find(&access, &node_did, &id).await?;
+    Ok(gents::plugin::ux::page::module(&page))
 }
 
 /// The pack behind the UX plugin listed as `ux`, once it ships an `.afb`
@@ -570,6 +647,7 @@ mod tests {
                     default_enabled: None,
                     data: vec![],
                 }],
+                created_collections: Vec::new(),
             },
         )
         .unwrap();

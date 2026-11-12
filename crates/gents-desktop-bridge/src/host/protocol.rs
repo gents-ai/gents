@@ -86,6 +86,73 @@ pub enum ClientCommand {
     ProviderUsageRead {
         request: crate::accounts::usage::ProviderUsageReadRequest,
     },
+    #[serde(rename = "client_provider_accounts_list")]
+    AccountsList {
+        request: crate::accounts::ProviderAccountsRequest,
+    },
+    #[serde(rename = "client_provider_account_sign_in")]
+    AccountSignIn {
+        request: crate::accounts::ProviderSignInRequest,
+    },
+    #[serde(rename = "client_provider_account_disconnect")]
+    AccountDisconnect {
+        request: crate::accounts::ProviderAccountDisconnectRequest,
+    },
+    #[serde(rename = "client_provider_account_rename")]
+    AccountRename {
+        request: crate::accounts::ProviderAccountRenameRequest,
+    },
+    #[serde(rename = "client_provider_account_remove")]
+    AccountRemove {
+        request: crate::accounts::ProviderAccountRemoveRequest,
+    },
+    #[serde(rename = "client_provider_account_retry_save")]
+    AccountRetrySave {
+        request: crate::accounts::ProviderAccountRetrySaveRequest,
+    },
+    #[serde(rename = "client_config_catalog")]
+    ConfigCatalog {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
+    #[serde(rename = "client_config_read")]
+    ConfigRead {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        collection: String,
+        id: String,
+    },
+    #[serde(rename = "client_config_save")]
+    ConfigSave {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        collection: String,
+        id: String,
+        revision: gents_desktop_core::client::ConfigEditorRevision,
+        content: String,
+    },
+    #[serde(rename = "client_action_catalog")]
+    ActionCatalog {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
+    #[serde(rename = "client_start_task")]
+    StartTask {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+        #[serde(rename = "argumentsJson")]
+        /// Parsed natively to avoid a JavaScript number round trip.
+        arguments_json: String,
+    },
+    #[serde(rename = "client_run_schedule")]
+    RunSchedule {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        #[serde(rename = "scheduleId")]
+        schedule_id: String,
+    },
     #[serde(rename = "desktop_session_file_inventory")]
     SessionFileInventory {
         #[serde(rename = "nodeDid")]
@@ -154,6 +221,40 @@ pub enum ClientCommand {
     EnrollLocal {
         #[serde(rename = "nodeHome")]
         node_home: Option<String>,
+    },
+    #[serde(rename = "client_workspace_permissions")]
+    WorkspacePermissions {
+        request: super::permissions::WorkspacePermissionsRequest,
+    },
+    #[serde(rename = "client_workspace_permissions_forget_commands")]
+    WorkspacePermissionsForgetCommands {
+        request: super::permissions::WorkspacePermissionsForgetCommandsRequest,
+    },
+    #[serde(rename = "client_workspace_permissions_save")]
+    WorkspacePermissionsSave {
+        request: super::permissions::WorkspacePermissionsSaveRequest,
+    },
+    #[serde(rename = "client_plugin_approval_subscribe")]
+    ApprovalSubscribe {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        token: String,
+    },
+    #[serde(rename = "client_plugin_approval_unsubscribe")]
+    ApprovalUnsubscribe { token: String },
+    #[serde(rename = "client_plugin_approval_pending")]
+    ApprovalPending {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        token: String,
+    },
+    #[serde(rename = "client_plugin_approval_decide")]
+    ApprovalDecide {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        token: String,
+        id: String,
+        decision: String,
     },
     #[serde(rename = "desktop_client_snapshot")]
     Snapshot {},
@@ -236,18 +337,37 @@ impl ClientCommand {
         "client_runtime_is_local",
         "client_inference_setup_catalog",
         "client_inference_setup_state",
-        "client_agent_model_select",
         "client_inference_models_discover",
         "client_inference_model_recommendation",
+        "client_agent_model_select",
         "client_config_apply",
         "desktop_provider_usage_read",
+        "client_provider_accounts_list",
+        "client_provider_account_sign_in",
+        "client_provider_account_disconnect",
+        "client_provider_account_rename",
+        "client_provider_account_remove",
+        "client_provider_account_retry_save",
+        "client_config_catalog",
+        "client_config_read",
+        "client_config_save",
+        "client_action_catalog",
+        "client_start_task",
+        "client_run_schedule",
+        "desktop_session_file_inventory",
+        "desktop_inventory_file_change",
+        "desktop_tool_file_changes",
         "desktop_request_output",
         "desktop_request_attachments",
-        "desktop_tool_file_changes",
-        "desktop_inventory_file_change",
-        "desktop_session_file_inventory",
         "client_connect_local",
         "client_enroll_local",
+        "client_workspace_permissions",
+        "client_workspace_permissions_forget_commands",
+        "client_workspace_permissions_save",
+        "client_plugin_approval_subscribe",
+        "client_plugin_approval_unsubscribe",
+        "client_plugin_approval_pending",
+        "client_plugin_approval_decide",
         "desktop_client_snapshot",
         "desktop_peer_enroll_status",
         "desktop_peer_enroll_invite",
@@ -266,9 +386,9 @@ impl ClientCommand {
         "desktop_pending_queue_edit",
         "desktop_pending_message_steer",
         "desktop_session_fork_before_message",
+        "desktop_session_history",
         "desktop_session_rename",
         "desktop_session_archive",
-        "desktop_session_history",
         "desktop_interrupt_request",
         "desktop_process_control",
     ];
@@ -281,6 +401,13 @@ impl ClientCommand {
                 | Self::InferenceCatalog {}
                 | Self::InferenceSetupState { .. }
                 | Self::RuntimeIsLocal { .. }
+                | Self::AccountsList { .. }
+                | Self::AccountSignIn { .. }
+                | Self::ConfigCatalog { .. }
+                | Self::ConfigRead { .. }
+                | Self::ActionCatalog { .. }
+                | Self::WorkspacePermissions { .. }
+                | Self::ApprovalPending { .. }
                 | Self::InferenceModelsDiscover { .. }
                 | Self::InferenceModelRecommendation { .. }
                 | Self::ProviderUsageRead { .. }
@@ -383,6 +510,38 @@ impl HostMessage {
                 result: None,
                 error: Some(error),
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod editor_contract_tests {
+    use super::*;
+
+    #[test]
+    fn permission_scope_uses_the_agent_did() {
+        let command = serde_json::json!({
+            "name": "client_workspace_permissions",
+            "args": { "request": { "nodeDid": "did:key:node", "agentDid": "did:key:agent", "workspacePath": "/workspace" } }
+        });
+        assert!(serde_json::from_value::<ClientCommand>(command.clone()).is_ok());
+        let mut rejected = command;
+        let scope = rejected["args"]["request"].as_object_mut().unwrap();
+        scope.remove("agentDid");
+        scope.insert("agentId".into(), "old-label".into());
+        assert!(serde_json::from_value::<ClientCommand>(rejected).is_err());
+    }
+
+    #[test]
+    fn editor_operations_are_advertised_by_the_current_host() {
+        for name in [
+            "client_provider_account_sign_in",
+            "client_config_read",
+            "client_action_catalog",
+            "client_workspace_permissions_save",
+            "client_plugin_approval_decide",
+        ] {
+            assert!(ClientCommand::NAMES.contains(&name), "{name}");
         }
     }
 }

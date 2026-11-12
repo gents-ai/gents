@@ -1,5 +1,9 @@
 # Upgrading a v1.0.0-rc0 node
 
+> This runbook describes the in-place upgrade from v1.0.0-rc0 to v1.0.0-rc1.
+> v1.0.0-rc2 and later open neither an rc0 nor an rc1 home; see
+> [upgrade-from-rc1.md](upgrade-from-rc1.md).
+
 An RC0 home upgrades in place: the first start of a newer `gents` runs the
 schema migrations in `crates/gents-migration` and logs one line such as
 

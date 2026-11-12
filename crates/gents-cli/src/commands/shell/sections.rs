@@ -244,6 +244,7 @@ pub(super) fn ux_plugins(listings: &[UxListing]) -> Vec<MenuRow> {
             let (id, door) = match listing.door {
                 UxDoor::Dev => (listing.id.as_str(), "Dev folder"),
                 UxDoor::Pack => (listing.id.rsplit('/').next().unwrap_or_default(), "Pack"),
+                UxDoor::Document => (listing.id.as_str(), "Page on this node"),
             };
             let mut about = vec![door];
             about.extend(listing.pack.as_deref());
@@ -960,6 +961,7 @@ mod tests {
                 contributes: None,
                 default_enabled: None,
                 data: Vec::new(),
+                digest: None,
             };
 
         let rows = ux_plugins(&[

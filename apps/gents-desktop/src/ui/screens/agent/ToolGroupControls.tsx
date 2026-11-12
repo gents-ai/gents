@@ -354,6 +354,10 @@ export function ToolGroupControls({
         {flags("self_config", [
           ["enable_self_config", "Can change this node's configuration"],
           ["enable_pack_install", "Install packs"],
+          [
+            "enable_pack_authority",
+            "Grant plugin permissions and compile plugin source",
+          ],
           ["self_config_no_lockout", "Prevent self-configuration lockout"],
           ["self_config_preview", "Preview configuration changes"],
         ])}

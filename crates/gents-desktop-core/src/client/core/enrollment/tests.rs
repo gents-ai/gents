@@ -2757,6 +2757,7 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
     .is_empty());
 
     let issuer = EnrollmentOfferIssuer::new(
+        sender.node_arc(),
         Arc::new(sender.node_identity().clone()),
         sender.p2p.clone(),
         "client-receiver".into(),

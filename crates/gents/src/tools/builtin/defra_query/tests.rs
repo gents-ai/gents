@@ -833,3 +833,46 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     assert_eq!(persisted["data"]["PlanTicket"][0]["status"], "open");
     node.shutdown().await.expect("shut down test node");
 }
+
+#[tokio::test]
+async fn a_write_verb_is_sent_to_the_write_tool_and_its_grant() {
+    let node = seeded_node().await;
+    for (holds_tools, expected) in [
+        (true, "Add it with next_call"),
+        (false, "you do not hold the tools category"),
+    ] {
+        let tool = DefraQueryTool::new(Arc::clone(&node), CollectionScope::all())
+            .with_tools_category(holds_tools);
+        for verb in [
+            "write", "create", "insert", "update", "delete", "mutate", "add",
+        ] {
+            let params: QueryParams = serde_json::from_value(
+                json!({"argv":[verb],"collection":"Board","options":{"input":{"title":"x"}}}),
+            )
+            .unwrap();
+            let error = Tool::call(&tool, params)
+                .await
+                .expect_err("query has no write verb")
+                .to_string();
+            let error: serde_json::Value = serde_json::from_str(&error).expect(&error);
+            assert!(
+                error["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Writes go through the write tool"),
+                "{verb}: {error}"
+            );
+            let recovery = &error["recovery"];
+            assert!(
+                recovery["how"].as_str().unwrap().contains(expected)
+                    && recovery["how"].as_str().unwrap().contains("Board"),
+                "{verb}: {error}"
+            );
+            assert_eq!(
+                recovery.get("next_call").is_some(),
+                holds_tools,
+                "{verb}: {error}"
+            );
+        }
+    }
+}

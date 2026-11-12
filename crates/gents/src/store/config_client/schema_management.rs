@@ -178,6 +178,83 @@ impl ConfigAccess {
         }
     }
 
+    /// Permanently removes every document of `collection` from this node,
+    /// with its heads, block history and index entries, keeping the definition.
+    ///
+    /// External premise (pinned DefraDB `truncate_collection_as`): the caller
+    /// needs the `truncate-collection` node permission and no document policy
+    /// is consulted; the removal is local to this node, issues no CRDT delete
+    /// and replicates nothing, so peers keep their copies; and it commits in
+    /// chunks, not one transaction.
+    pub async fn truncate_collection(&self, collection: &str) -> Result<()> {
+        crate::store::graphql::validate_collection_identifier(collection)?;
+        match self {
+            Self::Local(local) => {
+                let collection = collection.to_owned();
+                let actor = local.identity().cloned();
+                local
+                    .run_owned(move |node| async move {
+                        let context = actor_context(actor.as_ref());
+                        node.truncate_collection_as(&context, &collection, None)
+                            .await
+                            .map_err(Into::into)
+                    })
+                    .await
+            }
+            Self::Graphql(_) => {
+                self.schema_request(
+                    reqwest::Method::DELETE,
+                    &format!("collections/{collection}/truncate"),
+                    None,
+                )
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Deletes every version of each of `collections`, its name and its
+    /// definition blocks from this node.
+    ///
+    /// External premise (pinned DefraDB `delete_collections_as`): the caller
+    /// needs the `patch-collection` node permission; DefraDB resolves every
+    /// name and refuses, before deleting anything, while one has documents or
+    /// a collection outside the set has a field relating to it. Versions are
+    /// then deleted in separate commits. The embedded node exposes the name
+    /// form only on its database, which does not substitute the node for an
+    /// absent caller as `Node::*_as` does, so node-authority access names the
+    /// node here.
+    pub async fn remove_collections(&self, collections: &[String]) -> Result<()> {
+        for collection in collections {
+            crate::store::graphql::validate_collection_identifier(collection)?;
+        }
+        match self {
+            Self::Local(local) => {
+                let collections = collections.to_vec();
+                let actor = local.identity().map(ToString::to_string);
+                local
+                    .run_owned(move |node| async move {
+                        let caller = actor.or_else(|| node.node_identity_did().map(str::to_owned));
+                        let context = defra_core::RequestContext::default().with_identity(caller);
+                        node.database()
+                            .delete_collections_as(&context, collections, false)
+                            .await
+                            .map_err(|error| defra_node::Error::from(error).into())
+                    })
+                    .await
+            }
+            Self::Graphql(_) => {
+                self.schema_request(
+                    reqwest::Method::DELETE,
+                    &format!("collections?name={}", collections.join(",")),
+                    None,
+                )
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
     async fn schema_request(
         &self,
         method: reqwest::Method,

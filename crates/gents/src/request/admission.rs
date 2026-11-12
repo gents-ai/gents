@@ -720,7 +720,17 @@ impl AgentRequestAdmissionVerifier {
             && validate_signing_fields(&signing_fields).is_ok();
         observation.branch_fields_exact = admission.validate_canonical_fields().is_ok()
             && admission.validate_branch_fields().is_ok();
-        observation.pending_deadline_absent = row.deadline.is_none();
+        // The existing admission projection accepts the owner-installed deadline
+        // only after reconstructing its exact, immutable claim version.
+        observation.pending_deadline_absent =
+            if row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend) {
+                let actor = identity::Did::new(target_agent_did)
+                    .map_err(AgentRequestAdmissionError::denied)?;
+                let access = crate::ConfigAccess::local_as(self.node.clone(), actor);
+                verify_resumed_claim_version(&access, &row).await?
+            } else {
+                row.deadline.is_none()
+            };
         observation.hop_within_bound = request_hop_admitted(self.node.as_ref(), &row).await?;
         if !observation.signature_valid
             || !observation.signed_fields_match
@@ -1096,7 +1106,10 @@ pub(crate) fn validate_authored_content(
     input: &gents_protocol::request_input::RequestInput,
 ) -> AdmissionResult<()> {
     deny_if(
-        input.captured_context.iter().all(|context| context.is_well_formed()),
+        input
+            .captured_context
+            .iter()
+            .all(|context| context.is_well_formed()),
         "captured context requires an ordered UTF-16 range and a positive buffer version when present",
     )?;
     input
@@ -1377,7 +1390,7 @@ async fn verify_automated_trigger_source(
         .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
         triggers.len() == 1,
-        "runtime trigger is missing or ambiguous",
+        "runtime trigger no longer exists; it was removed before this fire ran",
     )?;
     let trigger = &triggers[0];
     deny_if(
@@ -1487,6 +1500,126 @@ async fn load_signed_request(
                 "AgentRequest disappeared before admission"
             ))
         })
+}
+
+#[derive(Debug)]
+struct ResumeClaimFacts {
+    waiting: bool,
+    version_present: bool,
+    claimed: bool,
+    same_identity: bool,
+    same_deadline: bool,
+    same_backend: bool,
+}
+
+fn resume_claim_valid(facts: &ResumeClaimFacts) -> bool {
+    facts.waiting
+        && facts.version_present
+        && facts.claimed
+        && facts.same_identity
+        && facts.same_deadline
+        && facts.same_backend
+}
+
+/// Reads as the Agent that parked the request: it owns both the wait record
+/// and the claim version being reconstructed.
+pub(crate) async fn verify_resumed_claim_version(
+    access: &crate::ConfigAccess,
+    current: &AgentRequestRow,
+) -> AdmissionResult<bool> {
+    let Some(doc) = current.doc_id.as_deref() else {
+        return Ok(false);
+    };
+    let doc_gql = escape_graphql_string(doc);
+    let wait = access
+        .execute(&format!(r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{doc_gql}" }} }}, limit: 1) {{ node_did claim_cid }} }}"#))
+        .await
+        .map_err(AgentRequestAdmissionError::unavailable)?;
+    let Some(wait) = wait.pointer("/data/AgentRequestBackendWait/0") else {
+        return Ok(false);
+    };
+    if wait.get("node_did").and_then(serde_json::Value::as_str) != current.node_did.as_deref() {
+        return Ok(false);
+    }
+    let Some(cid) = wait
+        .get("claim_cid")
+        .and_then(serde_json::Value::as_str)
+        .filter(|cid| !cid.trim().is_empty())
+    else {
+        return Ok(false);
+    };
+    let cid_gql = escape_graphql_string(cid);
+    let response = access
+        .execute(&format!(r#"query {{ AgentRequest(cid: ["{cid_gql}"], docID: "{doc_gql}", showDeleted: true) {{ {SIGNED_REQUEST_FIELDS} }} }}"#))
+        .await
+        .map_err(AgentRequestAdmissionError::unavailable)?;
+    let versions: Vec<AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
+    )
+    .map_err(AgentRequestAdmissionError::denied)?;
+    if versions.is_empty() {
+        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
+            "original request claim version is unavailable"
+        )));
+    }
+    if versions.len() != 1 {
+        return Ok(false);
+    }
+    let claimed = &versions[0];
+    let current_admission = row_admission(current).map_err(AgentRequestAdmissionError::denied)?;
+    let claimed_admission = row_admission(claimed).map_err(AgentRequestAdmissionError::denied)?;
+    let current_fields = row_signing_fields(current).map_err(AgentRequestAdmissionError::denied)?;
+    let claimed_fields = row_signing_fields(claimed).map_err(AgentRequestAdmissionError::denied)?;
+    let facts = ResumeClaimFacts {
+        waiting: current.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend),
+        version_present: claimed.doc_id.as_deref() == Some(doc),
+        claimed: claimed.lifecycle_state == Some(RequestLifecycleState::Claimed)
+            && claimed
+                .execution_generation
+                .as_deref()
+                .is_some_and(|generation| !generation.trim().is_empty()),
+        same_identity: current_admission.signature == claimed_admission.signature
+            && current_admission.signing_payload(&current_fields)
+                == claimed_admission.signing_payload(&claimed_fields)
+            && current.max_total_tokens == claimed.max_total_tokens
+            && current.execution_lease_secs == claimed.execution_lease_secs
+            && current.background_completion_input_through_sequence
+                == claimed.background_completion_input_through_sequence
+            && current.background_completion_notification_keys_json
+                == claimed.background_completion_notification_keys_json,
+        same_deadline: current
+            .deadline
+            .as_deref()
+            .is_some_and(|deadline| !deadline.trim().is_empty())
+            && current.deadline == claimed.deadline,
+        same_backend: current
+            .backend_id
+            .as_deref()
+            .is_some_and(|backend| !backend.trim().is_empty())
+            && current.backend_id == claimed.backend_id,
+    };
+    Ok(resume_claim_valid(&facts))
+}
+
+#[cfg(test)]
+#[test]
+fn resumed_claim_admission_matches_the_generated_model() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_resume_admission_cases;
+    assert!(!cases.is_empty());
+    for case in cases {
+        let facts = ResumeClaimFacts {
+            waiting: case.waiting,
+            version_present: case.version_present,
+            claimed: case.claimed,
+            same_identity: case.same_identity,
+            same_deadline: case.same_deadline,
+            same_backend: case.same_backend,
+        };
+        assert_eq!(resume_claim_valid(&facts), case.admitted, "{case:?}");
+    }
 }
 
 #[cfg(test)]

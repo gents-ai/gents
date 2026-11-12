@@ -413,6 +413,7 @@ impl GraphqlEnrollmentStore {
             "renewal transport identity mismatch"
         );
         let issuer = super::enrollment_offer::EnrollmentOfferIssuer::new(
+            self.node.clone(),
             self.identity.clone(),
             p2p,
             intent.network_id.clone(),

@@ -20,11 +20,13 @@ describe("enrollment input", () => {
     expect(transport.calls).toEqual([
       {
         command: "desktop_peer_enroll_invite",
-        args: { request: { invite: `gents://invite/${token}` } },
+        args: {
+          request: { invite: `gents://invite/${token}`, candidateName: null },
+        },
       },
       {
         command: "desktop_peer_enroll_invite",
-        args: { request: { invite: token } },
+        args: { request: { invite: token, candidateName: null } },
       },
       {
         command: "desktop_peer_enroll_status",

@@ -595,6 +595,30 @@
           "markdownDescription": "Denies the desktop_default_agent_set command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_default_packs command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-default-packs",
+          "markdownDescription": "Enables the desktop_default_packs command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_default_packs command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-default-packs",
+          "markdownDescription": "Denies the desktop_default_packs command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_default_packs_approve command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-default-packs-approve",
+          "markdownDescription": "Enables the desktop_default_packs_approve command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_default_packs_approve command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-default-packs-approve",
+          "markdownDescription": "Denies the desktop_default_packs_approve command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_ended_access_dismiss command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-ended-access-dismiss",
@@ -2101,10 +2125,10 @@
           "markdownDescription": "Open a web link in the person's own browser\n#### This permission set includes:\n\n- `allow-desktop-open-external-url`"
         },
         {
-          "description": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`\n- `allow-desktop-workflows-dynamic`\n- `allow-desktop-workflow-dynamic`",
+          "description": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`\n- `allow-desktop-default-packs`\n- `allow-desktop-workflows-dynamic`\n- `allow-desktop-workflow-dynamic`",
           "type": "string",
           "const": "packs-read",
-          "markdownDescription": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`\n- `allow-desktop-workflows-dynamic`\n- `allow-desktop-workflow-dynamic`"
+          "markdownDescription": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`\n- `allow-desktop-default-packs`\n- `allow-desktop-workflows-dynamic`\n- `allow-desktop-workflow-dynamic`"
         },
         {
           "description": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`\n- `allow-desktop-ux-data-watch`\n- `allow-desktop-ux-data-unwatch`",
@@ -2119,10 +2143,10 @@
           "markdownDescription": "A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares\n#### This permission set includes:\n\n- `allow-desktop-plugin-call`\n- `allow-desktop-ux-data-call`"
         },
         {
-          "description": "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`\n- `allow-desktop-workflow-promote`",
+          "description": "Install, update and remove packs, wire a plugin to an agent, approve the Engineer's default packs, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`\n- `allow-desktop-default-packs-approve`\n- `allow-desktop-workflow-promote`",
           "type": "string",
           "const": "packs-admin",
-          "markdownDescription": "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`\n- `allow-desktop-workflow-promote`"
+          "markdownDescription": "Install, update and remove packs, wire a plugin to an agent, approve the Engineer's default packs, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`\n- `allow-desktop-default-packs-approve`\n- `allow-desktop-workflow-promote`"
         },
         {
           "description": "The folders plugins may read or write, and the plugin questions waiting for an answer\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-list`\n- `allow-desktop-plugin-approvals-pending`",
@@ -2137,10 +2161,10 @@
           "markdownDescription": "Allow, change and remove plugin folders, and answer a plugin question\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-add`\n- `allow-desktop-allowed-dirs-remove`\n- `allow-desktop-plugin-approval-decide`\n- `allow-desktop-plugin-approval-subscribe`\n- `allow-desktop-plugin-approval-unsubscribe`"
         },
         {
-          "description": "Authenticated peer enrollment, removal and rename, and ended access\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-ended-access-dismiss`",
+          "description": "Authenticated peer enrollment, removal and rename, and ended access\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-enroll-invite`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-ended-access-dismiss`",
           "type": "string",
           "const": "fleet-admin",
-          "markdownDescription": "Authenticated peer enrollment, removal and rename, and ended access\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-ended-access-dismiss`"
+          "markdownDescription": "Authenticated peer enrollment, removal and rename, and ended access\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-enroll-invite`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-ended-access-dismiss`"
         },
         {
           "description": "Operations snapshot, health, session provenance, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",

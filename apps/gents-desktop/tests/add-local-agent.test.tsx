@@ -212,7 +212,7 @@ describe("Add node enrollment", () => {
     api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });
     const dialog = await openAddAgent(app);
     await userEvent.type(
-      within(dialog).getByLabelText("Node server"),
+      within(dialog).getByLabelText("Invitation or node server"),
       "server.example:9191",
     );
     await userEvent.type(within(dialog).getByLabelText("Your name (optional)"), "Ivan");

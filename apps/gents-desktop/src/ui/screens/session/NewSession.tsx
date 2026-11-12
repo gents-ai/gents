@@ -16,6 +16,7 @@ import { NodeSwitcher } from "@/app/NodeSwitcher";
 import { useShownNodeCount } from "@/lib/hidden";
 import { placeholderFor } from "@/lib/send-status";
 import { agentOf } from "@/lib/agents";
+import { ENGINEER_AGENT_TAG } from "@/lib/engineer";
 import { NodeAvatar, nodeAvatarOf } from "../AgentAvatar";
 import { NodeHoverCard } from "../HoverCards";
 import { AgentPicker } from "../BehaviorPicker";
@@ -45,6 +46,8 @@ export function NewSession() {
   const nodeName = deployment?.node.displayName ?? deployment?.label ?? "the agent";
   const env = deployment?.agentEnvironments.find((e) => e.agentDid === choice.agentDid);
   const chosenName = agentName(choice.agentDid, deployment);
+  const engineer =
+    agentOf(deployment, choice.agentDid)?.tags.includes(ENGINEER_AGENT_TAG) ?? false;
   return (
     <div
       key={selectedNodeDid ?? "new"}
@@ -91,7 +94,9 @@ export function NewSession() {
           <p className="mt-1 text-sm text-muted-foreground">
             {mailboxCause
               ? "Answering a mailbox item; the first message starts its request"
-              : "The first message creates the session automatically"}
+              : engineer
+                ? "The Engineer builds what you describe on this node: apps, automations and teams of agents. The first message creates the session."
+                : "The first message creates the session automatically"}
           </p>
         </div>
       </div>

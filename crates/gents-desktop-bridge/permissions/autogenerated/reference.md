@@ -673,6 +673,58 @@ Denies the desktop_default_agent_set command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-default-packs`
+
+</td>
+<td>
+
+Enables the desktop_default_packs command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-default-packs`
+
+</td>
+<td>
+
+Denies the desktop_default_packs command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-default-packs-approve`
+
+</td>
+<td>
+
+Enables the desktop_default_packs_approve command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-default-packs-approve`
+
+</td>
+<td>
+
+Denies the desktop_default_packs_approve command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-ended-access-dismiss`
 
 </td>
@@ -3967,7 +4019,7 @@ A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its 
 </td>
 <td>
 
-Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry
+Install, update and remove packs, wire a plugin to an agent, approve the Engineer's default packs, bind a plugin to an inference profile, and sign in to the registry
 
 </td>
 </tr>

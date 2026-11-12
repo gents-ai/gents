@@ -13,9 +13,6 @@ pub(crate) use diff::diff_manifests;
 pub(crate) use load::{load_manifest_root, load_manifest_root_for_owner};
 pub(crate) use write::write_manifest_root;
 
-mod document_handle;
-pub(crate) use document_handle::document_handle;
-
 use gents::Collection;
 use serde::Serialize;
 

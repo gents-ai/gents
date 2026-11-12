@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-default-packs"
+description = "Enables the desktop_default_packs command without any pre-configured scope."
+commands.allow = ["desktop_default_packs"]
+
+[[permission]]
+identifier = "deny-desktop-default-packs"
+description = "Denies the desktop_default_packs command without any pre-configured scope."
+commands.deny = ["desktop_default_packs"]

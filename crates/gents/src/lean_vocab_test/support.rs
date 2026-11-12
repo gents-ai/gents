@@ -500,6 +500,14 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
+    pub(crate) backend_wake_cases: Vec<LeanBackendWakeCase>,
+    pub(crate) backend_capture_scope_cases: Vec<LeanBackendCaptureScopeCase>,
+    pub(crate) backend_health_wake_cases: Vec<LeanBackendHealthWakeCase>,
+    pub(crate) backend_generation_mark_cases: Vec<LeanBackendGenerationMarkCase>,
+    pub(crate) backend_resume_admission_cases: Vec<LeanBackendResumeAdmissionCase>,
+    pub(crate) backend_repark_cases: Vec<LeanBackendReparkCase>,
+    pub(crate) backend_parked_finalize_cases: Vec<LeanBackendParkedFinalizeCase>,
+    pub(crate) backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
     pub(crate) account_rotation_select_cases: Vec<LeanAccountRotationSelectCase>,
     pub(crate) account_rotation_attempt_cases: Vec<LeanAccountRotationAttemptCase>,
     pub(crate) account_rotation_observe_cases: Vec<LeanAccountRotationObserveCase>,
@@ -1407,6 +1415,12 @@ pub(crate) enum LeanPluginJobAuthorityCase {
         via: String,
         expected: Box<LeanPluginJobInstallExpected>,
     },
+    Installer {
+        name: String,
+        via: String,
+        pack_authority: bool,
+        expected: Box<LeanPluginJobProvenanceExpected>,
+    },
     Origin {
         name: String,
         call: LeanPluginJobCall,
@@ -1424,6 +1438,12 @@ pub(crate) enum LeanPluginJobAuthorityCase {
         agent_targets: Vec<String>,
         policy: Box<LeanPluginJobPolicy>,
         expected: Box<LeanPluginJobValidExpected>,
+    },
+    ConsentedDynamic {
+        name: String,
+        consent: bool,
+        mode: String,
+        expected: LeanPluginJobModeExpected,
     },
     PublishedRead {
         name: String,
@@ -1446,9 +1466,11 @@ impl LeanPluginJobAuthorityCase {
         match self {
             Self::Provenance { name, .. }
             | Self::Install { name, .. }
+            | Self::Installer { name, .. }
             | Self::Origin { name, .. }
             | Self::PackJobBlock { name, .. }
             | Self::PolicyValid { name, .. }
+            | Self::ConsentedDynamic { name, .. }
             | Self::WireTargetsFrom { name, .. }
             | Self::PublishedRead { name, .. } => name,
         }
@@ -1501,6 +1523,12 @@ pub(crate) struct LeanPluginJobPackBlock {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobAdmissibleExpected {
     pub(crate) admissible: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobModeExpected {
+    pub(crate) mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4726,4 +4754,68 @@ pub(crate) fn lean_pack_identity_reference_cases() -> &'static [LeanPackIdentity
 
 pub(crate) fn lean_pack_eval_subject_cases() -> &'static [LeanPackEvalSubjectCase] {
     &lean_contract_snapshot().pack_eval_subject_cases
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendWakeCase {
+    pub(crate) now_ms: i64,
+    pub(crate) deadline_ms: i64,
+    pub(crate) attempts: u32,
+    pub(crate) wake_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendCaptureScopeCase {
+    pub(crate) persisted: Vec<u64>,
+    pub(crate) next: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendHealthWakeCase {
+    pub(crate) started_ms: i64,
+    pub(crate) now_ms: i64,
+    pub(crate) observed_ms: Option<i64>,
+    pub(crate) fresh: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendGenerationMarkCase {
+    pub(crate) marked: Option<u64>,
+    pub(crate) observed: Option<u64>,
+    pub(crate) applies: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendResumeAdmissionCase {
+    pub(crate) waiting: bool,
+    pub(crate) version_present: bool,
+    pub(crate) claimed: bool,
+    pub(crate) same_identity: bool,
+    pub(crate) same_deadline: bool,
+    pub(crate) same_backend: bool,
+    pub(crate) admitted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendParkedFinalizeCase {
+    pub(crate) request: gents_protocol::request_lifecycle::RequestLifecycleState,
+    pub(crate) outcome: gents_protocol::request_lifecycle::RequestLifecycleState,
+    pub(crate) allowed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendResumedTurnCase {
+    pub(crate) completed: Vec<u32>,
+    pub(crate) next: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendReparkCase {
+    pub(crate) resuming: bool,
+    pub(crate) observed_generation: u64,
+    pub(crate) observed_expiry: i64,
+    pub(crate) expected_generation: u64,
+    pub(crate) expected_expiry: i64,
+    pub(crate) now: i64,
+    pub(crate) allowed: bool,
 }

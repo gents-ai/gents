@@ -24,6 +24,8 @@ pub struct BuildReport {
     pub size_bytes: u64,
     pub out: PathBuf,
     pub plugins: Vec<PluginReport>,
+    /// The pack's UX plugins, by name.
+    pub ux: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +73,38 @@ pub fn build_pack(
     for plugin in &manifest.metadata.plugins {
         build_plugin(dir, &manifest, plugin, compiler)?;
     }
+    pack_directory(dir, &manifest, out)
+}
+
+/// Packs a directory whose plugins are already artifacts: prebuilt ones, or
+/// ones a compiler just produced.
+pub fn pack_built(dir: &Path, out: Option<&Path>) -> Result<BuildReport> {
+    let manifest = super::check::read_manifest(dir)?;
+    pack_directory(dir, &manifest, out)
+}
+
+/// A pack's plugins with `source`, which only a compiler turns into artifacts.
+pub fn plugins_with_source(manifest: &PackManifest) -> Vec<&str> {
+    manifest
+        .metadata
+        .plugins
+        .iter()
+        .filter(|plugin| plugin.source.is_some())
+        .map(|plugin| plugin.name.as_str())
+        .collect()
+}
+
+/// Where `pack_built` writes the pack of `dir` when given no output path.
+pub fn built_pack_path(dir: &Path, manifest: &PackManifest) -> PathBuf {
+    dir.parent().unwrap_or_else(|| Path::new(".")).join(
+        crate::pack::archive::format::pack_file_name(
+            &format!("{}/{}", manifest.metadata.namespace, manifest.name),
+            &manifest.version,
+        ),
+    )
+}
+
+fn pack_directory(dir: &Path, manifest: &PackManifest, out: Option<&Path>) -> Result<BuildReport> {
     // A file-produced UX plugin the webview would refuse never gets packed;
     // an .afb-produced one is linted when its producer runs.
     let refused: Vec<String> = crate::plugin::ux::lint_pack_dir(dir, &manifest.metadata.ux)?
@@ -138,6 +172,12 @@ pub fn build_pack(
                 name: plugin.name.clone(),
                 artifact: plugin.artifact.clone(),
             })
+            .collect(),
+        ux: manifest
+            .metadata
+            .ux
+            .iter()
+            .map(|page| page.name.clone())
             .collect(),
     })
 }

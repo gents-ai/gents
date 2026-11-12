@@ -310,6 +310,69 @@ pub async fn agent_tool_root_reader(
         .await
 }
 
+/// [`ToolRootReader`] for host tools run under `root`, read as `access`'s
+/// actor: what a pack's preview shows before any agent of it exists.
+pub async fn tool_root_reader(
+    access: &crate::store::config_client::ConfigAccess,
+    node_did: &str,
+    root: &str,
+) -> Result<ToolRootReader> {
+    access
+        .transact_readonly("workspace_root.tool_root", |txn| {
+            Box::pin(async move {
+                let policy = load_workspace_root_policy_in_txn(txn, None, node_did).await?;
+                if !policy.configured {
+                    return Ok(ToolRootReader::NotNeeded);
+                }
+                Ok(
+                    match published_root_covering_in_txn(txn, node_did, Path::new(root)).await? {
+                        Some(published) => ToolRootReader::Published(published),
+                        None => ToolRootReader::Unpublished(root.to_owned()),
+                    },
+                )
+            })
+        })
+        .await
+}
+
+/// Those of `agents` whose Tools select host tools under a published root,
+/// each with its Tools id, its tool root and the root it needs reader on, as `access`'s
+/// actor sees them: what the agents a pack ships need before they run. A User
+/// grants each with
+/// [`grant_workspace_root_reader`](super::grant_workspace_root_reader); an
+/// agent that installed the pack reports [`reader_grant_step`] instead.
+pub async fn agents_tool_root_readers(
+    access: &crate::store::config_client::ConfigAccess,
+    node_did: &str,
+    agents: &[String],
+) -> Result<Vec<(String, String, String, ToolRootReader)>> {
+    access
+        .transact_readonly("workspace_root.agents_tool_roots", |txn| {
+            Box::pin(async move {
+                let policy = load_workspace_root_policy_in_txn(txn, None, node_did).await?;
+                let mut readers = Vec::new();
+                for agent_did in agents {
+                    let Some(tools) =
+                        crate::documents::load_agent_tools_in_txn(txn, node_did, agent_did).await?
+                    else {
+                        continue;
+                    };
+                    let Some(root) = tools.host.as_ref().and_then(|host| host.root.clone()) else {
+                        continue;
+                    };
+                    match tools_root_reader_in_txn(txn, node_did, &policy, &tools).await? {
+                        ToolRootReader::NotNeeded => {}
+                        reader => {
+                            readers.push((agent_did.clone(), tools.tools_id.clone(), root, reader));
+                        }
+                    }
+                }
+                Ok(readers)
+            })
+        })
+        .await
+}
+
 /// The step a Node administrator takes so `agent_did` may run host tools under
 /// a published root. WorkspaceRoot `reader` is managed only by the Node's owner
 /// and administrators (`workspace_roots.reader_manager`), so an Agent creating

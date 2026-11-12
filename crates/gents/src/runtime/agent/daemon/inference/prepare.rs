@@ -328,6 +328,11 @@ where
         let (loop_history, loop_prompt) = self
             .request_frontier(preparation, &mut loop_config, &mut replay)
             .await?;
+        if lifecycle.resumed_from_backend() {
+            loop_config.initial_turn_index = loop_config
+                .initial_turn_index
+                .max(lifecycle.resumed_turn_index().await?);
+        }
         loop_config.replay = replay;
         Ok(PreparedInference {
             hook,

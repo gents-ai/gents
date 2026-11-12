@@ -1,9 +1,13 @@
+mod actions;
+mod approvals;
 mod connection;
 #[cfg(any(unix, windows))]
 pub mod local;
+pub mod permissions;
 pub mod protocol;
 #[cfg(any(unix, windows))]
 mod service;
+pub mod settings;
 
 #[cfg(any(unix, windows))]
 pub use service::ClientHostService;
@@ -28,6 +32,7 @@ pub struct ClientHost {
     installation_build: Option<String>,
     advertised_commands: Vec<String>,
     policy: ResolvedBridgePolicy,
+    pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
 }
 
 impl ClientHost {
@@ -89,6 +94,7 @@ impl ClientHost {
                 client_host: false,
                 store_key_custody: core.options().store_key_custody,
             },
+            pending_oauth_credentials: Arc::default(),
             core,
         }
     }
@@ -103,6 +109,7 @@ impl ClientHost {
     async fn execute(
         &self,
         command: ClientCommand,
+        approvals: &approvals::AttachmentApprovals,
         cancel: CancellationToken,
     ) -> Result<Value, BridgeError> {
         match command {
@@ -197,6 +204,234 @@ impl ClientHost {
             ClientCommand::ProviderUsageRead { request } => {
                 self.require_configured_runtime(&request.node_did).await?;
                 encode(crate::accounts::usage::read(&self.core, request).await?)
+            }
+            ClientCommand::AccountsList { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_observation_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Connect this local runtime before managing its accounts.")
+                    });
+                encode(
+                    crate::accounts::observe_provider_accounts(
+                        &self.pending_oauth_credentials,
+                        access,
+                        &request.node_did,
+                    )
+                    .await?,
+                )
+            }
+            ClientCommand::AccountSignIn { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let provider = crate::accounts::login::provider(request.method)?;
+                let signed = crate::accounts::login::sign_in(&self.pending_oauth_credentials,
+                    || self.core.operator_graphql(&request.node_did).map(gents::ConfigAccess::Graphql)
+                        .ok_or_else(|| anyhow::anyhow!("Connect this local runtime before managing its accounts.")),
+                    &request.node_did, request.method, provider, request.label.as_deref(), &cancel,
+                    async |url| crate::host_browser::open_url(url).await.map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
+                ).await?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account saved; its client observation is unavailable");
+                }
+                encode(crate::accounts::SignInView::from(&signed))
+            }
+            ClientCommand::AccountDisconnect { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        BridgeError::untyped(
+                            "Connect this local runtime before managing its accounts.",
+                        )
+                    })?;
+                gents::inference::auth::credential::set_account_enabled(
+                    &access,
+                    &request.node_did,
+                    &request.credential_id,
+                    false,
+                )
+                .await
+                .map_err(backend_error)?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account disconnected; its client observation is unavailable");
+                }
+                encode(())
+            }
+            ClientCommand::AccountRename { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        BridgeError::untyped(
+                            "Connect this local runtime before managing its accounts.",
+                        )
+                    })?;
+                gents::inference::auth::credential::set_account_label(
+                    &access,
+                    &request.node_did,
+                    &request.credential_id,
+                    &request.label,
+                )
+                .await
+                .map_err(backend_error)?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account renamed; its client observation is unavailable");
+                }
+                encode(())
+            }
+            ClientCommand::AccountRemove { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        BridgeError::untyped(
+                            "Connect this local runtime before managing its accounts.",
+                        )
+                    })?;
+                gents_server::accounts::remove_account(
+                    &access,
+                    &request.node_did,
+                    &request.credential_id,
+                    None,
+                    true,
+                )
+                .await
+                .map_err(backend_error)?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account removed; its client observation is unavailable");
+                }
+                encode(())
+            }
+            ClientCommand::AccountRetrySave { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Connect this local runtime before managing its accounts.")
+                    });
+                let credential = crate::accounts::retry_pending_credential(
+                    &self.pending_oauth_credentials,
+                    access,
+                    &request.node_did,
+                    &request.provider,
+                )
+                .await?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account saved; its client observation is unavailable");
+                }
+                encode(crate::accounts::ProviderAccountView::from(&credential))
+            }
+            ClientCommand::ConfigCatalog { node_did } => {
+                self.require_configured_runtime(&node_did).await?;
+                encode(
+                    settings::catalog(&self.core, &node_did)
+                        .await
+                        .map_err(backend_error)?,
+                )
+            }
+            ClientCommand::ConfigRead {
+                node_did,
+                collection,
+                id,
+            } => {
+                self.require_configured_runtime(&node_did).await?;
+                let target = settings::target(&collection).map_err(backend_error)?;
+                encode(
+                    self.core
+                        .read_config_editor(&node_did, target, &id)
+                        .await
+                        .map_err(backend_error)?,
+                )
+            }
+            ClientCommand::ConfigSave {
+                node_did,
+                collection,
+                id,
+                revision,
+                content,
+            } => {
+                self.require_configured_runtime(&node_did).await?;
+                let target = settings::target(&collection).map_err(backend_error)?;
+                encode(
+                    self.core
+                        .save_config_editor(&node_did, target, &id, &revision, &content)
+                        .await
+                        .map_err(backend_error)?,
+                )
+            }
+            ClientCommand::ActionCatalog { node_did } => {
+                self.require_configured_runtime(&node_did).await?;
+                encode(
+                    actions::catalog(&self.core, &node_did)
+                        .await
+                        .map_err(backend_error)?,
+                )
+            }
+            ClientCommand::StartTask {
+                node_did,
+                task_id,
+                arguments_json,
+            } => {
+                self.require_configured_runtime(&node_did).await?;
+                if arguments_json.len() > 64 * 1024 {
+                    return Err(BridgeError::new(
+                        BridgeErrorCode::InvalidArgument,
+                        "Task arguments exceed 64 KiB.",
+                    ));
+                }
+                let args = serde_json::from_str(&arguments_json).map_err(|_| {
+                    BridgeError::new(
+                        BridgeErrorCode::InvalidArgument,
+                        "Enter valid JSON task arguments.",
+                    )
+                })?;
+                let result = crate::commands::run_task_config(
+                    &self.core,
+                    crate::types::TaskRunRequest {
+                        node_did: Some(node_did),
+                        task_id,
+                        args: Some(args),
+                    },
+                )
+                .await
+                .map_err(backend_error)?;
+                encode(crate::types::ChatSendResult {
+                    session_id: result.session_id,
+                    request_id: result.request_id,
+                    node_did: result.node_did,
+                    agent_did: Some(result.agent_did),
+                })
+            }
+            ClientCommand::RunSchedule {
+                node_did,
+                schedule_id,
+            } => {
+                self.require_configured_runtime(&node_did).await?;
+                let result = crate::commands::run_schedule_config(
+                    &self.core,
+                    crate::types::ScheduleRunRequest {
+                        node_did: Some(node_did),
+                        schedule_id,
+                    },
+                )
+                .await
+                .map_err(backend_error)?;
+                encode(crate::types::ChatSendResult {
+                    session_id: result.session_id,
+                    request_id: result.request_id,
+                    node_did: result.node_did,
+                    agent_did: Some(result.agent_did),
+                })
             }
             ClientCommand::SessionFileInventory {
                 node_did,
@@ -331,6 +566,37 @@ impl ClientHost {
                 )
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
+                encode(())
+            }
+            ClientCommand::WorkspacePermissionsForgetCommands { request } => {
+                encode(permissions::forget_commands(&self.core, request).await?)
+            }
+            ClientCommand::WorkspacePermissionsSave { request } => {
+                encode(permissions::save(&self.core, request).await?)
+            }
+            ClientCommand::WorkspacePermissions { request } => {
+                encode(permissions::state(&self.core, request).await?)
+            }
+            ClientCommand::ApprovalSubscribe { node_did, token } => {
+                approvals.subscribe(&self.core, &node_did, &token).await?;
+                encode(())
+            }
+            ClientCommand::ApprovalUnsubscribe { token } => {
+                approvals.unsubscribe(&token);
+                encode(())
+            }
+            ClientCommand::ApprovalPending { node_did, token } => {
+                encode(approvals.pending(&self.core, &node_did, &token).await?)
+            }
+            ClientCommand::ApprovalDecide {
+                node_did,
+                token,
+                id,
+                decision,
+            } => {
+                approvals
+                    .decide(&self.core, &node_did, &token, &id, &decision)
+                    .await?;
                 encode(())
             }
             ClientCommand::Snapshot {} => encode(

@@ -106,13 +106,14 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 <p className="text-sm" data-testid="incompatible-home-unsafe-key">
                   This home&apos;s keys were created by an older Gents version with
                   unsafe file permissions, so other users on this computer could read
-                  them. 0.19 does not use a key that may have been exposed; start fresh
-                  with a new identity.
+                  them. This release does not use a key that may have been exposed;
+                  start fresh with a new identity.
                 </p>
               ) : older ? (
                 <p className="text-sm">
-                  This home was created by an older Gents version. 0.19 is a breaking
-                  release and can&apos;t open it.
+                  This home was created by an older Gents version (v1.0.0-rc1 or
+                  earlier). This release can&apos;t open or convert it. Back it up or
+                  delete it to start fresh; nothing is carried over.
                 </p>
               ) : (
                 <p

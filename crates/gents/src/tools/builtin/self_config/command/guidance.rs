@@ -38,7 +38,7 @@ fn missing_reference_next_step(
     if missing.target == crate::Collection::Skill {
         return format!("Skill {id:?} does not exist yet; create it with skill create or import it with skill import, then attach its ID with context update set.skill_ids.");
     }
-    format!("{target} {id:?} does not exist yet; create it with its own resource command first, or reference an existing ID.")
+    format!("{target} {id:?} is not among the documents you can read. Either it does not exist yet (create it with its own resource command first, or reference an existing ID), or another identity created it and you have no read access: a pack the node's User installed with the CLI leaves documents only the User reads, so list what you can read and ask the User to grant access or to let you install the pack yourself with pack install.")
 }
 
 impl ConfigCommandTool {

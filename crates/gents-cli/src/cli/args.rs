@@ -250,6 +250,8 @@ pub(crate) enum Command {
     },
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
+    #[command(name = "__plugin-build", hide = true)]
+    PluginBuild(SandboxedPluginBuildArgs),
     /// Write the CLI and configuration reference bundle for this build.
     #[command(name = "__docs-bundle", hide = true)]
     DocsBundle(DocsBundleArgs),

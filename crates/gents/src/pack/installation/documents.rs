@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::documents::PackConfig;
 use crate::pack::archive::PackArchive;
 use crate::store::config_client::{ConfigAccess, SchemaInstallPlan};
+use crate::tools::{
+    background::job::settings::pack_job_block_admissible, surface::ResolvedToolSelection,
+};
 
 use super::super::home_install::materialize_asset_pack;
 use super::super::{
@@ -42,6 +45,46 @@ pub fn document_pack_schema_paths(manifest: &super::super::PackManifest) -> Resu
         );
     }
     Ok(sdl_paths(manifest).into_iter().collect())
+}
+
+/// The collections the SDL of the stored pack `digest` declares.
+pub(crate) fn declared_collections(
+    home: &Path,
+    digest: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    archive_declared_collections(&crate::pack::store::PackStore::new(home).open(digest)?)
+}
+
+fn archive_declared_collections(
+    archive: &PackArchive,
+) -> Result<std::collections::BTreeSet<String>> {
+    let mut declared = std::collections::BTreeSet::new();
+    for path in sdl_paths(archive.manifest()) {
+        let sdl = std::str::from_utf8(archive.asset(path)?)
+            .with_context(|| format!("pack schema {path:?} is not UTF-8"))?;
+        declared.extend(query::parse_sdl(sdl)?.into_iter().map(|schema| schema.name));
+    }
+    Ok(declared)
+}
+
+/// The collections `archive`'s SDL declares that are not on the node yet:
+/// the ones installing it creates. Read before the install applies its
+/// schemas and kept in the pack's home record, it is what later tells a
+/// collection the pack brought from one it found
+/// ([`HomePackInstall::created_collections`]).
+pub async fn collections_install_creates(
+    access: &ConfigAccess,
+    archive: &PackArchive,
+) -> Result<Vec<String>> {
+    // One read per declared collection, the read the schema preview makes:
+    // an installer needs no wider collection permission for this.
+    let mut created = Vec::new();
+    for collection in archive_declared_collections(archive)? {
+        if access.collection_version(&collection).await?.is_none() {
+            created.push(collection);
+        }
+    }
+    Ok(created)
 }
 
 /// The fields of a declared collection and the field sets of its unique
@@ -336,12 +379,8 @@ pub(super) fn installed_dependency_bindings(
     Ok(bindings)
 }
 
-pub(super) fn document_ux_install_allowed(
-    has_ux: bool,
-    has_home: bool,
-    installed_via: InstalledVia,
-) -> bool {
-    !has_ux || (has_home && installed_via == InstalledVia::Operator)
+pub(super) fn document_ux_install_allowed(has_ux: bool, has_home: bool) -> bool {
+    !has_ux || has_home
 }
 
 pub(super) fn require_installed_dependency_ux(
@@ -353,13 +392,14 @@ pub(super) fn require_installed_dependency_ux(
         return Ok(());
     }
     let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
-    let home = home.context(
-        "a dependency with UX must first be installed by the operator in the node's local home",
-    )?;
+    let home =
+        home.context("a dependency with UX must first be installed in the node's local home")?;
     let record = super::super::read_home_install(home, &coordinate)?
-        .context("a dependency with UX must first be installed by the operator")?;
-    anyhow::ensure!(record.digest == digest && record.installed_via == Some(InstalledVia::Operator),
-        "dependency {coordinate} with UX must first be installed explicitly by the operator at the same digest");
+        .context("a dependency with UX must first be installed")?;
+    anyhow::ensure!(
+        record.digest == digest,
+        "dependency {coordinate} with UX must first be installed explicitly at the same digest"
+    );
     Ok(())
 }
 
@@ -415,6 +455,7 @@ pub async fn prepare_document_pack_install(
         requested,
         dependencies,
         installed_via,
+        installed_via,
         plugin_home,
         root_archive,
         environment,
@@ -447,6 +488,7 @@ pub async fn prepare_document_pack_archive(
         requested,
         dependencies,
         installed_via,
+        false,
         plugin_home,
         environment,
         None,
@@ -510,6 +552,7 @@ pub async fn prepare_document_pack_archive_with_runtime(
         requested,
         dependencies,
         InstalledVia::Operator,
+        false,
         plugin_home,
         environment,
         Some(&provisioner),
@@ -529,6 +572,7 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
     requested: &PackInferenceBindings,
     dependencies: &[&PackArchive],
     installed_via: InstalledVia,
+    grant_authority: bool,
     plugin_home: Option<&Path>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
@@ -541,6 +585,7 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
         requested,
         dependencies,
         installed_via,
+        grant_authority,
         plugin_home,
         environment,
         provisioner,
@@ -591,6 +636,7 @@ pub async fn prepare_hosted_document_pack_archive(
         requested,
         dependencies,
         InstalledVia::Operator,
+        false,
         None,
         environment,
         None,
@@ -612,12 +658,16 @@ async fn prepare_document_pack_archive_inputs(
     requested: &PackInferenceBindings,
     dependencies: &[&PackArchive],
     installed_via: InstalledVia,
+    grant_authority: bool,
     plugin_home: Option<&Path>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
     hosted: Option<&HostedPackPreparation>,
     overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall, PackChangeError> {
+    for archive in std::iter::once(archive).chain(dependencies.iter().copied()) {
+        refuse_authored_host_roots(archive)?;
+    }
     let declared = super::super::agent_bindings::declared_dependencies(archive.manifest());
     validate_dependency_overrides(dependencies, overrides)?;
     let mut preloaded = BTreeMap::new();
@@ -676,6 +726,14 @@ async fn prepare_document_pack_archive_inputs(
     )
     .await?;
     let root = root.with_variables(captured.into_inner().unwrap_or_else(|e| e.into_inner()));
+    let mut config = loaded.config;
+    default_host_tool_roots(
+        access,
+        owner,
+        provisioner.and_then(|context| context.selected_agent_did),
+        &mut config,
+    )
+    .await?;
     prepare_document_pack_install_inner(
         loaded.installation_doc_id,
         loaded.agent_bindings,
@@ -684,10 +742,11 @@ async fn prepare_document_pack_archive_inputs(
         access,
         owner,
         archive.manifest(),
-        &loaded.config,
+        &config,
         requested,
         dependencies,
         installed_via,
+        super::super::installer_provenance(installed_via, grant_authority),
         plugin_home,
         Some(archive),
         environment,
@@ -696,6 +755,139 @@ async fn prepare_document_pack_archive_inputs(
         overrides,
     )
     .await
+}
+
+/// The Tools of `tools` that select host tools and name no root: the ones an
+/// install runs under its installer's root ([`installer_tool_root`]), by
+/// position.
+fn host_tools_without_root(tools: &[crate::documents::Tools]) -> Result<Vec<usize>> {
+    let mut rootless = Vec::new();
+    for (index, tools) in tools.iter().enumerate() {
+        let unset = tools.host.as_ref().is_some_and(|host| {
+            host.root
+                .as_deref()
+                .is_none_or(|root| root.trim().is_empty())
+        });
+        if unset && ResolvedToolSelection::from_document(tools)?.requires_filesystem_root() {
+            rootless.push(index);
+        }
+    }
+    Ok(rootless)
+}
+
+/// The Tools documents an install of the authored `tools` would run under
+/// its installer's root, by `tools_id`: what an install preview lists and
+/// an approval covers before anything is written.
+pub fn tools_taking_installer_root(tools: &[crate::documents::Tools]) -> Result<Vec<String>> {
+    Ok(host_tools_without_root(tools)?
+        .into_iter()
+        .map(|index| tools[index].tools_id.clone())
+        .collect())
+}
+
+/// Refuses an archive whose Tools author a literal `host.root`, as
+/// `pack export` refuses to write one: a pack cannot know a folder of the
+/// node it is installed on, so a literal names one its author chose, and the
+/// agent it ships would ask for the User's reader grant there. A root given
+/// only through an install variable is the installer's to set, is listed with
+/// the preview's install variables, and is never granted automatically.
+fn refuse_authored_host_roots(archive: &PackArchive) -> Result<()> {
+    let Some(path) = archive.manifest().config.as_deref() else {
+        return Ok(());
+    };
+    let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
+    let literal: Vec<String> = authored["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tools| {
+            let root = tools["host"]["root"].as_str()?.trim();
+            (!root.is_empty() && !root.contains("${")).then(|| {
+                format!(
+                    "Tools {} (host.root {root})",
+                    tools["tools_id"].as_str().unwrap_or("without a tools_id")
+                )
+            })
+        })
+        .collect();
+    anyhow::ensure!(
+        literal.is_empty(),
+        "pack {}/{} ships a host tool root, a path on the node it was written on, which a pack cannot carry: {}. Nothing was installed. Its author leaves host.root unset, so the Tools run under the installer's own root",
+        archive.manifest().metadata.namespace,
+        archive.manifest().name,
+        literal.join(", ")
+    );
+    Ok(())
+}
+
+/// The root an install supplies to pack Tools that select host tools without
+/// one: the tool root of the installing agent `installer`, or of the node's
+/// default agent when the node's User installs. `None` when that agent has no
+/// root.
+pub async fn installer_tool_root(
+    access: &ConfigAccess,
+    owner: &str,
+    installer: Option<&str>,
+) -> Result<Option<String>> {
+    access
+        .transact_readonly("pack.default_tool_root", |txn| {
+            Box::pin(async move {
+                let agent = match installer {
+                    Some(agent) => Some(agent.to_owned()),
+                    None => crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Node,
+                        owner,
+                        owner,
+                    )
+                    .await?
+                    .and_then(|(_, node)| {
+                        node.get("default_agent_did")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToOwned::to_owned)
+                    }),
+                };
+                let Some(agent) = agent else {
+                    return Ok::<_, anyhow::Error>(None);
+                };
+                Ok(
+                    crate::documents::load_agent_tools_in_txn(txn, owner, &agent)
+                        .await?
+                        .and_then(|tools| tools.host)
+                        .and_then(|host| host.root)
+                        .filter(|root| !root.trim().is_empty()),
+                )
+            })
+        })
+        .await
+}
+
+/// A pack cannot name a folder on the node it will be installed on, so a pack
+/// Tools document that selects host tools without a root takes its
+/// installer's ([`installer_tool_root`]). The root is still admitted by the
+/// node's WorkspaceRoot policy when the agent runs, and the agent still needs
+/// the User's reader grant on the published root that covers it
+/// (`tools::surface::agents_tool_root_readers`), which an approved install
+/// makes for this root alone. With no such root to take, the document is left
+/// as the pack wrote it.
+async fn default_host_tool_roots(
+    access: &ConfigAccess,
+    owner: &str,
+    installer: Option<&str>,
+    config: &mut PackConfig,
+) -> Result<()> {
+    let rootless = host_tools_without_root(&config.tools)?;
+    if rootless.is_empty() {
+        return Ok(());
+    }
+    if let Some(root) = installer_tool_root(access, owner, installer).await? {
+        for index in rootless {
+            if let Some(host) = config.tools[index].host.as_mut() {
+                host.root = Some(root.clone());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The installed root's live configuration, read before an upgrade so the
@@ -837,11 +1029,15 @@ async fn load_dependency(
             reconfigure: false,
         });
     }
+    let installer = bindings
+        .provisioner
+        .and_then(|context| context.selected_agent_did);
+    let environment = super::super::agent_bindings::without_agent_bindings(environment);
     let resolver = super::super::loader::DependencyVariableResolver::new(
         record.doc_id.is_some(),
         &record.variables,
         selected,
-        environment,
+        &environment,
     );
     let bound = super::super::agent_bindings::load_pack_install_config_with_dependencies(
         access,
@@ -858,7 +1054,10 @@ async fn load_dependency(
     let variables = resolver
         .finish()
         .with_context(|| format!("preparing dependency {coordinate}"))?;
-    let bound = bound?;
+    let mut bound = bound?;
+    // A dependency rendered from its archive is installed by this install,
+    // so its rootless host tools take the installer's root as the root's do.
+    default_host_tool_roots(access, owner, installer, &mut bound.config).await?;
     Ok(LoadedDependency {
         bound,
         reconfigure: selected.is_some() && snapshot.is_some(),
@@ -885,6 +1084,7 @@ async fn prepare_document_pack_install_inner(
     requested: &PackInferenceBindings,
     dependencies: &[&PackArchive],
     installed_via: InstalledVia,
+    recorded_via: InstalledVia,
     plugin_home: Option<&Path>,
     root_archive: Option<&PackArchive>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -904,10 +1104,9 @@ async fn prepare_document_pack_install_inner(
     if !document_ux_install_allowed(
         !manifest.metadata.ux.is_empty(),
         plugin_home.is_some() || hosted.is_some(),
-        installed_via,
     ) {
         return Err(anyhow::anyhow!(
-            "document packs with UX require an operator install with the node's local home"
+            "document packs with UX need the node's local home, where the desktop reads their pages"
         )
         .into());
     }
@@ -1112,12 +1311,12 @@ async fn prepare_document_pack_install_inner(
         )
         .collect();
     for tools in &config.tools {
-        crate::tools::background::job::settings::pack_job_block_admissible(
+        pack_job_block_admissible(
             tools,
             &manifest.metadata,
             &coordinate,
             &shipped,
-            installed_via,
+            recorded_via,
         )?;
     }
     let mut shipped_digests = BTreeMap::new();
@@ -1309,10 +1508,9 @@ pub async fn install_prepared_document_pack(
     anyhow::ensure!(
         document_ux_install_allowed(
             !archive.manifest().metadata.ux.is_empty(),
-            plugin_home.is_some(),
-            installed_via
+            plugin_home.is_some()
         ),
-        "document packs with UX require an operator install with the node's local home"
+        "document packs with UX need the node's local home, where the desktop reads their pages"
     );
     for dependency in &prepared.dependencies {
         require_installed_dependency_ux(&dependency.manifest, &dependency.digest, plugin_home)?;
@@ -1368,6 +1566,7 @@ pub async fn install_prepared_document_pack(
             leases.push(lease);
         }
     }
+    let created_collections = collections_install_creates(access, archive).await?;
     apply_prepared_dependency_schemas(access, prepared).await?;
     let mut schemas = Vec::new();
     for path in document_pack_schema_paths(archive.manifest())? {
@@ -1427,13 +1626,25 @@ pub async fn install_prepared_document_pack(
             home,
             archive.manifest(),
             &identity,
-            assets,
-            dependency_assets,
-            installed_via,
+            HomeInstallContents {
+                assets,
+                dependency_assets,
+                created_collections,
+            },
+            super::super::installer_provenance(installed_via, grant_authority),
             true,
         )?;
     }
     Ok(report)
+}
+
+/// What one install left in the home: its asset root, its dependencies' asset
+/// roots, and the collections it created.
+#[derive(Default)]
+pub(super) struct HomeInstallContents {
+    pub assets: String,
+    pub dependency_assets: Vec<(String, String)>,
+    pub created_collections: Vec<String>,
 }
 
 /// Writes the home record of an install through
@@ -1443,11 +1654,15 @@ pub(super) fn record_home_install(
     home: &Path,
     manifest: &super::super::PackManifest,
     identity: &PackIdentity,
-    assets: String,
-    dependency_assets: Vec<(String, String)>,
+    contents: HomeInstallContents,
     installed_via: InstalledVia,
     explicit: bool,
 ) -> Result<()> {
+    let HomeInstallContents {
+        assets,
+        dependency_assets,
+        created_collections,
+    } = contents;
     super::super::record_after_install(
         home,
         HomePackInstall {
@@ -1463,6 +1678,7 @@ pub(super) fn record_home_install(
             installed_via: Some(installed_via),
             source: None,
             source_history: Vec::new(),
+            created_collections,
         },
         installed_via,
         explicit,
