@@ -187,7 +187,6 @@ mod tests {
     #[test]
     fn generated_intent_cases_match_current_generation_projection() {
         use chrono::{SecondsFormat, TimeZone};
-        use serde_json::Value;
         let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_renewal_intent_cases;
         let timestamp = |seconds: i64| {
             Utc.timestamp_opt(1_800_000_000 + seconds, 0)
@@ -197,28 +196,25 @@ mod tests {
         };
         let mut checked = 0;
         for case in cases {
-            let current = &case["current"];
-            let input = &case["intent"];
-            let text = |v: &Value, key: &str| v[key].as_str().unwrap().to_owned();
-            let number = |v: &Value, key: &str| v[key].as_i64().unwrap();
-            let model_now = number(case, "now");
+            let current = &case.current;
+            let input = &case.intent;
+            let model_now = case.now as i64;
             let now_seconds = model_now * 30;
             let now = Utc
                 .timestamp_opt(1_800_000_000 + now_seconds, 0)
                 .single()
                 .unwrap();
-            let expires = now_seconds + (number(current, "expires_at") - model_now) * 60_480;
-            let mut active =
-                active_enrollment(number(current, "sequence") as u64, &timestamp(expires));
-            active.request.network_id = text(current, "network");
-            active.request.candidate_did = text(current, "member");
-            active.request.candidate_peer = text(current, "peer");
-            let mut state = projection(if current["revoked"].as_bool().unwrap() {
+            let expires = now_seconds + (current.expires_at as i64 - model_now) * 60_480;
+            let mut active = active_enrollment(current.sequence, &timestamp(expires));
+            active.request.network_id = current.network.clone();
+            active.request.candidate_did = current.member.clone();
+            active.request.candidate_peer = current.peer.clone();
+            let mut state = projection(if current.revoked {
                 Vec::new()
             } else {
                 vec![active.clone()]
             });
-            if current["conflict"].as_bool().unwrap() {
+            if current.conflict {
                 state.conflict = Some("conflict".into());
             }
             state.next_authorization_sequences.insert(
@@ -226,25 +222,25 @@ mod tests {
                     active.request.network_id.clone(),
                     active.request.candidate_did.clone(),
                 ),
-                number(current, "next_sequence") as u64,
+                current.next_sequence,
             );
             let intent = gents_protocol::enrollment::RenewalIntent {
-                network_id: text(input, "network"),
+                network_id: input.network.clone(),
                 admin_did: active.request.admin_did.clone(),
                 server_peer: active.request.server_peer.clone(),
-                member_did: text(input, "member"),
-                member_peer: text(input, "peer"),
-                predecessor_sequence: number(input, "predecessor_sequence") as u64,
-                issued_at: timestamp(number(input, "issued_at") * 30),
-                expires_at: timestamp(number(input, "expires_at") * 30),
+                member_did: input.member.clone(),
+                member_peer: input.peer.clone(),
+                predecessor_sequence: input.predecessor_sequence,
+                issued_at: timestamp(input.issued_at as i64 * 30),
+                expires_at: timestamp(input.expires_at as i64 * 30),
                 nonce: "generated".into(),
                 member_sig: vec![1; 64],
             };
             assert_eq!(
                 state.current_for_renewal_intent(&intent, now).is_ok(),
-                case["projection_allowed"].as_bool().unwrap(),
+                case.projection_allowed,
                 "{}",
-                text(case, "name")
+                case.name
             );
             checked += 1;
         }

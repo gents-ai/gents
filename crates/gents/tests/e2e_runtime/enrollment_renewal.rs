@@ -66,17 +66,13 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
     };
 
-    let snapshot: serde_json::Value =
-        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
     let modeled = |name: &str| {
-        snapshot["enrollment_renewal_intent_cases"]
-            .as_array()
-            .unwrap()
+        gents_lean_vocab::lean_contract_snapshot()
+            .enrollment_renewal_intent_cases
             .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()["allowed"]
-            .as_bool()
+            .find(|case| case.name == name)
             .unwrap()
+            .allowed
     };
     let server = support::test_p2p_db("automatic-renewal-server").await;
     let member = support::test_p2p_db("automatic-renewal-member").await;
