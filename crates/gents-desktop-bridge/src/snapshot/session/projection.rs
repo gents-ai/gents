@@ -2272,3 +2272,7 @@ mod fork_input_tests;
 #[cfg(test)]
 #[path = "background_origin_tests.rs"]
 mod background_origin_tests;
+
+#[cfg(test)]
+#[path = "background_completion_live_tests.rs"]
+mod background_completion_live_tests;
