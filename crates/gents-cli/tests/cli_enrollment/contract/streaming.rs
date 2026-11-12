@@ -99,6 +99,12 @@ pub(super) async fn wait_for_visible_content(
     emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
     visibility_budget: Duration,
 ) -> Result<()> {
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(
+        &access,
+        &["AgentRequest", "AgentMessage", "AgentOutputSegment"],
+    )
+    .await;
     let (started, deadline) = emission_deadline(emission, visibility_budget).await?;
     tracing::info!(
         request,
@@ -120,7 +126,7 @@ pub(super) async fn wait_for_visible_content(
                 );
                 return Ok::<_, anyhow::Error>(());
             }
-            sleep(Duration::from_millis(20)).await;
+            observe_change_until(&mut changes, deadline).await;
         }
     })
     .await

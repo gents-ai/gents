@@ -80,7 +80,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
     let default_agent = agent_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let (mut server, _) =
+    let (server, _) =
         spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &owner_env)?;
     let (bindings, owned, root_doc, target_agent_doc, user_did) = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;

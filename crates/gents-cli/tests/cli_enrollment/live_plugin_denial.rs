@@ -215,8 +215,7 @@ async fn live_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Result<()
     let args = prepare_pack(&pack, &parcel)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let (mut server, _) =
-        spawn_server_with_ready_json(&home, port, &["--home", home_arg], &owner_env)?;
+    let (server, _) = spawn_server_with_ready_json(&home, port, &["--home", home_arg], &owner_env)?;
     server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
         run_cli_json_with_env(&home, &["config", "pack", "install", pack.to_str().context("pack path UTF-8")?, "--home", home_arg, "--graphql", &graphql], &owner_env)?;

@@ -651,7 +651,6 @@ async fn wait_for_runtime_reply(
             .duration_since(visibility_started)
             .as_millis(),
         observer_minus_terminal_database_us,
-        database_probe_interval_ms = DATABASE_PROBE_INTERVAL.as_millis(),
         "independently observed local database and app projection visibility",
     );
     anyhow::ensure!(
@@ -1215,8 +1214,7 @@ async fn run_live_contract(readiness_revisions: usize) -> Result<()> {
     let agent = agent_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let (mut server, _) =
-        spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &[])?;
+    let (server, _) = spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &[])?;
     let result = server
         .capturing(async {
             wait_for_runtime_ready(&graphql, &node_did, ENROLL_BUDGET).await?;

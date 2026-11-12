@@ -44,7 +44,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
     let default_agent = agent_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let (mut server, _) =
+    let (server, _) =
         spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &owner_env)?;
 
     let (bindings, requests, client_did) = server
