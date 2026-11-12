@@ -3,33 +3,37 @@ use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_session::workspace::WorkspaceBindingDoc;
-use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 use serde_json::Value;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
-enum RejectionOwner {
+pub enum RejectionOwner {
     FreshAdmission,
     ClaimAdmission,
 }
 
-pub(crate) struct Fixture {
-    pub(crate) node: Arc<defra_node::Node>,
-    pub(crate) request: gents_protocol::row::AgentRequest,
-    pub(crate) binding: WorkspaceBindingDoc,
-    pub(crate) access: ConfigAccess,
-    agent: Arc<dyn NodeIdentity>,
-    _workspace_dir: tempfile::TempDir,
-    _home: crate::support::TestDb,
+pub struct Fixture {
+    pub node: Arc<defra_node::Node>,
+    pub request: gents_protocol::row::AgentRequest,
+    pub binding: WorkspaceBindingDoc,
+    pub access: ConfigAccess,
+    pub agent: Arc<dyn NodeIdentity>,
+    pub _workspace_dir: tempfile::TempDir,
+    pub _home: gents_inference::test_support::TestDb,
 }
 
 impl Fixture {
-    pub(crate) async fn new() -> Self {
-        let db = crate::support::test_db("workspace-rejection").await;
+    pub async fn new() -> Self {
+        let db = gents_inference::test_support::test_db(
+            "workspace-rejection",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
         let (home, user, user_access, binding) =
-            crate::test_support::root::signed_test_node_from_db(db, "workspace-rejection-user")
+            gents_inference::test_support::signed_test_node_from_db(db, "workspace-rejection-user")
                 .await;
         let node = home.node.clone();
         let identity = home.node_identity.clone();
@@ -156,17 +160,16 @@ impl Fixture {
         create.workspace_id = Some("cleanup-workspace".to_string());
         create.workspace_owner_node_did = Some(identity.did().to_string());
         create.workspace_authority = Some("readWrite".to_string());
-        let lifecycle =
-            gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-                &node,
-                &user_access,
-                identity.clone(),
-                &user,
-                agent.as_ref(),
-                create,
-            )
-            .await
-            .expect("publish an authorized User request before workspace rejection");
+        let lifecycle = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &user_access,
+            identity.clone(),
+            &user,
+            agent.as_ref(),
+            create,
+        )
+        .await
+        .expect("publish an authorized User request before workspace rejection");
         let request = lifecycle.request().clone();
         let doc_id = request.doc_id.clone();
         let binding = WorkspaceBindingDoc {
@@ -193,7 +196,7 @@ impl Fixture {
         fixture
     }
 
-    pub(crate) async fn write_binding(&self, binding: &WorkspaceBindingDoc) {
+    pub async fn write_binding(&self, binding: &WorkspaceBindingDoc) {
         self.access
             .transact_write("test.workspace_rejection_binding", |txn| {
                 Box::pin(async move {
@@ -228,7 +231,7 @@ impl Fixture {
             .unwrap();
     }
 
-    pub(crate) fn lifecycle(&self) -> gents_session::request::lifecycle::RequestLifecycle {
+    pub fn lifecycle(&self) -> gents_session::request::lifecycle::RequestLifecycle {
         let mut lifecycle =
             gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
                 self.node.clone(),
@@ -241,7 +244,7 @@ impl Fixture {
         lifecycle
     }
 
-    async fn rejection_outcome(
+    pub async fn rejection_outcome(
         &self,
         doc_id: &str,
     ) -> Result<gents_session::request::admission::PendingRejectionOutcome> {
@@ -259,7 +262,7 @@ impl Fixture {
         )
     }
 
-    async fn reject(&self, owner: RejectionOwner) -> Result<()> {
+    pub async fn reject(&self, owner: RejectionOwner) -> Result<()> {
         match owner {
             RejectionOwner::FreshAdmission => {
                 gents_session::request::admission::terminalize_pending_request_rejection(
@@ -283,7 +286,7 @@ impl Fixture {
         }
     }
 
-    pub(crate) async fn observe(&self) -> Value {
+    pub async fn observe(&self) -> Value {
         let doc_id = escape_graphql_string(&self.request.doc_id);
         self.access.execute(
             &format!(r#"{{
@@ -295,233 +298,4 @@ impl Fixture {
         .unwrap()
         ["data"].clone()
     }
-}
-
-#[tokio::test]
-async fn malformed_pending_request_still_rejects_without_cleanup_provenance() {
-    for field in ["request_id", "workspace_id", "workspace_owner_node_did"] {
-        let mut fixture = Fixture::new().await;
-        fixture.request.request_id = "malformed-workspace-request".to_string();
-        let mut input = serde_json::json!({
-            "request_id": fixture.request.request_id,
-            "node_did": fixture.request.node_did,
-            "agent_did": fixture.request.agent_did,
-            "purpose": "normal",
-            "lifecycle_state": "pending",
-            "workspace_id": fixture.binding.workspace_id,
-            "workspace_owner_node_did": fixture.binding.owner_node_did,
-        });
-        input[field] = Value::Null;
-        let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
-        let created = fixture
-            .access
-            .write(
-                "test.malformed_workspace_rejection",
-                &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
-            )
-            .await
-            .unwrap();
-        fixture.request.doc_id =
-            gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-        fixture.binding.binding_id = "malformed-binding".to_string();
-        fixture.binding.request_id = fixture.request.request_id.clone();
-        fixture.binding.request_doc_id = fixture.request.doc_id.clone();
-        fixture.write_binding(&fixture.binding).await;
-        fixture
-            .reject(RejectionOwner::FreshAdmission)
-            .await
-            .unwrap();
-        let observed = fixture.observe().await;
-        assert_eq!(
-            observed["AgentRequest"][0]["lifecycle_state"], "failed",
-            "missing {field}"
-        );
-        assert!(
-            observed["WorkspaceBinding"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|binding| binding["lifecycle_state"] == "active"),
-            "missing {field}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn pending_rejection_releases_only_its_exact_binding_and_only_once() {
-    for owner in [
-        RejectionOwner::FreshAdmission,
-        RejectionOwner::ClaimAdmission,
-    ] {
-        let fixture = Fixture::new().await;
-        for field in ["workspace", "node", "logical_request", "physical_request"] {
-            let mut foreign = fixture.binding.clone();
-            foreign.binding_id = format!("foreign-{field}");
-            match field {
-                "workspace" => foreign.workspace_id.push_str("-other"),
-                "node" => foreign.owner_node_did.push_str("-other"),
-                "logical_request" => foreign.request_id.push_str("-other"),
-                "physical_request" => foreign.request_doc_id.push_str("-other"),
-                _ => unreachable!(),
-            }
-            fixture.write_binding(&foreign).await;
-        }
-        fixture.reject(owner).await.unwrap();
-        let observed = fixture.observe().await;
-        assert_eq!(
-            observed["AgentRequest"][0]["lifecycle_state"], "failed",
-            "{owner:?}"
-        );
-        for binding in observed["WorkspaceBinding"].as_array().unwrap() {
-            assert_eq!(
-                binding["lifecycle_state"],
-                if binding["binding_id"] == "exact-binding" {
-                    "released"
-                } else {
-                    "active"
-                },
-                "{owner:?}: {binding}",
-            );
-        }
-
-        fixture.write_binding(&fixture.binding).await;
-        let before_replay = fixture.observe().await;
-        fixture.reject(owner).await.unwrap();
-        assert_eq!(fixture.observe().await, before_replay, "{owner:?}");
-    }
-}
-
-#[tokio::test]
-async fn pending_rejection_and_binding_release_roll_back_together() {
-    for owner in [
-        RejectionOwner::FreshAdmission,
-        RejectionOwner::ClaimAdmission,
-    ] {
-        let fixture = Fixture::new().await;
-        let (_, mutations) = ConfigApplyTxn::assert_every_mutation_rolls_back(
-            || fixture.reject(owner),
-            || fixture.observe(),
-        )
-        .await;
-        assert!(
-            mutations >= 2,
-            "{owner:?}: terminal and binding must share the transaction"
-        );
-        let observed = fixture.observe().await;
-        assert_eq!(observed["AgentRequest"][0]["lifecycle_state"], "failed");
-        assert_eq!(
-            observed["WorkspaceBinding"][0]["lifecycle_state"],
-            "released"
-        );
-    }
-}
-
-#[tokio::test]
-async fn pending_rejection_cannot_release_a_request_that_was_claimed() {
-    for owner in [
-        RejectionOwner::FreshAdmission,
-        RejectionOwner::ClaimAdmission,
-    ] {
-        let fixture = Fixture::new().await;
-        let doc_id = escape_graphql_string(&fixture.request.doc_id);
-        fixture
-            .access
-            .write(
-                "test.workspace_rejection_lost_cas",
-                &format!(
-                    r#"mutation {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{ lifecycle_state: "claimed" }}
-            ) {{ _docID }} }}"#
-                ),
-            )
-            .await
-            .unwrap();
-        let before = fixture.observe().await;
-        if matches!(owner, RejectionOwner::FreshAdmission) {
-            assert_eq!(
-                fixture
-                    .rejection_outcome(&fixture.request.doc_id)
-                    .await
-                    .unwrap(),
-                gents_session::request::admission::PendingRejectionOutcome::NotMatched
-            );
-        }
-        let result = fixture.reject(owner).await;
-        assert_eq!(
-            result.is_ok(),
-            matches!(owner, RejectionOwner::FreshAdmission)
-        );
-        assert_eq!(fixture.observe().await, before, "{owner:?}");
-    }
-}
-
-#[tokio::test]
-async fn pending_rejection_reports_only_an_applied_update() {
-    use gents_session::request::admission::PendingRejectionOutcome;
-
-    let fixture = Fixture::new().await;
-    let created = fixture.access.write(
-        "test.workspace_rejection_absent_create",
-        r#"mutation { create_AgentRequest(input: { request_id: "deleted-request" }) { _docID } }"#,
-    )
-    .await
-    .unwrap();
-    let absent = gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-    fixture
-        .access
-        .write(
-            "test.workspace_rejection_absent_delete",
-            &format!(
-                r#"mutation {{ delete_AgentRequest(docID: "{}") {{ _docID }} }}"#,
-                escape_graphql_string(&absent)
-            ),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        fixture.rejection_outcome(&absent).await.unwrap(),
-        PendingRejectionOutcome::NotMatched
-    );
-    assert_eq!(
-        fixture
-            .rejection_outcome(&fixture.request.doc_id)
-            .await
-            .unwrap(),
-        PendingRejectionOutcome::Terminalized
-    );
-    let before_replay = fixture.observe().await;
-    assert_eq!(
-        fixture
-            .rejection_outcome(&fixture.request.doc_id)
-            .await
-            .unwrap(),
-        PendingRejectionOutcome::NotMatched
-    );
-    assert_eq!(fixture.observe().await, before_replay);
-}
-
-#[tokio::test]
-async fn pending_rejection_reports_write_failure_and_rolls_back() {
-    let fixture = Fixture::new().await;
-    let before = fixture.observe().await;
-    let (result, mutations) = ConfigApplyTxn::with_successful_mutation_failure_at(
-        Some(1),
-        gents_session::request::admission::terminalize_pending_request_rejection(
-            &fixture.node,
-            &fixture.request.doc_id,
-            &fixture.request.node_did,
-            &fixture.request.agent_did,
-            fixture.agent.as_ref(),
-            "workspace placement is unavailable",
-            "test.workspace_rejection_write_error",
-        ),
-    )
-    .await;
-    assert_eq!(mutations, 1);
-    assert!(matches!(
-        result,
-        Err(gents_session::request::admission::PendingRejectionError::Transaction(_))
-    ));
-    assert_eq!(fixture.observe().await, before);
 }

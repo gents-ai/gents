@@ -1,6 +1,5 @@
 //! Session tests that need the runtime, goals, tool calls or other crates above gents-session.
-mod admission_workspace_cleanup_tests;
-mod claim_tests;
+
 mod client_tests;
 mod execution_lease_tests;
 
