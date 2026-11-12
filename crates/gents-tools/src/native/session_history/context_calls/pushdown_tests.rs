@@ -1,5 +1,5 @@
+use crate::native::session_history::context_calls::*;
 use gents_loop::tool::Tool as _;
-use gents_tools::native::session_history::context_calls::*;
 use serde_json::json;
 
 async fn request(
@@ -48,7 +48,11 @@ async fn call(
 
 #[tokio::test]
 async fn inference_order_and_physical_scope_survive_index_hints() {
-    let db = crate::support::test_db("indexed-context-scopes").await;
+    let db = gents_inference::test_support::test_db(
+        "indexed-context-scopes",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let access = gents_store::config_client::ConfigAccess::local(db.node.clone());
     let old = request(
         &access,
@@ -228,7 +232,11 @@ async fn inference_order_and_physical_scope_survive_index_hints() {
 
 #[tokio::test]
 async fn retained_calls_page_past_foreign_rows_and_nullable_cursor_keys() {
-    let db = crate::support::test_db("paged-context-null-keys").await;
+    let db = gents_inference::test_support::test_db(
+        "paged-context-null-keys",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let access = gents_store::config_client::ConfigAccess::local(db.node.clone());
     let own = request(&access, "session", None, "2026-10-01T00:00:00Z").await;
     let foreign = request(&access, "other", None, "2026-10-01T00:00:00Z").await;
@@ -253,7 +261,11 @@ async fn retained_calls_page_past_foreign_rows_and_nullable_cursor_keys() {
 
 #[tokio::test]
 async fn retained_call_selection_pages_the_scoped_requests() {
-    let db = crate::support::test_db("paged-context-retained-requests").await;
+    let db = gents_inference::test_support::test_db(
+        "paged-context-retained-requests",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let access = gents_store::config_client::ConfigAccess::local(db.node.clone());
     let mut ids = Vec::new();
     for i in 0..PAGE_SIZE + 1 {
@@ -283,5 +295,3 @@ async fn retained_call_selection_pages_the_scoped_requests() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["call_id"], "last-physical-request");
 }
-
-mod query_cost;

@@ -59,3 +59,6 @@ mod runtime_projection_tests;
 
 #[cfg(test)]
 mod backend_protection_tests;
+
+#[cfg(test)]
+mod pushdown_tests;

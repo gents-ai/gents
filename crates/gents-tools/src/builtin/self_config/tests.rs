@@ -199,3 +199,80 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         );
     }
 }
+
+fn config(categories: &[&str]) -> SelfConfigToolConfig {
+    SelfConfigToolConfig {
+        enabled: true,
+        agent_did: "beh-test".to_string(),
+        categories: categories.iter().map(|c| c.to_string()).collect(),
+        no_lockout: false,
+        preview: false,
+        enable_pack_install: false,
+        enable_pack_authority: false,
+        process_ceiling: Default::default(),
+        selected_plugins: Vec::new(),
+        ceiling_plugins: None,
+    }
+}
+
+#[tokio::test]
+async fn build_fails_closed_without_node_did() {
+    let db = gents_inference::test_support::test_db(
+        "self-config-empty-node-did",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        db.node.clone(),
+        String::new(),
+        None,
+        &config(&["agent"]),
+        Arc::new(crate::plugin_host::NoPluginHost),
+        Arc::new(crate::task_run::NoTaskRunService),
+    );
+    assert!(
+        tools.is_empty(),
+        "an empty node DID must register no self-config tools"
+    );
+}
+
+#[tokio::test]
+async fn build_registers_gated_family() {
+    let db = gents_inference::test_support::test_db(
+        "self-config-gated-family",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        db.node.clone(),
+        "did:key:zSelfConfigTest".to_string(),
+        None,
+        &config(&["agent", "backend"]),
+        Arc::new(crate::plugin_host::NoPluginHost),
+        Arc::new(crate::task_run::NoTaskRunService),
+    );
+    assert_eq!(
+        tools.len(),
+        1,
+        "self-configuration has one model-facing tool"
+    );
+    assert_eq!(tools[0].name(), CONFIG_TOOL_NAME);
+    let definition = tools[0].definition(String::new()).await;
+    assert!(
+        definition.description.len() <= 700,
+        "config description grew to {} chars",
+        definition.description.len()
+    );
+    for core in [
+        "native API",
+        "copy the exact agent_did",
+        "Preview writes nothing.",
+        "[\"validate\"] audits saved configuration",
+        "[\"help\"] lists granted resources",
+    ] {
+        assert!(definition.description.contains(core), "missing {core}");
+    }
+    assert_eq!(definition.parameters["required"], json!(["argv"]));
+}

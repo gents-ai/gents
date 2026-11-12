@@ -170,65 +170,6 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
 }
 
 #[tokio::test]
-async fn build_fails_closed_without_node_did() {
-    let db = gents_inference::test_support::test_db(
-        "self-config-empty-node-did",
-        gents_automation::lifecycle_hooks::composition(),
-    )
-    .await;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        db.node.clone(),
-        String::new(),
-        None,
-        &config(&["agent"]),
-        test_plugins(),
-        Arc::new(gents_tools::task_run::NoTaskRunService),
-    );
-    assert!(
-        tools.is_empty(),
-        "an empty node DID must register no self-config tools"
-    );
-}
-
-#[tokio::test]
-async fn build_registers_gated_family() {
-    let db = gents_inference::test_support::test_db(
-        "self-config-gated-family",
-        gents_automation::lifecycle_hooks::composition(),
-    )
-    .await;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        db.node.clone(),
-        "did:key:zSelfConfigTest".to_string(),
-        None,
-        &config(&["agent", "backend"]),
-        test_plugins(),
-        Arc::new(gents_tools::task_run::NoTaskRunService),
-    );
-    assert_eq!(
-        tools.len(),
-        1,
-        "self-configuration has one model-facing tool"
-    );
-    assert_eq!(tools[0].name(), CONFIG_TOOL_NAME);
-    let definition = tools[0].definition(String::new()).await;
-    assert!(
-        definition.description.len() <= 700,
-        "config description grew to {} chars",
-        definition.description.len()
-    );
-    for core in [
-        "native API",
-        "copy the exact agent_did",
-        "Preview writes nothing.",
-        "[\"validate\"] audits saved configuration",
-        "[\"help\"] lists granted resources",
-    ] {
-        assert!(definition.description.contains(core), "missing {core}");
-    }
-    assert_eq!(definition.parameters["required"], json!(["argv"]));
 }
 
 #[tokio::test]

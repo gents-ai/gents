@@ -1,5 +1,5 @@
 use super::*;
-use gents_tools::native::session_history::context_calls::CONTEXT_CALL_LIMIT;
+use crate::native::session_history::context_calls::CONTEXT_CALL_LIMIT;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -74,7 +74,11 @@ async fn seed_unrelated_completed_requests(
 
 #[tokio::test]
 async fn query_inputs_do_not_grow_with_unrelated_completed_requests() {
-    let db = crate::support::test_db("context-query-input-cost").await;
+    let db = gents_inference::test_support::test_db(
+        "context-query-input-cost",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let access = gents_store::config_client::ConfigAccess::local(db.node.clone());
     let own = request(&access, "session", None, "2026-10-01T00:00:00Z").await;
     for i in 0..CONTEXT_CALL_LIMIT {
