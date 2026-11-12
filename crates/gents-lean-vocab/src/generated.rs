@@ -3185,7 +3185,6 @@ pub struct LeanContractSnapshot {
     pub startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub snapshot_demotion_cases: Vec<LeanSnapshotDemotionCase>,
     pub plugin_reference_cases: Vec<serde_json::Value>,
-    pub plugin_pin_cases: Vec<serde_json::Value>,
     pub pack_wire_lock_cases: Vec<serde_json::Value>,
     pub pack_wire_target_cases: Vec<serde_json::Value>,
     pub pack_finality_cases: Vec<serde_json::Value>,

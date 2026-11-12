@@ -144,19 +144,35 @@ def caseJson (name : String) (references : List (List String))
     ",\"accepted\":" ++ toString (Configuration.pluginInstallAvailable
       references.flatten (rootShips ++ dependencyShips) installed isLocal) ++ "}"
 
-def pinCaseJson (name : String) (source : String) (pin : Option String) (actual : String) : String :=
-  "{\"name\":" ++ jsonString name ++ ",\"source\":" ++ jsonString source ++
-    ",\"pin\":" ++ (match pin with | none => "null" | some value => jsonString value) ++
-    ",\"actual\":" ++ jsonString actual ++
-    ",\"accepted\":" ++ toString (Configuration.pluginPinMatches pin actual) ++ "}"
+inductive PinSource where
+  | installed | shipped
+  deriving Lean.ToJson, BEq
 
-def pinCasesJson : String := jsonArray [
-  pinCaseJson "installed_unpinned" "installed" none "a",
-  pinCaseJson "installed_match" "installed" (some "a") "a",
-  pinCaseJson "installed_mismatch" "installed" (some "b") "a",
-  pinCaseJson "shipped_match" "shipped" (some "a") "a",
-  pinCaseJson "shipped_mismatch" "shipped" (some "b") "a"
-]
+structure PinInput where
+  name : String
+  source : PinSource
+  pin : Option String
+  actual : String
+  deriving Lean.ToJson
+
+def pinCases : List PinInput := [
+  ⟨"installed_unpinned", .installed, none, "a"⟩,
+  ⟨"installed_match", .installed, some "a", "a"⟩,
+  ⟨"installed_mismatch", .installed, some "b", "a"⟩,
+  ⟨"shipped_match", .shipped, some "a", "a"⟩,
+  ⟨"shipped_mismatch", .shipped, some "b", "a"⟩]
+
+@[conformance_family]
+def pinPrepare : Conformance.Family PinInput Bool where
+  inputs := pinCases
+  model := fun i => Configuration.pluginPinMatches i.pin i.actual
+
+/-- The graph-commit scenario pins a plugin that is already installed in the
+home and ships none, so only installed sources can be built there. -/
+@[conformance_family]
+def pinInstalledCommit : Conformance.Family PinInput Bool where
+  inputs := pinCases.filter (·.source == .installed)
+  model := fun i => Configuration.pluginPinMatches i.pin i.actual
 
 def wireLockCasesJson : String := jsonArray ([false, true].map fun held =>
   "{\"held\":" ++ toString held ++ ",\"publish_allowed\":" ++

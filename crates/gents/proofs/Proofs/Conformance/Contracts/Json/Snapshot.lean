@@ -796,7 +796,6 @@ def snapshotClientCasesJson : String :=
       ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
     ++ "\"plugin_reference_cases\":"
       ++ PackInstallation.casesJson ++ ","
-    ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_wire_target_cases\":" ++ PackInstallation.wireTargetCasesJson ++ ","
     ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
