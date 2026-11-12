@@ -499,9 +499,7 @@ def caseCoverage : List CoverageEntry :=
       "remote_agent_delivery_response_cases" "RemoteAgentDeliveryResponseCases"
       "The snapshot emits and the decoder accepts these cases; no native test reads them.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "scope_collection_rules" "ScopeCollectionRules"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  , tagged (consumerCoverage "family" "scope_collection_rules_template_rules")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "lifecycle_hook_owed_delivery_cases"

@@ -3160,10 +3160,6 @@ pub struct LeanContractSnapshot {
     pub causal_hop_write_cases: Vec<LeanSessionMessageWriteCase>,
     pub causal_hop_session_target_cases: Vec<LeanSessionTargetCase>,
     pub causal_hop_session_list_cases: Vec<LeanSessionListCase>,
-    pub scope_collection_rules: std::collections::BTreeMap<
-        String,
-        Vec<LeanScopeCollectionRule>,
-    >,
     pub scope_node_route_cases: Vec<LeanScopeNodeRouteCase>,
     pub scope_template_cases: Vec<LeanScopeTemplateCase>,
     pub title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
@@ -10550,14 +10546,6 @@ pub struct LeanSchemaPublicationCase {
     pub compatible: bool,
     pub grant: bool,
     pub native_allowed: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanScopeCollectionRule {
-    pub collection: String,
-    pub field: String,
-    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

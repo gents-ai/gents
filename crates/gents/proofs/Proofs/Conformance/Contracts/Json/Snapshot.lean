@@ -227,16 +227,10 @@ import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
 import Proofs.Documents.ScopeTemplates.Derivation
 
+import Proofs.Conformance.ScopeCollectionRules
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
-
-def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
-  jsonArray (rules.map fun rule =>
-    "{\"collection\":" ++ jsonString rule.collection
-      ++ ",\"field\":" ++ jsonString rule.field
-      ++ ",\"source\":" ++ jsonString (match rule.source with
-          | .localDid => "localDid" | .homeDid => "homeDid") ++ "}")
 
 def nodeRouteCasesJson : String :=
   jsonArray (([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
@@ -1052,10 +1046,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_job_wake_cases\":" ++ Conformance.PluginJob.wakeCasesJson ++ ","
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
-    ++ "\"scope_collection_rules\":{"
-      ++ "\"machineRules\":"
-        ++ scopeRulesJson ScopeTemplates.machineRules
-      ++ "},"
     ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
     ++ "\"scope_template_cases\":" ++ scopeTemplateCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"

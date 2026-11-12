@@ -17,7 +17,8 @@ pub enum Scope {
     ClientRoute,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DidSource {
     LocalDid,
     HomeDid,
@@ -628,5 +629,28 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn builtin_template_rules_are_the_lean_scope_rules() {
+        use gents_lean_vocab::families::scope_collection_rules_template_rules::CollectionRule as ModeledRule;
+
+        gents_lean_vocab::families::scope_collection_rules_template_rules::replay::<DidSource>(
+            |i| {
+                resolve_template(&i.template).and_then(|template| match template.scope {
+                    Scope::PerCollection(rules) => Some(
+                        rules
+                            .iter()
+                            .map(|rule| ModeledRule {
+                                collection: rule.collection.to_owned(),
+                                field: rule.field.to_owned(),
+                                source: rule.source,
+                            })
+                            .collect(),
+                    ),
+                    Scope::ClientRoute => None,
+                })
+            },
+        );
     }
 }
