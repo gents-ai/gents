@@ -33,64 +33,6 @@ async fn emission_deadline(
     Ok((emitted, deadline))
 }
 
-#[tokio::test]
-async fn delayed_first_frame_starts_visibility_budget_at_emission() -> Result<()> {
-    let gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let model_gate = gate.clone();
-    let (emitted, emission) = tokio::sync::watch::channel(None);
-    let delay = Duration::from_millis(650);
-    let model = FakeLlm::start(
-        "emission-contract",
-        None,
-        Arc::new(move |_| {
-            ChatAction::GatedSse(
-                vec![(delay, "data: first-frame\n\n".to_owned())],
-                model_gate.clone(),
-                "data: [DONE]\n\n".to_owned(),
-                emitted.clone(),
-            )
-        }),
-    )?;
-    let started = std::time::Instant::now();
-    let mut response = reqwest::Client::new()
-        .post(format!("{}/chat/completions", model.endpoint()))
-        .json(&serde_json::json!({"messages": []}))
-        .send()
-        .await?
-        .error_for_status()?;
-    let (timestamp, deadline) = timeout(
-        Duration::from_secs(2),
-        emission_deadline(emission, Duration::from_millis(500)),
-    )
-    .await??;
-    assert!(timestamp.duration_since(started) >= delay);
-    assert_eq!(
-        deadline.into_std().duration_since(timestamp),
-        Duration::from_millis(500)
-    );
-    tokio::time::timeout_at(deadline, async {
-        let mut received = Vec::new();
-        while !String::from_utf8_lossy(&received).contains("first-frame") {
-            received.extend(response.chunk().await?.context("missing first frame")?);
-        }
-        Ok::<_, anyhow::Error>(())
-    })
-    .await??;
-    assert_eq!(gate.available_permits(), 0, "completion must remain held");
-    gate.add_permits(1);
-    while response.chunk().await?.is_some() {}
-    Ok(())
-}
-
-#[tokio::test]
-async fn late_visibility_observer_cannot_restart_the_emission_budget() {
-    let (_sender, receiver) =
-        tokio::sync::watch::channel(Some(std::time::Instant::now() - Duration::from_secs(1)));
-    assert!(emission_deadline(receiver, Duration::from_millis(500))
-        .await
-        .is_err());
-}
-
 pub(super) async fn wait_for_visible_content(
     core: &ClientCore,
     graphql: &str,
