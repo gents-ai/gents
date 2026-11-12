@@ -1,3 +1,4 @@
+import Proofs.Conformance.GoalOperatorResumeProfiles
 import Proofs.Conformance.Identity.SessionInputEdit
 import Proofs.Conformance.Identity.ClientTransport
 import Proofs.Conformance.RootCandidates
