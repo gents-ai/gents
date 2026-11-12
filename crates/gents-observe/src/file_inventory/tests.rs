@@ -1,12 +1,12 @@
 use super::*;
+use base64::Engine as _;
+use gents_loop::live_output::LiveToolOutputRegistry;
+use gents_loop::tool::Tool;
 use gents_protocol::file_changes::{FileChangeImages, FileImage, FilePermissions, ImageFailure};
 use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_inventory::{
     FileChangeMetadata, FileImageMetadata, FileInventoryAdmission,
 };
-use base64::Engine as _;
-use gents_loop::live_output::LiveToolOutputRegistry;
-use gents_loop::tool::Tool;
 use gents_session::file_contents::content_hash;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
@@ -474,10 +474,9 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     )
     .await
     .unwrap();
-    let snapshot =
-        crate::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
-            .await
-            .unwrap();
+    let snapshot = crate::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
+        .await
+        .unwrap();
     assert_eq!(
         snapshot.entries().len(),
         2,
@@ -498,10 +497,9 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     let page = snapshot.page(None).unwrap();
     assert_eq!(page.entries, snapshot.entries());
     assert!(page.next.is_none());
-    let repeated =
-        crate::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
-            .await
-            .unwrap();
+    let repeated = crate::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
+        .await
+        .unwrap();
     assert_eq!(snapshot.binding(), repeated.binding());
     assert_eq!(snapshot.entries(), repeated.entries());
     assert_eq!(tokio::fs::read(&path).await.unwrap(), b"second effect\n");
@@ -580,12 +578,10 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     )
     .await
     .unwrap();
-    let pending_inventory = crate::file_inventory::FileInventorySnapshot::load(
-        &admission.node,
-        &inventory_admission,
-    )
-    .await
-    .unwrap();
+    let pending_inventory =
+        crate::file_inventory::FileInventorySnapshot::load(&admission.node, &inventory_admission)
+            .await
+            .unwrap();
     assert_eq!(pending_inventory.binding().coverage.pending, 1);
     assert_eq!(pending_inventory.binding().coverage.unknown, 0);
     assert!(pending_inventory.entries().is_empty());
@@ -696,12 +692,10 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     )
     .await
     .unwrap();
-    let inventory = crate::file_inventory::FileInventorySnapshot::load(
-        &admission.node,
-        &inventory_admission,
-    )
-    .await
-    .unwrap();
+    let inventory =
+        crate::file_inventory::FileInventorySnapshot::load(&admission.node, &inventory_admission)
+            .await
+            .unwrap();
     assert_eq!(inventory.binding().coverage.entries, 1);
     assert_eq!(inventory.binding().coverage.pending, 0);
     assert_eq!(inventory.binding().coverage.unknown, 0);
@@ -720,12 +714,11 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         .contains("replacement bytes"));
     let mut wrong_session = inventory_admission.clone();
     wrong_session.session_doc_id = "different-physical-session".into();
-    assert!(crate::file_inventory::FileInventorySnapshot::load(
-        &admission.node,
-        &wrong_session,
-    )
-    .await
-    .is_err());
+    assert!(
+        crate::file_inventory::FileInventorySnapshot::load(&admission.node, &wrong_session,)
+            .await
+            .is_err()
+    );
     let ids = vec![projection["_docID"].as_str().unwrap().to_owned()];
     let owners = ConfigAccess::transact_local_readonly(
         &admission.node,

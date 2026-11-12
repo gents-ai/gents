@@ -1,7 +1,7 @@
 use super::validation::{validate_optional_request_binding, validate_required_request_binding};
 use super::*;
 use gents_inference::llm::message::{Message, Text, ToolResultContent, UserContent};
-use gents_inference::llm::{HookAction, ToolCallHookAction};
+use gents_inference::llm::ToolCallHookAction;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 
