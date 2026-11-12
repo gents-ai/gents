@@ -2176,8 +2176,37 @@ pub struct LeanClientDataPublicationCases {
     pub notice_delivery: LeanClientDataPublicationCasesNoticeDelivery,
     pub publication: Vec<LeanClientDataPublicationCasesPublicationItem>,
     pub recovery: Vec<LeanClientDataPublicationCasesRecoveryItem>,
-    pub scoped_publication: Vec<LeanClientDataPublicationCasesScopedPublicationItem>,
-    pub scoped_replacement: Vec<LeanClientDataPublicationCasesScopedReplacementItem>,
+    pub scoped_publication: Option<
+        Vec<LeanClientDataPublicationCasesScopedPublicationItem>,
+    >,
+    pub scoped_replacement: Option<
+        Vec<LeanClientDataPublicationCasesScopedReplacementItem>,
+    >,
+    pub node_publication: Vec<LeanClientDataPublicationCasesNodePublicationItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanClientDataPublicationCasesNodePublicationItem {
+    pub accepted: bool,
+    pub actions: Vec<LeanClientDataPublicationCasesNodePublicationItemActionsItem>,
+    pub expected: Vec<LeanClientDataPublicationCasesNodePublicationItemExpectedItem>,
+    pub merge: bool,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanClientDataPublicationCasesNodePublicationItemActionsItem {
+    pub node: u64,
+    pub op: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanClientDataPublicationCasesNodePublicationItemExpectedItem {
+    pub node: u64,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2260,7 +2289,7 @@ pub struct LeanClientDataPublicationCasesPublicationItemRead {
 #[serde(deny_unknown_fields)]
 pub struct LeanClientDataPublicationCasesRecoveryItem {
     pub actions: Vec<LeanClientDataPublicationCasesRecoveryItemActionsItem>,
-    pub full: bool,
+    pub full: Option<bool>,
     pub generation: u64,
     pub initial: LeanClientDataPublicationCasesRecoveryItemInitial,
     pub name: String,
@@ -2279,7 +2308,7 @@ pub struct LeanClientDataPublicationCasesRecoveryItemActionsItem {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanClientDataPublicationCasesRecoveryItemInitial {
-    pub full: bool,
+    pub full: Option<bool>,
     pub generation: u64,
     pub pending_scopes: Vec<serde_json::Value>,
     pub retry_scheduled: bool,
@@ -3006,7 +3035,7 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Vec<LeanClientObservationScopeCase>,
+    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3414,6 +3443,8 @@ pub struct LeanContractSnapshot {
     pub event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
     pub event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     pub event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+    pub pack_operator_wire_cases: Vec<LeanPackOperatorWireCase>,
+    pub recovery_sweep_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -7788,6 +7819,15 @@ pub struct LeanPackIdentityBinding {
     pub slot: String,
     pub creation_nonce: String,
     pub agent_did: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanPackOperatorWireCase {
+    pub allowed: bool,
+    pub home: bool,
+    pub operator: bool,
+    pub ready: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

@@ -104,6 +104,7 @@ pub(super) async fn apply_pack_documents(
                     None,
                     None,
                     profile_policy,
+                    &[],
                 )
                 .await
                 .map_err(super::PackChangeError::into_anyhow)?;

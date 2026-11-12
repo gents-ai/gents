@@ -5433,6 +5433,7 @@ dependencies = [
  "gents-loop",
  "gents-migration",
  "gents-protocol",
+ "gents-schemas",
  "hkdf",
  "hmac 0.12.1",
  "identity",

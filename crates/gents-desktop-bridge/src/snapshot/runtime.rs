@@ -16,9 +16,7 @@ use super::super::types::{
     NodeReadinessView, RuntimeView, SessionSummary, SkillView, TaskRecentRunsView,
     TaskRunSummaryView, TaskView, Tools, TriggerView,
 };
-use super::runtime_tasks::{
-    recent_runs_for_task_views, session_summaries, source_matches_node, task_run_histories,
-};
+use super::runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_histories};
 use super::to_health_view;
 
 static STARTERS: std::sync::LazyLock<super::runtime_tasks::StarterCache> =
@@ -33,9 +31,14 @@ pub(crate) fn node_reads(
         .ok_or_else(|| anyhow::anyhow!("Runtime {node_did} has no authenticated GraphQL endpoint"))
 }
 
+/// One `DeploymentView` per configured node, each built only from that node's
+/// own store; the fleet totals sum the nodes' stores.
 pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
     let sync_state = core.sync_state();
-    let store = core.store().snapshot();
+    let stores = core.stores();
+    let mut row_count = 0;
+    let mut approx_serialized_bytes = 0_usize;
+    let mut operator_config_authoritative_node_dids = Vec::new();
     let enrollment_requests = core
         .active_status_enrollment_requests()
         .await
@@ -53,6 +56,17 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .clone()
         .into_iter()
         .map(|peer| {
+            let store = stores.snapshot(&peer.node_did);
+            row_count += store.row_count();
+            approx_serialized_bytes =
+                approx_serialized_bytes.saturating_add(store.approx_serialized_bytes());
+            operator_config_authoritative_node_dids.extend(
+                store
+                    .operator_config_authoritative_node_dids
+                    .iter()
+                    .filter(|did| **did == peer.node_did)
+                    .cloned(),
+            );
             let status = peer_statuses_by_id.get(&peer.peer_id);
             let node_row = store.nodes.iter().find(|row| row.node_did == peer.node_did);
             let mailbox_items = store
@@ -152,16 +166,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let mut skills = store
                 .skills
                 .iter()
-                .enumerate()
-                .filter(|(index, row)| {
-                    source_matches_node(
-                        &store.skill_source_node_dids,
-                        *index,
-                        &peer.node_did,
-                        false,
-                    ) && row.node_did == peer.node_did
-                })
-                .map(|(_index, row)| SkillView {
+                .filter(|row| row.node_did == peer.node_did)
+                .map(|row| SkillView {
                     skill_id: row.skill_id.clone(),
                     node_did: Some(row.node_did.clone()),
                     name: normalize_optional(row.name.as_deref()),
@@ -181,11 +187,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let scoped_task_rows = store
                 .tasks
                 .iter()
-                .enumerate()
-                .filter(|(index, row)| {
-                    source_matches_node(&store.task_source_node_dids, *index, &peer.node_did, false)
-                        && row.node_did == peer.node_did
-                        && agent_dids.contains(&row.agent_did.as_str())
+                .filter(|row| {
+                    row.node_did == peer.node_did && agent_dids.contains(&row.agent_did.as_str())
                 })
                 .collect::<Vec<_>>();
             let mut schedules = store
@@ -210,31 +213,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     let observation = store
                         .trigger_observations
                         .iter()
-                        .enumerate()
-                        .find(|(index, observation)| {
-                            observation.trigger_id == row.trigger_id
-                                && source_matches_node(
-                                    &store.trigger_observation_source_node_dids,
-                                    *index,
-                                    &row.node_did,
-                                    true,
-                                )
-                        })
-                        .map(|(_, observation)| observation);
+                        .find(|observation| observation.trigger_id == row.trigger_id);
                     let schedule_observation = store
                         .schedule_observations
                         .iter()
-                        .enumerate()
-                        .find(|(index, observation)| {
-                            observation.trigger_id == row.trigger_id
-                                && source_matches_node(
-                                    &store.schedule_observation_source_node_dids,
-                                    *index,
-                                    &row.node_did,
-                                    true,
-                                )
-                        })
-                        .map(|(_, observation)| observation);
+                        .find(|observation| observation.trigger_id == row.trigger_id);
                     TriggerView {
                         config: row.clone(),
                         next_run_at: schedule_observation.and_then(|item| item.next_run_at.clone()),
@@ -252,7 +235,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let mut run_histories = task_run_histories(store.as_ref(), &peer.node_did, &triggers);
             let mut tasks = scoped_task_rows
                 .into_iter()
-                .map(|(_index, row)| {
+                .map(|row| {
                     project_task_view(
                         row,
                         recent_runs_for_task_views(&triggers, &peer.node_did, &row.task_id),
@@ -295,8 +278,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 operator_root.as_deref(),
             );
 
-            let runtime_connection = core
-                .store()
+            let runtime_connection = stores
                 .runtime_connection(&peer.node_did)
                 .map(|status| status.as_str().to_owned());
             let chat_refusal = peer.chat_refusal();
@@ -380,16 +362,12 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         p2p_health: to_health_view(&sync_state.transport),
         sync_health: super::project_client_sync_health(core),
         enrollment_requests,
-        row_count: store.row_count(),
-        approx_serialized_bytes: store.approx_serialized_bytes(),
+        row_count,
+        approx_serialized_bytes,
         operator_config_authoritative_node_dids: {
-            let mut dids = store
-                .operator_config_authoritative_node_dids
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
-            dids.sort();
-            (!dids.is_empty()).then_some(dids)
+            operator_config_authoritative_node_dids.sort();
+            (!operator_config_authoritative_node_dids.is_empty())
+                .then_some(operator_config_authoritative_node_dids)
         },
         deployments,
         ended_access: core

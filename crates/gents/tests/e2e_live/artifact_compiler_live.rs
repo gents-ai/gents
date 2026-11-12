@@ -117,12 +117,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     let parent = std::fs::canonicalize(fixture.path()).unwrap();
     let repo = parent.join("repo");
     std::fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "-b", "main"]);
-    git(
-        &repo,
-        &["config", "user.email", "artifact-live@example.com"],
-    );
-    git(&repo, &["config", "user.name", "Artifact Live QA"]);
+    gents_session::workspace::init_test_repo(&repo, &["-b", "main"]);
     let files = [("Cargo.toml", "[package]\nname = \"artifact-live-probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
         ("Cargo.lock", "version = 3\n\n[[package]]\nname = \"artifact-live-probe\"\nversion = \"0.1.0\"\n"),
         ("src/lib.rs", "pub fn answer() -> u32 { 42 }\n#[test] fn live_artifact_answer() { assert_eq!(answer(), 42); }\n")];

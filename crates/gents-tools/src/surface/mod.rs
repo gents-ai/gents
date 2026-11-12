@@ -64,7 +64,12 @@ pub(crate) fn configured_plugin_refs(
         .collect())
 }
 
-pub use pack_readers::{pack_root_readers, PackRootReader};
+pub use pack_readers::{
+    grant_pack_root_readers, grant_reader_command, pack_root_readers, planned_root_agents,
+    publish_root_command, root_review, PackRootReader, PackRoots,
+};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use pack_readers::FAIL_GRANTS_FOR;
 pub use root_admission::RootExecutionGuard;
 #[doc(hidden)]
 pub use root_admission::{
@@ -72,7 +77,9 @@ pub use root_admission::{
     ensure_root_published_for_node, load_workspace_root_policy, project_workspace_root_policy,
     refuse_too_broad_root, TooBroadRoot, WorkspaceRootDocument, WorkspaceRootPolicy,
 };
-pub use root_admission::{agent_tool_root_reader, agents_tool_root_readers, ToolRootReader};
+pub use root_admission::{
+    agent_tool_root_reader, agents_tool_root_readers, tool_root_reader, ToolRootReader,
+};
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
     tools_root_reader_in_txn,

@@ -1,5 +1,3 @@
-import Proofs.Clients.ClientShell.ObservationScope
-
 namespace ClientInstallation
 
 inductive Phase where
@@ -10,7 +8,7 @@ inductive Phase where
 
 structure State where
   phase : Phase
-  observation : ClientObservationScope.State
+  attachments : Nat
   history : Nat
   deriving DecidableEq, Repr
 
@@ -44,20 +42,20 @@ locks protect process lifetime, not runtime DID or document authorization. -/
 def step (state : State) : Action → Option State
   | .attach =>
       if state.phase = .accepting then
-        some { state with observation := ClientObservationScope.step state.observation .attach }
+        some { state with attachments := state.attachments + 1 }
       else none
   | .detach =>
-      if state.phase ≠ .released ∧ 0 < state.observation.attachments then
-        some { state with observation := ClientObservationScope.step state.observation .detach }
+      if state.phase ≠ .released ∧ 0 < state.attachments then
+        some { state with attachments := state.attachments - 1 }
       else none
   | .retire =>
       if state.phase = .accepting then some { state with phase := .draining } else none
   | .release =>
-      if state.phase = .draining ∧ state.observation.attachments = 0 then
+      if state.phase = .draining ∧ state.attachments = 0 then
         some { state with phase := .released }
       else none
   | .replace reserved =>
-      if state.phase = .released ∧ state.observation.attachments = 0 ∧ reserved = true then
+      if state.phase = .released ∧ state.attachments = 0 ∧ reserved = true then
         some { state with phase := .accepting }
       else none
 
@@ -68,14 +66,14 @@ theorem history_is_preserved (before after : State) (action : Action)
   all_goals cases h; rfl
 
 theorem retirement_preserves_pending_attachments (before after : State)
-    (h : step before .retire = some after) : after.observation = before.observation := by
+    (h : step before .retire = some after) : after.attachments = before.attachments := by
   simp only [step] at h
   split at h <;> simp_all
   cases h
   rfl
 
 theorem release_requires_drained_attachments (before after : State)
-    (h : step before .release = some after) : before.observation.attachments = 0 := by
+    (h : step before .release = some after) : before.attachments = 0 := by
   simp only [step] at h
   split at h <;> simp_all
 
@@ -85,16 +83,8 @@ theorem draining_refuses_new_attachments (state : State) (h : state.phase = .dra
 
 theorem replacement_requires_released_owner (before after : State) (reserved : Bool)
     (h : step before (.replace reserved) = some after) :
-    before.phase = .released ∧ before.observation.attachments = 0 ∧ reserved = true := by
+    before.phase = .released ∧ before.attachments = 0 ∧ reserved = true := by
   simp only [step] at h
   split at h <;> simp_all
-
-theorem releasing_preserves_observation_intent (before after : State)
-    (h : step before .release = some after) :
-    after.observation.requested = before.observation.requested := by
-  simp only [step] at h
-  split at h <;> simp_all
-  cases h
-  rfl
 
 end ClientInstallation

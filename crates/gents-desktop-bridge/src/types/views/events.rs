@@ -103,10 +103,11 @@ impl ClientUpdateEvent {
         }
     }
 
-    pub fn store(notice: gents_desktop_core::client::StoreUpdateNotice) -> Self {
+    /// `version` advances on every publication into any node's store.
+    pub fn store(version: u64) -> Self {
         Self {
             reason: "store",
-            store_version: Some(notice.revision.store_version),
+            store_version: Some(version),
         }
     }
 }

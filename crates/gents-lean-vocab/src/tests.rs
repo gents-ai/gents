@@ -182,6 +182,11 @@ async fn resolved_identity_permission_cases_drive_defra_acp() -> anyhow::Result<
 }
 
 #[test]
+fn pack_operator_wire_contract_cases_parse_through_typed_snapshot() {
+    assert!(!lean_contract_snapshot().pack_operator_wire_cases.is_empty());
+}
+
+#[test]
 fn generated_root_admission_case_inventory_is_complete() {
     let cases = &crate::lean_contract_snapshot().root_admission_cases;
     assert!(!cases.is_empty());
@@ -449,7 +454,24 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 52);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 18);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 55);
+    let sweep_ids = &lean_contract_snapshot().recovery_sweep_ids;
+    assert!(!sweep_ids.is_empty(), "the model registers recovery sweeps");
+    for sweep_id in sweep_ids {
+        assert!(
+            lean_recovery_sweep_cases()
+                .iter()
+                .any(|case| &case.sweep_id == sweep_id),
+            "registered recovery sweep {sweep_id} has no emitted case"
+        );
+    }
+    for case in lean_recovery_sweep_cases() {
+        assert!(
+            sweep_ids.contains(&case.sweep_id),
+            "recovery sweep case {} names an unregistered sweep {}",
+            case.name,
+            case.sweep_id
+        );
+    }
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }

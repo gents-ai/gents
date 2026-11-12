@@ -3,15 +3,15 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents_desktop_core::client::{
-    load_session_transcript_page, load_session_transcript_page_on, ClientCore, ClientCoreOptions,
-    ClientStore, ClientStoreRows, DesktopPaths,
+    load_session_transcript_page_on, ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows,
+    DesktopPaths,
 };
 use gents_desktop_core::test_fixtures::ServedRuntimeHome;
 use tokio::time::timeout;
 
 #[test]
 fn focused_request_id_defaults_to_none() {
-    let (store, _) = gents_desktop_core::client::ObservedStore::new(ClientStore::default());
+    let store = gents_desktop_core::client::ObservedStores::new().ensure("did:test:node");
     assert!(store.focused_request_id().is_none());
 }
 
@@ -110,12 +110,16 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         })
         .await?;
 
-    core.refresh_store().await?;
-    assert!(core.store().snapshot().transcript_messages.is_empty());
-    assert!(core.store().snapshot().output_segments.is_empty());
+    core.refresh_node(&node_did).await?;
+    assert!(core
+        .stores()
+        .snapshot(&node_did)
+        .transcript_messages
+        .is_empty());
+    assert!(core.stores().snapshot(&node_did).output_segments.is_empty());
     core.refresh_local_request(&node_did, "session-1", Some("request-1"), None, &[])
         .await?;
-    let refreshed = core.store().snapshot();
+    let refreshed = core.stores().snapshot(&node_did);
     assert!(refreshed.transcript_messages.is_empty());
     assert!(refreshed.output_segments.is_empty());
     assert!(refreshed
@@ -211,7 +215,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         data
     };
     let runtime_default = Arc::new(std::sync::Mutex::new("did:test:hosted-amy:default"));
-    let store = Arc::clone(core.store());
+    let store = core.stores().ensure(NODE_DID);
     let response_request = completed_request.clone();
     let response_session = serde_json::json!({
         "session_id": "session-terminal-config",
@@ -267,9 +271,11 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "/tmp/test-hosted-amy-home",
     )
     .await?;
-    core.refresh_store().await?;
+    core.refresh_node(NODE_DID).await?;
     assert_eq!(
-        core.store().snapshot().selected_default_agent_did(NODE_DID),
+        core.stores()
+            .snapshot(NODE_DID)
+            .selected_default_agent_did(NODE_DID),
         Some("did:test:hosted-amy:default"),
         "the starting configuration is the runtime's"
     );
@@ -291,7 +297,10 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     );
     timeout(Duration::from_secs(5), async {
         loop {
-            if core.store().snapshot().selected_default_agent_did(NODE_DID)
+            if core
+                .stores()
+                .snapshot(NODE_DID)
+                .selected_default_agent_did(NODE_DID)
                 == Some("did:test:hosted-amy:research")
             {
                 break;
@@ -378,10 +387,10 @@ fn agent_message(alias: &str, key: &str, session: &str, node_did: &str, sequence
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     let (_tempdir, core, runtime) = served_core().await?;
-    let store = core.store();
+    let stores = core.stores();
     let mut updates = core.store_updates();
 
-    assert_eq!(store.snapshot().nodes.len(), 0);
+    assert_eq!(stores.snapshot(runtime.node_did()).nodes.len(), 0);
     let baseline = *updates.borrow_and_update();
 
     runtime
@@ -399,11 +408,14 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     .await
     .context("timed out waiting for store update")??;
     until(&core, "the refreshed snapshot", |core| {
-        core.store().snapshot().nodes.len() == 1
+        core.stores().snapshot(runtime.node_did()).nodes.len() == 1
     })
     .await?;
 
-    assert_eq!(store.snapshot().nodes[0].node_did, runtime.node_did());
+    assert_eq!(
+        stores.snapshot(runtime.node_did()).nodes[0].node_did,
+        runtime.node_did()
+    );
     Arc::new(core).shutdown().await?;
     runtime.shutdown().await;
     Ok(())
@@ -430,7 +442,7 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     }
 
     until(&core, "all 20 sessions in the store", |core| {
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(runtime.node_did());
         (0..20usize).all(|i| {
             snapshot
                 .sessions
@@ -452,7 +464,7 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
         .publish_node(serde_json::json!({"enabled": true}))
         .await;
     until(&core, "the observer's first snapshot", |core| {
-        !core.store().snapshot().nodes.is_empty()
+        !core.stores().snapshot(runtime.node_did()).nodes.is_empty()
     })
     .await?;
     let node_did = runtime.node_did().to_owned();
@@ -485,7 +497,11 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
     })
     .await
     .context("timed out waiting for canonical transcript invalidation")??;
-    assert!(core.store().snapshot().transcript_messages.is_empty());
+    assert!(core
+        .stores()
+        .snapshot(&node_did)
+        .transcript_messages
+        .is_empty());
     let page = load_session_transcript_page_on(
         &runtime.user_access(),
         "long",
@@ -535,8 +551,12 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
         "seed immutable twins: {:?}",
         response.errors
     );
-    let result = load_session_transcript_page(
-        core.node(),
+    let creator_access = gents_store::config_client::ConfigAccess::local_as(
+        core.node_arc(),
+        core.node().node_identity_did().unwrap().parse()?,
+    );
+    let result = load_session_transcript_page_on(
+        &creator_access,
         "conflict",
         Some("did:conflict"),
         None,
@@ -578,9 +598,8 @@ async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
         )
         .await?;
 
-    core.set_selected_node_did(Some(alpha.clone()));
     let only_alpha = |core: &ClientCore| {
-        let nodes = core.store().snapshot().nodes.clone();
+        let nodes = core.stores().snapshot(&alpha).nodes.clone();
         assert!(nodes.iter().all(|node| node.node_did != beta), "{nodes:?}");
         nodes.iter().any(|node| node.node_did == alpha)
     };
@@ -608,8 +627,8 @@ async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
     until(&core, "the resnapshot of the routed node", |core| {
         only_alpha(core)
             && core
-                .store()
-                .snapshot()
+                .stores()
+                .snapshot(&alpha)
                 .nodes
                 .iter()
                 .any(|node| node.display_name.as_deref() == Some("resnapshot"))

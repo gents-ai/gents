@@ -395,7 +395,7 @@ where
         .map(|approval| (approval.pack, approval.digest))
         .collect();
     let outcome = std::sync::Arc::new(tokio::sync::Mutex::new(None));
-    restart_managed_server(&app, restart, &state, || {
+    let restarted = restart_managed_server(&app, restart, &state, || {
         let (home, outcome) = (home.clone(), outcome.clone());
         async move {
             *outcome.lock().await = Some(
@@ -407,11 +407,18 @@ where
             Ok(())
         }
     })
-    .await?;
-    let report =
-        outcome.lock().await.take().ok_or_else(|| {
-            BridgeError::untyped("the node restarted without installing the packs")
-        })??;
+    .await;
+    let report = outcome.lock().await.take();
+    if let Err(mut error) = restarted {
+        // The packs were installed, or failed, before the node did not come
+        // back: the restart error carries what happened to them.
+        if let Some(Ok(report)) = &report {
+            error.message = format!("{} {}", error.message, installed_before_restart(report));
+        }
+        return Err(error);
+    }
+    let report = report
+        .ok_or_else(|| BridgeError::untyped("the node restarted without installing the packs"))??;
     let failed = serde_json::from_value(report["failed"].clone())
         .map_err(|error| BridgeError::untyped(format!("invalid pack report: {error}")))?;
     let listed: crate::types::DefaultPacksView =
@@ -420,6 +427,57 @@ where
         packs: listed.packs,
         failed,
     })
+}
+
+/// What an approval did to the packs before its node restart failed. A
+/// failed pack the report marks `installed` has a home install record and
+/// nothing more is known of it: its own install may have stopped partway, or
+/// an older install may have been there before a refused approval. So it is
+/// said to be installed but not finished, with what finishes it.
+fn installed_before_restart(report: &serde_json::Value) -> String {
+    let names = |packs: Vec<&serde_json::Value>| {
+        packs
+            .into_iter()
+            .filter_map(|pack| pack["pack"].as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let listed = |key: &str| report[key].as_array().into_iter().flatten();
+    let (unfinished, absent): (Vec<_>, Vec<_>) =
+        listed("failed").partition(|pack| pack["installed"] == true);
+    let (installed, unfinished, absent) = (
+        names(listed("installed").collect()),
+        names(unfinished),
+        names(absent),
+    );
+    let mut clauses = Vec::new();
+    if !installed.is_empty() {
+        clauses.push(format!("these starter packs were installed: {installed}."));
+    }
+    if !unfinished.is_empty() {
+        clauses.push(format!(
+            "these are installed but not finished: {unfinished}. Approve them again once the node starts."
+        ));
+    }
+    if clauses.is_empty() {
+        clauses.push("no starter pack was installed.".to_owned());
+    }
+    if !absent.is_empty() {
+        clauses.push(format!("these were not installed: {absent}."));
+    }
+    let mut message = "Before the local node failed to start again,".to_owned();
+    for (index, clause) in clauses.iter().enumerate() {
+        message.push(' ');
+        let mut letters = clause.chars();
+        match letters.next().filter(|_| index > 0) {
+            Some(first) => {
+                message.extend(first.to_uppercase());
+                message.push_str(letters.as_str());
+            }
+            None => message.push_str(clause),
+        }
+    }
+    message
 }
 
 async fn restart_managed_server<R, P, WhileStopped>(

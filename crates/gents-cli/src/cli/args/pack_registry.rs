@@ -298,6 +298,9 @@ pub(crate) struct PackInstallArgs {
     #[arg(long = "dependency-variable", value_name = "NAMESPACE/PACK:NAME=VALUE", action = clap::ArgAction::Append,
         help = "Explicitly set an install variable for a dependency; repeat for each variable")]
     pub(crate) dependency_variables: Vec<String>,
+    #[arg(long = "bind-agent", value_name = "SLOT=AGENT_DID", action = clap::ArgAction::Append,
+        help = "Bind one of the pack's agent slots to an existing agent of this node instead of making a new one; repeat for each slot")]
+    pub(crate) bind_agents: Vec<String>,
     #[arg(
         long,
         default_value_t = false,
@@ -324,7 +327,7 @@ pub(crate) struct PackInstallArgs {
     pub(crate) drift: PackDriftArgs,
     #[arg(
         long,
-        help = "Allow the files, network or environment the pack's plugins ask for"
+        help = "Allow the files, network or environment the pack's plugins ask for, and its agents reading your tool root"
     )]
     pub(crate) grant_authority: bool,
     #[arg(
@@ -340,6 +343,13 @@ pub(crate) struct PackInstallArgs {
         help = "Refuse the install, writing nothing, unless the pack's content digest is this one (see gents config pack show)"
     )]
     pub(crate) expect_digest: Option<String>,
+    #[arg(
+        long = "root-agent",
+        value_name = "NAMESPACE/PACK=AGENT",
+        action = clap::ArgAction::Append,
+        help = "With --grant-authority, grant the installer's tool root only to these agents: the rows a preview listed under host_tool_roots.rows. Without it, the agents this install itself lists are granted"
+    )]
+    pub(crate) root_agents: Option<Vec<String>>,
     /// Whether this install was requested for its own sake, rather than only
     /// as a documents pack's dependency; never a CLI flag.
     #[arg(skip = true)]

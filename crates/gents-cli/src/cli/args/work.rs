@@ -214,8 +214,6 @@ pub(crate) enum GoalStatusArg {
     Active,
     Paused,
     Blocked,
-    UsageLimited,
-    BudgetLimited,
     Complete,
 }
 

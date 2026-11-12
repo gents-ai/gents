@@ -134,7 +134,7 @@ impl ClientCore {
                     QueueDelivery::Queue,
                 )
                 .await?;
-            let snapshot = self.store.snapshot();
+            let snapshot = self.stores.snapshot(node_did);
             let (_, request) = prepare_request_submission(
                 &self.session_queue_access(node_did)?,
                 snapshot.as_ref(),

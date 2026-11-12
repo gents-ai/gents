@@ -1,18 +1,4 @@
 use super::*;
-#[cfg(test)]
-use gents_protocol::output::rows::{
-    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
-    AGENT_OUTPUT_SEGMENT_FIELDS,
-};
-
-#[cfg(test)]
-pub(super) async fn load_rows<T>(node: &EmbeddedNode, root: &str, query: &str) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    let data = execute_local_graphql_query(node, query, &format!("query for {root}")).await?;
-    parse_query_rows(&data, root)
-}
 
 #[cfg(test)]
 pub struct DocumentPatch {
@@ -23,10 +9,15 @@ pub struct DocumentPatch {
 
 #[cfg(test)]
 pub async fn fetch_doc_patch(
-    node: &EmbeddedNode,
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
     collection_name: &str,
     doc_ids: &[&str],
 ) -> Result<DocumentPatch> {
+    use gents_documents::views::{agents::AgentList, config, tasks};
+    use gents_inference::views::{backends, profiles::ProfileList, settings};
+    use gents_session::views::{requests::RequestRows, transcript, SessionPage};
+    use gents_store::views::runtime;
     if doc_ids.is_empty() {
         return Ok(DocumentPatch {
             store: ClientStore::default(),
@@ -34,287 +25,182 @@ pub async fn fetch_doc_patch(
             missing_doc_ids: (collection_name == AGENT_REQUEST_NAME).then(Vec::new),
         });
     }
-
-    let in_clause = doc_ids
+    let ids = doc_ids
         .iter()
-        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
-        .collect::<Vec<_>>()
-        .join(", ");
-
+        .map(|id| (*id).to_owned())
+        .collect::<Vec<_>>();
+    let scope = transcript::Scope::Node(node_did.to_owned());
     let mut rows = ClientStoreRows::default();
-    let mut observed_physical_documents = None;
+    let observed_documents;
+    macro_rules! read {
+        ($view:expr, $field:ident, $map:expr) => {{
+            let selected = access.read_view(&$view).await?;
+            observed_documents = selected.len();
+            rows.$field = selected.into_iter().map($map).collect();
+        }};
+    }
     match collection_name {
-        NODE_NAME => {
-            rows.nodes = load_rows(
-                node,
-                NODE_NAME,
-                &format!("query {{ {NODE_NAME}(docIDs: [{in_clause}]) {{ {NODE_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        DEFAULT_AGENT_SELECTION_NAME => {
-            rows.default_agent_selections = load_rows(
-                node,
-                DEFAULT_AGENT_SELECTION_NAME,
-                &format!("query {{ {DEFAULT_AGENT_SELECTION_NAME}(docIDs: [{in_clause}]) {{ {DEFAULT_AGENT_SELECTION_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        AGENT_NAME => {
-            rows.agents = load_rows(
-                node,
-                AGENT_NAME,
-                &format!("query {{ {AGENT_NAME}(docIDs: [{in_clause}]) {{ {AGENT_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        NODE_RUNTIME_NAME => {
-            rows.runtimes = load_rows(
-                node,
-                NODE_RUNTIME_NAME,
-                &format!("query {{ {NODE_RUNTIME_NAME}(docIDs: [{in_clause}]) {{ {NODE_RUNTIME_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        NODE_READINESS_NAME => {
-            rows.node_readiness = load_rows(
-                node,
-                NODE_READINESS_NAME,
-                &format!("query {{ {NODE_READINESS_NAME}(docIDs: [{in_clause}]) {{ {NODE_READINESS_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        AGENT_REQUEST_NAME => {
-            rows.requests = load_rows(
-                node,
-                AGENT_REQUEST_NAME,
-                &format!("query {{ {AGENT_REQUEST_NAME}(docIDs: [{in_clause}]) {{ {AGENT_REQUEST_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        MAILBOX_ITEM_NAME => {
-            rows.mailbox_items = load_rows(
-                node,
-                MAILBOX_ITEM_NAME,
-                &format!("query {{ {MAILBOX_ITEM_NAME}(docIDs: [{in_clause}]) {{ {MAILBOX_ITEM_FIELDS} }} }}"),
-            )
-            .await?;
-        }
+        NODE_NAME => read!(config::NodeList::new(node_did).doc_ids(ids), nodes, |row| {
+            row.document
+        }),
+        DEFAULT_AGENT_SELECTION_NAME => read!(
+            config::DefaultAgentSelectionList::new(node_did).doc_ids(ids),
+            default_agent_selections,
+            |row| row.document
+        ),
+        AGENT_NAME => read!(AgentList::new(node_did).doc_ids(ids), agents, |row| row
+            .agent),
+        NODE_RUNTIME_NAME => read!(
+            runtime::NodeRuntimeList::new(node_did).doc_ids(ids),
+            runtimes,
+            |row| row
+        ),
+        NODE_READINESS_NAME => read!(
+            runtime::NodeReadinessList::new(node_did).doc_ids(ids),
+            node_readiness,
+            |row| row
+        ),
+        AGENT_REQUEST_NAME => read!(RequestRows::new(scope).doc_ids(ids), requests, |row| row),
+        MAILBOX_ITEM_NAME => read!(
+            gents_automation::views::MailboxRows::new(node_did).doc_ids(ids),
+            mailbox_items,
+            |row| row
+        ),
         AGENT_MESSAGE_NAME => {
-            let data = execute_local_graphql_query(
-                node,
-                &format!("query {{ {AGENT_MESSAGE_NAME}(docIDs: [{in_clause}]) {{ {AGENT_MESSAGE_FIELDS} }} }}"),
-                "canonical message patch",
-            ).await?;
-            rows.transcript_messages =
-                parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?;
+            let mut view = transcript::MessageRows::new(scope);
+            view.document_ids = Some(ids);
+            read!(view, transcript_messages, |row| row.into_canonical());
         }
         AGENT_OUTPUT_SEGMENT_NAME => {
-            let data = execute_local_graphql_query(
-                node,
-                &format!("query {{ {AGENT_OUTPUT_SEGMENT_NAME}(docIDs: [{in_clause}]) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"),
-                "canonical output segment patch",
-            ).await?;
-            rows.output_segments =
-                parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
+            let mut view = transcript::SegmentRows::new(scope);
+            view.document_ids = Some(ids);
+            read!(view, output_segments, |row| row.into_canonical());
         }
         AGENT_SESSION_NAME => {
-            rows.sessions = load_rows(
-                node,
-                AGENT_SESSION_NAME,
-                &format!("query {{ {AGENT_SESSION_NAME}(docIDs: [{in_clause}]) {{ {AGENT_SESSION_FIELDS} }} }}"),
-            )
-            .await?;
+            let view = SessionPage {
+                input: gents_protocol::operations::session::SessionListInput {
+                    node_did: Some(node_did.to_owned()),
+                    include_archived: true,
+                    ..Default::default()
+                },
+                doc_ids: Some(ids),
+                ..Default::default()
+            };
+            read!(view, sessions, |row| row.session);
         }
-        GOAL_NAME => {
-            rows.goals = load_rows(
-                node,
-                GOAL_NAME,
-                &format!("query {{ {GOAL_NAME}(docIDs: [{in_clause}]) {{ {GOAL_FIELDS} }} }}"),
-            )
-            .await?;
-        }
+        GOAL_NAME => read!(
+            gents_automation::views::GoalRows::new(node_did).doc_ids(ids),
+            goals,
+            |row| row
+        ),
         AGENT_TOOL_CALL_NAME => {
-            rows.tool_calls = load_rows(
-                node,
-                AGENT_TOOL_CALL_NAME,
-                &format!("query {{ {AGENT_TOOL_CALL_NAME}(docIDs: [{in_clause}]) {{ {AGENT_TOOL_CALL_FIELDS} }} }}"),
-            )
-            .await?;
+            let mut view = transcript::ToolCallRows::new(scope);
+            view.document_ids = Some(ids);
+            read!(view, tool_calls, |row| row);
         }
         COMPACTION_ENTRY_NAME => {
-            rows.compaction_entries = load_rows(
-                node,
-                COMPACTION_ENTRY_NAME,
-                &format!("query {{ {COMPACTION_ENTRY_NAME}(docIDs: [{in_clause}]) {{ {COMPACTION_ENTRY_FIELDS} }} }}"),
-            )
-            .await?;
+            let mut view = transcript::CompactionRows::new(scope);
+            view.document_ids = Some(ids);
+            read!(view, compaction_entries, |row| row);
         }
-        TASK_NAME => {
-            rows.tasks = load_rows(
-                node,
-                TASK_NAME,
-                &format!("query {{ {TASK_NAME}(docIDs: [{in_clause}]) {{ {TASK_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        SCHEDULE_NAME => {
-            rows.schedules = load_rows(
-                node,
-                SCHEDULE_NAME,
-                &format!("query {{ {SCHEDULE_NAME}(docIDs: [{in_clause}]) {{ {SCHEDULE_FIELDS} }} }}"),
-            )
-            .await?;
-        }
+        TASK_NAME => read!(tasks::TaskList::new(node_did).doc_ids(ids), tasks, |row| {
+            row.task
+        }),
+        SCHEDULE_NAME => read!(
+            tasks::ScheduleList::new(node_did).doc_ids(ids),
+            schedules,
+            |row| row.schedule
+        ),
         TRIGGER_NAME => {
-            let data = execute_local_graphql_query(
-                node,
-                &format!("query {{ {TRIGGER_NAME}(docIDs: [{in_clause}]) {{ {TRIGGER_FIELDS} {TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS} }} }}"),
-                "trigger document patch",
-            ).await?;
-            observed_physical_documents = Some(
-                data.get(TRIGGER_NAME)
-                    .and_then(Value::as_array)
-                    .map_or(0, Vec::len),
-            );
-            (rows.triggers, rows.trigger_source_node_dids) = parse_projected_query_rows_with_source(
-                &data,
-                TRIGGER_NAME,
-                TRIGGER_FIELDS,
-                &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
-                Some("node_did"),
-            )?;
-            (rows.trigger_observations, rows.trigger_observation_source_node_dids) = parse_observation_query_rows_with_source(
-                &data,
-                TRIGGER_NAME,
-                TRIGGER_OBSERVATION_FIELDS,
-                Some("node_did"),
-            )?;
-            (rows.schedule_observations, rows.schedule_observation_source_node_dids) = parse_observation_query_rows_with_source(
-                &data,
-                TRIGGER_NAME,
-                SCHEDULE_OBSERVATION_FIELDS,
-                Some("node_did"),
-            )?;
+            let selected = access
+                .read_view(&tasks::TriggerList::new(node_did).doc_ids(ids))
+                .await?;
+            observed_documents = selected.len();
+            for row in selected {
+                let (trigger, observation, schedule) = row.into_parts();
+                rows.triggers.push(trigger);
+                rows.trigger_observations.push(observation);
+                rows.schedule_observations.push(schedule);
+            }
         }
-        SKILL_NAME => {
-            rows.skills = load_rows(
-                node,
-                SKILL_NAME,
-                &format!("query {{ {SKILL_NAME}(docIDs: [{in_clause}]) {{ {SKILL_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        TOOLS_NAME => {
-            rows.tools = load_rows(
-                node,
-                TOOLS_NAME,
-                &format!("query {{ {TOOLS_NAME}(docIDs: [{in_clause}]) {{ {TOOLS_FIELDS} }} }}"),
-            )
-            .await?;
-        }
+        SKILL_NAME => read!(
+            config::SkillList::new(node_did).doc_ids(ids),
+            skills,
+            |row| row.document
+        ),
+        TOOLS_NAME => read!(
+            config::ToolsList::new(node_did).doc_ids(ids),
+            tools,
+            |row| row.document
+        ),
         INFERENCE_BACKEND_NAME => {
-            let data = execute_local_graphql_query(
-                node,
-                &format!("query {{ {INFERENCE_BACKEND_NAME}(docIDs: [{in_clause}]) {{ {INFERENCE_BACKEND_FIELDS} }} }}"),
-                "inference backend document patch",
-            ).await?;
-            observed_physical_documents = Some(
-                data.get(INFERENCE_BACKEND_NAME)
-                    .and_then(Value::as_array)
-                    .map_or(0, Vec::len),
-            );
-            let (metadata, sources): (Vec<gents_documents::InferenceBackendMetadata>, _) = parse_projected_query_rows_with_source(
-                &data,
-                INFERENCE_BACKEND_NAME,
-                INFERENCE_BACKEND_FIELDS,
-                "",
-                Some("node_did"),
-            )?;
-            rows.inference_backends = metadata.into_iter().map(|metadata| metadata.into_backend().map_err(anyhow::Error::from)).collect::<Result<_>>()?;
-            rows.inference_backend_source_node_dids = sources;
+            let selected = access
+                .read_view(&backends::BackendList::new(node_did).doc_ids(ids))
+                .await?;
+            observed_documents = selected.len();
+            for row in selected {
+                rows.inference_backends.push(row.metadata.into_backend()?);
+            }
         }
         INFERENCE_BACKEND_OBSERVATION_NAME => {
-            let data = execute_local_graphql_query(
-                node,
-                &format!("query {{ {INFERENCE_BACKEND_OBSERVATION_NAME}(docIDs: [{in_clause}]) {{ node_did {INFERENCE_BACKEND_OBSERVATION_FIELDS} }} }}"),
-                "inference backend observation patch",
-            ).await?;
-            observed_physical_documents = Some(data.get(INFERENCE_BACKEND_OBSERVATION_NAME).and_then(Value::as_array).map_or(0, Vec::len));
-            (rows.backend_observations, rows.backend_observation_source_node_dids) =
-                parse_backend_observation_rows(&data, INFERENCE_BACKEND_OBSERVATION_NAME)?;
+            let selected = access
+                .read_view(&backends::ObservationList::new(node_did).doc_ids(ids))
+                .await?;
+            observed_documents = selected.len();
+            for row in selected {
+                rows.backend_observations.push(row.observation);
+            }
         }
-        "AgentContext" => rows.contexts = load_rows(node, "AgentContext", &format!("query {{ AgentContext(docIDs: [{in_clause}]) {{ {AGENT_CONTEXT_FIELDS} }} }}")).await?,
-        "CompactionConfig" => rows.compactions = load_rows(node, "CompactionConfig", &format!("query {{ CompactionConfig(docIDs: [{in_clause}]) {{ {COMPACTION_CONFIG_FIELDS} }} }}")).await?,
-        "InferenceSampling" => rows.inference_sampling = load_rows(node, "InferenceSampling", &format!("query {{ InferenceSampling(docIDs: [{in_clause}]) {{ {INFERENCE_SAMPLING_FIELDS} }} }}")).await?,
-        "InferenceExecution" => rows.inference_execution = load_rows(node, "InferenceExecution", &format!("query {{ InferenceExecution(docIDs: [{in_clause}]) {{ {INFERENCE_EXECUTION_FIELDS} }} }}")).await?,
-        "EventSource" => rows.event_sources = load_rows(node, "EventSource", &format!("query {{ EventSource(docIDs: [{in_clause}]) {{ {EVENT_SOURCE_FIELDS} }} }}")).await?,
-        AGENT_TARGET_NAME => rows.agent_targets = load_rows(node, AGENT_TARGET_NAME, &format!("query {{ {AGENT_TARGET_NAME}(docIDs: [{in_clause}]) {{ {AGENT_TARGET_FIELDS} }} }}")).await?,
-        "DatastoreToolSurface" => rows.datastore_tool_surfaces = load_rows(node, "DatastoreToolSurface", &format!("query {{ DatastoreToolSurface(docIDs: [{in_clause}]) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }} }}")).await?,
-        INFERENCE_PROFILE_NAME => {
-            rows.inference_profiles = load_rows(
-                node,
-                INFERENCE_PROFILE_NAME,
-                &format!("query {{ {INFERENCE_PROFILE_NAME}(docIDs: [{in_clause}]) {{ {INFERENCE_PROFILE_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        TOOL_SERVICE_REGISTRY_NAME => {
-            rows.tool_service_registries = load_rows(
-                node,
-                TOOL_SERVICE_REGISTRY_NAME,
-                &format!("query {{ {TOOL_SERVICE_REGISTRY_NAME}(docIDs: [{in_clause}]) {{ {TOOL_SERVICE_REGISTRY_FIELDS} }} }}"),
-            )
-            .await?;
-        }
+        "AgentContext" => read!(
+            config::AgentContextList::new(node_did).doc_ids(ids),
+            contexts,
+            |row| row.document
+        ),
+        "CompactionConfig" => read!(
+            config::CompactionConfigList::new(node_did).doc_ids(ids),
+            compactions,
+            |row| row.document
+        ),
+        "InferenceSampling" => read!(
+            settings::SamplingList::new(node_did).doc_ids(ids),
+            inference_sampling,
+            |row| row.settings
+        ),
+        "InferenceExecution" => read!(
+            settings::ExecutionList::new(node_did).doc_ids(ids),
+            inference_execution,
+            |row| row.settings
+        ),
+        "EventSource" => read!(
+            tasks::EventSourceList::new(node_did).doc_ids(ids),
+            event_sources,
+            |row| row.event_source
+        ),
+        AGENT_TARGET_NAME => read!(
+            config::AgentTargetList::new(node_did).doc_ids(ids),
+            agent_targets,
+            |row| row.document
+        ),
+        "DatastoreToolSurface" => read!(
+            config::DatastoreToolSurfaceList::new(node_did).doc_ids(ids),
+            datastore_tool_surfaces,
+            |row| row.document
+        ),
+        INFERENCE_PROFILE_NAME => read!(
+            ProfileList::new(node_did).doc_ids(ids),
+            inference_profiles,
+            |row| row.profile
+        ),
+        TOOL_SERVICE_REGISTRY_NAME => read!(
+            gents_tools::mcp::views::ServiceDocuments {
+                node_did,
+                doc_ids: &ids
+            },
+            tool_service_registries,
+            |row| row.config
+        ),
         other => bail!("fetch_doc_patch: unknown collection {other}"),
     }
-    rows.context_source_node_dids = rows
-        .contexts
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.compaction_source_node_dids = rows
-        .compactions
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.inference_sampling_source_node_dids = rows
-        .inference_sampling
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.inference_execution_source_node_dids = rows
-        .inference_execution
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.event_source_source_node_dids = rows
-        .event_sources
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.agent_target_source_node_dids = rows
-        .agent_targets
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.datastore_tool_surface_source_node_dids = rows
-        .datastore_tool_surfaces
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.tool_service_registry_source_node_dids = rows
-        .tool_service_registries
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.inference_profile_source_node_dids = rows
-        .inference_profiles
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    let request_count = rows.requests.len();
     let missing_doc_ids = (collection_name == AGENT_REQUEST_NAME).then(|| {
         let found_doc_ids: rapidhash::RapidHashSet<&str> = rows
             .requests
@@ -327,14 +213,8 @@ pub async fn fetch_doc_patch(
             .map(|doc_id| (*doc_id).to_owned())
             .collect()
     });
-    let store = ClientStore::from_rows(rows);
-    let observed_documents = if collection_name == AGENT_REQUEST_NAME {
-        request_count
-    } else {
-        observed_physical_documents.unwrap_or_else(|| store.row_count())
-    };
     Ok(DocumentPatch {
-        store,
+        store: ClientStore::from_rows(rows),
         observed_documents,
         missing_doc_ids,
     })

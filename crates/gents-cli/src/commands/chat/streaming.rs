@@ -4,7 +4,10 @@ use std::io::{self, IsTerminal, Write};
 use anyhow::{Context, Result};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::operations::request::{RequestReceipt, RequestRef};
-use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_protocol::row::AgentToolCallRow;
+use gents_protocol::session::SessionScope;
+use gents_session::views::transcript::ToolCallRows;
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
@@ -50,48 +53,6 @@ struct Shown {
     thinking_printed: bool,
 }
 
-pub(crate) async fn load_existing_tool_call_keys(
-    graphql: &GraphqlEndpoint,
-    session_id: &str,
-) -> Result<std::collections::BTreeMap<String, String>> {
-    let rendered = {
-        use gents_protocol::document_query::{
-            fields::agent_tool_call as fields, Filter, Query, Selection,
-        };
-        Query::select(
-            Selection::new()
-                .field(fields::TOOL_CALL_KEY)
-                .field(fields::STATUS),
-        )
-        .filter(Filter::eq(fields::SESSION_ID, session_id))
-        .render()
-    };
-    let response = gents_store::config_client::post_graphql_with_variables(
-        graphql,
-        &rendered.document,
-        &rendered.variables,
-    )
-    .await?;
-    let rows = response
-        .pointer("/data/AgentToolCall")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            Some((
-                row.get("tool_call_key")?.as_str()?.to_string(),
-                row.get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-            ))
-        })
-        .collect())
-}
-
 /// Whether ANSI styling should be applied: only on a real terminal, and only
 /// when the caller has not opted out via `NO_COLOR`
 /// (https://no-color.org — any non-empty *or* empty value disables color).
@@ -112,28 +73,6 @@ fn folded_input_completed(state: RequestLifecycleState, reason: &str) -> bool {
         && reason == gents_session::request::lifecycle::FOLDED_REASON
 }
 
-fn tool_calls_query(receipt: &RequestReceipt) -> gents_protocol::document_query::Rendered {
-    use gents_protocol::document_query::{
-        fields::agent_tool_call, session_scope, Direction, Filter, Query, Selection,
-    };
-    Query::select(Selection::owned(
-        "_docID tool_call_key tool_name status started_at completed_at",
-    ))
-    .filter(
-        session_scope(
-            &receipt.node_did,
-            &receipt.session_id,
-            receipt.requester_did.as_deref(),
-        )
-        .and(Filter::eq(
-            agent_tool_call::REQUEST_DOC_ID,
-            &receipt.request_doc_id,
-        )),
-    )
-    .order_by(agent_tool_call::STARTED_AT, Direction::Asc)
-    .render()
-}
-
 /// Prints the tool lines and the thinking indicator that changed since the
 /// last poll; true when the turn showed progress.
 async fn show_progress(
@@ -145,10 +84,18 @@ async fn show_progress(
     colors: bool,
 ) -> Result<bool> {
     let mut shown = shown.lock().await;
-    let response = access.read(&tool_calls_query(receipt)).await?;
-    let tool_rows = gents_protocol::document_query::rows(&response, "AgentToolCall");
+    let tool_rows = access
+        .read_view(&ToolCallRows::for_request(
+            SessionScope {
+                node_did: receipt.node_did.clone(),
+                session_id: receipt.session_id.clone(),
+                requester_did: receipt.requester_did.clone(),
+            },
+            &receipt.request_doc_id,
+        ))
+        .await?;
     let mut progressed = false;
-    for mut tool in tool_rows.iter().filter_map(decode_tool_call_progress) {
+    for mut tool in tool_rows.iter().filter_map(tool_call_progress) {
         let terminal = matches!(tool.status.as_str(), "completed" | "error");
         let presentation = gents_session::session::load_tool_call_presentation(
             access,
@@ -376,12 +323,12 @@ fn chat_output_progress(
     })
 }
 
-fn chat_tool_progress_marker(row: &Value) -> ChatToolProgressMarker {
+fn chat_tool_progress_marker(row: &AgentToolCallRow) -> ChatToolProgressMarker {
     ChatToolProgressMarker {
-        tool_call_key: scalar_marker(Some(row), "tool_call_key"),
-        status: scalar_marker(Some(row), "status"),
-        started_at: scalar_marker(Some(row), "started_at"),
-        completed_at: scalar_marker(Some(row), "completed_at"),
+        tool_call_key: Some(row.tool_call_key.clone()),
+        status: row.status.clone(),
+        started_at: row.started_at.clone(),
+        completed_at: row.completed_at.clone(),
     }
 }
 
@@ -400,25 +347,12 @@ fn should_print_thinking(
             .unwrap_or(false)
 }
 
-fn scalar_marker(row: Option<&Value>, field: &str) -> Option<String> {
-    let value = row?.get(field)?;
-    if value.is_null() {
-        return None;
-    }
-    value
-        .as_str()
-        .map(ToOwned::to_owned)
-        .or_else(|| value.as_i64().map(|value| value.to_string()))
-        .or_else(|| value.as_u64().map(|value| value.to_string()))
-        .or_else(|| value.as_bool().map(|value| value.to_string()))
-}
-
-pub(super) fn decode_tool_call_progress(row: &Value) -> Option<ToolCallProgress> {
+fn tool_call_progress(row: &AgentToolCallRow) -> Option<ToolCallProgress> {
     Some(ToolCallProgress {
-        tool_call_doc_id: row.get("_docID")?.as_str()?.to_string(),
-        tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
-        tool_name: row.get("tool_name")?.as_str()?.to_string(),
-        status: row.get("status")?.as_str()?.to_string(),
+        tool_call_doc_id: row.doc_id.clone()?,
+        tool_call_key: row.tool_call_key.clone(),
+        tool_name: row.tool_name.clone()?,
+        status: row.status.clone()?,
         arguments: String::new(),
         result: None,
     })

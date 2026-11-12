@@ -7,10 +7,8 @@ use gents_protocol::node_readiness::{
 };
 use gents_protocol::operations::agent::{AgentCreateInput, AgentCreateOperation};
 use gents_protocol::operations::StringUpdate;
-use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
+use gents_protocol::row::decode_node_readiness_snapshot;
 use gents_store::config_client::GraphqlEndpoint;
-use gents_store::graphql::escape_graphql_string;
-use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;
 use gents_service::state::StoredInitConfig;
@@ -36,52 +34,41 @@ pub(super) async fn ensure_agent(
     let access = ConfigAccess::Graphql(graphql.clone());
     let node_did = config.node_did.as_str();
     let source = default_agent(&access, node_did).await?;
-    let rendered = {
-        use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
-        Query::select(
-            Selection::new()
-                .field(fields::AGENT_DID)
-                .field(fields::DISPLAY_NAME)
-                .field(fields::DESCRIPTION)
-                .field(fields::ENABLED)
-                .field(fields::INFERENCE_PROFILE_ID)
-                .field(fields::CREATED_AT),
+    let yolos = access
+        .read_view(
+            &gents_documents::views::agents::AgentList::new(node_did)
+                .named(DISPLAY_NAME, DESCRIPTION)
+                .oldest_first(),
         )
-        .filter(Filter::eq(fields::NODE_DID, node_did))
-        .render()
-    };
-    let rows = gents_protocol::graphql::graphql_rows_from_response(
-        &access.read(&rendered).await?,
-        "Agent",
-    );
-    let mut yolos: Vec<&Value> = rows
-        .iter()
-        .filter(|row| row["display_name"] == DISPLAY_NAME && row["description"] == DESCRIPTION)
-        .collect();
-    yolos.sort_by_key(|row| (row["created_at"].as_str(), row["agent_did"].as_str()));
-    if let Some(agent) = yolos.iter().find(|row| row["enabled"] == Value::Bool(true)) {
-        let yolo = agent["agent_did"]
-            .as_str()
-            .context("the yolo agent row has no agent_did")?;
+        .await?;
+    if let Some(row) = yolos.iter().find(|row| row.agent.enabled) {
+        let yolo = &row.agent.agent_did;
         ensure_root_reader(&access, node_did, yolo, &source).await?;
         grant_self_configuration(&access, node_did, yolo, &source).await?;
         wait_until_ready(&access, node_did, yolo).await?;
         return Ok(yolo.to_owned());
     }
-    if let Some(disabled) = yolos.first().and_then(|row| row["agent_did"].as_str()) {
+    if let Some(row) = yolos.first() {
         bail!(
             "the yolo agent {disabled} is disabled. Remove it with `gents config agent rm {disabled} --home {home}`, then run `gents --yolo` again to make a new one.",
+            disabled = row.agent.agent_did,
             home = crate::shell_word(home)
         );
     }
-    let profile_id = rows
-        .iter()
-        .find(|row| row["agent_did"] == source.as_str())
-        .and_then(|agent| agent["inference_profile_id"].as_str())
+    let profile_id = access
+        .read_view(
+            &gents_documents::views::agents::AgentList::new(node_did)
+                .agent_did(&source)
+                .limit(1),
+        )
+        .await?
+        .into_iter()
+        .next()
         .with_context(|| {
             format!("this home has no default agent {source} with a profile to give the yolo agent")
         })?
-        .to_owned();
+        .agent
+        .inference_profile_id;
     let identity_binding = gents_desktop_core::agent_identity::provision(graphql, node_did).await?;
     let yolo = identity_binding.agent_did.clone();
     let made = gents::operations::agent::create(
@@ -119,22 +106,16 @@ pub(super) async fn ensure_agent(
 
 /// The node's default agent, as its DefaultAgentSelection document names it.
 pub(crate) async fn default_agent(access: &ConfigAccess, node_did: &str) -> Result<String> {
-    use gents_protocol::document_query::{
-        fields::default_agent_selection as fields, Filter, Query, Selection,
-    };
-    let rendered = Query::select(Selection::new().field(fields::DEFAULT_AGENT_DID))
-        .filter(Filter::eq(fields::NODE_DID, node_did))
-        .limit(1)
-        .render();
-    let rows = gents_protocol::graphql::graphql_rows_from_response(
-        &access.read(&rendered).await?,
-        "DefaultAgentSelection",
-    );
-    rows.first()
-        .and_then(|row| row["default_agent_did"].as_str())
-        .map(str::trim)
+    access
+        .read_view(
+            &gents_documents::views::config::DefaultAgentSelectionList::new(node_did).limit(1),
+        )
+        .await?
+        .into_iter()
+        .next()
+        .and_then(|row| row.document.default_agent_did)
+        .map(|did| did.trim().to_owned())
         .filter(|did| !did.is_empty())
-        .map(str::to_owned)
         .with_context(|| format!("node {node_did} names no default agent"))
 }
 
@@ -228,19 +209,14 @@ pub(crate) async fn node_readiness(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Option<NodeReadinessSnapshot>> {
-    let rows = crate::graphql_rows(
-        access,
-        "NodeReadiness",
-        &format!(
-            r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}, order: {{updated_at: DESC}}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
-            escape_graphql_string(node_did)
-        ),
-    )
-    .await?;
-    let Some(row) = rows.into_iter().next() else {
+    let Some(row) = access
+        .read_view(&gents_store::views::runtime::NodeReadinessList::new(node_did).limit(1))
+        .await?
+        .into_iter()
+        .next()
+    else {
         return Ok(None);
     };
-    let row: NodeReadinessRow = serde_json::from_value(row).context("reading NodeReadiness")?;
     Ok(decode_node_readiness_snapshot(&row, node_did)
         .ok()
         .filter(|snapshot| snapshot.router_generation == snapshot.active_generation))

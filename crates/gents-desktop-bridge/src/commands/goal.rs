@@ -50,7 +50,7 @@ fn waiting_question_ids(
     session_id: &str,
     observation: &SessionGoalObservation,
 ) -> Option<Vec<String>> {
-    let snapshot = core.store().snapshot();
+    let snapshot = core.stores().snapshot(node_did);
     let mut sessions = snapshot.sessions.iter().filter(|session| {
         session.node_did == node_did
             && session.session_id == session_id

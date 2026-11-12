@@ -1,5 +1,5 @@
 use super::scope::resolve_plugin_slot_owner;
-use super::{plugin_notification_scope, resolve_scope_owner, wire};
+use super::{plugin_notification_scope, resolve_scope_owner};
 use crate::cli::*;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -8,6 +8,7 @@ use gents_pack::pack::install_flow::{
     check_wire_target, has_plugin_references, install_documents_pack_resolved_inner, merge,
     DocumentsInstallRequest, LocalPackAccess,
 };
+use gents_pack::pack::installation_roots;
 use gents_pack::pack::plugin_wire::wire_pack_plugins;
 use gents_pack::pack::resolved_pack::{resolve_pack_source, ResolvedPack};
 use gents_pack::pack::{PackChangeError, PackKind, PackManifest};
@@ -21,6 +22,7 @@ pub(crate) fn install_request(args: &PackInstallArgs) -> DocumentsInstallRequest
         remote: args.scope.graphql.is_some(),
         inference_slots: args.inference_slots.clone(),
         dependency_variables: args.dependency_variables.clone(),
+        bind_agents: args.bind_agents.clone(),
         preview: args.preview,
         force_rebind_concrete_did: args.force_rebind_concrete_did,
         edited: args.drift.edited(),
@@ -39,27 +41,50 @@ pub(crate) async fn install_documents_pack(
     args: &PackInstallArgs,
     explicit: bool,
 ) -> Result<serde_json::Value, PackChangeError> {
-    install_documents_pack_inner(access, owner, pack, args, explicit, None).await
+    let dependencies = resolve_dependencies(pack, args).await?;
+    install_documents_pack_inner(
+        access,
+        owner,
+        pack,
+        args,
+        explicit,
+        dependencies,
+        None,
+        false,
+    )
+    .await
 }
 
+/// The archives of the packs `pack` declares as dependencies.
+async fn resolve_dependencies(
+    pack: &ResolvedPack,
+    args: &PackInstallArgs,
+) -> Result<Vec<ResolvedPack>> {
+    let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
+    futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
+        .map(|coordinate| resolve_pack_source(coordinate, args.registry.as_deref(), &home))
+        .buffered(4)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect()
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the install inputs each entry point supplies, and whether it asks approval for a root grant"
+)]
 async fn install_documents_pack_inner(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     pack: &ResolvedPack,
     args: &PackInstallArgs,
     explicit: bool,
+    dependencies: Vec<ResolvedPack>,
     local: Option<&LocalPackAccess>,
+    refuse_unapproved_root: bool,
 ) -> Result<serde_json::Value, PackChangeError> {
     let request = install_request(args);
-    let home = request.home.clone();
-    let dependencies: Vec<ResolvedPack> =
-        futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
-            .map(|coordinate| resolve_pack_source(coordinate, args.registry.as_deref(), &home))
-            .buffered(4)
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
     if let gents_store::config_client::ConfigAccess::Graphql(endpoint) = access {
         let mut needs_runtime_store = false;
         for source in std::iter::once(pack).chain(dependencies.iter()) {
@@ -118,6 +143,8 @@ async fn install_documents_pack_inner(
         explicit,
         dependencies,
         local,
+        &gents_tools::surface::PackRoots,
+        refuse_unapproved_root,
     )
     .await
 }
@@ -161,7 +188,29 @@ pub(super) async fn install_documents_command_with_local(
     args: &PackInstallArgs,
     local_endpoint: Option<gents_store::config_client::GraphqlEndpoint>,
 ) -> Result<(), PackChangeError> {
+    let (receipt, failed_step) =
+        install_documents_report(access, pack, args, local_endpoint).await?;
+    crate::print_json(&receipt)?;
+    match failed_step {
+        Some(failed) => Err(anyhow::anyhow!(
+            "the pack is installed, but {failed}; the receipt above lists each step that failed and the command that completes it"
+        )
+        .into()),
+        None => Ok(()),
+    }
+}
+
+/// The install's receipt, and the step that failed after the install
+/// committed: the pack is on the node by then, so its receipt is returned
+/// with the failed step named rather than lost with the error.
+pub(super) async fn install_documents_report(
+    access: gents_store::config_client::ConfigAccess,
+    pack: &ResolvedPack,
+    args: &PackInstallArgs,
+    local_endpoint: Option<gents_store::config_client::GraphqlEndpoint>,
+) -> Result<(serde_json::Value, Option<String>), PackChangeError> {
     let result = async {
+        let mut failed_step = None;
         let (home, owner, local) = async {
             let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
             let bind_mode = if args.scope.graphql.is_some() {
@@ -208,28 +257,75 @@ pub(super) async fn install_documents_command_with_local(
             anyhow::Ok((home, owner, local))
         }
         .await?;
+        // Refused before anything is resolved or written.
+        let reviewed = args
+            .root_agents
+            .as_deref()
+            .map(installation_roots::reviewed_root_agents)
+            .transpose()?;
+        let dependencies = resolve_dependencies(pack, args).await?;
+        // The root pack and its dependencies: the packs whose records the
+        // grant reads, whichever install first put them on the node.
+        let coordinates: Vec<String> = std::iter::once(pack)
+            .chain(&dependencies)
+            .map(|source| {
+                format!(
+                    "{}/{}",
+                    source.manifest().metadata.namespace,
+                    source.manifest().name
+                )
+            })
+            .collect();
         let mut output = install_documents_pack_inner(
             &access,
             &owner,
             pack,
             args,
             args.explicit,
+            dependencies,
             local.as_ref(),
+            true,
         )
         .await?;
         if !args.preview {
-            let readers = wire::grant_pack_root_readers(
-                &access,
-                &owner,
-                &format!(
-                    "{}/{}",
-                    pack.manifest().metadata.namespace,
-                    pack.manifest().name
-                ),
-            )
-            .await?;
-            if !readers.is_empty() {
-                output["host_tool_roots"] = readers.into();
+            // What the approver was shown: the rows a separate review named
+            // back, or with none given the rows of this install's own plan,
+            // which its receipt lists and `--grant-authority` approves.
+            let planned = installation_roots::take_planned_root_agents(&mut output);
+            let shown = reviewed.unwrap_or(planned);
+            let readers = match gents_pack::pack::installer_tool_root(&access, &owner, None).await
+            {
+                Ok(supplied) => {
+                    gents_tools::surface::grant_pack_root_readers(
+                        &access,
+                        &owner,
+                        &coordinates,
+                        &shown,
+                        supplied.as_deref(),
+                        args.grant_authority,
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            };
+            match readers {
+                Ok(readers) => {
+                    if readers.iter().any(|reader| reader.get("failed").is_some()) {
+                        failed_step =
+                            Some("an agent it ships was not granted its tool root".to_owned());
+                    }
+                    if !readers.is_empty() {
+                        output["host_tool_roots"] = readers.into();
+                    }
+                }
+                Err(error) => {
+                    failed_step =
+                        Some("the tool roots its agents need could not be read".to_owned());
+                    output["host_tool_roots_failed"] = json!({
+                        "error": format!("{error:#}"),
+                        "next": "repeat the install with --grant-authority once the cause is resolved",
+                    });
+                }
             }
         }
         if !args.wire.is_empty() && !args.preview && args.scope.graphql.is_none() {
@@ -244,7 +340,7 @@ pub(super) async fn install_documents_command_with_local(
             .await?
             .into();
         }
-        Ok::<_, PackChangeError>(output)
+        Ok::<_, PackChangeError>((output, failed_step))
     }
     .await;
     if let Some(node) = access.local_node() {
@@ -252,7 +348,7 @@ pub(super) async fn install_documents_command_with_local(
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
         }
     }
-    Ok(crate::print_json(&result?)?)
+    result
 }
 
 pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError> {

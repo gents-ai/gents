@@ -18,6 +18,7 @@ fn right(connection: &Connection, branch: Option<&str>, width: u16) -> String {
             format!("runtime ready · {branch} ")
         }
         (Connection::Ready, _) => "runtime ready ".to_string(),
+        (Connection::NoAgent(_), _) => "no agent ready ".to_string(),
         (Connection::Lost(_), _) => "runtime lost ".to_string(),
     }
 }
@@ -111,7 +112,7 @@ pub fn draw(app: &App, area: Rect, buf: &mut Buffer) {
     let hints_x = area.x + chip.len() as u16 + 1;
     let room = right_x.saturating_sub(hints_x + 1) as usize;
     let lost = match &app.connection {
-        Connection::Lost(message) => Some(message.as_str()),
+        Connection::Lost(message) | Connection::NoAgent(message) => Some(message.as_str()),
         _ => None,
     };
     let message = app.keymap.pending().or(app.notice.as_deref()).or(lost);

@@ -480,6 +480,7 @@ mod native_access_tests {
         )
         .await?;
         node.add_collection(gents_protocol::schemas::NODE).await?;
+        node.add_collection(gents_protocol::schemas::AGENT).await?;
         node.add_collection(gents_protocol::schemas::OAUTH_CREDENTIAL)
             .await?;
         let access = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {

@@ -18,17 +18,7 @@ pub(super) fn resolve_agent_binding(
         store
             .sessions
             .iter()
-            .enumerate()
-            .find(|(index, row)| {
-                row.session_id == session_id
-                    && row.node_did == node_did
-                    && store
-                        .session_source_node_dids
-                        .get(*index)
-                        .and_then(|source| source.as_deref())
-                        .is_none_or(|source| source == node_did)
-            })
-            .map(|(_index, row)| row)
+            .find(|row| row.session_id == session_id && row.node_did == node_did)
     });
 
     let agent_did = resolve_agent_did(

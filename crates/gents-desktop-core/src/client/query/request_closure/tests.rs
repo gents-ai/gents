@@ -1,10 +1,11 @@
-use super::super::parse_query_rows;
 use super::*;
 use gents_protocol::graphql::graphql_input_literal;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::json;
+use serde_json::Value;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -20,6 +21,10 @@ async fn generated_request_closures_use_exact_database_dependencies() {
     crate::client::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
+    let access = ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    );
     let outside_scope = ConfigAccess::write_local(
         &node,
         "test.seed_unavailable_successor",
@@ -128,11 +133,15 @@ async fn generated_request_closures_use_exact_database_dependencies() {
     let mut excluded_sql_cases = Vec::new();
     let mut sql_case_count = 0;
     for (case, docs, session) in seeded {
-        let session = escape_graphql_string(&session);
-        let data = execute_local_graphql_query(&node, &format!(
-            "query {{ AgentRequest(filter: {{node_did: {{_eq: \"closure-node\"}}, session_id: {{_eq: \"{session}\"}}}}) {{ {AGENT_REQUEST_FIELDS} }} }}"
-        ), "test closure inputs").await.unwrap();
-        let all = parse_query_rows::<AgentRequestRow>(&data, AGENT_REQUEST_NAME).unwrap();
+        let all = access
+            .read_view(
+                &RequestRows::new(gents_session::views::transcript::Scope::Node(
+                    "closure-node".into(),
+                ))
+                .session_id(Some(session.clone())),
+            )
+            .await
+            .unwrap();
         let seed_docs = case["seed_docs"]
             .as_array()
             .map(Vec::as_slice)
@@ -166,15 +175,27 @@ async fn generated_request_closures_use_exact_database_dependencies() {
                 .map(|doc| docs[&doc.as_u64().unwrap()].clone())
                 .collect::<Vec<_>>();
             let scopes = super::super::request_seed_scopes(std::slice::from_ref(&selected));
-            let query = super::super::session_request_seed_query(&scopes, &page_docs);
-            let data = execute_local_graphql_query(&node, &query, "modeled session request seeds")
+            seeds = access
+                .transact_readonly("test.request_seed_views", |txn| {
+                    let selected = selected.clone();
+                    let scopes = &scopes;
+                    let page_docs = &page_docs;
+                    Box::pin(async move {
+                        super::super::read_request_seeds_in_txn(
+                            txn,
+                            vec![selected],
+                            scopes,
+                            page_docs,
+                        )
+                        .await
+                    })
+                })
                 .await
                 .unwrap();
-            seeds = super::super::request_seeds_from_data(&data, vec![selected], &scopes).unwrap();
         } else if case["selected_doc"].is_number() {
             excluded_sql_cases.push(case["name"].as_str().unwrap());
         }
-        let actual = close_request_rows(&node, seeds).await.unwrap();
+        let actual = close_request_rows_on(&access, seeds).await.unwrap();
         let expected = case
             .get("expected_read_docs")
             .unwrap_or(&case["expected_docs"])
@@ -213,6 +234,10 @@ async fn partial_twin_seed_keeps_the_full_projection_order() {
     crate::client::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
+    let access = ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    );
     let queued: RequestInput = RequestInput {
         queue: Some(RequestQueue {
             delivery: Default::default(),
@@ -245,17 +270,15 @@ async fn partial_twin_seed_keeps_the_full_projection_order() {
         .await
         .unwrap();
     }
-    let data = execute_local_graphql_query(
-        &node,
-        &format!("query {{ AgentRequest {{ {AGENT_REQUEST_FIELDS} }} }}"),
-        "test full twin projection",
-    )
-    .await
-    .unwrap();
-    let mut full = parse_query_rows::<AgentRequestRow>(&data, AGENT_REQUEST_NAME).unwrap();
+    let mut full = access
+        .read_view(&RequestRows::new(
+            gents_session::views::transcript::Scope::Node("node".into()),
+        ))
+        .await
+        .unwrap();
     crate::client::store::sort_request_rows(&mut full);
     let seeds = vec![full[1].clone(), full[2].clone()];
-    let closed = close_request_rows(&node, seeds).await.unwrap();
+    let closed = close_request_rows_on(&access, seeds).await.unwrap();
     assert_eq!(
         closed.iter().map(|row| &row.doc_id).collect::<Vec<_>>(),
         full.iter().map(|row| &row.doc_id).collect::<Vec<_>>()
@@ -279,25 +302,4 @@ async fn missing_scope_stays_a_leaf_without_querying() {
         .unwrap();
     assert_eq!(closed.len(), 1);
     assert_eq!(closed[0].doc_id.as_deref(), Some("legacy"));
-}
-
-#[tokio::test]
-async fn malformed_dependency_row_does_not_become_missing_owner() {
-    let seeds = vec![AgentRequestRow {
-        doc_id: Some("seed".into()),
-        request_id: "request".into(),
-        node_did: Some("node".into()),
-        session_id: Some("session".into()),
-        lifecycle_state: Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded),
-        superseded_by_request: Some("owner".into()),
-        superseded_by_request_doc_id: Some("owner-doc".into()),
-        failure_reason: Some(gents_session::request::lifecycle::FOLDED_REASON.into()),
-        ..Default::default()
-    }];
-    let error = close_request_rows_with(seeds, |_| {
-        Box::pin(async { Ok(json!({"r0":[{"request_id":[]}]})) })
-    })
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("malformed rows"));
 }

@@ -5,7 +5,7 @@ use gents_store::config_client::{
     AgentPublicationObserver, ClientAgentJournal, ConfigAccess, ConfigClientError,
     ConfigRelationshipGrant, IdempotentTransactionRetry, PublicationStage, PublicationStatus,
 };
-use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents_store::graphql::escape_graphql_string;
 
 use super::{Entry, Envelope};
 
@@ -77,25 +77,16 @@ async fn write(
 }
 
 async fn lookup(
-    node: &defra_node::Node,
+    node: &Arc<defra_node::Node>,
     client: &str,
     node_did: &str,
     agent_did: &str,
 ) -> Result<Option<Record>> {
     let id = key(client, node_did, agent_did);
-    let response = graphql_with_transaction_retry(
-        node,
-        &super::query(&id),
-        "desktop.agent.publication.lookup",
-    )
-    .await?;
-    match super::row(
-        response
-            .data
-            .as_ref()
-            .context("publication query omitted data")?,
-        &id,
-    )? {
+    let rows = ConfigAccess::local_as(node.clone(), identity::Did::new(client)?)
+        .read_view(&gents_store::views::journals::PendingSubmission { request_id: &id })
+        .await?;
+    match super::row(rows, &id)? {
         None => Ok(None),
         Some((_, Entry::Publication(record))) => Ok(Some(*record)),
         Some(_) => bail!("configuration publication identity belongs to another journal"),
@@ -103,7 +94,17 @@ async fn lookup(
 }
 
 async fn reserve(node: &Arc<defra_node::Node>, records: &[Record]) -> Result<()> {
-    ConfigAccess::transact_local_idempotent(node, None, IdempotentTransactionRetry::Standard,
+    let Some(first) = records.first() else {
+        return Ok(());
+    };
+    super::require_client_signer(node, &first.journal.client)?;
+    ensure!(
+        records
+            .iter()
+            .all(|record| record.journal.client == first.journal.client),
+        "publication records have different clients"
+    );
+    ConfigAccess::transact_local_idempotent(node, Some(identity::Did::new(&first.journal.client)?), IdempotentTransactionRetry::Standard,
         "desktop.agent.publication.reserve", |txn| {
             Box::pin(async move {
                 for record in records {
@@ -133,9 +134,20 @@ async fn replace(node: &Arc<defra_node::Node>, before: &[Record], after: &[Recor
         before.len() == after.len(),
         "publication update changed its extent"
     );
+    let Some(first) = before.first() else {
+        return Ok(());
+    };
+    super::require_client_signer(node, &first.journal.client)?;
+    ensure!(
+        before
+            .iter()
+            .chain(after)
+            .all(|record| record.journal.client == first.journal.client),
+        "publication records have different clients"
+    );
     ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(identity::Did::new(&first.journal.client)?),
         IdempotentTransactionRetry::Standard,
         "desktop.agent.publication.update",
         |txn| {

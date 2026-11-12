@@ -289,8 +289,9 @@ export type DesktopApiAdapter = {
   observeMailboxItem: (
     request: MailboxItemObservationRequest,
   ) => Promise<MailboxItemObservation | null>;
-  startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
-  dismissMailboxItem: (itemId: string) => Promise<void>;
+  /** `nodeDid` is the node whose store lists the item. */
+  startMailboxRequest: (itemId: string, nodeDid?: string | null) => Promise<MailboxItemView>;
+  dismissMailboxItem: (itemId: string, nodeDid?: string | null) => Promise<void>;
   forkSessionBeforeMessage: (
     request: SessionForkBeforeRequest,
   ) => Promise<SessionForkResult>;

@@ -233,6 +233,7 @@ impl BackendAdmissionController {
         node: Arc<EmbeddedNode>,
         pending: PendingCallMetadata,
         slot_connection: &str,
+        runtime: DropCleanup,
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, AdmissionError> {
@@ -260,6 +261,7 @@ impl BackendAdmissionController {
                         node,
                         permit,
                         call,
+                        runtime,
                         cancel_observer,
                         terminal_failure_observer,
                     )
@@ -296,7 +298,7 @@ impl BackendAdmissionController {
             controller: self.clone(),
             call: call.clone(),
             doc_id: None,
-            runtime: DropCleanup::current(),
+            runtime: runtime.clone(),
         };
         let doc_id = match super::persistence::persist_call_queued(node.clone(), &call).await {
             Ok(doc_id) => {
@@ -342,6 +344,7 @@ impl BackendAdmissionController {
             doc_id,
             cancel_observer,
             terminal_failure_observer,
+            runtime,
         ))
     }
 
@@ -350,6 +353,7 @@ impl BackendAdmissionController {
         node: Arc<EmbeddedNode>,
         permit: PoolPermit,
         call: InferenceCallRecord,
+        runtime: DropCleanup,
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, AdmissionError> {
@@ -361,6 +365,7 @@ impl BackendAdmissionController {
             doc_id,
             cancel_observer,
             terminal_failure_observer,
+            runtime,
         ))
     }
 

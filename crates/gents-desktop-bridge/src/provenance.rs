@@ -4,15 +4,12 @@ use std::sync::Arc;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use gents_protocol::session::session_scope_filter;
 use gents_protocol::session::SessionScope;
 use gents_protocol::tool_names::is_session_message_tool;
 use gents_session::session::origin::{
     group_caused, lineage, single_caused, starting_request, SessionLink,
 };
-use gents_session::session::public_request_filter;
 use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::graphql_string_list_literal;
 use serde_json::Value;
 
 use crate::types::{
@@ -64,7 +61,7 @@ pub async fn session_provenance(
         None => None,
     };
     let related_sessions =
-        related_session_metadata(core, lineage.started.iter().chain(&lineage.sent))
+        related_session_metadata(&access, lineage.started.iter().chain(&lineage.sent))
             .await
             .map_err(fail)?;
     let senders = turn_senders(&lineage);
@@ -93,16 +90,6 @@ pub async fn session_provenance(
     })
 }
 
-async fn rows(access: &ConfigAccess, query: &str, collection: &str) -> anyhow::Result<Vec<Value>> {
-    Ok(access
-        .execute(query)
-        .await?
-        .pointer(&format!("/data/{collection}"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default())
-}
-
 fn text(row: &Value, field: &str) -> Option<String> {
     row.get(field)
         .and_then(Value::as_str)
@@ -125,56 +112,51 @@ async fn caused_calls(
     access: &ConfigAccess,
     scope: &SessionScope,
 ) -> anyhow::Result<Vec<CausedCallView>> {
-    let own = rows(
-        access,
-        &format!(
-            "{{AgentRequest(filter: {{{}}}) {{_docID}}}}",
-            public_request_filter(&session_scope_filter(
-                &scope.node_did,
-                &scope.session_id,
-                scope.requester_did.as_deref(),
-            ))
-        ),
-        "AgentRequest",
-    )
-    .await?;
+    let own = access
+        .read_view(
+            &gents_session::views::requests::RequestRows::new(
+                gents_session::views::transcript::Scope::Session(scope.clone()),
+            )
+            .public(),
+        )
+        .await?;
     let own_doc_ids = own
-        .iter()
-        .filter_map(|row| row.get("_docID").and_then(Value::as_str))
+        .into_iter()
+        .filter_map(|row| row.doc_id)
         .collect::<Vec<_>>();
     if own_doc_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let states = rows(
-        access,
-        &format!(
-            "{{AgentRequest(filter: {{{}}}) {{_docID node_did session_id requester_did request_id created_at lifecycle_state caused_by_parent_tool_call_doc_id}}}}",
-            public_request_filter(&format!(
-                "caused_by_parent_request_doc_id: {{_in: {}}}, caused_by_parent_tool_call_doc_id: {{_ne: null}}",
-                graphql_string_list_literal(own_doc_ids.iter().copied()),
-            ))
-        ),
-        "AgentRequest",
-    )
-    .await?;
+    let states = access
+        .read_view(&gents_session::views::requests::CausedRequests::new(
+            own_doc_ids,
+        ))
+        .await?
+        .into_iter()
+        .map(|row| {
+            let mut value = serde_json::to_value(&row)?;
+            value["_docID"] = row.doc_id.map(Value::String).unwrap_or(Value::Null);
+            Ok(value)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let caused = group_caused(&states);
     if caused.is_empty() {
         return Ok(Vec::new());
     }
-    let call_doc_ids = caused.keys().map(String::as_str).collect::<Vec<_>>();
+    let call_doc_ids = caused.keys().cloned().collect::<Vec<_>>();
     let mut calls = Vec::new();
-    // Bounded lookups, never an empty list literal in a database operation.
     for batch in call_doc_ids.chunks(128) {
+        let mut view = gents_session::views::transcript::ToolCallRows::new(
+            gents_session::views::transcript::Scope::Session(scope.clone()),
+        );
+        view.document_ids = Some(batch.to_vec());
         calls.extend(
-            rows(
-                access,
-                &format!(
-                    "{{AgentToolCall(docIDs: {}) {{_docID request_id tool_call_id tool_name}}}}",
-                    graphql_string_list_literal(batch.iter().copied())
-                ),
-                "AgentToolCall",
-            )
-            .await?,
+            access
+                .read_view(&view)
+                .await?
+                .into_iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()?,
         );
     }
     project_caused_calls(&states, &calls)
@@ -259,9 +241,8 @@ fn turn_senders(
 }
 
 /// Read headers, never transcripts or retained images, for the canonical links.
-/// Each node retains its existing operator-or-replica observation authority.
 async fn related_session_metadata<'a>(
-    core: &ClientCore,
+    access: &ConfigAccess,
     links: impl Iterator<Item = &'a SessionLink>,
 ) -> anyhow::Result<Vec<crate::types::SessionSummary>> {
     let mut scopes =
@@ -277,37 +258,24 @@ async fn related_session_metadata<'a>(
     }
     let mut result = Vec::new();
     for (node, scopes) in scopes {
-        let access = crate::snapshot::node_reads(core, &node)?;
-        let filters: Vec<_> = scopes
+        let selected = scopes
             .iter()
-            .map(|(session, requester)| {
-                format!(
-                    "{{{}}}",
-                    session_scope_filter(&node, session, requester.as_deref())
-                )
+            .map(|(session_id, requester_did)| SessionScope {
+                node_did: node.clone(),
+                session_id: session_id.clone(),
+                requester_did: requester_did.clone(),
             })
-            .collect();
-        for filters in filters.chunks(128) {
-            let query = format!(
-                "{{ AgentSession(filter: {{_or: [{}]}}) {{ {} }} }}",
-                filters.join(","),
-                gents_protocol::session::AGENT_SESSION_FIELDS
-            );
-            let sessions: Vec<_> = rows(&access, &query, "AgentSession")
-                .await?
-                .iter()
-                .map(|row| {
-                    gents_protocol::session::decode_session_row(row).map_err(anyhow::Error::from)
+            .collect::<Vec<_>>();
+        for selected in selected.chunks(128) {
+            let sessions = access
+                .read_view(&gents_session::views::ScopedSessions {
+                    scopes: selected.to_vec(),
+                    include_archived: true,
                 })
-                .collect::<anyhow::Result<Vec<_>>>()?
+                .await?
                 .into_iter()
                 .map(|row| row.session)
-                .filter(|session| {
-                    session.node_did == node
-                        && scopes
-                            .contains(&(session.session_id.clone(), session.requester_did.clone()))
-                })
-                .collect();
+                .collect::<Vec<_>>();
             result.extend(crate::snapshot::session_summaries(
                 &sessions,
                 &[],

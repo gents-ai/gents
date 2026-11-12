@@ -103,7 +103,7 @@ impl ClientCore {
         mutations::save_backend_authentication_on(&access, node_did, id, revision, auth).await?;
         if self.refresh_config_source(node_did).await.is_err() {
             tracing::warn!("Authentication saved; client observation will resynchronize");
-            self.store.request_resync(Some(node_did));
+            self.stores.ensure(node_did).request_resync();
         }
         Ok(())
     }
@@ -125,7 +125,7 @@ impl ClientCore {
                 .await?;
         if self.refresh_config_source(node_did).await.is_err() {
             tracing::warn!("Configuration saved; client observation will resynchronize");
-            self.store.request_resync(Some(node_did));
+            self.stores.ensure(node_did).request_resync();
         }
         Ok(saved)
     }
@@ -307,7 +307,7 @@ impl ClientCore {
         .await?;
         if self.refresh_config_source(node_did).await.is_err() {
             tracing::warn!("Model saved; client observation will resynchronize");
-            self.store.request_resync(Some(node_did));
+            self.stores.ensure(node_did).request_resync();
         }
         Ok(saved)
     }

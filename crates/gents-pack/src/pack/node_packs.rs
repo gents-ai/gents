@@ -21,6 +21,7 @@ use gents_documents::ConfigurationNodeBinding;
 use gents_protocol::operations::pack::{PackActor, PackChangeInput};
 use gents_store::config_client::{ConfigAccess, SchemaInstallPlan};
 
+pub use super::plugin_lifecycle::InstallError;
 pub use super::registry::split_pack_coordinate;
 pub use super::wiring::PluginWiring;
 pub use super::AgentProvisioner;
@@ -666,14 +667,14 @@ impl NodePacks<'_> {
         actor: Option<::identity::Did>,
         node_binding: Option<ConfigurationNodeBinding>,
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
-    ) -> Result<plugin_lifecycle::InstalledHomePack> {
+    ) -> Result<plugin_lifecycle::InstalledHomePack, InstallError> {
         let home = self
             .home
             .context("plugins and assets packs require a runtime plugin home")?;
         let notify_access = self.access.clone();
         let notify_node = self.node_did.to_owned();
         let notify_home = home.to_owned();
-        let (record, plugins) = plugin_lifecycle::install(
+        let (record, plugins) = plugin_lifecycle::install_final(
             home,
             distribution.archive(),
             self.grants_authority,
@@ -796,17 +797,16 @@ impl NodePacks<'_> {
     /// ([`super::ensure_plugins_unreferenced`]), then the home record, the
     /// plugin records it owns, its asset cache and the plugin bytes and
     /// archive nothing else references are released
-    /// ([`super::home_removal::remove_checked`]), and the node is told as
-    /// `actor`. The second value is why the node was not told, when it was
-    /// not: a running runtime keeps the removed tools listed until its
-    /// configuration changes.
+    /// ([`super::home_removal::remove_checked`]). The node is told as `actor`
+    /// that the plugins retired before their bytes are released: a retirement
+    /// it did not record is an error, and the bytes it still lists stay.
     pub async fn remove_home_pack(
         &self,
         coordinate: &str,
         record: HomePackInstall,
         actor: Option<::identity::Did>,
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
-    ) -> Result<(super::home_removal::HomeRemoval, Option<String>), HomePackRemovalError> {
+    ) -> Result<super::home_removal::HomeRemoval, HomePackRemovalError> {
         let home = self
             .home
             .context("assets and plugins packs live in the node home")?;
@@ -834,25 +834,40 @@ impl NodePacks<'_> {
                 cause,
             });
         }
-        let removal =
-            super::home_removal::remove_checked(guard, home, coordinate, record, Some(self.access))
-                .await?;
-        let unrecorded = if removal.plugins.is_empty() {
-            None
-        } else {
-            super::record_plugin_retirement_as(
-                self.access,
-                self.node_did,
-                actor,
-                home,
-                coordinate,
-                profile_policy,
-            )
-            .await
-            .err()
-            .map(|error| format!("{:#}", anyhow::Error::from(error)))
-        };
-        Ok((removal, unrecorded))
+        let mut removal = super::home_removal::remove_checked_keeping_bytes(
+            guard,
+            home,
+            coordinate,
+            record,
+            Some(self.access),
+        )
+        .await?;
+        if removal.plugins.is_empty() {
+            return Ok(removal);
+        }
+        // The node drops the plugins from its record before their bytes go:
+        // a retirement that is not recorded leaves the bytes the node still
+        // lists. The home record is released by then, so a repeated removal
+        // finds no pack here; the bytes are content-addressed, and installing
+        // the pack again takes them back for its own removal to release.
+        super::record_plugin_retirement_as(
+            self.access,
+            self.node_did,
+            actor,
+            home,
+            coordinate,
+            profile_policy,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+        let bytes_home = home.to_owned();
+        let removal = tokio::task::spawn_blocking(move || {
+            super::home_removal::release_removed_plugin_bytes(&bytes_home, &mut removal)
+                .map(|()| removal)
+        })
+        .await
+        .context("plugin byte release task did not finish")??;
+        Ok(removal)
     }
 
     /// Removes an installed documents pack's `PackInstallation` record and

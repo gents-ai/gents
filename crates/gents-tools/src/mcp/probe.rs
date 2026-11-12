@@ -17,11 +17,14 @@ pub async fn enabled_services(
     node_did: &str,
     service_id: Option<&str>,
 ) -> anyhow::Result<Vec<gents_documents::ToolServiceRegistry>> {
-    let mut services = super::registry::configured_mcp_services_on(access, node_did).await?;
-    services.retain(|service| {
-        service.enabled && service_id.is_none_or(|id| service.service_id == id.trim())
-    });
-    services.sort_by(|left, right| left.service_id.cmp(&right.service_id));
+    let services = access
+        .read_view(&super::views::Services {
+            node_did,
+            service_id: service_id.map(str::trim),
+            enabled_only: true,
+        })
+        .await?;
+    super::registry::validate_services(&services, node_did)?;
     Ok(services)
 }
 

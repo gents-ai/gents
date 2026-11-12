@@ -563,7 +563,7 @@ mod tests {
         let endpoint = format!("http://{}", listener.local_addr().expect("local address"));
         drop(listener);
 
-        let error = crate::local_runtime::fetch_runtime_connection_payload(&endpoint)
+        let error = crate::local_runtime::fetch_runtime_connection_payload(&endpoint, None)
             .await
             .expect_err("closed temporary port must refuse the request");
         assert!(error.chain().any(|cause| cause

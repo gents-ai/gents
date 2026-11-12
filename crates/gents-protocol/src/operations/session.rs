@@ -13,8 +13,6 @@ pub type SessionOrderKey = (
     Option<String>,
 );
 
-/// Lean `SessionOperations.sessionListOrder`: latest activity first, then the
-/// newest session, then the session and requester identities.
 pub fn session_order_key(
     updated_at: Option<&str>,
     created_at: Option<&str>,

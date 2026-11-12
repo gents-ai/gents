@@ -8,7 +8,10 @@ pub mod agents;
 pub(super) mod agents;
 mod args;
 mod authoring;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use authoring::{RebuildTestPause, REBUILD_TEST_PAUSE};
 mod automation;
+mod automation_inventory;
 mod cleanup;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod contracts;
@@ -25,6 +28,8 @@ pub mod help;
 pub(super) mod help;
 mod inference;
 mod inventory;
+mod inference_inventory;
+mod mcp_views;
 mod observe;
 mod pack;
 mod patch;

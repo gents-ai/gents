@@ -30,7 +30,7 @@ async fn merge_accepted_edit_projection(
             return anyhow::Result::<()>::Ok(());
         }
         let captured = store.capture_read();
-        let rows = crate::client::load_request_documents_on(access, &doc_ids).await?;
+        let rows = crate::client::load_request_documents_on(access, node_did, &doc_ids).await?;
         for row in &rows {
             anyhow::ensure!(
                 row.node_did.as_deref() == Some(node_did)
@@ -44,7 +44,7 @@ async fn merge_accepted_edit_projection(
             ..ClientStoreRows::default()
         });
         if store.merge_chat_patch_at_read(&captured, patch).is_none() {
-            store.request_resync(Some(node_did));
+            store.request_resync();
             anyhow::bail!("accepted edit projection read became stale before publication");
         }
         anyhow::Result::<()>::Ok(())
@@ -209,7 +209,7 @@ impl ClientCore {
                     .unwrap_or_else(|| self.node_identity.did().to_string());
                 let receipt = merge_accepted_edit_projection(
                     &self.session_queue_access(node_did)?,
-                    self.store.as_ref(),
+                    self.stores.ensure(node_did).as_ref(),
                     receipt,
                     &selected_doc_ids,
                     node_did,

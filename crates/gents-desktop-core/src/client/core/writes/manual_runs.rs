@@ -46,9 +46,12 @@ impl ClientCore {
             agent_did: Some(output.agent_did),
         };
         let node = submitted.node_did.clone();
-        let submitted =
-            observe_submitted_request(&self.store, submitted, self.refresh_written_node(&node))
-                .await;
+        let submitted = observe_submitted_request(
+            &self.stores.ensure(&node),
+            submitted,
+            self.refresh_node(&node),
+        )
+        .await;
         self.clear_mutation_error();
         tracing::info!(
             target: "gents_desktop_core::writes",
@@ -84,14 +87,14 @@ fn failure(error: TaskOperationError) -> anyhow::Error {
         NextCall::List { resource: "task" } => "Reload the task list and choose a task.",
         NextCall::Inspect { resource: "task" } => "Enable the task, then run it again.",
         NextCall::Inspect { .. } => "Enable the task's agent, then run it again.",
-        NextCall::List { resource: "schedule" } => "Reload the schedules and choose one.",
+        NextCall::List {
+            resource: "schedule",
+        } => "Reload the schedules and choose one.",
         NextCall::List { .. } => "Give the schedule exactly one enabled trigger, or run its task.",
         NextCall::VerbHelp { .. }
         | NextCall::ResourceHelp { .. }
         | NextCall::Preview { .. }
-        | NextCall::Verb { .. } => {
-            "Check the task's arguments and templates, then run it again."
-        }
+        | NextCall::Verb { .. } => "Check the task's arguments and templates, then run it again.",
     };
     let message = format!(
         "{}. {next}",

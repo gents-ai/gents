@@ -32,25 +32,12 @@ pub(super) async fn load_runtime_row(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Option<Value>> {
-    use gents_protocol::document_query::{
-        fields::node_runtime as fields, Filter, Query, Selection,
-    };
-    let rendered = Query::select(
-        Selection::new()
-            .field(fields::NODE_DID)
-            .field(fields::RECONCILE_PHASE)
-            .field(fields::LAST_RECONCILE_RESULT)
-            .field(fields::LAST_RECONCILE_ERROR)
-            .field(fields::LAST_RECONCILE_COMPLETED_AT)
-            .field(fields::UPDATED_AT),
-    )
-    .filter(Filter::eq(fields::NODE_DID, node_did))
-    .limit(1)
-    .render();
-    Ok(gents_protocol::graphql::graphql_rows_from_response(
-        &access.read(&rendered).await?,
-        "NodeRuntime",
-    )
-    .into_iter()
-    .next())
+    access
+        .read_view(&gents_store::views::runtime::NodeRuntimeList::new(node_did).limit(1))
+        .await?
+        .into_iter()
+        .next()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(Into::into)
 }

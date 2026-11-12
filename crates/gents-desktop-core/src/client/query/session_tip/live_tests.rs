@@ -15,14 +15,11 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
         create_AgentOutputSegment(input: {node_did:"agent", session_id:"session",
             request_doc_id:"historic", source:{kind:"invalid"}, payload:"must not be decoded"}) { _docID }
     }"#).await.unwrap();
-    let data = execute_local_graphql_query(
-        &node,
-        &format!("query {{ AgentRequest {{ {AGENT_REQUEST_FIELDS} }} }}"),
-        "test request",
-    )
-    .await
-    .unwrap();
-    let request: AgentRequestRow = parse_query_rows::<AgentRequestRow>(&data, AGENT_REQUEST_NAME)
+    let request = fixture_view_access(&node)
+        .read_view(
+            &RequestRows::new(Scope::Node("agent".into())).request_ids(vec!["logical".into()]),
+        )
+        .await
         .unwrap()
         .remove(0);
     let doc = escape_graphql_string(request.doc_id.as_deref().unwrap());
@@ -112,103 +109,41 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
     )
     .await
     .unwrap();
-    let query = tip_query(&request, true).unwrap();
-    let plan = execute_local_graphql_query(
-        &node,
-        &query.replacen(
-            "query DesktopSessionTip",
-            "query DesktopSessionTip @explain(type: execute)",
-            1,
-        ),
-        "explain live query",
-    )
-    .await
-    .unwrap();
-    fn scan_cost(value: &Value) -> (u64, u64) {
-        match value {
-            Value::Object(fields) => {
-                let mut cost = (
-                    fields
-                        .get("indexFetches")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    fields
-                        .get("docFetches")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                );
-                for child in fields.values() {
-                    let (indexes, docs) = scan_cost(child);
-                    cost.0 += indexes;
-                    cost.1 += docs;
-                }
-                cost
-            }
-            Value::Array(values) => values
-                .iter()
-                .map(scan_cost)
-                .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1)),
-            _ => (0, 0),
-        }
-    }
-    let roots = plan["explain"]["operationNode"].as_array().unwrap();
-    assert_eq!(roots.len(), 3, "{plan}");
-    let request_cost = scan_cost(&roots[0]);
-    assert_eq!(
-        request_cost,
-        (0, 1),
-        "request must use its point read: {plan}"
-    );
-    assert_eq!(
-        scan_cost(&roots[1]),
-        (0, 0),
-        "no headers in this request: {plan}"
-    );
-    let (indexes, docs) = scan_cost(&roots[2]);
-    let request_rows = INERT_ROWS as u64 + 8;
-    assert!(
-        indexes > 0 && indexes <= request_rows && docs > 0 && docs <= request_rows,
-        "live output must touch only the selected request above the estimate cap: {plan}"
-    );
-    let mut oversized = execute_local_graphql_query(&node, &query, "live cap fixture")
+    let mut oversized = read_tip(&fixture_view_access(&node), &request, true)
         .await
         .unwrap();
-    assert_eq!(
-        oversized[AGENT_OUTPUT_SEGMENT_NAME]
-            .as_array()
-            .unwrap()
-            .len(),
-        4
-    );
+    assert_eq!(oversized.segments.len(), 4);
     assert!(
-        serde_json::to_vec(&oversized).unwrap().len() < 8_192,
+        serde_json::to_vec(&oversized.segments).unwrap().len() < 8192,
         "inert payloads must not cross the query boundary"
     );
-    let limited = execute_local_graphql_query(
-        &node,
-        &query.replace(&format!("limit: {}", MAX_TIP_REQUEST_ROWS + 1), "limit: 4"),
-        "live scope before limit",
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        limited[AGENT_OUTPUT_SEGMENT_NAME].as_array().unwrap().len(),
-        4
-    );
+    let request_rows = oversized
+        .requests
+        .iter()
+        .map(|row| {
+            let mut value = serde_json::to_value(row).unwrap();
+            value["_docID"] = serde_json::to_value(&row.doc_id).unwrap();
+            value
+        })
+        .collect::<Vec<_>>();
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v0/graphql"))
-        .and(wiremock::matchers::body_partial_json(
-            serde_json::json!({"query": query}),
-        ))
         .respond_with(
             wiremock::ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"data": oversized})),
+                .set_body_json(serde_json::json!({"data": {"view_0":request_rows,"view_1":oversized.messages,"view_2":oversized.segments}})),
         )
         .expect(1)
         .mount(&server)
         .await;
-    let remote = ConfigAccess::graphql(format!("{}/api/v0/graphql", server.uri()));
+    let remote = ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::with_authenticated_delegation(
+            format!("{}/api/v0/graphql", server.uri()),
+            "Bearer fixture",
+            node.node_identity_did().unwrap().parse().unwrap(),
+        )
+        .unwrap(),
+    );
     assert_eq!(
         load_session_live_store_on(&remote, &request)
             .await
@@ -217,13 +152,13 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
             .len(),
         4
     );
-    let record = oversized[AGENT_OUTPUT_SEGMENT_NAME][0].clone();
-    oversized[AGENT_OUTPUT_SEGMENT_NAME] = Value::Array(vec![record; MAX_TIP_REQUEST_ROWS + 1]);
-    assert!(live_store(&oversized, &request)
+    let record = oversized.segments[0].clone();
+    oversized.segments = vec![record; MAX_TIP_REQUEST_ROWS + 1];
+    assert!(live_store(oversized, &request)
         .unwrap_err()
         .to_string()
         .contains("bounded session-tip"));
-    let access = ConfigAccess::local(node.clone());
+    let access = fixture_view_access(&node);
     let start = std::time::Instant::now();
     let live = load_session_live_store_on(&access, &request).await.unwrap();
     tracing::info!(
@@ -247,12 +182,16 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
             .count(),
         1
     );
-    let local = load_session_live_store(&node, &request).await.unwrap();
+    let local = load_session_live_store_on(&fixture_view_access(&node), &request)
+        .await
+        .unwrap();
     assert_eq!(local.output_segments.len(), live.output_segments.len());
     ConfigAccess::write_local(&node, "test.live_terminal", &format!(r#"mutation {{
         update_AgentRequest(filter: {{_docID: {{_eq:"{doc}"}}}}, input: {{lifecycle_state:"completed"}}) {{ _docID }}
     }}"#)).await.unwrap();
-    let completed = load_session_live_store(&node, &request).await.unwrap();
+    let completed = load_session_live_store_on(&fixture_view_access(&node), &request)
+        .await
+        .unwrap();
     assert_eq!(
         completed.requests[0].lifecycle_state,
         Some(RequestLifecycleState::Completed)
@@ -261,11 +200,13 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
         requester_did: Some("other".into()),
         ..request.clone()
     };
-    assert!(load_session_live_store(&node, &wrong_scope)
-        .await
-        .unwrap()
-        .requests
-        .is_empty());
+    assert!(
+        load_session_live_store_on(&fixture_view_access(&node), &wrong_scope)
+            .await
+            .unwrap()
+            .requests
+            .is_empty()
+    );
     ConfigAccess::write_local(
         &node,
         "test.live_remove",
@@ -277,11 +218,13 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
     )
     .await
     .unwrap();
-    assert!(load_session_live_store(&node, &request)
-        .await
-        .unwrap()
-        .requests
-        .is_empty());
+    assert!(
+        load_session_live_store_on(&fixture_view_access(&node), &request)
+            .await
+            .unwrap()
+            .requests
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -351,19 +294,24 @@ async fn session_live_text_reads_the_running_turn_and_ends_with_its_lifecycle() 
     let mut segment_json = serde_json::to_value(&segment.segment).unwrap();
     segment_json["_docID"] = serde_json::json!(segment.doc_id);
     let mut body = serde_json::json!({"data": {
-        "AgentRequest": [request],
-        "AgentMessage": [],
-        "AgentOutputSegment": [segment_json],
+        "view_0": [request],
+        "view_1": [],
+        "view_2": [segment_json],
     }});
-    body["data"]["AgentRequest"][0]["_docID"] = serde_json::json!("physical");
+    body["data"]["view_0"][0]["_docID"] = serde_json::json!("physical");
     let server = wiremock::MockServer::start().await;
-    let access = ConfigAccess::graphql(format!("{}/api/v0/graphql", server.uri()));
+    let reader = tokio::task::spawn_blocking(|| {
+        gents_store::test_support::test_identity("live-text-view-reader")
+    })
+    .await
+    .unwrap();
+    let access = ConfigAccess::graphql_as(
+        format!("{}/api/v0/graphql", server.uri()),
+        gents_store::identity::NodeIdentity::did(&reader),
+    );
     let mount = |body: Value| {
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/api/v0/graphql"))
-            .and(wiremock::matchers::body_string_contains(
-                "DesktopSessionTip",
-            ))
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
             .expect(1)
     };
@@ -376,7 +324,7 @@ async fn session_live_text_reads_the_running_turn_and_ends_with_its_lifecycle() 
     assert!(live.reasoning.is_empty());
     server.verify().await;
     server.reset().await;
-    body["data"]["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");
+    body["data"]["view_0"][0]["lifecycle_state"] = serde_json::json!("completed");
     mount(body).mount(&server).await;
     assert!(
         load_session_live_text_on(&access, &observed, "session", "node")

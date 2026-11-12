@@ -1,5 +1,4 @@
 use super::*;
-use crate::client::store::ClientStore;
 
 fn peer_record(source: Option<&str>) -> PeerRecord {
     let mut record = PeerRecord::new("Amy", "endpoint-amy", "did:key:amy");
@@ -82,8 +81,9 @@ fn machine_pairing_never_claims_an_unlisted_node() {
 
 #[tokio::test]
 async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync() {
-    let (store, _version) = ObservedStore::new(ClientStore::default());
-    let mut wake = store.subscribe_resync_requests();
+    let stores = crate::client::observe::ObservedStores::new();
+    let store = stores.ensure("did:test:node");
+    let mut wake = stores.subscribe_resync_requests();
     let receipt = SubmittedRequest {
         request_id: "accepted-request".into(),
         session_id: "accepted-session".into(),
@@ -99,8 +99,8 @@ async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync()
     assert!(wake.has_changed().unwrap());
     wake.borrow_and_update();
     assert_eq!(
-        store.take_resync_requests(),
-        (false, vec!["did:test:node".to_owned()])
+        stores.take_resync_requests(),
+        vec!["did:test:node".to_owned()]
     );
     assert_eq!(store.projection_revision(), before);
     assert!(store.snapshot().requests.is_empty());
@@ -108,8 +108,9 @@ async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync()
 
 #[tokio::test]
 async fn submitted_request_refresh_success_does_not_schedule_another_read() {
-    let (store, _version) = ObservedStore::new(ClientStore::default());
-    let wake = store.subscribe_resync_requests();
+    let stores = crate::client::observe::ObservedStores::new();
+    let store = stores.ensure("did:test:node");
+    let wake = stores.subscribe_resync_requests();
     let receipt = SubmittedRequest {
         request_id: "accepted-request".into(),
         session_id: "accepted-session".into(),
@@ -122,5 +123,5 @@ async fn submitted_request_refresh_success_does_not_schedule_another_read() {
     .await;
     assert_eq!(accepted, receipt);
     assert!(!wake.has_changed().unwrap());
-    assert_eq!(store.take_resync_requests(), (false, Vec::new()));
+    assert!(stores.take_resync_requests().is_empty());
 }

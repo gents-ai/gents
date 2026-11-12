@@ -1,13 +1,11 @@
 use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
-use gents_protocol::row::AgentRequestRow;
-use gents_store::graphql::escape_graphql_string;
+use anyhow::Result;
+use gents_protocol::row::{AgentRequestRow, CompactionEntryRow};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use gents_store::config_client::post_graphql;
+use gents_store::config_client::ConfigAccess;
 
 /// Bound the request scan used to discover sessions for this context estimate;
 /// the response reports this limit so callers can interpret its coverage.
@@ -46,201 +44,59 @@ pub struct ContextIndicator {
     pub last_compacted_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct SelfViewEnvelope {
-    #[serde(rename = "Agent", default)]
-    agents: Vec<AgentRow>,
-    #[serde(rename = "InferenceBackendMetadata", default)]
-    backends: Vec<BackendRow>,
-    #[serde(rename = "InferenceProfile", default)]
-    profiles: Vec<ProfileRow>,
-    #[serde(rename = "AgentContext", default)]
-    contexts: Vec<ContextRow>,
-    #[serde(rename = "CompactionConfig", default)]
-    compaction_configs: Vec<CompactionConfigRow>,
-    #[serde(rename = "AgentRequest", default)]
-    requests: Vec<AgentRequestRow>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CompactionEnvelope {
-    #[serde(rename = "CompactionEntry", default)]
-    compactions: Vec<CompactionRow>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct AgentRow {
-    #[serde(default)]
-    agent_did: String,
-    #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    inference_profile_id: Option<String>,
-    #[serde(default)]
-    context_id: Option<String>,
-    #[serde(default)]
-    enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct BackendRow {
-    #[serde(default)]
-    backend_id: String,
-    #[serde(default)]
-    provider_kind: Option<String>,
-    #[serde(default)]
-    endpoint: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ProfileRow {
-    #[serde(default)]
-    profile_id: String,
-    #[serde(default)]
-    backend_id: Option<String>,
-    #[serde(default)]
-    model_name: Option<String>,
-    #[serde(default)]
-    context_window: Option<i64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ContextRow {
-    #[serde(default)]
-    context_id: String,
-    #[serde(default)]
-    compaction_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct CompactionConfigRow {
-    #[serde(default)]
-    compaction_id: String,
-    #[serde(default)]
-    threshold: Option<f64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct CompactionRow {
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    original_tokens: Option<i64>,
-    #[serde(default)]
-    compacted_tokens: Option<i64>,
-}
-
 pub async fn load_self_view(
     graphql: &GraphqlEndpoint,
     node_did: &str,
 ) -> Result<(Vec<SelfAgent>, ContextBudget, ContextIndicator)> {
-    let response = post_graphql(graphql, &self_view_query(node_did)).await?;
-    let envelope = decode::<SelfViewEnvelope>(response, "self view")?;
-
-    let agents = build_agents(
-        envelope.agents,
-        envelope.backends,
-        envelope.profiles,
-        envelope.contexts,
-        envelope.compaction_configs,
-    );
-    let session_ids = distinct_session_ids(&envelope.requests);
-
-    let mut context_budget = if session_ids.is_empty() {
-        ContextBudget::default()
-    } else {
-        let rendered = compaction_query(node_did, &session_ids);
-        let response = gents_store::config_client::post_graphql_with_variables(
-            graphql,
-            &rendered.document,
-            &rendered.variables,
-        )
-        .await?;
-        let envelope = decode::<CompactionEnvelope>(response, "context budget")?;
-        aggregate_compaction(envelope.compactions)
-    };
-    context_budget.sessions_considered = session_ids.len() as i64;
-    context_budget.request_scan_limit = RECENT_REQUEST_SCAN as i64;
-    let context = build_context_indicator(&agents, &context_budget);
-
-    Ok((agents, context_budget, context))
-}
-
-fn self_view_query(node_did: &str) -> String {
-    let node_did = escape_graphql_string(node_did);
-    format!(
-        r#"{{
-        Agent(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ agent_did: ASC }}) {{
-            agent_did: agent_did
-            display_name
-            inference_profile_id
-            context_id
-            enabled
-        }}
-        InferenceBackendMetadata(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ backend_id: ASC }}) {{
-            backend_id
-            provider_kind
-            endpoint
-        }}
-        InferenceProfile(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ profile_id: ASC }}) {{
-            profile_id
-            backend_id
-            model_name
-            context_window
-        }}
-        AgentContext(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
-            context_id
-            compaction_id
-        }}
-        CompactionConfig(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
-            compaction_id
-            threshold
-        }}
-        AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
-            request_id
-            session_id
-        }}
-    }}"#
-    )
-}
-
-fn compaction_query(
-    node_did: &str,
-    session_ids: &[String],
-) -> gents_protocol::document_query::Rendered {
-    use gents_protocol::document_query::{
-        fields::compaction_entry as fields, Direction, Filter, Query, Selection,
-    };
-    Query::select(
-        Selection::new()
-            .field(fields::CREATED_AT)
-            .field(fields::ORIGINAL_TOKENS)
-            .field(fields::COMPACTED_TOKENS),
-    )
-    .filter(Filter::eq(fields::NODE_DID, node_did))
-    .filter(Filter::any_of(fields::SESSION_ID, session_ids))
-    .order_by(fields::CREATED_AT, Direction::Desc)
-    .render()
-}
-
-fn decode<T>(response: Value, label: &str) -> Result<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let data = response
-        .get("data")
-        .filter(|data| data.is_object())
-        .cloned()
-        .with_context(|| format!("{label} query response missing object data: {response}"))?;
-    serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
+    let access = ConfigAccess::Graphql(graphql.clone());
+    access
+        .transact_readonly("views.http.self", |txn| {
+            Box::pin(async move {
+                let (agents, backends, profiles, contexts, configs, requests) = txn
+                    .read_views(&(
+                        gents_documents::views::agents::AgentList::new(node_did),
+                        gents_inference::views::backends::BackendList::new(node_did),
+                        gents_inference::views::profiles::ProfileList::new(node_did),
+                        gents_documents::views::config::AgentContextList::new(node_did),
+                        gents_documents::views::config::CompactionConfigList::new(node_did),
+                        gents_session::views::requests::RequestRows::new(
+                            gents_session::views::transcript::Scope::Node(node_did.to_owned()),
+                        )
+                        .limit(RECENT_REQUEST_SCAN as u64),
+                    ))
+                    .await?;
+                let agents = build_agents(
+                    agents.into_iter().map(|row| row.agent).collect(),
+                    backends.into_iter().map(|row| row.metadata).collect(),
+                    profiles.into_iter().map(|row| row.profile).collect(),
+                    contexts.into_iter().map(|row| row.document).collect(),
+                    configs.into_iter().map(|row| row.document).collect(),
+                );
+                let session_ids = distinct_session_ids(&requests);
+                let mut budget = if session_ids.is_empty() {
+                    ContextBudget::default()
+                } else {
+                    let mut view = gents_session::views::transcript::CompactionRows::new(
+                        gents_session::views::transcript::Scope::Node(node_did.to_owned()),
+                    );
+                    view.session_ids = Some(session_ids.clone());
+                    aggregate_compaction(txn.read_view(&view).await?)
+                };
+                budget.sessions_considered = session_ids.len() as i64;
+                budget.request_scan_limit = RECENT_REQUEST_SCAN as i64;
+                let context = build_context_indicator(&agents, &budget);
+                Ok::<_, anyhow::Error>((agents, budget, context))
+            })
+        })
+        .await
 }
 
 fn build_agents(
-    agents: Vec<AgentRow>,
-    backends: Vec<BackendRow>,
-    profiles: Vec<ProfileRow>,
-    contexts: Vec<ContextRow>,
-    compaction_configs: Vec<CompactionConfigRow>,
+    agents: Vec<gents_documents::Agent>,
+    backends: Vec<gents_documents::InferenceBackendMetadata>,
+    profiles: Vec<gents_documents::InferenceProfile>,
+    contexts: Vec<gents_documents::AgentContext>,
+    compaction_configs: Vec<gents_documents::CompactionConfig>,
 ) -> Vec<SelfAgent> {
     use std::collections::BTreeMap;
 
@@ -280,11 +136,7 @@ fn build_agents(
             if agent_did.is_empty() {
                 return None;
             }
-            let inference_profile_id = agent_config
-                .inference_profile_id
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            let inference_profile_id = agent_config.inference_profile_id.trim().to_string();
             let context_id = agent_config
                 .context_id
                 .as_deref()
@@ -296,7 +148,7 @@ fn build_agents(
                 .and_then(|compaction_id| compaction_configs.get(compaction_id.trim()));
             let profile = profiles.get(&inference_profile_id);
             let backend_id = profile
-                .and_then(|profile| profile.backend_id.as_deref())
+                .map(|profile| profile.backend_id.as_str())
                 .unwrap_or_default()
                 .trim()
                 .to_string();
@@ -305,15 +157,15 @@ fn build_agents(
                 agent_did,
                 display_name: agent_config.display_name.unwrap_or_default(),
                 model_name: profile
-                    .and_then(|profile| profile.model_name.clone())
+                    .map(|profile| profile.model_name.clone())
                     .unwrap_or_default(),
-                enabled: agent_config.enabled.unwrap_or(true),
+                enabled: agent_config.enabled,
                 backend_id,
                 provider_kind: backend
-                    .and_then(|backend| backend.provider_kind.clone())
+                    .map(|backend| backend.provider_kind.as_str().to_owned())
                     .unwrap_or_default(),
                 endpoint: backend
-                    .and_then(|backend| backend.endpoint.clone())
+                    .map(|backend| backend.endpoint.clone())
                     .unwrap_or_default(),
                 inference_profile_id,
                 context_window: profile.and_then(|profile| profile.context_window),
@@ -337,7 +189,7 @@ fn distinct_session_ids(requests: &[AgentRequestRow]) -> Vec<String> {
         .collect()
 }
 
-fn aggregate_compaction(compactions: Vec<CompactionRow>) -> ContextBudget {
+fn aggregate_compaction(compactions: Vec<CompactionEntryRow>) -> ContextBudget {
     let compaction_count = compactions.len() as i64;
     let latest = compactions
         .iter()

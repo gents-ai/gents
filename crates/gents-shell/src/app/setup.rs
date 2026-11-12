@@ -904,6 +904,96 @@ mod tests {
         );
     }
 
+    const NO_MODEL: &str = "No model is connected yet, so The Engineer cannot answer.";
+
+    /// A shell whose source found no agent that can run.
+    fn without_an_agent() -> (App, Receiver<Intent>) {
+        let (mut app, rx) = connected(Vim, 132, 36);
+        app.apply(Update::Agents(Vec::new()));
+        app.apply(Update::Connection(Connection::NoAgent(
+            NO_MODEL.to_string(),
+        )));
+        (app, rx)
+    }
+
+    #[test]
+    fn a_shell_with_no_agent_opens_on_setup_and_says_why() {
+        let (mut app, rx) = without_an_agent();
+        assert_eq!(kinds(&app), [LayerKind::Setup]);
+        assert_eq!(drain(&rx), [Intent::ReadSetup]);
+
+        app.apply(Update::Setup(Ok(catalog())));
+        let s = screen(&app);
+        assert!(find(&s, "Add a provider").is_some(), "{s:#?}");
+        assert!(find(&s, "Anthropic").is_some(), "{s:#?}");
+        assert_eq!(find(&s, NO_MODEL).map(|(row, _)| row), Some(35), "{s:#?}");
+        assert!(find(&s, "no agent ready").is_some(), "{s:#?}");
+
+        press(&mut app, "down enter");
+        assert_eq!(step(&app), Step::Connect);
+
+        // The same state told again, as its reason changes, opens nothing over the user.
+        press(&mut app, "esc esc");
+        assert_eq!(kinds(&app), []);
+        app.apply(Update::Connection(Connection::NoAgent(
+            "another reason".to_string(),
+        )));
+        assert_eq!(kinds(&app), []);
+        assert!(find(&screen(&app), "another reason").is_some());
+    }
+
+    #[test]
+    fn the_message_box_sends_nothing_until_an_agent_can_run() {
+        let off = "No agent can answer yet. Press enter to connect a model.";
+        let (mut app, rx) = without_an_agent();
+        app.apply(Update::Setup(Ok(catalog())));
+        press(&mut app, "esc");
+        assert_eq!(kinds(&app), []);
+        let s = screen(&app);
+        assert!(find(&s, off).is_some(), "{s:#?}");
+        assert!(find(&s, "enter send").is_none(), "{s:#?}");
+        rx.try_iter().for_each(drop);
+
+        // Enter on the empty box, and on a typed message, opens Setup and sends nothing.
+        press(&mut app, "enter");
+        assert_eq!(kinds(&app), [LayerKind::Setup]);
+        press(&mut app, "esc");
+        type_text(&mut app, "hello");
+        press(&mut app, "enter");
+        assert_eq!(kinds(&app), [LayerKind::Setup]);
+        assert_eq!(app.notice.as_deref(), Some(NO_MODEL));
+        assert_eq!(app.tabs[0].input.text(), "hello");
+        assert_eq!(drain(&rx), [Intent::ReadSetup, Intent::ReadSetup]);
+
+        // The menus read over the source as they do with an agent.
+        app.push_layer(LayerKind::Menu(MenuId::Accounts));
+        assert_eq!(drain(&rx), [Intent::ReadMenu(MenuId::Accounts)]);
+
+        // An agent that became ready takes the starter tab, and the typed message goes to it.
+        app.apply(Update::Agents(vec![crate::source::Agent {
+            id: "did:engineer".to_string(),
+            name: "The Engineer".to_string(),
+            text: " The Engineer default".to_string(),
+            tone: Tone::Plain,
+        }]));
+        app.apply(Update::Connection(Connection::Ready));
+        app.layers.clear();
+        assert_eq!(app.picker_matches("").len(), 1);
+        assert!(find(&screen(&app), "runtime ready").is_some());
+        press(&mut app, "enter");
+        assert_eq!(
+            drain(&rx),
+            [Intent::Send {
+                tab: 0,
+                session: None,
+                agent: "did:engineer".to_string(),
+                text: "hello".to_string(),
+            }]
+        );
+        app.tabs[0].following = false;
+        assert!(find(&screen(&app), "Message The Engineer").is_some());
+    }
+
     #[test]
     fn a_lost_source_keeps_the_layer_and_says_why() {
         let gone = " could not reach the runtime: gone";

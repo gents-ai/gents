@@ -104,8 +104,8 @@ mod tests {
     use crate::auth::credential::{set_account_enabled, store_sign_in, AccountState};
     use gents_documents::BackendAuth;
     use gents_documents::InferenceBackend;
+    use gents_store::identity::NodeIdentity;
     use serde_json::json;
-    use std::sync::Arc;
 
     fn serving_sign_in(did: &str, who: &str) -> crate::auth::credential::OAuthCredential {
         crate::auth::claude::credential_from_login_tokens(
@@ -144,18 +144,14 @@ mod tests {
 
     #[tokio::test]
     async fn serving_accounts_reads_backends_and_accounts() -> Result<()> {
-        let did = "did:key:z6MkTestServing";
-        let node = Arc::new(gents_store::test_support::node_builder().build().await?);
-        gents_store::schema::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local_as(
-            node.clone(),
-            identity::Did::new(
-                node.node_identity_did()
-                    .expect("fixture node has an identity"),
-            )
-            .unwrap(),
-        );
-        gents_documents::test_support::bootstrap_signed_test_node(&access, did).await;
+        // Only a User changes an account, so the fixture writes through the
+        // enrolled User's client access on a protected node.
+        let (db, _user, access) = crate::test_support::signed_test_node_without_agent(
+            "serving-accounts",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
+        let did = db.node_identity.did();
         let oauth = |account_ref: Option<&str>| BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         };
@@ -240,18 +236,14 @@ mod tests {
     #[tokio::test]
     async fn agent_accounts_follow_profile_and_compaction() -> Result<()> {
         use crate::auth::credential::{set_account_enabled, store_sign_in, AccountState};
-        let did = "did:key:z6MkTestAgentAccounts";
-        let node = Arc::new(gents_store::test_support::node_builder().build().await?);
-        gents_store::schema::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local_as(
-            node.clone(),
-            identity::Did::new(
-                node.node_identity_did()
-                    .expect("fixture node has an identity"),
-            )
-            .unwrap(),
-        );
-        gents_documents::test_support::bootstrap_signed_test_node(&access, did).await;
+        // Only a User changes an account, so the fixture writes through the
+        // enrolled User's client access on a protected node.
+        let (db, user, access) = crate::test_support::signed_test_node_without_agent(
+            "agent-accounts",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
+        let did = db.node_identity.did();
         let spec = crate::backends::setup::connection_spec(
             crate::backends::setup::InferenceProviderId::Anthropic,
             crate::backends::setup::InferenceAuthMethod::ClaudeOauth,
@@ -275,13 +267,26 @@ mod tests {
             crate::auth::claude::CLAUDE_OAUTH_PROVIDER,
             b.credential.account_ref.as_deref().unwrap()
         );
+        let user_did = identity::Did::new(user.did())?;
+        let x = gents_store::identity::provision_agent_identity_authorized(
+            &db.node,
+            db.node_identity.as_ref(),
+            &user_did,
+        )
+        .await?;
+        let y = gents_store::identity::provision_agent_identity_authorized(
+            &db.node,
+            db.node_identity.as_ref(),
+            &user_did,
+        )
+        .await?;
         let documents = [
             (Collection::InferenceProfile, json!({"node_did": did, "profile_id": "profile-a", "backend_id": "claude", "model_name": "model-x"})),
             (Collection::InferenceProfile, json!({"node_did": did, "profile_id": "profile-b", "backend_id": b_backend, "model_name": "model-x"})),
             (Collection::Compaction, json!({"node_did": did, "compaction_id": "compaction-a", "inference_profile_id": "profile-a"})),
             (Collection::AgentContext, json!({"node_did": did, "context_id": "context-x", "compaction_id": "compaction-a"})),
-            (Collection::Agent, json!({"node_did": did, "agent_did": "did:key:z6MkTestAgentX", "creation_nonce": "nonce-x", "context_id": "context-x", "inference_profile_id": "profile-b"})),
-            (Collection::Agent, json!({"node_did": did, "agent_did": "did:key:z6MkTestAgentY", "creation_nonce": "nonce-y", "inference_profile_id": "profile-a"})),
+            (Collection::Agent, json!({"node_did": did, "agent_did": x.agent_did, "creation_nonce": x.creation_nonce, "context_id": "context-x", "inference_profile_id": "profile-b"})),
+            (Collection::Agent, json!({"node_did": did, "agent_did": y.agent_did, "creation_nonce": y.creation_nonce, "inference_profile_id": "profile-a"})),
         ]
         .into_iter()
         .map(|(collection, value)| gents_documents::DesiredStateApplyDocument {
@@ -317,7 +322,7 @@ mod tests {
         };
 
         assert_eq!(
-            agent_accounts(&access, did, "did:key:z6MkTestAgentX").await?,
+            agent_accounts(&access, did, &x.agent_did).await?,
             [
                 expected("profile-b", "label-b", AccountState::Enabled),
                 expected("profile-a", "Claude", AccountState::Enabled),
@@ -325,11 +330,11 @@ mod tests {
         );
         set_account_enabled(&access, did, &b.credential.credential_id, false).await?;
         assert_eq!(
-            agent_accounts(&access, did, "did:key:z6MkTestAgentX").await?[0],
+            agent_accounts(&access, did, &x.agent_did).await?[0],
             expected("profile-b", "label-b", AccountState::Disabled)
         );
         assert_eq!(
-            agent_accounts(&access, did, "did:key:z6MkTestAgentY").await?,
+            agent_accounts(&access, did, &y.agent_did).await?,
             [expected("profile-a", "Claude", AccountState::Enabled)]
         );
         assert!(agent_accounts(&access, did, "agent-unknown").await.is_err());

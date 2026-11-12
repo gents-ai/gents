@@ -336,7 +336,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
                 principals.iter().all(|did| did == &node_did),
                 "the client may hold only the runtime's replicated Node; found {principals:?}"
             );
-            let snapshot = core.store().snapshot();
+            let snapshot = core.stores().snapshot(&node_did);
             assert!(
                 snapshot.nodes.iter().all(|node| node.node_did == node_did),
                 "the client store may materialize only the runtime's Node; found {:?}",
@@ -470,7 +470,7 @@ async fn resolve_live_inference() -> Result<(String, String)> {
 async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        match fetch_runtime_connection_payload(status_url).await {
+        match fetch_runtime_connection_payload(status_url, None).await {
             Ok(status) => {
                 let token = status
                     .pointer("/enrollment/token")
@@ -783,7 +783,7 @@ async fn wait_for_client_complete_response(
             &page_request_doc_ids,
         )
         .await?;
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(node_did);
         let client_reply = client_selected_reply(
             &snapshot.requests,
             &page.store.transcript_messages,
@@ -853,9 +853,9 @@ async fn wait_for_chat_ready_enrollment(
 
 async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut updates = core.store_change_updates();
+    let mut updates = core.store_updates();
     loop {
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(node_did);
         let has_agent = snapshot.agents.iter().any(|row| row.node_did == node_did);
         let has_readiness = snapshot
             .node_readiness

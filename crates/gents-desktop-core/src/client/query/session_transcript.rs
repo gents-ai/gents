@@ -1,9 +1,13 @@
 use super::*;
-use gents_protocol::output::rows::{
-    decode_output_segment_row, decode_transcript_message_row, output_source_discriminator,
-    OutputSegmentRow, TranscriptMessageRow, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
-};
+use gents_protocol::document_query::Direction;
+use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::output::MessagePublication;
+use gents_session::views::requests::RequestRows;
+use gents_session::views::transcript::{
+    CompactionRows, MessageRows, MessageSequences, Scope, SegmentRows, SequenceRange, ToolCallRows,
+    ToolSequences,
+};
+use gents_store::config_client::ConfigAccess;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Bound traversal of fork origins supplied by persisted session headers.
@@ -12,19 +16,18 @@ const MAX_FORK_ORIGIN_DEPTH: usize = 32;
 /// their bounded read would exceed this budget.
 const MAX_CANONICAL_DEPENDENCY_ROWS: usize = 2_048;
 
-#[derive(Clone, Copy)]
-pub(super) enum TranscriptAccess<'a> {
-    Local(&'a EmbeddedNode),
-    Config(&'a gents_store::config_client::ConfigAccess),
-}
-
-impl TranscriptAccess<'_> {
-    async fn execute(self, query: &str, operation: &str) -> Result<Value> {
-        match self {
-            Self::Local(node) => execute_local_graphql_query(node, query, operation).await,
-            Self::Config(access) => execute_access_graphql_query(access, query, operation).await,
-        }
-    }
+fn scoped_session(
+    session_id: &str,
+    node_did: Option<&str>,
+    requester_did: Option<&str>,
+) -> Result<Scope> {
+    Ok(Scope::Session(gents_protocol::session::SessionScope {
+        node_did: node_did
+            .context("session read requires a node DID")?
+            .to_owned(),
+        session_id: session_id.to_owned(),
+        requester_did: requester_did.map(str::to_owned),
+    }))
 }
 
 /// Request documents by physical identity, in batches, returning the rows
@@ -32,7 +35,8 @@ impl TranscriptAccess<'_> {
 /// needs every one compares the two; a transcript read does not, since a
 /// request can be unreadable or not yet replicated while its messages are.
 pub(super) async fn read_request_documents(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
+    node_did: &str,
     doc_ids: &[String],
     operation: &str,
 ) -> Result<(Vec<AgentRequestRow>, usize)> {
@@ -48,12 +52,8 @@ pub(super) async fn read_request_documents(
     let mut observed =
         rapidhash::RapidHashSet::with_capacity_and_hasher(unique_doc_ids.len(), Default::default());
     for batch in unique_doc_ids.chunks(BATCH_SIZE) {
-        let ids =
-            gents_store::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
-        let query =
-            format!(r#"{{ {AGENT_REQUEST_NAME}(docIDs: {ids}) {{ {AGENT_REQUEST_FIELDS} }} }}"#);
-        let data = access.execute(&query, operation).await?;
-        let batch_rows: Vec<AgentRequestRow> = parse_query_rows(&data, AGENT_REQUEST_NAME)?;
+        let view = RequestRows::new(Scope::Node(node_did.to_owned())).doc_ids(batch.to_vec());
+        let batch_rows = access.read_view(&view).await?;
         for row in &batch_rows {
             let doc_id = row
                 .doc_id
@@ -74,59 +74,56 @@ pub(super) async fn read_request_documents(
 }
 
 async fn read_legacy_question_sources<'a>(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
     requests: impl Iterator<Item = &'a AgentRequestRow>,
 ) -> Result<(Vec<MailboxItemRow>, u64)> {
-    let ids = requests
-        .filter_map(|request| {
-            let input = request.input.as_ref();
-            if !matches!(
-                gents_session::request::lifecycle::request_origin(request),
-                gents_session::request::lifecycle::RequestOrigin::Person
-            ) || input.is_some_and(|input| input.question_reply.is_some())
-            {
-                return None;
-            }
+    let mut sources = BTreeMap::<String, BTreeSet<String>>::new();
+    for request in requests {
+        if !matches!(
+            gents_session::request::lifecycle::request_origin(request),
+            gents_session::request::lifecycle::RequestOrigin::Person
+        ) || request
+            .input
+            .as_ref()
+            .is_some_and(|input| input.question_reply.is_some())
+        {
+            continue;
+        }
+        if let (Some(node), Some(doc)) = (
+            request.node_did.as_ref(),
             request
                 .caused_by_source_doc_id
                 .as_ref()
-                .filter(|id| !id.is_empty())
-                .cloned()
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let mut rows = Vec::new();
-    let mut query_count = 0;
-    for batch in ids.chunks(128) {
-        let list =
-            gents_store::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
-        let query = format!("query DesktopQuestionSources {{ {MAILBOX_ITEM_NAME}(docIDs: {list}) {{ {MAILBOX_ITEM_FIELDS} }} }}");
-        query_count += 1;
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            access.execute(&query, "question reply sources"),
-        )
-        .await
-        {
-            Ok(Ok(data)) => match parse_query_rows::<MailboxItemRow>(&data, MAILBOX_ITEM_NAME) {
-                Ok(found) => {
-                    rows.extend(found.into_iter().filter(|row| batch.contains(&row.doc_id)))
-                }
-                Err(error) => tracing::debug!(%error, "question reply sources unavailable"),
-            },
-            Ok(Err(error)) if error.permission_denied() => return Err(error),
-            Ok(Err(error)) => tracing::debug!(%error, "question reply sources unavailable"),
-            Err(_) => tracing::debug!("question reply sources timed out"),
+                .filter(|id| !id.is_empty()),
+        ) {
+            sources.entry(node.clone()).or_default().insert(doc.clone());
         }
     }
-    Ok((rows, query_count))
+    let mut rows = Vec::new();
+    let mut count = 0;
+    for (node, ids) in sources {
+        let ids = ids.into_iter().collect::<Vec<_>>();
+        for batch in ids.chunks(128) {
+            let view = gents_automation::views::MailboxRows::new(&node).doc_ids(batch.to_vec());
+            count += 1;
+            match tokio::time::timeout(std::time::Duration::from_secs(1), access.read_view(&view))
+                .await
+            {
+                Ok(Ok(found)) => rows.extend(found),
+                Ok(Err(error)) if error.permission_denied() => return Err(error.into()),
+                Ok(Err(error)) => tracing::debug!(%error,"question reply sources unavailable"),
+                Err(_) => tracing::debug!("question reply sources timed out"),
+            }
+        }
+    }
+    Ok((rows, count))
 }
 
 #[cfg(test)]
 mod question_source_tests {
     use super::*;
     use gents_store::config_client::ConfigAccess;
+    use gents_store::identity::NodeIdentity;
     use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -134,6 +131,7 @@ mod question_source_tests {
         let request = AgentRequestRow {
             request_id: "request".into(),
             caused_by_source_doc_id: Some("question".into()),
+            node_did: Some("node".into()),
             ..Default::default()
         };
         for denied in [false, true] {
@@ -148,12 +146,20 @@ mod question_source_tests {
                 .expect(1)
                 .mount(&server)
                 .await;
-            let access = ConfigAccess::graphql(format!("{}/api/v0/graphql", server.uri()));
-            let result = read_legacy_question_sources(
-                TranscriptAccess::Config(&access),
-                [&request].into_iter(),
-            )
-            .await;
+            let identity = tokio::task::spawn_blocking(|| {
+                gents_store::test_support::test_identity("question-reader")
+            })
+            .await
+            .unwrap();
+            let access = ConfigAccess::Graphql(
+                gents_store::config_client::GraphqlEndpoint::with_authenticated_delegation(
+                    format!("{}/api/v0/graphql", server.uri()),
+                    "Bearer fixture",
+                    identity.did().parse().unwrap(),
+                )
+                .unwrap(),
+            );
+            let result = read_legacy_question_sources(&access, [&request].into_iter()).await;
             if denied {
                 assert!(result.unwrap_err().permission_denied());
             } else {
@@ -161,15 +167,6 @@ mod question_source_tests {
             }
         }
     }
-}
-
-fn scope_filter(node_did: &str, requester_did: Option<&str>) -> String {
-    let node_did = escape_graphql_string(node_did);
-    let requester = requester_did
-        .map(escape_graphql_string)
-        .map(|did| format!("\"{did}\""))
-        .unwrap_or_else(|| "null".to_string());
-    format!("node_did: {{ _eq: \"{node_did}\" }}, requester_did: {{ _eq: {requester} }}")
 }
 
 fn insert_exact_header(
@@ -231,7 +228,7 @@ fn insert_exact_segment(
 /// (`gents_protocol::output::reconstruction::fork_copy_observations`) and
 /// returns the headers they cover; those need nothing from their origin.
 async fn load_fork_copies(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
     page_headers: &[TranscriptMessageRow],
     records: &mut BTreeMap<String, OutputSegmentRow>,
     query_count: &mut u64,
@@ -267,23 +264,20 @@ async fn load_fork_copies(
                 "canonical transcript page names more than {MAX_CANONICAL_DEPENDENCY_ROWS} fork copies"
             );
         }
-        let logical_filter = logicals
-            .iter()
-            .map(|id| format!("\"{}\"", escape_graphql_string(id)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let session = escape_graphql_string(session_id);
-        let query = format!(
-            r#"query DesktopForkCopies {{
-  AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _in: [{logical_filter}] }}, {} }}, limit: {}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
-}}"#,
-            scope_filter(node_did, requester_did.as_deref()),
-            MAX_CANONICAL_DEPENDENCY_ROWS.saturating_add(1)
-        );
-        let data = access.execute(&query, "canonical fork copies").await?;
+        let mut view = SegmentRows::new(scoped_session(
+            session_id,
+            Some(node_did),
+            requester_did.as_deref(),
+        )?);
+        view.request_doc_ids = Some(logicals.iter().cloned().collect());
+        view.limit = Some((MAX_CANONICAL_DEPENDENCY_ROWS + 1) as u64);
+        let rows = access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(|row| row.into_canonical())
+            .collect::<Vec<_>>();
         *query_count += 1;
-        let rows =
-            parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
         *queried_rows = queried_rows.saturating_add(rows.len());
         if rows.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
             bail!(
@@ -328,7 +322,7 @@ async fn load_fork_copies(
 }
 
 async fn load_page_canonical_dependencies(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
     page_headers: &[TranscriptMessageRow],
     page_tools: &[AgentToolCallRow],
 ) -> Result<(CanonicalTranscriptDependencies, u64, usize)> {
@@ -382,18 +376,19 @@ async fn load_page_canonical_dependencies(
                 "canonical fork origin chain exceeds bounded depth {MAX_FORK_ORIGIN_DEPTH} at {origin_id}"
             );
         }
-        let origin_id_escaped = escape_graphql_string(&origin_id);
-        let query = format!(
-            r#"query DesktopExactForkOrigin {{
-  AgentMessage(filter: {{ _docID: {{ _eq: "{origin_id_escaped}" }}, {} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }}
-}}"#,
-            scope_filter(&node_did, requester_did.as_deref()),
-        );
-        let data = access
-            .execute(&query, "exact canonical fork origin")
-            .await?;
+        let mut view = MessageRows::new(Scope::Origin {
+            node_did: node_did.clone(),
+            requester_did: requester_did.clone(),
+        });
+        view.document_ids = Some(vec![origin_id.clone()]);
+        view.limit = Some(2);
+        let rows = access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(|row| row.into_canonical())
+            .collect::<Vec<_>>();
         query_count += 1;
-        let rows = parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?;
         queried_rows = queried_rows.saturating_add(rows.len());
         match rows.len() {
             0 => {}
@@ -462,20 +457,25 @@ async fn load_page_canonical_dependencies(
     let mut closures = Vec::new();
     let close_scopes = close_scopes.into_iter().collect::<Vec<_>>();
     for batch in close_scopes.chunks(32) {
-        let selections = batch.iter().enumerate().map(|(index, (close_id, node_did, requester_did))| {
-            let close_id = escape_graphql_string(close_id);
-            format!(r#"closure{index}: AgentOutputSegment(filter: {{ _docID: {{ _eq: "{close_id}" }}, {} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#, scope_filter(node_did, requester_did.as_deref()))
-        }).collect::<Vec<_>>().join("\n");
-        let data = access
-            .execute(
-                &format!("query DesktopExactOutputClosures {{ {selections} }}"),
-                "exact canonical output closures",
-            )
-            .await?;
+        let views = batch
+            .iter()
+            .map(|(close_id, node, requester)| {
+                let mut view = SegmentRows::new(Scope::Origin {
+                    node_did: node.clone(),
+                    requester_did: requester.clone(),
+                });
+                view.document_ids = Some(vec![close_id.clone()]);
+                view.limit = Some(2);
+                view
+            })
+            .collect::<Vec<_>>();
+        let result = access.read_views(&views).await?;
         query_count += 1;
-        for (index, (close_id, node_did, requester_did)) in batch.iter().enumerate() {
-            let rows =
-                parse_canonical_rows(&data, &format!("closure{index}"), decode_output_segment_row)?;
+        for ((close_id, node_did, requester_did), rows) in batch.iter().zip(result) {
+            let rows = rows
+                .into_iter()
+                .map(|row| row.into_canonical())
+                .collect::<Vec<_>>();
             queried_rows = queried_rows.saturating_add(rows.len());
             match rows.len() {
                 0 => {}
@@ -540,42 +540,29 @@ async fn load_page_canonical_dependencies(
     }
     let sources_by_request = sources_by_request.into_iter().collect::<Vec<_>>();
     for batch in sources_by_request.chunks(8) {
-        let selections = batch
+        let views = batch
             .iter()
-            .enumerate()
-            .map(|(index, (request_scope, sources))| {
-                let discriminators = sources
+            .map(|(request_scope, sources)| -> Result<_> {
+                let mut view = SegmentRows::new(Scope::Origin {
+                    node_did: request_scope.1.clone(),
+                    requester_did: request_scope.2.clone(),
+                });
+                view.request_doc_ids = Some(vec![request_scope.0.clone()]);
+                view.sources = sources
                     .iter()
-                    .map(|source| {
-                        let source = serde_json::from_str(source)?;
-                        Ok(serde_json::json!({ "source": output_source_discriminator(&source) }))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let source_filter = gents_protocol::graphql::graphql_input_literal(
-                    &serde_json::json!({ "_or": discriminators }),
-                )?;
-                let request_id = escape_graphql_string(&request_scope.0);
-                Ok(format!(
-                    r#"source{index}: AgentOutputSegment(
-                filter: {{ _and: [{{ request_doc_id: {{ _eq: "{request_id}" }}, {} }}, {source_filter}] }},
-                order: [{{ ordinal: ASC }}, {{ _docID: ASC }}], limit: {}
-            ) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#,
-                    scope_filter(&request_scope.1, request_scope.2.as_deref()),
-                    MAX_CANONICAL_DEPENDENCY_ROWS.saturating_add(1)
-                ))
+                    .map(|source| serde_json::from_str(source))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                view.limit = Some((MAX_CANONICAL_DEPENDENCY_ROWS + 1) as u64);
+                Ok(view)
             })
-            .collect::<Result<Vec<_>>>()?
-            .join("\n");
-        let data = access
-            .execute(
-                &format!("query DesktopReferencedOutputSources {{ {selections} }}"),
-                "referenced canonical output sources",
-            )
-            .await?;
+            .collect::<Result<Vec<_>>>()?;
+        let result = access.read_views(&views).await?;
         query_count += 1;
-        for (index, (request_scope, expected_sources)) in batch.iter().enumerate() {
-            let rows =
-                parse_canonical_rows(&data, &format!("source{index}"), decode_output_segment_row)?;
+        for ((request_scope, expected_sources), rows) in batch.iter().zip(result) {
+            let rows = rows
+                .into_iter()
+                .map(|row| row.into_canonical())
+                .collect::<Vec<_>>();
             queried_rows = queried_rows.saturating_add(rows.len());
             if rows.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
                 bail!(
@@ -597,17 +584,21 @@ async fn load_page_canonical_dependencies(
         }
     }
     dependencies.output_segments = records.into_values().collect();
-    let origin_request_docs = dependencies
-        .origin_headers
-        .iter()
-        .filter(|header| header.message.role == gents_protocol::output::MessageRole::User)
-        .filter_map(|header| header.message.request_doc_id.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    if !origin_request_docs.is_empty() {
+    let mut origin_request_docs = BTreeMap::<String, BTreeSet<String>>::new();
+    for header in &dependencies.origin_headers {
+        if header.message.role == gents_protocol::output::MessageRole::User {
+            if let Some(doc) = &header.message.request_doc_id {
+                origin_request_docs
+                    .entry(header.message.node_did.clone())
+                    .or_default()
+                    .insert(doc.clone());
+            }
+        }
+    }
+    for (node, docs) in origin_request_docs {
+        let docs = docs.into_iter().collect::<Vec<_>>();
         let (requests, _) =
-            read_request_documents(access, &origin_request_docs, "fork input attribution").await?;
+            read_request_documents(access, &node, &docs, "fork input attribution").await?;
         for request in &requests {
             anyhow::ensure!(
                 dependencies.origin_headers.iter().any(|header| {
@@ -619,9 +610,9 @@ async fn load_page_canonical_dependencies(
                 "fork input attribution crossed its source scope"
             );
         }
-        query_count += origin_request_docs.len().div_ceil(128) as u64;
+        query_count += docs.len().div_ceil(128) as u64;
         queried_rows = queried_rows.saturating_add(requests.len());
-        dependencies.origin_requests = requests;
+        dependencies.origin_requests.extend(requests);
     }
     Ok((dependencies, query_count, queried_rows))
 }
@@ -633,72 +624,42 @@ pub(super) fn tool_group_cursor_sequence(cursor: &str) -> Option<i64> {
 }
 
 async fn resolve_transcript_cursor_sequence(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
     cursor: &str,
 ) -> Result<i64> {
+    let scope = scoped_session(session_id, node_did, requester_did)?;
+    let mut messages = MessageRows::new(scope.clone());
+    messages.limit = Some(1);
     if let Some(sequence) = tool_group_cursor_sequence(cursor) {
-        let session_id = escape_graphql_string(session_id);
-        let node_filter = node_did
-            .map(escape_graphql_string)
-            .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
-            .unwrap_or_default();
-        let requester_filter = requester_did
-            .map(escape_graphql_string)
-            .map(|requester_did| format!(", requester_did: {{ _eq: \"{requester_did}\" }}"))
-            .unwrap_or_else(|| ", requester_did: { _eq: null }".to_string());
-        let query = format!(
-            r#"query DesktopSessionToolCursor {{
-  AgentMessage(
-    filter: {{ session_id: {{ _eq: "{session_id}" }}, sequence: {{ _eq: {sequence} }}{node_filter}{requester_filter} }},
-    limit: 1
-  ) {{ sequence }}
-  AgentToolCall(
-    filter: {{ session_id: {{ _eq: "{session_id}" }}, message_sequence: {{ _eq: {sequence} }}{node_filter}{requester_filter} }},
-    limit: 1
-  ) {{ sequence: message_sequence }}
-}}"#
-        );
-        let data = access.execute(&query, "session tool cursor").await?;
-        let rows: Vec<TranscriptCursorRow> = parse_query_rows(&data, AGENT_MESSAGE_NAME)?;
-        let tool_rows: Vec<TranscriptCursorRow> = parse_query_rows(&data, AGENT_TOOL_CALL_NAME)?;
-        if rows
-            .iter()
-            .chain(&tool_rows)
-            .any(|row| row.sequence == Some(sequence))
+        messages.sequence = SequenceRange::At(sequence);
+        let mut tools = ToolCallRows::new(scope);
+        tools.sequence = SequenceRange::At(sequence);
+        tools.limit = Some(1);
+        let (messages, tools) = access
+            .read_views(&(MessageSequences(messages), ToolSequences(tools)))
+            .await?;
+        if messages.iter().any(|row| row.sequence == Some(sequence))
+            || tools
+                .iter()
+                .any(|row| row.message_sequence == Some(sequence))
         {
             return Ok(sequence);
         }
-        bail!("session transcript cursor is no longer present: {cursor}");
+    } else {
+        messages.message_key = Some(cursor.to_owned());
+        if let Some(sequence) = access
+            .read_view(&MessageSequences(messages))
+            .await?
+            .first()
+            .and_then(|row| row.sequence)
+        {
+            return Ok(sequence);
+        }
     }
-    let session_id = escape_graphql_string(session_id);
-    let message_key = escape_graphql_string(cursor);
-    let node_filter = node_did
-        .map(escape_graphql_string)
-        .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
-        .unwrap_or_default();
-    let requester_filter = requester_did
-        .map(escape_graphql_string)
-        .map(|requester_did| format!(", requester_did: {{ _eq: \"{requester_did}\" }}"))
-        .unwrap_or_else(|| ", requester_did: { _eq: null }".to_string());
-    let query = format!(
-        r#"query {{
-  AgentMessage(
-    filter: {{
-      session_id: {{ _eq: "{session_id}" }},
-      message_key: {{ _eq: "{message_key}" }}{node_filter}{requester_filter}
-    }},
-    limit: 1
-  ) {{ sequence }}
-}}"#
-    );
-    let data = access.execute(&query, "session message cursor").await?;
-    let rows: Vec<TranscriptCursorRow> = parse_query_rows(&data, AGENT_MESSAGE_NAME)?;
-    rows.first()
-        .and_then(|row| row.sequence)
-        .ok_or_else(|| anyhow!("session transcript cursor is no longer present: {cursor}"))
+    bail!("session transcript cursor is no longer present: {cursor}")
 }
 
 /// The stretch of a session's message order a transcript read covers: the
@@ -712,86 +673,8 @@ pub enum TranscriptWindow {
     After(i64),
 }
 
-pub async fn load_session_transcript_page(
-    node: &EmbeddedNode,
-    session_id: &str,
-    node_did: Option<&str>,
-    requester_did: Option<&str>,
-    before_item_key: Option<&str>,
-    requested_limit: Option<usize>,
-) -> Result<SessionTranscriptQueryPage> {
-    load_session_transcript_page_with_access(
-        TranscriptAccess::Local(node),
-        session_id,
-        node_did,
-        requester_did,
-        before_item_key,
-        requested_limit,
-    )
-    .await
-}
-
 pub async fn load_session_transcript_page_on(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    node_did: Option<&str>,
-    requester_did: Option<&str>,
-    before_item_key: Option<&str>,
-    requested_limit: Option<usize>,
-) -> Result<SessionTranscriptQueryPage> {
-    load_session_transcript_page_with_access(
-        TranscriptAccess::Config(access),
-        session_id,
-        node_did,
-        requester_did,
-        before_item_key,
-        requested_limit,
-    )
-    .await
-}
-
-pub async fn load_session_transcript_window(
-    node: &EmbeddedNode,
-    session_id: &str,
-    node_did: Option<&str>,
-    requester_did: Option<&str>,
-    window: TranscriptWindow,
-    requested_limit: Option<usize>,
-) -> Result<SessionTranscriptQueryPage> {
-    load_session_transcript_window_with_access(
-        TranscriptAccess::Local(node),
-        session_id,
-        node_did,
-        requester_did,
-        window,
-        requested_limit,
-        true,
-    )
-    .await
-}
-
-pub async fn load_session_transcript_window_on(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    node_did: Option<&str>,
-    requester_did: Option<&str>,
-    window: TranscriptWindow,
-    requested_limit: Option<usize>,
-) -> Result<SessionTranscriptQueryPage> {
-    load_session_transcript_window_with_access(
-        TranscriptAccess::Config(access),
-        session_id,
-        node_did,
-        requester_did,
-        window,
-        requested_limit,
-        true,
-    )
-    .await
-}
-
-async fn load_session_transcript_page_with_access(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -825,8 +708,28 @@ async fn load_session_transcript_page_with_access(
     Ok(page)
 }
 
+pub async fn load_session_transcript_window_on(
+    access: &ConfigAccess,
+    session_id: &str,
+    node_did: Option<&str>,
+    requester_did: Option<&str>,
+    window: TranscriptWindow,
+    requested_limit: Option<usize>,
+) -> Result<SessionTranscriptQueryPage> {
+    load_session_transcript_window_with_access(
+        access,
+        session_id,
+        node_did,
+        requester_did,
+        window,
+        requested_limit,
+        true,
+    )
+    .await
+}
+
 async fn load_session_transcript_window_with_access(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -853,60 +756,32 @@ async fn load_session_transcript_window_with_access(
             sequence > boundary
         }
     };
-    let escaped_session_id = escape_graphql_string(session_id);
-    let node_filter = node_did
-        .map(escape_graphql_string)
-        .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
-        .unwrap_or_default();
-    let requester_filter = requester_did
-        .map(escape_graphql_string)
-        .map(|requester_did| format!(", requester_did: {{ _eq: \"{requester_did}\" }}"))
-        .unwrap_or_else(|| ", requester_did: { _eq: null }".to_string());
-    let (message_sequence_filter, tool_sequence_filter) = match window {
-        TranscriptWindow::Tip => (String::new(), String::new()),
-        TranscriptWindow::Before(sequence) => (
-            format!(", sequence: {{ _lt: {sequence} }}"),
-            format!(", message_sequence: {{ _lt: {sequence} }}"),
-        ),
-        TranscriptWindow::After(sequence) => (
-            format!(", sequence: {{ _gt: {sequence} }}"),
-            format!(", message_sequence: {{ _gt: {sequence} }}"),
-        ),
+    let scope = scoped_session(session_id, node_did, requester_did)?;
+    let sequence = match window {
+        TranscriptWindow::Tip => SequenceRange::All,
+        TranscriptWindow::Before(n) => SequenceRange::Before(n),
+        TranscriptWindow::After(n) => SequenceRange::After(n),
     };
-    let direction = if forward { "ASC" } else { "DESC" };
-    let message_order = if node_did.is_some() {
-        format!("[{{ sequence: {direction} }}]")
+    let direction = if forward {
+        Direction::Asc
     } else {
-        format!("[{{ sequence: {direction} }}, {{ message_key: {direction} }}]")
+        Direction::Desc
     };
-    let transcript_query = format!(
-        r#"query DesktopSessionTranscriptPage {{
-  AgentMessage(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}{message_sequence_filter} }},
-    order: {message_order},
-    limit: {message_query_limit}
-  ) {{ {AGENT_MESSAGE_FIELDS} }}
-  AgentToolCall(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}{tool_sequence_filter} }},
-    order: [{{ message_sequence: {direction} }}, {{ tool_call_key: {direction} }}],
-    limit: {tool_call_query_limit}
-  ) {{ {AGENT_TOOL_CALL_FIELDS} }}
-}}"#
-    );
+    let mut message_view = MessageRows::new(scope.clone());
+    message_view.sequence = sequence;
+    message_view.direction = direction;
+    message_view.limit = Some(message_query_limit as u64);
+    let mut tool_view = ToolCallRows::new(scope.clone());
+    tool_view.sequence = sequence;
+    tool_view.direction = direction;
+    tool_view.limit = Some(tool_call_query_limit as u64);
     let started = std::time::Instant::now();
-    // Messages and tool calls must come from one DefraDB query evaluation: a
-    // pair of sequential reads can observe a tool group without the message
-    // window that owns it.
-    let transcript_data = access
-        .execute(&transcript_query, "session transcript page")
-        .await?;
-    let queried_messages = parse_canonical_rows(
-        &transcript_data,
-        AGENT_MESSAGE_NAME,
-        decode_transcript_message_row,
-    )?;
-    let queried_tool_calls: Vec<AgentToolCallRow> =
-        parse_query_rows(&transcript_data, AGENT_TOOL_CALL_NAME)?;
+    let (queried_messages, queried_tool_calls) =
+        access.read_views(&(message_view, tool_view)).await?;
+    let queried_messages = queried_messages
+        .into_iter()
+        .map(|row| row.into_canonical())
+        .collect::<Vec<_>>();
     let messages_exhausted = queried_messages.len() < message_query_limit;
     let mut messages = queried_messages.clone();
     let deferred_message_sequence = (!messages_exhausted)
@@ -993,43 +868,36 @@ async fn load_session_transcript_window_with_access(
             .chain(unanswered.iter().filter_map(|row| row.message_sequence))
             .max()
             .unwrap_or_default();
-        let owners = gents_store::graphql::graphql_string_list_literal(
-            unanswered
-                .iter()
-                .filter_map(|row| row.request_doc_id.as_deref())
-                .collect::<BTreeSet<_>>(),
-        );
         let wanted = unanswered
             .iter()
             .filter_map(|row| row.doc_id.as_deref())
             .collect::<BTreeSet<_>>();
-        let query = format!(
-            r#"query DesktopSessionTranscriptResults {{
-  AgentMessage(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}, role: {{ _eq: "user" }}, sequence: {{ _gt: {after} }}, request_doc_id: {{ _in: {owners} }} }},
-    order: [{{ sequence: ASC }}],
-    limit: {}
-  ) {{ {AGENT_MESSAGE_FIELDS} }}
-}}"#,
-            unanswered.len()
+        let mut view = MessageRows::new(scope);
+        view.request_doc_ids = Some(
+            unanswered
+                .iter()
+                .filter_map(|row| row.request_doc_id.clone())
+                .collect(),
         );
-        let data = access
-            .execute(&query, "session transcript tool results")
-            .await?;
+        view.role = Some(gents_protocol::output::MessageRole::User);
+        view.sequence = SequenceRange::After(after);
+        view.limit = Some(unanswered.len() as u64);
         result_query_count = 1;
-        result_messages =
-            parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?
-                .into_iter()
-                .filter(|row| {
-                    row.message.blocks.iter().any(|block| {
+        result_messages = access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(|row| row.into_canonical())
+            .filter(|row| {
+                row.message.blocks.iter().any(|block| {
                     matches!(
                         block,
                         gents_protocol::output::MessageBlock::ToolResult { tool_call_doc_id, .. }
                             if wanted.contains(tool_call_doc_id.as_str())
                     )
                 })
-                })
-                .collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
     }
     let (canonical_dependencies, dependency_query_count, dependency_rows) =
         load_page_canonical_dependencies(
@@ -1062,7 +930,13 @@ async fn load_session_transcript_window_with_access(
     let (requests, _) = if request_doc_ids.is_empty() {
         (Vec::new(), 0)
     } else {
-        read_request_documents(access, &request_doc_ids, "session transcript requests").await?
+        read_request_documents(
+            access,
+            node_did.context("session read requires a node DID")?,
+            &request_doc_ids,
+            "session transcript requests",
+        )
+        .await?
     };
     let request_query_count = request_doc_ids.len().div_ceil(128) as u64;
     let (question_sources, question_query_count) = read_legacy_question_sources(
@@ -1156,38 +1030,8 @@ async fn load_session_transcript_window_with_access(
     })
 }
 
-pub async fn load_session_context_store(
-    node: &EmbeddedNode,
-    session_id: &str,
-    node_did: Option<&str>,
-    requester_did: Option<&str>,
-) -> Result<ClientStore> {
-    load_session_context_store_with_access(
-        TranscriptAccess::Local(node),
-        session_id,
-        node_did,
-        requester_did,
-    )
-    .await
-}
-
 pub async fn load_session_context_store_on(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    node_did: Option<&str>,
-    requester_did: Option<&str>,
-) -> Result<ClientStore> {
-    load_session_context_store_with_access(
-        TranscriptAccess::Config(access),
-        session_id,
-        node_did,
-        requester_did,
-    )
-    .await
-}
-
-async fn load_session_context_store_with_access(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -1196,37 +1040,23 @@ async fn load_session_context_store_with_access(
     if session_id.is_empty() {
         bail!("session context query requires a session id");
     }
-    let escaped_session_id = escape_graphql_string(session_id);
-    let node_filter = node_did
-        .map(escape_graphql_string)
-        .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
-        .unwrap_or_default();
-    let requester_filter = requester_did
-        .map(escape_graphql_string)
-        .map(|requester_did| format!(", requester_did: {{ _eq: \"{requester_did}\" }}"))
-        .unwrap_or_else(|| ", requester_did: { _eq: null }".to_string());
-    let query = format!(
-        r#"query DesktopSessionContext {{
-  AgentMessage(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }},
-    order: [{{ sequence: ASC }}, {{ message_key: ASC }}]
-  ) {{ {AGENT_MESSAGE_FIELDS} }}
-  AgentOutputSegment(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }}
-  ) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
-  CompactionEntry(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }},
-    order: [{{ sequence: ASC }}, {{ compaction_key: ASC }}]
-  ) {{ {COMPACTION_ENTRY_FIELDS} }}
-}}"#
-    );
+    let scope = scoped_session(session_id, node_did, requester_did)?;
     let started = std::time::Instant::now();
-    let data = access.execute(&query, "session context").await?;
-    let messages = parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?;
-    let output_segments =
-        parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
-    let compaction_entries: Vec<CompactionEntryRow> =
-        parse_query_rows(&data, COMPACTION_ENTRY_NAME)?;
+    let (messages, output_segments, compaction_entries) = access
+        .read_views(&(
+            MessageRows::new(scope.clone()),
+            SegmentRows::new(scope.clone()),
+            CompactionRows::new(scope),
+        ))
+        .await?;
+    let messages = messages
+        .into_iter()
+        .map(|row| row.into_canonical())
+        .collect::<Vec<_>>();
+    let output_segments = output_segments
+        .into_iter()
+        .map(|row| row.into_canonical())
+        .collect::<Vec<_>>();
     tracing::debug!(
         target: "gents_desktop_core::query",
         session_id,
@@ -1243,38 +1073,8 @@ async fn load_session_context_store_with_access(
     }))
 }
 
-pub async fn load_session_compaction_entries(
-    node: &EmbeddedNode,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-) -> Result<Vec<gents_protocol::row::CompactionEntryRow>> {
-    load_session_compaction_entries_with_access(
-        TranscriptAccess::Local(node),
-        session_id,
-        node_did,
-        requester_did,
-    )
-    .await
-}
-
 pub async fn load_session_compaction_entries_on(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-) -> Result<Vec<gents_protocol::row::CompactionEntryRow>> {
-    load_session_compaction_entries_with_access(
-        TranscriptAccess::Config(access),
-        session_id,
-        node_did,
-        requester_did,
-    )
-    .await
-}
-
-async fn load_session_compaction_entries_with_access(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -1287,53 +1087,18 @@ async fn load_session_compaction_entries_with_access(
         !node_did.trim().is_empty(),
         "session compactions require a node DID"
     );
-    let session_id = escape_graphql_string(session_id.trim());
-    let scope = scope_filter(node_did.trim(), requester_did);
-    let query = format!(
-        r#"query DesktopSessionCompactions {{
-  CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }}, {scope} }},
-    order: [{{ sequence: ASC }}, {{ compaction_key: ASC }}]) {{
-      compaction_key session_id requester_did request_doc_id sequence messages_compacted
-      compacted_through_sequence original_tokens compacted_tokens created_at
-  }}
-}}"#
-    );
-    let data = access.execute(&query, "session compactions").await?;
-    parse_query_rows(&data, COMPACTION_ENTRY_NAME)
-}
-
-pub async fn load_session_diagnostics_store(
-    node: &EmbeddedNode,
-    session_id: &str,
-    node_did: Option<&str>,
-    requester_did: Option<&str>,
-) -> Result<ClientStore> {
-    load_session_diagnostics_store_with_access(
-        TranscriptAccess::Local(node),
-        session_id,
-        node_did,
-        requester_did,
-    )
-    .await
+    access
+        .read_view(&CompactionRows::new(scoped_session(
+            session_id.trim(),
+            Some(node_did.trim()),
+            requester_did,
+        )?))
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn load_session_diagnostics_store_on(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    node_did: Option<&str>,
-    requester_did: Option<&str>,
-) -> Result<ClientStore> {
-    load_session_diagnostics_store_with_access(
-        TranscriptAccess::Config(access),
-        session_id,
-        node_did,
-        requester_did,
-    )
-    .await
-}
-
-async fn load_session_diagnostics_store_with_access(
-    access: TranscriptAccess<'_>,
+    access: &ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -1342,36 +1107,23 @@ async fn load_session_diagnostics_store_with_access(
     if session_id.is_empty() {
         bail!("session diagnostics query requires a session id");
     }
-    let escaped_session_id = escape_graphql_string(session_id);
-    let node_filter = node_did
-        .map(escape_graphql_string)
-        .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
-        .unwrap_or_default();
-    let requester_filter = requester_did
-        .map(escape_graphql_string)
-        .map(|requester_did| format!(", requester_did: {{ _eq: \"{requester_did}\" }}"))
-        .unwrap_or_else(|| ", requester_did: { _eq: null }".to_string());
-    let query = format!(
-        r#"query DesktopSessionDiagnostics {{
-  AgentMessage(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }},
-    order: [{{ sequence: ASC }}, {{ message_key: ASC }}]
-  ) {{ {AGENT_MESSAGE_FIELDS} }}
-  AgentToolCall(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }},
-    order: [{{ message_sequence: ASC }}, {{ tool_call_key: ASC }}]
-  ) {{ {AGENT_TOOL_CALL_FIELDS} }}
-  AgentOutputSegment(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }}
-  ) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
-}}"#
-    );
+    let scope = scoped_session(session_id, node_did, requester_did)?;
     let started = std::time::Instant::now();
-    let data = access.execute(&query, "session diagnostics").await?;
-    let messages = parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?;
-    let tool_calls: Vec<AgentToolCallRow> = parse_query_rows(&data, AGENT_TOOL_CALL_NAME)?;
-    let output_segments =
-        parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
+    let (messages, tool_calls, output_segments) = access
+        .read_views(&(
+            MessageRows::new(scope.clone()),
+            ToolCallRows::new(scope.clone()),
+            SegmentRows::new(scope),
+        ))
+        .await?;
+    let messages = messages
+        .into_iter()
+        .map(|row| row.into_canonical())
+        .collect::<Vec<_>>();
+    let output_segments = output_segments
+        .into_iter()
+        .map(|row| row.into_canonical())
+        .collect::<Vec<_>>();
     tracing::debug!(
         target: "gents_desktop_core::query",
         session_id,
@@ -1422,8 +1174,13 @@ mod dependency_identity_tests {
             .await?;
         }
         for (requester, expected) in [(Some("did:requester"), "mine"), (None, "no-requester")] {
-            let store =
-                load_session_context_store(&node, "session", Some("did:owner"), requester).await?;
+            let store = load_session_context_store_on(
+                &ConfigAccess::local_as(node.clone(), node.node_identity_did().unwrap().parse()?),
+                "session",
+                Some("did:owner"),
+                requester,
+            )
+            .await?;
             assert_eq!(store.compaction_entries.len(), 1);
             assert_eq!(store.compaction_entries[0].compaction_key, expected);
         }

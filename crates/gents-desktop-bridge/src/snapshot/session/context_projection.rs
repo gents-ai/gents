@@ -34,17 +34,7 @@ fn configured_context_window(
     let observation = store
         .backend_observations
         .iter()
-        .enumerate()
-        .find(|(index, observation)| {
-            observation.backend_id == backend.backend_id
-                && source_matches_node(
-                    &store.backend_observation_source_node_dids,
-                    *index,
-                    &backend.node_did,
-                    true,
-                )
-        })
-        .map(|(_, observation)| observation);
+        .find(|observation| observation.backend_id == backend.backend_id);
     let advertised_model =
         gents_inference::resolved::advertised_model_for_profile(backend, profile, observation)
             .map_err(|error| error.to_string())?;
@@ -139,19 +129,7 @@ pub(super) fn build_session_context_view(
     let mut compaction_rows = context_store
         .compaction_entries
         .iter()
-        .enumerate()
-        .filter(|(index, row)| {
-            row.session_id.as_deref() == Some(session_id)
-                && node_did.is_none_or(|node_did| {
-                    source_matches_node(
-                        &context_store.compaction_entry_source_node_dids,
-                        *index,
-                        node_did,
-                        false,
-                    )
-                })
-        })
-        .map(|(_, row)| row)
+        .filter(|row| row.session_id.as_deref() == Some(session_id))
         .collect::<Vec<_>>();
     compaction_rows.sort_by(|left, right| {
         left.sequence

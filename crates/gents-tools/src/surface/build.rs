@@ -393,14 +393,11 @@ pub(super) async fn enabled_mcp_service_ids(
         node.clone(),
         identity::Did::new(node_did)?,
     );
-    Ok(
-        crate::mcp::registry::configured_mcp_services_on(&access, node_did)
-            .await?
-            .into_iter()
-            .filter(|service| service.enabled)
-            .map(|service| service.service_id)
-            .collect(),
-    )
+    Ok(crate::mcp::probe::enabled_services(&access, node_did, None)
+        .await?
+        .into_iter()
+        .map(|service| service.service_id)
+        .collect())
 }
 
 pub async fn measured_available_mcp_service_ids(
@@ -411,27 +408,21 @@ pub async fn measured_available_mcp_service_ids(
         node.node_identity_did() == Some(node_did),
         "MCP availability requires the local runtime identity"
     );
-    let actor = identity::Did::new(node_did)?;
-    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(node_did)?,
+    );
     let services = crate::mcp::registry::configured_mcp_services_on(&access, node_did).await?;
     if services.is_empty() {
         return Ok(Vec::new());
     }
-    let query = mcp_health_query(node_did);
-    let response = gents_store::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        Some(actor),
-        "tools.measured_availability",
-        |txn| {
-            let query = query.clone();
-            Box::pin(async move { txn.execute(&query).await })
-        },
-    )
-    .await?;
+    let rows = access
+        .read_view(&crate::mcp::views::Health { node_did })
+        .await?;
     let hostname = hostname::get()
         .ok()
         .and_then(|value| value.into_string().ok());
-    project_measured_mcp_services(node_did, &services, &response, hostname.as_deref())
+    project_measured_mcp_services(node_did, &services, &rows, hostname.as_deref())
 }
 
 /// A remote server's loopback endpoint is never inferred from the CLI host.
@@ -443,27 +434,22 @@ pub async fn measured_mcp_services_for_access(
     if services.is_empty() {
         return Ok(Vec::new());
     }
-    let response = access.execute(&mcp_health_query(node_did)).await?;
+    let rows = access
+        .read_view(&crate::mcp::views::Health { node_did })
+        .await?;
     let hostname = match access {
         gents_store::config_client::ConfigAccess::Local(_) => hostname::get()
             .ok()
             .and_then(|value| value.into_string().ok()),
         gents_store::config_client::ConfigAccess::Graphql(_) => None,
     };
-    project_measured_mcp_services(node_did, services, &response, hostname.as_deref())
-}
-
-fn mcp_health_query(node_did: &str) -> String {
-    format!(
-        r#"{{ ToolServiceHealthState(filter: {{node_did: {{_eq: "{}"}}}}) {{ service_id endpoint status }} }}"#,
-        gents_store::graphql::escape_graphql_string(node_did)
-    )
+    project_measured_mcp_services(node_did, services, &rows, hostname.as_deref())
 }
 
 fn project_measured_mcp_services(
     node_did: &str,
     services: &[gents_documents::ToolServiceRegistry],
-    response: &serde_json::Value,
+    rows: &[gents_protocol::row::ToolServiceHealthStateRow],
     local_hostname: Option<&str>,
 ) -> Result<Vec<String>> {
     anyhow::ensure!(
@@ -526,17 +512,12 @@ fn project_measured_mcp_services(
             }
         }
     }
-    let rows = response
-        .get("data")
-        .and_then(|data| data.get("ToolServiceHealthState"))
-        .and_then(serde_json::Value::as_array)
-        .context("MCP health query returned no rows array")?;
     let mut available = rows
         .iter()
         .filter_map(|row| {
-            let service_id = row.get("service_id")?.as_str()?;
-            let endpoint = row.get("endpoint")?.as_str()?;
-            let status = row.get("status")?.as_str()?;
+            let service_id = row.service_id.as_str();
+            let endpoint = row.endpoint.as_deref()?;
+            let status = row.status.as_deref()?;
             let callable = matches!(
                 ToolServiceHealthState::parse_opt(Some(status))
                     .map(ToolServiceHealthState::project),

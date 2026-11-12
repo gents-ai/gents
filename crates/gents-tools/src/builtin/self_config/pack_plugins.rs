@@ -9,6 +9,20 @@ impl PackInstaller {
         distribution: &Distribution,
         commit: bool,
     ) -> Result<String> {
+        self.plugins_pack_final(operation, args, distribution, commit)
+            .await
+            .map_err(|error| error.into_change_error().into_anyhow())
+    }
+
+    /// [`Self::plugins_pack`], with a failure that says whether the
+    /// publication stayed installed ([`node_packs::InstallError`]).
+    pub(super) async fn plugins_pack_final(
+        &self,
+        operation: &str,
+        args: &PackChangeInput,
+        distribution: &Distribution,
+        commit: bool,
+    ) -> Result<String, node_packs::InstallError> {
         let access = self.core.access()?;
         let packs = self.packs(&access);
         let node_binding = self.core.refresh_node_binding().await?;
@@ -18,7 +32,7 @@ impl PackInstaller {
             .await?;
         let ready = plan.blockers.is_empty() && plan.missing_slots.is_empty();
         if !commit {
-            return ordered! {
+            return Ok(ordered! {
                 "committed": false,
                 "ready": ready,
                 "operation": operation,
@@ -31,9 +45,11 @@ impl PackInstaller {
                 "manifest": manifest,
                 "artifact_digest": distribution.digest(),
                 "inference": plan.inference,
-            }.pretty();
+            }.pretty()?);
         }
-        anyhow::ensure!(ready, "plugin installation blocked; call [\"pack\",\"preview\",{operation:?},{:?}] and resolve its operator approval or inference blockers", distribution.pinned_spec(&args.package));
+        if !ready {
+            return Err(anyhow!("plugin installation blocked; call [\"pack\",\"preview\",{operation:?},{:?}] and resolve its operator approval or inference blockers", distribution.pinned_spec(&args.package)).into());
+        }
         let inference = packs
             .bound_inference(manifest, &args.inference_slots, node_binding.as_ref())
             .await?;
@@ -53,7 +69,7 @@ impl PackInstaller {
             .map(|plugin| json!({"argv": ["plugin", "get", format!("{}/{}", plugin.namespace, plugin.name)]}))
             .collect::<Vec<_>>();
         let single = discovery.first().cloned().unwrap_or(json!(null));
-        ordered! {
+        Ok(ordered! {
             "committed": true,
             "installed": installed.record,
             "next_call": single,
@@ -62,6 +78,6 @@ impl PackInstaller {
             "granted_authority": plan.authority,
             "plugins": installed.plugins,
             "artifact_digest": distribution.digest(),
-        }.pretty()
+        }.pretty()?)
     }
 }

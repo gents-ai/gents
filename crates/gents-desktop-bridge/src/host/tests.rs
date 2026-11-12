@@ -262,6 +262,7 @@ async fn request_retry_reaches_the_existing_parent_owner() {
                 request_id: "missing-parent".into(),
                 node_did: "node".into(),
             },
+            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -315,6 +316,7 @@ async fn provider_usage_read_rejects_an_unconfigured_runtime() {
                     provider: None,
                 },
             },
+            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -350,6 +352,7 @@ async fn inference_setup_state_rejects_an_unconfigured_runtime() {
             protocol::ClientCommand::InferenceSetupState {
                 node_did: "did:unconfigured".into(),
             },
+            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -399,7 +402,7 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
         "tool_service_registries":[], "event_sources":[], "agent_targets":[],
         "datastore_tool_surfaces":[], "sessions":[], "requests":[], "backend_observations":[]
     }});
-    let store = core.store().clone();
+    let store = core.stores().ensure(&did);
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v0/graphql"))
         .respond_with(move |_: &wiremock::Request| {
@@ -413,6 +416,7 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
             protocol::ClientCommand::InferenceSetupState {
                 node_did: did.clone(),
             },
+            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await;
@@ -475,6 +479,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
             protocol::ClientCommand::RuntimeIsLocal {
                 node_did: did.clone()
             },
+            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -483,6 +488,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     );
     host.execute(
         protocol::ClientCommand::Snapshot {},
+        &super::approvals::AttachmentApprovals::default(),
         CancellationToken::new(),
     )
     .await
@@ -539,6 +545,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
             protocol::ClientCommand::InferenceSetupState {
                 node_did: did.clone(),
             },
+            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await

@@ -52,7 +52,10 @@ async fn inference_order_and_physical_scope_survive_index_hints() {
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let access = gents_store::config_client::ConfigAccess::local(db.node.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        db.node_identity.did().parse().unwrap(),
+    );
     let old = request(
         &access,
         "session",
@@ -236,7 +239,10 @@ async fn retained_calls_page_past_foreign_rows_and_nullable_cursor_keys() {
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let access = gents_store::config_client::ConfigAccess::local(db.node.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        db.node_identity.did().parse().unwrap(),
+    );
     let own = request(&access, "session", None, "2026-10-01T00:00:00Z").await;
     let foreign = request(&access, "other", None, "2026-10-01T00:00:00Z").await;
     for i in 0..PAGE_SIZE + 1 {
@@ -265,7 +271,10 @@ async fn retained_call_selection_pages_the_scoped_requests() {
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let access = gents_store::config_client::ConfigAccess::local(db.node.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        db.node_identity.did().parse().unwrap(),
+    );
     let mut ids = Vec::new();
     for i in 0..PAGE_SIZE + 1 {
         ids.push(

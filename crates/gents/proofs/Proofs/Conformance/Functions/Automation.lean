@@ -3,7 +3,6 @@ import Proofs.Automation.Mailbox.State
 import Proofs.Automation.RuntimeReconcile.State
 import Proofs.Automation.Triggers.ManualRun
 import Proofs.Automation.GoalAutomation.ReadinessGate
-import Proofs.Automation.GoalAutomation.UpdateGoal
 import Proofs.Automation.GoalAutomation.Operations
 import Proofs.Conformance.Family
 
@@ -28,13 +27,9 @@ deriving instance Lean.ToJson for Decision
 deriving instance Lean.ToJson for Status
 end Goals
 
-namespace GoalAutomation.UpdateGoal
-deriving instance Lean.ToJson for RequestedStatus, ReasonArgument, Route
-end GoalAutomation.UpdateGoal
-
 namespace GoalAutomation.Operations
 deriving instance Lean.ToJson for Actor, Session, Existing, Claim, StartDecision, Target,
-  FieldChange, SetDecision
+  FieldChange, Reason, SetDecision
 end GoalAutomation.Operations
 
 attribute [conformance_function]
@@ -47,6 +42,5 @@ attribute [conformance_function]
   Triggers.ManualRun.scheduleDecision
   Triggers.ManualRun.sessionTitle
   GoalAutomation.ReadinessGate.publishes
-  GoalAutomation.UpdateGoal.route
   GoalAutomation.Operations.startDecision
   GoalAutomation.Operations.setDecision

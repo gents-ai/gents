@@ -13,7 +13,9 @@ use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
 use crate::graphql_access::graphql_endpoint_available;
 use gents_host::args::StoreKeyCustodyArg;
-use gents_protocol::node_readiness::{AgentReadinessState, NodeReadinessSnapshot};
+use gents_protocol::node_readiness::{
+    AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
+};
 use gents_service::args::ServiceAction;
 use gents_service::home_state::read_finished_init_config;
 use gents_service::home_state::read_runtime_state;
@@ -66,14 +68,7 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
         );
         let graphql = ensure_graphql(&home).await?;
         let agent = chosen_agent(&home, &config, &args).await?;
-        ensure_an_agent_can_run(
-            &graphql,
-            &home,
-            &config.node_did,
-            agent.is_some(),
-            PUBLISH_WAIT,
-        )
-        .await?;
+        wait_for_its_agent(&graphql, &config.node_did, agent.as_deref(), PUBLISH_WAIT).await;
         let shown =
             crate::commands::shell::open(&home, agent, args.prompt, args.continue_session, runtime)
                 .await?;
@@ -178,7 +173,7 @@ async fn session_agent(graphql: &GraphqlEndpoint, node_did: &str, session: &str)
 pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
     let (home, config) = ready_home(args.home, args.store_key_custody, true).await?;
     let graphql = ensure_graphql(&home).await?;
-    ensure_an_agent_can_run(&graphql, &home, &config.node_did, false, PUBLISH_WAIT).await?;
+    wait_for_its_agent(&graphql, &config.node_did, None, PUBLISH_WAIT).await;
     let shown = crate::commands::shell::open(&home, None, None, None, runtime).await?;
     if let Some(hint) = continue_hint(shown.as_deref(), None) {
         eprintln!("{hint}");
@@ -315,55 +310,51 @@ async fn start_service(home: &Path) -> Result<()> {
 
 /// Only the NodeReadiness document a runtime publishes tells another process which agents it
 /// can run, and it lands a little after GraphQL answers, so this bounded wait reads it again.
-/// A read that fails is left for the shell to report.
-async fn ensure_an_agent_can_run(
+/// The shell opens either way: with no agent that can run it opens on Setup, which connects a
+/// model, and it reports a read that fails.
+async fn wait_for_its_agent(
     graphql: &GraphqlEndpoint,
-    home: &Path,
     node_did: &str,
-    agent_given: bool,
+    agent: Option<&str>,
     wait: Duration,
-) -> Result<()> {
+) {
     let access = ConfigAccess::Graphql(graphql.clone());
     let deadline = Instant::now() + wait;
     loop {
         let Ok(snapshot) = yolo::node_readiness(&access, node_did).await else {
-            return Ok(());
+            return;
         };
-        match cannot_open(snapshot.as_ref(), agent_given, home) {
-            None => return Ok(()),
-            Some(refusal) if Instant::now() >= deadline => bail!("{refusal}"),
-            Some(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+        if can_run(snapshot.as_ref(), agent) || Instant::now() >= deadline {
+            return;
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-/// Plain `gents` opens the default agent, so that one has to be ready. The shell checks an
-/// agent named with `--agent` itself, so here only an empty set stops it.
-fn cannot_open(
-    snapshot: Option<&NodeReadinessSnapshot>,
-    agent_given: bool,
-    home: &Path,
-) -> Option<String> {
-    let ready = |agent: Option<&str>| {
-        snapshot.is_some_and(|snapshot| {
-            snapshot.agents.iter().any(|entry| {
-                entry.state == AgentReadinessState::Ready
-                    && agent.is_none_or(|agent| entry.agent_did == agent)
-            })
-        })
-    };
-    let what = match snapshot {
-        _ if !ready(None) => "no agent can run yet on this home's runtime".to_string(),
-        Some(snapshot) if !agent_given && !ready(Some(&snapshot.default_agent_did)) => format!(
-            "this home's default agent {:?} cannot run yet, though `gents --agent <id>` can open another (see `gents config agent list`)",
-            snapshot.default_agent_did
-        ),
-        _ => return None,
-    };
-    let home = crate::shell_word(home);
-    Some(format!(
-        "{what}. Check `gents status --home {home}`. If its model cannot be reached, start the model, or change its address with `gents config backend set --file <backend.json> --home {home}` (`gents config backend list --home {home}` names the backend to `show`). If no model is selected yet, choose one with `gents config profile set --file <profile.json> --home {home}`."
-    ))
+/// Whether the agent a tab opens on is ready: the one `--agent` names, else the default.
+fn can_run(snapshot: Option<&NodeReadinessSnapshot>, agent: Option<&str>) -> bool {
+    snapshot.is_some_and(|snapshot| {
+        let agent = agent.unwrap_or(&snapshot.default_agent_did);
+        snapshot
+            .agents
+            .iter()
+            .any(|entry| entry.state == AgentReadinessState::Ready && entry.agent_did == agent)
+    })
+}
+
+/// The reasons an agent cannot run that connecting a model clears, which the shell's Setup
+/// and Accounts menu do.
+pub(crate) fn wants_a_model(reason: AgentReadinessUnavailableReason) -> bool {
+    use AgentReadinessUnavailableReason as Reason;
+    matches!(
+        reason,
+        Reason::BackendNotConfigured
+            | Reason::BackendDisabled
+            | Reason::BackendTemporarilyUnavailable
+            | Reason::CredentialsRequired
+            | Reason::SubscriptionNotEntitled
+            | Reason::InferenceProfileInvalid
+    )
 }
 
 fn no_service_manager_message(home: &Path) -> String {
@@ -442,8 +433,8 @@ mod tests {
                 "gents runtime server --home '/srv/my home'",
             ),
             (
-                cannot_open(None, false, home).unwrap(),
-                "gents status --home '/srv/my home'",
+                ignored_client_setting_notice(&home.join("client.json")),
+                "'/srv/my home/client.json'",
             ),
         ] {
             assert!(message.contains(command), "{message}");
@@ -451,40 +442,33 @@ mod tests {
     }
 
     #[test]
-    fn no_ready_agent_names_gents_status_then_the_backend() {
-        let home = Path::new("/srv/home");
-        for snapshot in [None, Some(readiness("a", &[]))] {
-            for agent_given in [false, true] {
-                let error =
-                    cannot_open(snapshot.as_ref(), agent_given, home).expect("nothing is ready");
-                assert!(error.contains("no agent can run"), "{error}");
-                let status = error.find("gents status --home /srv/home").expect(&error);
-                let backend = error
-                    .find("gents config backend set --file <backend.json> --home /srv/home")
-                    .expect(&error);
-                assert!(status < backend, "{error}");
-                let profile = error
-                    .find("gents config profile set --file <profile.json> --home /srv/home")
-                    .expect(&error);
-                assert!(backend < profile, "{error}");
-            }
+    fn the_wait_ends_once_the_agent_a_tab_opens_on_is_ready() {
+        for agent in [None, Some("a")] {
+            assert!(!can_run(None, agent));
+            assert!(!can_run(Some(&readiness("a", &[])), agent));
+            assert!(!can_run(Some(&readiness("a", &["other"])), agent));
+            assert!(can_run(Some(&readiness("a", &["a"])), agent));
         }
+        assert!(can_run(Some(&readiness("a", &["other"])), Some("other")));
     }
 
     #[test]
-    fn the_default_agent_has_to_be_ready_when_no_agent_is_named() {
-        let home = Path::new("/srv/home");
-        let other = readiness("a", &["other"]);
-
-        let error = cannot_open(Some(&other), false, home).expect("only another agent is ready");
-
-        assert!(error.contains(r#"default agent "a""#), "{error}");
-        assert!(error.contains("gents --agent"), "{error}");
-        assert!(error.contains("gents status --home /srv/home"), "{error}");
-        assert_eq!(cannot_open(Some(&other), true, home), None);
+    fn the_reasons_a_model_clears_are_the_inference_ones() {
+        use AgentReadinessUnavailableReason as Reason;
+        let wanted: Vec<_> = Reason::ALL
+            .into_iter()
+            .filter(|r| wants_a_model(*r))
+            .collect();
         assert_eq!(
-            cannot_open(Some(&readiness("a", &["a"])), false, home),
-            None
+            wanted,
+            [
+                Reason::BackendNotConfigured,
+                Reason::BackendDisabled,
+                Reason::BackendTemporarilyUnavailable,
+                Reason::CredentialsRequired,
+                Reason::SubscriptionNotEntitled,
+                Reason::InferenceProfileInvalid,
+            ]
         );
     }
 

@@ -102,17 +102,30 @@ pub enum GoalFieldChange {
     ClearBudget,
 }
 
+/// Lean `GoalAutomation.Operations.Reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalReason {
+    Absent,
+    Blank,
+    Given,
+}
+
 /// Lean `GoalAutomation.Operations.SetDecision`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalSetDecision {
     Apply,
     Denied,
+    RuntimeOnly,
+    ReasonNotAccepted,
     NothingToChange,
     PersonOnly,
     FieldsNeedKeep,
     NotEditable,
     ResumeRequired,
+    Illegal,
+    ReasonRequired,
     ObligationsUnmet,
 }
 
@@ -151,6 +164,14 @@ pub struct GoalSetInput {
 impl GoalSetInput {
     pub fn target(&self) -> GoalTarget {
         self.status.map(GoalTarget::of).unwrap_or(GoalTarget::Keep)
+    }
+
+    pub fn reason(&self) -> GoalReason {
+        match self.reason.as_deref().map(str::trim) {
+            None => GoalReason::Absent,
+            Some("") => GoalReason::Blank,
+            Some(_) => GoalReason::Given,
+        }
     }
 
     pub fn field_change(&self) -> GoalFieldChange {
@@ -193,7 +214,9 @@ pub enum GoalOperationError {
     InvalidBudget,
     #[error("provide objective, token_budget, status or auto_resume to change the goal")]
     NothingToChange,
-    #[error("only a person may pause, stop, mark limits, clear the budget or choose reset resume")]
+    #[error("usage_limited and budget_limited are set by the runtime when a limit is reached")]
+    RuntimeOnly,
+    #[error("only a person may pause, stop, clear the budget or choose reset resume")]
     PersonOnly,
     #[error("objective and token_budget can only be edited while status is active")]
     FieldsNeedKeep,
@@ -203,6 +226,10 @@ pub enum GoalOperationError {
     ResumeRequired(GoalStatus),
     #[error("{0}")]
     ObligationsUnmet(String),
+    #[error("the goal's first request is not valid: {0}")]
+    FirstRequestInvalid(&'static str),
+    #[error("the goal's first request does not match its session and author")]
+    FirstRequestMismatch,
     #[error("reason is only accepted with status complete or blocked")]
     ReasonNotAccepted,
     #[error("blocked requires a non-empty reason identifying the repeated condition")]
@@ -243,6 +270,10 @@ impl GoalOperationError {
                 resource: "goal",
                 verb: "start",
             },
+            Self::FirstRequestInvalid(_) | Self::FirstRequestMismatch => NextCall::VerbHelp {
+                resource: "goal",
+                verb: "start",
+            },
             Self::Busy | Self::LiveGoal | Self::Stale | Self::Conflict | Self::NotEditable(_) => {
                 NextCall::Inspect { resource: "goal" }
             }
@@ -254,6 +285,7 @@ impl GoalOperationError {
             Self::InvalidObjective
             | Self::InvalidBudget
             | Self::NothingToChange
+            | Self::RuntimeOnly
             | Self::PersonOnly
             | Self::FieldsNeedKeep
             | Self::ObligationsUnmet(_)
