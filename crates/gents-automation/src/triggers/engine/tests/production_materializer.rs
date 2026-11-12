@@ -1600,15 +1600,24 @@ async fn group_marker_reads_match_the_lean_marker_model() {
 }
 
 #[tokio::test]
-async fn materializer_rejects_workspace_from_different_explicit_owner() {
-    let (db, _user, _client_access, behavior) =
-        signed_materializer_agent("workspace-reject-owner").await;
+async fn workspace_fires_follow_the_lean_model() {
+    let (db, _user, _client_access, behavior) = signed_materializer_agent("workspace-fire").await;
     let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
-        signed_materializer_agent("workspace-reject-owner-foreign").await;
+        signed_materializer_agent("workspace-fire-foreign").await;
     let node = db.node.clone();
-    let owner = behavior.node_did().to_owned();
-    let workspace_owner = foreign_db.node_identity.did().to_owned();
-    assert_ne!(owner, workspace_owner);
+    let executor = behavior.node_did().to_owned();
+    let foreign = foreign_db.node_identity.did().to_owned();
+    assert_ne!(executor, foreign);
+    let did_of = |name: &str| match name {
+        "executor" => executor.clone(),
+        "foreign" => foreign.clone(),
+        other => panic!("unknown fire node {other}"),
+    };
+    let node_of = |did: Option<&str>| match did {
+        Some(did) if did == executor => "executor".to_string(),
+        Some(did) if did == foreign => "foreign".to_string(),
+        other => panic!("unexpected node DID {other:?}"),
+    };
     let agent_did = behavior.agent_did.clone();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
@@ -1616,35 +1625,106 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
         behavior.agent_identity.as_ref(),
     )
     .unwrap();
-    publish_workspace_for_agent(&access, "ws-owner", &workspace_owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), rx);
-    let context = writer_context("ws-owner", &owner);
-    let error = materializer
-        .materialize(
-            &workspace_writer_task(&agent_did),
-            Some("trigger-owner"),
-            TriggerKind::Event,
-            Some("trigger-owner-doc"),
-            Some("source"),
-            Some("corr"),
-            Some(&context),
-            "prompt",
-            None,
-            "test-fire",
-            None,
-            None,
+    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let cases = gents_lean_vocab::families::workspace_fire_materialize::cases::<
+        gents_loop::tool_policy::WorkspaceAuthority,
+        String,
+        String,
+        gents_protocol::request_lifecycle::RequestLifecycleState,
+    >();
+    for (index, case) in cases.iter().enumerate() {
+        let workspace_id = format!("ws-fire-{index}");
+        publish_workspace_for_agent(
+            &access,
+            &workspace_id,
+            &did_of(&case.input.owner),
+            &agent_did,
         )
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("not found"), "{error:#}");
-    assert!(
-        workspace_requests_for_agent(&access, "ws-owner")
+        .await;
+        let mut outcomes = Vec::new();
+        let mut returned = Vec::new();
+        let mut triggers = RapidHashMap::new();
+        for (fire_index, fire) in case.input.fires.iter().enumerate() {
+            let mut fields = serde_json::json!({
+                "workspace_id": workspace_id,
+                "workspace_authority": fire.authority,
+            });
+            if let Some(owner) = &fire.named_owner {
+                fields["workspace_owner_node_did"] = serde_json::Value::String(did_of(owner));
+            }
+            let context = serde_json::json!({"version": 1, "source_fields": fields}).to_string();
+            let trigger = format!("trigger-fire-{index}-{fire_index}");
+            triggers.insert(trigger.clone(), fire_index as u64);
+            let result = materializer
+                .materialize(
+                    &workspace_writer_task(&agent_did),
+                    Some(&trigger),
+                    TriggerKind::Event,
+                    Some(&format!("{trigger}-doc")),
+                    Some("source"),
+                    Some("corr"),
+                    Some(&context),
+                    "prompt",
+                    None,
+                    &format!("test-fire-{index}-{fire_index}"),
+                    None,
+                    None,
+                )
+                .await;
+            let outcome = match &result {
+                Ok(_) => "published",
+                Err(error)
+                    if error
+                        .to_string()
+                        .contains(&format!("isolated workspace {workspace_id} not found")) =>
+                {
+                    "workspace_not_found"
+                }
+                Err(error)
+                    if error
+                        .to_string()
+                        .contains("unique Active ReadWrite binding already exists") =>
+                {
+                    "binding_denied"
+                }
+                Err(error) => panic!("{:?}: {error:#}", case.input),
+            };
+            outcomes.push(outcome.to_string());
+            returned.push(result.ok());
+        }
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{workspace_id: {{_eq: "{}"}}}}) {{request_id node_did lifecycle_state workspace_owner_node_did workspace_authority caused_by_trigger_id}} }}"#,
+                escape_graphql_string(&workspace_id),
+            ))
             .await
-            .is_empty(),
-        "wrong owner must reject before request publication"
-    );
+            .expect("read the held Agent's workspace requests");
+        let mut rows = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                let fire = triggers[row["caused_by_trigger_id"].as_str().unwrap()];
+                gents_lean_vocab::families::workspace_fire_materialize::FireRow {
+                    fire,
+                    node: node_of(row["node_did"].as_str()),
+                    workspace_owner: node_of(row["workspace_owner_node_did"].as_str()),
+                    authority: gents_loop::tool_policy::WorkspaceAuthority::parse(
+                        row["workspace_authority"].as_str().unwrap(),
+                    )
+                    .unwrap(),
+                    state: serde_json::from_value(row["lifecycle_state"].clone()).unwrap(),
+                    returned: returned[fire as usize].as_deref() == row["request_id"].as_str(),
+                }
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|row| row.fire);
+        case.check(
+            gents_lean_vocab::families::workspace_fire_materialize::Output { outcomes, rows },
+        );
+    }
 }
 
 #[tokio::test]
@@ -1813,171 +1893,6 @@ async fn publish_workspace_for_agent(
         .expect("publish Agent-owned workspace with native parent and roles");
 }
 
-async fn workspace_requests_for_agent(
-    access: &gents_store::config_client::ConfigAccess,
-    workspace_id: &str,
-) -> Vec<serde_json::Value> {
-    let result = access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{workspace_id: {{_eq: "{}"}}}}) {{request_id node_did lifecycle_state workspace_id workspace_seal_hash workspace_owner_node_did workspace_authority}} }}"#,
-        escape_graphql_string(workspace_id),
-    )).await.expect("read the held Agent's workspace requests");
-    result["data"]["AgentRequest"].as_array().unwrap().clone()
-}
-
-#[tokio::test]
-async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace() {
-    let (db, _user, _client_access, behavior) =
-        signed_materializer_agent("workspace-inferred-owner").await;
-    let node = db.node.clone();
-    let owner = behavior.node_did().to_string();
-    let agent_did = behavior.agent_did.clone();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent_did.parse().unwrap(),
-        behavior.agent_identity.as_ref(),
-    )
-    .unwrap();
-    publish_workspace_for_agent(&access, "ws-incomplete", &owner, &agent_did).await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), rx);
-    let context=serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-incomplete","workspace_authority":"readWrite"}}).to_string();
-    let request_id = materializer
-        .materialize(
-            &workspace_writer_task(&agent_did),
-            Some("trigger-incomplete"),
-            TriggerKind::Event,
-            Some("trigger-incomplete-doc"),
-            Some("source"),
-            Some("corr"),
-            Some(&context),
-            "prompt",
-            None,
-            "test-fire",
-            None,
-            None,
-        )
-        .await
-        .expect("canonical workspace resolves the missing owner");
-    let rows = workspace_requests_for_agent(&access, "ws-incomplete").await;
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
-    assert_eq!(
-        rows[0]["workspace_owner_node_did"].as_str(),
-        Some(owner.as_str())
-    );
-    assert_eq!(rows[0]["workspace_authority"].as_str(), Some("readWrite"));
-}
-
-#[tokio::test]
-async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
-    let (db, _user, _client_access, behavior) =
-        signed_materializer_agent("workspace-ownerless").await;
-    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
-        signed_materializer_agent("workspace-ownerless-foreign").await;
-    let node = db.node.clone();
-    let owner = behavior.node_did().to_owned();
-    let workspace_owner = foreign_db.node_identity.did().to_owned();
-    assert_ne!(owner, workspace_owner);
-    let agent_did = behavior.agent_did.clone();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent_did.parse().unwrap(),
-        behavior.agent_identity.as_ref(),
-    )
-    .unwrap();
-    publish_workspace_for_agent(
-        &access,
-        "ws-foreign-ownerless",
-        &workspace_owner,
-        &agent_did,
-    )
-    .await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), rx);
-    let context = serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-foreign-ownerless","workspace_authority":"readOnly"}}).to_string();
-    let error = materializer
-        .materialize(
-            &workspace_writer_task(&agent_did),
-            Some("trigger-foreign-ownerless"),
-            TriggerKind::Event,
-            Some("trigger-foreign-ownerless-doc"),
-            Some("source"),
-            Some("corr"),
-            Some(&context),
-            "prompt",
-            None,
-            "test-fire",
-            None,
-            None,
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("isolated workspace ws-foreign-ownerless not found"),
-        "{error:#}"
-    );
-    assert!(
-        workspace_requests_for_agent(&access, "ws-foreign-ownerless")
-            .await
-            .is_empty()
-    );
-}
-
-#[tokio::test]
-async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor() {
-    let (db, _user, _client_access, behavior) =
-        signed_materializer_agent("workspace-explicit-owner").await;
-    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
-        signed_materializer_agent("workspace-explicit-owner-foreign").await;
-    let node = db.node.clone();
-    let owner = behavior.node_did().to_owned();
-    let workspace_owner = foreign_db.node_identity.did().to_owned();
-    assert_ne!(owner, workspace_owner);
-    let agent_did = behavior.agent_did.clone();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent_did.parse().unwrap(),
-        behavior.agent_identity.as_ref(),
-    )
-    .unwrap();
-    publish_workspace_for_agent(&access, "ws-stamp", &workspace_owner, &agent_did).await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let context = writer_context("ws-stamp", &workspace_owner);
-    let request_id = materializer
-        .materialize(
-            &workspace_writer_task(&agent_did),
-            Some("trigger-stamp"),
-            TriggerKind::Event,
-            Some("trigger-stamp-config-doc"),
-            Some("src-stamp"),
-            Some("corr-stamp"),
-            Some(&context),
-            "prompt",
-            None,
-            "test-fire",
-            None,
-            None,
-        )
-        .await
-        .expect("explicit workspace owner survives request publication");
-    let rows = workspace_requests_for_agent(&access, "ws-stamp").await;
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["node_did"].as_str(), Some(owner.as_str()));
-    assert_eq!(rows[0]["workspace_id"].as_str(), Some("ws-stamp"));
-    assert_eq!(rows[0]["workspace_authority"].as_str(), Some("readWrite"));
-    assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
-    assert_eq!(
-        rows[0]["workspace_owner_node_did"].as_str(),
-        Some(workspace_owner.as_str())
-    );
-}
-
 #[tokio::test]
 async fn goal_task_workspace_activation_retry_is_idempotent() {
     let (db, _user, _client_access, behavior) =
@@ -2075,83 +1990,6 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
         rows[0]["_docID"]
     );
     node.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn unique_read_write_denial_does_not_leave_claimable_request() {
-    let (db, _user, _client_access, behavior) =
-        signed_materializer_agent("workspace-unique-writer").await;
-    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
-        signed_materializer_agent("workspace-unique-writer-foreign").await;
-    let node = db.node.clone();
-    let owner = behavior.node_did().to_owned();
-    let workspace_owner = foreign_db.node_identity.did().to_owned();
-    assert_ne!(owner, workspace_owner);
-    let agent_did = behavior.agent_did.clone();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent_did.parse().unwrap(),
-        behavior.agent_identity.as_ref(),
-    )
-    .unwrap();
-    publish_workspace_for_agent(&access, "ws-rw", &workspace_owner, &agent_did).await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let context = writer_context("ws-rw", &workspace_owner);
-    let first = materializer
-        .materialize(
-            &workspace_writer_task(&agent_did),
-            Some("trigger-rw-1"),
-            TriggerKind::Event,
-            Some("trigger-rw-1-config-doc"),
-            Some("src-rw-1"),
-            Some("corr-rw-1"),
-            Some(&context),
-            "prompt",
-            None,
-            "test-fire-1",
-            None,
-            None,
-        )
-        .await
-        .expect("first writer");
-    let error = materializer
-        .materialize(
-            &workspace_writer_task(&agent_did),
-            Some("trigger-rw-2"),
-            TriggerKind::Event,
-            Some("trigger-rw-2-config-doc"),
-            Some("src-rw-2"),
-            Some("corr-rw-2"),
-            Some(&context),
-            "prompt",
-            None,
-            "test-fire-2",
-            None,
-            None,
-        )
-        .await
-        .expect_err("second writer must not enqueue");
-    assert!(
-        error.to_string().contains("unique Active ReadWrite"),
-        "{error:#}"
-    );
-    let rows = workspace_requests_for_agent(&access, "ws-rw").await;
-    assert_eq!(rows.len(), 2, "{rows:?}");
-    let claimable = rows
-        .iter()
-        .filter(|row| row["lifecycle_state"].as_str() == Some("pending"))
-        .collect::<Vec<_>>();
-    assert_eq!(claimable.len(), 1, "{rows:?}");
-    assert_eq!(claimable[0]["request_id"].as_str(), Some(first.as_str()));
-    assert_eq!(
-        rows.iter()
-            .filter(|row| row["lifecycle_state"].as_str() == Some("workspaceBindingPending"))
-            .count(),
-        1,
-        "{rows:?}"
-    );
 }
 
 async fn claimed_trigger_request(

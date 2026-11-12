@@ -118,6 +118,7 @@ import Proofs.Conformance.AccessReview
 import Proofs.Conformance.BackendWake
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
+import Proofs.Conformance.WorkspaceFire
 import Proofs.Conformance.CommandIsolation
 import Proofs.Conformance.CompactionCheckpoint
 import Proofs.Conformance.ClientDataPublicationCases
