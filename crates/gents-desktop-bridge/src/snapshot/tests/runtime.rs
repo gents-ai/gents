@@ -2,7 +2,7 @@ use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::types::{SessionSummary, TriggerView};
-use gents_lean_vocab::{lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases};
+use gents_lean_vocab::lean_trigger_dispatch_cases;
 
 fn canonical_session(requester: Option<&str>) -> AgentSession {
     serde_json::from_value(serde_json::json!({
@@ -378,11 +378,6 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
     assert!(
         !cases.is_empty(),
         "Lean trigger dispatch contract should emit recent-runs cases"
-    );
-    assert_eq!(
-        cases.len(),
-        lean_trigger_dispatch_case_count(),
-        "Lean trigger dispatch case-count sentinel drifted"
     );
 
     let fired_task_cases = cases

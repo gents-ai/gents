@@ -24,8 +24,8 @@ use gents_documents::{ConcurrencyMode, ScheduleCadence};
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::{ResolvedAgent, SamplingConfig};
 use gents_lean_vocab::{
-    assert_lean_to_defradb_vocabulary_matches, lean_trigger_dispatch_case_count,
-    lean_trigger_dispatch_cases, LeanTriggerDispatchCase, LeanVocabulary,
+    assert_lean_to_defradb_vocabulary_matches, lean_trigger_dispatch_cases,
+    LeanTriggerDispatchCase, LeanVocabulary,
 };
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, RuntimeNode};

@@ -547,8 +547,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.TerminalDiagnosticReplayContracts.casesJson ++ ","
     ++ "\"process_transition_cases\":"
       ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
-    ++ "\"trigger_dispatch_case_count\":"
-      ++ toString Conformance.TriggerContracts.triggerDispatchCaseCount ++ ","
     ++ "\"trigger_dispatch_cases\":"
       ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
     ++ "\"goal_decision_cases\":"

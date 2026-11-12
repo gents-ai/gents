@@ -20,11 +20,6 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
         !cases.is_empty(),
         "Lean trigger dispatch contract should emit at least one case"
     );
-    assert_eq!(
-        cases.len(),
-        lean_trigger_dispatch_case_count(),
-        "Lean trigger dispatch case-count sentinel drifted"
-    );
 
     for case in cases {
         let trigger_kind = trigger_kind_from_lean(&case.trigger_kind);

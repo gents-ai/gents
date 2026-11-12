@@ -346,11 +346,6 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
 
 fn lean_manual_dispatch_case() -> Result<&'static gents_lean_vocab::LeanTriggerDispatchCase> {
     let cases = gents_lean_vocab::lean_trigger_dispatch_cases();
-    assert_eq!(
-        gents_lean_vocab::lean_trigger_dispatch_case_count(),
-        cases.len(),
-        "Lean trigger dispatch case-count sentinel drifted"
-    );
     cases
         .iter()
         .find(|case| case.name == "manual_unconditional")

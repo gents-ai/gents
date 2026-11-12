@@ -259,9 +259,6 @@ def triggerDispatchScenarios : List TriggerScenario :=
     }
   ]
 
-def triggerDispatchCaseCount : Nat :=
-  triggerDispatchScenarios.length
-
 def triggerDispatchCasesJson : String :=
   jsonArray (triggerDispatchScenarios.map contractJson)
 

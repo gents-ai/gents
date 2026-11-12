@@ -424,10 +424,6 @@ pub fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
         .collect()
 }
 
-pub fn lean_trigger_dispatch_case_count() -> usize {
-    lean_contract_snapshot().trigger_dispatch_case_count
-}
-
 pub fn assert_lean_contract_vocabulary_matches(spec: LeanContractVocabulary<'_>) {
     let lean_values = lean_vocabulary_values(spec.domain);
     let missing_from_lean = values_missing_from(spec.rust_values, &lean_values);
