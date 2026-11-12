@@ -507,22 +507,8 @@ impl Drop for Terminal {
 
 /// The configured model server, checked before anything is installed.
 pub(super) async fn live_model() -> Result<(String, String)> {
-    let endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .context("with_model tests read GENTS_CLI_E2E_MODEL_ENDPOINT")?;
-    let model = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-        .context("with_model tests read GENTS_CLI_E2E_MODEL_NAME")?;
-    let models = format!("{}/models", endpoint.trim_end_matches('/'));
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(10))
-        .build()?
-        .get(&models)
-        .send()
-        .await
-        .with_context(|| format!("the model server at {models} is unreachable"))?
-        .error_for_status()
-        .with_context(|| format!("the model server at {models} refused the request"))?;
-    Ok((endpoint, model))
+    let target = gents::support::live_inference::live_target().await;
+    Ok((target.endpoint().to_owned(), target.model().to_owned()))
 }
 
 pub(super) fn node_did_of(home: &Path) -> Result<String> {

@@ -19,7 +19,7 @@ path = "src/main.rs"
 # Gates the live-inference test binary out of default builds: every test in
 # cli_live_suite is #[ignore]d behind env gates, so default runs paid a
 # full gents+defradb+iroh link to execute nothing.
-live-e2e = []
+live-e2e = ["gents/test-fixtures"]
 # Debug native desktop acceptance must never address the user's daily service.
 native-e2e = ["gents-service/native-e2e"]
 heap-profiling = ["dep:tikv-jemallocator"]

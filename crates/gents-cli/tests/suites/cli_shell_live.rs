@@ -127,10 +127,9 @@ struct Live {
 }
 
 async fn start_live() -> Result<Live> {
-    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    let target = gents::support::live_inference::live_target().await;
+    let model_endpoint = target.endpoint().to_owned();
+    let model_name = target.model().to_owned();
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home = tempdir.path().join("home");
     fs::create_dir_all(&home)?;
@@ -212,7 +211,7 @@ fn quit_cleanly(shell: &Session) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires a live model at GENTS_CLI_E2E_MODEL_ENDPOINT"]
+#[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn the_shell_streams_a_live_reply_and_quits_cleanly() -> Result<()> {
     let live = start_live().await?;
 
@@ -288,7 +287,7 @@ async fn wait_for_mailbox_status(
 /// The question arrives over the mailbox subscription the first turn opened, with no second
 /// turn; typing its option number answers it with the receipt the claim requires.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires a live model at GENTS_CLI_E2E_MODEL_ENDPOINT"]
+#[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn the_shell_answers_a_question_and_the_item_is_acted() -> Result<()> {
     let live = start_live().await?;
     let shell = open_shell(&live.home)?;

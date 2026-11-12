@@ -425,6 +425,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
         .await
 }
 
+#[cfg(feature = "live-e2e")]
 async fn resolve_live_inference() -> Result<(String, String)> {
     let target = gents::support::live_inference::live_target().await;
     Ok((target.endpoint().to_owned(), target.model().to_owned()))

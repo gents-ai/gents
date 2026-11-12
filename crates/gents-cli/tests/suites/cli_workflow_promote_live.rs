@@ -40,10 +40,9 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
     let pack_dir = std::env::var("GENTS_DYNAMIC_WORKFLOWS_PACK").context(
         "GENTS_DYNAMIC_WORKFLOWS_PACK must point at a built packs/gents/dynamic_workflows",
     )?;
-    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    let target = gents::support::live_inference::live_target().await;
+    let model_endpoint = target.endpoint().to_owned();
+    let model_name = target.model().to_owned();
     // The fixture is deleted on success; set this to keep the evidence.
     let evidence = std::env::var_os("GENTS_WORKFLOW_PROMOTE_EVIDENCE_DIR")
         .map(PathBuf::from)
@@ -65,10 +64,6 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
         "--max-queue-depth".to_string(),
         "8".to_string(),
     ];
-    if std::env::var("GENTS_CLI_E2E_API_KEY").is_ok_and(|key| !key.trim().is_empty()) {
-        init_args.push("--api-key-env-var".to_string());
-        init_args.push("GENTS_CLI_E2E_API_KEY".to_string());
-    }
     init_args.push("--inference-url".to_string());
     init_args.push(model_endpoint);
     let init_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
