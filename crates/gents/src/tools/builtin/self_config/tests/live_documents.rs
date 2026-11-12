@@ -103,10 +103,21 @@ async fn a_fileless_agent_creates_edits_lints_disables_and_removes_a_page() {
 
     let lint = ok(&tools, json!({"argv":["page","lint"],"target_id":"notes"})).await;
     assert_eq!(lint["admitted"], true, "{lint}");
-    assert_eq!(
-        lint["next_call"]["argv"],
-        json!(["ux", "preview", "page/notes"])
-    );
+    // A build without a page renderer has nothing to preview, and says so
+    // instead of naming a call that would render nothing.
+    if lint["next_call"].is_null() {
+        assert!(
+            lint["note"]
+                .as_str()
+                .is_some_and(|note| note.contains("no page renderer")),
+            "{lint}"
+        );
+    } else {
+        assert_eq!(
+            lint["next_call"]["argv"],
+            json!(["ux", "preview", "page/notes"])
+        );
+    }
     assert_eq!(
         ok(&tools, json!({"argv":["ux","lint","page/notes"]})).await["admitted"],
         true
