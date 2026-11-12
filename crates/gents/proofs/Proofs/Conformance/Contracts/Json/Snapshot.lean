@@ -568,7 +568,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.GoalClaimedReadiness.casesJson ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
     ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
-    ++ "\"goal_backed_runtime_cases\":" ++ runtimeGoalPublicationCasesJson ++ ","
     ++ "\"lifecycle_hook_effect_cases\":"
       ++ Conformance.HooksContracts.effectCasesJson ++ ","
     ++ "\"lifecycle_hook_stage_cases\":"

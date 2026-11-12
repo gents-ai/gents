@@ -572,22 +572,39 @@ structure GoalSubmissionCase where
   state : GoalAutomation.SubmissionState
   action : GoalAutomation.SubmissionAction
 
-def runtimeGoalPublicationCasesJson : String :=
-  let cases : List (String × String × String × String × String × String × String × String × Bool × Bool) :=
-    [("created", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true),
-     ("aborted", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, false),
-     ("foreign-actor", "other", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true),
-     ("wrong-session", "agent", "agent", "agent", "other", "session", "agent-doc", "agent-doc", true, true),
-     ("wrong-agent", "agent", "agent", "agent", "session", "session", "other", "agent-doc", true, true),
-     ("duplicate-after-revocation", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", false, true)]
-  (Lean.toJson (cases.map fun (name, actor, signer, selected, session, observedSession, agent, observedAgent, fresh, commit) =>
+structure RuntimeGoalOpeningInput where
+  name : String
+  actor : String
+  signer : String
+  selected : String
+  targetSession : String
+  observedSession : String
+  targetAgent : String
+  observedAgent : String
+  fresh : Bool
+  commit : Bool
+  deriving Lean.ToJson
+
+deriving instance Lean.ToJson for GoalAutomation.RuntimeGoalPublication
+
+/-- Each opening runs on its own served node. A duplicate (`fresh = false`)
+first opens the goal and then revokes the request's relationships, which is
+the state the model starts a duplicate from. -/
+@[conformance_family]
+def goalBackedRuntime : Family RuntimeGoalOpeningInput GoalAutomation.RuntimeGoalPublication where
+  inputs :=
+    [ ⟨"created", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true⟩
+    , ⟨"aborted", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, false⟩
+    , ⟨"foreign-actor", "other", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true⟩
+    , ⟨"wrong-session", "agent", "agent", "agent", "other", "session", "agent-doc", "agent-doc", true, true⟩
+    , ⟨"wrong-agent", "agent", "agent", "agent", "session", "session", "other", "agent-doc", true, true⟩
+    , ⟨"duplicate-after-revocation", "agent", "agent", "agent", "session", "session", "agent-doc",
+        "agent-doc", false, true⟩ ]
+  model := fun i =>
     let before : GoalAutomation.RuntimeGoalPublication :=
-      if fresh then ⟨false, false, false, false⟩ else ⟨true, true, true, false⟩
-    let result := GoalAutomation.commitRuntimeGoalOpening before actor signer selected
-      session observedSession agent observedAgent fresh commit
-    Lean.Json.mkObj [("name", Lean.toJson name), ("session", Lean.toJson result.session),
-      ("goal", Lean.toJson result.goal), ("request", Lean.toJson result.request),
-      ("grants", Lean.toJson result.grants)])).compress
+      if i.fresh then ⟨false, false, false, false⟩ else ⟨true, true, true, false⟩
+    GoalAutomation.commitRuntimeGoalOpening before i.actor i.signer i.selected
+      i.targetSession i.observedSession i.targetAgent i.observedAgent i.fresh i.commit
 
 def goalSubmissionCases : List GoalSubmissionCase :=
   [ { name := "stage_goal_not_visible", state := ⟨false, false, false, false⟩,

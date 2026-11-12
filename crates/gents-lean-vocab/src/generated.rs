@@ -2880,7 +2880,6 @@ pub struct LeanContractSnapshot {
     pub goal_claimed_publication_cases: Vec<LeanGoalClaimedPublicationCase>,
     pub goal_claimed_identity_cases: Vec<LeanGoalClaimedIdentityCase>,
     pub goal_claimed_target_cases: Vec<LeanGoalClaimedTargetCase>,
-    pub goal_backed_runtime_cases: Vec<LeanGoalBackedRuntimeCase>,
     pub goal_wake_coalescing_cases: Vec<serde_json::Value>,
     pub goal_wake_ancestry_cases: Vec<LeanGoalWakeAncestryCase>,
     pub goal_request_scope_cases: Vec<serde_json::Value>,
@@ -4268,16 +4267,6 @@ pub struct LeanGateRow {
     pub dropped_candidate: u64,
     pub sufficient: bool,
     pub no_case_regression: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalBackedRuntimeCase {
-    pub goal: bool,
-    pub grants: bool,
-    pub name: String,
-    pub request: bool,
-    pub session: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

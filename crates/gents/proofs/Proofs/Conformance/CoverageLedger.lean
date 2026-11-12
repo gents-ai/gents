@@ -666,6 +666,10 @@ def caseCoverage : List CoverageEntry :=
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "contracts_goal_backed_runtime")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "contracts_goal_submission")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
