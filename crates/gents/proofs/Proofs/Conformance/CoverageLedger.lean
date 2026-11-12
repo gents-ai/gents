@@ -2528,7 +2528,12 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_document_fork_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_document_archive_cases" "SessionDocumentCases")
+  , tagged (consumerCoverage "family" "contracts_archive_transition")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_archive_receipts")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "contracts_archive_transition_unreached"
+      "model-production-gap: archive authorization is DefraDB ACP on the caller's transaction before the revision transition runs; no production scenario replays the unauthorized archive writes.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage "session_document_retry_cases" "SessionDocumentCases"
       "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")

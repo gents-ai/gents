@@ -7,9 +7,12 @@ import Proofs.Conformance.ContractCases.Types
 import Lean
 import Proofs.Conformance.RuntimeInput
 import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Session
 
 namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
+
+deriving instance ToJson for AgentSession.Scope
 
 def pluginJobOpeningCasesJson : String :=
   let good : AgentSession.PluginJobOpening := ⟨true, true, true, true, true⟩
@@ -248,6 +251,84 @@ private def editBlockName {α : Type} : CanonicalOutput.MessageBlock α → Stri
   | .toolResult _ _ _ _ => "toolResult"
   | .media _ => "media"
 
+structure TitleWire where
+  text : String
+  source : String
+  deriving ToJson
+
+structure ForkWire where
+  sourceSessionId : Nat
+  atUserTurn : Nat
+  deriving ToJson
+
+structure ProvenanceWire where
+  taskId : Option Nat
+  parentRequestDocId : Option Nat
+  startedBy : Option AgentSession.Scope
+  openingRequestDocId : Option Nat
+  fork : Option ForkWire
+  deriving ToJson
+
+structure LatestWire where
+  docId : Nat
+  requestId : Nat
+  state : RequestState
+  deriving ToJson
+
+structure ObservationWire where
+  activity : Nat
+  preview : Option String
+  latest : Option LatestWire
+  deriving ToJson
+
+/-- A session document as the wire carries it: identifiers and times are
+the model's numbers, a title source and request state their wire names. -/
+structure DocumentWire where
+  scope : AgentSession.Scope
+  agent : Nat
+  createdAt : Nat
+  closedAt : Option Nat
+  stoppedAt : Option Nat
+  archivedAt : Option Nat
+  archiveRevision : Nat
+  provenance : Option ProvenanceWire
+  tags : List String
+  title : Option TitleWire
+  observation : Option ObservationWire
+  deriving ToJson
+
+def DocumentWire.ofModel (d : AgentSession.Document) : DocumentWire :=
+  { scope := d.scope, agent := d.agent, createdAt := d.createdAt, closedAt := d.closedAt
+    stoppedAt := d.stoppedAt, archivedAt := d.archivedAt, archiveRevision := d.archiveRevision
+    provenance := d.provenance.map fun p =>
+      { taskId := p.task, parentRequestDocId := p.parentRequestDoc, startedBy := p.startedBy
+        openingRequestDocId := p.openingRequestDoc
+        fork := p.fork.map fun f => { sourceSessionId := f.sourceSession, atUserTurn := f.atUserTurn } }
+    tags := d.tags
+    title := d.title.map fun t => { text := t.text, source := t.source.toWireName }
+    observation := d.observation.map fun o =>
+      { activity := o.activity, preview := o.preview
+        latest := o.latest.map fun r => { docId := r.docId, requestId := r.requestId, state := r.state } } }
+
+def titleSourceOfWire : String → AgentSession.TitleSource
+  | "placeholder" => .placeholder
+  | "generated" => .generated
+  | "task" => .task
+  | _ => .user
+
+def DocumentWire.toModel (w : DocumentWire) : AgentSession.Document :=
+  { scope := w.scope, agent := w.agent, createdAt := w.createdAt, closedAt := w.closedAt
+    stoppedAt := w.stoppedAt, archivedAt := w.archivedAt, archiveRevision := w.archiveRevision
+    provenance := w.provenance.map fun p =>
+      { task := p.taskId, parentRequestDoc := p.parentRequestDocId, startedBy := p.startedBy
+        openingRequestDoc := p.openingRequestDocId
+        fork := p.fork.map fun f => ⟨f.sourceSessionId, f.atUserTurn⟩ }
+    tags := w.tags
+    title := w.title.map fun t => ⟨t.text, titleSourceOfWire t.source⟩
+    observation := w.observation.map fun o =>
+      { activity := o.activity, preview := o.preview
+        latest := o.latest.map fun r => ⟨r.docId, r.requestId, r.state⟩ } }
+
 private def archiveDecisionName : AgentSession.Archive.Decision → String
   | .denied => "denied"
   | .unchanged => "unchanged"
@@ -255,13 +336,23 @@ private def archiveDecisionName : AgentSession.Archive.Decision → String
   | .exhausted => "exhausted"
   | .applied => "applied"
 
-private def archiveCases : List Json := do
-  let limit : Nat := 9223372036854775807
-  let (archivedAt, revision) ← ([(none, 0), (some 3, 1), (none, 2), (some 3, limit)] :
+def archiveLimit : Nat := 9223372036854775807
+
+structure ArchiveInput where
+  before : DocumentWire
+  authorized : Bool
+  expectedRevision : Nat
+  archived : Bool
+  now : Nat
+  limit : Nat
+  deriving ToJson
+
+def archiveInputs : List ArchiveInput := do
+  let (archivedAt, revision) ← ([(none, 0), (some 3, 1), (none, 2), (some 3, archiveLimit)] :
     List (Option Nat × Nat))
   let lifecycle ← [0, 1, 2]
   let authorized ← [false, true]
-  let expected ← [0, 1, 2, limit]
+  let expected ← [0, 1, 2, archiveLimit]
   let archived ← [false, true]
   let before := { indexed with
     archivedAt, archiveRevision := revision
@@ -270,15 +361,69 @@ private def archiveCases : List Json := do
     observation := indexed.observation.map fun o => { o with
       latest := some { newerRequest.observed with
         state := if lifecycle = 0 then .processing else .failed } } }
-  let (decision, after) := AgentSession.Archive.apply before authorized expected archived 7 limit
-  pure (Json.mkObj [
-    ("before", documentJson before), ("authorized", toJson authorized),
-    ("expected_revision", toJson expected), ("archived", toJson archived),
-    ("now", toJson (7 : Nat)), ("limit", toJson limit),
-    ("decision", toJson (archiveDecisionName decision)), ("after", documentJson after),
-    ("active_visible", toJson (AgentSession.Archive.visible .active after)),
-    ("archived_visible", toJson (AgentSession.Archive.visible .archived after)),
-    ("all_visible", toJson (AgentSession.Archive.visible .all after))])
+  pure { before := DocumentWire.ofModel before, authorized, expectedRevision := expected, archived
+         now := 7, limit := archiveLimit }
+
+structure ArchiveOutput where
+  decision : String
+  after : DocumentWire
+  activeVisible : Bool
+  archivedVisible : Bool
+  allVisible : Bool
+  deriving ToJson
+
+def archiveOutcome (i : ArchiveInput) : ArchiveOutput :=
+  let (decision, after) := AgentSession.Archive.apply i.before.toModel i.authorized
+    i.expectedRevision i.archived i.now i.limit
+  { decision := archiveDecisionName decision, after := DocumentWire.ofModel after
+    activeVisible := AgentSession.Archive.visible .active after
+    archivedVisible := AgentSession.Archive.visible .archived after
+    allVisible := AgentSession.Archive.visible .all after }
+
+@[conformance_family]
+def archiveTransition : Family ArchiveInput ArchiveOutput where
+  inputs := archiveInputs.filter (·.authorized)
+  model := archiveOutcome
+
+example : archiveTransition.inputs.any fun i =>
+    i.before.archiveRevision == 2 && i.expectedRevision == 0 && i.archived := by native_decide
+
+/-- model-production-gap: archive authorization is DefraDB ACP on the
+caller's transaction before the revision transition runs; no production
+scenario replays these unauthorized archive writes. -/
+@[conformance_family]
+def archiveTransitionUnreached : Family ArchiveInput ArchiveOutput where
+  inputs := archiveInputs.filter fun i => !i.authorized
+  model := archiveOutcome
+
+structure ArchiveStep where
+  expectedRevision : Nat
+  archived : Bool
+  deriving ToJson
+
+structure ArchiveTrace where
+  steps : List ArchiveStep
+  deriving ToJson
+
+structure ArchiveReceipt where
+  decision : String
+  revision : Nat
+  archived : Bool
+  deriving ToJson
+
+/-- Archive commands submitted in order to one runtime session by two
+clients; each receipt is the outcome of one authorized archive transition. -/
+@[conformance_family]
+def archiveReceipts : Family ArchiveTrace (List ArchiveReceipt) where
+  inputs := [{ steps := [⟨0, true⟩, ⟨0, false⟩, ⟨0, true⟩, ⟨1, false⟩, ⟨0, true⟩] }]
+  model := fun trace =>
+    (trace.steps.foldl (fun (state : AgentSession.Document × List ArchiveReceipt) step =>
+      let (decision, after) := AgentSession.Archive.apply state.1 true step.expectedRevision
+        step.archived 7 archiveLimit
+      (after, state.2 ++ [{ decision := archiveDecisionName decision
+                            revision := after.archiveRevision
+                            archived := after.archivedAt.isSome }]))
+      ({ indexed with archivedAt := none, archiveRevision := 0 }, [])).2
 
 private def taskOpeningCases : List Json :=
   let fire : AgentSession.TaskFireEvidence := ⟨1, 10, 20, 4, true⟩
@@ -299,8 +444,6 @@ private def forkAuthorityCases : List Json :=
     Json.mkObj [("name", toJson name), ("operation", toJson "fork_reference_authority"),
       ("source_agent", toJson source), ("target_agent", toJson target),
       ("allowed", toJson (SessionFork.mayReuseSourceFragments source target))]
-
-deriving instance ToJson for AgentSession.Scope
 
 structure StarterIndex where
   node : Nat
@@ -339,8 +482,6 @@ def starterVerification : Family StarterInput Bool where
 example : starterVerification.inputs.any fun i =>
     i.name == "signature" && !starterVerification.model i := by native_decide
 
-def sessionDocumentArchiveCasesJson : String :=
-  (toJson archiveCases).compress
 
 def sessionDocumentReferenceEncodingJson : String :=
   (toJson "interned collection plus _docID, not raw _docID").compress
