@@ -42,4 +42,28 @@ theorem periodic_probes_enabled (known : List ProbeConfiguration)
     shouldProbe known current true = true := by
   simp [shouldProbe, enabled]
 
+/-- Measured health outlives a cycle exactly while its backend is observed as
+enabled. A cancelled cycle observes nothing and prunes nothing: shutdown must not
+read as the disappearance of every backend. -/
+def retainedEntries (entries observed : List Nat) (cancelled : Bool) : List Nat :=
+  if cancelled then entries else entries.filter (observed.contains ·)
+
+theorem cancelled_cycle_keeps_every_entry (entries observed : List Nat) :
+    retainedEntries entries observed true = entries := by
+  simp [retainedEntries]
+
+theorem observed_entry_survives (entries observed : List Nat) (id : Nat)
+    (present : id ∈ entries) (enabled : observed.contains id = true) :
+    id ∈ retainedEntries entries observed false := by
+  have hm : id ∈ observed := List.contains_iff_mem.mp enabled
+  simp [retainedEntries, present, hm]
+
+theorem unobserved_entry_is_pruned (entries observed : List Nat) (id : Nat)
+    (absent : observed.contains id = false) :
+    id ∉ retainedEntries entries observed false := by
+  have hn : id ∉ observed := fun h => by
+    have hc : observed.contains id = true := List.contains_iff_mem.mpr h
+    simp_all
+  simp [retainedEntries, hn]
+
 end Proofs.BackendHealth

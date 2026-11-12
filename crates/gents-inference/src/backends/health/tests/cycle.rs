@@ -722,3 +722,49 @@ async fn probe_shutdown_prevents_new_backend_probes_and_pruning() {
     assert!(health.get("unobserved").await.is_some());
     node.shutdown().await.expect("node shutdown");
 }
+
+#[tokio::test]
+async fn cycle_retention_matches_the_lean_model() {
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
+    for case in gents_lean_vocab::families::backend_health_retention_cycle::cases() {
+        let health = BackendHealthMap::new();
+        for id in &case.input.entries {
+            health
+                .set_for_test(format!("backend-{id}"), BackendHealthState::Healthy, 0)
+                .await;
+        }
+        let backends = case
+            .input
+            .observed
+            .iter()
+            .map(|id| fixture.backend(&format!("backend-{id}"), "http://127.0.0.1:1/v1".into()))
+            .collect::<Vec<_>>();
+        let cancel = CancellationToken::new();
+        if case.input.cancelled {
+            cancel.cancel();
+        }
+        probe_selected_backends(
+            &node,
+            &reqwest::Client::new(),
+            &backends,
+            ProbeEnv {
+                now: Utc::now(),
+                health_map: &health,
+                options: &probe_options(),
+                cancel: Some(&cancel),
+            },
+            None,
+            None,
+        )
+        .await;
+        let mut retained = Vec::new();
+        for id in 0..3u64 {
+            if health.get(&format!("backend-{id}")).await.is_some() {
+                retained.push(id);
+            }
+        }
+        case.check(retained);
+    }
+    node.shutdown().await.expect("node shutdown");
+}
