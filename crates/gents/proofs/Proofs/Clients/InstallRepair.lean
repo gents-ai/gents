@@ -1,4 +1,5 @@
 import Lean
+import Proofs.Runtime.RuntimeReconcile.UpdateHandoff
 
 namespace InstallRepair
 
@@ -314,5 +315,21 @@ def storeExitCode : StoreKind → Nat
   | .foreignVersion => 67
   | .missingStoreKey => 72
   | _ => 65
+
+end InstallRepair
+
+namespace InstallRepair
+
+structure RecoveryObservation where
+  candidateExposed : Bool
+  sameBuild : Bool
+  deriving Repr, DecidableEq, Lean.ToJson
+
+def canRestore (o : RecoveryObservation) : Bool :=
+  RuntimeReconcile.UpdateHandoff.canRestore .installed o.candidateExposed o.sameBuild
+
+theorem exposed_changed_build_is_not_restored : canRestore ⟨true, false⟩ = false := by decide
+
+theorem unexposed_changed_build_may_be_restored : canRestore ⟨false, false⟩ = true := by decide
 
 end InstallRepair

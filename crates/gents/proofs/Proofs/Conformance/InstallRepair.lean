@@ -74,3 +74,13 @@ def storeExitCodes : Conformance.Family StoreKind Nat where
   model := storeExitCode
 
 end Conformance.InstallRepair
+
+namespace Conformance.InstallRepair
+open _root_.InstallRepair
+
+@[conformance_family]
+def recovery : Conformance.Family RecoveryObservation Bool where
+  inputs := [false, true].flatMap fun exposed => [false, true].map fun same => ⟨exposed, same⟩
+  model := canRestore
+
+end Conformance.InstallRepair
