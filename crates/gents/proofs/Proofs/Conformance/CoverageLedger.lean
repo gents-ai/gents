@@ -611,8 +611,12 @@ def caseCoverage : List CoverageEntry :=
       "EventDelivery.Durable")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_outcome_cases"
-      "Triggers.Durable.Outcomes")
+      "family"
+      "trigger_delivery_outcome_reasons")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "trigger_delivery_outcome_recovery")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "trigger_dispatch_cases"

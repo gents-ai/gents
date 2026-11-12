@@ -24,6 +24,71 @@ def IdentityWire.toModel (id : IdentityWire) : Identity :=
   { owner := id.ownerDid, trigger := id.triggerId, collection := id.sourceCollection,
     document := id.sourceDocId }
 
+structure FireWire where
+  identity : IdentityWire
+  session : String
+  serial : Bool
+  emitOutcome : Bool
+  goalBacked : Bool
+  deriving Lean.ToJson
+
+def FireWire.ofModel (f : Fire) : FireWire :=
+  { identity := .ofModel f.identity, session := f.session, serial := f.serial,
+    emitOutcome := f.emitOutcome, goalBacked := f.goalBacked }
+
+def FireWire.toModel (f : FireWire) : Fire :=
+  { identity := f.identity.toModel, session := f.session, serial := f.serial,
+    emitOutcome := f.emitOutcome, goalBacked := f.goalBacked }
+
+structure RequestWire where
+  fire : FireWire
+  running : Bool
+  terminal : Bool
+  assignmentReplaced : Bool
+  goalAssignmentApplied : Bool
+  deriving Lean.ToJson
+
+def RequestWire.ofModel (r : Request) : RequestWire :=
+  { fire := .ofModel r.fire, running := r.running, terminal := r.terminal,
+    assignmentReplaced := r.assignmentReplaced, goalAssignmentApplied := r.goalAssignmentApplied }
+
+def RequestWire.toModel (r : RequestWire) : Request :=
+  { fire := r.fire.toModel, running := r.running, terminal := r.terminal,
+    assignmentReplaced := r.assignmentReplaced, goalAssignmentApplied := r.goalAssignmentApplied }
+
+structure GoalBindingWire where
+  owner : String
+  session : String
+  assignment : IdentityWire
+  status : String
+  deriving Lean.ToJson
+
+def GoalBindingWire.ofModel (g : GoalBinding) : GoalBindingWire :=
+  { owner := g.owner, session := g.session, assignment := .ofModel g.assignment,
+    status := g.status.toDefraDB }
+
+def GoalBindingWire.toModel (g : GoalBindingWire) : GoalBinding :=
+  { owner := g.owner, session := g.session, assignment := g.assignment.toModel,
+    status := (Goals.Status.fromDefraDB? g.status).getD .active }
+
+/-- Production keeps no publication order between outcome rows, so the wire
+lists published outcomes in receipt order. -/
+structure StateWire where
+  receipts : List IdentityWire
+  requests : List RequestWire
+  outcomes : List IdentityWire
+  goals : List GoalBindingWire
+  deriving Lean.ToJson
+
+def StateWire.ofModel (s : State) : StateWire :=
+  { receipts := s.receipts.map .ofModel, requests := s.requests.map .ofModel,
+    outcomes := (s.receipts.filter fun id => decide (id ∈ s.outcomes)).map .ofModel,
+    goals := s.goals.map .ofModel }
+
+def StateWire.toModel (s : StateWire) : State :=
+  { receipts := s.receipts.map (·.toModel), requests := s.requests.map (·.toModel),
+    outcomes := s.outcomes.map (·.toModel), goals := s.goals.map (·.toModel) }
+
 def callbackVisibilityCases : List String := do
   let visible ← [false, true]
   let linked ← [false, true]
@@ -118,41 +183,72 @@ def reasonString : OutcomeReason → String
   | .goalTerminal status => status.toDefraDB
   | .superseded => "superseded"
 
-def outcomeCase (name : String) (r : Request) (status : Option Goals.Status) (already : Bool) : String :=
+structure OutcomeInput where
+  name : String
+  pre : StateWire
+  deriving Lean.ToJson
+
+def outcomeInput (name : String) (r : Request) (status : Option Goals.Status) (already : Bool) :
+    OutcomeInput :=
   let bindings := status.toList.map fun value => ({
     owner := r.fire.identity.owner
     session := r.fire.session
     assignment := r.fire.identity
     status := value } : GoalBinding)
-  let pre : State := {
+  { name, pre := .ofModel {
     receipts := [r.fire.identity]
     requests := [r]
     outcomes := if already then [r.fire.identity] else []
-    goals := bindings }
-  object [("name", jsonString name), ("pre", stateJson pre),
-    ("due", toString (outcomeDue pre r)),
-    ("reason", jsonOptionalString ((outcomeReason pre r).map reasonString)),
-    ("post", stateJson (recoverOutcomes pre))]
+    goals := bindings } }
 
-def outcomeCases : List String :=
+def outcomeInputs : List OutcomeInput :=
   let ordinary : Request := { fire := fire "a", terminal := true }
   let goal : Request := { ordinary with fire := { ordinary.fire with goalBacked := true }, goalAssignmentApplied := true }
-  [outcomeCase "ordinary_terminal_outcome" ordinary none false,
-   outcomeCase "crash_after_terminal_before_outcome" ordinary none false,
-   outcomeCase "crash_after_outcome_retry" ordinary none true,
-   outcomeCase "opted_out" { ordinary with fire := { ordinary.fire with emitOutcome := false } } none false,
-   outcomeCase "outcome_consumer_ends_chain"
+  [outcomeInput "ordinary_terminal_outcome" ordinary none false,
+   outcomeInput "crash_after_terminal_before_outcome" ordinary none false,
+   outcomeInput "crash_after_outcome_retry" ordinary none true,
+   outcomeInput "opted_out" { ordinary with fire := { ordinary.fire with emitOutcome := false } } none false,
+   outcomeInput "outcome_consumer_ends_chain"
      { ordinary with fire := { ordinary.fire with emitOutcome := false, identity := { ordinary.fire.identity with collection := "FireOutcome" } } } none false,
-   outcomeCase "continuing_goal_has_no_outcome" goal (some .active) false,
-   outcomeCase "queued_goal_ignores_previous_complete" { goal with terminal := false, goalAssignmentApplied := false } (some .complete) false,
-   outcomeCase "preclaim_cancelled_goal" { goal with goalAssignmentApplied := false } none false,
-   outcomeCase "replaced_applied_goal" { goal with assignmentReplaced := true } none false,
-   outcomeCase "completed_goal" goal (some .complete) false,
-   outcomeCase "stopped_goal" goal (some .stopped) false,
-   outcomeCase "blocked_goal" goal (some .blocked) false,
-   outcomeCase "budget_exhausted_goal" goal (some .budgetLimited) false,
-   outcomeCase "paused_goal" goal (some .paused) false,
-   outcomeCase "usage_limited_goal" goal (some .usageLimited) false]
+   outcomeInput "continuing_goal_has_no_outcome" goal (some .active) false,
+   outcomeInput "queued_goal_ignores_previous_complete" { goal with terminal := false, goalAssignmentApplied := false } (some .complete) false,
+   outcomeInput "preclaim_cancelled_goal" { goal with goalAssignmentApplied := false } none false,
+   outcomeInput "replaced_applied_goal" { goal with assignmentReplaced := true } none false,
+   outcomeInput "completed_goal" goal (some .complete) false,
+   outcomeInput "stopped_goal" goal (some .stopped) false,
+   outcomeInput "blocked_goal" goal (some .blocked) false,
+   outcomeInput "budget_exhausted_goal" goal (some .budgetLimited) false,
+   outcomeInput "paused_goal" goal (some .paused) false,
+   outcomeInput "usage_limited_goal" goal (some .usageLimited) false]
+
+structure OutcomeReasonOutput where
+  due : Bool
+  reason : Option String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def outcomeReasons : Family OutcomeInput OutcomeReasonOutput where
+  inputs := outcomeInputs
+  model := fun i =>
+    let pre := i.pre.toModel
+    match pre.requests.head? with
+    | none => { due := false, reason := none }
+    | some r => { due := outcomeDue pre r, reason := (outcomeReason pre r).map reasonString }
+
+structure OutcomeRecoveryOutput where
+  post : StateWire
+  recovered : Nat
+  recoveredAgain : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def outcomeRecovery : Family OutcomeInput OutcomeRecoveryOutput where
+  inputs := outcomeInputs
+  model := fun i =>
+    let pre := i.pre.toModel
+    let post := recoverOutcomes pre
+    { post := .ofModel post, recovered := post.outcomes.length - pre.outcomes.length,
+      recoveredAgain := (recoverOutcomes post).outcomes.length - post.outcomes.length }
 
 def retainedOutcomeCase (name : String) (request : Request)
     (retained current : Option GoalBinding) (settled : Bool := false) : String :=
@@ -576,9 +672,6 @@ def triggerDeliveryQueueCasesJson : String :=
 
 def triggerDeliveryObservedClaimCasesJson : String :=
   jsonArray observedClaimCases
-
-def triggerDeliveryOutcomeCasesJson : String :=
-  jsonArray outcomeCases
 
 def triggerDeliveryOutcomeTraceCasesJson : String :=
   jsonArray outcomeTraces

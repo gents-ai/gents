@@ -144,8 +144,8 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             decode::<Option<String>>(&case["resolved"])
         );
     }
-    for case in cases["trigger_delivery_outcome_cases"].as_array().unwrap() {
-        let state: State = decode(&case["pre"]);
+    gents_lean_vocab::families::trigger_delivery_outcome_reasons::replay(|input| {
+        let state: State = gents_lean_vocab::family::recode(&input.pre);
         let request = &state.requests[0];
         let mut fire = receipt(&request.fire, 0);
         fire.goal_assignment_applied = request.goal_assignment_applied;
@@ -156,19 +156,11 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             request.assignment_replaced,
             binding.as_ref(),
         );
-        assert_eq!(
+        gents_lean_vocab::families::trigger_delivery_outcome_reasons::OutcomeReasonOutput {
+            due: reason.is_some(),
             reason,
-            decode::<Option<String>>(&case["reason"]),
-            "{}",
-            case["name"]
-        );
-        assert_eq!(
-            reason.is_some(),
-            case["due"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
+        }
+    });
     for case in cases["trigger_delivery_retained_outcome_cases"]
         .as_array()
         .unwrap()
@@ -443,6 +435,284 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
             case["name"]
         );
         assert!(post.outcomes.is_empty());
+    }
+}
+
+/// The trigger-delivery state production holds: receipts in admission order,
+/// the admitted request of each receipt, published outcomes in receipt order and
+/// Goal bindings whose assignment is an admitted fire. `modeled` maps a stored
+/// identity back to the modeled one.
+async fn observed_delivery_state<F>(
+    access: &gents_store::config_client::ConfigAccess,
+    modeled: F,
+) -> serde_json::Value
+where
+    F: Fn(&FireIdentity) -> FireIdentity,
+{
+    let response = access
+        .execute(&format!(
+            "{{ TriggerFire {{ {} }} AgentRequest {{ _docID request_id lifecycle_state }} FireOutcome {{ handoff_id }} Goal {{ node_did session_id assignment_root_request_doc_id status }} }}",
+            durable::FIRE_FIELDS
+        ))
+        .await
+        .unwrap();
+    let data = &response["data"];
+    let mut fires: Vec<TriggerFire> = decode(&data["TriggerFire"]);
+    fires.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+    let requests: Vec<gents_protocol::row::AgentRequestRow> = decode(&data["AgentRequest"]);
+    let published: Vec<String> = data["FireOutcome"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["handoff_id"].as_str().unwrap().to_owned())
+        .collect();
+    let bindings: Vec<durable::GoalOutcomeBinding> = data["Goal"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|goal| {
+            let root = goal["assignment_root_request_doc_id"].as_str()?;
+            let assignment = requests
+                .iter()
+                .find(|row| row.doc_id.as_deref() == Some(root))?;
+            Some(durable::GoalOutcomeBinding {
+                owner_did: goal["node_did"].as_str().unwrap().to_owned(),
+                session_id: goal["session_id"].as_str().unwrap().to_owned(),
+                assignment_request_id: assignment.request_id.clone(),
+                status: goal["status"].as_str().unwrap().to_owned(),
+            })
+        })
+        .collect();
+    let identity = |fire: &TriggerFire| serde_json::to_value(modeled(&fire.identity)).unwrap();
+    let binding = |fire: &TriggerFire| {
+        bindings
+            .iter()
+            .find(|goal| {
+                goal.owner_did == fire.identity.owner_did && goal.session_id == fire.session_id
+            })
+            .cloned()
+    };
+    serde_json::json!({
+        "receipts": fires.iter().map(identity).collect::<Vec<_>>(),
+        "requests": fires.iter().filter_map(|fire| {
+            let state = requests.iter().find(|row| row.request_id == fire.request_id)?.lifecycle_state;
+            Some(serde_json::json!({
+                "fire": {
+                    "identity": identity(fire), "session": fire.session_id,
+                    "serial": fire.queued_serial, "emit_outcome": fire.emit_outcome,
+                    "goal_backed": fire.goal_id.is_some(),
+                },
+                "running": state.is_some_and(|state| matches!(
+                    state,
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Claimed
+                        | gents_protocol::request_lifecycle::RequestLifecycleState::Processing
+                )),
+                "terminal": state.is_some_and(|state| state.is_terminal()),
+                "assignment_replaced": durable::assignment_replaced(fire, binding(fire).as_ref()),
+                "goal_assignment_applied": fire.goal_assignment_applied,
+            }))
+        }).collect::<Vec<_>>(),
+        "outcomes": fires.iter()
+            .filter(|fire| published.contains(&fire.identity.outcome_id()))
+            .map(identity)
+            .collect::<Vec<_>>(),
+        "goals": bindings.iter().filter_map(|goal| {
+            let fire = fires.iter().find(|fire| fire.request_id == goal.assignment_request_id)?;
+            let assignment = modeled(&fire.identity);
+            Some(serde_json::json!({
+                "owner": if goal.owner_did == fire.identity.owner_did {
+                    assignment.owner_did.clone()
+                } else {
+                    goal.owner_did.clone()
+                },
+                "session": goal.session_id, "assignment": assignment, "status": goal.status,
+            }))
+        }).collect::<Vec<_>>(),
+    })
+}
+
+#[tokio::test]
+async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
+    for case in gents_lean_vocab::families::trigger_delivery_outcome_recovery::cases() {
+        let pre: State = gents_lean_vocab::family::recode(&case.input.pre);
+        let request = &pre.requests[0];
+        let identity = request.fire.identity.clone();
+        let session = request.fire.session.clone();
+        let fire = TriggerFire {
+            fire_key: identity.fire_key(),
+            identity: identity.clone(),
+            task_id: "recovery-task".into(),
+            request_id: identity.request_id(),
+            session_id: session.clone(),
+            goal_id: request.fire.goal_backed.then(|| "recovery-goal".into()),
+            goal_objective: request
+                .fire
+                .goal_backed
+                .then(|| "finish assignment".into()),
+            goal_token_budget: None,
+            goal_assignment_applied: request.goal_assignment_applied,
+            emit_outcome: request.fire.emit_outcome,
+            queued_serial: request.fire.serial,
+            source_handoff_id: Some("source-assignment".into()),
+            reply_session_id: None,
+            shard_id: None,
+            attempt: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let (root, key) = (
+            gents_store::identity::NodeIdentity::did(
+                &crate::triggers::callback::test_root_identity(),
+            )
+            .to_owned(),
+            directory.path().join("node.key"),
+        );
+        tokio::task::spawn_blocking(move || {
+            gents_store::test_support::write_held_identity_key(&root, &key)
+        })
+        .await
+        .unwrap();
+        let mut db = gents_inference::test_support::test_db_at(
+            directory.path(),
+            None,
+            crate::lifecycle_hooks::composition(),
+        )
+        .await
+        .unwrap();
+        let node = db.node.clone();
+        crate::triggers::callback::seed_test_agent(&node, db.node_identity.did()).await;
+        let agent = crate::triggers::callback::test_agent_identity();
+        let terminal = request.terminal;
+        let state = if terminal { "completed" } else { "pending" };
+        let agent_did = crate::triggers::callback::test_agent_did();
+        let create_request = |request_id: &str, created_at: &str| {
+            format!(
+                r#"mutation {{create_AgentRequest(input: {{
+                request_id: "{}", node_did: "{}", session_id: "{}", agent_did: "{}",
+                purpose: "normal", lifecycle_state: "{state}", created_at: "{}"
+            }}) {{_docID}} }}"#,
+                escape_graphql_string(request_id),
+                escape_graphql_string(&fire.identity.owner_did),
+                escape_graphql_string(&session),
+                escape_graphql_string(&agent_did),
+                escape_graphql_string(created_at),
+            )
+        };
+        let request_mutation = create_request(&fire.request_id, "2026-01-01T00:00:00Z");
+        let replacement_mutation = create_request("recovery-replacement", "2026-01-01T00:00:01Z");
+        let goal_status = pre.goals.first().map(|goal| goal.status.clone());
+        let replaced = request.assignment_replaced;
+        let published = !pre.outcomes.is_empty();
+        let access = crate::triggers::callback::test_agent_access(&node);
+        access
+            .transact_write("test.seed_terminal_outcome_boundary", |txn| {
+                let (fire, request_mutation, agent_did, goal_status) =
+                    (&fire, &request_mutation, &agent_did, &goal_status);
+                Box::pin(async move {
+                    gents_session::session::ensure_session_in_txn(
+                        txn,
+                        &fire.session_id,
+                        &fire.identity.owner_did,
+                        agent_did,
+                        None,
+                        None,
+                        None,
+                        "2026-01-01T00:00:00Z",
+                    )
+                    .await?;
+                    durable::stage_fire_request(txn, fire, request_mutation).await?;
+                    if goal_status.is_some() || replaced {
+                        let response = txn
+                            .execute(&format!(
+                                "{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID}}}}",
+                                escape_graphql_string(&fire.request_id)
+                            ))
+                            .await?;
+                        let root = response["data"]["AgentRequest"][0]["_docID"]
+                            .as_str()
+                            .unwrap();
+                        let session = txn
+                            .execute(&format!(
+                                "{{AgentSession(filter: {{session_id: {{_eq: \"{}\"}}}}) {{_docID}}}}",
+                                escape_graphql_string(&fire.session_id)
+                            ))
+                            .await?;
+                        txn.execute_with_variables(
+                            "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
+                            &serde_json::json!({"input": {
+                                "goal_id": fire.goal_id, "node_did": fire.identity.owner_did,
+                                "session_id": fire.session_id, "objective": "finish assignment",
+                                "session_doc_id": session["data"]["AgentSession"][0]["_docID"],
+                                "status": goal_status.as_deref().unwrap_or("active"),
+                                "assignment_root_request_doc_id": root,
+                            }}),
+                        )
+                        .await?;
+                    }
+                    if published {
+                        durable::stage_outcome(
+                            txn,
+                            fire,
+                            durable::OutcomeStage {
+                                goal: None,
+                                assignment_replaced: false,
+                                request_terminal: terminal,
+                                terminal_state: state,
+                                reason: state,
+                            },
+                            "2026-01-01T00:00:01Z",
+                        )
+                        .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        if replaced {
+            access
+                .transact_write("test.seed_replaced_assignment", |txn| {
+                    let (fire, replacement_mutation) = (&fire, &replacement_mutation);
+                    Box::pin(async move {
+                        let created = txn.execute(replacement_mutation).await?;
+                        let replacement =
+                            gents_store::graphql::created_doc_id(&created, "AgentRequest")?;
+                        txn.execute(&format!(
+                            "mutation {{update_Goal(filter: {{session_id: {{_eq: \"{}\"}}}}, input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
+                            escape_graphql_string(&fire.session_id),
+                            escape_graphql_string(&replacement),
+                        ))
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
+        }
+        drop(access);
+        drop(node);
+        db.simulate_process_crash().await.unwrap();
+        let node = db.node.clone();
+        let recovered = durable::recover_outcomes(&node, &fire.identity.owner_did, agent.as_ref())
+            .await
+            .unwrap();
+        let recovered_again =
+            durable::recover_outcomes(&node, &fire.identity.owner_did, agent.as_ref())
+                .await
+                .unwrap();
+        let post = observed_delivery_state(
+            &crate::triggers::callback::test_agent_access(&node),
+            FireIdentity::clone,
+        )
+        .await;
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_outcome_recovery::OutcomeRecoveryOutput {
+            post: gents_lean_vocab::family::recode(&post),
+            recovered: recovered as u64,
+            recovered_again: recovered_again as u64,
+            },
+        );
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
