@@ -108,29 +108,37 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 .find(|row| row.node_did == node_did && row.agent_did == default_agent)
                 .cloned()
                 .context("paired user cannot see the default Agent")?;
-            let first = AgentIdentityBinding {
+            // The default Agent is the Engineer, which `gents init` makes the
+            // Node's administrator (Lean `SelfConfig.engineerInitRelations`), so
+            // it reads every Agent's sessions by decision. Isolation is checked
+            // between two Agents that hold no grant on each other.
+            let engineer = AgentIdentityBinding {
                 agent_did: agent.agent_did.clone(),
                 creation_nonce: agent.creation_nonce.clone(),
             };
-            let second = core
-                .provision_agent_identity(&node_did)
-                .await
-                .context("provisioning the second Agent identity")?;
-            assert_ne!(first.agent_did, second.agent_did);
-            agent.agent_did = second.agent_did.clone();
-            agent.creation_nonce = second.creation_nonce.clone();
-            agent.display_name = Some("live second agent".into());
-            core.save_agent(&agent)
-                .await
-                .context("publishing the second Agent as the enrolled desktop User")?;
+            let mut workers = Vec::new();
+            for label in ["live first worker", "live second worker"] {
+                let worker = core
+                    .provision_agent_identity(&node_did)
+                    .await
+                    .with_context(|| format!("provisioning the {label} identity"))?;
+                assert_ne!(engineer.agent_did, worker.agent_did);
+                agent.agent_did = worker.agent_did.clone();
+                agent.creation_nonce = worker.creation_nonce.clone();
+                agent.display_name = Some(label.into());
+                core.save_agent(&agent)
+                    .await
+                    .with_context(|| format!("publishing the {label} as the enrolled desktop User"))?;
+                workers.push(worker);
+            }
             let access = core.operator_access(&node_did)?;
-            grant_configured_workspace_root_readers(&access, &graphql, &init, &owner_home, &[&second])
+            grant_configured_workspace_root_readers(&access, &graphql, &init, &owner_home, &workers.iter().collect::<Vec<_>>())
                 .await
-                .context("granting the second Agent access to its configured WorkspaceRoot")?;
+                .context("granting the worker Agents access to their configured WorkspaceRoot")?;
             let user_did = core.node_identity().did().to_owned();
             assert_ne!(user_did, node_did);
             let mut requests = Vec::new();
-            for (index, binding) in [&first, &second].into_iter().enumerate() {
+            for (index, binding) in workers.iter().enumerate() {
                 let session = Uuid::new_v4().to_string();
                 let prompt = format!(
                     "For isolation test {index}, give a short greeting: {}",
@@ -193,8 +201,10 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                     .await?;
             }
             Arc::new(reopened).shutdown().await?;
+            let [first, second]: [AgentIdentityBinding; 2] =
+                workers.try_into().map_err(|_| anyhow::anyhow!("two worker Agents"))?;
             Ok((
-                [first, second],
+                [engineer, first, second],
                 requests.into_iter().map(|(request_id, session, _)| (request_id, session)).collect::<Vec<_>>(),
                 user_did,
             ))
@@ -316,6 +326,33 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
         })
         .and_then(|action| action["expected"].as_bool())
         .context("modeled foreign session update")?;
+    let administrator_reads = |resource: &str, id: &str| -> Result<bool> {
+        let actions = household["actions"]
+            .as_array()
+            .context("modeled household actions")?;
+        let granted = actions
+            .iter()
+            .position(|action| {
+                action["action"] == "grant"
+                    && action["relation"]["resource"] == "nodes"
+                    && action["relation"]["relation"] == "administrator"
+            })
+            .context("modeled Node administrator grant")?;
+        let administrator = &actions[granted]["relation"]["subject"]["actor"];
+        actions[granted..]
+            .iter()
+            .find(|action| {
+                action["action"] == "check"
+                    && &action["actor"] == administrator
+                    && action["resource"] == resource
+                    && action["id"] == id
+                    && action["permission"] == "read"
+            })
+            .and_then(|action| action["expected"].as_bool())
+            .context("modeled Node administrator read")
+    };
+    let engineer_reads_sessions = administrator_reads("sessions", "sibling-session")?;
+    let engineer_reads_requests = administrator_reads("delivered_requests", "remote-request")?;
     let actors = bindings
         .iter()
         .map(|binding| {
@@ -328,8 +365,10 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
         })
         .collect::<Result<Vec<_>>>()?;
     let mut session_docs = Vec::new();
+    let (engineer_actor, workers) = actors.split_first().context("Engineer actor")?;
+    let worker_bindings = &bindings[1..];
     for (target, (_, session_id)) in requests.iter().enumerate() {
-        let result = actors[target]
+        let result = workers[target]
             .execute(&format!(
                 "{{ AgentSession(filter: {{session_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
                 escape_graphql_string(session_id),
@@ -342,8 +381,28 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 .to_owned(),
         );
     }
-    for (index, binding) in bindings.iter().enumerate() {
-        let actor = &actors[index];
+    for (request_id, session_id) in &requests {
+        let response = engineer_actor.execute(&format!(
+            "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ request_id }} AgentSession(filter: {{ session_id: {{ _eq: \"{}\" }} }}) {{ session_id }} }}",
+            escape_graphql_string(request_id),
+            escape_graphql_string(session_id),
+        )).await?;
+        for (collection, expected) in [
+            ("AgentRequest", engineer_reads_requests),
+            ("AgentSession", engineer_reads_sessions),
+        ] {
+            let rows = response["data"][collection]
+                .as_array()
+                .with_context(|| format!("{collection} query failed"))?;
+            assert_eq!(
+                rows.len(),
+                usize::from(expected),
+                "Engineer (Node administrator) visibility for {collection}: {response}"
+            );
+        }
+    }
+    for (index, binding) in worker_bindings.iter().enumerate() {
+        let actor = &workers[index];
         assert!(
             node.nac_manager()
                 .check_permission(
@@ -392,7 +451,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 allowed, expected,
                 "native document ACP for Agent {index}, session {target}"
             );
-            let before = actors[target]
+            let before = workers[target]
                 .execute(&format!(
                     "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{tags}} }}",
                     escape_graphql_string(doc_id),
@@ -414,7 +473,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 changed, expected,
                 "Agent {index} update of session {target}: {updated:?}"
             );
-            let after = actors[target]
+            let after = workers[target]
                 .execute(&format!(
                     "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{tags}} }}",
                     escape_graphql_string(doc_id),
