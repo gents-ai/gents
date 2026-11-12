@@ -217,10 +217,14 @@ async fn execute_inner(
             } else {
                 let current = current.map(|h| h.reviewed.node_did);
                 load_peer_records(paths.peer_directory_path())
-                    .await?
-                    .iter()
-                    .any(|peer| peer.is_stale_local_peer(home, current.as_deref()))
-                    .then_some(current)
+                    .await
+                    .ok()
+                    .filter(|peers| {
+                        peers
+                            .iter()
+                            .any(|peer| peer.is_stale_local_peer(home, current.as_deref()))
+                    })
+                    .map(|_| current)
             }
         }
         None => None,

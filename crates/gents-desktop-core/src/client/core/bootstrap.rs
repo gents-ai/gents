@@ -499,8 +499,6 @@ pub(super) fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a 
         .with_context(|| format!("{field} must not be empty"))
 }
 
-// Key custody is durable before the first encrypted write; existing plaintext
-// stores are promoted offline while the client store lock is held.
 async fn open_or_create_client_store_key(
     paths: &DesktopPaths,
     options: &ClientCoreOptions,
