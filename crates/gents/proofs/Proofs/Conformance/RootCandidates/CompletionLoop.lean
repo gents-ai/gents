@@ -24,6 +24,7 @@ private def cases : List Input :=
    { calls := [{ failure "transport" with tool := true }, done] },
    { calls := [{ tool := true }, failure "parse", failure "parse", done], context := true, maxTurns := 4 },
    { calls := [{ tool := true }, { tool := true }, done], maxTurns := 1 },
+   { calls := [{ tool := true }, { tool := true }, done], maxTurns := 2 },
    { calls := [{ reasoning := ["thinking"] }, { reasoning := ["again"] }] },
    { calls := [failure "rate_limit", failure "connection", failure "transport", done] },
    { calls := [failure "parse", failure "parse", done], initialDirty := true },

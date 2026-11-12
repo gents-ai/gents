@@ -30,6 +30,7 @@ structure Input where
   resample : Nat := 2
   repair : Bool := true
   deadlineFits : Bool := true
+  /-- Zero leaves the loop uncapped. A positive bound counts provider turns, not retry attempts. -/
   maxTurns : Nat := 0
   context : Bool := false
   initialDirty : Bool := false
