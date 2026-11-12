@@ -29,6 +29,7 @@ import { NewAutomationDialog } from "./NewAutomationDialog";
 import { EditorSheet } from "./EditorSheet";
 import { TriggerEditor } from "./TriggersPanel";
 import { sourceInWords, triggerReadiness } from "./automation";
+import { runInWords } from "../automations/model";
 import { Switch } from "@gents/ui/components/switch";
 import { ExternalLink, Pencil, Play, Plus } from "lucide-react";
 import { Hint } from "../Hint";
@@ -488,15 +489,27 @@ export function TaskEditor({
           {task.recentRuns.scheduleCount} schedules · {task.recentRuns.eventCount}{" "}
           events
         </FactRow>
-        {task.runHistory.slice(0, 5).map((r) => (
-          <FactRow
-            key={r.requestId}
-            label={<span className="font-mono text-xs">{r.requestId}</span>}
-            description={`${r.causedByTriggerKind ?? "manual"}${r.causedByTriggerId ? `:${r.causedByTriggerId}` : ""}`}
-          >
-            {r.lifecycleState ?? "—"}
-          </FactRow>
-        ))}
+        {[...task.runHistory]
+          .sort((x, y) => Date.parse(y.createdAt ?? "") - Date.parse(x.createdAt ?? ""))
+          .slice(0, 5)
+          .map((r) => (
+            <FactRow
+              key={r.requestId}
+              label={when(r.createdAt)}
+              description={runInWords(r)}
+            >
+              {r.sessionId ? (
+                <a
+                  href={href({ name: "session", sessionId: r.sessionId })}
+                  className="underline-offset-2 hover:underline"
+                >
+                  Open session
+                </a>
+              ) : (
+                "—"
+              )}
+            </FactRow>
+          ))}
       </Group>
       <Group
         title="Manual run"
