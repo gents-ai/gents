@@ -1,47 +1,34 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
 
-// Transport observations run as the Node's own identity, as the runtime's
-// P2P owners bind them.
-
-/// iroh may also advertise a NAT-PMP mapping from the LAN router first
-/// (`<router ip>:<port>`), which a local dial through that router times out on.
 pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let addrs = gents_store::identity::node_p2p(node)
-            .expect("p2p should be enabled")
-            .listen_addresses()
-            .await
-            .expect("listen addresses");
-        if let Some(addr) = addrs
-            .iter()
-            .find(|addr| addr.starts_with("127.0.0.1:") || addr.starts_with("[::1]:"))
-        {
-            return addr.clone();
-        }
-        if Instant::now() >= deadline {
-            panic!("node never exposed a loopback P2P listen address; last_addrs={addrs:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let p2p = gents_store::identity::node_p2p(node).expect("P2P enabled");
+    let addresses = tokio::time::timeout(Duration::from_secs(10), p2p.listen_addresses())
+        .await
+        .expect("P2P listen-address deadline")
+        .expect("P2P listen addresses");
+    addresses
+        .into_iter()
+        .find(|address| address.starts_with("127.0.0.1:") || address.starts_with("[::1]:"))
+        .expect("the loopback P2P endpoint must be bound when the node is created")
 }
 
 pub async fn wait_for_connected_peer(node: &EmbeddedNode) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut changes = node.subscribe(&[gents::defra_node::EventName::PeerConnection]);
     loop {
         let peers = gents_store::identity::node_p2p(node)
-            .expect("p2p should be enabled")
+            .expect("P2P enabled")
             .connected_peers()
             .await
             .expect("connected peers");
         if !peers.is_empty() {
             return;
         }
-        if Instant::now() >= deadline {
-            panic!("node never reported a connected peer; last_peers={peers:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("no connected peer before the connection deadline")
+            .expect("peer connection subscription closed");
     }
 }
