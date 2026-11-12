@@ -17,6 +17,8 @@ use support::Attachment;
 
 #[path = "live_delivery.rs"]
 mod live_delivery;
+#[path = "live_file_actions.rs"]
+mod live_file_actions;
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -47,7 +49,15 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         .env_remove("GENTS_SYSTEM_LOG")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&home)
-        .args(["--tool-package", "readonly", "--tool-root"])
+        .args([
+            "--tool-package",
+            if editor == Some("live-review") {
+                "write"
+            } else {
+                "readonly"
+            },
+            "--tool-root",
+        ])
         .arg(root)
         .args([
             "--node-name",
@@ -206,6 +216,9 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == resumed_request && value["turnState"] == "completed").await?;
         }
         if let Some(scenario) = editor {
+            if scenario == "live-review" {
+                live_file_actions::prepare_review(root).await?;
+            }
             if scenario == "live-history" {
                 let prompts = (1..=45).map(|turn| format!("History turn {turn}: give one short sentence about a leaf. Do not call tools.")).collect::<Vec<_>>();
                 for prompt in &prompts {
@@ -219,7 +232,11 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
                 tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
             }
             super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), scenario).await?;
-            if scenario == "live-delivery" {
+            if scenario == "live-review" {
+                let evidence = live_file_actions::verify_review(&mut client, &mut id, &access, root, node, session, &client_did).await?;
+                tokio::fs::write(root.join("editor-review-canonical.json"), serde_json::to_vec(&evidence)?).await?;
+                projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
+            } else if scenario == "live-delivery" {
                 live_delivery::verify(&access, root, node, session, &client_did, opening).await?;
                 projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
             } else if scenario == "live-workspace" {
