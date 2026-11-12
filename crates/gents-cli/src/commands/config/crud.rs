@@ -550,7 +550,10 @@ mod tests {
     async fn backend_reads_use_metadata_for_list_and_exact_show() -> Result<()> {
         let node = Arc::new(gents_host::test_support::node_builder().build().await?);
         gents_store::schema::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().context("fixture Node identity")?)?,
+        );
         for owner in ["owner-a", "owner-b"] {
             access.write("test.backend.metadata", &format!(
                 r#"mutation {{ create_InferenceBackendMetadata(input: {{node_did: "{owner}", backend_id: "same", name: "{owner}", provider_kind: "OpenAiCompatible", endpoint: "http://127.0.0.1:9/v1", auth_kind: "credential", credential_id: "private-ref", credential_version: "version"}}) {{_docID}} }}"#

@@ -294,19 +294,24 @@ async fn session_live_text_reads_the_running_turn_and_ends_with_its_lifecycle() 
     let mut segment_json = serde_json::to_value(&segment.segment).unwrap();
     segment_json["_docID"] = serde_json::json!(segment.doc_id);
     let mut body = serde_json::json!({"data": {
-        "AgentRequest": [request],
-        "AgentMessage": [],
-        "AgentOutputSegment": [segment_json],
+        "view_0": [request],
+        "view_1": [],
+        "view_2": [segment_json],
     }});
-    body["data"]["AgentRequest"][0]["_docID"] = serde_json::json!("physical");
+    body["data"]["view_0"][0]["_docID"] = serde_json::json!("physical");
     let server = wiremock::MockServer::start().await;
-    let access = ConfigAccess::graphql(format!("{}/api/v0/graphql", server.uri()));
+    let reader = tokio::task::spawn_blocking(|| {
+        gents_store::test_support::test_identity("live-text-view-reader")
+    })
+    .await
+    .unwrap();
+    let access = ConfigAccess::graphql_as(
+        format!("{}/api/v0/graphql", server.uri()),
+        gents_store::identity::NodeIdentity::did(&reader),
+    );
     let mount = |body: Value| {
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/api/v0/graphql"))
-            .and(wiremock::matchers::body_string_contains(
-                "DesktopSessionTip",
-            ))
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
             .expect(1)
     };
@@ -319,7 +324,7 @@ async fn session_live_text_reads_the_running_turn_and_ends_with_its_lifecycle() 
     assert!(live.reasoning.is_empty());
     server.verify().await;
     server.reset().await;
-    body["data"]["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");
+    body["data"]["view_0"][0]["lifecycle_state"] = serde_json::json!("completed");
     mount(body).mount(&server).await;
     assert!(
         load_session_live_text_on(&access, &observed, "session", "node")

@@ -21,7 +21,13 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did()
+            .expect("fixture reader identity")
+            .parse()
+            .expect("fixture DID"),
+    );
     let response = access
         .write(
             "test.pending_edit_request_patch",
@@ -389,7 +395,13 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did()
+            .expect("fixture reader identity")
+            .parse()
+            .expect("fixture DID"),
+    );
 
     let mutation = r#"mutation {
         selected_session: create_AgentSession(input: {
@@ -651,7 +663,13 @@ fn direct_session_read_matches_the_lean_model() {
 async fn absent_session_is_empty_even_when_a_request_is_visible() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did()
+            .expect("fixture reader identity")
+            .parse()
+            .expect("fixture DID"),
+    );
     let response = node
         .execute(
             r#"mutation { create_AgentRequest(input: {
@@ -681,7 +699,13 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did()
+            .expect("fixture reader identity")
+            .parse()
+            .expect("fixture DID"),
+    );
     let response = node
         .execute(
             r#"mutation {
@@ -737,7 +761,13 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did()
+            .expect("fixture reader identity")
+            .parse()
+            .expect("fixture DID"),
+    );
     access
         .write(
             "test.title_request_patch",
