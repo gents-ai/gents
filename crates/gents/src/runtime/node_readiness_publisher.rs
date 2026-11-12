@@ -976,3 +976,118 @@ mod tests;
 #[cfg(test)]
 #[path = "node_readiness_publisher/deep_history_tests.rs"]
 mod deep_history_tests;
+
+#[cfg(test)]
+mod candidate_conformance {
+    use super::*;
+    use gents_lean_vocab::families::runtime_readiness_persistence_commit_candidates as family;
+    use std::collections::VecDeque;
+
+    struct Writer {
+        results: std::sync::Mutex<VecDeque<String>>,
+        persisted: std::sync::Mutex<Vec<String>>,
+    }
+    #[async_trait::async_trait]
+    impl NodeReadinessWriter for Writer {
+        async fn upsert(&self, _: &str, snapshot: &NodeReadinessSnapshot, _: &str) -> Result<()> {
+            let result = self
+                .results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("modeled write outcome");
+            match result.as_str() {
+                "ok" => {
+                    self.persisted.lock().unwrap().push(
+                        serde_json::to_value(snapshot.process_state)
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .into(),
+                    );
+                    Ok(())
+                }
+                "full" => Err(gents_protocol::database_error::StorageFull.into()),
+                "timeout" => std::future::pending().await,
+                "fail" => anyhow::bail!("injected write failure"),
+                other => panic!("unmodeled write result {other}"),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn generated_readiness_commits_keep_failed_candidates_unpublished() {
+        for case in family::cases() {
+            let writer = Arc::new(Writer {
+                results: Default::default(),
+                persisted: Default::default(),
+            });
+            let erased: Arc<dyn NodeReadinessWriter> = writer.clone();
+            let mut state = PublisherState {
+                node_did: "did:test:node".into(),
+                process_state: NodeReadinessProcessState::Uninitialized,
+                router_generation: 0,
+                source: Some(ReadinessSource {
+                    active_generation: 0,
+                    default_agent_did: "agent".into(),
+                    entries: BTreeMap::from([(
+                        "agent".into(),
+                        AgentReadinessSourceEntry {
+                            agent_did: "agent".into(),
+                            dispatcher_present: false,
+                            unavailable_reason: Some(
+                                AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                            ),
+                            startup_demoted: false,
+                        },
+                    )]),
+                    slot_generations: BTreeMap::new(),
+                }),
+                registered_slots: BTreeSet::new(),
+                demotions: BTreeMap::new(),
+                persisted: None,
+                updated_at: String::new(),
+                persist_attempt_timeout: Some(Duration::from_millis(1)),
+            };
+            let (observation, observed) = watch::channel(AgentAdmissionObservation::default());
+            let mut result = Vec::new();
+            for update in &case.input.updates {
+                *writer.results.lock().unwrap() = update.writes.iter().cloned().collect();
+                let cancel = CancellationToken::new();
+                if update.cancelled {
+                    cancel.cancel();
+                }
+                let mut candidate = state.clone();
+                candidate.process_state =
+                    serde_json::from_value(serde_json::json!(update.process)).unwrap();
+                let accepted = commit_candidate(
+                    &erased,
+                    &mut state,
+                    candidate,
+                    &observation,
+                    Duration::ZERO,
+                    &cancel,
+                )
+                .await
+                .is_ok();
+                let current = observed.borrow().clone();
+                result.push(family::Observation {
+                    accepted,
+                    process: serde_json::to_value(current.process_state)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .into(),
+                    source_generation: current.source_generation,
+                    demotions: current
+                        .demotions
+                        .into_iter()
+                        .map(|(agent, reason)| format!("{agent}:{reason}"))
+                        .collect(),
+                    persisted: writer.persisted.lock().unwrap().clone(),
+                });
+            }
+            case.check(result);
+        }
+    }
+}

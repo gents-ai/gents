@@ -5,7 +5,6 @@ use std::time::Duration;
 use gents_inference::resolved::SamplingConfig;
 use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_protocol::row::AgentRequest;
-use gents_session::request::aggregate_token_limit::parse_aggregate_token_limit;
 use gents_store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 
 fn request() -> AgentRequest {
@@ -45,60 +44,6 @@ fn request() -> AgentRequest {
 }
 
 #[test]
-fn claude_profile_effort_reaches_messages_without_sampling() {
-    assert_eq!(
-        reasoning_profile_params(
-            BackendProviderKind::ClaudeCliSubscription,
-            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-            Some(ReasoningEffort::High),
-        ),
-        Some(serde_json::json!({"output_config": {"effort": "high"}}))
-    );
-}
-
-#[test]
-fn absent_profile_effort_does_not_inject_reasoning() {
-    assert!(reasoning_profile_params(
-        BackendProviderKind::OpenAiCompatible,
-        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        None,
-    )
-    .is_none());
-    assert!(reasoning_profile_params(
-        BackendProviderKind::OpenAiCompatible,
-        gents_loop::openai_wire::OpenAiWireApi::Responses,
-        None,
-    )
-    .is_none());
-    assert!(reasoning_profile_params(
-        BackendProviderKind::OpenRouter,
-        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        None,
-    )
-    .is_none());
-}
-
-#[test]
-fn absent_profile_effort_keeps_the_codex_medium_default() {
-    assert_eq!(
-        reasoning_profile_params(
-            BackendProviderKind::ChatGptCodex,
-            gents_loop::openai_wire::OpenAiWireApi::Responses,
-            None,
-        ),
-        Some(serde_json::json!({ "reasoning": { "effort": "medium" } })),
-    );
-    assert_eq!(
-        reasoning_profile_params(
-            BackendProviderKind::ChatGptCodex,
-            gents_loop::openai_wire::OpenAiWireApi::Responses,
-            Some(ReasoningEffort::High),
-        ),
-        Some(serde_json::json!({ "reasoning": { "effort": "high" } })),
-    );
-}
-
-#[test]
 fn generic_responses_request_does_not_force_reasoning() {
     use rig::completion::message::{Message, Text, UserContent};
     use rig::one_or_many::OneOrMany;
@@ -134,48 +79,6 @@ fn generic_responses_request_does_not_force_reasoning() {
     assert_eq!(body["temperature"], 0.0);
     assert!(body.get("reasoning").is_none());
     assert!(body.get("chat_template_kwargs").is_none());
-}
-
-#[test]
-fn responses_and_openrouter_use_profile_reasoning_effort() {
-    let codex = reasoning_profile_params(
-        BackendProviderKind::ChatGptCodex,
-        gents_loop::openai_wire::OpenAiWireApi::Responses,
-        Some(gents_documents::inference_defaults::ReasoningEffort::Ultra),
-    )
-    .expect("profile reasoning effort must be present");
-    let responses = reasoning_profile_params(
-        BackendProviderKind::OpenAiCompatible,
-        gents_loop::openai_wire::OpenAiWireApi::Responses,
-        Some(gents_documents::inference_defaults::ReasoningEffort::XHigh),
-    )
-    .expect("profile reasoning effort must be present");
-    let openrouter = reasoning_profile_params(
-        BackendProviderKind::OpenRouter,
-        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        Some(gents_documents::inference_defaults::ReasoningEffort::Medium),
-    )
-    .expect("profile reasoning effort must be present");
-
-    assert_eq!(codex["reasoning"]["effort"], "ultra");
-    assert_eq!(responses["reasoning"]["effort"], "xhigh");
-    assert_eq!(openrouter["reasoning"]["effort"], "medium");
-    assert!(codex.get("chat_template_kwargs").is_none());
-}
-
-#[test]
-fn profile_none_disables_local_thinking() {
-    let value = reasoning_profile_params(
-        BackendProviderKind::OpenAiCompatible,
-        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        Some(gents_documents::inference_defaults::ReasoningEffort::None),
-    )
-    .expect("explicit none must be present");
-
-    assert_eq!(value["chat_template_kwargs"]["enable_thinking"], false);
-    assert!(value["chat_template_kwargs"]
-        .get("reasoning_effort")
-        .is_none());
 }
 
 #[test]
@@ -355,111 +258,6 @@ fn generated_responses_effort_cases_drive_loop_config() {
 }
 
 #[test]
-fn sampling_additional_params_merge_with_provider_params() {
-    let sampling = SamplingConfig {
-        temperature: Some(0.1),
-        top_p: Some(0.95),
-        top_k: Some(40),
-        max_tokens: Some(1024),
-        ..Default::default()
-    };
-
-    let value = merge_optional_params(
-        provider_additional_params(
-            BackendProviderKind::OpenRouter,
-            gents_loop::openai_wire::OpenAiWireApi::Responses,
-            gents_inference::backends::setup::OPENAI_ENDPOINT,
-        ),
-        sampling.additional_params(),
-    )
-    .expect("sampling params should be present");
-
-    assert_eq!(value["provider"]["require_parameters"], true);
-    assert_eq!(value["top_p"], 0.95);
-    assert_eq!(value["top_k"], 40);
-    assert!(value.get("max_tokens").is_none());
-    assert!(value.get("temperature").is_none());
-}
-
-#[test]
-fn openai_cache_scope_prefers_session_id() {
-    let value = openai_cache_scope_params(&request()).expect("scope should be present");
-
-    assert_eq!(value["user"], "session-456");
-}
-
-#[test]
-fn openai_cache_scope_falls_back_to_request_id() {
-    let mut request = request();
-    request.session_id.clear();
-
-    let value = openai_cache_scope_params(&request).expect("fallback scope should be present");
-
-    assert_eq!(value["user"], "request-123");
-}
-
-#[test]
-fn codex_cache_key_stays_with_session_across_requests() {
-    let mut agent = agent_with_retry(Default::default());
-    agent.backend_provider_kind = BackendProviderKind::ChatGptCodex;
-    agent.openai_wire_api = gents_loop::openai_wire::OpenAiWireApi::Responses;
-    let mut request = request();
-    let first = request_additional_params(&agent, &request).unwrap();
-    let config = loop_config_for_request(&agent, "system".into(), &request, None, 0, 0).unwrap();
-    let params = config.additional_params.unwrap();
-    assert_eq!(params["prompt_cache_key"], first["prompt_cache_key"]);
-    assert_eq!(params["reasoning"]["effort"], "medium");
-    request.request_id = "next-request".to_string();
-    assert_eq!(
-        request_additional_params(&agent, &request),
-        Some(first.clone())
-    );
-    assert_eq!(
-        first,
-        serde_json::json!({"prompt_cache_key": "session-456"})
-    );
-    request.session_id = "another-session".to_string();
-    assert_ne!(request_additional_params(&agent, &request), Some(first));
-}
-
-#[test]
-fn codex_cache_key_uses_request_when_session_is_absent() {
-    let mut agent = agent_with_retry(Default::default());
-    agent.backend_provider_kind = BackendProviderKind::ChatGptCodex;
-    let mut request = request();
-    request.session_id = "  ".to_string();
-    assert_eq!(
-        request_additional_params(&agent, &request),
-        Some(serde_json::json!({"prompt_cache_key": "request-123"}))
-    );
-    request.request_id.clear();
-    assert!(request_additional_params(&agent, &request).is_none());
-}
-
-#[test]
-fn loop_config_for_request_resolves_completion_retry_policy_and_deadline() {
-    let agent = agent_with_retry(CompletionRetryProfileFields {
-        retry_interactive_max: Some(2),
-        ..Default::default()
-    });
-    let mut request = request();
-    request.execution_origin = Some("interactive".to_string());
-    request.deadline = Some("2030-01-01T00:00:00Z".to_string());
-
-    let config =
-        loop_config_for_request(&agent, "preamble".to_string(), &request, None, 0, 0).unwrap();
-
-    assert_eq!(
-        config.retry_policy.transport_backoff,
-        vec![Duration::from_secs(2), Duration::from_secs(2)]
-    );
-    assert_eq!(
-        config.deadline.map(|deadline| deadline.timestamp()),
-        Some(1_893_456_000)
-    );
-}
-
-#[test]
 fn loop_config_for_request_rejects_unknown_retry_origin() {
     let agent = agent_with_retry(CompletionRetryProfileFields::default());
     let mut request = request();
@@ -538,60 +336,6 @@ fn agent_with_binding(
         skills: Vec::new(),
         oauth_pool: Vec::new(),
     }
-}
-
-#[test]
-fn claude_advertised_efforts_override_spoofed_additional_params() {
-    let spoofed = Some(serde_json::json!({
-        (gents_inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): ["high"]
-    }));
-    let unknown = super::authoritative_reasoning_capabilities(
-        spoofed.clone(),
-        BackendProviderKind::ClaudeCliSubscription,
-        None,
-    )
-    .unwrap();
-    assert!(
-        unknown[gents_inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM]
-            .is_null()
-    );
-
-    let advertised = super::authoritative_reasoning_capabilities(
-        spoofed,
-        BackendProviderKind::ClaudeCliSubscription,
-        Some(&[ReasoningEffort::Low, ReasoningEffort::XHigh]),
-    )
-    .unwrap();
-    assert_eq!(
-        advertised[gents_inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM],
-        serde_json::json!(["low", "xhigh"])
-    );
-}
-
-#[test]
-fn runtime_budget_construction_preserves_zero_and_rejects_negative_values() {
-    let agent = agent_with_retry(CompletionRetryProfileFields::default());
-    let invalid = -1;
-    let error = parse_aggregate_token_limit(Some(invalid))
-        .expect_err("negative aggregate budget must be rejected");
-    assert!(error.to_string().contains("must not be negative"));
-
-    assert_eq!(parse_aggregate_token_limit(None).unwrap(), None);
-    assert_eq!(parse_aggregate_token_limit(Some(0)).unwrap(), Some(0));
-    assert_eq!(
-        parse_aggregate_token_limit(Some(4_096)).unwrap(),
-        Some(4_096)
-    );
-
-    let mut request = request();
-    request.max_total_tokens = Some(4_096);
-    let budget = Some(AggregateTokenBudget::new(4_096));
-    assert!(
-        loop_config_for_request(&agent, "system".to_string(), &request, budget, 0, 0)
-            .unwrap()
-            .aggregate_token_budget
-            .is_some()
-    );
 }
 
 #[test]
@@ -981,173 +725,6 @@ fn calibration_accounting(estimator: &str, estimated: usize, ratio: Option<u64>)
     .to_string()
 }
 
-/// The ratio the seed sets before any default prior: the window's maximum,
-/// else the newest dispatched ratio.
-fn session_input_ratio_only(rows: &[CalibrationCallRow], estimator: &str) -> Option<u64> {
-    let seed = session_calibration_seed(rows, estimator);
-    seed.observations
-        .iter()
-        .copied()
-        .max()
-        .or(seed.dispatched_ratio)
-}
-
-fn calibration_row(
-    usage: Option<(i64, i64, i64)>,
-    accounting: Option<String>,
-) -> CalibrationCallRow {
-    CalibrationCallRow {
-        prompt_tokens: usage.map(|(input, _, _)| input),
-        completion_tokens: usage.map(|_| 7_000),
-        cached_input_tokens: usage.map(|(_, read, _)| read),
-        cache_creation_input_tokens: usage.map(|(_, _, write)| write),
-        usage_completeness: Some(
-            if usage.is_some() {
-                "complete"
-            } else {
-                "missing"
-            }
-            .into(),
-        ),
-        context_accounting_json: accounting,
-    }
-}
-
-#[test]
-fn session_input_ratio_reads_the_newest_calibrated_call() {
-    let claude = "claude_messages_wire_json_bytes_div_4_v1";
-    let accounting = |estimated, ratio| Some(calibration_accounting(claude, estimated, ratio));
-    assert_eq!(session_input_ratio_only(&[], claude), None);
-    assert_eq!(
-        session_input_ratio_only(
-            &[calibration_row(
-                Some((109_881, 109_000, 878)),
-                accounting(65_755, None)
-            )],
-            claude
-        ),
-        Some(16_711),
-        "a version-2 call's estimate is its raw count; normalized input is the whole count"
-    );
-    for (row, why) in [
-        (
-            calibration_row(Some((3, 109_000, 878)), accounting(65_755, None)),
-            "pre-normalization uncached input",
-        ),
-        (
-            calibration_row(Some((50_000, 0, 0)), accounting(65_755, None)),
-            "input under the estimate",
-        ),
-        (
-            CalibrationCallRow {
-                usage_completeness: Some("partial".into()),
-                ..calibration_row(Some((109_881, 109_000, 878)), accounting(65_755, None))
-            },
-            "incomplete usage",
-        ),
-    ] {
-        assert_eq!(
-            session_input_ratio_only(&[row], claude),
-            None,
-            "{why} leaves the prior in place"
-        );
-    }
-    assert_eq!(
-        session_input_ratio_only(
-            &[
-                calibration_row(None, None),
-                calibration_row(Some((3, 109_000, 878)), accounting(65_755, None)),
-                calibration_row(
-                    None,
-                    Some(calibration_accounting(
-                        "openai_chat_wire_json_bytes_div_4_v1",
-                        10,
-                        None
-                    ))
-                ),
-                calibration_row(None, accounting(10_000, Some(17_000))),
-                calibration_row(Some((20_000, 0, 0)), accounting(10_000, None)),
-            ],
-            claude
-        ),
-        Some(20_000),
-        "only usable usage of this estimator is an observation; a dispatched ratio is not"
-    );
-    assert_eq!(
-        session_input_ratio_only(
-            &[calibration_row(None, accounting(10_000, Some(17_000)))],
-            claude
-        ),
-        Some(17_000),
-        "without observations the newest dispatched ratio is the prior"
-    );
-}
-
-#[test]
-fn session_seed_keeps_the_maximum_of_its_newest_observations() {
-    let claude = "claude_messages_wire_json_bytes_div_4_v1";
-    let observed = |input: i64| {
-        calibration_row(
-            Some((input, 0, 0)),
-            Some(calibration_accounting(claude, 10_000, None)),
-        )
-    };
-    let seed = session_calibration_seed(&[observed(13_000), observed(26_000)], claude);
-    assert_eq!(seed.observations, vec![26_000, 13_000], "oldest first");
-    assert_eq!(
-        session_input_ratio_only(&[observed(13_000), observed(26_000)], claude),
-        Some(26_000),
-        "a 1.3x call after a 2.6x one still seeds 2.6x"
-    );
-    let window = crate::turn::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW;
-    let mut rows = (0..window).map(|_| observed(13_000)).collect::<Vec<_>>();
-    rows.push(observed(26_000));
-    assert_eq!(
-        session_input_ratio_only(&rows, claude),
-        Some(13_000),
-        "a 2.6x call older than the newest {window} observations has aged out"
-    );
-}
-
-#[test]
-fn only_a_usable_newest_call_anchors_the_session() {
-    let claude = "claude_messages_wire_json_bytes_div_4_v1";
-    let accounting = |estimated, ratio| Some(calibration_accounting(claude, estimated, ratio));
-    assert_eq!(
-        session_calibration_seed(
-            &[calibration_row(
-                Some((109_881, 109_000, 878)),
-                accounting(65_755, None)
-            )],
-            claude
-        ),
-        CalibrationSeed {
-            observations: vec![16_711],
-            dispatched_ratio: None,
-            anchor: Some(crate::turn::provider_input::budget::ContextAnchor {
-                input_tokens: 109_881,
-                output_tokens: 7_000,
-                estimated_input_tokens: 65_755,
-            }),
-        }
-    );
-    assert_eq!(
-        session_calibration_seed(
-            &[
-                calibration_row(None, accounting(80_000, Some(17_000))),
-                calibration_row(Some((109_881, 109_000, 878)), accounting(65_755, None)),
-            ],
-            claude
-        ),
-        CalibrationSeed {
-            observations: vec![16_711],
-            dispatched_ratio: Some(17_000),
-            anchor: None,
-        },
-        "a newest call without usable usage anchors nothing; older usage still observes"
-    );
-}
-
 #[tokio::test]
 async fn session_calibration_seeds_from_durable_inference_calls() {
     let (db, user, owner, binding) =
@@ -1375,4 +952,159 @@ fn claude_subscription_requests_carry_the_session_key_and_hops_reach_the_policy(
         "session-456"
     );
     assert_eq!(config.retry_policy.account_hops, 3);
+}
+
+#[test]
+fn generated_reasoning_profile_params_preserve_the_provider_wire_contract() {
+    gents_lean_vocab::families::runtime_completion_parameters_reasoning_profile_params::replay(
+        |input| {
+            let kind = BackendProviderKind::parse_optional(Some(&input.provider)).unwrap();
+            let wire = if input.responses {
+                OpenAiWireApi::Responses
+            } else {
+                OpenAiWireApi::ChatCompletions
+            };
+            let effort = input
+                .effort
+                .as_deref()
+                .map(|value| serde_json::from_value(serde_json::json!(value)).unwrap());
+            reasoning_profile_params(kind, wire, effort)
+                .map(|value| gents_lean_vocab::compact_model_json(&value))
+        },
+    );
+}
+
+#[test]
+fn generated_request_additional_params_keep_session_cache_affinity() {
+    gents_lean_vocab::families::runtime_completion_parameters_request_additional_params::replay(
+        |input| {
+            let mut agent = agent_with_retry(Default::default());
+            agent.backend_provider_kind =
+                BackendProviderKind::parse_optional(Some(&input.provider)).unwrap();
+            let mut request = request();
+            request.session_id = input.session.clone();
+            request.request_id = input.request.clone();
+            request_additional_params(&agent, &request)
+                .map(|value| gents_lean_vocab::compact_model_json(&value))
+        },
+    );
+}
+
+#[test]
+fn generated_openai_cache_scope_params_use_the_session_before_the_request() {
+    gents_lean_vocab::families::runtime_completion_parameters_openai_cache_scope_params::replay(
+        |input| {
+            let mut request = request();
+            request.session_id = input.session.clone();
+            request.request_id = input.request.clone();
+            openai_cache_scope_params(&request)
+                .map(|value| gents_lean_vocab::compact_model_json(&value))
+        },
+    );
+}
+
+#[test]
+fn generated_session_calibration_seeds_compare_the_complete_observation() {
+    use gents_lean_vocab::families::runtime_session_calibration_session_calibration_seed as family;
+    family::replay(|input| {
+        let estimator = "claude_messages_wire_json_bytes_div_4_v1";
+        let rows = input
+            .rows
+            .iter()
+            .map(|row| {
+                let accounting = row.accounting.then(|| {
+                    let mut value: serde_json::Value =
+                        serde_json::from_str(&calibration_accounting(
+                            if row.matching {
+                                estimator
+                            } else {
+                                "another_estimator"
+                            },
+                            usize::try_from(row.estimated).unwrap(),
+                            row.dispatched,
+                        ))
+                        .unwrap();
+                    value["raw_estimated_input_tokens"] = serde_json::json!(row.raw);
+                    value.to_string()
+                });
+                CalibrationCallRow {
+                    prompt_tokens: row.input,
+                    completion_tokens: row.output,
+                    cached_input_tokens: row.cached,
+                    cache_creation_input_tokens: row.created,
+                    usage_completeness: Some(
+                        if row.complete { "complete" } else { "partial" }.into(),
+                    ),
+                    context_accounting_json: accounting,
+                }
+            })
+            .collect::<Vec<_>>();
+        let seed = session_calibration_seed(&rows, estimator);
+        family::Observation {
+            observations: seed.observations,
+            dispatched_ratio: seed.dispatched_ratio,
+            anchor: seed.anchor.map(|anchor| family::Anchor {
+                input_tokens: anchor.input_tokens,
+                output_tokens: anchor.output_tokens,
+                estimated_input_tokens: anchor.estimated_input_tokens as u64,
+            }),
+        }
+    });
+}
+
+#[test]
+fn generated_request_loop_configuration_preserves_retry_policy_and_deadline() {
+    use chrono::TimeZone;
+    use gents_lean_vocab::families::runtime_completion_config_loop_config_for_request as family;
+    family::replay(|input| {
+        let agent = agent_with_retry(CompletionRetryProfileFields {
+            retry_max_transport: input.transport,
+            retry_interactive_max: input.interactive,
+            retry_max_resample: input.resample,
+            retry_allow_repair: input.repair,
+            retry_backoff_ms: input.delays.clone(),
+        });
+        let mut request = request();
+        request.execution_origin = Some(input.origin.clone());
+        request.deadline = input.deadline.map(|timestamp| {
+            chrono::Utc
+                .timestamp_opt(timestamp, 0)
+                .unwrap()
+                .to_rfc3339()
+        });
+        loop_config_for_request(
+            &agent,
+            "preamble".into(),
+            &request,
+            None,
+            0,
+            input.hops as u32,
+        )
+        .ok()
+        .map(|config| family::Observation {
+            delays: config
+                .retry_policy
+                .transport_backoff
+                .iter()
+                .map(|delay| delay.as_millis() as u64)
+                .collect(),
+            resample: u64::from(config.retry_policy.max_resample),
+            empty: u64::from(config.retry_policy.max_empty_resample),
+            repair: config.retry_policy.allow_repair,
+            hops: u64::from(config.retry_policy.account_hops),
+            deadline: config.deadline.map(|deadline| deadline.timestamp()),
+        })
+    });
+}
+
+#[test]
+fn generated_reasoning_capabilities_override_untrusted_provider_parameters() {
+    gents_lean_vocab::families::runtime_reasoning_capabilities_authoritative_reasoning_capabilities::replay(|input| {
+        let kind = if input.messages { BackendProviderKind::ClaudeCliSubscription } else { BackendProviderKind::OpenAiCompatible };
+        let params = input.params.as_ref().map(|params| serde_json::from_str(params).unwrap());
+        let advertised = input.advertised.as_ref().map(|efforts| efforts.iter().map(|effort| {
+            serde_json::from_value::<ReasoningEffort>(serde_json::json!(effort)).unwrap()
+        }).collect::<Vec<_>>());
+        authoritative_reasoning_capabilities(params, kind, advertised.as_deref()).map(|params| gents_lean_vocab::compact_model_json(&params))
+    });
 }

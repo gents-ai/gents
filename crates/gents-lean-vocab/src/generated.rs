@@ -165,18 +165,6 @@ pub fn lean_eval_outcome_cases() -> &'static [LeanEvalOutcomeCase] {
     &lean_contract_snapshot().eval_outcome_cases
 }
 
-pub fn lean_event_delivery_convergence_traces() -> &'static [LeanEventDeliveryConvergenceTrace] {
-    &lean_contract_snapshot().event_delivery_convergence_traces
-}
-
-pub fn lean_event_delivery_source_instances() -> &'static [LeanEventDeliverySourceInstance] {
-    &lean_contract_snapshot().event_delivery_source_instances
-}
-
-pub fn lean_event_delivery_transition_cases() -> &'static [LeanEventDeliveryTransitionCase] {
-    &lean_contract_snapshot().event_delivery_transition_cases
-}
-
 pub fn lean_event_group_cases() -> &'static [LeanEventGroupCase] {
     &lean_contract_snapshot().event_group_cases
 }
@@ -1320,16 +1308,6 @@ pub struct LeanBackgroundTheoremWitness {
     pub scenario: String,
     pub numeric_bound: usize,
     pub kind_fields: Vec<LeanBackgroundTheoremKindField>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBoundary {
-    pub id: String,
-    pub domain: String,
-    pub subject: String,
-    pub statement: String,
-    pub accepted_failure_mode: Option<String>,
-    pub accepted_follow_up: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3287,7 +3265,6 @@ pub struct LeanContractSnapshot {
     pub mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub backend_health_cases: Vec<LeanBackendHealthCase>,
     pub backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
-    pub boundaries: Vec<LeanBoundary>,
     pub deviations: Vec<LeanDeviation>,
     pub command_policy_cases: Vec<LeanCommandPolicyCase>,
     pub command_isolation_cases: Vec<LeanCommandIsolationCase>,
@@ -3439,10 +3416,6 @@ pub struct LeanContractSnapshot {
     pub callback_cases: Vec<LeanCallbackCase>,
     pub callback_retry_cases: Vec<LeanCallbackRetryCase>,
     pub callback_recovery_cases: Vec<LeanCallbackRecoveryCase>,
-    pub event_delivery_transition_case_count: usize,
-    pub event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
-    pub event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
-    pub event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
     pub pack_operator_wire_cases: Vec<LeanPackOperatorWireCase>,
     pub recovery_sweep_ids: Vec<String>,
 }
@@ -4033,53 +4006,6 @@ pub struct LeanEvalOutcomeCase {
     pub provider_reason: Option<String>,
     pub class: String,
     pub subject_causable: bool,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanEventDeliveryAction {
-    Persist { doc: String },
-    Depersist { doc: String },
-    Enqueue { doc: String },
-    Drop { doc: String },
-    DeliverFromQueue { doc: String },
-    RescanTick,
-    Handle { doc: String },
-    Release { doc: String },
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanEventDeliveryConvergenceTrace {
-    pub name: String,
-    pub instance_name: String,
-    pub initial_world: LeanEventDeliveryWorld,
-    pub actions: Vec<LeanEventDeliveryAction>,
-    pub final_world: LeanEventDeliveryWorld,
-    pub status: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanEventDeliverySourceInstance {
-    pub name: String,
-    pub dedupe_policy: String,
-    pub rescan_bounded_by: u64,
-    pub deviation: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanEventDeliveryTransitionCase {
-    pub name: String,
-    pub pre: LeanEventDeliveryWorld,
-    pub action: LeanEventDeliveryAction,
-    pub post: LeanEventDeliveryWorld,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-pub struct LeanEventDeliveryWorld {
-    pub persistent_set: Vec<String>,
-    pub subscription_queue: Vec<String>,
-    pub processed_set: Vec<String>,
-    pub handled: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

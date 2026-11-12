@@ -306,7 +306,7 @@ async fn pack_removal_releases_the_archives_the_model_releases() {
     let as_pack = |pack: &removal::Pack| -> family::Pack {
         serde_json::from_value(serde_json::to_value(pack).unwrap()).unwrap()
     };
-    for case in removal::cases::<Action>() {
+    for case in gents_lean_vocab::families::pack_store_removal::cases::<Action>() {
         let script = &case.input;
         let home = tempfile::tempdir().unwrap();
         let store = PackStore::new(home.path());
