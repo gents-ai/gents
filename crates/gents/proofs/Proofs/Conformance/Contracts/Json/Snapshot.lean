@@ -1064,8 +1064,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
     ++ "\"causal_hop_step_cases\":"
       ++ Conformance.CausalHopContracts.stepCasesJson ++ ","
-    ++ "\"causal_hop_chain_cases\":"
-      ++ Conformance.CausalHopContracts.chainCasesJson ++ ","
     ++ "\"causal_hop_call_cases\":"
       ++ Conformance.CausalHopContracts.callCasesJson ++ ","
     ++ "\"causal_hop_interrupt_cases\":"

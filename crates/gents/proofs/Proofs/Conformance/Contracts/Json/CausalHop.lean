@@ -128,18 +128,43 @@ def chainHops : Nat → List CausalHop.Step → List Nat
       let hop := step.apply start
       hop :: chainHops hop rest
 
-def stepJson : CausalHop.Step → String
-  | .cross own => "{\"kind\":\"cross_session\",\"own_predecessor_hop\":" ++ toString own ++ "}"
-  | .cont => "{\"kind\":\"continuation\",\"own_predecessor_hop\":null}"
+inductive ChainStepKind where
+  | crossSession
+  | continuation
+  deriving Lean.ToJson
 
-def chainCaseJson (c : ChainCase) : String :=
-  let hops := chainHops 0 c.steps
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
-    ++ ",\"steps\":" ++ jsonArray (c.steps.map stepJson)
-    ++ ",\"expected_hops\":" ++ jsonArray (hops.map toString)
-    ++ ",\"expected_admitted\":"
-      ++ jsonArray (hops.map (toString ∘ CausalHop.admitHop c.maxRequestHop)) ++ "}"
+structure ChainStepWire where
+  kind : ChainStepKind
+  ownPredecessorHop : Option Nat
+  deriving Lean.ToJson
+
+def ChainStepWire.ofModel : CausalHop.Step → ChainStepWire
+  | .cross own => { kind := .crossSession, ownPredecessorHop := some own }
+  | .cont => { kind := .continuation, ownPredecessorHop := none }
+
+def ChainStepWire.toModel (step : ChainStepWire) : CausalHop.Step :=
+  match step.kind with
+  | .crossSession => .cross (step.ownPredecessorHop.getD 0)
+  | .continuation => .cont
+
+structure ChainInput where
+  name : String
+  maxRequestHop : Option Nat
+  steps : List ChainStepWire
+  deriving Lean.ToJson
+
+structure HopTrace where
+  hops : List Nat
+  admitted : List Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def chain : Family ChainInput HopTrace where
+  inputs := chainCases.map fun c =>
+    { name := c.name, maxRequestHop := c.maxRequestHop, steps := c.steps.map ChainStepWire.ofModel }
+  model := fun i =>
+    let hops := chainHops 0 (i.steps.map ChainStepWire.toModel)
+    { hops, admitted := hops.map (CausalHop.admitHop i.maxRequestHop) }
 
 
 structure CreationCase where
@@ -339,9 +364,6 @@ def defaultMaxRequestHopJson : String :=
 
 def stepCasesJson : String :=
   jsonArray (stepCases.map stepCaseJson)
-
-def chainCasesJson : String :=
-  jsonArray (chainCases.map chainCaseJson)
 
 def callCasesJson : String :=
   jsonArray (callCases.map callCaseJson)

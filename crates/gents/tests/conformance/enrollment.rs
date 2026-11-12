@@ -119,26 +119,6 @@ fn generated_causal_hop_cases_match_native_materializer() {
             case.name
         );
     }
-    assert!(!contract.causal_hop_chain_cases.is_empty());
-    for chain in &contract.causal_hop_chain_cases {
-        let mut hop = 0;
-        let mut hops = Vec::new();
-        let mut admitted = Vec::new();
-        for step in &chain.steps {
-            hop = match step.kind.as_str() {
-                "cross_session" => next_request_hop(
-                    RequestHopCause::CrossSession { cause_hop: hop },
-                    step.own_predecessor_hop
-                        .expect("cross-session step names its own predecessor hop"),
-                ),
-                other => next_request_hop(cause(other, None), hop),
-            };
-            hops.push(hop);
-            admitted.push(request_hop_within_bound(chain.max_request_hop, hop));
-        }
-        assert_eq!(hops, chain.expected_hops, "{}", chain.name);
-        assert_eq!(admitted, chain.expected_admitted, "{}", chain.name);
-    }
     assert!(!contract.causal_hop_call_cases.is_empty());
     for call in &contract.causal_hop_call_cases {
         let (mut a, mut b) = (0, 0);

@@ -304,7 +304,10 @@ mod tests {
 
 #[cfg(test)]
 mod conformance {
-    use super::{request_hop_within_bound, RequestHopCapObservation, RequestLifecycleState};
+    use super::{
+        next_request_hop, request_hop_within_bound, RequestHopCapObservation, RequestHopCause,
+        RequestLifecycleState,
+    };
 
     #[test]
     fn lifecycle_states_are_the_lean_request_states() {
@@ -334,6 +337,35 @@ mod conformance {
                 expected,
                 bound: bound.map(u64::from),
             }
+        });
+    }
+
+    #[test]
+    fn causal_hop_chains_follow_the_lean_causal_hop_model() {
+        gents_lean_vocab::families::causal_hop_contracts_chain::replay::<String>(|chain| {
+            let max_request_hop = chain
+                .max_request_hop
+                .map(|bound| u32::try_from(bound).unwrap());
+            let mut hop = 0;
+            let mut hops = Vec::new();
+            let mut admitted = Vec::new();
+            for step in &chain.steps {
+                hop = match step.kind.as_str() {
+                    "cross_session" => next_request_hop(
+                        RequestHopCause::CrossSession { cause_hop: hop },
+                        u32::try_from(
+                            step.own_predecessor_hop
+                                .expect("cross-session step names its own predecessor hop"),
+                        )
+                        .unwrap(),
+                    ),
+                    "continuation" => next_request_hop(RequestHopCause::Continuation, hop),
+                    other => panic!("unknown Lean causal-hop step {other:?}"),
+                };
+                hops.push(u64::from(hop));
+                admitted.push(request_hop_within_bound(max_request_hop, hop));
+            }
+            gents_lean_vocab::families::causal_hop_contracts_chain::HopTrace { hops, admitted }
         });
     }
 }

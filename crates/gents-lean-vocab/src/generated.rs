@@ -1952,23 +1952,6 @@ pub struct LeanCausalHopCallCase {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanCausalHopChainCase {
-    pub name: String,
-    pub max_request_hop: Option<u32>,
-    pub steps: Vec<LeanCausalHopChainStep>,
-    pub expected_hops: Vec<u32>,
-    pub expected_admitted: Vec<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCausalHopChainStep {
-    pub kind: String,
-    pub own_predecessor_hop: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanCausalHopStepCase {
     pub name: String,
     pub cause: String,
@@ -3131,7 +3114,6 @@ pub struct LeanContractSnapshot {
     pub agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub causal_hop_step_cases: Vec<LeanCausalHopStepCase>,
-    pub causal_hop_chain_cases: Vec<LeanCausalHopChainCase>,
     pub causal_hop_call_cases: Vec<LeanCausalHopCallCase>,
     pub causal_hop_interrupt_cases: Vec<LeanAgentInterruptCase>,
     pub causal_hop_creation_cases: Vec<LeanSessionCreationCase>,
