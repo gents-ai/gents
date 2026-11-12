@@ -74,16 +74,35 @@ fn workspace_agent_selection_is_configured_and_frozen() {
     .unwrap();
     let source = json!({"work_unit_id":"unit", "repository_id":"repo", "base_sha":"base", "branch":"topic",
         "owned_files":["src/a.rs"], "writer_agent_did":node.did(), "integrator_agent_did":node.did()});
-    let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_agent_selection_cases;
-    for case in cases {
-        let selection = match case["name"].as_str().unwrap() {
-            "missing" => None,
-            "separate" => Some((writer.did(), integrator.did())),
-            "same" => Some((writer.did(), writer.did())),
-            "node" => Some((node.did(), integrator.did())),
-            "blank" => Some(("", integrator.did())),
-            name => panic!("unknown modeled selection {name}"),
-        };
+    let agents = [
+        ("writer", writer.did()),
+        ("integrator", integrator.did()),
+        ("node", node.did()),
+        ("", ""),
+    ];
+    let did = |name: &str| {
+        agents
+            .iter()
+            .find(|(modeled, _)| *modeled == name)
+            .unwrap_or_else(|| panic!("unknown modeled Agent {name}"))
+            .1
+    };
+    let modeled = |did: Option<&str>| {
+        did.map(|did| {
+            agents
+                .iter()
+                .find(|(_, held)| *held == did)
+                .unwrap_or_else(|| panic!("unknown frozen Agent {did}"))
+                .0
+                .to_owned()
+        })
+    };
+    for case in gents_lean_vocab::families::workspace_and_file_requests_agent_selection::cases() {
+        let selection = case
+            .input
+            .configured
+            .as_ref()
+            .map(|configured| (did(&configured.writer), did(&configured.integrator)));
         let mut configured = callback();
         configured.node_did = node.did().into();
         configured.handler = gents_documents::CallbackHandler::BuiltIn {
@@ -99,20 +118,31 @@ fn workspace_agent_selection_is_configured_and_frozen() {
             }),
         };
         let plan = plan_from_callback(&configured, &source, None);
-        assert_eq!(plan.is_ok(), case["accepted"].as_bool().unwrap(), "{case}");
+        let frozen = plan.as_ref().ok().map(|plan| {
+            let HostAction::CreateWorkspace(action) = &plan.actions[0] else {
+                panic!("workspace plan")
+            };
+            (
+                modeled(action.writer_agent_did.as_deref()),
+                modeled(action.integrator_agent_did.as_deref()),
+            )
+        });
+        let (writer_frozen, integrator_frozen) = frozen.unwrap_or((None, None));
+        case.check(
+            gents_lean_vocab::families::workspace_and_file_requests_agent_selection::AgentSelectionOutput {
+                accepted: plan.is_ok(),
+                writer: writer_frozen,
+                integrator: integrator_frozen,
+            },
+        );
         if let Ok(plan) = plan {
             let HostAction::CreateWorkspace(action) = &plan.actions[0] else {
                 panic!("workspace plan")
             };
-            let (expected_writer, expected_integrator) = selection.unwrap();
-            assert_eq!(action.writer_agent_did.as_deref(), Some(expected_writer));
-            assert_eq!(
-                action.integrator_agent_did.as_deref(),
-                Some(expected_integrator)
-            );
+            let (_, configured_integrator) = selection.unwrap();
             assert!(action.writer_agent_doc_id.is_none());
             assert_eq!(action.readers.len(), 1);
-            assert_eq!(action.readers[0].agent_did, expected_integrator);
+            assert_eq!(action.readers[0].agent_did, configured_integrator);
             assert!(action.readers[0].agent_doc_id.is_none());
             let claimed_handler = configured.handler.clone();
             let mut invocation = CallbackInvocationDoc {

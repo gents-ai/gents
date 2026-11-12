@@ -699,7 +699,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.AgentBlockSigning.casesJson ++ ","
     ++ "\"mailbox_runtime_notice_case\":" ++ Identity.MailboxAccess.runtimeNoticeCasesJson ++ ","
     ++ "\"mailbox_claimed_recipient_cases\":" ++ Identity.MailboxAccess.claimedRecipientCasesJson ++ ","
-    ++ "\"workspace_agent_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAgentSelectionCasesJson ++ ","
     ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
     ++ "\"workspace_child_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildCasesJson ++ ","
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","

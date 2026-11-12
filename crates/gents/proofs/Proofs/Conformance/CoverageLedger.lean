@@ -1425,8 +1425,8 @@ def caseCoverage : List CoverageEntry :=
       "Checks native filtered absence before exclusive release; complete workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_agent_selection_cases"
-      "WorkspaceAgentSelectionCases"
+      "family"
+      "workspace_and_file_requests_agent_selection"
       "Checks explicit workflow selection and action-plan replay; native workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
