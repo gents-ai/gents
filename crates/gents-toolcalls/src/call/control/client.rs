@@ -1151,7 +1151,7 @@ mod signed_conformance {
         let cases = &gents_lean_vocab::lean_contract_snapshot().client_signed_control_cases;
         assert!(!cases.is_empty());
         for case in cases {
-            let signer = if case["author"] == "client" {
+            let signer = if case.author == "client" {
                 &client
             } else {
                 &other
@@ -1160,28 +1160,28 @@ mod signed_conformance {
                 version: 1,
                 intent_id: "unique".into(),
                 client_did: signer.did().into(),
-                node_did: case["node"].as_str().unwrap().into(),
-                agent_did: case["agent"].as_str().unwrap().into(),
+                node_did: case.node.clone(),
+                agent_did: case.agent.clone(),
                 session_id: "session".into(),
-                session_doc_id: case["session"].as_str().unwrap().into(),
-                request_doc_id: case["request"].as_str().unwrap().into(),
+                session_doc_id: case.session.clone(),
+                request_doc_id: case.request.clone(),
                 requester_did: Some("requester".into()),
-                tool_call_id: case["call"].as_str().unwrap().into(),
-                tool_call_doc_id: case["document"].as_str().unwrap().into(),
-                action: case["action"].as_str().unwrap().into(),
+                tool_call_id: case.call.clone(),
+                tool_call_doc_id: case.document.clone(),
+                action: case.action.clone(),
                 signature: Vec::new(),
             };
             intent.signature = signer
                 .sign(&intent.signing_payload().unwrap())
                 .await
                 .unwrap();
-            if case["signature_valid"] == false {
+            if !case.signature_valid {
                 intent.signature[0] ^= 1;
             }
             assert_eq!(
                 signed_invocation_authorized(&intent, client.did(), "process_stop", &row),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
+                case.expected,
+                "{case:?}"
             );
         }
     }
