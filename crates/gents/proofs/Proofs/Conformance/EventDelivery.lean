@@ -324,6 +324,4 @@ def eventGroupCaptureCasesJson : String :=
         ((captured.bind (·.originGroupKey)).map Conformance.EventGroupContracts.keyJson).getD "null"
       ++ "}")
 
-def eventGroupCaptureCaseCount : Nat := eventGroupCaptureCases.length
-
 end Conformance.EventDelivery
