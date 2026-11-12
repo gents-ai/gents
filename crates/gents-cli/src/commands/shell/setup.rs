@@ -217,6 +217,17 @@ pub(super) fn backend_id(provider: &str, existing: &[String]) -> String {
     id
 }
 
+/// What `save` wrote: its notice, and the profile an agent runs the model on.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Saved {
+    pub(super) notice: String,
+    pub(super) profile: String,
+}
+
+fn profile_id(backend_id: &str) -> String {
+    format!("profile-{backend_id}")
+}
+
 /// One backend beside the node's others and its profile, as the desktop's add-backend writes
 /// them: it binds no agent.
 pub(super) async fn save(
@@ -225,7 +236,7 @@ pub(super) async fn save(
     connection: &SetupConnection,
     model: &str,
     settings: &[(SettingKey, String)],
-) -> Result<String, String> {
+) -> Result<Saved, String> {
     let model = model.trim();
     let saved = async {
         let (provider, method) = choice(&connection.provider, &connection.method)?;
@@ -242,7 +253,10 @@ pub(super) async fn save(
         apply_config_components_on(access, &document).await?;
         anyhow::Ok(id)
     };
-    saved_answer(saved.await, model, connection)
+    let saved = saved.await;
+    let profile = saved.as_deref().map(profile_id).unwrap_or_default();
+    let notice = saved_answer(saved, model, connection)?;
+    Ok(Saved { notice, profile })
 }
 
 /// A save's notice, or why it failed, which never carries the key.
@@ -266,7 +280,7 @@ fn backend_document(
     settings: &[(SettingKey, String)],
 ) -> anyhow::Result<PackConfig> {
     let value = |key| setting(settings, key);
-    let profile_id = format!("profile-{backend_id}");
+    let profile_id = profile_id(backend_id);
     let (temperature, top_p) = (value(SettingKey::Temperature)?, value(SettingKey::TopP)?);
     let sampled = !temperature.is_null() || !top_p.is_null();
     let sampling_id = sampled.then(|| format!("{profile_id}-sampling"));
@@ -655,7 +669,11 @@ mod tests {
 
         let saved = save(&access, OWNER, &connection, "claude-x", &settings).await;
 
-        assert_eq!(saved, Ok("saved anthropic-2: claude-x".to_string()));
+        let expected = Saved {
+            notice: "saved anthropic-2: claude-x".to_string(),
+            profile: "profile-anthropic-2".to_string(),
+        };
+        assert_eq!(saved, Ok(expected));
         let backends_now = stored(&access, Collection::InferenceBackend).await;
         let profiles_now = stored(&access, Collection::InferenceProfile).await;
         let existing = by(&backends, "backend_id", "anthropic");

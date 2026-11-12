@@ -1805,7 +1805,7 @@ fn init_next_steps(
     let home = crate::shell_word(home);
     if summary.model_name.is_empty() {
         steps.push(format!(
-            "No model is selected yet, so the Engineer cannot answer. Choose one with `gents config profile set --file <profile.json> --home {home}`, or in the desktop under the node's Providers settings."
+            "No model is selected yet, so the Engineer cannot answer. Run `gents --home {home}` in a terminal to connect one, or use the desktop's Providers settings."
         ));
     } else if is_probably_ollama_endpoint(&summary.endpoint) {
         steps.push(format!("ollama pull {}", summary.model_name));

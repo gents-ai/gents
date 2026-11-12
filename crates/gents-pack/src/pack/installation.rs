@@ -26,10 +26,11 @@ pub use declared_access::declared_readers;
 pub use documents::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
     collections_install_creates, document_pack_schema_paths, hosted_document_graph,
-    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
-    prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
-    prepare_document_pack_install, prepare_hosted_document_pack_archive,
-    DependencyVariableOverrides, HostedDocumentGraph, HostedPackPreparation, PreparedDependency,
+    install_prepared_document_graph, install_prepared_document_pack, installer_tool_root,
+    plugin_data_unique_keys, prepare_document_pack_archive,
+    prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
+    prepare_hosted_document_pack_archive, tools_taking_installer_root, DependencyVariableOverrides,
+    HostedDocumentGraph, HostedPackPreparation, InstallerRootAgent, PreparedDependency,
     PreparedDocumentPackInstall,
 };
 pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
@@ -252,6 +253,16 @@ struct RecordedDocument {
     id: String,
     digest: String,
     created: bool,
+    /// A Tools document whose `host.root` this pack's install supplied: the
+    /// pack named none as installed (it authored no root, or one that
+    /// rendered empty), so the install gave it its installer's own
+    /// ([`installer_tool_root`]). Tools whose root the pack names never
+    /// carry it once that root renders to a path, including the installer's.
+    /// Written by the install that fills the root, the only place that knows
+    /// it, and read by [`pack_root_record`]; a record written before the
+    /// field existed reads as false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    installer_root: bool,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -463,6 +474,84 @@ pub(super) async fn read_agent_bindings(
             })
         })
         .await
+}
+
+/// How an agent a pack installed came by the root its host tools run under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackAgentRoot {
+    /// Its Tools are the pack's own and the pack's install supplied their
+    /// root: the installer's.
+    Installer,
+    /// Its Tools are the pack's own and name their root themselves.
+    Own,
+    /// Its Tools are not a document of its pack.
+    OtherPack,
+}
+
+/// What an installed pack's installation record says of its agents and the
+/// roots their Tools run under: which Agent documents are the pack's, and
+/// which of its Tools documents its install gave its installer's root
+/// (`RecordedDocument::installer_root`). The record is the only source, so
+/// nothing is inferred from what a document renders to. An install grants a
+/// reader only to an agent whose Tools stand as [`PackAgentRoot::Installer`];
+/// every other one is a step for a User.
+pub struct PackRootRecord {
+    pub coordinate: String,
+    agent_bindings: super::PackAgentBindings,
+    agents: Vec<String>,
+    /// Each Tools document of the pack, with whether its root was supplied.
+    tools: BTreeMap<String, bool>,
+}
+
+impl PackRootRecord {
+    /// The DIDs of the Agent documents the pack installed.
+    pub fn agents(&self) -> &[String] {
+        &self.agents
+    }
+
+    /// The agent as an install's review names it: its slot, or its DID.
+    pub fn agent_key(&self, agent_did: &str) -> String {
+        documents::agent_slot_or_did(&self.agent_bindings, agent_did)
+    }
+
+    /// How an agent of the pack whose Context selects `tools` came by its
+    /// root.
+    pub fn standing(&self, tools: &str) -> PackAgentRoot {
+        match self.tools.get(tools) {
+            Some(true) => PackAgentRoot::Installer,
+            Some(false) => PackAgentRoot::Own,
+            None => PackAgentRoot::OtherPack,
+        }
+    }
+}
+
+/// [`PackRootRecord`] of the installed pack `coordinate`.
+pub async fn pack_root_record(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<PackRootRecord> {
+    let record = access
+        .transact_readonly("pack.root_record", |txn| {
+            Box::pin(async move { read_record(txn, owner, coordinate).await })
+        })
+        .await?;
+    let of = |collection: Collection| {
+        record
+            .documents
+            .values()
+            .filter(move |document| document.collection == collection.graphql_type())
+    };
+    Ok(PackRootRecord {
+        coordinate: coordinate.to_owned(),
+        agents: of(Collection::Agent)
+            .map(|document| document.id.clone())
+            .collect(),
+        tools: of(Collection::Tools)
+            .map(|document| (document.id.clone(), document.installer_root))
+            .collect(),
+        agent_bindings: record.agent_bindings.clone(),
+    })
 }
 
 fn decode_record_field<T>(row: &Value, field: &str, owner: &str, coordinate: &str) -> Result<T>
@@ -738,6 +827,7 @@ pub(crate) async fn install_in_txn(
     source: Option<&PackSource>,
     variables: Option<&BTreeMap<String, Option<String>>>,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
+    installer_root_tools: &[String],
 ) -> Result<InstallReport, PackChangeError> {
     let mut prior = read_record(txn, owner, &pack.coordinate).await?;
     if let Some(variables) = variables {
@@ -858,6 +948,8 @@ pub(crate) async fn install_in_txn(
                 id: id.to_owned(),
                 digest: String::new(),
                 created,
+                installer_root: document.collection == Collection::Tools
+                    && installer_root_tools.iter().any(|tools| tools == id),
             },
         );
     }

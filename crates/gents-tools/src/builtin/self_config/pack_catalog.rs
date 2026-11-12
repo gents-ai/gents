@@ -240,7 +240,7 @@ impl PackInstaller {
         let access = self.core.access()?;
         let packs = self.packs(&access);
         if let Some(record) = packs.home_pack(&coordinate)? {
-            let (removal, unrecorded) = packs
+            let removal = packs
                 .remove_home_pack(
                     &coordinate,
                     record,
@@ -275,7 +275,6 @@ impl PackInstaller {
                 } else {
                     "The pack's plugins are retired: no call resolves them and plugin list no longer shows them. Their records, the bytes no other plugin uses, the install record, its cached assets and the archive nothing else uses were released."
                 },
-                "node_not_told": unrecorded.map(|reason| format!("The node was not told the plugins retired ({reason}): a running runtime keeps the removed tools listed, and their calls fail, until its configuration changes.")),
                 "source": source.map(|name| format!("The source document {name} is kept, and [\"plugin\",\"build\",{name:?}] installs it again. Delete it with the call below to stop building it.")),
                 "next_call": source.map(|name| json!({"argv":["plugin-source","preview","delete"],"target_id":name})),
             }

@@ -86,6 +86,8 @@ where
         writer_stop.cancel();
         result
     });
+    let approvals = Arc::new(super::approvals::AttachmentApprovals::default());
+    let mut approval_changes = approvals.changes();
     let mut calls = JoinSet::new();
     let mut pending = RapidHashMap::<u32, CancellationToken>::new();
     let mut sequence = 0_u64;
@@ -137,9 +139,10 @@ where
                             let cancel = CancellationToken::new();
                             pending.insert(id, cancel.clone());
                             let host = host.clone();
+                            let approvals = approvals.clone();
                             calls.spawn(async move {
                                 let cancellable = command.is_cancellable();
-                                let result = run_operation(cancellable, cancel.clone(), host.execute(command, cancel)).await;
+                                let result = run_operation(cancellable, cancel.clone(), host.execute(command, &approvals, cancel)).await;
                                 (id, result)
                             });
                         }
@@ -150,6 +153,14 @@ where
                         .context("client operation panicked")?;
                     pending.remove(&id);
                     publish(&out, &local_stop, HostMessage::response(id, result)).await?;
+                }
+                changed = approval_changes.changed() => {
+                    if changed.is_err() { break; }
+                    approval_changes.borrow_and_update();
+                    sequence = sequence.checked_add(1).context("client notification sequence exhausted")?;
+                    publish(&out, &local_stop, HostMessage::Updated {
+                        sequence, payload: ClientUpdateEvent::coarse("approvals"),
+                    }).await?;
                 }
                 changed = store.changed() => {
                     if changed.is_err() { break; }
@@ -170,6 +181,7 @@ where
         Ok(())
     }.await;
 
+    approvals.close();
     for cancel in pending.values() {
         cancel.cancel();
     }

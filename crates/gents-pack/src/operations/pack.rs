@@ -195,7 +195,9 @@ pub fn parse_inference_slots(
 /// was supplied for that pack alone.
 pub fn install_value(actor: PackActor, variables: &PackVariables, name: &str) -> Option<String> {
     let shared = variables.shared.get(name);
-    let in_environment = std::env::var_os(name).is_some();
+    // An agent binding is never read from the environment.
+    let in_environment =
+        !crate::pack::is_agent_binding_variable(name) && std::env::var_os(name).is_some();
     match variable_source(actor, false, shared.is_some(), in_environment) {
         VariableSource::Shared => shared.cloned(),
         VariableSource::Environment => std::env::var(name).ok(),

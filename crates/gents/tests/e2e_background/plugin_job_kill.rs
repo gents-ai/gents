@@ -24,12 +24,13 @@ use serde_json::{json, Value};
 
 use crate::plugin_job_support::{
     effects, guest_pin, install_job_fixture, job_call, job_row, job_settings, result, spawn,
-    wait_job, JobHarness, PlanEntry, CHILD, MODEL, PARENT, PLUGIN,
+    wait_job, wait_job_observation, JobHarness, PlanEntry, CHILD, MODEL, PARENT, PLUGIN,
 };
 use crate::support::accepted_turn::{
     boot_managed_accepted_turn_with_backend_capacity, boot_prepared_accepted_turn,
     enqueue_managed_accepted_request, prepare_managed_accepted_turn, AcceptedTurnSpec,
 };
+use crate::support::canonical_reads::live_canonical_message;
 use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 use crate::support::fixtures::{
     agent_target, bind_managed_agent_backend, configure_agent_tools_as,
@@ -253,14 +254,16 @@ async fn completion_notifications(h: &JobHarness, tool_call_id: &str) -> usize {
         .as_array()
         .expect("message headers")
     {
-        let (_, message) = gents_session::session::load_canonical_message(
+        let Some((_, message)) = live_canonical_message(
             &h.actors.fixture.access,
             header["_docID"].as_str().expect("message doc id"),
             header["node_did"].as_str().expect("message node"),
             header["requester_did"].as_str(),
         )
         .await
-        .expect("reconstruct canonical message");
+        else {
+            continue;
+        };
         let texts: Vec<String> = match message {
             Message::User { content } => content
                 .into_iter()
@@ -287,10 +290,12 @@ async fn completion_notifications(h: &JobHarness, tool_call_id: &str) -> usize {
 /// reached the parent session once.
 async fn assert_stopped(job: &LiveJob, route: &str) {
     let h = &job.h;
-    let view = wait_job(
+    // The completion owner sets `status` to completed only after the
+    // notification it published is durable.
+    let view = wait_job_observation(
         h,
         TOOL_CALL,
-        |view| view.state == JobState::Cancelled,
+        |view, status| view.state == JobState::Cancelled && status == "completed",
         Duration::from_secs(30),
     )
     .await;
@@ -305,14 +310,11 @@ async fn assert_stopped(job: &LiveJob, route: &str) {
         "{route}: every live child is interrupted: {children:?}"
     );
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while completion_notifications(h, TOOL_CALL).await == 0 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "{route}: no completion notification was delivered"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    assert_eq!(
+        completion_notifications(h, TOOL_CALL).await,
+        1,
+        "{route}: the completion is delivered"
+    );
     // Longer than one reconciler tick, so a second delivery would show.
     tokio::time::sleep(Duration::from_secs(6)).await;
     assert_eq!(

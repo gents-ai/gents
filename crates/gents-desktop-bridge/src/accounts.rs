@@ -1,10 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "tauri-host")]
 pub(crate) mod login;
-#[cfg(feature = "tauri-host")]
 mod provider;
-#[cfg(feature = "tauri-host")]
 pub(crate) use provider::*;
 pub mod usage;
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]

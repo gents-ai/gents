@@ -114,6 +114,23 @@ pub async fn remove_checked(
     checked: HomePackInstall,
     access: Option<&ConfigAccess>,
 ) -> Result<HomeRemoval> {
+    let mut removal =
+        remove_checked_keeping_bytes(guard, home, coordinate, checked, access).await?;
+    release_removed_plugin_bytes(home, &mut removal)?;
+    Ok(removal)
+}
+
+/// [`remove_checked`] without releasing the plugin bytes: a caller that must
+/// first record the plugins' retirement on the node releases them after,
+/// with [`release_removed_plugin_bytes`], so a retirement the node did not
+/// record leaves the bytes it still lists.
+pub async fn remove_checked_keeping_bytes(
+    guard: StoreGuard,
+    home: &Path,
+    coordinate: &str,
+    checked: HomePackInstall,
+    access: Option<&ConfigAccess>,
+) -> Result<HomeRemoval> {
     let mut retained = Vec::new();
     let mut assets = Vec::new();
     let removal = super::plugin_lifecycle::remove_local_locked(
@@ -148,15 +165,6 @@ pub async fn remove_checked(
             reason,
         });
     }
-    let plugin_digests = removal
-        .record
-        .plugins
-        .iter()
-        .map(|plugin| plugin.digest.clone())
-        .collect();
-    let plugin_bytes = release_plugin_bytes(home, &plugin_digests).context(
-        "the local pack was removed, but unreferenced plugin-byte cleanup did not finish",
-    )?;
     let archives = release_archives(
         home,
         access,
@@ -169,9 +177,24 @@ pub async fn remove_checked(
         plugins: removal.plugins,
         assets,
         retained,
-        plugin_bytes,
+        plugin_bytes: Vec::new(),
         archives,
     })
+}
+
+/// Releases the plugin bytes of a [`remove_checked_keeping_bytes`] removal
+/// that nothing else references.
+pub fn release_removed_plugin_bytes(home: &Path, removal: &mut HomeRemoval) -> Result<()> {
+    let plugin_digests = removal
+        .record
+        .plugins
+        .iter()
+        .map(|plugin| plugin.digest.clone())
+        .collect();
+    removal.plugin_bytes = release_plugin_bytes(home, &plugin_digests).context(
+        "the local pack was removed, but unreferenced plugin-byte cleanup did not finish",
+    )?;
+    Ok(())
 }
 
 pub fn release_plugin_bytes(home: &Path, digests: &BTreeSet<String>) -> Result<Vec<String>> {

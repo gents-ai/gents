@@ -3414,6 +3414,7 @@ pub struct LeanContractSnapshot {
     pub event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
     pub event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     pub event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+    pub pack_operator_wire_cases: Vec<LeanPackOperatorWireCase>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -7788,6 +7789,15 @@ pub struct LeanPackIdentityBinding {
     pub slot: String,
     pub creation_nonce: String,
     pub agent_did: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanPackOperatorWireCase {
+    pub allowed: bool,
+    pub home: bool,
+    pub operator: bool,
+    pub ready: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

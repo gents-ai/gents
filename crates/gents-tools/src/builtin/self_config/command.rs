@@ -8,6 +8,8 @@ pub mod agents;
 pub(super) mod agents;
 mod args;
 mod authoring;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use authoring::{RebuildTestPause, REBUILD_TEST_PAUSE};
 mod automation;
 mod cleanup;
 #[cfg(any(test, feature = "test-fixtures"))]
