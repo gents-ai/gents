@@ -524,9 +524,11 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     let selected = store.load_applied("peer").await?;
     let partition = &lean_contract_snapshot().identity_pairing_partition_cases;
     for (name, candidate) in [("local", doc.as_str()), ("foreign", foreign.as_str())] {
-        let modeled = partition.iter().find(|case| case["name"] == name).unwrap()["selected"]
-            .as_bool()
-            .unwrap();
+        let modeled = partition
+            .iter()
+            .find(|case| case.name == name)
+            .unwrap()
+            .selected;
         assert_eq!(
             selected.doc_id.as_deref() == Some(candidate)
                 || selected.duplicate_doc_ids.iter().any(|id| id == candidate),
@@ -547,10 +549,9 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     let forged_before = user_access.execute(&forged_query).await?;
     let forged_expected = partition
         .iter()
-        .find(|case| case["name"] == "forged")
-        .unwrap()["selected"]
-        .as_bool()
-        .unwrap();
+        .find(|case| case.name == "forged")
+        .unwrap()
+        .selected;
     assert_eq!(
         store.load_applied("forged").await?.doc_id.is_some(),
         forged_expected
