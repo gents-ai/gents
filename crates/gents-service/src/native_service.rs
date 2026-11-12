@@ -461,6 +461,10 @@ where
         }
     }
 
+    pub fn home(&self) -> &Path {
+        &self.config.home
+    }
+
     pub fn install(&self) -> Result<()> {
         self.install_environment(None)
     }

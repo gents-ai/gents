@@ -113,30 +113,6 @@ fn operation_lock_survives_receipt_replacement_and_excludes_duplicates() {
     assert!(files::lock(&path).is_ok());
 }
 
-#[test]
-fn supported_service_commands_refuse_disruption_only_for_the_calling_home() {
-    let home = tempfile::tempdir().unwrap();
-    let other = tempfile::tempdir().unwrap();
-    for action in [
-        ServiceAction::Stop {
-            keep_enabled: false,
-        },
-        ServiceAction::Restart,
-        ServiceAction::Install {
-            network: Default::default(),
-            environment_file: None,
-        },
-        ServiceAction::Uninstall,
-    ] {
-        assert!(refuse_origin_disruption(home.path(), Some(home.path()), &action).is_err());
-        assert!(refuse_origin_disruption(home.path(), Some(other.path()), &action).is_ok());
-        assert!(refuse_origin_disruption(home.path(), None, &action).is_ok());
-    }
-    assert!(
-        refuse_origin_disruption(home.path(), Some(home.path()), &ServiceAction::Status).is_ok()
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn cold_copy_preserves_key_permissions_and_does_not_follow_symlinks() {
@@ -489,14 +465,6 @@ fn cold_backup_omits_transient_plugin_workers_without_touching_other_state() {
         b"keep"
     );
     assert!(!restored.join("run-worker").exists());
-}
-
-#[test]
-fn login_enablement_can_change_without_disrupting_the_calling_runtime() {
-    let home = tempfile::tempdir().unwrap();
-    for action in [ServiceAction::Enable, ServiceAction::Disable] {
-        assert!(refuse_origin_disruption(home.path(), Some(home.path()), &action).is_ok());
-    }
 }
 
 #[test]

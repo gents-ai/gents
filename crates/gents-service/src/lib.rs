@@ -1,6 +1,7 @@
 pub mod args;
 pub mod enrollment_admin;
 pub mod home_state;
+pub mod lifecycle;
 pub mod native_service;
 pub mod network_settings;
 pub mod process_resources;
