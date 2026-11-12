@@ -191,6 +191,27 @@ impl DesiredStateApplyPlan {
         &self.documents
     }
 
+    /// Replaces one document's desired value with the candidate a document
+    /// owner admitted for it. The candidate must keep the document's
+    /// collection, owner and logical ID.
+    pub fn replace_admitted(&mut self, index: usize, admitted: Value) -> Result<()> {
+        let document = self
+            .documents
+            .get_mut(index)
+            .context("admitted document is not in the plan")?;
+        let admitted = config_projection(document.collection, Some(&admitted))?
+            .1
+            .context("missing admitted configuration")?;
+        anyhow::ensure!(
+            document_identity(document.collection, &admitted)?
+                == document_identity(document.collection, &document.add)?,
+            "an admitted document cannot change owner or logical ID"
+        );
+        document.add = admitted.clone();
+        document.update = admitted;
+        Ok(())
+    }
+
     pub fn with_expected(mut self, expected: Vec<DesiredStateExpectation>) -> Result<Self> {
         let mut identities = BTreeSet::new();
         for expectation in &expected {

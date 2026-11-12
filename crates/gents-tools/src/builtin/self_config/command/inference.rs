@@ -79,8 +79,8 @@ impl ConfigCommandTool {
             .first()
             .map(String::as_str)
             .context("backend command is required; see [\"help\",\"backend\"]")?;
+        self.ensure_resource("backend")?;
         if verb == "list" {
-            self.ensure_resource("backend")?;
             let parsed = ParsedArgs::parse(&argv[1..])?;
             parsed.reject_mutation_flags()?;
             return self
@@ -95,7 +95,6 @@ impl ConfigCommandTool {
             ParsedArgs::parse(&argv[1..])?.reject_mutation_flags()?;
             return self.account_inventory().await;
         }
-        self.ensure_resource("backend")?;
         let create_args = match verb {
             "create" => Some(&argv[1..]),
             "preview" if argv.get(1).map(String::as_str) == Some("create") => Some(&argv[2..]),

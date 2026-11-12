@@ -19,8 +19,9 @@ pub use discovery::{
     discover, discover_for_authenticated_request, discovery_target, Discovery, DiscoveryTarget,
 };
 pub use document::{
-    admit_backend_choice_in_txn, merge_in_txn, plan_in_txn, remove, remove_in_txn,
-    whole_document_write, write, write_in_txn, MergedWrite, PlannedWrite, WriteReceipt,
+    admit_backend_choice_in_txn, admit_plan_in_txn, merge_in_txn, plan_in_txn, remove,
+    remove_in_txn, whole_document_write, write, write_in_txn, MergedWrite, PlanAdmissionFailure,
+    PlannedWrite, WriteReceipt,
 };
 
 use gents_protocol::operations::inference::InferenceOperationError;

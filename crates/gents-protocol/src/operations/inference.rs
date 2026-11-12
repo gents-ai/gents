@@ -236,18 +236,6 @@ impl InferenceRefusal {
     }
 }
 
-/// A preview's answer: the receipt the commit would return, or the refusal it
-/// would raise with that error's message and next call.
-#[derive(Debug, Clone, PartialEq)]
-pub enum InferenceOutcome<R> {
-    Admitted(R),
-    Refused {
-        refusal: InferenceRefusal,
-        message: String,
-        next_call: NextCall,
-    },
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum InferenceOperationError {
     #[error("raw credentials are operator-managed; select an environment or OAuth reference")]
@@ -371,20 +359,6 @@ impl InferenceOperationError {
                 resource: document.resource(),
                 verb,
             },
-        }
-    }
-
-    /// In a preview a refusal becomes the successful refused answer, with
-    /// `next_call` the recovery the commit's error declares; a failure that is
-    /// not a refusal stays an error.
-    pub fn preview_outcome<R>(self, next_call: NextCall) -> Result<InferenceOutcome<R>, Self> {
-        match self.refusal() {
-            Some(refusal) => Ok(InferenceOutcome::Refused {
-                refusal,
-                message: crate::error_chain::ErrorChain(&self).to_string(),
-                next_call,
-            }),
-            None => Err(self),
         }
     }
 

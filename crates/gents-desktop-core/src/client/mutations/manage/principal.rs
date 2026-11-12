@@ -95,7 +95,13 @@ async fn apply_config_components_in_txn(
     gents_documents::read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
         .await?
         .context("component apply requires an existing node")?;
-    let plan = admit_inference_documents(txn, owner, plan).await?;
+    let mut plan = plan.clone();
+    operations::admit_plan_in_txn(txn, &mut plan)
+        .await
+        .map_err(|failure| {
+            let document = failure.document();
+            super::inference::operation_failure(failure.into_failure(), document, "update")
+        })?;
     apply_desired_state_plan(
         txn,
         &plan,
@@ -103,51 +109,6 @@ async fn apply_config_components_in_txn(
     )
     .await?;
     Ok(())
-}
-
-/// Commits the plan's backends through the shared handler, then substitutes
-/// the handler's admitted profiles into the rest of the plan. A profile's
-/// admission reads its backend from the transaction, so the backends are
-/// written first; every other document still applies and validates together.
-async fn admit_inference_documents(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    owner: &str,
-    plan: &DesiredStateApplyPlan,
-) -> Result<DesiredStateApplyPlan> {
-    use super::inference::{operation_failure, put_write};
-    for entry in plan.documents() {
-        if entry.collection == Collection::InferenceBackend {
-            let (_, write) = put_write(InferenceDocument::Backend, &entry.add, WriteMode::Put)?;
-            operations::write_in_txn(txn, owner, &write)
-                .await
-                .map_err(|failure| {
-                    operation_failure(failure, InferenceDocument::Backend, "update")
-                })?;
-        }
-    }
-    let mut documents = Vec::with_capacity(plan.documents().len());
-    for entry in plan.documents() {
-        match entry.collection {
-            Collection::InferenceBackend => {}
-            Collection::InferenceProfile => {
-                let (_, write) = put_write(InferenceDocument::Profile, &entry.add, WriteMode::Put)?;
-                let planned =
-                    operations::plan_in_txn(txn, owner, &write)
-                        .await
-                        .map_err(|failure| {
-                            operation_failure(failure, InferenceDocument::Profile, "update")
-                        })?;
-                let value = serde_json::Value::Object(planned.candidate().clone());
-                documents.push(DesiredStateApplyDocument {
-                    collection: entry.collection,
-                    add: value.clone(),
-                    update: value,
-                });
-            }
-            _ => documents.push(entry.clone()),
-        }
-    }
-    DesiredStateApplyPlan::new(documents)?.with_removals(plan.removals().to_vec())
 }
 
 fn config_components_plan(

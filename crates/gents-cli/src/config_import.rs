@@ -73,7 +73,8 @@ pub(crate) async fn apply_desired_state_changes(
                 .map(|id| (collection, bundle.node_did.clone(), id.clone())),
         );
     }
-    let plan = DesiredStateApplyPlan::new(documents)?.with_removals(removals)?;
+    let mut plan = DesiredStateApplyPlan::new(documents)?.with_removals(removals)?;
+    gents_inference::operations::admit_plan_in_txn(txn, &mut plan).await?;
     apply_selected_plan(txn, &plan).await
 }
 
