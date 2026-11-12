@@ -2986,7 +2986,6 @@ pub struct LeanContractSnapshot {
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub identity_delegation_cases: Vec<LeanDelegationCase>,
     pub identity_agent_baseline_cases: Vec<LeanAgentBaselineCase>,
-    pub identity_agent_creator_cases: Vec<serde_json::Value>,
     pub identity_agent_block_signing_cases: Vec<LeanAgentBlockSigningCase>,
     pub identity_private_journal_policy: LeanPrivateJournalPolicy,
     pub mailbox_runtime_notice_case: serde_json::Value,
