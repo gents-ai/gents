@@ -447,11 +447,11 @@ structure CaptureOrderCase where
   leftBeforeRight : Bool
   deriving Repr
 
-private def orderTuple
+def orderTuple
     (kind : CaptureScopeKind) (seq turn attempt : Nat) : Nat × Nat × Nat × Nat :=
   (kind.rank, seq, turn, attempt)
 
-private def tupleLt : Nat × Nat × Nat × Nat → Nat × Nat × Nat × Nat → Bool
+def tupleLt : Nat × Nat × Nat × Nat → Nat × Nat × Nat × Nat → Bool
   | (a1, a2, a3, a4), (b1, b2, b3, b4) =>
     if a1 ≠ b1 then a1 < b1
     else if a2 ≠ b2 then a2 < b2

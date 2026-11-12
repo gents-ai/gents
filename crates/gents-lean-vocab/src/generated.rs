@@ -77,10 +77,6 @@ pub fn lean_canonical_worker_capacity_cases() -> &'static [LeanWorkerCapacityCas
     &lean_contract_snapshot().canonical_worker_capacity_cases
 }
 
-pub fn lean_capture_order_cases() -> &'static [LeanCaptureOrderCase] {
-    &lean_contract_snapshot().capture_order_cases
-}
-
 pub fn lean_capture_scope_cases() -> &'static [LeanCaptureScopeCase] {
     &lean_contract_snapshot().capture_scope_cases
 }
@@ -1916,18 +1912,6 @@ pub struct LeanCapObservationCase {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct LeanCaptureOrderCase {
-    pub name: String,
-    pub left_label: String,
-    pub left_turn: i64,
-    pub left_attempt: i64,
-    pub right_label: String,
-    pub right_turn: i64,
-    pub right_attempt: i64,
-    pub left_before_right: bool,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct LeanCaptureScopeCase {
     pub label: String,
     pub kind: String,
@@ -3343,7 +3327,6 @@ pub struct LeanContractSnapshot {
     pub auxiliary_session_child_binding_cases: Vec<LeanAuxiliarySessionChildBindingCase>,
     pub client_request_publication_cases: Vec<serde_json::Value>,
     pub capture_scope_cases: Vec<LeanCaptureScopeCase>,
-    pub capture_order_cases: Vec<LeanCaptureOrderCase>,
     pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
     pub task_hook_admission_cases: Vec<LeanTaskHookAdmissionCase>,
     pub native_completion_cases: Vec<LeanNativeCompletionCase>,

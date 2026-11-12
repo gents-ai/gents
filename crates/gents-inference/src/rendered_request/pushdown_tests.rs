@@ -259,8 +259,8 @@ fn generated_rendered_capture_cases_never_permit_an_uncaptured_send() {
 }
 
 #[test]
-fn generated_capture_scope_cases_pin_the_shared_parser_and_order() {
-    use crate::rendered_request::{CaptureOrderKey, CaptureScope};
+fn generated_capture_scope_cases_pin_the_shared_parser() {
+    use crate::rendered_request::CaptureScope;
 
     let scope_cases = gents_lean_vocab::lean_capture_scope_cases();
     assert!(
@@ -287,33 +287,5 @@ fn generated_capture_scope_cases_pin_the_shared_parser_and_order() {
                 label = case.label
             );
         }
-    }
-
-    let order_cases = gents_lean_vocab::lean_capture_order_cases();
-    assert!(
-        !order_cases.is_empty(),
-        "Lean emitted no capture order cases"
-    );
-    for case in order_cases {
-        let left = CaptureOrderKey {
-            scope: case.left_label.parse::<CaptureScope>().expect("left label"),
-            turn_index: case.left_turn,
-            attempt: case.left_attempt,
-        };
-        let right = CaptureOrderKey {
-            scope: case
-                .right_label
-                .parse::<CaptureScope>()
-                .expect("right label"),
-            turn_index: case.right_turn,
-            attempt: case.right_attempt,
-        };
-        assert_eq!(left < right, case.left_before_right, "{}", case.name);
-        assert_eq!(
-            left.padded() < right.padded(),
-            case.left_before_right,
-            "{} (padded)",
-            case.name
-        );
     }
 }

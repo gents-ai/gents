@@ -316,8 +316,6 @@ def snapshotCaptureTailJson : String :=
       ++ Identity.SessionChild.clientRequestPublicationCasesJson ++ ","
     ++ "\"capture_scope_cases\":"
       ++ captureScopeCasesJson ++ ","
-    ++ "\"capture_order_cases\":"
-      ++ captureOrderCasesJson ++ ","
     ++ "\"aggregate_token_budget_cases\":"
       ++ aggregateTokenBudgetCasesJson ++ ","
     ++ "\"task_hook_admission_cases\":"

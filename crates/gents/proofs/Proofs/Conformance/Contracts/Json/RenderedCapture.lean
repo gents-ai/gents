@@ -79,19 +79,44 @@ def captureScopeCaseJson (witness : CaptureScopeCase) : String :=
 def captureScopeCasesJson : String :=
   jsonArray (captureScopeCases.map captureScopeCaseJson)
 
-def captureOrderCaseJson (witness : CaptureOrderCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"left_label\":" ++ jsonString witness.leftLabel ++ ","
-    ++ "\"left_turn\":" ++ toString witness.leftTurn ++ ","
-    ++ "\"left_attempt\":" ++ toString witness.leftAttempt ++ ","
-    ++ "\"right_label\":" ++ jsonString witness.rightLabel ++ ","
-    ++ "\"right_turn\":" ++ toString witness.rightTurn ++ ","
-    ++ "\"right_attempt\":" ++ toString witness.rightAttempt ++ ","
-    ++ "\"left_before_right\":" ++ boolString witness.leftBeforeRight
-    ++ "}"
+structure CaptureOrderPair where
+  leftLabel : String
+  leftTurn : Nat
+  leftAttempt : Nat
+  rightLabel : String
+  rightTurn : Nat
+  rightAttempt : Nat
+  deriving Lean.ToJson
 
-def captureOrderCasesJson : String :=
-  jsonArray (captureOrderCases.map captureOrderCaseJson)
+/-- The scope kind and sequence a well-formed `"{kind}.{seq}"` label names. -/
+def captureScopeOf (label : String) : Option (CaptureScopeKind × Nat) :=
+  allCaptureScopeKinds.findSome? fun kind =>
+    if label.startsWith (kind.label ++ ".") then
+      (label.drop (kind.label.length + 1)).toNat?.map (kind, ·)
+    else none
+
+/-- Whether the left capture orders strictly before the right one by
+`(kind rank, seq, turn, attempt)`. -/
+def captureOrderBefore (pair : CaptureOrderPair) : Bool :=
+  match captureScopeOf pair.leftLabel, captureScopeOf pair.rightLabel with
+  | some (leftKind, leftSeq), some (rightKind, rightSeq) =>
+      tupleLt (orderTuple leftKind leftSeq pair.leftTurn pair.leftAttempt)
+        (orderTuple rightKind rightSeq pair.rightTurn pair.rightAttempt)
+  | _, _ => false
+
+def captureOrderPairs : List CaptureOrderPair :=
+  captureOrderCases.map fun c =>
+    { leftLabel := c.leftLabel, leftTurn := c.leftTurn, leftAttempt := c.leftAttempt
+      rightLabel := c.rightLabel, rightTurn := c.rightTurn, rightAttempt := c.rightAttempt }
+
+example :
+    (captureOrderCases.zip captureOrderPairs).all fun (c, pair) =>
+      captureOrderBefore pair == c.leftBeforeRight := by
+  native_decide
+
+@[conformance_family]
+def captureOrder : Family CaptureOrderPair Bool where
+  inputs := captureOrderPairs
+  model := captureOrderBefore
 
 end Conformance.Contracts
