@@ -20,12 +20,12 @@ async fn committed_run(
     name: &str,
 ) -> (
     std::sync::Arc<defra_node::Node>,
-    gents_toolcalls::call::lifecycle::ToolCallLifecycle,
+    crate::call::lifecycle::ToolCallLifecycle,
     gents_loop::live_output::LiveToolOutputRegistry,
     gents_loop::live_output::LiveToolOutputWriter,
 ) {
     let (node, _path, tool) =
-        gents_toolcalls::call::lifecycle::admission_fixture::published_spawn_parent(name).await;
+        crate::call::lifecycle::admission_fixture::published_spawn_parent(name).await;
     let binding = tool
         .tool_output_binding()
         .expect("running tool output binding");
@@ -41,7 +41,7 @@ async fn committed_run(
 
 async fn presented(
     _node: &std::sync::Arc<defra_node::Node>,
-    tool: &gents_toolcalls::call::lifecycle::ToolCallLifecycle,
+    tool: &crate::call::lifecycle::ToolCallLifecycle,
 ) -> String {
     gents_session::tool_call::query::result::load_tool_call_presentation(
         &tool.access().unwrap(),
@@ -58,7 +58,7 @@ async fn presented(
 
 async fn committed_output(
     _node: &std::sync::Arc<defra_node::Node>,
-    tool: &gents_toolcalls::call::lifecycle::ToolCallLifecycle,
+    tool: &crate::call::lifecycle::ToolCallLifecycle,
 ) -> String {
     gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
         &tool.access().unwrap(),
