@@ -45,12 +45,15 @@ export function startClientObservation(
       logShellEvent(`desktop update listener failed: ${message}`);
       lifecycle.setError(message);
     };
+    const hidden = () => document.visibilityState === "hidden";
     const controller = createProjectionController({
       currentSessionId: () => selection.getState().sessionId,
       refreshSnapshot,
       refreshSession,
       rereadSession,
       readSessionUpdate,
+
+      defersUpdates: () => hidden() && !trackedRequestId(),
       onError: reportListenerError,
     });
     const unfollowReads = actions.followSessionReads(
@@ -126,8 +129,6 @@ export function startClientObservation(
         if (!stopped && mine === published) lifecycle.setError(String(err));
       });
     };
-
-    const hidden = () => document.visibilityState === "hidden";
 
     publishSelection();
     unregisteredTimer = setTimeout(readUnregistered, UNREGISTERED_READ_MS);

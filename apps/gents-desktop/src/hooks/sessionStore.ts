@@ -13,6 +13,7 @@ import {
   type SessionGoalRead,
 } from "@source-inc/gents-desktop-client";
 import type { SessionLoadState } from "../lib/loadingStatus";
+import { equal } from "./fleetStore";
 
 export type SessionFacts = {
   rowsRevision: number;
@@ -97,12 +98,30 @@ export function writeSession(
   });
 }
 
+export function writeSessionRead(
+  store: SessionStore,
+  session: DesktopSessionSnapshot,
+  read: SessionGoalRead,
+) {
+  store.setState((state) =>
+    session === state.session
+      ? state
+      : {
+          ...state,
+          session,
+          facts: factsOf(state, session),
+          goal: foldSessionGoalRead(state.goal, read),
+        },
+  );
+}
+
 /** Folds one Goal read of the selected session into what the store holds. */
 export function writeSessionGoalRead(store: SessionStore, read: SessionGoalRead) {
   store.setState((state) => ({ goal: foldSessionGoalRead(state.goal, read) }));
 }
 
 export function writeSessionLoad(store: SessionStore, load: SessionLoadState) {
+  if (equal(store.getState().load, load)) return;
   store.setState({ load });
 }
 

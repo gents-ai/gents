@@ -304,18 +304,29 @@ inductive Outcome where
   /-- the reply names another session than the read asked for -/
   | mismatch
 
+/-- The load names the selection, read and shown: a read of it refreshes what
+is already on screen rather than loading it. -/
+def State.refreshes (s : State) : Bool :=
+  s.load == some s.selected && s.phase == .loaded && s.shown == some s.selected
+
 /-- A read of the selection starts and takes over the load. A waiting phase of
-the same target stays while it is read again; any read cancels the scheduled
-re-read. -/
+the same target stays while it is read again, and a shown session stays
+`loaded` while it is refreshed: store notices re-read the open session on
+activity anywhere on its node, and each such read reporting `loading` would
+reload the whole session view for a read that usually finds nothing new. Its
+load is left as it was, so the read is carried by the refresh fence alone. Any
+read cancels the scheduled re-read. -/
 def launch (s : State) : State :=
-  let same := s.load == some s.selected
-  { s with
-    reading := some s.selected
-    load := some s.selected
-    phase := if same && s.phase.isWaiting then s.phase else .loading
-    found := if same && s.found == some false then some false else none
-    errored := same && s.errored
-    timer := false }
+  if s.refreshes then { s with reading := some s.selected, timer := false }
+  else
+    let same := s.load == some s.selected
+    { s with
+      reading := some s.selected
+      load := some s.selected
+      phase := if same && s.phase.isWaiting then s.phase else .loading
+      found := if same && s.found == some false then some false else none
+      errored := same && s.errored
+      timer := false }
 
 /-- The drain loop starts the owed read; a read the timer alone asked for
 continues its streak. -/
@@ -364,7 +375,11 @@ inductive Step : State → State → Prop where
                       fresh := s.fresh || s.running, timer := false,
                       shown := if drop then none else s.shown }
   /-- a store or health notice, the listener's registration, or a foreground
-  refresh -/
+  refresh. A store notice while the selection is shown is paced: any write on
+  the node sends one, so its read waits out the gap since the last read
+  (longer once reads keep finding nothing new) and, while the window is
+  hidden, waits for the window to show, which reads in full. The read stays
+  owed and is never dropped; time is not modeled, so it is owed at once. -/
   | notice (s : State) (h : s.running = true) : Step s { s with queued := true, fresh := true }
   | begin (s : State) (h : s.queued = true) : Step s (beginRead s)
   | complete (s : State) (t : Nat) (o : Outcome) (h : s.reading = some t) :
@@ -393,6 +408,12 @@ inductive Reachable : State → Prop where
   | init (n : Nat) : Reachable (initial n)
   | step {s t : State} : Reachable s → Step s t → Reachable t
 
+/-- What the load's `reread` says: a read of the load is running or a re-read is
+scheduled. A refresh of a shown session leaves its `loaded` load untouched, so
+a read running under it is not on the load. -/
+def State.loadReread (s : State) : Bool :=
+  (s.reading.isSome && s.phase != .loaded) || s.timer
+
 def input (s : State) (blocker : Option Blocker) : Input :=
   { selected := true
     sessionMatches := s.shown == some s.selected
@@ -400,7 +421,7 @@ def input (s : State) (blocker : Option Blocker) : Input :=
     phase := s.phase
     error := if s.errored then some "read failed" else none
     found := s.found
-    reread := s.reading.isSome || s.timer
+    reread := s.loadReread
     blocker }
 
 /-- The machine's invariant: a running read is the load's, and a named load has
@@ -414,14 +435,33 @@ def Invariant (s : State) : Prop :=
   (s.running = true → s.load ≠ some s.selected → s.queued = true ∨ s.reading.isSome = true) ∧
   (s.running = true → ∀ t, s.reading = some t → t ≠ s.selected → s.queued = true)
 
-theorem launch_phase_ne_idle (s : State) : (launch s).phase ≠ .idle := by
-  simp only [launch]
+theorem launch_reading (s : State) : (launch s).reading = some s.selected := by
+  unfold launch; split <;> rfl
+
+theorem launch_selected (s : State) : (launch s).selected = s.selected := by
+  unfold launch; split <;> rfl
+
+theorem launch_load (s : State) : (launch s).load = some s.selected := by
+  unfold launch
   split
   · rename_i h
-    intro hp
-    simp only [Bool.and_eq_true] at h
-    simp [hp, Phase.isWaiting, Phase.isDelivery] at h
-  · simp
+    simp only [State.refreshes, Bool.and_eq_true, beq_iff_eq] at h
+    exact h.1.1
+  · rfl
+
+theorem launch_phase_ne_idle (s : State) : (launch s).phase ≠ .idle := by
+  unfold launch
+  split
+  · rename_i h
+    simp only [State.refreshes, Bool.and_eq_true, beq_iff_eq] at h
+    simp [h.1.2]
+  · simp only
+    split
+    · rename_i h
+      intro hp
+      simp only [Bool.and_eq_true] at h
+      simp [hp, Phase.isWaiting, Phase.isDelivery] at h
+    · simp
 
 theorem invariant_initial (n : Nat) : Invariant (initial n) := by
   refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> simp [initial]
@@ -435,11 +475,13 @@ theorem invariant_step {s t : State} (hs : Invariant s) (step : Step s t) : Inva
       refine ⟨hr, hi, ?_, ?_, ?_⟩ <;> intros <;> simp
   | begin h =>
       refine ⟨?_, ?_, ?_, ?_, ?_⟩
-      · intro t ht; simp [beginRead, launch] at ht ⊢; exact ht
+      · intro t ht; simp only [beginRead, launch_reading, launch_load] at ht ⊢; exact ht
       · intro _; exact launch_phase_ne_idle s
-      · intros; simp [beginRead, launch]
-      · intros; simp [beginRead, launch]
-      · intro _ t ht hne; simp [beginRead, launch] at ht; exact absurd ht.symm hne
+      · intros; simp [beginRead, launch_reading]
+      · intros; simp [beginRead, launch_reading]
+      · intro _ t ht hne
+        simp only [beginRead, launch_reading, launch_selected, Option.some.injEq] at ht hne
+        exact absurd ht.symm hne
   | complete target o h =>
       have hload := hr target h
       unfold finish
@@ -473,11 +515,13 @@ theorem invariant_step {s t : State} (hs : Invariant s) (step : Step s t) : Inva
       refine ⟨hr, hi, ?_, ?_, ?_⟩ <;> intros <;> simp
   | retry =>
       refine ⟨?_, ?_, ?_, ?_, ?_⟩
-      · intro t ht; simp [launch] at ht ⊢; exact ht
+      · intro t ht; simp only [launch_reading, launch_load] at ht ⊢; exact ht
       · intro _; exact launch_phase_ne_idle s
-      · intros; simp [launch]
-      · intros; simp [launch]
-      · intro _ t ht hne; simp [launch] at ht; exact absurd ht.symm hne
+      · intros; simp [launch_reading]
+      · intros; simp [launch_reading]
+      · intro _ t ht hne
+        simp only [launch_reading, launch_selected, Option.some.injEq] at ht hne
+        exact absurd ht.symm hne
   | drop =>
       exact ⟨hr, hi, hl, ho, hm⟩
   | stop h =>
@@ -522,9 +566,9 @@ theorem phase_has_exit {s : State} (hs : Reachable s) (hrun : s.running = true)
     rcases ho hrun hne with h | h
     · exact Or.inr (Or.inl h)
     · exact Or.inl h
-  · simp only [input, Bool.or_eq_true] at hr
+  · simp only [input, State.loadReread, Bool.or_eq_true, Bool.and_eq_true] at hr
     rcases hr with h | h
-    · exact Or.inl h
+    · exact Or.inl h.1
     · exact Or.inr (Or.inr (Or.inl h))
   · simp only [input, beq_iff_eq] at hm
     exact Or.inr (Or.inr (Or.inr ⟨hm, hb⟩))
@@ -544,7 +588,7 @@ theorem stop_leaves_action {s : State} (hs : Reachable s)
   · simp only [input, stopObserver] at hp
     split at hp <;> simp_all
   · simp [input, stopObserver, hload] at hm
-  · simp [input, stopObserver] at hr
+  · simp [input, stopObserver, State.loadReread] at hr
   · simp only [input, stopObserver, beq_iff_eq] at hm
     exact ⟨hm, hb⟩
 

@@ -416,7 +416,8 @@ describe("createSessionReads", () => {
     await reads.refreshSession("session-1");
     const refresh = reads.refreshSession("session-1");
     expect(readSession(reads.sessionStore)?.timelineItems).toEqual(saved.timelineItems);
-    expect(reads.sessionStore.getState().load.phase).toBe("loading");
+    /* a re-read of the session on screen refreshes it; it is not loading */
+    expect(reads.sessionStore.getState().load.phase).toBe("loaded");
     reject(new Error("database read timed out"));
     await refresh;
     expect(readSession(reads.sessionStore)?.timelineItems).toEqual(saved.timelineItems);
@@ -540,6 +541,127 @@ describe("createSessionReads", () => {
     reads.invalidateSessionReads();
     finish(stale);
     expect(await pending).toBeNull();
+  });
+
+  it("keeps the held session and its load when a re-read finds nothing new", async () => {
+    const tip = () => {
+      const read = session(["m1", "m2"], {
+        totalItems: 2,
+        pageItems: 2,
+        hasOlder: false,
+        hasNewer: false,
+        oldestItemKey: "m1",
+        newestItemKey: "m2",
+      });
+      read.projectionRevision = { storeVersion: ++version, provenanceVersion: 1 };
+      return read;
+    };
+    let version = 0;
+    let finish!: (value: DesktopSessionSnapshot) => void;
+    const fetchSessionSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(tip())
+      .mockImplementationOnce(
+        () =>
+          new Promise<DesktopSessionSnapshot>((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockImplementation(async () => ({ ...tip(), title: "Renamed" }));
+    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    const shown = reads.sessionStore.getState();
+    expect(shown.load).toMatchObject({ phase: "loaded", found: true, reread: false });
+    const commits = vi.fn();
+    const unsubscribe = reads.sessionStore.subscribe(commits);
+    try {
+      const refresh = reads.refreshSession("session-1");
+      expect(reads.sessionStore.getState().load).toBe(shown.load);
+      expect(
+        projectSessionLoadingStatus({
+          selectedSessionId: "session-1",
+          selectedNodeDid: "did:key:test",
+          session: shown.session,
+          sessionLoad: reads.sessionStore.getState().load,
+          operationalState: null,
+        }),
+      ).toBeNull();
+      /* the store moved on elsewhere; this session did not */
+      finish(tip());
+      await refresh;
+      expect(commits).not.toHaveBeenCalled();
+      expect(reads.sessionStore.getState()).toBe(shown);
+
+      await reads.refreshSession("session-1");
+      expect(commits).toHaveBeenCalledTimes(1);
+      expect(readSession(reads.sessionStore)?.title).toBe("Renamed");
+      expect(reads.sessionStore.getState().load).toBe(shown.load);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("drops a full read older than a live read that landed while it ran", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      const tip = (storeVersion: number) => {
+        const read = session([], {
+          totalItems: 0,
+          pageItems: 0,
+          hasOlder: false,
+          hasNewer: false,
+          oldestItemKey: null,
+          newestItemKey: null,
+        });
+        read.projectionRevision = { storeVersion, provenanceVersion: 1 };
+        read.timelineItems = [
+          { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
+        ];
+        return read;
+      };
+      let finish!: (value: DesktopSessionSnapshot) => void;
+      const api = {
+        fetchSessionSnapshot: vi
+          .fn()
+          .mockResolvedValueOnce(tip(7))
+          .mockImplementationOnce(
+            () =>
+              new Promise<DesktopSessionSnapshot>((resolve) => {
+                finish = resolve;
+              }),
+          ),
+        fetchSessionLiveDelta: vi.fn(async (): Promise<SessionLiveDeltaView> => ({
+          outcome: "delta",
+          liveCursor: "cursor",
+          requestId: "request-1",
+          revision: { storeVersion: 9, provenanceVersion: 1 },
+          turnState: "running",
+          status: null,
+          content: { mode: "append", value: " world", byteLen: 11, hash: "d58b3fa7" },
+          reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+        })),
+      } as unknown as DesktopApiAdapter;
+      const reads = readsFor(api);
+      await reads.refreshSession("session-1");
+      /* the retry action reads beside the drain loop, which reads a delta */
+      const full = reads.refreshSession("session-1");
+      await reads.readSessionUpdate();
+      expect(readSession(reads.sessionStore)?.timelineItems[0]).toMatchObject({
+        content: "hello world",
+      });
+      finish(tip(8));
+      await full;
+      expect(readSession(reads.sessionStore)?.timelineItems[0]).toMatchObject({
+        content: "hello world",
+      });
+      expect(readSession(reads.sessionStore)?.projectionRevision?.storeVersion).toBe(9);
+      expect(reads.sessionStore.getState().load).toMatchObject({
+        phase: "loaded",
+        found: true,
+      });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("requires history reconciliation even when every live read succeeds", async () => {

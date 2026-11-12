@@ -10,6 +10,7 @@ import {
   applySessionLiveDelta,
   sessionLiveDeltaRequest,
 } from "@source-inc/gents-desktop-client";
+import { shareUnchanged } from "./fleetStore";
 import { acceptsAsyncResult } from "./observationOrdering";
 import { createContextDetailsCache } from "./sessionContextDetails";
 import { timingConfig } from "./timing";
@@ -26,10 +27,12 @@ import {
 import type { SelectionStore } from "./selectionStore";
 import {
   IDLE_LOAD,
+  heldFor,
   readSession,
   writeSession,
   writeSessionGoalRead,
   writeSessionLoad,
+  writeSessionRead,
   type SessionStore,
 } from "./sessionStore";
 
@@ -54,12 +57,22 @@ export function waitingRereadDelay(used: number): number | null {
   return WAITING_REREAD_MS[used] ?? null;
 }
 
-/* a session's content apart from the store-wide revision, which moves when
-   any document in the store changes */
-const sessionSignature = (snapshot: DesktopSessionSnapshot) =>
-  JSON.stringify(snapshot, (key, value) =>
-    key === "projectionRevision" ? undefined : value,
-  );
+const keepStoreRevision = (
+  held: DesktopSessionSnapshot,
+  merged: DesktopSessionSnapshot,
+): DesktopSessionSnapshot =>
+  held.projectionRevision &&
+  merged.projectionRevision &&
+  held.projectionRevision.provenanceVersion ===
+    merged.projectionRevision.provenanceVersion
+    ? { ...merged, projectionRevision: held.projectionRevision }
+    : merged;
+
+const supersedes = (held: DesktopSessionSnapshot, next: DesktopSessionSnapshot) =>
+  held.sessionId === next.sessionId &&
+  held.projectionRevision != null &&
+  next.projectionRevision != null &&
+  held.projectionRevision.storeVersion > next.projectionRevision.storeVersion;
 
 type SessionReadParams = {
   api: DesktopApiAdapter;
@@ -85,7 +98,8 @@ export function createSessionReads({
   let readAt = 0;
   let readCost = 0;
   let changedAt = 0;
-  let lastOutcome: string | null = null;
+
+  let lastOutcome: { sessionId: string; outcome: unknown } | null = null;
   /* the scheduled re-read of a waiting phase, and the re-reads its streak has
      used; any read the timer did not start begins a new streak */
   let waitingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -96,12 +110,16 @@ export function createSessionReads({
     clearTimeout(waitingTimer);
     waitingTimer = undefined;
   };
-  const noteRead = (sessionId: string, outcome: string, started: number) => {
+  const noteRead = (
+    sessionId: string,
+    outcome: string | DesktopSessionSnapshot,
+    started: number,
+  ) => {
     readAt = performance.now();
     readCost = readAt - started;
-    const keyed = `${sessionId}\0${outcome}`;
-    if (keyed !== lastOutcome) changedAt = readAt;
-    lastOutcome = keyed;
+    if (lastOutcome?.sessionId !== sessionId || lastOutcome.outcome !== outcome)
+      changedAt = readAt;
+    lastOutcome = { sessionId, outcome };
   };
   const quiet = () => readAt - changedAt >= QUIET_AFTER_MS;
   /* A full read of a long session can take over a second, and nothing tells
@@ -183,15 +201,22 @@ export function createSessionReads({
       previous.sessionId === nextSessionId && previous.nodeDid === nodeDid;
     const waiting =
       previous.phase === "pending" || isSessionDeliveryPhase(previous.phase);
-    setSessionLoad({
-      phase: sameSelection && waiting ? previous.phase : "loading",
-      sessionId: nextSessionId,
-      nodeDid,
-      /* looking again doesn't bring a missing session back until it's found */
-      found: sameSelection && previous.found === false ? false : null,
-      error: sameSelection ? previous.error : null,
-      reread: true,
-    });
+    const heldAtStart = readSession(sessionStore);
+
+    const refreshes =
+      sameSelection &&
+      previous.phase === "loaded" &&
+      heldFor(heldAtStart, nextSessionId, nodeDid) !== null;
+    if (!refreshes)
+      setSessionLoad({
+        phase: sameSelection && waiting ? previous.phase : "loading",
+        sessionId: nextSessionId,
+        nodeDid,
+        /* looking again doesn't bring a missing session back until it's found */
+        found: sameSelection && previous.found === false ? false : null,
+        error: sameSelection ? previous.error : null,
+        reread: true,
+      });
     const started = performance.now();
     try {
       const next = await api.fetchSessionSnapshot(
@@ -222,9 +247,21 @@ export function createSessionReads({
         return null;
       }
       waitingRereads = 0;
-      setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
-      if (next) writeSessionGoalRead(sessionStore, sessionGoalReadOf(next));
-      noteRead(nextSessionId, next ? sessionSignature(next) : "missing", started);
+      const held = readSession(sessionStore);
+      let outcome: string | DesktopSessionSnapshot = "missing";
+      if (!next) setSession(null);
+      else if (held && held !== heldAtStart && supersedes(held, next)) {
+        outcome = held;
+      } else {
+        const merged = mergeSessionTipSnapshot(held, next);
+
+        const kept = held
+          ? shareUnchanged(held, keepStoreRevision(held, merged))
+          : merged;
+        writeSessionRead(sessionStore, kept, sessionGoalReadOf(next));
+        outcome = kept;
+      }
+      noteRead(nextSessionId, outcome, started);
       setSessionLoad({
         phase: "loaded",
         sessionId: nextSessionId,
