@@ -126,6 +126,7 @@ import Proofs.Conformance.OperatorBaseFreeze
 
 
 import Proofs.Documents.Configuration
+import Proofs.Documents.DesiredStatePlan
 import Proofs.Tools.ToolPolicy.Configuration
 import Proofs.Tools.SelfConfig.Auth
 
