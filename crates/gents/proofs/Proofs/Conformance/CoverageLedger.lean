@@ -1232,16 +1232,16 @@ def caseCoverage : List CoverageEntry :=
       "compaction_checkpoint_fallback_checkpoint")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "command_policy_cases"
-      "CommandPolicyValidation")
+      "family"
+      "contracts_command_policy_validation")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "command_policy_cases"
-      "CommandPolicySandbox")
+      "family"
+      "contracts_command_sandbox_selection")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "command_policy_cases"
-      "CommandPolicyEnv")
+      "family"
+      "contracts_command_env_filtering")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "command_isolation_cases"
@@ -1252,8 +1252,8 @@ def caseCoverage : List CoverageEntry :=
       "CommandIsolationSeatbelt")
       "command-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "command_policy_cases"
-      "CommandPolicyOperatorUi")
+      "family"
+      "contracts_command_policy_validation")
       "command-policy" [Surface.operatorUi]
   , tagged (consumerCoverage
       "queue_deadline_conformance_cases"

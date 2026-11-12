@@ -2,7 +2,6 @@ use gents_protocol::tool_names::{
     AGENT_NEW_TOOL_NAME, AGENT_TOOL_NAMES, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
     READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
 };
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -24,15 +23,11 @@ use super::file_tools::edit_file::EditFileTool;
 use super::file_tools::read_tools::{GlobTool, GrepTool, ListFilesTool, ReadFileTool};
 use super::file_tools::write_file::WriteFileTool;
 use super::shared::{
-    build_shell_env_from_vars, select_sandbox, validate_command_policy, validate_read_only_command,
+    build_shell_env_from_vars, select_sandbox, FALLBACK_PATH, validate_command_policy, validate_read_only_command,
     CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, ToolContext, ToolError,
     WorkspaceAuthority,
 };
 use super::*;
-use gents_lean_vocab::{
-    lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
-    LeanCommandPolicyCase,
-};
 
 #[tokio::test]
 async fn native_tool_definitions_include_model_facing_defaults_and_constraints() {
@@ -1155,197 +1150,58 @@ fn deny_all_argv_policy_rejects_every_command() {
 
 #[test]
 fn generated_command_policy_cases_match_rust_validation() {
-    for case in lean_command_policy_cases() {
-        if case.category == "read_only_argv_safety" {
+    gents_lean_vocab::families::contracts_command_policy_validation::replay::<
+        CommandExecutionMode,
+        CommandNetworkMode,
+    >(|i| {
+        if i.category == "read_only_argv_safety" {
             assert_eq!(
-                case.read_only_allowlist,
+                i.read_only_allowlist,
                 default_read_only_commands(),
                 "Lean and runtime read-only defaults must agree"
             );
         }
-        let mode = rust_command_execution_mode(&case.mode);
-        let network_mode = rust_command_network_mode(&case.network_mode);
-        let lookup_command = std::path::Path::new(&case.command)
+        let lookup_command = Path::new(&i.command)
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or(&case.command);
+            .unwrap_or(&i.command);
         assert_eq!(
-            lookup_command, case.lookup_command,
+            lookup_command, i.lookup_command,
             "Lean command policy case {} must use Rust basename lookup",
-            case.name
+            i.name
         );
-
-        let policy = CommandExecutionPolicy::read_only(case.read_only_allowlist.clone())
-            .with_mode(mode)
-            .with_allowed_argv_prefixes(case.allowed_argv_prefixes.clone())
-            .with_forbidden_argv_prefixes(case.forbidden_argv_prefixes.clone())
-            .with_network_mode(network_mode);
-        let result = validate_command_policy(&case.command, &case.args, &policy);
-
-        match case.decision.as_str() {
-            "allow" => assert!(
-                result.is_ok(),
-                "Lean CommandPolicy case {} should allow but Rust denied: {:?}",
-                case.name,
-                result.err()
-            ),
-            "deny" => {
-                let error = result.unwrap_err();
-                assert_command_denial_matches(case, &error);
-            }
-            other => panic!(
-                "Lean CommandPolicy case {} emitted unknown decision {other:?}",
-                case.name
-            ),
+        let policy = CommandExecutionPolicy::read_only(i.read_only_allowlist.clone())
+            .with_mode(i.mode)
+            .with_allowed_argv_prefixes(i.allowed_argv_prefixes.clone())
+            .with_forbidden_argv_prefixes(i.forbidden_argv_prefixes.clone())
+            .with_network_mode(i.network_mode);
+        let denial = validate_command_policy(&i.command, &i.args, &policy)
+            .err()
+            .map(|error| {
+                error.command_policy_denial().cloned().unwrap_or_else(|| {
+                    panic!(
+                        "Lean CommandPolicy case {} denied with unstructured Rust error: {error}",
+                        i.name
+                    )
+                })
+            });
+        if let Some(denial) = &denial {
+            assert_eq!(denial.policy_mode, i.mode.as_str());
+            assert_eq!(denial.policy_network, i.network_mode.as_str());
         }
-    }
-}
-
-#[test]
-fn generated_command_policy_cases_cover_read_only_safety_matrix() {
-    let emitted = lean_command_policy_cases()
-        .iter()
-        .map(|case| case.name.as_str())
-        .collect::<BTreeSet<_>>();
-    let expected = [
-        "read_only_git_status_allows",
-        "read_only_git_branch_list_allows",
-        "read_only_git_global_config_denies",
-        "read_only_git_config_env_denies",
-        "read_only_git_output_flag_denies",
-        "read_only_git_exec_flag_denies",
-        "read_only_git_commit_subcommand_denies",
-        "read_only_git_branch_delete_denies",
-        "read_only_sed_print_allows",
-        "read_only_sed_in_place_short_denies",
-        "read_only_sed_in_place_long_denies",
-        "read_only_sed_in_place_suffix_denies",
-        "read_only_find_type_file_allows",
-        "read_only_find_delete_denies",
-        "read_only_find_exec_denies",
-        "read_only_find_fprint_denies",
-        "read_only_rg_search_allows",
-        "read_only_rg_pre_denies",
-        "read_only_rg_search_zip_denies",
-        "read_only_curl_http_get_allows",
-        "read_only_curl_post_denies",
-        "read_only_curl_data_denies",
-        "read_only_curl_output_denies",
-        "read_only_curl_upload_denies",
-        "read_only_curl_config_denies",
-        "read_only_curl_missing_http_url_denies",
-        "read_only_launchctl_print_allows",
-        "read_only_launchctl_bootout_denies",
-        "read_only_launchctl_missing_subcommand_denies",
-        "read_only_tailscale_status_allows",
-        "read_only_tailscale_netcheck_allows",
-        "read_only_tailscale_up_denies",
-        "read_only_sudo_launchctl_print_allows",
-        "read_only_sudo_launchctl_wrong_path_denies",
-        "read_only_sudo_rm_denies",
-        "read_only_sudo_missing_command_denies",
-    ];
-
-    for name in expected {
-        assert!(
-            emitted.contains(name),
-            "Lean CommandPolicy contract must emit read-only safety case {name}"
-        );
-    }
-
-    for name in [
-        "read_only_git_status_allows",
-        "read_only_git_branch_list_allows",
-        "read_only_sed_print_allows",
-        "read_only_find_type_file_allows",
-        "read_only_rg_search_allows",
-        "read_only_curl_http_get_allows",
-        "read_only_launchctl_print_allows",
-        "read_only_tailscale_status_allows",
-        "read_only_tailscale_netcheck_allows",
-        "read_only_sudo_launchctl_print_allows",
-    ] {
-        let case = lean_command_policy_case(name);
-        assert_eq!(case.decision, "allow");
-        assert_eq!(case.denial_reason, None);
-    }
-
-    for (name, argument) in [
-        ("read_only_git_global_config_denies", "-c"),
-        (
-            "read_only_git_config_env_denies",
-            "--config-env=GIT_CONFIG_GLOBAL=ENV_FILE",
-        ),
-        (
-            "read_only_git_output_flag_denies",
-            "--output=/tmp/gents-diff.txt",
-        ),
-        (
-            "read_only_git_exec_flag_denies",
-            "--exec=touch /tmp/gents-nope",
-        ),
-        ("read_only_git_branch_delete_denies", "-D"),
-        ("read_only_sed_in_place_short_denies", "-i"),
-        ("read_only_sed_in_place_long_denies", "--in-place"),
-        ("read_only_sed_in_place_suffix_denies", "--in-place=.bak"),
-        ("read_only_find_delete_denies", "-delete"),
-        ("read_only_find_exec_denies", "-exec"),
-        ("read_only_find_fprint_denies", "-fprint0"),
-        ("read_only_rg_pre_denies", "--pre"),
-        ("read_only_rg_search_zip_denies", "--search-zip"),
-        ("read_only_curl_post_denies", "-X"),
-        ("read_only_curl_data_denies", "--data={}"),
-        ("read_only_curl_output_denies", "-o"),
-        ("read_only_curl_upload_denies", "-T"),
-        ("read_only_curl_config_denies", "-K"),
-        (
-            "read_only_sudo_launchctl_wrong_path_denies",
-            "/usr/bin/launchctl",
-        ),
-    ] {
-        let case = lean_command_policy_case(name);
-        assert_eq!(case.decision, "deny");
-        assert_eq!(
-            case.denial_reason.as_deref(),
-            Some("readOnlyArgumentNotAllowed")
-        );
-        assert_eq!(case.denied_argument.as_deref(), Some(argument));
-    }
-
-    for (name, subcommand) in [
-        ("read_only_git_commit_subcommand_denies", "commit"),
-        ("read_only_launchctl_bootout_denies", "bootout"),
-        ("read_only_tailscale_up_denies", "up"),
-        ("read_only_sudo_rm_denies", "rm"),
-    ] {
-        let case = lean_command_policy_case(name);
-        assert_eq!(case.decision, "deny");
-        assert_eq!(
-            case.denial_reason.as_deref(),
-            Some("readOnlySubcommandNotAllowlisted")
-        );
-        assert_eq!(case.denied_subcommand.as_deref(), Some(subcommand));
-    }
-
-    for name in [
-        "read_only_launchctl_missing_subcommand_denies",
-        "read_only_sudo_missing_command_denies",
-    ] {
-        let case = lean_command_policy_case(name);
-        assert_eq!(case.decision, "deny");
-        assert_eq!(
-            case.denial_reason.as_deref(),
-            Some("readOnlySubcommandRequired")
-        );
-    }
-
-    let missing_url = lean_command_policy_case("read_only_curl_missing_http_url_denies");
-    assert_eq!(missing_url.decision, "deny");
-    assert_eq!(
-        missing_url.denial_reason.as_deref(),
-        Some("readOnlyUrlRequired")
-    );
-    assert_eq!(missing_url.denied_command.as_deref(), Some("curl"));
+        let reason = denial.as_ref().map(|denial| &denial.reason);
+        gents_lean_vocab::families::contracts_command_policy_validation::PolicyOutput {
+            decision: if denial.is_some() { "deny" } else { "allow" }.into(),
+            denial_reason: reason.map(|reason| reason.to_contract().to_owned()),
+            matched_prefix: reason.and_then(|reason| reason.matched_prefix()).map(<[String]>::to_vec),
+            denied_argv: reason.and_then(|reason| reason.denied_argv()).map(<[String]>::to_vec),
+            denied_command: reason.and_then(|reason| reason.denied_command()).map(str::to_owned),
+            denied_argument: reason.and_then(|reason| reason.denied_argument()).map(str::to_owned),
+            denied_subcommand: reason
+                .and_then(|reason| reason.denied_subcommand())
+                .map(str::to_owned),
+        }
+    });
 }
 
 #[test]
@@ -1372,81 +1228,30 @@ fn generated_command_sandbox_cases_match_rust_selection() {
 
 #[test]
 fn generated_command_env_cases_match_rust_filtering() {
-    for case in lean_command_env_cases() {
-        let vars = if case.input_present {
-            vec![(case.input_name.clone(), case.input_value.clone())]
+    gents_lean_vocab::families::contracts_command_env_filtering::replay::<String, String>(|i| {
+        let vars = if i.input_present {
+            vec![(i.input_name.clone(), i.input_value.clone())]
         } else {
             Vec::new()
         };
-        let env = build_shell_env_from_vars(vars);
-        let actual = env.get(&case.output_name).map(String::as_str);
-
-        assert_eq!(
-            actual,
-            case.expected_output_value.as_deref(),
-            "Lean CommandPolicy env case {} ({}) must match Rust shell env filtering; expected kind {:?}",
-            case.name,
-            case.env_key,
-            case.expected_value_kind
-        );
-    }
-}
-
-fn rust_command_execution_mode(value: &str) -> CommandExecutionMode {
-    CommandExecutionMode::parse(value)
-        .unwrap_or_else(|error| panic!("unknown Lean command execution mode {value:?}: {error}"))
-}
-
-fn rust_command_network_mode(value: &str) -> CommandNetworkMode {
-    CommandNetworkMode::parse(value)
-        .unwrap_or_else(|error| panic!("unknown Lean command network mode {value:?}: {error}"))
-}
-
-fn assert_command_denial_matches(case: &LeanCommandPolicyCase, error: &ToolError) {
-    let denial = error.command_policy_denial().unwrap_or_else(|| {
-        panic!(
-            "Lean CommandPolicy case {} denied with unstructured Rust error: {error}",
-            case.name
-        )
+        let output_value = build_shell_env_from_vars(vars).remove(&i.output_name);
+        let value_kind = output_value.as_deref().map(|value| {
+            match value {
+                value if i.input_present && value == i.input_value => "inherited",
+                FALLBACK_PATH => "fallback_path",
+                "cat" => "forced_cat",
+                "1" => "forced_no_color",
+                "0" => "forced_cli_color_off",
+                "dumb" => "forced_dumb",
+                other => panic!("{} produced an unclassified value {other:?}", i.name),
+            }
+            .to_owned()
+        });
+        gents_lean_vocab::families::contracts_command_env_filtering::EnvOutput {
+            value_kind,
+            output_value,
+        }
     });
-    assert_eq!(
-        Some(denial.to_contract()),
-        case.denial_reason.as_deref(),
-        "Lean CommandPolicy case {} emitted a different denial reason",
-        case.name
-    );
-    assert_eq!(
-        denial.reason.matched_prefix(),
-        case.matched_prefix.as_deref(),
-        "Lean CommandPolicy case {} matched_prefix drifted",
-        case.name
-    );
-    assert_eq!(
-        denial.reason.denied_argv(),
-        case.denied_argv.as_deref(),
-        "Lean CommandPolicy case {} denied_argv drifted",
-        case.name
-    );
-    assert_eq!(
-        denial.reason.denied_command(),
-        case.denied_command.as_deref(),
-        "Lean CommandPolicy case {} denied_command drifted",
-        case.name
-    );
-    assert_eq!(
-        denial.reason.denied_argument(),
-        case.denied_argument.as_deref(),
-        "Lean CommandPolicy case {} denied_argument drifted",
-        case.name
-    );
-    assert_eq!(
-        denial.reason.denied_subcommand(),
-        case.denied_subcommand.as_deref(),
-        "Lean CommandPolicy case {} denied_subcommand drifted",
-        case.name
-    );
-    assert_eq!(denial.policy_mode, case.mode);
-    assert_eq!(denial.policy_network, case.network_mode);
 }
 
 #[test]

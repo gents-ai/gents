@@ -400,22 +400,6 @@ pub fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {
         .unwrap_or_else(|| panic!("Lean tool retry case {name:?} was not emitted"))
 }
 
-pub fn lean_command_policy_case(name: &str) -> &'static LeanCommandPolicyCase {
-    lean_contract_snapshot()
-        .command_policy_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean command policy case {name:?} was not emitted"))
-}
-
-pub fn lean_command_env_case(name: &str) -> &'static LeanCommandEnvCase {
-    lean_contract_snapshot()
-        .command_env_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean command env case {name:?} was not emitted"))
-}
-
 pub fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
     lean_vocabulary_contract(domain)
         .values

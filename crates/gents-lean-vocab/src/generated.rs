@@ -101,14 +101,6 @@ pub fn lean_client_session_turn_cases() -> &'static [LeanSessionTurnCase] {
     &lean_contract_snapshot().client_session_turn_cases
 }
 
-pub fn lean_command_env_cases() -> &'static [LeanCommandEnvCase] {
-    &lean_contract_snapshot().command_env_cases
-}
-
-pub fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {
-    &lean_contract_snapshot().command_policy_cases
-}
-
 pub fn lean_compaction_canonical_projection_cases() -> &'static [LeanCanonicalCompactionCase] {
     &lean_contract_snapshot().compaction_canonical_projection_cases
 }
@@ -2479,37 +2471,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -2727,18 +2688,6 @@ pub struct LeanClientSyncHealthCase {
     pub transport: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LeanCommandEnvCase {
-    pub name: String,
-    pub env_key: String,
-    pub input_present: bool,
-    pub input_name: String,
-    pub input_value: String,
-    pub output_name: String,
-    pub expected_value_kind: Option<String>,
-    pub expected_output_value: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanCommandIsolationCase {
@@ -2748,27 +2697,6 @@ pub struct LeanCommandIsolationCase {
     pub network: String,
     #[serde(rename = "protectsCredentials")]
     pub protects_credentials: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanCommandPolicyCase {
-    pub name: String,
-    pub category: String,
-    pub mode: String,
-    pub allowed_argv_prefixes: Vec<Vec<String>>,
-    pub forbidden_argv_prefixes: Vec<Vec<String>>,
-    pub network_mode: String,
-    pub read_only_allowlist: Vec<String>,
-    pub command: String,
-    pub lookup_command: String,
-    pub args: Vec<String>,
-    pub decision: String,
-    pub denial_reason: Option<String>,
-    pub matched_prefix: Option<Vec<String>>,
-    pub denied_argv: Option<Vec<String>>,
-    pub denied_command: Option<String>,
-    pub denied_argument: Option<String>,
-    pub denied_subcommand: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -3035,7 +2963,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3289,12 +3216,10 @@ pub struct LeanContractSnapshot {
     pub backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
     pub boundaries: Vec<LeanBoundary>,
     pub deviations: Vec<LeanDeviation>,
-    pub command_policy_cases: Vec<LeanCommandPolicyCase>,
     pub command_isolation_cases: Vec<LeanCommandIsolationCase>,
     pub artifact_mode_meet_cases: Vec<serde_json::Value>,
     pub artifact_admission_cases: Vec<serde_json::Value>,
     pub artifact_spawn_cases: Vec<serde_json::Value>,
-    pub command_env_cases: Vec<LeanCommandEnvCase>,
     pub live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub request_progress_cases: Vec<LeanRequestProgressCase>,
     pub pending_user_turn_cases: Vec<LeanPendingUserTurnCase>,
