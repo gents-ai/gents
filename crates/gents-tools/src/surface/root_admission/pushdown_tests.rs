@@ -1,7 +1,9 @@
 #[cfg(unix)]
 #[test]
 fn generated_root_admission_cases_drive_production_root_policy() {
-    use gents_lean_vocab::families::root_admission_contracts_admission::{AdmissionOutput, CanonicalPath};
+    use gents_lean_vocab::families::root_admission_contracts_admission::{
+        AdmissionOutput, CanonicalPath,
+    };
     for case in gents_lean_vocab::families::root_admission_contracts_admission::cases() {
         let input = &case.input;
         let blank = input.authored.trim().is_empty();

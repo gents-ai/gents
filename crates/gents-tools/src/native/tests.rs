@@ -23,9 +23,9 @@ use super::file_tools::edit_file::EditFileTool;
 use super::file_tools::read_tools::{GlobTool, GrepTool, ListFilesTool, ReadFileTool};
 use super::file_tools::write_file::WriteFileTool;
 use super::shared::{
-    build_shell_env_from_vars, select_sandbox, FALLBACK_PATH, validate_command_policy, validate_read_only_command,
+    build_shell_env_from_vars, select_sandbox, validate_command_policy, validate_read_only_command,
     CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, ToolContext, ToolError,
-    WorkspaceAuthority,
+    WorkspaceAuthority, FALLBACK_PATH,
 };
 use super::*;
 
@@ -1193,10 +1193,18 @@ fn generated_command_policy_cases_match_rust_validation() {
         gents_lean_vocab::families::contracts_command_policy_validation::PolicyOutput {
             decision: if denial.is_some() { "deny" } else { "allow" }.into(),
             denial_reason: reason.map(|reason| reason.to_contract().to_owned()),
-            matched_prefix: reason.and_then(|reason| reason.matched_prefix()).map(<[String]>::to_vec),
-            denied_argv: reason.and_then(|reason| reason.denied_argv()).map(<[String]>::to_vec),
-            denied_command: reason.and_then(|reason| reason.denied_command()).map(str::to_owned),
-            denied_argument: reason.and_then(|reason| reason.denied_argument()).map(str::to_owned),
+            matched_prefix: reason
+                .and_then(|reason| reason.matched_prefix())
+                .map(<[String]>::to_vec),
+            denied_argv: reason
+                .and_then(|reason| reason.denied_argv())
+                .map(<[String]>::to_vec),
+            denied_command: reason
+                .and_then(|reason| reason.denied_command())
+                .map(str::to_owned),
+            denied_argument: reason
+                .and_then(|reason| reason.denied_argument())
+                .map(str::to_owned),
             denied_subcommand: reason
                 .and_then(|reason| reason.denied_subcommand())
                 .map(str::to_owned),
