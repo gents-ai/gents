@@ -506,9 +506,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let public_expected = gents_lean_vocab::lean_contract_snapshot()
         .identity_discovery_policy_cases
         .iter()
-        .find(|case| case["name"] == "outsider-read")
-        .context("missing public discovery case")?["allowed"]
-        == true;
+        .find(|case| case.name == "outsider-read")
+        .context("missing public discovery case")?
+        .allowed;
     assert_eq!(
         !gents_protocol::graphql::graphql_rows_from_response(&public, "PeerRegistry").is_empty(),
         public_expected
@@ -558,7 +558,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let discovery_expected = |name: &str| {
         discovery_cases
             .iter()
-            .find(|case| case["name"] == name)
+            .find(|case| case.name == name)
             .with_context(|| format!("missing discovery case {name}"))
     };
     let user_write = http(admin_address, &user)?
@@ -575,7 +575,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
                 "PeerRegistry"
             )
             .is_ok()),
-        discovery_expected("local-user-write")?["allowed"] == true
+        discovery_expected("local-user-write")?.allowed == true
     );
 
     let user_registry = http(admin_address, &user)?.write(
@@ -682,7 +682,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
                 "PeerRegistry"
             )
             .is_ok()),
-        discovery_expected("revoked-user-write")?["allowed"] == true
+        discovery_expected("revoked-user-write")?.allowed == true
     );
 
     candidate_local
@@ -752,7 +752,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         reopened_write.as_ref().is_ok_and(|value| {
             gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
         }),
-        discovery_expected("revoked-user-write")?["allowed"] == true
+        discovery_expected("revoked-user-write")?.allowed == true
     );
     assert_eq!(
         !gents_protocol::graphql::graphql_rows_from_response(
