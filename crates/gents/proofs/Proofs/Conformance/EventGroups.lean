@@ -128,8 +128,6 @@ def scenarioJson (scenario : GroupScenario) : String :=
     ++ "\"marker_count_after\":" ++ toString after.materialized.length
     ++ "}"
 
-def eventGroupCaseCount : Nat := scenarios.length
-
 def eventGroupCasesJson : String := jsonArray (scenarios.map scenarioJson)
 
 end Conformance.EventGroupContracts

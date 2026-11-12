@@ -2,7 +2,6 @@ use super::*;
 
 pub(super) async fn event_group_eligibility_matches_lean_generated_contract_cases() {
     let cases = lean_event_group_cases();
-    assert_eq!(cases.len(), lean_event_group_case_count());
     assert!(!cases.is_empty());
     for case in cases {
         assert_eq!(

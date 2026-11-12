@@ -24,7 +24,7 @@ use gents_documents::{ConcurrencyMode, ScheduleCadence};
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::{ResolvedAgent, SamplingConfig};
 use gents_lean_vocab::{
-    assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
+    assert_lean_to_defradb_vocabulary_matches, lean_event_group_cases,
     lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
     LeanVocabulary,
 };

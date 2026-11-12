@@ -3061,7 +3061,6 @@ pub struct LeanContractSnapshot {
     pub request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
     pub trigger_dispatch_case_count: usize,
     pub trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
-    pub event_group_case_count: usize,
     pub event_group_cases: Vec<LeanEventGroupCase>,
     pub event_group_clock_case_count: usize,
     pub event_group_clock_cases: Vec<serde_json::Value>,
