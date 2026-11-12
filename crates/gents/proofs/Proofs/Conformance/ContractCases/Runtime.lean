@@ -2,6 +2,8 @@ import Proofs.Runtime.RuntimeReconcile
 import Lean
 import Mathlib.Data.Finset.Sort
 import Proofs.Conformance.ContractCases.Types
+import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Automation
 
 namespace Conformance.ContractCases
 
@@ -267,31 +269,44 @@ def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   , clientAgentReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
   ]
 
-def sessionSelectionCasesJson : String :=
-  let cases : List (String × Nat × Option Nat) :=
-    [("invisible", 10, none), ("matching", 10, some 10), ("mismatched", 10, some 20)]
-  let result (selection : RuntimeState.SessionSelection) : String :=
-    match selection with
-    | .unavailable => "unavailable"
-    | .matched => "matched"
-    | .mismatched => "mismatched"
-  (Lean.toJson (cases.map fun (name, requested, visible) => Lean.Json.mkObj
-    [("name", Lean.toJson name), ("requested", Lean.toJson requested),
-     ("visible", Lean.toJson visible),
-     ("expected", Lean.toJson (result (RuntimeState.sessionSelection requested visible)))] )).compress
+deriving instance Lean.ToJson for RuntimeState.SessionSelection
 
-def configurationAdmissionCasesJson : String :=
-  let cases : List (String × Bool × Nat × Nat) :=
-    [("visible", true, 3, 3), ("invisible_same_generation", false, 3, 3),
-     ("invisible_newer_generation", false, 3, 4), ("invisible_older_generation", false, 4, 3)]
-  let result (admission : RuntimeState.ConfigurationAdmission) : String :=
-    match admission with
-    | .claim => "claim"
-    | .awaitNewerGeneration => "await_newer_generation"
-  (Lean.toJson (cases.map fun (name, visible, deferredAt, active) => Lean.Json.mkObj
-    [("name", Lean.toJson name), ("visible", Lean.toJson visible),
-     ("deferred_at", Lean.toJson deferredAt), ("active", Lean.toJson active),
-     ("expected", Lean.toJson (result (RuntimeState.configurationAdmission visible))),
-     ("retries", Lean.toJson (RuntimeState.retriesDeferred deferredAt active))] )).compress
+structure SessionSelectionInput where
+  name : String
+  requested : Nat
+  visible : Option Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def runtimeSessionSelection : Family SessionSelectionInput RuntimeState.SessionSelection where
+  inputs :=
+    [ { name := "invisible", requested := 10, visible := none }
+    , { name := "matching", requested := 10, visible := some 10 }
+    , { name := "mismatched", requested := 10, visible := some 20 } ]
+  model := fun i => RuntimeState.sessionSelection i.requested i.visible
+
+structure ConfigurationAdmissionInput where
+  name : String
+  visible : Bool
+  deferredAt : Nat
+  active : Nat
+  deriving Lean.ToJson
+
+structure ConfigurationAdmissionOutput where
+  expected : RuntimeState.ConfigurationAdmission
+  retries : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def runtimeConfigurationAdmissionDeferral :
+    Family ConfigurationAdmissionInput ConfigurationAdmissionOutput where
+  inputs :=
+    [ { name := "visible", visible := true, deferredAt := 3, active := 3 }
+    , { name := "invisible_same_generation", visible := false, deferredAt := 3, active := 3 }
+    , { name := "invisible_newer_generation", visible := false, deferredAt := 3, active := 4 }
+    , { name := "invisible_older_generation", visible := false, deferredAt := 4, active := 3 } ]
+  model := fun i =>
+    { expected := RuntimeState.configurationAdmission i.visible
+      retries := RuntimeState.retriesDeferred i.deferredAt i.active }
 
 end Conformance.ContractCases

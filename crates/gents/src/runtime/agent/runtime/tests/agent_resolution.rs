@@ -57,8 +57,8 @@ impl PrivateSessionFixture {
         .await;
     }
 
-    fn request(&self, session: &str) -> AgentRequest {
-        let mut request = request(Some(self.selected.did()), session);
+    fn request(&self, session: &str, agent: &str) -> AgentRequest {
+        let mut request = request(Some(agent), session);
         request.node_did = self.runtime.did().to_owned();
         request.requester_did = Some(self.user.did().to_owned());
         request
@@ -95,31 +95,42 @@ async fn explicit_agent_resolution_matches_lean_binding_cases() {
             fixture.selected.did()
         };
         fixture.create_session("session-binding", bound, true).await;
-        let resolved =
-            resolve_agent_for_request(&fixture.db.node, &fixture.request("session-binding"))
-                .await
-                .unwrap()
-                .expect("the agent can read the session");
+        let resolved = resolve_agent_for_request(
+            &fixture.db.node,
+            &fixture.request("session-binding", fixture.selected.did()),
+        )
+        .await
+        .unwrap()
+        .expect("the agent can read the session");
         assert_eq!(resolved.agent_did, fixture.selected.did(), "{name}");
         assert_eq!(resolved.rejection_reason.is_none(), case.legal, "{name}");
         fixture.db.node.shutdown().await.unwrap();
     }
 }
 
+fn fixture_agent(fixture: &PrivateSessionFixture, id: u64) -> &str {
+    match id {
+        10 => fixture.selected.did(),
+        20 => fixture.other.did(),
+        other => panic!("the fixture has no agent {other}"),
+    }
+}
+
 #[tokio::test]
 async fn private_session_selection_is_actor_scoped_and_matches_lean() {
     let fixture = PrivateSessionFixture::new().await;
-    let cases = &gents_lean_vocab::lean_contract_snapshot().runtime_session_selection_cases;
-    assert_eq!(cases.len(), 3);
-    for case in cases {
-        let name = case.name.as_str();
-        let bound = if name == "mismatched" {
-            fixture.other.did()
-        } else {
-            fixture.selected.did()
+    let cases = gents_lean_vocab::families::contract_cases_runtime_session_selection::cases::<
+        String,
+    >();
+    for case in &cases {
+        let name = case.input.name.as_str();
+        let requested = fixture_agent(&fixture, case.input.requested);
+        let bound = match case.input.visible {
+            Some(id) => fixture_agent(&fixture, id),
+            None => fixture.selected.did(),
         };
         fixture
-            .create_session(name, bound, name != "invisible")
+            .create_session(name, bound, case.input.visible.is_some())
             .await;
         let node_view = ConfigAccess::local_as(
             fixture.db.node.clone(),
@@ -138,21 +149,25 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
                 .is_empty(),
             "runtime must not read private session"
         );
-        let result = resolve_agent_for_request(&fixture.db.node, &fixture.request(name))
-            .await
-            .unwrap();
+        let result =
+            resolve_agent_for_request(&fixture.db.node, &fixture.request(name, requested))
+                .await
+                .unwrap();
         let observed = match result {
             None => "unavailable",
             Some(value) if value.rejection_reason.is_some() => "mismatched",
             Some(_) => "matched",
         };
-        assert_eq!(observed, case.expected.as_str(), "{name}");
+        case.check(observed.to_owned());
     }
     assert!(
-        resolve_agent_for_request(&fixture.db.node, &fixture.request("missing"))
-            .await
-            .unwrap()
-            .is_none()
+        resolve_agent_for_request(
+            &fixture.db.node,
+            &fixture.request("missing", fixture.selected.did())
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
     fixture.db.node.shutdown().await.unwrap();
 }
