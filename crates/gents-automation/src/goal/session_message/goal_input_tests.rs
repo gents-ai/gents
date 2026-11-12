@@ -9,23 +9,20 @@ use gents_session::session::message::plan::{plan, target_goal_assignment};
 use gents_session::session::message::{stage_planned_write_in_txn, RenderedBody};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
-use serde_json::{json, Value};
+use serde_json::json;
 
 #[tokio::test]
 async fn generated_session_messages_capture_target_goal_before_signing() {
-    let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contracts["session_message_goal_input_cases"]
-        .as_array()
-        .unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().session_message_goal_input_cases;
     assert_eq!(cases.len(), 5);
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
         "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     for (index, case) in cases.iter().enumerate() {
-        let name = case["name"].as_str().unwrap();
+        let name = case.name.as_str();
         let f = Fixture::new(&before).await;
         assert_eq!(
-            case["owner"], 1,
+            case.owner, 1,
             "{name}: delivery stays on the calling runtime"
         );
         let caller_agent = &f.agent;
@@ -36,7 +33,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             session_id: session_id.clone(),
         };
         let agent_access = f.agent_access();
-        if case["session_readable"] == true {
+        if case.session_readable {
             agent_access
                 .transact_write("test.goal_input.session", |txn| {
                     Box::pin(async {
@@ -66,11 +63,11 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
         }
         let mut goal_id = None;
         let mut root_doc = None;
-        if case["observed"].is_object() && case["session_readable"] == false {
+        if case.observed.is_some() && !case.session_readable {
             agent_access.write("test.goal_input.orphan", &format!(r#"mutation {{ create_Goal(input: {{ goal_id: "orphan", node_did: "{}", agent_did: "{}", session_id: "{}", objective: "Orphan", status: "active" }}) {{ _docID }} }}"#,
                 escape_graphql_string(f.identity.did()), escape_graphql_string(f.agent.did()), escape_graphql_string(&session_id))).await.unwrap();
         }
-        if case["observed"].is_object() && case["session_readable"] == true {
+        if case.observed.is_some() && case.session_readable {
             let mut opening = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 format!("opening-{index}"),
@@ -109,7 +106,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             .await
             .unwrap();
             goal_id = Some(goal.goal_id);
-            if !case["observed"]["root"].is_null() {
+            if case.observed.as_ref().unwrap().root.is_some() {
                 agent_access.write("test.goal_input.root", &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ assignment_root_request_doc_id: "{}" }}) {{ _docID }} }}"#,
                     escape_graphql_string(&goal.doc_id), escape_graphql_string(&doc))).await.unwrap();
                 root_doc = Some(doc);
@@ -148,7 +145,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             correlation: None,
         };
         let selected = target_goal_assignment(&f.node, &SessionGoals, &cause, &target).await;
-        if case["expected"]["kind"] == "pending" {
+        if case.expected.kind == "pending" {
             assert!(
                 selected.is_err(),
                 "{name}: unknown goal must remain pending"
@@ -173,8 +170,10 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 "{name}: unknown destination input must not be signed as unassigned"
             );
         } else {
-            let expected = case["expected"]["reference"]
-                .is_object()
+            let expected = case
+                .expected
+                .reference
+                .is_some()
                 .then(|| GoalAssignmentInput {
                     goal_id: goal_id.unwrap(),
                     root_request_doc_id: root_doc,
@@ -243,7 +242,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                     })
                 })
                 .await;
-            if case["session_readable"] == false {
+            if !case.session_readable {
                 // Session messages publish only into an existing session the
                 // caller can see; a fresh session is opened by its own flow.
                 let error = staged.err().unwrap_or_else(|| {
