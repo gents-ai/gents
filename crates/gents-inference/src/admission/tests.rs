@@ -585,6 +585,8 @@ fn rust_inference_call_state_vocabulary_matches_lean_model() {
         rust_source: "admission source call_state literals",
         rust_values: &rust_states,
     });
+    let owned: Vec<String> = rust_states.iter().map(|state| (*state).to_owned()).collect();
+    gents_lean_vocab::families::inference_call_state_vocabulary::replay(&owned);
 }
 
 #[test]
