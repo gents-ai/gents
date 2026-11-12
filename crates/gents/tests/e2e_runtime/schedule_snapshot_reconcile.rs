@@ -8,7 +8,7 @@ use gents_tools::surface::ToolCeiling;
 
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::snapshots::{
-    fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot,
+    fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot, SnapshotReader,
 };
 use crate::support::{managed_agent_fixture, test_db, ManagedAgentFixture};
 
@@ -171,6 +171,7 @@ where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut changes = access.subscribe_changes("NodeRuntime").await;
     loop {
         let snapshot = fetch_runtime_snapshot_as(access, node_did).await;
         if snapshot.as_ref().is_some_and(&predicate) {
@@ -180,7 +181,7 @@ where
             tokio::time::Instant::now() < deadline,
             "timed out waiting for runtime snapshot for {node_did}; last snapshot: {snapshot:?}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -303,6 +304,9 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     let due = (Utc::now() - ChronoDuration::seconds(60)).to_rfc3339();
     set_trigger_cursor(&db, &node_did, "schedule-reconcile-alpha", &due).await;
 
+    let mut changes = agent_reader(&db, &fixture)
+        .subscribe_changes("AgentRequest")
+        .await;
     let requests_after_reconcile = fetch_schedule_agent_requests(
         &agent_reader(&db, &fixture),
         &node_did,
@@ -310,7 +314,23 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     )
     .await
     .len();
-    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1_500);
+    while tokio::time::timeout_at(deadline, changes.recv())
+        .await
+        .is_ok()
+    {
+        assert_eq!(
+            fetch_schedule_agent_requests(
+                &agent_reader(&db, &fixture),
+                &node_did,
+                "schedule-reconcile-alpha"
+            )
+            .await
+            .len(),
+            requests_after_reconcile,
+            "a disabled Trigger must stop firing after its generation is active"
+        );
+    }
     assert_eq!(
         fetch_schedule_agent_requests(
             &agent_reader(&db, &fixture),
