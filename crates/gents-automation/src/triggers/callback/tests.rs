@@ -233,39 +233,75 @@ async fn workspace_agent_selection_binds_visible_physical_targets() -> anyhow::R
     Ok(())
 }
 
-fn lean_journal(states: &[String]) -> Vec<ActionJournalEntry> {
-    serde_json::from_value(json!(states
+fn journal_state(state: &str) -> ActionJournalState {
+    match state {
+        "validated" => ActionJournalState::Validated,
+        "executing" => ActionJournalState::Executing,
+        "effect_observed" => ActionJournalState::EffectObserved,
+        "result_docs_written" => ActionJournalState::ResultDocsWritten,
+        "interrupted" => ActionJournalState::Interrupted,
+        other => panic!("unknown journal state {other}"),
+    }
+}
+
+fn state_name(state: ActionJournalState) -> String {
+    match state {
+        ActionJournalState::Validated => "validated",
+        ActionJournalState::Executing => "executing",
+        ActionJournalState::EffectObserved => "effect_observed",
+        ActionJournalState::ResultDocsWritten => "result_docs_written",
+        ActionJournalState::Interrupted => "interrupted",
+    }
+    .to_owned()
+}
+
+fn numbered_journal(states: &[String]) -> Vec<ActionJournalEntry> {
+    states
         .iter()
         .enumerate()
-        .map(|(index, state)| json!({ "index": index, "state": state }))
-        .collect::<Vec<_>>()))
-    .unwrap()
+        .map(|(index, state)| ActionJournalEntry::new(index as u32, journal_state(state)))
+        .collect()
+}
+
+fn journal_wire(
+    journal: &[ActionJournalEntry],
+) -> Vec<gents_lean_vocab::families::contracts_callback_recovery::ActionJournalEntry<String>> {
+    journal
+        .iter()
+        .map(
+            |entry| gents_lean_vocab::families::contracts_callback_recovery::ActionJournalEntry {
+                index: u64::from(entry.index),
+                state: state_name(entry.state),
+            },
+        )
+        .collect()
 }
 
 #[test]
-fn generated_recovery_and_denial_match_runtime_owners() {
-    let cases = gents_lean_vocab::lean_callback_recovery_cases();
-    assert_eq!(cases.len(), 28, "Lean must emit the whole recovery matrix");
-    for case in cases {
-        let journal = lean_journal(&case.journal);
+fn generated_recovery_matches_runtime_owners() {
+    gents_lean_vocab::families::contracts_callback_recovery::replay::<String, String>(|case| {
+        let journal = numbered_journal(&case.journal);
         let (state, recovered) = match gents_session::workspace::recover_running(&journal) {
             Some(failed) => (LIFECYCLE_FAILED, failed),
             None => (LIFECYCLE_RUNNING, journal.clone()),
         };
-        assert_eq!(state, case.post_state, "{}: recovered state", case.name);
-        assert_eq!(recovered, lean_journal(&case.post_journal), "{}", case.name);
-        assert_eq!(
-            gents_session::workspace::retry_allowed(
+        gents_lean_vocab::families::contracts_callback_recovery::RecoveryOutput {
+            post_state: state.to_owned(),
+            post_journal: journal_wire(&recovered),
+            retry_allowed_after: gents_session::workspace::retry_allowed(
                 state,
                 &recovered,
-                case.attempts,
-                case.max_attempts
+                case.attempts as u32,
+                case.max_attempts as u32,
             ),
-            case.retry_allowed_after,
-            "{}: retry after recovery",
-            case.name,
-        );
+        }
+    });
+}
 
+#[test]
+fn generated_denial_matches_runtime_owners() {
+    gents_lean_vocab::families::contracts_callback_denial::replay::<String, String>(|case| {
+        let journal = numbered_journal(&case.journal);
         let mut denied = CallbackInvocationDoc {
             invocation_id: "inv-1".into(),
             agent_did: crate::triggers::callback::test_agent_did(),
@@ -283,7 +319,7 @@ fn generated_recovery_and_denial_match_runtime_owners() {
             caused_by_correlation: None,
             idempotency_key: "bind-1:doc-1".into(),
             lifecycle_state: LIFECYCLE_RUNNING.into(),
-            attempts: Some(i64::from(case.attempts)),
+            attempts: Some(case.attempts as i64),
             action_plan: None,
             action_journal: Some(serde_json::to_string(&journal).unwrap()),
             error: None,
@@ -292,29 +328,25 @@ fn generated_recovery_and_denial_match_runtime_owners() {
         };
         apply_planner_deny(&mut denied, "callback is disabled");
         let denied_journal = decode_journal(denied.action_journal.as_deref()).unwrap();
-        assert_eq!(
-            denied.lifecycle_state, case.deny_post_state,
-            "{}: denied state",
-            case.name
-        );
-        assert_eq!(
-            denied_journal,
-            lean_journal(&case.deny_post_journal),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            gents_session::workspace::retry_allowed(
+        gents_lean_vocab::families::contracts_callback_denial::DenialOutput {
+            retry_allowed_after_deny: gents_session::workspace::retry_allowed(
                 &denied.lifecycle_state,
                 &denied_journal,
-                case.attempts,
-                case.max_attempts
+                case.attempts as u32,
+                case.max_attempts as u32,
             ),
-            case.retry_allowed_after_deny,
-            "{}: retry after denial",
-            case.name,
-        );
-    }
+            deny_post_state: denied.lifecycle_state,
+            deny_post_journal: denied_journal
+                .iter()
+                .map(|entry| {
+                    gents_lean_vocab::families::contracts_callback_denial::ActionJournalEntry {
+                        index: u64::from(entry.index),
+                        state: state_name(entry.state),
+                    }
+                })
+                .collect(),
+        }
+    });
 }
 
 #[test]

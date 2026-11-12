@@ -49,10 +49,6 @@ pub fn lean_callback_cases() -> &'static [LeanCallbackCase] {
     &lean_contract_snapshot().callback_cases
 }
 
-pub fn lean_callback_recovery_cases() -> &'static [LeanCallbackRecoveryCase] {
-    &lean_contract_snapshot().callback_recovery_cases
-}
-
 pub fn lean_callback_retry_cases() -> &'static [LeanCallbackRetryCase] {
     &lean_contract_snapshot().callback_retry_cases
 }
@@ -1353,20 +1349,6 @@ pub struct LeanCallbackCase {
     pub journal: Vec<String>,
     pub result_emitted: bool,
     pub legal: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanCallbackRecoveryCase {
-    pub name: String,
-    pub journal: Vec<String>,
-    pub attempts: u32,
-    pub max_attempts: u32,
-    pub post_state: String,
-    pub post_journal: Vec<String>,
-    pub retry_allowed_after: bool,
-    pub deny_post_state: String,
-    pub deny_post_journal: Vec<String>,
-    pub retry_allowed_after_deny: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -3400,7 +3382,6 @@ pub struct LeanContractSnapshot {
     pub workspace_binding_cases: Vec<LeanWorkspaceBindingCase>,
     pub callback_cases: Vec<LeanCallbackCase>,
     pub callback_retry_cases: Vec<LeanCallbackRetryCase>,
-    pub callback_recovery_cases: Vec<LeanCallbackRecoveryCase>,
     pub event_delivery_transition_case_count: usize,
     pub event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
     pub event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,

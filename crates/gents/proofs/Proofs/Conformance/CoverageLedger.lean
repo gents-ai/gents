@@ -2518,8 +2518,12 @@ def caseCoverage : List CoverageEntry :=
       "CallbackRetryCases")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "callback_recovery_cases"
-      "CallbackRecoveryCases")
+      "family"
+      "contracts_callback_recovery")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_callback_denial")
       "isolated-workspaces" [Surface.runtimeInternal]
 
   , tagged (consumerWithFollowUp "runtime_reconcile_cases" "RuntimeReconcileCases"
@@ -2573,7 +2577,7 @@ def caseCoverage : List CoverageEntry :=
       "Drive captured ordered input and typed origin through the callback capture owner; quiesced groups must reject capture.")
       "triggers" [Surface.runtimeInternal]
   , tagged (followUpCoverage "callback_transition_cases" "CallbackTransitionCases"
-      "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through callback_recovery_cases.")
+      "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through contracts_callback_recovery.")
       "triggers" [Surface.runtimeInternal]
 
   , tagged (consumerCoverage "discovery_guidance_cases" "DiscoveryGuidanceCases")

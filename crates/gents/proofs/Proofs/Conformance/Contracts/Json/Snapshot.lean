@@ -1116,7 +1116,6 @@ def snapshotFileCasesJson : String :=
     ++ "\"callback_transition_case_count\":" ++ toString callbackTransitionCaseCount ++ ","
     ++ "\"callback_transition_cases\":" ++ callbackTransitionCasesJson ++ ","
     ++ "\"callback_retry_cases\":" ++ callbackRetryCasesJson ++ ","
-    ++ "\"callback_recovery_cases\":" ++ callbackRecoveryCasesJson ++ ","
     ++ "\"callback_cases\":"
       ++ callbackCasesJson ++ ","
     ++ "\"r6_background_theorem_witnesses\":"
