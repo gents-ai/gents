@@ -1776,8 +1776,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginHostImportCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_calls_route_cases"
-      "PluginCallsRouteCases")
+      "family"
+      "plugin_resources_child_routes")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "self_config_cases"

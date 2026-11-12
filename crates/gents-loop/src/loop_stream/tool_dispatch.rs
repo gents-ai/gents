@@ -834,6 +834,59 @@ mod tests {
         }
     }
 
+    struct AdmissionGate {
+        name: &'static str,
+        admitted: bool,
+    }
+
+    impl ToolDyn for AdmissionGate {
+        fn name(&self) -> String {
+            self.name.into()
+        }
+
+        fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: self.name.into(),
+                    description: String::new(),
+                    parameters: serde_json::json!({"type": "object"}),
+                }
+            })
+        }
+
+        fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+            Box::pin(async { Ok(String::new()) })
+        }
+
+        fn admit(&self, _args: &str) -> Result<(), ToolError> {
+            if self.admitted {
+                Ok(())
+            } else {
+                Err(ToolError::ReportedFailure {
+                    class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+                    text: "refused by the tool's own admission".into(),
+                })
+            }
+        }
+    }
+
+    #[test]
+    fn plugin_child_admission_matches_the_lean_model() {
+        gents_lean_vocab::families::plugin_resources_child_routes::replay(|i| {
+            let name = if i.static_hook_owned {
+                gents_protocol::goal_names::GET_GOAL_TOOL_NAME
+            } else {
+                "workflow_run"
+            };
+            let surface = if i.selected { name } else { "unselected" };
+            let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(AdmissionGate {
+                name: surface,
+                admitted: i.admitted,
+            })];
+            admit_tool_effect(&tools, name, "{}").is_none()
+        });
+    }
+
     #[test]
     fn ready_settlement_matches_the_lean_model() {
         gents_lean_vocab::families::tool_dispatch_settle_ready::replay::<ReadySettlement>(|i| {

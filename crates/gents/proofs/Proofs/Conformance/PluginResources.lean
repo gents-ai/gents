@@ -545,16 +545,27 @@ def routeCases : List (Bool × Bool × Bool × Bool) :=
 def routeVerdict (c : Bool × Bool × Bool × Bool) : Bool :=
   PluginCalls.childAdmissible c.2.2.1 (PluginCalls.routeOf c.1 c.2.1) c.2.2.2
 
-def routeCasesJson : String := (toJson <| routeCases.map fun c => Json.mkObj [
-  ("static_hook_owned", toJson c.1), ("job_bound", toJson c.2.1),
-  ("selected", toJson c.2.2.1), ("admitted", toJson c.2.2.2),
-  ("expected", toJson (routeVerdict c))]).compress
-
 theorem route_regressions :
     routeCases.map routeVerdict =
       [ false, false, false, true, false, false, false, true
       , false, false, false, true, false, false, false, true ] := by
   native_decide
+
+structure ChildRouteInput where
+  staticHookOwned : Bool
+  jobBound : Bool
+  selected : Bool
+  admitted : Bool
+  deriving ToJson
+
+/-- The child route a plugin's tool call takes: a static hook-owned or
+job-bound tool still runs only when it is on the selected surface and its own
+admission accepts the call. -/
+@[conformance_family]
+def childRoutes : Family ChildRouteInput Bool where
+  inputs := routeCases.map fun (staticHookOwned, jobBound, selected, admitted) =>
+    { staticHookOwned, jobBound, selected, admitted }
+  model := fun i => routeVerdict (i.staticHookOwned, i.jobBound, i.selected, i.admitted)
 
 def pluginResourceConsentCasesJson : String :=
   consentJson.compress

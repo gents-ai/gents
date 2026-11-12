@@ -683,41 +683,11 @@ mod tests {
 #[cfg(test)]
 mod conformance {
     use super::available;
-    use gents_lean_vocab::lean_plugin_calls_route_cases;
-    use std::collections::BTreeSet;
 
     #[test]
     fn plugin_call_availability_matches_the_lean_model() {
         gents_lean_vocab::families::tool_policy_plugin_calls_available::replay(|i| {
             available(i.selected_grant, i.live_dispatcher)
         });
-    }
-
-    /// Lean `PluginCalls.childAdmissible` over `routeOf staticHookOwned jobBound`
-    /// through `plugin::tool_calls::supported`, given the hook's job-bound tool
-    /// set. A static hook-owned route is a tool of the hook's own table; a
-    /// job-bound tool is an operator-chosen name that only the set knows.
-    #[test]
-    fn generated_plugin_calls_route_cases_drive_supported() {
-        let cases = lean_plugin_calls_route_cases();
-        assert_eq!(cases.len(), 16, "Lean child-route rows drifted");
-        for (index, row) in cases.iter().enumerate() {
-            let name = if row.static_hook_owned {
-                gents_protocol::goal_names::GET_GOAL_TOOL_NAME
-            } else {
-                "workflow_run"
-            };
-            let job_tools: BTreeSet<String> =
-                row.job_bound.then(|| name.to_owned()).into_iter().collect();
-            let supported = crate::plugin::tool_calls::supported(name, &job_tools);
-            if row.selected && row.admitted {
-                assert_eq!(supported, row.expected, "route {index}");
-            } else {
-                assert!(
-                    !row.expected,
-                    "route {index}: only a selected, admitted child runs"
-                );
-            }
-        }
     }
 }
