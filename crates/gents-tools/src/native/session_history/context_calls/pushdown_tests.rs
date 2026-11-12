@@ -294,3 +294,5 @@ async fn retained_call_selection_pages_the_scoped_requests() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["call_id"], "last-physical-request");
 }
+
+mod query_cost;
