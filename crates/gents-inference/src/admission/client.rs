@@ -267,18 +267,6 @@ fn context_for_call(call_kind: CallKind, attempt: i64) -> AdmissionCallContext {
     context
 }
 
-#[cfg(test)]
-pub(crate) async fn scope_call_with_token<T>(
-    call_kind: CallKind,
-    attempt: i64,
-    token: CancellationToken,
-    future: impl Future<Output = T>,
-) -> T {
-    let mut context = context_for_call(call_kind, attempt);
-    context.inference_token = Some(token);
-    ADMISSION_CALL_CONTEXT.scope(context, future).await
-}
-
 pub(crate) type TerminalFailureReasonObserver = Arc<Mutex<Option<String>>>;
 
 pub fn terminal_failure_reason_observer() -> TerminalFailureReasonObserver {

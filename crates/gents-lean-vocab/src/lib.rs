@@ -400,14 +400,6 @@ pub fn lean_command_policy_case(name: &str) -> &'static LeanCommandPolicyCase {
         .unwrap_or_else(|| panic!("Lean command policy case {name:?} was not emitted"))
 }
 
-pub fn lean_command_sandbox_case(name: &str) -> &'static LeanCommandSandboxCase {
-    lean_contract_snapshot()
-        .command_sandbox_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean command sandbox case {name:?} was not emitted"))
-}
-
 pub fn lean_command_env_case(name: &str) -> &'static LeanCommandEnvCase {
     lean_contract_snapshot()
         .command_env_cases

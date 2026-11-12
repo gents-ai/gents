@@ -498,4 +498,37 @@ theorem captureOrderCases_pinned :
       ] := by
   rfl
 
+deriving instance Lean.ToJson for RenderedCapture.ManifestFormat, RenderedCapture.InlineValue,
+  RenderedCapture.InlineDecode
+
+structure CaptureManifestInput where
+  captureVersion : Nat
+  format : RenderedCapture.ManifestFormat
+  kind : String
+  deriving Lean.ToJson
+
+/-- Whether `decode_capture_record` accepts a container of each manifest
+format under each manifest-bearing capture version, for either payload. -/
+@[conformance_family]
+def renderedCaptureManifestVersion : Family CaptureManifestInput Bool where
+  inputs := [3, 4].flatMap fun captureVersion =>
+    [RenderedCapture.ManifestFormat.flat, .tree].flatMap fun format =>
+      ["request_body", "provenance_payload"].map fun kind => { captureVersion, format, kind }
+  model := fun i => RenderedCapture.admitsManifest i.captureVersion i.format
+
+structure CaptureInlineInput where
+  captureVersion : Nat
+  value : RenderedCapture.InlineValue
+  deriving Lean.ToJson
+
+/-- What `decode_inline_value` yields for an inline value stored under each
+capture version. -/
+@[conformance_family]
+def renderedCaptureInlineVersion : Family CaptureInlineInput RenderedCapture.InlineDecode where
+  inputs :=
+    [ { captureVersion := 1, value := .collidingLegacy }
+    , { captureVersion := 2, value := .bareJson }
+    , { captureVersion := 3, value := .bareJson } ]
+  model := fun i => RenderedCapture.inlineDecode i.captureVersion i.value
+
 end Conformance.ContractCases

@@ -205,6 +205,18 @@ async fn hydration_segment_selection_uses_the_session_index() {
     node.shutdown().await.expect("node shutdown");
 }
 
+fn terminal_output(
+    selection: &gents_lean_vocab::families::contracts_terminal_selection_hydration::Selection,
+) -> gents_protocol::output::TerminalOutput {
+    match (selection.kind.as_str(), &selection.message_doc_id) {
+        ("message", Some(message_doc_id)) => gents_protocol::output::TerminalOutput::Message {
+            message_doc_id: message_doc_id.clone(),
+        },
+        ("no_message", None) => gents_protocol::output::TerminalOutput::NoMessage,
+        _ => panic!("terminal selection {selection:?} has no production form"),
+    }
+}
+
 #[tokio::test]
 async fn generated_terminal_selections_preserve_superseded_requests() -> Result<()> {
     let db = gents_inference::test_support::test_db(
@@ -215,15 +227,16 @@ async fn generated_terminal_selections_preserve_superseded_requests() -> Result<
     let node = db.node.clone();
     let did = node.node_identity_did().unwrap().to_owned();
     let access = ConfigAccess::local(node.clone());
-    let cases = gents_lean_vocab::lean_request_terminal_selection_cases();
-    assert_eq!(cases.len(), 27);
+    let cases = gents_lean_vocab::families::contracts_terminal_selection_hydration::cases::<
+        gents_protocol::request_lifecycle::RequestLifecycleState,
+    >();
     for (index, case) in cases.iter().enumerate() {
-        let state = case["state"].as_str().unwrap();
         let session = format!("terminal-case-{index}");
+        let selection = case.input.selection.as_ref().map(terminal_output);
         let value = serde_json::json!({
             "request_id":format!("terminal-request-{index}"), "purpose":"normal",
             "node_did":did, "requester_did":did, "session_id":session,
-            "lifecycle_state":state, "terminal_output":case["selection"],
+            "lifecycle_state":case.input.state, "terminal_output":selection,
         });
         let response = access
             .write(
@@ -243,12 +256,11 @@ async fn generated_terminal_selections_preserve_superseded_requests() -> Result<
         };
         let mut row: gents_protocol::row::AgentRequestRow = serde_json::from_value(value.clone())?;
         row.doc_id = Some(physical.clone());
-        let expected: Option<gents_protocol::output::TerminalOutput> =
-            serde_json::from_value(case["expected"].clone())?;
-        assert_eq!(row.observed_terminal_output(), expected.as_ref(), "{case}");
         if row.is_terminal() {
             let observed = gents_session::session::observe_request_output(&access, &row).await?;
-            if expected == Some(gents_protocol::output::TerminalOutput::NoMessage) {
+            if row.observed_terminal_output()
+                == Some(&gents_protocol::output::TerminalOutput::NoMessage)
+            {
                 assert!(matches!(
                     observed,
                     gents_session::session::CanonicalRequestOutput::TerminalNoMessage
@@ -269,17 +281,11 @@ async fn generated_terminal_selections_preserve_superseded_requests() -> Result<
         assert_eq!(
             gents_protocol::graphql::first_graphql_row(&retained, "AgentRequest")?
                 ["terminal_output"],
-            case["selection"],
+            value["terminal_output"],
             "observing output must not rewrite its durable selection"
         );
         let selected = load_session_selection(&node, &request).await;
-        assert_eq!(
-            selected.is_ok(),
-            case["hydration_admitted"].as_bool().unwrap(),
-            "model case {index}: {case}; native error: {:?}",
-            selected.as_ref().err()
-        );
-        if let Ok(selected) = selected {
+        if let Ok(selected) = &selected {
             assert!(selected.documents.iter().any(|document| document.collection
                 == crate::file_inventory::SessionCollection::AgentRequest
                 && document.doc_id == physical));
@@ -288,6 +294,7 @@ async fn generated_terminal_selections_preserve_superseded_requests() -> Result<
                 "no terminal header is invented or borrowed"
             );
         }
+        case.check(selected.is_ok());
     }
     node.shutdown().await.expect("node shutdown");
     Ok(())

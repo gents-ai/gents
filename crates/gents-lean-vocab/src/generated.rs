@@ -113,10 +113,6 @@ pub fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {
     &lean_contract_snapshot().command_policy_cases
 }
 
-pub fn lean_command_sandbox_cases() -> &'static [LeanCommandSandboxCase] {
-    &lean_contract_snapshot().command_sandbox_cases
-}
-
 pub fn lean_compaction_canonical_projection_cases() -> &'static [LeanCanonicalCompactionCase] {
     &lean_contract_snapshot().compaction_canonical_projection_cases
 }
@@ -615,10 +611,6 @@ pub fn lean_request_lifecycle_operator_ui_cases() -> &'static [LeanClientShellCa
 
 pub fn lean_request_progress_cases() -> &'static [LeanRequestProgressCase] {
     &lean_contract_snapshot().request_progress_cases
-}
-
-pub fn lean_request_terminal_selection_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().request_terminal_selection_cases
 }
 
 pub fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
@@ -2782,17 +2774,6 @@ pub enum LeanCommandResult {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanCommandSandboxCase {
-    pub name: String,
-    pub category: String,
-    pub mode: String,
-    pub workspace_write_sandbox_enforced: bool,
-    pub decision: String,
-    pub sandbox: Option<String>,
-    pub denial_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanCompactionCursorCase {
     pub name: String,
     pub compacted: usize,
@@ -2964,7 +2945,6 @@ pub struct LeanContractSnapshot {
     pub background_process_identity_cases: Vec<LeanBackgroundProcessIdentityCase>,
     pub durable_observation_cases: Vec<LeanDurableObservationCase>,
     pub plugin_target_resolution_cases: Vec<LeanPluginTargetResolutionCase>,
-    pub goal_request_head_cases: Vec<LeanGoalRequestHeadCase>,
     pub goal_request_assignment_cases: Vec<LeanGoalRequestAssignmentCase>,
     pub goal_wake_receipt_cases: Vec<LeanGoalWakeReceiptCase>,
     pub goal_tool_context_cases: Vec<LeanGoalToolContextCase>,
@@ -2972,7 +2952,6 @@ pub struct LeanContractSnapshot {
     pub goal_fresh_session_input_cases: Vec<LeanGoalFreshSessionInputCase>,
     pub session_message_goal_input_cases: Vec<LeanSessionMessageGoalInputCase>,
     pub goal_delivery_input_cases: Vec<serde_json::Value>,
-    pub goal_assignment_history_cases: Vec<LeanGoalAssignmentHistoryCase>,
     pub goal_operator_resume_cases: Vec<LeanGoalOperatorResumeCase>,
     pub goal_resume_publication_cases: Vec<LeanGoalResumePublicationCase>,
     pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,
@@ -3251,7 +3230,6 @@ pub struct LeanContractSnapshot {
     pub boundaries: Vec<LeanBoundary>,
     pub deviations: Vec<LeanDeviation>,
     pub command_policy_cases: Vec<LeanCommandPolicyCase>,
-    pub command_sandbox_cases: Vec<LeanCommandSandboxCase>,
     pub command_isolation_cases: Vec<LeanCommandIsolationCase>,
     pub artifact_mode_meet_cases: Vec<serde_json::Value>,
     pub artifact_admission_cases: Vec<serde_json::Value>,
@@ -3282,7 +3260,6 @@ pub struct LeanContractSnapshot {
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
-    pub request_terminal_selection_cases: Vec<serde_json::Value>,
     pub canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
     pub reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,
@@ -4295,63 +4272,6 @@ pub struct LeanGateRow {
     pub dropped_candidate: u64,
     pub sufficient: bool,
     pub no_case_regression: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCase {
-    pub entry: LeanGoalAssignmentHistoryCaseEntry,
-    pub expected: LeanGoalAssignmentHistoryCaseExpected,
-    pub expected_handoff_reason: Option<String>,
-    pub name: String,
-    pub retire_documents: Vec<u64>,
-    pub versions: Vec<LeanGoalAssignmentHistoryCaseVersionsItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseEntry {
-    pub doc: u64,
-    pub owner: u64,
-    pub reference: Option<LeanGoalAssignmentHistoryCaseEntryReference>,
-    pub session: u64,
-    pub signature_valid: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseEntryReference {
-    pub goal: u64,
-    pub root: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseExpected {
-    pub goal: Option<u64>,
-    pub kind: String,
-    pub root: Option<u64>,
-    pub status: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseVersionsItem {
-    pub assignment: LeanGoalAssignmentHistoryCaseVersionsItemAssignment,
-    pub commit: u64,
-    pub document: u64,
-    pub height: u64,
-    pub parents: Vec<u64>,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalAssignmentHistoryCaseVersionsItemAssignment {
-    pub goal: u64,
-    pub owner: u64,
-    pub root: Option<u64>,
-    pub session: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -5611,64 +5531,6 @@ pub struct LeanGoalRequestAssignmentCaseObservedItem {
     pub goal: u64,
     pub owner: u64,
     pub root: Option<u64>,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestHeadCase {
-    pub assignment_root: Option<u64>,
-    pub expected: Option<LeanGoalRequestHeadCaseExpected>,
-    pub expected_receipt_checks: Option<u64>,
-    pub membership_current: u64,
-    pub membership_entry: Option<u64>,
-    pub membership_members: Vec<u64>,
-    pub membership_parents: Vec<Vec<u64>>,
-    pub membership_receipt_checks: Option<u64>,
-    pub name: String,
-    pub rows: Vec<LeanGoalRequestHeadCaseRowsItem>,
-    pub scope: LeanGoalRequestHeadCaseScope,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestHeadCaseExpected {
-    pub deterministic_identity: bool,
-    pub doc: u64,
-    pub goal: Option<u64>,
-    pub input_disposition: String,
-    pub owner: u64,
-    pub parent_doc: Option<u64>,
-    pub parent_request: Option<u64>,
-    pub purpose: String,
-    pub receipt_valid: bool,
-    pub request: u64,
-    pub sequence: u64,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestHeadCaseRowsItem {
-    pub deterministic_identity: bool,
-    pub doc: u64,
-    pub goal: Option<u64>,
-    pub input_disposition: String,
-    pub owner: u64,
-    pub parent_doc: Option<u64>,
-    pub parent_request: Option<u64>,
-    pub purpose: String,
-    pub receipt_valid: bool,
-    pub request: u64,
-    pub sequence: u64,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestHeadCaseScope {
-    pub goal: u64,
-    pub owner: u64,
     pub session: u64,
 }
 

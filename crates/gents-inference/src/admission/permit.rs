@@ -283,7 +283,7 @@ pub(super) fn dropped_terminal(cancelled: bool, observed: Option<String>) -> Dro
 
 /// InferenceCall rows replicate like the request's own reason, so their text
 /// goes through the same redaction and bound.
-fn recorded_failure_reason(reason: &str) -> String {
+pub(super) fn recorded_failure_reason(reason: &str) -> String {
     gents_protocol::failure_text::bounded_text(
         &gents_loop::provider_limit::persisted_failure_reason(reason, chrono::Utc::now()),
     )

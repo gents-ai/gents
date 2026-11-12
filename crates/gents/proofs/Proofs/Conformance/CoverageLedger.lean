@@ -876,8 +876,12 @@ def caseCoverage : List CoverageEntry :=
       "contracts_catalog_refresh_scenarios")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "request_terminal_selection_cases"
-      "RequestTerminalSelectionCases")
+      "family"
+      "contracts_terminal_selection_observed")
+      "file-inventory" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_terminal_selection_hydration")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1764,8 +1768,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalContinuationAssignmentCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_assignment_history_cases"
-      "GoalAssignmentHistoryCases")
+      "family"
+      "goal_request_assignment_contracts_history")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_request_assignment_contracts_persisted_history")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_message_goal_input_cases"
@@ -1852,8 +1860,12 @@ def caseCoverage : List CoverageEntry :=
       "PluginTargetResolutionCases")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_request_head_cases"
-      "GoalRequestHeadCases")
+      "family"
+      "goal_request_head_contracts_selection")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_request_head_contracts_membership")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_edit_cases"

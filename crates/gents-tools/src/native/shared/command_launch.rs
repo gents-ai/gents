@@ -18,11 +18,10 @@ use gents_session::workspace::sandbox::workspace_write_sandbox_enforced;
 #[cfg(target_os = "macos")]
 use gents_session::workspace::sandbox::SANDBOX_EXEC;
 
-#[cfg(test)]
-pub(crate) fn select_sandbox_for_policy(
+pub(crate) fn select_sandbox(
     mode: CommandExecutionMode,
     workspace_write_sandbox_enforced: bool,
-) -> Result<&'static str> {
+) -> std::result::Result<&'static str, DenialReason> {
     match mode {
         CommandExecutionMode::ReadOnly => Ok("policy_read_only"),
         CommandExecutionMode::Unrestricted => Ok("unsandboxed_unrestricted"),
@@ -31,20 +30,8 @@ pub(crate) fn select_sandbox_for_policy(
         {
             Ok("macos_seatbelt")
         }
-        CommandExecutionMode::ArtifactWrite => {
-            anyhow::bail!("artifact_write requires macOS sandbox-exec enforcement")
-        }
-        CommandExecutionMode::WorkspaceWrite => {
-            if cfg!(target_os = "macos") {
-                anyhow::bail!(
-                    "macOS sandbox-exec is required for workspace_write bash but was not found"
-                )
-            } else {
-                anyhow::bail!(
-                    "workspace_write bash requires macOS seatbelt sandbox enforcement on this build"
-                )
-            }
-        }
+        CommandExecutionMode::ArtifactWrite => Err(DenialReason::ArtifactWriteSandboxUnavailable),
+        CommandExecutionMode::WorkspaceWrite => Err(DenialReason::WorkspaceWriteSandboxUnavailable),
     }
 }
 
@@ -347,23 +334,8 @@ fn sandboxed_command_for_policy(
 fn select_sandbox_for_execution(
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<&'static str, ToolError> {
-    match policy.mode {
-        CommandExecutionMode::ReadOnly => Ok("policy_read_only"),
-        CommandExecutionMode::Unrestricted => Ok("unsandboxed_unrestricted"),
-        CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
-            if workspace_write_sandbox_enforced() =>
-        {
-            Ok("macos_seatbelt")
-        }
-        CommandExecutionMode::ArtifactWrite => Err(policy_denial(
-            policy,
-            DenialReason::ArtifactWriteSandboxUnavailable,
-        )),
-        CommandExecutionMode::WorkspaceWrite => Err(policy_denial(
-            policy,
-            DenialReason::WorkspaceWriteSandboxUnavailable,
-        )),
-    }
+    select_sandbox(policy.mode, workspace_write_sandbox_enforced())
+        .map_err(|reason| policy_denial(policy, reason))
 }
 
 #[cfg(target_os = "macos")]

@@ -872,4 +872,44 @@ theorem trace_realizes (sc : Scenario) : Trace (initialMachine sc) (finalMachine
 
 end Scenario
 
+/-- The manifest format a stored record carries. -/
+inductive ManifestFormat where
+  | flat
+  | tree
+  deriving DecidableEq, Repr
+
+/-- A capture version names its manifest format before any block is read:
+version 3 records hold the flat manifest and version 4 records the tree. -/
+def admitsManifest (captureVersion : Nat) : ManifestFormat → Bool
+  | .flat => captureVersion == 3
+  | .tree => captureVersion == 4
+
+theorem version_selects_manifest_format :
+    admitsManifest 3 .flat ∧ admitsManifest 4 .tree ∧
+      admitsManifest 3 .tree = false ∧ admitsManifest 4 .flat = false := by
+  decide
+
+/-- An inline value stored without the lossless envelope. -/
+inductive InlineValue where
+  | collidingLegacy
+  | bareJson
+  deriving DecidableEq, Repr
+
+/-- What decoding an inline value yields: the stored value itself, or a refusal. -/
+inductive InlineDecode where
+  | verbatim
+  | refused
+  deriving DecidableEq, Repr
+
+/-- Version 1 stored inline values verbatim, even one that looks like the
+lossless envelope; later versions require the envelope, so bare JSON is
+refused rather than read as a record. -/
+def inlineDecode (captureVersion : Nat) (_ : InlineValue) : InlineDecode :=
+  if captureVersion == 1 then .verbatim else .refused
+
+theorem capture_version_strictly_selects_the_storage_format :
+    inlineDecode 1 .collidingLegacy = .verbatim ∧ inlineDecode 2 .bareJson = .refused ∧
+      inlineDecode 3 .bareJson = .refused := by
+  decide
+
 end RenderedCapture

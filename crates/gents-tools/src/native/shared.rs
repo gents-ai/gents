@@ -9,7 +9,7 @@ pub(super) use command::command_env::build_shell_env_from_vars;
 pub(crate) use command::command_host_executable::admit_host_executable;
 pub(crate) use command::command_launch::prepare_declared_cli_command;
 #[cfg(test)]
-pub(crate) use command::command_launch::select_sandbox_for_policy;
+pub(crate) use command::command_launch::select_sandbox;
 pub(crate) use command::command_output::shell_join;
 pub(super) use command::command_output::{captured_channel, stopped_stream, truncate_stream};
 pub(super) use command::command_run::run_command;

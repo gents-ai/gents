@@ -2,10 +2,11 @@ import Proofs.Automation.GoalAutomation.RequestHead
 import Proofs.Automation.GoalAutomation.RequestAncestry
 import Proofs.Automation.GoalAutomation.AuthenticationCost
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.GoalRequestHeadContracts
 
-open GoalAutomation.RequestHead Conformance.Contracts
+open Lean GoalAutomation.RequestHead Conformance.Contracts
 
 structure Case where
   name : String
@@ -91,37 +92,101 @@ def rowJson (row : Row) : String :=
   ",\"deterministic_identity\":" ++ boolJson row.deterministicIdentity ++
   ",\"input_disposition\":" ++ dispositionJson row.inputDisposition ++ "}"
 
-private def membershipFields (testCase : Case) : String :=
-  let current := (testCase.rows.head?.map (·.doc)).getD 0
-  let entry := GoalAutomation.RequestAncestry.signedEntry
-    scope.owner scope.session testCase.rows none current
-  let members : List Row := match entry with
-    | none => []
-    | some opening => testCase.rows.filter fun row =>
-      GoalAutomation.RequestAncestry.signedEntry scope.owner scope.session
-        testCase.rows none row.doc == some opening
-  let parents := members.filterMap fun row =>
-    if some row.doc == entry then none
-    else row.parentDoc.map fun parent => "[" ++ toString row.doc ++ "," ++ toString parent ++ "]"
-  ",\"membership_current\":" ++ toString current ++
-  ",\"membership_entry\":" ++ optionalNatJson entry ++
-  ",\"membership_members\":" ++ jsonArray (members.map fun row => toString row.doc) ++
-  ",\"membership_parents\":" ++ jsonArray parents ++
-  ",\"membership_receipt_checks\":" ++ optionalNatJson (testCase.assignmentRoot.map fun _ =>
-    GoalAutomation.AuthenticationCost.membershipChainChecks (testCase.rows.length - 1))
+deriving instance ToJson for GoalAutomation.RequestHead.InputDisposition,
+  GoalAutomation.RequestHead.Scope
 
-def caseJson (testCase : Case) : String :=
-  "{\"name\":" ++ jsonString testCase.name ++
-  ",\"scope\":{\"owner\":" ++ toString scope.owner ++
-  ",\"session\":" ++ toString scope.session ++ ",\"goal\":" ++ toString scope.goal ++ "}" ++
-  ",\"assignment_root\":" ++ optionalNatJson testCase.assignmentRoot ++
-  ",\"expected_receipt_checks\":" ++ optionalNatJson (testCase.assignmentRoot.map fun _ =>
-    GoalAutomation.AuthenticationCost.newestChainChecks (testCase.rows.length - 1)) ++
-  ",\"rows\":" ++ jsonArray (testCase.rows.map rowJson) ++
-  ",\"expected\":" ++ (match testCase.expected with | none => "null" | some row => rowJson row) ++
-  membershipFields testCase ++ "}"
+structure RowWire where
+  purpose : String
+  doc : Nat
+  request : Nat
+  owner : Nat
+  session : Nat
+  goal : Option Nat
+  parentDoc : Option Nat
+  parentRequest : Option Nat
+  sequence : Nat
+  receiptValid : Bool
+  deterministicIdentity : Bool
+  inputDisposition : InputDisposition
+  deriving ToJson
 
-def casesJson : String := jsonArray (cases.map caseJson)
+def RowWire.ofModel (row : Row) : RowWire :=
+  ⟨row.purpose.toWire, row.doc, row.request, row.owner, row.session, row.goal, row.parentDoc,
+    row.parentRequest, row.sequence, row.receiptValid, row.deterministicIdentity, row.inputDisposition⟩
+
+def RowWire.toModel (row : RowWire) : Row :=
+  ⟨(RequestPurpose.fromWire? row.purpose).getD .normal, row.doc, row.request, row.owner, row.session,
+    row.goal, row.parentDoc, row.parentRequest, row.sequence, row.receiptValid,
+    row.deterministicIdentity, row.inputDisposition⟩
+
+structure SelectionInput where
+  name : String
+  scope : Scope
+  rows : List RowWire
+  assignmentRoot : Option Nat
+  /-- The receipt verifications the selector may spend: a bound the consumer
+  checks, not an observation it reports. -/
+  receiptChecks : Option Nat
+  deriving ToJson
+
+/-- The causal head `latest_goal_request` selects from signed rows. -/
+@[conformance_family]
+def selection : Family SelectionInput (Option RowWire) where
+  inputs := cases.map fun c =>
+    { name := c.name, scope, rows := c.rows.map RowWire.ofModel, assignmentRoot := c.assignmentRoot
+      receiptChecks := c.assignmentRoot.map fun _ =>
+        GoalAutomation.AuthenticationCost.newestChainChecks (c.rows.length - 1) }
+  model := fun i =>
+    (select i.scope (assignedRows
+      ⟨i.name, i.rows.map RowWire.toModel, none, i.assignmentRoot⟩)).map RowWire.ofModel
+
+structure Edge where
+  doc : Nat
+  parent : Nat
+  deriving ToJson
+
+structure MembershipInput where
+  name : String
+  scope : Scope
+  rows : List RowWire
+  assignmentRoot : Option Nat
+  membershipCurrent : Nat
+  /-- The receipt verifications membership may spend: a bound the consumer
+  checks, not an observation it reports. -/
+  membershipReceiptChecks : Option Nat
+  deriving ToJson
+
+structure MembershipOutput where
+  membershipEntry : Option Nat
+  membershipMembers : List Nat
+  membershipParents : List Edge
+  deriving ToJson
+
+/-- The Goal members `authenticated_goal_request_members` proves from the
+current request, as the signed entry, every member and each non-entry member's
+physical parent, in document order. -/
+@[conformance_family]
+def membership : Family MembershipInput MembershipOutput where
+  inputs := cases.map fun c =>
+    { name := c.name, scope, rows := c.rows.map RowWire.ofModel, assignmentRoot := c.assignmentRoot
+      membershipCurrent := (c.rows.head?.map (·.doc)).getD 0
+      membershipReceiptChecks := c.assignmentRoot.map fun _ =>
+        GoalAutomation.AuthenticationCost.membershipChainChecks (c.rows.length - 1) }
+  model := fun i =>
+    let rows := i.rows.map RowWire.toModel
+    let entry := GoalAutomation.RequestAncestry.signedEntry
+      i.scope.owner i.scope.session rows none i.membershipCurrent
+    let members : List Row := match entry with
+      | none => []
+      | some opening => rows.filter fun row =>
+        GoalAutomation.RequestAncestry.signedEntry i.scope.owner i.scope.session
+          rows none row.doc == some opening
+    { membershipEntry := entry
+      membershipMembers := (members.map (·.doc)).mergeSort
+      membershipParents := ((members.filterMap fun row =>
+          if some row.doc == entry then none
+          else row.parentDoc.map fun parent => ({ doc := row.doc, parent } : Edge)).mergeSort
+        fun a b => a.doc ≤ b.doc) }
 
 theorem cases_count : cases.length = 27 := by decide
 
