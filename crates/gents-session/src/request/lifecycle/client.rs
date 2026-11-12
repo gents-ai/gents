@@ -2015,13 +2015,9 @@ mod tests {
             .unwrap()
             .is_empty());
         access
-            .write(
-                "test.client.delete_unattended",
-                &format!(
-                    "mutation {{ delete_AgentSession(docID: \"{}\") {{ _docID }} }}",
-                    gents_store::graphql::escape_graphql_string(unattended)
-                ),
-            )
+            .transact_write("test.client.delete_unattended", |txn| {
+                Box::pin(async move { txn.delete_session_for_native_fixture(unattended).await })
+            })
             .await
             .unwrap();
         let after = agent_access
@@ -2069,12 +2065,18 @@ mod tests {
         crate::request::admission::sign_agent_request_create(&user, &mut create)
             .await
             .unwrap();
-        let publication = create.graphql_client_publication_mutation().unwrap();
+        let mut input = gents_store::config_client::client_request_input(&create).unwrap();
+        input["relationships_pending"] = true.into();
         access
             .transact_write("test.retry.pending", |txn| {
-                let publication = &publication;
+                let input = &input;
                 Box::pin(async move {
-                    txn.execute(publication).await?;
+                    txn.execute_client_signed_create(
+                        "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                        &serde_json::json!({"input": input}),
+                        gents_protocol::schemas::AGENT_REQUEST,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })

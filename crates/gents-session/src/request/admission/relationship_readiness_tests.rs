@@ -24,6 +24,38 @@ async fn decision(
         .unwrap()
 }
 
+async fn set_pending(
+    access: &ConfigAccess,
+    operation: &'static str,
+    session: &str,
+    session_pending: Option<bool>,
+    request: &str,
+    request_pending: Option<bool>,
+) {
+    access
+        .transact_write(operation, |txn| {
+            Box::pin(async move {
+                for (collection, schema, doc, pending) in [
+                    ("AgentSession", gents_protocol::schemas::AGENT_SESSION, session, session_pending),
+                    ("AgentRequest", gents_protocol::schemas::AGENT_REQUEST, request, request_pending),
+                ] {
+                    txn.execute_client_signed_update(
+                        &format!(
+                            r#"mutation($input: {collection}MutationInputArg!) {{ update_{collection}(docID: "{}", input: $input) {{ _docID }} }}"#,
+                            gents_store::graphql::escape_graphql_string(doc)
+                        ),
+                        &serde_json::json!({"input": {"relationships_pending": pending}}),
+                        schema,
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn visible_request_is_not_claimed_until_both_relationship_sets_are_published() {
     exercise_readiness(false).await;
@@ -167,14 +199,27 @@ async fn exercise_readiness(same_agent: bool) {
     )
     .await
     .unwrap();
-    let response = author_access
-        .write(
-            "test.readiness.request",
-            &create.graphql_client_publication_mutation().unwrap(),
-        )
+    let mut input = gents_store::config_client::client_request_input(&create).unwrap();
+    input["relationships_pending"] = true.into();
+    let request_doc = author_access
+        .transact_write("test.readiness.request", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                let response = txn
+                    .execute_client_signed_create(
+                        "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                        &serde_json::json!({"input": input}),
+                        gents_protocol::schemas::AGENT_REQUEST,
+                    )
+                    .await?;
+                Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(
+                    &response,
+                    "AgentRequest",
+                )?)
+            })
+        })
         .await
         .unwrap();
-    let request_doc = gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let session_doc = create.session_doc_id.as_deref().unwrap();
     author_access
         .add_resource_relationship(
@@ -250,32 +295,54 @@ async fn exercise_readiness(same_agent: bool) {
         ClaimOutcome::Queued
     ));
 
-    let session = gents_store::graphql::escape_graphql_string(session_doc);
-    let document = gents_store::graphql::escape_graphql_string(&request_doc);
-    author_access.write("test.readiness.session_pending", &format!(
-        r#"mutation {{ update_AgentSession(docID: "{session}", input: {{ relationships_pending: true }}) {{ _docID }} update_AgentRequest(docID: "{document}", input: {{ relationships_pending: false }}) {{ _docID }} }}"#,
-    )).await.unwrap();
+    set_pending(
+        &author_access,
+        "test.readiness.session_pending",
+        session_doc,
+        Some(true),
+        &request_doc,
+        Some(false),
+    )
+    .await;
     assert_eq!(
         decision(&agent_access, &admission, &request).await,
         ClientClaimAuthorization::Unavailable
     );
-    author_access.write("test.readiness.unknown_request", &format!(
-        r#"mutation {{ update_AgentSession(docID: "{session}", input: {{ relationships_pending: false }}) {{ _docID }} update_AgentRequest(docID: "{document}", input: {{ relationships_pending: null }}) {{ _docID }} }}"#,
-    )).await.unwrap();
+    set_pending(
+        &author_access,
+        "test.readiness.unknown_request",
+        session_doc,
+        Some(false),
+        &request_doc,
+        None,
+    )
+    .await;
     assert_eq!(
         decision(&agent_access, &admission, &request).await,
         ClientClaimAuthorization::Unavailable
     );
-    author_access.write("test.readiness.unknown_session", &format!(
-        r#"mutation {{ update_AgentSession(docID: "{session}", input: {{ relationships_pending: null }}) {{ _docID }} update_AgentRequest(docID: "{document}", input: {{ relationships_pending: false }}) {{ _docID }} }}"#,
-    )).await.unwrap();
+    set_pending(
+        &author_access,
+        "test.readiness.unknown_session",
+        session_doc,
+        None,
+        &request_doc,
+        Some(false),
+    )
+    .await;
     assert_eq!(
         decision(&agent_access, &admission, &request).await,
         ClientClaimAuthorization::Unavailable
     );
-    author_access.write("test.readiness.restore_pending", &format!(
-        r#"mutation {{ update_AgentSession(docID: "{session}", input: {{ relationships_pending: false }}) {{ _docID }} update_AgentRequest(docID: "{document}", input: {{ relationships_pending: true }}) {{ _docID }} }}"#,
-    )).await.unwrap();
+    set_pending(
+        &author_access,
+        "test.readiness.restore_pending",
+        session_doc,
+        Some(false),
+        &request_doc,
+        Some(true),
+    )
+    .await;
     crate::request::lifecycle::complete_client_request_relationships(&author_access, &request_doc)
         .await
         .unwrap();
