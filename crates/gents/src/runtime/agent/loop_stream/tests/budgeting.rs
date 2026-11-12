@@ -1177,6 +1177,8 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
 #[test]
 fn generated_compaction_trigger_cases_drive_the_production_trigger() {
     use crate::turn::provider_input::budget::{ContextAnchor, ContextCalibration};
+    let native = |tokens: u64| usize::try_from(tokens).expect("modeled tokens fit");
+    let modeled = |tokens: usize| u64::try_from(tokens).expect("native tokens fit");
     gents_lean_vocab::families::contracts_prompt_assembly_compaction_trigger::replay(|case| {
         let calibration = ContextCalibration::with_observations(
             case.prior_basis_points,
@@ -1184,34 +1186,34 @@ fn generated_compaction_trigger_cases_drive_the_production_trigger() {
         );
         if let Some(anchor) = &case.anchor {
             calibration.anchor_accepted(ContextAnchor {
-                input_tokens: anchor.input_tokens,
-                output_tokens: anchor.output_tokens,
-                estimated_input_tokens: anchor.estimated_input_tokens,
+                input_tokens: native(anchor.input_tokens),
+                output_tokens: native(anchor.output_tokens),
+                estimated_input_tokens: native(anchor.estimated_input_tokens),
             });
         }
         for count in &case.observed {
-            calibration.observe(count.provider, count.estimate);
+            calibration.observe(count.provider, native(count.estimate));
         }
         if case.invalidate {
             calibration.invalidate_anchor();
         }
-        let context = calibration.context(case.raw_input_tokens);
+        let context = calibration.context(native(case.raw_input_tokens));
         let budget = crate::turn::provider_input::budget::compaction_input_budget(
-            case.context_window,
+            native(case.context_window),
             case.threshold_basis_points as f64 / 10_000.0,
-            case.max_output_tokens,
+            native(case.max_output_tokens),
         );
         let ratio_basis_points = context.ratio_basis_points;
-        let calibrated_tokens = context.calibrated;
-        let anchored_tokens = context.anchored;
-        let context_tokens = context.tokens;
+        let calibrated_tokens = modeled(context.calibrated);
+        let anchored_tokens = context.anchored.map(modeled);
+        let context_tokens = modeled(context.tokens);
         let admission = gents_inference::compaction::ReductionAdmission::for_context(
             context, budget,
         )
         .map(|admission| {
             gents_lean_vocab::families::contracts_prompt_assembly_compaction_trigger::Admission {
-                input_tokens: admission.input_tokens(),
-                input_budget: admission.effective_input_budget(),
+                input_tokens: modeled(admission.input_tokens()),
+                input_budget: modeled(admission.effective_input_budget()),
             }
         });
         gents_lean_vocab::families::contracts_prompt_assembly_compaction_trigger::CompactionTriggerOutput {
@@ -1219,7 +1221,7 @@ fn generated_compaction_trigger_cases_drive_the_production_trigger() {
             calibrated_tokens,
             anchored_tokens,
             context_tokens,
-            compaction_input_budget: budget,
+            compaction_input_budget: modeled(budget),
             admission,
         }
     });
