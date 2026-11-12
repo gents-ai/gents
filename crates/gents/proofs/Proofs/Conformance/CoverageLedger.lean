@@ -1615,8 +1615,8 @@ def caseCoverage : List CoverageEntry :=
       "InvalidToolProgressCases")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "repeated_tool_failure_cases"
-      "RepeatedToolFailureCases")
+      "family"
+      "repeated_tool_failure_contracts_owned_loop")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "self_config_selection_cases"

@@ -1010,8 +1010,6 @@ def snapshotRecoveryCasesJson : String :=
       ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
-    ++ "\"repeated_tool_failure_cases\":"
-      ++ Conformance.RepeatedToolFailureContracts.casesJson ++ ","
 
 def snapshotPluginCasesJson : String :=
   ""

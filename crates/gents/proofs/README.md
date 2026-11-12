@@ -1746,7 +1746,7 @@ that a call at the limit is never dispatched, that other calls are, that
 charged outcomes never count, that hook-handled calls not stopped reset, that suppression
 spends one allowance unit, and that an unbounded identical failure stops on
 the fifth call. Interleaved repeats are left to the turn cap and other
-budgets. `repeated_tool_failure_cases` and the composed fields of
+budgets. The `repeated_tool_failure_contracts_owned_loop` family and the composed fields of
 `invalid_tool_progress_cases` drive the real owned loop and persistence hook.
 
 ### Logical invocation output obligations
