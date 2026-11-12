@@ -1,13 +1,12 @@
 #[tokio::test]
 async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder() {
-    let db = gents_inference::test_support::test_db(
+    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
         "unmet-output-obligation",
         gents_automation::lifecycle_hooks::composition(),
     )
     .await;
     let node = db.node.clone();
-    let actor =
-        identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76").unwrap();
+    let actor = identity::Did::new(&binding.agent_did).unwrap();
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::Message("premature answer".to_string()),

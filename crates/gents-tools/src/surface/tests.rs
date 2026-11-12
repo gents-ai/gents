@@ -2,7 +2,7 @@ use super::*;
 
 async fn selected_surface_runtime() -> (gents_inference::test_support::TestDb, ToolRuntimeContext) {
     use gents_store::identity::NodeIdentity as _;
-    let db = gents_inference::test_support::test_db(
+    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
         "selected-surface",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -10,7 +10,6 @@ async fn selected_surface_runtime() -> (gents_inference::test_support::TestDb, T
     let node = db.node.clone();
     let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let node_did = root.did().to_owned();
-    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
     let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node, node_did);
     runtime.agent_identity = Some(agent);

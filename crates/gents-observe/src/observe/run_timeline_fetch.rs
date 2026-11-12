@@ -890,14 +890,14 @@ mod tests {
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
         use gents_store::identity::NodeIdentity;
-        let node_db = gents_inference::test_support::test_db(
-            "fetches-native-goal-history-without-proj",
-            gents_automation::lifecycle_hooks::composition(),
-        )
-        .await;
+        let (node_db, _user, _user_access, binding) =
+            gents_inference::test_support::signed_test_node(
+                "fetches-native-goal-history-without-proj",
+                gents_automation::lifecycle_hooks::composition(),
+            )
+            .await;
         let node = node_db.node.clone();
         let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
-        let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         gents_store::schema::ensure_runtime_schemas(node.as_ref())
             .await

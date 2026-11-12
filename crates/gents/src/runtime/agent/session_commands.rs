@@ -524,6 +524,7 @@ mod tests {
         let user =
             gents_store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
                 .unwrap();
+        gents_session::test_support::grant_operator_user(&node, identity.as_ref(), &user).await;
         let binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
         let agent =
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
@@ -587,6 +588,11 @@ mod tests {
         expected.sort();
         let other_binding =
             gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        access.transact_write("test.sweep.other_agent", |txn| Box::pin(async {
+            txn.execute_client_signed_create("mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did":identity.did(),"agent_did":other_binding.agent_did,"creation_nonce":other_binding.creation_nonce,"enabled":true}}), gents_protocol::schemas::AGENT).await?;
+            Ok::<_, anyhow::Error>(())
+        })).await.unwrap();
         let other =
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &other_binding)
                 .unwrap();

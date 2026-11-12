@@ -107,6 +107,42 @@ async fn node() -> gents_inference::test_support::TestDb {
     .await
 }
 
+/// Schema tool acting as a live Agent holding the permissions the `schema`
+/// tool source projects; the test node's tool policy projects no sources.
+async fn schema_agent_node() -> (gents_inference::test_support::TestDb, SchemaTool) {
+    use gents_store::config_client::NodePermission;
+    use gents_store::identity::NodeIdentity;
+    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node(
+        "schema-help-agent",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+    let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+    let agent_did = identity::Did::new(agent.did()).unwrap();
+    let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::CollectionPatch,
+        NodePermission::CollectionTruncate,
+        NodePermission::MigrationSet,
+        NodePermission::ViewAdd,
+    ] {
+        admin
+            .grant_node_permission(&agent_did, permission)
+            .await
+            .unwrap();
+    }
+    let tool = SchemaTool {
+        node_did: runtime.did().to_owned(),
+        access: ConfigAccess::local_managed_agent(db.node.clone(), agent_did, agent.as_ref())
+            .unwrap(),
+        home: None,
+        caller: None,
+    };
+    (db, tool)
+}
+
 /// Schema tool acting as the node's runtime owner, the signed actor for the
 /// node-owned collections these fixtures create and migrate.
 fn runtime_owned_tool(node: &Arc<EmbeddedNode>) -> SchemaTool {
@@ -406,9 +442,8 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
 
 #[tokio::test]
 async fn additive_recovery_preserves_documents_and_rejects_stale_preview() {
-    let db = node().await;
+    let (db, tool) = schema_agent_node().await;
     let node = db.node.clone();
-    let tool = SchemaTool::new(node.clone());
     let access = ConfigAccess::local(node.clone());
     let installed = apply(
         &tool,
@@ -632,9 +667,7 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
 
 #[tokio::test]
 async fn view_creation_is_previewed_and_discoverable() {
-    let db = node().await;
-    let node = db.node.clone();
-    let tool = SchemaTool::new(node.clone());
+    let (_db, tool) = schema_agent_node().await;
     apply(&tool,json!({"argv":["collection","create"],"options":{"sdl":"type ViewInput { title: String }"}})).await;
     apply(&tool,json!({"argv":["view","create"],"options":{"query":"ViewInput { title }","sdl":"type Titles { title: String }"}})).await;
     let found = call(

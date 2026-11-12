@@ -66,20 +66,14 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             objective: case.fields.objective.clone(),
             budget: case.fields.budget,
         };
-        let db = gents_inference::test_support::test_db(
+        let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
             "goal-edit-contract",
             crate::lifecycle_hooks::composition(),
         )
         .await;
         let node = db.node.clone();
         let signer = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-        let temp = tempfile::tempdir().unwrap();
-        let user =
-            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
-                .unwrap();
-        let binding = gents_store::identity::provision_agent_identity(&signer).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&signer, &binding).unwrap();
-        let access = db.client_access(&user);
         let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
             node.clone(),
             identity::Did::new(agent.did()).unwrap(),
@@ -219,14 +213,13 @@ fn generated_goal_objective_whitespace_matches_native_character_classification()
 
 #[tokio::test]
 async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
-    let node_db = gents_inference::test_support::test_db(
+    let (node_db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
         "edited-fields-match-operator-updates-wit",
         crate::lifecycle_hooks::composition(),
     )
     .await;
     let node = node_db.node.clone();
     let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
-    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
