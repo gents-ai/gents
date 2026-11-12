@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use gents_documents::{BashMode, FileToolMode};
 use crate::native::{CommandExecutionMode, CommandNetworkMode};
 use crate::surface::ToolPolicySurface;
 use crate::surface::{EndpointScope, ToolPolicyBash};
+use gents_documents::{BashMode, FileToolMode};
 
 use gents_lean_vocab::{
     lean_tool_policy_cases, LeanToolPolicySurfaceView as View,

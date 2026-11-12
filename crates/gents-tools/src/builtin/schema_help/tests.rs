@@ -1336,12 +1336,11 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
 async fn schema_preview_and_publication_expose_ignored_native_directives() {
     use gents_store::config_client::NodePermission;
 
-    let (db, _user, _user_access, binding) =
-        gents_inference::test_support::signed_test_node(
-            "schema-native-warnings",
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
+    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
+        "schema-native-warnings",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(

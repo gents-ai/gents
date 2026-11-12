@@ -1,6 +1,16 @@
-use super::command::{agents::agent_params, contracts::help_patch_contracts};
+use super::command::contracts::help_patch_contracts;
 use super::*;
-use gents_protocol::tool_names::{CONFIG_TOOL_NAME, SELF_CONFIG_TOOL_NAMES};
+use crate::builtin::self_config::agent::{admit_sibling_tools_target, SiblingToolsTarget};
+use crate::builtin::self_config::agent::{
+    decide_agent_operation, materialize_agent, AgentActor, AgentCandidate, AgentCatalogView,
+    AgentCreateRequest, AgentOperation,
+};
+use crate::builtin::self_config::{apply_tool_grant_selection, validate_tool_network_selection};
+use crate::builtin::self_config::{
+    guard_agent_keeps_reach, guard_tools_keep_control, guard_tools_keep_grants,
+    reselection_keeps_grants, OperatorGrants,
+};
+use crate::native::CommandNetworkMode;
 use gents_documents::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
 };
@@ -10,19 +20,7 @@ use gents_lean_vocab::{
     LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
 };
 use gents_protocol::operations::inference::InferenceActor;
-use crate::builtin::self_config::agent::{admit_sibling_tools_target, SiblingToolsTarget};
-use crate::builtin::self_config::agent::{
-    decide_agent_operation, materialize_agent, AgentActor, AgentCandidate, AgentCatalogView,
-    AgentCreateRequest, AgentOperation,
-};
-use crate::builtin::self_config::{
-    apply_tool_grant_selection, validate_tool_network_selection,
-};
-use crate::builtin::self_config::{
-    guard_agent_keeps_reach, guard_tools_keep_control, guard_tools_keep_grants,
-    reselection_keeps_grants, OperatorGrants,
-};
-use crate::native::CommandNetworkMode;
+use gents_protocol::tool_names::{CONFIG_TOOL_NAME, SELF_CONFIG_TOOL_NAMES};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 

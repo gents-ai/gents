@@ -184,8 +184,8 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                             }),
                             ..Default::default()
                         };
-                        crate::surface::canonicalize_tools_root(&mut tools, &policy, None)
-                            .and_then(|()| {
+                        crate::surface::canonicalize_tools_root(&mut tools, &policy, None).and_then(
+                            |()| {
                                 let configured = tools
                                     .host
                                     .and_then(|host| host.root)
@@ -195,7 +195,8 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                                     configured.as_deref().map(std::path::Path::new),
                                     Some(ceiling),
                                 )
-                            })
+                            },
+                        )
                     }
                 };
                 let modeled_effective = case.effective.as_ref().map(|path| {

@@ -25,10 +25,8 @@ fn generated_task_policies_bind_the_configured_task_fields() {
                 .iter()
                 .map(|hook| TaskHook {
                     hook_id: hook.hook_id.clone(),
-                    phase: serde_json::from_value(serde_json::Value::String(
-                        hook.phase.clone(),
-                    ))
-                    .unwrap(),
+                    phase: serde_json::from_value(serde_json::Value::String(hook.phase.clone()))
+                        .unwrap(),
                     command: hook.command.clone(),
                     timeout_secs: None,
                     skip_exit_codes: Vec::new(),

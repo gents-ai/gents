@@ -1,6 +1,4 @@
-use crate::native::edit_match::{
-    decide, EditOutcome, EditRequest, MatchMode, Operation, Strategy,
-};
+use crate::native::edit_match::{decide, EditOutcome, EditRequest, MatchMode, Operation, Strategy};
 
 fn ladder_req<'a>(old: &'a str, new: &'a str, replace_all: bool) -> EditRequest<'a> {
     EditRequest {

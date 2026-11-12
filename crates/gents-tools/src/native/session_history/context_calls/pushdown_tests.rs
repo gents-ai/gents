@@ -1,5 +1,4 @@
 use crate::native::session_history::context_calls::*;
-use gents_loop::tool::Tool as _;
 use serde_json::json;
 
 async fn request(
