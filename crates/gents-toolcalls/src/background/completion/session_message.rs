@@ -380,6 +380,15 @@ mod conformance {
         );
     }
 
+    #[test]
+    fn settled_state_matches_lean() {
+        gents_lean_vocab::families::recovery_caused_terminal_settled_state::replay(
+            |case: &gents_lean_vocab::families::recovery_caused_terminal_settled_state::Input<
+                String,
+            >| caused(&case.terminal).tool_state(),
+        );
+    }
+
     fn terminal(name: &str) -> Option<Terminal> {
         match name {
             "pending" => None,

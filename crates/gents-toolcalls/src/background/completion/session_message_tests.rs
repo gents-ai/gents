@@ -414,20 +414,3 @@ async fn managed_parent_receives_child_completion_when_node_cannot_read_request(
     node.shutdown().await.unwrap();
     std::fs::remove_dir_all(&admission.path).unwrap();
 }
-
-/// Native background completions keep their reasonless success form: the
-/// persisted suffix path is reserved for session-message settlement
-/// (verified through the real redrive in
-/// `crash_before_notice_redrive_renders_the_persisted_assignment_reason`
-/// and by the projection regression in the recovery module).
-#[tokio::test]
-async fn session_message_settlement_persists_assignment_reason_not_native_status() {
-    // Non-session-message completions never call settle_session_message;
-    // the accessor at tool_call_lifecycle.rs keeps formatting any reason
-    // it is given, so the native vocabulary is unchanged there.
-    let terminal = crate::call::lifecycle::CausedRequestTerminal::Completed {
-        output: "child done".into(),
-    };
-    assert_eq!(terminal.completion_reason(), None);
-    assert_eq!(terminal.notification_status(), "completed");
-}
