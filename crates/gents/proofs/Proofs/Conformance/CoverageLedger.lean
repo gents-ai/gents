@@ -1663,8 +1663,8 @@ def caseCoverage : List CoverageEntry :=
       "plugin_effects_terminal_presentation")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_tool_effect_accounting_cases"
-      "PluginEffectAccountingCases")
+      "family"
+      "plugin_effects_child_accounting")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_tool_call_cases"
