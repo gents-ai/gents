@@ -2921,7 +2921,6 @@ pub struct LeanContractSnapshot {
     pub background_process_identity_cases: Vec<LeanBackgroundProcessIdentityCase>,
     pub durable_observation_cases: Vec<LeanDurableObservationCase>,
     pub plugin_target_resolution_cases: Vec<LeanPluginTargetResolutionCase>,
-    pub goal_request_assignment_cases: Vec<LeanGoalRequestAssignmentCase>,
     pub goal_wake_receipt_cases: Vec<LeanGoalWakeReceiptCase>,
     pub goal_tool_context_cases: Vec<LeanGoalToolContextCase>,
     pub goal_input_binding_cases: Vec<LeanGoalInputBindingCase>,
@@ -5451,70 +5450,6 @@ pub struct LeanGoalRequestAncestryCaseRowsItem {
 pub struct LeanGoalRequestAncestryCaseScope {
     pub goal: u64,
     pub owner: u64,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAssignmentCase {
-    pub assignment: LeanGoalRequestAssignmentCaseAssignment,
-    pub entry: LeanGoalRequestAssignmentCaseEntry,
-    pub expected_member: bool,
-    pub expected_observation: LeanGoalRequestAssignmentCaseExpectedObservation,
-    pub expected_queue_scope: Option<LeanGoalRequestAssignmentCaseExpectedQueueScope>,
-    pub name: String,
-    pub observed: Vec<LeanGoalRequestAssignmentCaseObservedItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAssignmentCaseAssignment {
-    pub goal: u64,
-    pub owner: u64,
-    pub root: Option<u64>,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAssignmentCaseEntry {
-    pub doc: u64,
-    pub owner: u64,
-    pub reference: Option<LeanGoalRequestAssignmentCaseEntryReference>,
-    pub session: u64,
-    pub signature_valid: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAssignmentCaseEntryReference {
-    pub goal: u64,
-    pub root: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAssignmentCaseExpectedObservation {
-    pub goal: Option<u64>,
-    pub kind: String,
-    pub root: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAssignmentCaseExpectedQueueScope {
-    pub entry: Option<u64>,
-    pub goal: Option<u64>,
-    pub kind: String,
-    pub root: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAssignmentCaseObservedItem {
-    pub goal: u64,
-    pub owner: u64,
-    pub root: Option<u64>,
     pub session: u64,
 }
 

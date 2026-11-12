@@ -130,26 +130,11 @@ def entryJson (e : Entry) : Json :=
     ("reference", e.reference.map referenceJson |>.getD Json.null),
     ("signature_valid", toJson e.signatureValid)]
 
-def observationJson : Observation → Json
-  | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
-  | .unknown => Json.mkObj [("kind", toJson "unknown")]
-  | .assigned goal root => Json.mkObj [("kind", toJson "assigned"),
-      ("goal", toJson goal), ("root", toJson root)]
-
 def queueScopeJson : QueueScope → Json
   | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
   | .unresolved entry => Json.mkObj [("kind", toJson "unresolved"), ("entry", toJson entry)]
   | .referenced goal root => Json.mkObj [("kind", toJson "referenced"),
       ("goal", toJson goal), ("root", toJson root)]
-
-def caseJson (c : Case) : Json :=
-  Json.mkObj [("name", toJson c.name), ("assignment", assignmentJson c.assignment),
-    ("entry", entryJson c.entry), ("observed", toJson (c.observed.map assignmentJson)),
-    ("expected_member", toJson (belongs c.assignment c.entry)),
-    ("expected_observation", observationJson (observe c.observed c.entry)),
-    ("expected_queue_scope", (queueScope c.observed c.entry).map queueScopeJson |>.getD Json.null)]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
 
 example : cases.length = 18 := by decide
 
@@ -264,6 +249,56 @@ def persistedHistory : Family HistoryCase PersistedObservation where
   model := fun c =>
     { observation := ObservationWire.ofModel (observeHistory c.versions c.entry)
       handoffReason := historyHandoffReason (observeHistory c.versions c.entry) }
+
+deriving instance ToJson for Case
+
+structure AssignmentObservationWire where
+  kind : String
+  goal : Option Nat
+  root : Option Nat
+  deriving ToJson
+
+def AssignmentObservationWire.ofModel : Observation → AssignmentObservationWire
+  | .unassigned => ⟨"unassigned", none, none⟩
+  | .unknown => ⟨"unknown", none, none⟩
+  | .assigned goal root => ⟨"assigned", some goal, some root⟩
+
+structure QueueScopeWire where
+  kind : String
+  entry : Option Nat
+  goal : Option Nat
+  root : Option Nat
+  deriving ToJson
+
+def QueueScopeWire.ofModel : QueueScope → QueueScopeWire
+  | .unassigned => ⟨"unassigned", none, none, none⟩
+  | .unresolved entry => ⟨"unresolved", some entry, none, none⟩
+  | .referenced goal root => ⟨"referenced", none, some goal, some root⟩
+
+structure SignedBindingOutput where
+  member : Bool
+  observation : AssignmentObservationWire
+  queueScope : Option QueueScopeWire
+  deriving ToJson
+
+/-- Membership by `request_belongs_to_goal`, the observation by
+`observe_request_assignment` and the queue scope by `request_assignment_scope`
+over the observed Goals, for every signed assignment case. -/
+@[conformance_family]
+def signedBinding : Family Case SignedBindingOutput where
+  inputs := cases
+  model := fun c =>
+    { member := belongs c.assignment c.entry
+      observation := AssignmentObservationWire.ofModel (observe c.observed c.entry)
+      queueScope := (queueScope c.observed c.entry).map QueueScopeWire.ofModel }
+
+/-- The scope `load_request_assignment_scopes` resolves when retained Goal
+history cannot be read: only a verified signed reference, with no historical
+entry to fall back on. -/
+@[conformance_family]
+def unreadHistoryScope : Family Case (Option QueueScopeWire) where
+  inputs := cases
+  model := fun c => (preferSignedQueueScope [] (some c.entry) none).map QueueScopeWire.ofModel
 
 structure MessageInputWire where
   name : String

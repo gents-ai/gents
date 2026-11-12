@@ -1,5 +1,4 @@
 use super::*;
-use gents_lean_vocab::LeanGoalRequestAssignmentCaseExpectedQueueScope;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,16 +43,17 @@ impl gents_store::config_client::ConfigRead for ReadScope {
 
 #[tokio::test]
 async fn signed_scope_reads_use_the_executed_assignment_contract_without_history() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_assignment_cases;
-    assert!(!cases.is_empty());
     let home = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(home.path().join("one.key"), None).unwrap(),
         KeyIdentity::load_or_create(home.path().join("two.key"), None).unwrap(),
     ];
-    for case in cases {
+    for case in
+        gents_lean_vocab::families::goal_request_assignment_contracts_unread_history_scope::cases()
+    {
+        let name = &case.input.name;
         let row = super::contract_tests::entry(
-            &super::contract_tests::case_entry_value(&case.entry),
+            &serde_json::to_value(&case.input.entry).unwrap(),
             &identities,
         )
         .await;
@@ -74,54 +74,28 @@ async fn signed_scope_reads_use_the_executed_assignment_contract_without_history
             row.session_id.as_deref().unwrap(),
         )
         .await;
-        if explicit && valid {
+        let scope = if explicit && valid {
             let mut scopes = result.unwrap();
-            let scope = scopes
-                .scope_for_request(&doc, &row.request_id)
-                .await
-                .unwrap();
-            let RequestAssignmentScope::Referenced(reference) = scope else {
-                panic!("{}", case.name)
-            };
-            let actual = LeanGoalRequestAssignmentCaseExpectedQueueScope {
-                entry: None,
-                goal: Some(
-                    reference
-                        .goal_id
-                        .strip_prefix("goal-")
-                        .unwrap()
-                        .parse::<u64>()
-                        .unwrap(),
-                ),
-                kind: "referenced".into(),
-                root: Some(
-                    reference
-                        .root_request_doc_id
-                        .unwrap()
-                        .strip_prefix("physical-")
-                        .unwrap()
-                        .parse::<u64>()
-                        .unwrap(),
-                ),
-            };
-            assert_eq!(Some(actual), case.expected_queue_scope, "{}", case.name);
+            let scope = scopes.scope_for_request(&doc, &row.request_id).await;
             assert!(scopes
                 .scope_for_request(&doc, "another-logical-request")
                 .await
                 .is_err());
             assert!(scopes.scope("unobserved-physical-request").await.is_err());
-            assert_eq!(reader.history_reads.load(Ordering::Relaxed), 0);
+            assert_eq!(reader.history_reads.load(Ordering::Relaxed), 0, "{name}");
+            scope
         } else {
-            assert!(
-                result.unwrap().scope(&doc).await.is_err(),
-                "{}",
-                case.name
-            );
+            let scope = result.unwrap().scope(&doc).await;
             assert_eq!(
                 reader.history_reads.load(Ordering::Relaxed),
-                usize::from(valid)
+                usize::from(valid),
+                "{name}"
             );
-        }
+            scope
+        };
+        case.check(scope.ok().map(|scope| {
+            gents_lean_vocab::family::recode(&super::contract_tests::queue_scope_wire(scope))
+        }));
     }
 }
 

@@ -1792,8 +1792,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalFreshSessionInputCases")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "goal_request_assignment_cases"
-      "GoalRequestAssignmentCases")
+      "family"
+      "goal_request_assignment_contracts_signed_binding")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_request_assignment_contracts_unread_history_scope")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_wake_receipt_cases"
