@@ -23,6 +23,7 @@ use super::inference_backend::{
 use super::InferenceBackend;
 #[cfg(test)]
 use apply::confirm_removal;
+pub(crate) use apply::find_node_doc_id;
 pub use apply::{configuration_node_doc, ConfigurationNodeBinding};
 pub use apply::{
     grant_agent_catalog, grant_node_administration, grant_selected_self_configuration,

@@ -4,6 +4,7 @@ import Proofs.Tools.MCPHealth.Coupling
 import Proofs.Tools.ToolPolicy.OperatorPaths
 import Proofs.Tools.ToolPolicy.PluginCalls
 import Proofs.Tools.SelfConfig.ToolsSave
+import Proofs.Tools.WorkspaceRootOperations
 import Proofs.Conformance.Family
 import Proofs.Conformance.Functions.Documents
 
@@ -46,3 +47,16 @@ attribute [conformance_function] holdsOperatorGrant ownControlBinds sharedOutcom
   dropRefused
 
 end SelfConfig.ToolsSave
+
+namespace WorkspaceRootOperations
+
+deriving instance Lean.ToJson for Stored, Toggle, NameUpdate, ReaderSubject, ReaderChange,
+  ReaderDecision, Refusal, Recovery
+
+attribute [conformance_function]
+  enabledAfter
+  writesDisplayName
+  readerDecision
+  Refusal.recovery
+
+end WorkspaceRootOperations

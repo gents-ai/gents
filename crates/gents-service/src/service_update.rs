@@ -1,7 +1,7 @@
 //! Constrained, independently supervised native-service replacement. Durable
 //! receipts survive runtime retirement; they never stand in for store locks or
 //! the runtime's authenticated admission fence.
-use crate::args::{ServiceAction, ServiceUpdateArgs};
+use crate::args::ServiceUpdateArgs;
 use crate::home_state::{read_init_config, read_runtime_state, resolve_home_dir};
 use crate::native_service::{NativeServiceConfig, NativeServiceManager};
 use crate::network_settings::NetworkSettings;
@@ -339,7 +339,7 @@ fn metadata(schema_checked: bool) -> serde_json::Value {
 pub async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
     let guarded_home = home.clone();
     tokio::task::spawn_blocking(move || {
-        refuse_self_disruption(&guarded_home, &ServiceAction::Restart)
+        crate::lifecycle::refuse_update_from_its_runtime(&guarded_home)
     })
     .await??;
     let directory = operation_dir(&home, id);
@@ -413,36 +413,4 @@ async fn cleanup_helper(plan: &Plan) -> Result<()> {
         NativeServiceManager::new(config)?.unregister_updater(&directory, id)
     })
     .await?
-}
-
-pub fn refuse_self_disruption(home: &Path, action: &ServiceAction) -> Result<()> {
-    refuse_origin_disruption(
-        home,
-        std::env::var_os("GENTS_CALLER_RUNTIME_HOME")
-            .map(PathBuf::from)
-            .as_deref(),
-        action,
-    )
-}
-fn refuse_origin_disruption(
-    home: &Path,
-    origin: Option<&Path>,
-    action: &ServiceAction,
-) -> Result<()> {
-    if matches!(
-        action,
-        ServiceAction::Stop { .. }
-            | ServiceAction::Restart
-            | ServiceAction::Install { .. }
-            | ServiceAction::Uninstall
-    ) {
-        if let Some(origin) = origin {
-            if let (Ok(origin), Ok(home)) =
-                (std::fs::canonicalize(origin), std::fs::canonicalize(home))
-            {
-                anyhow::ensure!(origin != home, "This command would disrupt the runtime executing your turn. Use `gents runtime service update` and finish your turn after acceptance; inspect `gents runtime service update-status` after reconnect. Use external administration for unsupported maintenance.");
-            }
-        }
-    }
-    Ok(())
 }

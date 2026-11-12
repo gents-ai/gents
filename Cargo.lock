@@ -5299,6 +5299,7 @@ dependencies = [
  "clap",
  "gents",
  "gents-desktop-core",
+ "gents-lean-vocab",
  "gents-protocol",
  "gents-session",
  "gents-store",

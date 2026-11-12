@@ -2,8 +2,17 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use gents_documents::read_desired_state_record_in_txn;
+use gents_protocol::operations::workspace_root::{
+    enabled_after, normalize_root_path, reader_decision, writes_display_name, EnabledUpdate,
+    NameUpdate, ReaderChange, ReaderDecision, ReaderSubject, StoredRoot, WorkspaceRootError,
+    WorkspaceRootPublish, WorkspaceRootReaderInput, WorkspaceRootReaderReceipt,
+    WorkspaceRootReceipt, WorkspaceRootRemoved, WorkspaceRootView,
+};
+use gents_protocol::operations::StringUpdate;
 use gents_store::collection::Collection;
-use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::config_client::{
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, TransactionFailure,
+};
 use gents_store::graphql::{
     created_doc_id, escape_graphql_string, mutation_documents, required_rows,
 };
@@ -14,15 +23,70 @@ pub enum WorkspaceRootWriteError {
     Publication(#[source] anyhow::Error),
 }
 
-async fn selected_node(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<String> {
-    anyhow::ensure!(
-        txn.actor_did().is_some(),
-        "workspace root publication requires an authenticated actor"
-    );
-    identity::Did::new(node_did)?;
+enum RootApplyError {
+    Operation(WorkspaceRootError),
+    Other(anyhow::Error),
+}
+
+impl From<WorkspaceRootError> for RootApplyError {
+    fn from(error: WorkspaceRootError) -> Self {
+        Self::Operation(error)
+    }
+}
+
+impl From<anyhow::Error> for RootApplyError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<ConfigClientError> for RootApplyError {
+    fn from(error: ConfigClientError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl From<RootApplyError> for WorkspaceRootError {
+    fn from(error: RootApplyError) -> Self {
+        match error {
+            RootApplyError::Operation(error) => error,
+            RootApplyError::Other(error) => {
+                Self::Passthrough(error.reallocate_into_boxed_dyn_error_without_backtrace())
+            }
+        }
+    }
+}
+
+impl From<RootApplyError> for anyhow::Error {
+    fn from(error: RootApplyError) -> Self {
+        match error {
+            RootApplyError::Operation(error) => error.into(),
+            RootApplyError::Other(error) => error,
+        }
+    }
+}
+
+impl TransactionFailure for RootApplyError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Operation(_) => None,
+            Self::Other(error) => error.config_client_error(),
+        }
+    }
+}
+
+type Applied<T> = std::result::Result<T, RootApplyError>;
+
+async fn selected_node(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Applied<String> {
+    if txn.actor_did().is_none() {
+        return Err(
+            anyhow::anyhow!("workspace root publication requires an authenticated actor").into(),
+        );
+    }
+    identity::Did::new(node_did).map_err(anyhow::Error::from)?;
     let (doc, _) = read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
         .await?
-        .context("selected Node is unavailable")?;
+        .ok_or_else(|| WorkspaceRootError::NodeUnavailable(node_did.to_owned()))?;
     Ok(doc)
 }
 
@@ -31,17 +95,24 @@ fn value_rows(response: &Value, field: &str) -> Result<Vec<Value>> {
     Ok(required_rows(&response, field)?)
 }
 
+type RootDoc = gents_protocol::document_query::fields::workspace_root::Doc;
+
+fn root_selection() -> gents_protocol::document_query::Selection<RootDoc> {
+    use gents_protocol::document_query::{fields::workspace_root as fields, Selection};
+    Selection::doc_id()
+        .field(fields::NODE_DID)
+        .field(fields::NODE_DOC_ID)
+        .field(fields::ROOT_PATH)
+        .field(fields::DISPLAY_NAME)
+        .field(fields::ENABLED)
+        .field(fields::UPDATED_AT)
+}
+
 async fn root_row(txn: &ConfigApplyTxn<'_>, root_path: &str) -> Result<Option<Value>> {
-    use gents_protocol::document_query::{
-        fields::workspace_root as fields, Filter, Query, Selection,
-    };
-    let rendered = Query::select(
-        Selection::doc_id()
-            .field(fields::NODE_DID)
-            .field(fields::NODE_DOC_ID),
-    )
-    .filter(Filter::eq(fields::ROOT_PATH, root_path))
-    .render();
+    use gents_protocol::document_query::{fields::workspace_root as fields, Filter, Query};
+    let rendered = Query::select(root_selection())
+        .filter(Filter::eq(fields::ROOT_PATH, root_path))
+        .render();
     let response = txn.run(&rendered).await?;
     let mut rows: Vec<Value> = value_rows(&response, "WorkspaceRoot")?;
     anyhow::ensure!(
@@ -51,14 +122,22 @@ async fn root_row(txn: &ConfigApplyTxn<'_>, root_path: &str) -> Result<Option<Va
     Ok(rows.pop())
 }
 
-fn checked_root_doc<'a>(row: &'a Value, node_did: &str, node_doc: &str) -> Result<&'a str> {
-    anyhow::ensure!(
-        row["node_did"] == node_did && row["node_doc_id"] == node_doc,
-        "WorkspaceRoot does not belong to the selected physical Node"
-    );
-    row["_docID"]
+async fn existing_root(txn: &ConfigApplyTxn<'_>, root_path: &str) -> Applied<Value> {
+    Ok(root_row(txn, root_path)
+        .await?
+        .ok_or_else(|| WorkspaceRootError::RootMissing(root_path.to_owned()))?)
+}
+
+fn checked_root_doc<'a>(row: &'a Value, node_did: &str, node_doc: &str) -> Applied<&'a str> {
+    if row["node_did"] != node_did || row["node_doc_id"] != node_doc {
+        return Err(WorkspaceRootError::ForeignRoot(
+            row["root_path"].as_str().unwrap_or_default().to_owned(),
+        )
+        .into());
+    }
+    Ok(row["_docID"]
         .as_str()
-        .context("WorkspaceRoot is missing its physical ID")
+        .context("WorkspaceRoot is missing its physical ID")?)
 }
 
 /// This write is the native Node authorization check and the shared transaction
@@ -84,24 +163,231 @@ async fn fence_node(txn: &ConfigApplyTxn<'_>, node_doc: &str) -> Result<()> {
     Ok(())
 }
 
-async fn selected_agent(
+async fn reader_subject(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_did: &str,
-) -> Result<identity::Did> {
-    let did = identity::Did::new(agent_did)?;
-    anyhow::ensure!(
-        agent_did != node_did,
-        "root reader must be an explicitly selected Agent"
-    );
-    let (_, row) = read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
+    change: ReaderChange,
+) -> Result<ReaderSubject> {
+    if agent_did == node_did {
+        return Ok(ReaderSubject::NodeActor);
+    }
+    if change == ReaderChange::Revoke {
+        return Ok(ReaderSubject::UnknownActor);
+    }
+    let Some((_, row)) =
+        read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did).await?
+    else {
+        return Ok(ReaderSubject::UnknownActor);
+    };
+    Ok(
+        if row["agent_did"] != agent_did || row["node_did"] != node_did {
+            ReaderSubject::UnknownActor
+        } else if row["enabled"] == false {
+            ReaderSubject::DisabledAgent
+        } else {
+            ReaderSubject::EnabledAgent
+        },
+    )
+}
+
+async fn admitted_reader(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_did: &str,
+    change: ReaderChange,
+) -> Applied<identity::Did> {
+    let did = identity::Did::new(agent_did).map_err(anyhow::Error::from)?;
+    match reader_decision(
+        change,
+        reader_subject(txn, node_did, agent_did, change).await?,
+    ) {
+        ReaderDecision::Admitted => Ok(did),
+        ReaderDecision::AgentUnavailable => {
+            Err(WorkspaceRootError::AgentUnavailable(agent_did.to_owned()).into())
+        }
+        ReaderDecision::NodeActor => Err(WorkspaceRootError::NodeActor.into()),
+    }
+}
+
+async fn publish_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    input: &WorkspaceRootPublish,
+) -> Applied<WorkspaceRootReceipt> {
+    let (node_did, root_path) = (input.node_did.as_str(), input.root_path.as_str());
+    if !std::path::Path::new(root_path).is_absolute() {
+        return Err(WorkspaceRootError::PathNotAbsolute(root_path.to_owned()).into());
+    }
+    let node_doc = selected_node(txn, node_did).await?;
+    let existing = root_row(txn, root_path).await?;
+    if let Some(row) = &existing {
+        checked_root_doc(row, node_did, &node_doc)?;
+    }
+    let mut readers = Vec::new();
+    for agent_did in input
+        .reader_agents
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        readers.push((
+            agent_did.clone(),
+            admitted_reader(txn, node_did, agent_did, ReaderChange::Grant).await?,
+        ));
+    }
+    fence_node(txn, &node_doc).await?;
+    let stored = match &existing {
+        None => StoredRoot::Absent,
+        Some(row) if row["enabled"] == false => StoredRoot::Disabled,
+        Some(_) => StoredRoot::Enabled,
+    };
+    let enabled = enabled_after(stored, input.enabled);
+    let display_name = if writes_display_name(stored, NameUpdate::from(&input.display_name)) {
+        input.display_name.owned_value()
+    } else {
+        existing
+            .as_ref()
+            .and_then(|row| row["display_name"].as_str())
+            .map(str::to_owned)
+    };
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let created = existing.is_none();
+    let doc = if let Some(row) = existing {
+        let doc = checked_root_doc(&row, node_did, &node_doc)?;
+        let mutation = format!("mutation($input: WorkspaceRootMutationInputArg!) {{ update_WorkspaceRoot(docID: \"{}\", input: $input) {{ _docID }} }}", escape_graphql_string(doc));
+        let result = txn.execute_client_signed_update(&mutation, &json!({"input":{"display_name":display_name,"enabled":enabled,"updated_at":updated_at}}), gents_protocol::schemas::WORKSPACE_ROOT).await?;
+        let docs = mutation_documents(&result, "update_WorkspaceRoot")
+            .map_err(anyhow::Error::from)?
+            .context("WorkspaceRoot update returned no confirmation")?;
+        if docs.len() != 1 || docs[0]["_docID"] != doc {
+            return Err(anyhow::anyhow!("WorkspaceRoot update was not confirmed").into());
+        }
+        doc.to_owned()
+    } else {
+        let result = txn.execute_client_signed_create(
+            "mutation($input: WorkspaceRootMutationInputArg!) { create_WorkspaceRoot(input: $input) { _docID } }",
+            &json!({"input":{"node_did":node_did,"node_doc_id":node_doc,"root_path":root_path,"display_name":display_name,"enabled":enabled,"updated_at":updated_at}}),
+            gents_protocol::schemas::WORKSPACE_ROOT).await?;
+        let doc = created_doc_id(&result, "WorkspaceRoot").map_err(anyhow::Error::from)?;
+        txn.add_resource_relationship("WorkspaceRoot", &doc, "parent", "nodes", &node_doc)
+            .await?;
+        gents_store::config_client::publish_node_managers_in_txn(
+            txn,
+            "WorkspaceRoot",
+            &doc,
+            "reader_manager",
+            &node_doc,
+        )
+        .await?;
+        doc
+    };
+    let mut granted_agents = Vec::new();
+    for (agent_did, reader) in readers {
+        txn.add_actor_relationship("WorkspaceRoot", &doc, "reader", &reader)
+            .await?;
+        granted_agents.push(agent_did);
+    }
+    Ok(WorkspaceRootReceipt {
+        doc_id: doc,
+        root_path: root_path.to_owned(),
+        display_name,
+        enabled,
+        created,
+        granted_agents,
+    })
+}
+
+async fn publish_spelled(
+    access: &ConfigAccess,
+    input: &WorkspaceRootPublish,
+) -> Applied<WorkspaceRootReceipt> {
+    access
+        .transact_signed_conflict_rebuild("workspace_root.set", |txn| {
+            Box::pin(publish_in_txn(txn, input))
+        })
+        .await
+}
+
+/// Publishes a root for a Node, or patches the root already published at the
+/// path, in one transaction with its Node binding, parent relation and the
+/// selected readers. Fields the caller omits keep their stored value, and no
+/// publication revokes a reader.
+pub async fn publish_workspace_root(
+    access: &ConfigAccess,
+    input: &WorkspaceRootPublish,
+) -> std::result::Result<WorkspaceRootReceipt, WorkspaceRootError> {
+    let input = WorkspaceRootPublish {
+        root_path: normalize_root_path(&input.root_path)?,
+        ..input.clone()
+    };
+    Ok(publish_spelled(access, &input).await?)
+}
+
+/// Grants or revokes one Agent's reader relation on the root at the path,
+/// without changing the root.
+pub async fn change_workspace_root_reader(
+    access: &ConfigAccess,
+    input: &WorkspaceRootReaderInput,
+) -> std::result::Result<WorkspaceRootReaderReceipt, WorkspaceRootError> {
+    let root_path = normalize_root_path(&input.root_path)?;
+    change_reader_spelled(access, &root_path, &input.agent_did, input.change).await?;
+    Ok(WorkspaceRootReaderReceipt {
+        root_path,
+        agent_did: input.agent_did.clone(),
+        change: input.change,
+    })
+}
+
+/// Removes the root at the path. Only an actor who may update the root's Node
+/// removes it, whichever Node that is.
+pub async fn remove_workspace_root(
+    access: &ConfigAccess,
+    root_path: &str,
+) -> std::result::Result<WorkspaceRootRemoved, WorkspaceRootError> {
+    let root_path = normalize_root_path(root_path)?;
+    let doc_id = delete_spelled(access, &root_path).await?;
+    Ok(WorkspaceRootRemoved { root_path, doc_id })
+}
+
+/// The published roots this actor can read, ordered by path.
+pub async fn list_workspace_roots(
+    access: &ConfigAccess,
+) -> std::result::Result<Vec<WorkspaceRootView>, WorkspaceRootError> {
+    use gents_protocol::document_query::Query;
+    let mut roots = read_roots(access, Query::select(root_selection())).await?;
+    roots.sort_by(|left, right| left.root_path.cmp(&right.root_path));
+    Ok(roots)
+}
+
+/// The published root at the path.
+pub async fn show_workspace_root(
+    access: &ConfigAccess,
+    root_path: &str,
+) -> std::result::Result<WorkspaceRootView, WorkspaceRootError> {
+    use gents_protocol::document_query::{fields::workspace_root as fields, Filter, Query};
+    let root_path = normalize_root_path(root_path)?;
+    let query = Query::select(root_selection()).filter(Filter::eq(fields::ROOT_PATH, &root_path));
+    read_roots(access, query)
         .await?
-        .context("selected root reader Agent is unavailable")?;
-    anyhow::ensure!(
-        row["agent_did"] == agent_did && row["node_did"] == node_did && row["enabled"] != false,
-        "selected root reader Agent changed or is disabled"
-    );
-    Ok(did)
+        .into_iter()
+        .next()
+        .ok_or(WorkspaceRootError::RootMissing(root_path))
+}
+
+async fn read_roots(
+    access: &ConfigAccess,
+    query: gents_protocol::document_query::Query<RootDoc>,
+) -> std::result::Result<Vec<WorkspaceRootView>, WorkspaceRootError> {
+    let passthrough = |error: anyhow::Error| {
+        WorkspaceRootError::Passthrough(error.reallocate_into_boxed_dyn_error_without_backtrace())
+    };
+    let response = access
+        .read(&query.render())
+        .await
+        .map_err(|error| passthrough(error.into()))?;
+    gents_protocol::graphql::graphql_rows_from_response(&response, "WorkspaceRoot")
+        .into_iter()
+        .map(|row| serde_json::from_value(row).map_err(|error| passthrough(error.into())))
+        .collect()
 }
 
 /// Publishes an immutable physical Node binding and the native parent relation in
@@ -116,6 +402,8 @@ pub async fn set_workspace_root(
     set_workspace_root_with_readers(access, node_did, root_path, display_name, enabled, &[]).await
 }
 
+/// The runtime's and the fixtures' whole-value publication of a path they
+/// already spell canonically: every field is named, so nothing is preserved.
 /// Each reader is an explicit operator selection; an ordinary update with no
 /// selections never restores an Agent reader that the operator revoked.
 pub async fn set_workspace_root_with_readers(
@@ -126,42 +414,19 @@ pub async fn set_workspace_root_with_readers(
     enabled: bool,
     reader_agents: &[String],
 ) -> std::result::Result<String, WorkspaceRootWriteError> {
-    let result: Result<String> = access.transact_signed_conflict_rebuild("workspace_root.set", |txn| Box::pin(async move {
-        anyhow::ensure!(std::path::Path::new(root_path).is_absolute(), "workspace root path must be absolute");
-        let node_doc = selected_node(txn, node_did).await?;
-        let existing = root_row(txn, root_path).await?;
-        if let Some(row) = &existing { checked_root_doc(row, node_did, &node_doc)?; }
-        let mut readers = Vec::new();
-        for agent_did in reader_agents.iter().collect::<std::collections::BTreeSet<_>>() {
-            readers.push(selected_agent(txn, node_did, agent_did).await?);
-        }
-        fence_node(txn, &node_doc).await?;
-        let updated_at = chrono::Utc::now().to_rfc3339();
-        let doc = if let Some(row) = existing {
-            let doc = checked_root_doc(&row, node_did, &node_doc)?;
-            let mutation = format!("mutation($input: WorkspaceRootMutationInputArg!) {{ update_WorkspaceRoot(docID: \"{}\", input: $input) {{ _docID }} }}", escape_graphql_string(doc));
-            let result = txn.execute_client_signed_update(&mutation, &json!({"input":{"display_name":display_name,"enabled":enabled,"updated_at":updated_at}}), gents_protocol::schemas::WORKSPACE_ROOT).await?;
-            let docs = mutation_documents(&result, "update_WorkspaceRoot")?.context("WorkspaceRoot update returned no confirmation")?;
-            anyhow::ensure!(docs.len() == 1 && docs[0]["_docID"] == doc, "WorkspaceRoot update was not confirmed");
-            doc.to_owned()
-        } else {
-            let result = txn.execute_client_signed_create(
-                "mutation($input: WorkspaceRootMutationInputArg!) { create_WorkspaceRoot(input: $input) { _docID } }",
-                &json!({"input":{"node_did":node_did,"node_doc_id":node_doc,"root_path":root_path,"display_name":display_name,"enabled":enabled,"updated_at":updated_at}}),
-                gents_protocol::schemas::WORKSPACE_ROOT).await?;
-            let doc = created_doc_id(&result, "WorkspaceRoot")?;
-            txn.add_resource_relationship("WorkspaceRoot", &doc, "parent", "nodes", &node_doc).await?;
-            gents_store::config_client::publish_node_managers_in_txn(
-                txn, "WorkspaceRoot", &doc, "reader_manager", &node_doc,
-            ).await?;
-            doc
-        };
-        for reader in readers {
-            txn.add_actor_relationship("WorkspaceRoot", &doc, "reader", &reader).await?;
-        }
-        Ok(doc)
-    })).await;
-    result.map_err(WorkspaceRootWriteError::Publication)
+    let input = WorkspaceRootPublish {
+        node_did: node_did.to_owned(),
+        root_path: root_path.to_owned(),
+        display_name: display_name.map_or(StringUpdate::Clear, |name| {
+            StringUpdate::Set(name.to_owned())
+        }),
+        enabled: EnabledUpdate::from(Some(enabled)),
+        reader_agents: reader_agents.to_vec(),
+    };
+    publish_spelled(access, &input)
+        .await
+        .map(|receipt| receipt.doc_id)
+        .map_err(|error| WorkspaceRootWriteError::Publication(error.into()))
 }
 
 /// Grants a selected Agent read access without changing the root's state.
@@ -170,7 +435,9 @@ pub async fn grant_workspace_root_reader(
     root_path: &str,
     agent_did: &str,
 ) -> std::result::Result<(), WorkspaceRootWriteError> {
-    change_workspace_root_reader(access, root_path, agent_did, true).await
+    change_reader_spelled(access, root_path, agent_did, ReaderChange::Grant)
+        .await
+        .map_err(|error| WorkspaceRootWriteError::Publication(error.into()))
 }
 
 /// Revocation acts on the exact visible root and actor in the same
@@ -180,48 +447,42 @@ pub async fn revoke_workspace_root_reader(
     root_path: &str,
     agent_did: &str,
 ) -> std::result::Result<(), WorkspaceRootWriteError> {
-    change_workspace_root_reader(access, root_path, agent_did, false).await
+    change_reader_spelled(access, root_path, agent_did, ReaderChange::Revoke)
+        .await
+        .map_err(|error| WorkspaceRootWriteError::Publication(error.into()))
 }
 
-async fn change_workspace_root_reader(
+async fn change_reader_spelled(
     access: &ConfigAccess,
     root_path: &str,
     agent_did: &str,
-    grant: bool,
-) -> std::result::Result<(), WorkspaceRootWriteError> {
-    let result: Result<()> = access
+    change: ReaderChange,
+) -> Applied<()> {
+    access
         .transact_signed_conflict_rebuild("workspace_root.reader", |txn| {
             Box::pin(async move {
-                let row = root_row(txn, root_path)
-                    .await?
-                    .context("workspace root is unavailable")?;
+                let row = existing_root(txn, root_path).await?;
                 let node_did = row["node_did"]
                     .as_str()
                     .context("workspace root is missing Node scope")?;
                 let node_doc = selected_node(txn, node_did).await?;
                 let doc = checked_root_doc(&row, node_did, &node_doc)?;
-                let reader = if grant {
-                    selected_agent(txn, node_did, agent_did).await?
-                } else {
-                    anyhow::ensure!(
-                        agent_did != node_did,
-                        "root reader cannot be the Node actor"
-                    );
-                    identity::Did::new(agent_did)?
-                };
+                let reader = admitted_reader(txn, node_did, agent_did, change).await?;
                 fence_node(txn, &node_doc).await?;
-                if grant {
-                    txn.add_actor_relationship("WorkspaceRoot", doc, "reader", &reader)
-                        .await?;
-                } else {
-                    txn.delete_actor_relationship("WorkspaceRoot", doc, "reader", &reader)
-                        .await?;
+                match change {
+                    ReaderChange::Grant => {
+                        txn.add_actor_relationship("WorkspaceRoot", doc, "reader", &reader)
+                            .await?
+                    }
+                    ReaderChange::Revoke => {
+                        txn.delete_actor_relationship("WorkspaceRoot", doc, "reader", &reader)
+                            .await?
+                    }
                 }
                 Ok(())
             })
         })
-        .await;
-    result.map_err(WorkspaceRootWriteError::Publication)
+        .await
 }
 
 /// Removes the exact visible root using the native signed-delete adapter. The
@@ -230,12 +491,17 @@ pub async fn delete_workspace_root(
     access: &ConfigAccess,
     root_path: &str,
 ) -> std::result::Result<(), WorkspaceRootWriteError> {
-    let result: Result<()> = access
+    delete_spelled(access, root_path)
+        .await
+        .map(drop)
+        .map_err(|error| WorkspaceRootWriteError::Publication(error.into()))
+}
+
+async fn delete_spelled(access: &ConfigAccess, root_path: &str) -> Applied<String> {
+    access
         .transact_signed_conflict_rebuild("workspace_root.delete", |txn| {
             Box::pin(async move {
-                let row = root_row(txn, root_path)
-                    .await?
-                    .context("workspace root is unavailable")?;
+                let row = existing_root(txn, root_path).await?;
                 let node_did = row["node_did"]
                     .as_str()
                     .context("workspace root is missing Node scope")?;
@@ -244,11 +510,10 @@ pub async fn delete_workspace_root(
                 fence_node(txn, &node_doc).await?;
                 txn.delete_configuration_document("WorkspaceRoot", doc)
                     .await?;
-                Ok(())
+                Ok(doc.to_owned())
             })
         })
-        .await;
-    result.map_err(WorkspaceRootWriteError::Publication)
+        .await
 }
 
 #[cfg(test)]
@@ -264,6 +529,24 @@ mod tests {
                 .with_client_signing_capability(key.client_signing_capability()?)?
                 .with_client_signed_agent_creates(),
         ))
+    }
+
+    #[test]
+    fn publication_and_reader_decisions_match_lean() {
+        use gents_lean_vocab::families;
+        use gents_protocol::operations::workspace_root::WorkspaceRootRefusal;
+        families::workspace_root_operations_enabled_after::replay(|i| {
+            enabled_after(i.stored, i.toggle)
+        });
+        families::workspace_root_operations_writes_display_name::replay(|i| {
+            writes_display_name(i.stored, i.name)
+        });
+        families::workspace_root_operations_reader_decision::replay(|i| {
+            reader_decision(i.change, i.subject)
+        });
+        families::workspace_root_operations_refusal_recovery::replay(|i| {
+            WorkspaceRootRefusal::recovery(i.refusal)
+        });
     }
 
     #[tokio::test]

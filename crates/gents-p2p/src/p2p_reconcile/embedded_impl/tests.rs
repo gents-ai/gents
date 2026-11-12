@@ -1,5 +1,6 @@
 mod agent_target;
 pub(in crate::p2p_reconcile) mod fixtures;
+mod operations;
 mod pairing;
 mod peer_admission;
 mod replication;

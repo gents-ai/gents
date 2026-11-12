@@ -13,6 +13,7 @@ import Proofs.Conformance.Functions.Clients
 import Proofs.Conformance.Functions.Documents
 import Proofs.Conformance.Functions.Inference
 import Proofs.Conformance.Functions.Pack
+import Proofs.Conformance.Functions.P2P
 import Proofs.Conformance.Functions.Runtime
 import Proofs.Conformance.Functions.Session
 import Proofs.Conformance.Functions.ToolCalls
