@@ -1282,8 +1282,8 @@ def caseCoverage : List CoverageEntry :=
       "LifecycleHookMustCommitCases")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_rerun_cases"
-      "LifecycleHookRerunCases"
+      "family"
+      "hooks_contracts_rerun"
       "Production TransactionFailure::rerun_requested classifies a ConfigClientError::rerun carried through production wrappers (anyhow context, HookError::Operation, CommitError::Other re-erased as on the plugin-job path, text rendering). The transaction owner's rerun loop itself is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

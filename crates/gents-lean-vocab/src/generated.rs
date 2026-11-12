@@ -313,10 +313,6 @@ pub fn lean_lifecycle_hook_queue_scope_cases() -> &'static [LeanLifecycleHookQue
     &lean_contract_snapshot().lifecycle_hook_queue_scope_cases
 }
 
-pub fn lean_lifecycle_hook_rerun_cases() -> &'static [LeanLifecycleHookRerunCase] {
-    &lean_contract_snapshot().lifecycle_hook_rerun_cases
-}
-
 pub fn lean_lifecycle_hook_stage_cases() -> &'static [LeanLifecycleHookStageCase] {
     &lean_contract_snapshot().lifecycle_hook_stage_cases
 }
@@ -3377,7 +3373,6 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
     pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
     pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
-    pub lifecycle_hook_rerun_cases: Vec<LeanLifecycleHookRerunCase>,
     pub lifecycle_hook_goal_resume_cases: Vec<LeanLifecycleHookGoalResumeCase>,
     pub lifecycle_hook_combine_cases: Vec<LeanLifecycleHookCombineCase>,
     pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
@@ -6792,15 +6787,6 @@ pub struct LeanLifecycleHookBinding {
     pub configuration: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanLifecycleHookCarrier {
-    Context,
-    Sourced,
-    Transparent,
-    Stringified,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookCombineCase {
@@ -7157,14 +7143,6 @@ pub enum LeanLifecycleHookRefusal {
     Refused { plugin: String, reason: String },
     Invalid { plugin: String },
     Conflict { plugin: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookRerunCase {
-    pub name: String,
-    pub path: Vec<LeanLifecycleHookCarrier>,
-    pub rerun: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
