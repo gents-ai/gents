@@ -137,7 +137,7 @@ async fn selected_agent(db: &TestDb) -> String {
 
 async fn selected_identity(db: &TestDb) -> Arc<dyn gents_store::identity::NodeIdentity> {
     let agent_did = selected_agent(db).await;
-    let agent = gents_documents::load_agent(&db.node, &agent_did)
+    let agent = gents_documents::load_agent(&db.node, db.node_identity.did(), &agent_did)
         .await
         .unwrap()
         .unwrap();

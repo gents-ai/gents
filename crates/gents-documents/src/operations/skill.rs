@@ -2,15 +2,14 @@ use std::path::{Path, PathBuf};
 
 use gents_protocol::document_query::{fields::skill as fields, Filter, Query, Selection};
 use gents_protocol::operations::document::{
-    DocumentDeleteReceipt, DocumentOperationError, DocumentReceipt, OperationActor, OwnerCount,
-    OwnerResolution, WriteMode,
+    DocumentDeleteReceipt, DocumentOperationError, DocumentReceipt, OperationActor, WriteMode,
 };
 use gents_protocol::operations::skill::{SkillImportOutcome, SkillOperationError};
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use serde_json::{json, Map, Value};
 
 use super::write::{candidate_in_txn, publish_in_txn, DocumentWrite};
-use super::{decide_owner, OperationFailure};
+use super::OperationFailure;
 use crate::inference_backend::AdvertisedProfilePolicy;
 use crate::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::skills::import::load_skill_source;
@@ -297,45 +296,7 @@ pub async fn resolve_owner(
     owner: Option<&str>,
     skill_id: &str,
 ) -> Result<String, SkillOperationError> {
-    let collection = SelfConfigTarget::Skill.collection_name();
-    if decide_owner(owner.is_some(), OwnerCount::None) == OwnerResolution::Named {
-        return Ok(owner.unwrap_or_default().to_owned());
-    }
-    let rendered = Query::select(Selection::new().field(fields::NODE_DID))
-        .filter(Filter::eq(fields::SKILL_ID, skill_id))
-        .render();
-    let response = access
-        .read(&rendered)
-        .await
-        .map_err(|error| DocumentOperationError::Passthrough(error.into()))?;
-    let mut owners = response["data"]["Skill"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row["node_did"].as_str().map(ToOwned::to_owned))
-        .collect::<Vec<_>>();
-    owners.sort();
-    owners.dedup();
-    let count = match owners.len() {
-        0 => OwnerCount::None,
-        1 => OwnerCount::One,
-        _ => OwnerCount::Several,
-    };
-    match decide_owner(false, count) {
-        OwnerResolution::Named | OwnerResolution::Sole => Ok(owners.remove(0)),
-        OwnerResolution::RefusedMissing => Err(DocumentOperationError::Missing {
-            collection,
-            id: skill_id.to_owned(),
-            node_did: "any owner this identity can read".to_owned(),
-        }
-        .into()),
-        OwnerResolution::RefusedAmbiguous => Err(DocumentOperationError::AmbiguousOwner {
-            collection,
-            id: skill_id.to_owned(),
-            owners,
-        }
-        .into()),
-    }
+    Ok(super::owner::resolve_skill_owner(access, owner, skill_id).await?)
 }
 
 /// Deletes one Skill of `owner` through the one document delete.

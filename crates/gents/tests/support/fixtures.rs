@@ -716,7 +716,7 @@ pub async fn session_agent_identity(
         .as_str()
         .expect("session has a working Agent")
         .to_owned();
-    let agent = gents_documents::load_agent(node, &agent_did)
+    let agent = gents_documents::load_agent(node, node_did, &agent_did)
         .await
         .expect("load session Agent")
         .expect("session Agent exists");

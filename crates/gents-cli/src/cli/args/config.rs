@@ -141,7 +141,7 @@ pub(crate) enum AgentCommand {
     #[command(name = "list", about = "List Agent documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an Agent document")]
-    Show(ConfigShowArgs),
+    Show(AgentShowArgs),
     #[command(name = "rm", about = "Delete an Agent document")]
     Rm(ConfigShowArgs),
 }
@@ -370,6 +370,18 @@ pub(crate) struct ConfigShowArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct AgentShowArgs {
+    #[command(flatten)]
+    pub(crate) show: ConfigShowArgs,
+    #[arg(
+        long,
+        value_name = "NODE_DID",
+        help = "The node that owns the Agent; required when several nodes hold the ID"
+    )]
+    pub(crate) node_did: Option<String>,
 }
 
 #[derive(clap::Args)]

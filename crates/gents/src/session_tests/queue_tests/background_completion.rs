@@ -725,7 +725,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         retry_keys[1].rsplit_once(':').unwrap().0,
         "unrelated transcript writes must not advance the queue-local generation"
     );
-    let agent = gents_documents::load_agent(&node, &agent_did)
+    let agent = gents_documents::load_agent(&node, &did, &agent_did)
         .await
         .unwrap()
         .expect("fixture Agent binding");

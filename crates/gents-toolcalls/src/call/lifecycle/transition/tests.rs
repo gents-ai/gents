@@ -21,7 +21,11 @@ async fn published_job_row(name: &str) -> PublishedAdmission {
         gents_store::identity::KeyIdentity::load_existing(admission.path.join("node.key"), None)
             .unwrap();
     assert_eq!(root.did(), admission.node_did);
-    let agent = gents_documents::load_agent(&admission.node, admission.tool.actor().as_str())
+    let agent = gents_documents::load_agent(
+        &admission.node,
+        &admission.node_did,
+        admission.tool.actor().as_str(),
+    )
         .await
         .unwrap()
         .unwrap();

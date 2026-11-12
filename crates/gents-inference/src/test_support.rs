@@ -55,7 +55,7 @@ pub async fn ensure_test_default_agent(
         .await
         .unwrap()
     {
-        let agent = gents_documents::load_agent(node, &did)
+        let agent = gents_documents::load_agent(node, owner, &did)
             .await
             .unwrap()
             .expect("fixture default agent exists");

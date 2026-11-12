@@ -95,7 +95,7 @@ pub async fn process_command_at(
     actor: &::identity::Did,
     now: DateTime<Utc>,
 ) -> Result<Option<DateTime<Utc>>> {
-    let agent = gents_documents::load_agent(node, actor.as_str())
+    let agent = gents_documents::load_agent(node, identity.did(), actor.as_str())
         .await?
         .context("test goal Agent is unavailable")?;
     let binding = gents_protocol::agent_identity::AgentIdentityBinding {

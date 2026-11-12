@@ -74,14 +74,19 @@ impl Agent {
     }
 }
 
-pub async fn load_agent(node: &EmbeddedNode, agent_did: &str) -> Result<Option<Agent>> {
-    Ok(load_agent_record(node, agent_did)
+pub async fn load_agent(
+    node: &EmbeddedNode,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<Option<Agent>> {
+    Ok(load_agent_record(node, node_did, agent_did)
         .await?
         .map(|(_, behavior)| behavior))
 }
 
 pub async fn load_agent_record(
     node: &EmbeddedNode,
+    node_did: &str,
     agent_did: &str,
 ) -> Result<Option<(String, Agent)>> {
     use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
@@ -98,7 +103,7 @@ pub async fn load_agent_record(
             .field(fields::TAGS)
             .field(fields::CREATED_AT),
     )
-    .filter(Filter::eq(fields::AGENT_DID, agent_did))
+    .filter(Filter::eq(fields::AGENT_DID, agent_did).and(Filter::eq(fields::NODE_DID, node_did)))
     .limit(1)
     .render();
 

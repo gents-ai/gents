@@ -245,7 +245,7 @@ async fn engineer_of(
     let rendered = {
         use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
         Query::select(Selection::new().field(fields::TAGS))
-            .filter(Filter::eq(fields::AGENT_DID, &agent))
+            .filter(Filter::eq(fields::AGENT_DID, &agent).and(Filter::eq(fields::NODE_DID, owner)))
             .limit(1)
             .render()
     };

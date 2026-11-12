@@ -686,7 +686,8 @@ mod tests {
             tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
             correlation: None,
         };
-        let stored = gents_documents::load_agent(&admission.node, &caller.agent_did)
+        let stored =
+            gents_documents::load_agent(&admission.node, &admission.node_did, &caller.agent_did)
             .await
             .unwrap()
             .expect("caller Agent");

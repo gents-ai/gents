@@ -7824,7 +7824,7 @@ async fn public_agent_management_uses_provisioned_binding_and_client_access() {
     assert_eq!(committed["committed"], true);
     assert_eq!(committed["agent_did"], binding.agent_did);
     assert_eq!(committed["agent_did"], preview["agent_did"]);
-    let stored = gents_documents::load_agent(node, &binding.agent_did)
+    let stored = gents_documents::load_agent(node, owner, &binding.agent_did)
         .await
         .unwrap()
         .unwrap();
@@ -7844,7 +7844,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     let owner = fixture.node_did();
     let target = fixture.install_sibling("target").await;
     let access = fixture.user_access();
-    let mut stored = gents_documents::load_agent(node, &target)
+    let mut stored = gents_documents::load_agent(node, owner, &target)
         .await
         .unwrap()
         .unwrap();
@@ -7872,7 +7872,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     assert_eq!(preview["committed"], false);
     assert_eq!(preview["agent"]["enabled"], false);
     assert_eq!(
-        gents_documents::load_agent(node, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.action = "edit".into();
@@ -7883,7 +7883,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
         .unwrap_err();
     assert!(error.to_string().contains("does not accept clone_from"));
     assert_eq!(
-        gents_documents::load_agent(node, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.clone_from = None;
@@ -7892,7 +7892,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
         .unwrap();
     stored.display_name = Some("Edited while disabled".into());
     assert_eq!(
-        gents_documents::load_agent(node, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Set("missing-profile".into());
@@ -7900,7 +7900,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
         .await
         .is_err());
     assert_eq!(
-        gents_documents::load_agent(node, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Omitted;
@@ -7909,7 +7909,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
         .await
         .is_err());
     assert_eq!(
-        gents_documents::load_agent(node, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target).await.unwrap(),
         Some(stored)
     );
 }
@@ -7925,7 +7925,7 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     let sibling_id = fixture.install_sibling("sibling").await;
     let private_id = fixture.install_sibling("private").await;
     let access = fixture.user_access();
-    let mut missing = gents_documents::load_agent(node, &missing_id)
+    let mut missing = gents_documents::load_agent(node, owner, &missing_id)
         .await
         .unwrap()
         .unwrap();
@@ -7937,11 +7937,11 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     )
     .await
     .unwrap();
-    let shared = gents_documents::load_agent(node, &shared_id)
+    let shared = gents_documents::load_agent(node, owner, &shared_id)
         .await
         .unwrap()
         .unwrap();
-    let mut sibling = gents_documents::load_agent(node, &sibling_id)
+    let mut sibling = gents_documents::load_agent(node, owner, &sibling_id)
         .await
         .unwrap()
         .unwrap();
@@ -7975,7 +7975,7 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
             assert_eq!(access.execute(query).await.unwrap(), before);
         }
     }
-    let private = gents_documents::load_agent(node, &private_id)
+    let private = gents_documents::load_agent(node, owner, &private_id)
         .await
         .unwrap()
         .unwrap();
@@ -8222,7 +8222,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         })
         .await
         .unwrap();
-    let sibling_doc = gents_documents::load_agent(&fixture.db.node, &sibling)
+    let sibling_doc = gents_documents::load_agent(&fixture.db.node, fixture.node_did(), &sibling)
         .await
         .unwrap()
         .unwrap();
@@ -9155,7 +9155,7 @@ async fn an_agent_granted_its_own_self_configuration_edits_itself_and_nothing_el
         serde_json::to_value(&engineer_tools.self_config).unwrap()
     );
 
-    let yolo_doc = gents_documents::load_agent(&fixture.db.node, &yolo)
+    let yolo_doc = gents_documents::load_agent(&fixture.db.node, fixture.node_did(), &yolo)
         .await
         .unwrap()
         .unwrap();
