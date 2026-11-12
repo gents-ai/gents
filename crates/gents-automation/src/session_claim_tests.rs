@@ -51,8 +51,7 @@ async fn load_agent_goal(
     agent_access(node)
         .transact_readonly("test.claim_agent_goal", |txn| {
             Box::pin(async move {
-                crate::goal::load_canonical_goal_in_txn(txn, &test_node_did(), session)
-                    .await
+                crate::goal::load_canonical_goal_in_txn(txn, &test_node_did(), session).await
             })
         })
         .await
@@ -620,24 +619,19 @@ async fn queued_task_goal_changes_only_when_its_request_claims() {
                 if stopped { 100 } else { 0 }
             );
             assert_eq!(
-                crate::goal::refresh_goal_usage_from_access(
-                    &agent_access(&node),
-                    &assigned
-                )
-                .await
-                .unwrap(),
+                crate::goal::refresh_goal_usage_from_access(&agent_access(&node), &assigned)
+                    .await
+                    .unwrap(),
                 if stopped { 0 } else { 100 }
             );
-            assert!(
-                !crate::goal::update_goal_fields_if_status_from_access(
-                    &agent_access(&node),
-                    &original,
-                    gents_protocol::goal_status::GoalStatus::Active,
-                    "objective: \"stale controller\""
-                )
-                .await
-                .unwrap()
-            );
+            assert!(!crate::goal::update_goal_fields_if_status_from_access(
+                &agent_access(&node),
+                &original,
+                gents_protocol::goal_status::GoalStatus::Active,
+                "objective: \"stale controller\""
+            )
+            .await
+            .unwrap());
         }
     }
 }

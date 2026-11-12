@@ -258,11 +258,8 @@ fn generated_task_goal_cases_fence_declaration_and_identity() {
         );
 
         if declaration_valid && case.goal_objective.is_some() {
-            let identity = crate::goal::task_goal_fire_identity(
-                &case.node_did,
-                &case.task_id,
-                &case.fire_key,
-            );
+            let identity =
+                crate::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
             assert_eq!(
                 case.expected_session_id.as_deref(),
                 Some(identity.session_id.as_str()),
@@ -290,11 +287,8 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
     let cases = lean_task_goal_recovery_cases();
     assert_eq!(cases.len(), 10, "the Task goal recovery matrix drifted");
     for case in cases {
-        let identity = crate::goal::task_goal_fire_identity(
-            &case.node_did,
-            &case.task_id,
-            &case.fire_key,
-        );
+        let identity =
+            crate::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
         let expected = crate::goal::TaskGoalRequestBinding {
             node_did: case.node_did.clone(),
             agent_did: case.agent_did.clone(),
@@ -302,38 +296,37 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
             request_id: identity.request_id,
             retry_key: identity.retry_key,
         };
-        let observed =
-            case.request_present
-                .then(|| crate::goal::TaskGoalRequestBinding {
-                    node_did: case
-                        .observed_node_did
-                        .clone()
-                        .expect("present request must emit node_did"),
-                    agent_did: case
-                        .observed_agent_did
-                        .clone()
-                        .expect("present request must emit agent_did"),
-                    session_id: case
-                        .observed_session_id
-                        .clone()
-                        .expect("present request must emit session_id"),
-                    request_id: case
-                        .observed_request_id
-                        .clone()
-                        .expect("present request must emit request_id"),
-                    retry_key: case
-                        .observed_retry_key
-                        .clone()
-                        .expect("present request must emit retry_key"),
-                });
+        let observed = case
+            .request_present
+            .then(|| crate::goal::TaskGoalRequestBinding {
+                node_did: case
+                    .observed_node_did
+                    .clone()
+                    .expect("present request must emit node_did"),
+                agent_did: case
+                    .observed_agent_did
+                    .clone()
+                    .expect("present request must emit agent_did"),
+                session_id: case
+                    .observed_session_id
+                    .clone()
+                    .expect("present request must emit session_id"),
+                request_id: case
+                    .observed_request_id
+                    .clone()
+                    .expect("present request must emit request_id"),
+                retry_key: case
+                    .observed_retry_key
+                    .clone()
+                    .expect("present request must emit retry_key"),
+            });
         assert_eq!(
             observed.as_ref() == Some(&expected),
             case.request_binding_matches,
             "Lean case {} binding classification",
             case.name
         );
-        let actual =
-            crate::goal::decide_task_goal_fire_recovery(&expected, observed.as_ref());
+        let actual = crate::goal::decide_task_goal_fire_recovery(&expected, observed.as_ref());
         let disposition = match actual.disposition {
             crate::goal::TaskGoalFireRecoveryDisposition::Absent => "absent",
             crate::goal::TaskGoalFireRecoveryDisposition::Recovered => "recovered",

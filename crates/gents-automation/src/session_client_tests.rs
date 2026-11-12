@@ -10,12 +10,11 @@ use gents_store::identity::{KeyIdentity, NodeIdentity};
 async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back_together() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().goal_backed_runtime_cases;
     let modeled = |name: &str| cases.iter().find(|case| case.name == name).unwrap();
-    let (db, user, client, binding) =
-        gents_inference::test_support::signed_test_node(
-            "runtime-goal-opening",
-            crate::lifecycle_hooks::composition(),
-        )
-        .await;
+    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        "runtime-goal-opening",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = db.node.clone();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
@@ -161,20 +160,18 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
         );
         assert!(!modeled(name).request);
     }
-    assert!(
-        crate::goal::submit_goal_backed_request_with_identity(
-            &node,
-            identity::Did::new(db.node_identity.did()).unwrap(),
-            db.node_identity.did(),
-            "task-session",
-            "finish work",
-            None,
-            &request,
-            Some(db.node_identity.as_ref()),
-        )
-        .await
-        .is_err()
-    );
+    assert!(crate::goal::submit_goal_backed_request_with_identity(
+        &node,
+        identity::Did::new(db.node_identity.did()).unwrap(),
+        db.node_identity.did(),
+        "task-session",
+        "finish work",
+        None,
+        &request,
+        Some(db.node_identity.as_ref()),
+    )
+    .await
+    .is_err());
     assert!(!modeled("foreign-actor").request);
     admin
         .grant_node_permission(
@@ -235,20 +232,18 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
     gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut rejected)
         .await
         .unwrap();
-    assert!(
-        crate::goal::submit_goal_backed_request_with_identity(
-            &node,
-            identity::Did::new(agent.did()).unwrap(),
-            db.node_identity.did(),
-            "rejected-session",
-            "finish work",
-            None,
-            &rejected,
-            Some(agent.as_ref()),
-        )
-        .await
-        .is_err()
-    );
+    assert!(crate::goal::submit_goal_backed_request_with_identity(
+        &node,
+        identity::Did::new(agent.did()).unwrap(),
+        db.node_identity.did(),
+        "rejected-session",
+        "finish work",
+        None,
+        &rejected,
+        Some(agent.as_ref()),
+    )
+    .await
+    .is_err());
     let after = access.execute("{ AgentSession {_docID} AgentRequest {_docID} Goal {_docID} GoalCreationClaim {_docID} }").await.unwrap();
     for name in ["AgentSession", "AgentRequest", "Goal", "GoalCreationClaim"] {
         assert_eq!(after["data"][name].as_array().unwrap().len(), 1, "{name}");

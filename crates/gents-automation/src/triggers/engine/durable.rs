@@ -1,10 +1,10 @@
+#[cfg(test)]
+mod pushdown_tests;
 mod recovery;
 #[cfg(test)]
 mod retained_tests;
 #[cfg(test)]
 mod task_delivery_tests;
-#[cfg(test)]
-mod pushdown_tests;
 use anyhow::{ensure, Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
