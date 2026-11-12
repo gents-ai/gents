@@ -72,7 +72,7 @@ export function missingSessionText(
   const where = node ? `${nameOf(node)} or your other nodes` : "your nodes";
   return {
     title: "Session not found",
-    detail: `This app can't find it on ${where}. It may have been removed, may not have synced yet, or may not be shared with you.`,
+    detail: `This app can't find it on ${where}. It may have been removed or may not be shared with you.`,
   };
 }
 

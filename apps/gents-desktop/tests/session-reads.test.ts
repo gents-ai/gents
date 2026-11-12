@@ -202,67 +202,6 @@ describe("createSessionReads", () => {
     expect(reads.sessionStore.getState().load.error).toBeNull();
   });
 
-  it("shows a session its node has not returned as how far the message got, never as a failed read", async () => {
-    const delivery = (
-      code: "sessionDelivering" | "sessionNotConnected" | "sessionAccepted",
-    ) =>
-      new BridgeInvokeError({
-        code,
-        message: `${code} on Studio`,
-        retryable: true,
-        endpoint: "did:key:test",
-      });
-    const tip = session(["k1"], {
-      totalItems: 1,
-      pageItems: 1,
-      hasOlder: false,
-      hasNewer: false,
-      oldestItemKey: "k1",
-      newestItemKey: "k1",
-    });
-    const fetchSessionSnapshot = vi
-      .fn()
-      .mockRejectedValueOnce(delivery("sessionNotConnected"))
-      .mockRejectedValueOnce(delivery("sessionDelivering"))
-      .mockRejectedValueOnce(delivery("sessionAccepted"))
-      .mockResolvedValueOnce(tip);
-    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
-    /* an observer follows the reads, so each waiting phase has its re-read */
-    reads.followSessionReads(vi.fn());
-    const status = () =>
-      projectSessionLoadingStatus({
-        selectedSessionId: "session-1",
-        selectedNodeDid: "did:key:test",
-        session: readSession(reads.sessionStore),
-        sessionLoad: reads.sessionStore.getState().load,
-        operationalState: null,
-      });
-
-    await reads.refreshSession("session-1");
-    expect(reads.sessionStore.getState().load).toMatchObject({
-      phase: "notConnected",
-      error: "sessionNotConnected on Studio",
-    });
-    expect(status()).toMatchObject({
-      phase: "blocked",
-      title: "Not connected to the node",
-      detail: "sessionNotConnected on Studio",
-      action: null,
-    });
-
-    const refresh = reads.refreshSession("session-1");
-    expect(reads.sessionStore.getState().load.phase).toBe("notConnected");
-    await refresh;
-    expect(status()).toMatchObject({ phase: "loading", title: "Sending message" });
-
-    await reads.refreshSession("session-1");
-    expect(status()).toMatchObject({ phase: "loading", title: "Message picked up" });
-
-    await reads.refreshSession("session-1");
-    expect(reads.sessionStore.getState().load.phase).toBe("loaded");
-    expect(status()).toBeNull();
-  });
-
   it("owes an update it cannot read yet a full read instead of dropping it", async () => {
     const clock = vi.spyOn(performance, "now").mockReturnValue(0);
     try {

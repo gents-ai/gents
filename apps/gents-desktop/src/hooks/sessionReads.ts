@@ -18,12 +18,7 @@ import {
   mergeSessionTipSnapshot,
   sessionGoalReadOf,
 } from "@source-inc/gents-desktop-client";
-import {
-  isSessionDeliveryPhase,
-  selectionMatches,
-  sessionDeliveryPhase,
-  type SessionLoadState,
-} from "../lib/loadingStatus";
+import { selectionMatches, type SessionLoadState } from "../lib/loadingStatus";
 import type { SelectionStore } from "./selectionStore";
 import {
   IDLE_LOAD,
@@ -199,8 +194,7 @@ export function createSessionReads({
     const previous = sessionStore.getState().load;
     const sameSelection =
       previous.sessionId === nextSessionId && previous.nodeDid === nodeDid;
-    const waiting =
-      previous.phase === "pending" || isSessionDeliveryPhase(previous.phase);
+    const waiting = previous.phase === "pending";
     const heldAtStart = readSession(sessionStore);
 
     const refreshes =
@@ -280,18 +274,14 @@ export function createSessionReads({
           setSession(null);
           writeSessionGoalRead(sessionStore, { kind: "refused" });
         }
-        const delivery = code ? sessionDeliveryPhase(code) : null;
-        const phase = code === "projectionPending" ? "pending" : (delivery ?? "failed");
-        const message =
-          delivery && error instanceof BridgeInvokeError
-            ? error.message
-            : String(error);
+        const phase = code === "projectionPending" ? "pending" : "failed";
+        const message = String(error);
         noteRead(
           nextSessionId,
           phase === "failed" ? `failed ${message}` : phase,
           started,
         );
-        const waiting = phase === "pending" || isSessionDeliveryPhase(phase);
+        const waiting = phase === "pending";
         setSessionLoad({
           phase,
           sessionId: nextSessionId,

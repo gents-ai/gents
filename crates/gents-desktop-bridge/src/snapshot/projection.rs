@@ -116,7 +116,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         deployment.dial_succeeded = false;
         // `runtime_connection` stays: it is this client's own observation and
         // admission reads it (`RuntimeConnectionObservation.presentation`).
-        deployment.pairing_ready = None;
         deployment.last_error = None;
     }
 
@@ -256,7 +255,8 @@ mod tests {
                     cause: None,
                     next_action: None,
                     last_error: None,
-                    connected_peer_count: 1,
+                    runtime_count: 1,
+                    connected_runtime_count: 1,
                     activation_error_count: 0,
                 },
                 enrollment_requests: Some(vec![EnrollmentRequestView {
@@ -284,7 +284,6 @@ mod tests {
                     runtime_connection: Some("connected".to_owned()),
                     chat_safe: true,
                     chat_refusal: None,
-                    pairing_ready: Some(true),
                     lease_expires_at: None,
                     operator_access: true,
                     last_error: None,

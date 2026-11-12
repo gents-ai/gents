@@ -5,7 +5,6 @@ import {
   BridgeInvokeError,
   type DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import type { BridgeErrorCode } from "@source-inc/gents-desktop-client/generated/BridgeErrorCode";
 
 import { startClientObservation } from "../src/hooks/clientObservation";
 import { LoadingStatus } from "../src/ui/screens/LoadingStatus";
@@ -83,10 +82,10 @@ function observe({
   return { app, api, stop, started, sendUpdate };
 }
 
-function deliveryError(code: BridgeErrorCode) {
+function pendingError() {
   return new BridgeInvokeError({
-    code,
-    message: `${code} on Studio`,
+    code: "projectionPending",
+    message: "projectionPending on Studio",
     retryable: true,
     endpoint: NODE_DID,
   });
@@ -245,11 +244,7 @@ describe("a session waiting on its node", () => {
   it("re-reads when the pairing changes and when the store changes, ahead of its backoff", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const api = bridgeApi();
-    const reads = [
-      deliveryError("sessionNotConnected"),
-      deliveryError("sessionDelivering"),
-      deliveryError("sessionAccepted"),
-    ];
+    const reads = [pendingError(), pendingError(), pendingError()];
     const visible = sessionSnapshot({
       sessionId: "s-1",
       nodeDid: NODE_DID,
@@ -291,10 +286,10 @@ describe("a session waiting on its node", () => {
     const phase = () => app.stores.session.getState().load.phase;
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(phase()).toBe("notConnected");
+      expect(phase()).toBe("pending");
       expect(app.view.getState().loadingStatus).toMatchObject({
-        phase: "blocked",
-        title: "Not connected to the node",
+        phase: "loading",
+        title: "Waiting for session update",
       });
       /* nothing reads before the first re-read of the backoff is due */
       await vi.advanceTimersByTimeAsync(999);
@@ -302,12 +297,12 @@ describe("a session waiting on its node", () => {
 
       await send("health");
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
-      expect(phase()).toBe("delivering");
+      expect(phase()).toBe("pending");
 
       await send("store");
       await vi.advanceTimersByTimeAsync(0);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
-      expect(phase()).toBe("accepted");
+      expect(phase()).toBe("pending");
 
       await send("store");
       await vi.advanceTimersByTimeAsync(0);
@@ -332,10 +327,10 @@ describe("a session waiting on its node", () => {
       .mockImplementationOnce(
         () =>
           new Promise((_resolve, reject) => {
-            land = () => reject(deliveryError("sessionNotConnected"));
+            land = () => reject(pendingError());
           }),
       )
-      .mockRejectedValueOnce(deliveryError("sessionDelivering"));
+      .mockRejectedValueOnce(pendingError());
     const app = testApp({
       api,
       snapshot: running,
@@ -366,18 +361,13 @@ describe("a session waiting on its node", () => {
       land();
       await vi.advanceTimersByTimeAsync(0);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
-      expect(app.stores.session.getState().load.phase).toBe("delivering");
+      expect(app.stores.session.getState().load.phase).toBe("pending");
     } finally {
       stop();
     }
   });
 
-  it.each([
-    ["projectionPending", "Waiting for session update"],
-    ["sessionDelivering", "Sending message"],
-    ["sessionNotConnected", "Not connected to the node"],
-    ["sessionAccepted", "Message picked up"],
-  ] as const)(
+  it.each([["projectionPending", "Waiting for session update"]] as const)(
     "re-reads %s within a bounded backoff, then offers retry",
     async (code, title) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });

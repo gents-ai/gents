@@ -3,9 +3,8 @@ Selected-session load presentation and its follow-up obligation.
 
 The desktop reads a selected session from its runtime over authenticated HTTP.
 Store and pairing-health notices are the only pushed wakes; a session whose
-row has not reached its owner yet (`projectionPending`) or whose message is
-still in delivery can have no further notice at all, because the runtime holds
-no replica here. So every status the shell shows for the selected session must
+row has not reached its owner yet (`projectionPending`) can have no further
+notice at all, because the runtime holds no replica here. So every status the shell shows for the selected session must
 either be making progress on its own (a read in flight, a read queued, or a
 re-read scheduled) or name its cause and offer an action. Nothing waits on a
 notice that may never come.
@@ -23,19 +22,14 @@ runtime-connection owner, whose own model carries its exits.
 namespace ClientSessionLoad
 
 inductive Phase where
-  | idle | loading | pending | delivering | notConnected | accepted | loaded | failed
+  | idle | loading | pending | loaded | failed
   deriving DecidableEq, Repr
 
-/-- The three message-delivery phases a session the node has not returned yet
-reports (`sessionDelivering`, `sessionNotConnected`, `sessionAccepted`). -/
-def Phase.isDelivery : Phase → Bool
-  | .delivering | .notConnected | .accepted => true
-  | _ => false
-
 /-- A phase that waits on the runtime rather than on a read the shell runs:
-the selected request has not reached its owner, or its message is still in
-delivery. These are the phases a re-read must follow. -/
-def Phase.isWaiting (p : Phase) : Bool := p == .pending || p.isDelivery
+the selected request has not reached its owner. This is the phase a re-read
+must follow. The desktop reads its runtime directly, so there is no
+message-delivery phase between a written request and its session. -/
+def Phase.isWaiting (p : Phase) : Bool := p == .pending
 
 inductive Layer where
   | localDatabase | p2p | sessionSync | sync | runtime | inference
@@ -119,22 +113,6 @@ def waitingStatus (reread : Bool) : Status :=
     detail := "Waiting for the latest conversation update."
     action := followUpAction reread }
 
-def deliveryStatus (phase : Phase) (error : Option String) (reread : Bool) : Status :=
-  match phase with
-  | .notConnected =>
-      { layer := .p2p, phase := .blocked, title := "Not connected to the node"
-        detail := error.getD
-          "The message is saved on this computer and sends when the connection returns."
-        action := followUpAction reread }
-  | .accepted =>
-      { layer := .sessionSync, phase := .loading, title := "Message picked up"
-        detail := error.getD "The node accepted the message. Its session is on the way back."
-        action := followUpAction reread }
-  | _ =>
-      { layer := .sessionSync, phase := .loading, title := "Sending message"
-        detail := error.getD "Waiting for the node to pick up the message."
-        action := followUpAction reread }
-
 def retryingStatus (sessionMatches : Bool) : Status :=
   { layer := .localDatabase, phase := .loading, title := "Retrying conversation update"
     detail := if sessionMatches
@@ -165,8 +143,6 @@ def project (i : Input) : Option Status :=
   if !i.selected then none
   else if i.loadMatches && i.phase == .pending && !i.sessionMatches then
     some (waitingStatus i.reread)
-  else if i.loadMatches && i.phase.isDelivery && !i.sessionMatches then
-    some (deliveryStatus i.phase i.error i.reread)
   else if i.loadMatches && i.phase == .loading && i.error.isSome then
     some (retryingStatus i.sessionMatches)
   else if i.loadMatches && i.phase == .loading && !i.sessionMatches then
@@ -213,19 +189,6 @@ theorem actionless_status_has_exit (i : Input) (s : Status)
         exact Or.inr (Or.inr (Or.inl ⟨by simp [Phase.isWaiting, h1.1.2], by assumption⟩))
       · cases hn
     rw [if_neg h1] at h
-    by_cases h2 : (i.loadMatches && i.phase.isDelivery && !i.sessionMatches) = true
-    · rw [if_pos h2] at h
-      cases h
-      have hr : i.reread = true := by
-        cases hrr : i.reread
-        · exfalso
-          revert hn
-          unfold deliveryStatus
-          split <;> simp [followUpAction, hrr]
-        · rfl
-      simp only [Bool.and_eq_true] at h2
-      exact Or.inr (Or.inr (Or.inl ⟨by simp [Phase.isWaiting, h2.1.2], hr⟩))
-    rw [if_neg h2] at h
     by_cases h3 : (i.loadMatches && i.phase == .loading && i.error.isSome) = true
     · simp only [Bool.and_eq_true, beq_iff_eq] at h3
       exact Or.inl ⟨h3.1.1, h3.1.2⟩
@@ -460,7 +423,7 @@ theorem launch_phase_ne_idle (s : State) : (launch s).phase ≠ .idle := by
     · rename_i h
       intro hp
       simp only [Bool.and_eq_true] at h
-      simp [hp, Phase.isWaiting, Phase.isDelivery] at h
+      simp [hp, Phase.isWaiting] at h
     · simp
 
 theorem invariant_initial (n : Nat) : Invariant (initial n) := by
@@ -503,8 +466,8 @@ theorem invariant_step {s t : State} (hs : Invariant s) (step : Step s t) : Inva
         | waiting p hp =>
             refine ⟨fun _ h => by simp at h, fun _ hpi => ?_, fun _ hpl => ?_,
               fun _ hne => absurd hload hne, fun _ _ h => by simp at h⟩
-            · simp only at hpi; subst hpi; simp [Phase.isWaiting, Phase.isDelivery] at hp
-            · simp only at hpl; subst hpl; simp [Phase.isWaiting, Phase.isDelivery] at hp
+            · simp only at hpi; subst hpi; simp [Phase.isWaiting] at hp
+            · simp only at hpl; subst hpl; simp [Phase.isWaiting] at hp
         | failed =>
             exact ⟨fun _ h => by simp at h, fun _ => by simp, fun _ h => by simp at h,
               fun _ hne => absurd hload hne, fun _ _ h => by simp at h⟩
@@ -602,8 +565,7 @@ theorem waiting_without_reread_offers_retry (i : Input) (hsel : i.selected = tru
   simp only at hsel hl hs hw hr
   subst hsel hl hs hr
   cases phase <;>
-    simp_all [project, Phase.isWaiting, Phase.isDelivery, waitingStatus, deliveryStatus,
-      followUpAction]
+    simp_all [project, Phase.isWaiting, waitingStatus, followUpAction]
 
 /-- The re-read budget is finite: a session that keeps answering `pending`
 stops being re-read and offers its action. -/

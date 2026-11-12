@@ -232,14 +232,9 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
 
-    let (mut serve, readiness) =
-        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
+    let mut serve = spawn_server_with_env(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-    assert_eq!(
-        readiness.get("p2p_transport").and_then(Value::as_str),
-        Some("iroh")
-    );
 
     let desktop_init = run_desktop_init_json(&home_dir, &desktop_home, "Standard Onboarding Demo")?;
     assert_eq!(
@@ -269,8 +264,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     assert!(
         desktop_next_steps.iter().any(|step| step
             .as_str()
-            .is_some_and(|step| step.contains("replication subscriptions armed"))),
-        "desktop init should tell the demo to wait for desktop bootstrap before chat replication: {desktop_init}"
+            .is_some_and(|step| step.contains("show `Connected`"))),
+        "desktop init should tell the demo to wait for the desktop connection before chat: {desktop_init}"
     );
     let peer_directory_path = desktop_home.join("peers.json");
     let peer_directory: Value = serde_json::from_slice(

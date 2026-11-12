@@ -2703,6 +2703,8 @@ pub struct LeanClientSyncHealthCase {
     pub runtimes: Vec<Option<String>>,
     pub state: String,
     pub transport: String,
+    pub connected_runtime_count: u64,
+    pub runtime_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
