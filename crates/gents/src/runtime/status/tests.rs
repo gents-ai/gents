@@ -799,26 +799,21 @@ async fn goal_settled_uses_live_runtime_status_cases() {
     for case in &gents_lean_vocab::lean_contract_snapshot().identity_readiness_settled_cases {
         {
             let mut row = status.state.lock().await;
-            row.reconcile_phase = if case["idle"].as_bool().unwrap() {
-                "idle"
-            } else {
-                "applying"
-            }
-            .to_owned();
-            row.last_reconcile_result = if !case["result_known"].as_bool().unwrap() {
+            row.reconcile_phase = if case.idle { "idle" } else { "applying" }.to_owned();
+            row.last_reconcile_result = if !case.result_known {
                 ""
-            } else if case["result_error"].as_bool().unwrap() {
+            } else if case.result_error {
                 "error"
             } else {
                 "applied"
             }
             .to_owned();
         }
-        let actual = if case["live_present"].as_bool().unwrap() {
+        let actual = if case.live_present {
             status.goal_reconcile_settled().await
         } else {
             false
         };
-        assert_eq!(actual, case["expected"].as_bool().unwrap(), "{case}");
+        assert_eq!(actual, case.expected, "{case:?}");
     }
 }
