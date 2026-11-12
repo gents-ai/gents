@@ -45,7 +45,7 @@ pub use enrollment_network::ensure_enrollment_network;
 pub use enrollment_offer::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
 pub use enrollment_operator::{
     authenticate_operator_command, authenticate_operator_query, consume_operator_nonce,
-    operator_query_view,
+    decide_operator_command, operator_query_view, sign_operator_command,
 };
 pub use enrollment_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, EnrollmentAuthorityHandle,

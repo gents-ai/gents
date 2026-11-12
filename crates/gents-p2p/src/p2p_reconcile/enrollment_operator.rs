@@ -121,6 +121,64 @@ pub async fn authenticate_operator_command(
     Ok(())
 }
 
+/// The runtime's one entry for an enrollment decision, whichever surface
+/// sent it: the command must be signed by this runtime's key and its nonce is
+/// consumed before the store signs and publishes the decision. An approval's
+/// grant runs before this, as the approver (`approve_enrollment`).
+pub async fn decide_operator_command(
+    identity: &dyn NodeIdentity,
+    node: &Arc<EmbeddedNode>,
+    store: &super::GraphqlEnrollmentStore,
+    command: &EnrollmentOperatorDecisionCommand,
+) -> Result<super::EnrollmentDecisionOutcome> {
+    use gents_protocol::enrollment::{EnrollmentDecisionKind, EnrollmentOperatorAction};
+    let now = Utc::now();
+    authenticate_operator_command(identity, command, now).await?;
+    consume_operator_nonce(node, &command.admin_did, &command.nonce, now).await?;
+    let request_id = command.request_id.trim();
+    match command.action {
+        EnrollmentOperatorAction::Approve => {
+            store
+                .decide_request_with_lease(
+                    request_id,
+                    EnrollmentDecisionKind::Approved,
+                    std::time::Duration::from_secs(command.lease_seconds),
+                )
+                .await
+        }
+        EnrollmentOperatorAction::Deny => {
+            store
+                .decide_request(request_id, EnrollmentDecisionKind::Denied)
+                .await
+        }
+        EnrollmentOperatorAction::Revoke => store.revoke_request(request_id).await,
+    }
+}
+
+/// An operator decision command signed now by `identity`, with a fresh nonce.
+pub async fn sign_operator_command(
+    identity: &dyn NodeIdentity,
+    request_id: &str,
+    action: gents_protocol::enrollment::EnrollmentOperatorAction,
+    lease_seconds: u64,
+) -> Result<EnrollmentOperatorDecisionCommand> {
+    let mut command = EnrollmentOperatorDecisionCommand {
+        protocol_version: gents_protocol::enrollment::ENROLLMENT_PROTOCOL_VERSION,
+        request_id: request_id.trim().to_string(),
+        lease_seconds,
+        action,
+        admin_did: identity.did().to_string(),
+        issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        nonce: uuid::Uuid::new_v4().simple().to_string(),
+        admin_sig: Vec::new(),
+    };
+    command.admin_sig = identity
+        .sign(&command.signing_payload())
+        .await
+        .context("signing enrollment operator command")?;
+    Ok(command)
+}
+
 pub async fn authenticate_operator_query(
     identity: &dyn NodeIdentity,
     command: &EnrollmentOperatorQueryCommand,

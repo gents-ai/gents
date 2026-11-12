@@ -259,14 +259,17 @@ pub(crate) async fn ensure_managed_runtime_pairing(
                     .map_err(|error| format!("granting desktop User access to managed Node: {error:#}"))
                 },
                 || async {
-                    match gents_service::server_host::approve_managed_client_enrollment(
+                    match gents_service::server_host::admit_managed_client_enrollment(
                         node_home,
                         &target.graphql,
                         &request_id,
+                        &target.node_did,
+                        core.node_identity().did(),
                     )
                     .await
                     {
-                        Ok(()) => Ok(PairingApproval::Committed),
+                        Ok(true) => Ok(PairingApproval::Committed),
+                        Ok(false) => Ok(PairingApproval::NotVisibleYet),
                         Err(error) => {
                             let message = format!("{error:#}");
                             if enrollment_request_is_not_visible_yet(&error) {

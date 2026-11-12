@@ -1,12 +1,14 @@
 import Proofs.Store.Identity.GrantSets
+import Proofs.Store.Identity.Household
 
 /-!
 The authority an explicit enrollment grant derives for one verified client
 enrollment, and what revoking that enrollment withdraws.
 
-Rust owner: `crates/gents/src/store/identity/enrollment_grant.rs`
-(`EnrollmentGrantTuple`, `plan_grant`, `plan_withdrawal`), written by
-`gents p2p enrollment grant` and withdrawn by
+Rust owner: `crates/gents-store/src/identity/enrollment_grant.rs`
+(`EnrollmentGrantTuple`, `plan_grant`, `plan_withdrawal`, `approve_enrollment`),
+written by every enrollment approval and by `gents p2p enrollment grant`, and
+withdrawn by
 `GraphqlEnrollmentStore::revoke_request` in the transaction that publishes the
 revocation revision.
 -/
@@ -228,16 +230,18 @@ theorem grant_derives_all (s : State) (request member : String)
 enrollment derives authority; approving another profile admits its route
 alone.
 
-Decision: approving is admission. `gents p2p enrollment grant` followed by
-an approval, desktop pairing, and the desktop's Approve all run `grant`
-(receipt first, then the derived tuples) before the approval commits, so an
-approval never stands without its authority, a failed grant approves nothing,
-and a retried approval finds the receipt and reissues it (`grant` is
-idempotent per request). Denying runs `revoke`, so a grant whose approval
-never committed is withdrawn and no derived authority outlives a denial.
-Rust owners: `server_host::admit_managed_enrollment` (grant, then approve) and
-the runtime enrollment store's denial, which withdraws the request's live
-receipt. -/
+Decision: approving is admission. Decision (maintainer, 2026-11-11, #3681):
+approving a client enrollment grants Node administration on every surface, to
+be narrowed later. `gents p2p enrollment approve`, desktop pairing, the
+desktop's Approve and the Agent `p2p` tool's `enrollment_approve` all run one
+handler, `approve_enrollment`, which runs `grant` (receipt first, then the
+derived tuples) before the approval commits, so an approval never stands
+without its authority, a failed grant approves nothing, and a retried approval
+finds the receipt and reissues it (`grant` is idempotent per request). Denying
+runs `revoke`, so a grant whose approval never committed is withdrawn and no
+derived authority outlives a denial. Rust owners: `approve_enrollment` (grant,
+then approve) and the runtime enrollment store's denial, which withdraws the
+request's live receipt. -/
 inductive Decision where
   | approve
   | deny
@@ -300,5 +304,70 @@ theorem deny_withdraws_an_unapproved_grant :
 /-- Denying a request nothing was granted for grants nothing. -/
 theorem deny_grants_nothing :
     heldOf (applyDecision fresh "request" "member" .deny) "member" = [] := by decide
+
+/-! ### Who may approve
+
+The approver writes the member's Node `administrator` relation under its own
+identity: a User through its signed client, an Agent through its managed
+identity. Native document ACP admits that write only for the Node owner or a
+holder of a relation that manages `administrator`, which the Household policy
+gives `administrator` alone. So whether an approval proceeds is decided by
+ACP and by nothing else: no surface, tool grant or operator signature widens
+it. The Node key signs the decision only after the grant committed. Open
+(#3681): whether an Agent that administers the Node, such as the Engineer, may
+approve at all. -/
+
+/-- The approver's standing on the Node an enrollment joins. -/
+inductive Standing where
+  | owner
+  | administrator
+  | agentManager
+  | runtimeReader
+  | unrelated
+  deriving DecidableEq, Repr
+
+def Standing.relation : Standing → Option String
+  | .administrator => some "administrator"
+  | .agentManager => some "agent_manager"
+  | .runtimeReader => some "runtime_reader"
+  | .owner | .unrelated => none
+
+/-- A Node owned by `user`, with the approver holding its standing. -/
+def standingState (standing : Standing) : Household.State :=
+  { objects := [⟨"nodes", "node", if standing == .owner then "approver" else "user"⟩]
+    relations := match standing.relation with
+      | some relation => [⟨"nodes", "node", relation, .actor "approver"⟩]
+      | none => []
+    enrolled := [] }
+
+/-- ACP admits the approver's write of the member's Node `administrator`
+relation. External premise: the pinned DefraDB DAC relation management. -/
+def grantAdmitted (standing : Standing) : Bool :=
+  Household.mayManage (standingState standing) "approver"
+    ⟨"nodes", "node", "administrator", .actor "member"⟩
+
+/-- What an approval does once its grant has run as the approver. -/
+inductive ApprovalStep where
+  | approve
+  | refuse
+  deriving DecidableEq, Repr
+
+/-- A committed grant is followed by the Node-signed approval; a refused or
+failed grant approves nothing. -/
+def afterGrant (grantCommitted : Bool) : ApprovalStep :=
+  if grantCommitted then .approve else .refuse
+
+def approval (standing : Standing) : ApprovalStep :=
+  afterGrant (grantAdmitted standing)
+
+/-- The Node owner and a Node administrator (the Engineer holds
+`administrator`) approve; `agent_manager`, `runtime_reader` and an Agent with
+no Node relation are refused by ACP, whatever its tool grant. -/
+theorem approval_follows_node_administration :
+    approval .owner = .approve ∧ approval .administrator = .approve ∧
+    approval .agentManager = .refuse ∧ approval .runtimeReader = .refuse ∧
+    approval .unrelated = .refuse := by native_decide
+
+theorem refused_grant_approves_nothing : afterGrant false = .refuse := rfl
 
 end Identity.EnrollmentGrant

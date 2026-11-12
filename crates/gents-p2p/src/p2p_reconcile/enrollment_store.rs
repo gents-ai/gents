@@ -189,7 +189,7 @@ impl EnrollmentProjection {
         }
     }
 
-    fn pending_for_decision(
+    pub fn pending_for_decision(
         &self,
         request_id: &str,
     ) -> Result<&PendingEnrollment, EnrollmentDecisionRefusal> {

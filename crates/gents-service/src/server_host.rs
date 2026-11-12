@@ -133,35 +133,35 @@ pub async fn grant_managed_client_enrollment(
     .is_some())
 }
 
-/// Approve the already granted desktop enrollment through the runtime's
-/// separately authenticated route-admission service.
-pub async fn approve_managed_client_enrollment(
+/// Admit the verified pending desktop request through the one approval
+/// handler: the CLI User that owns the Node grants its administration, then
+/// the runtime approves it. `false` while the request is not yet pending.
+pub async fn admit_managed_client_enrollment(
     home: &Path,
     graphql: &str,
     request_id: &str,
-) -> Result<()> {
-    decide_managed_enrollment(
+    node_did: &str,
+    client_did: &str,
+) -> Result<bool> {
+    let endpoint = crate::home_state::home_graphql_endpoint(home, graphql)?;
+    Ok(crate::enrollment_admin::approve_verified_client(
         home,
-        graphql,
+        endpoint,
         request_id,
-        ManagedEnrollmentDecision::Approve {
-            lease_seconds: DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
-        },
+        DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+        Some((node_did, client_did)),
     )
     .await
-    .context("approving desktop enrollment on managed runtime")?;
-    Ok(())
+    .context("approving desktop enrollment on managed runtime")?
+    .is_some())
 }
 
-/// Admit a pending client enrollment, as `gents p2p enrollment grant`
-/// followed by an approval does (Lean `Identity.EnrollmentGrant.applyDecision`
-/// `.approve`): grant the enrollment's derived authority (the Node
-/// `administrator` relation, written by the home's User, and the
-/// `operatorUser` node permissions, written by the runtime's native Node
-/// permission owner; receipt first), then approve it through the
-/// route-admission service. A failed grant approves nothing. A grant whose
-/// approval does not commit stays recorded under the request: approving
-/// again reissues the grant and finishes, and denying withdraws it.
+/// Admit a pending client enrollment (Lean `Identity.EnrollmentGrant.approval`)
+/// through the one approval handler every surface runs: the home's User grants
+/// its Node administration, which ACP admits only for the Node owner or an
+/// administrator, then the runtime approves it. A refused or failed grant
+/// approves nothing; a grant whose approval does not commit stays recorded
+/// under the request, so approving again finishes it and denying withdraws it.
 pub async fn admit_managed_enrollment(
     home: &Path,
     graphql: &str,
@@ -172,51 +172,29 @@ pub async fn admit_managed_enrollment(
     admit_managed_enrollment_as(home, owner, request_id, lease_seconds).await
 }
 
-/// [`admit_managed_enrollment`] with the User's signed endpoint given: the
-/// User that owns the Node writes its `administrator` relation.
+/// [`admit_managed_enrollment`] with the User's signed endpoint given.
 pub async fn admit_managed_enrollment_as(
     home: &Path,
     owner: gents_store::config_client::GraphqlEndpoint,
     request_id: &str,
     lease_seconds: u64,
 ) -> Result<ManagedEnrollmentDecisionOutcome> {
-    let graphql = owner.url().to_owned();
-    let graphql = graphql.as_str();
-    let not_pending = || EnrollmentDecisionRejected {
+    let body = crate::enrollment_admin::approve_verified_client(
+        home,
+        owner,
+        request_id,
+        lease_seconds,
+        None,
+    )
+    .await?
+    .ok_or_else(|| EnrollmentDecisionRejected {
         status: reqwest::StatusCode::CONFLICT,
         message: format!(
             "enrollment request {request_id} is not pending; nothing was granted or approved"
         ),
         code: Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending),
-    };
-    let pending = pending_managed_enrollments(home, graphql)
-        .await?
-        .into_iter()
-        .find(|pending| pending.request_id == request_id)
-        .ok_or_else(not_pending)?;
-    /* only a client enrollment derives authority; another profile's approval
-    admits its route alone */
-    let derives_authority = pending.profile.as_deref() == Some("client");
-    if derives_authority {
-        crate::enrollment_admin::grant_verified_client(home, owner, request_id, None)
-            .await
-            .context("granting the enrollment's access before approving it; nothing was approved")?
-            .ok_or_else(not_pending)?;
-    }
-    decide_managed_enrollment(
-        home,
-        graphql,
-        request_id,
-        ManagedEnrollmentDecision::Approve { lease_seconds },
-    )
-    .await
-    .with_context(|| {
-        if derives_authority {
-            "access was granted under this request but its approval did not commit; approve it again to finish, or deny it to withdraw the access"
-        } else {
-            "approving the enrollment"
-        }
-    })
+    })?;
+    serde_json::from_value(body).context("decoding managed enrollment decision")
 }
 
 pub async fn pending_managed_enrollments(

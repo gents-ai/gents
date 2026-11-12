@@ -18,6 +18,10 @@ use crate::config_writes::ConfigAccess;
 use super::load_rows;
 #[derive(Debug, Clone)]
 pub(super) struct ProjectionAcpReadScope {
+    /// The caller's own authenticated endpoint. DefraDB authorizes each
+    /// decision request as this caller (its `DacStatus` gate); `actor_did`
+    /// only narrows rows the caller already read as itself.
+    caller: gents_store::config_client::GraphqlEndpoint,
     actor_did: String,
     policy_id: String,
     api_base: String,
@@ -89,6 +93,7 @@ pub(super) async fn projection_acp_read_scope(
         );
     };
     Ok(Some(ProjectionAcpReadScope {
+        caller: graphql.clone(),
         actor_did: actor_did.to_string(),
         policy_id,
         api_base: crate::graphql_access::graphql_api_base(graphql.url())?,
@@ -489,7 +494,7 @@ impl<'a> ProjectionAcpReadDecider<'a> {
         let allowed = decide_document_access(
             &self.client,
             &self.scope.api_base,
-            None,
+            Some(&self.scope.caller),
             &DocumentAccessQuestion {
                 actor: &self.scope.actor_did,
                 permission: "read",
@@ -781,6 +786,9 @@ mod tests {
             let _ = axum::serve(listener, router).await;
         });
         Ok(ProjectionAcpReadScope {
+            caller: gents_store::config_client::GraphqlEndpoint::anonymous(format!(
+                "http://{addr}/api/v0/graphql"
+            )),
             actor_did: "did:test:projection-reader".to_string(),
             policy_id: "projection-policy".to_string(),
             api_base: format!("http://{addr}/api/v0"),

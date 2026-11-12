@@ -9,9 +9,7 @@ use gents_loop::tool::{Tool, ToolDefinition};
 use gents_p2p::p2p_reconcile::{
     EmbeddedRemoteP2pAdmin, EnrollmentOfferIssuer, GraphqlEnrollmentStore, RemoteP2pAdmin,
 };
-use gents_protocol::enrollment::{
-    AuthorizationLease, EnrollmentDecisionKind, EnrollmentRenewalPolicy,
-};
+use gents_protocol::enrollment::{AuthorizationLease, EnrollmentRenewalPolicy};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::{escape_graphql_string, validate_collection_identifier};
 use gents_store::identity::NodeIdentity;
@@ -23,6 +21,7 @@ pub struct P2pTool {
     node: Arc<EmbeddedNode>,
     identity: Option<Arc<dyn NodeIdentity>>,
     mutate: bool,
+    approver: Option<ConfigAccess>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -138,7 +137,15 @@ impl P2pTool {
             node,
             identity,
             mutate,
+            approver: None,
         }
+    }
+
+    /// The selected Agent's own access: an enrollment approval grants Node
+    /// administration as this actor, so ACP decides whether it may approve.
+    pub fn with_approver(mut self, approver: ConfigAccess) -> Self {
+        self.approver = Some(approver);
+        self
     }
 
     fn actor(&self) -> Result<Arc<dyn NodeIdentity>> {
@@ -415,9 +422,29 @@ impl P2pTool {
                 ))
             }
             ["enrollment", operation @ ("approve" | "deny" | "revoke")] => {
+                use gents_protocol::enrollment::EnrollmentOperatorAction;
                 ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
-                let store = GraphqlEnrollmentStore::new(self.node.clone(), actor);
+                let store = GraphqlEnrollmentStore::new(self.node.clone(), actor.clone());
                 let id = text("request_id")?;
+                let decide = |action, lease_seconds| {
+                    let (actor, store) = (actor.clone(), store.clone());
+                    async move {
+                        let command = gents_p2p::p2p_reconcile::sign_operator_command(
+                            actor.as_ref(),
+                            id,
+                            action,
+                            lease_seconds,
+                        )
+                        .await?;
+                        gents_p2p::p2p_reconcile::decide_operator_command(
+                            actor.as_ref(),
+                            &self.node,
+                            &store,
+                            &command,
+                        )
+                        .await
+                    }
+                };
                 let result = match *operation {
                     "approve" => {
                         let lease = options.get("lease_seconds").map_or(
@@ -428,10 +455,38 @@ impl P2pTool {
                                 Ok::<_, anyhow::Error>(value)
                             },
                         )?;
-                        store.decide_request_with_lease(id, EnrollmentDecisionKind::Approved, std::time::Duration::from_secs(lease)).await
-                    },
-                    "deny" => store.decide_request(id, EnrollmentDecisionKind::Denied).await,
-                    _ => store.revoke_request(id).await,
+                        async {
+                        let request = store
+                            .load_projection()
+                            .await?
+                            .pending_for_decision(id)?
+                            .request
+                            .clone();
+                        let approver = self.approver.as_ref().context(
+                            "enrollment approval grants Node administration as the selected Agent, and this tool has no Agent identity",
+                        )?;
+                        let runtime = ConfigAccess::local_as(
+                            self.node.clone(),
+                            identity::Did::new(actor.did())?,
+                        );
+                        gents_store::identity::approve_enrollment(
+                            gents_store::identity::EnrollmentApproval {
+                                approver,
+                                runtime: &runtime,
+                                node: actor.as_ref(),
+                                request: &request,
+                                expected: None,
+                            },
+                            || decide(EnrollmentOperatorAction::Approve, lease),
+                        )
+                        .await
+                        .map(|(_, decided)| decided)
+                        .map_err(anyhow::Error::from)
+                        }
+                        .await
+                    }
+                    "deny" => decide(EnrollmentOperatorAction::Deny, 0).await,
+                    _ => decide(EnrollmentOperatorAction::Revoke, 0).await,
                 }
                 .map_err(|error| {
                     let reused = gents_protocol::error_chain::find_source::<
@@ -483,7 +538,7 @@ fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
         None => "Actions: status; network_list, network_get; enrollment_offer, enrollment_request, enrollment_pending, enrollment_approve, enrollment_deny, enrollment_revoke, enrollment_history, enrollment_renewal_policy. Action help with topic status, network, enrollment or scope explains each; scope covers grants and capability boundaries. Identity comes from the running node. Mutation grants are explicit.",
         Some("status" | "network") => "status returns native connected peer references (raw IDs or transport addresses) and native sync facts. network_list lists up to 50 registered peers with exact DIDs and addresses. network_get takes peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority or current connectivity; network_get's connected field is the observed transport connection. status defaults to backlog facts; details:true returns native diagnostic counters.",
-        Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending and approves it. enrollment_offer requires mutation authority and returns this node's signed offer_token, peer_id and DID; the token is valid 5 minutes unless valid_for_secs asks for up to 3600, which a relay through people or other agents needs, and the joining node must request before expires_at; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for 30 days by default; lease_seconds may set a lease of up to 90 days. It materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, not this node in the requester's. Enrollment in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned enrollment document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted. Approved entries carry lease_state, lease_remaining_days and renewal_due, which turns true inside the last 7 days of the lease. Automatic renewal is off by default. enrollment_renewal_policy sets auto_renew and an optional maximum lease_seconds for this network; disabling it immediately stops automatic approvals. Renewal is re-enrollment before expiry: the same four calls with a fresh offer, request and approval for the same peer; the approval takes the peer's next authorization sequence and supersedes the old generation in place, so the peer's enrollment route stays. After expiry the peer's routes and remote requests stop until it re-enrolls.",
+        Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending and approves it. enrollment_offer requires mutation authority and returns this node's signed offer_token, peer_id and DID; the token is valid 5 minutes unless valid_for_secs asks for up to 3600, which a relay through people or other agents needs, and the joining node must request before expires_at; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval first grants the requester administration of this Node under your own Agent identity; DefraDB refuses that grant unless you administer this Node, and then nothing is approved. Approval admits the peer to this node's network for 30 days by default; lease_seconds may set a lease of up to 90 days. It materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, not this node in the requester's. Enrollment in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned enrollment document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted. Approved entries carry lease_state, lease_remaining_days and renewal_due, which turns true inside the last 7 days of the lease. Automatic renewal is off by default. enrollment_renewal_policy sets auto_renew and an optional maximum lease_seconds for this network; disabling it immediately stops automatic approvals. Renewal is re-enrollment before expiry: the same four calls with a fresh offer, request and approval for the same peer; the approval takes the peer's next authorization sequence and supersedes the old generation in place, so the peer's enrollment route stays. After expiry the peer's routes and remote requests stop until it re-enrolls.",
         Some("scope") => "P2P carries discovery and enrollment only. This tool never pairs or syncs application, protocol configuration or credential collections, whatever the tool grants or document ACP say; read authorized documents through query. Enrollment is a separate signed authority, and mutation authority gates offers, requests and decisions.",
         Some(resource) => bail!("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}"),
     })

@@ -7,6 +7,7 @@ use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 pub mod agent;
+mod enrollment_approval;
 mod enrollment_grant;
 mod error;
 mod file_key;
@@ -20,6 +21,10 @@ pub use agent::{
     derive_agent_identity, observe_agent_admission, provision_agent_identity,
     provision_agent_identity_authorized, provision_agent_identity_for_agent,
     resolve_agent_identity, AgentAdmissionObservationError, AgentProvisionError,
+};
+pub use enrollment_approval::{
+    approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep, EnrollmentApproval,
+    EnrollmentApprovalError,
 };
 pub use enrollment_grant::{
     grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant, plan_withdrawal,
