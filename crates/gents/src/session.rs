@@ -80,10 +80,16 @@ pub(crate) use output::count_request_output_scans;
 #[cfg(test)]
 pub(crate) use output::count_source_output_queries;
 #[cfg(test)]
+pub(crate) use output::count_source_payload_bytes;
+#[cfg(test)]
+pub(crate) use output::count_source_rows_decoded;
+#[cfg(test)]
 pub(crate) use output::reader::load_canonical_payload_from_access;
 pub(crate) use output::reader::load_canonical_payload_in_txn;
 pub(crate) use output::reader::load_canonical_payload_with_access;
+pub(crate) use output::reader::load_output_segment_in_txn;
 pub(crate) use output::reader::load_source_rows_in_txn;
+pub(crate) use output::reader::load_source_shapes_in_txn;
 pub use output::reader::{load_canonical_message, load_canonical_message_from_node};
 pub(crate) use output::reader::{
     load_canonical_message_in_txn, load_request_headers_in_txn, TxnCanonicalReader,

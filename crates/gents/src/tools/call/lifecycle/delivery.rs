@@ -22,6 +22,10 @@ pub(crate) use output_append::{
 pub(crate) use presentation::{render_presentation, terminal_output_tail};
 
 #[cfg(test)]
+mod output_append_bounded_tests;
+#[cfg(test)]
+mod output_append_scaling;
+#[cfg(test)]
 mod plugin_writes_failed_tests;
 #[cfg(test)]
 mod spawned_background_tests;

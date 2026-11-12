@@ -12,6 +12,33 @@ use super::native::execute_owned_native;
 use super::{graphql, graphql_api_base, retry, ConfigApplyTxn, ConfigClientError, Result};
 use crate::store::config_client::write_telemetry::{record_slow_native_phase, ConflictSource};
 
+#[cfg(test)]
+tokio::task_local! {
+    static TXN_STATEMENTS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+fn record_transaction_statement() {
+    let _ = TXN_STATEMENTS
+        .try_with(|statements| statements.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
+/// Count the GraphQL statements a transaction owner issues while `future`
+/// runs. The count is taken in the caller's task before native dispatch, so a
+/// statement that `execute_owned_native` spawns is still attributed here.
+#[cfg(test)]
+pub(crate) async fn count_transaction_statements<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
+    let statements = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = TXN_STATEMENTS.scope(statements.clone(), future).await;
+    (
+        output,
+        statements.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
 impl ConfigApplyTxn<'_> {
     pub(crate) async fn delete_verified_configuration_document(
         &self,
@@ -784,6 +811,8 @@ impl ConfigApplyTxn<'_> {
     /// arbitrary keys and nested empty arrays; ordinary nillable list fields
     /// remain the caller's responsibility.
     pub async fn execute_with_variables(&self, document: &str, variables: &Value) -> Result<Value> {
+        #[cfg(test)]
+        record_transaction_statement();
         if !variables.is_object() {
             return Err(ConfigClientError::VariablesNotObject);
         }
@@ -1217,6 +1246,8 @@ impl ConfigApplyTxn<'_> {
         identity: Option<identity::Did>,
         agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     ) -> Result<defra_node::QueryResponse> {
+        #[cfg(test)]
+        record_transaction_statement();
         let TxnBackend::Embedded {
             node,
             handle,

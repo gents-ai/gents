@@ -89,6 +89,39 @@ struct ReconstructedScopedMessage {
 tokio::task_local! {
     static REQUEST_OUTPUT_SCANS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
     static SOURCE_OUTPUT_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+    static SOURCE_ROWS_DECODED: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+    static SOURCE_PAYLOAD_BYTES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+/// What one source read actually transported: the rows it decoded and the
+/// payload bytes those rows carried. A payload-free projection reports the
+/// same rows and zero bytes.
+#[cfg(test)]
+pub(crate) fn record_source_read(rows: usize, payload_bytes: usize) {
+    let _ = SOURCE_ROWS_DECODED
+        .try_with(|decoded| decoded.fetch_add(rows, std::sync::atomic::Ordering::Relaxed));
+    let _ = SOURCE_PAYLOAD_BYTES
+        .try_with(|bytes| bytes.fetch_add(payload_bytes, std::sync::atomic::Ordering::Relaxed));
+}
+
+#[cfg(test)]
+pub(crate) async fn count_source_rows_decoded<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
+    let rows = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = SOURCE_ROWS_DECODED.scope(rows.clone(), future).await;
+    (output, rows.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[cfg(test)]
+pub(crate) async fn count_source_payload_bytes<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
+    let bytes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = SOURCE_PAYLOAD_BYTES.scope(bytes.clone(), future).await;
+    (output, bytes.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[cfg(test)]

@@ -28,6 +28,8 @@ use super::{
 
 pub use apply_txn::ConfigApplyTxn;
 pub use cursor::ConfigCursor;
+#[cfg(test)]
+pub(crate) use execute::count_transaction_statements;
 pub use gate::LocalConfigAccess;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
 #[cfg(test)]

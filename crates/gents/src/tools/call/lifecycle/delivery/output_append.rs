@@ -4,7 +4,7 @@ use crate::store::graphql::created_doc_id;
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::extent::ObservedShape;
 use gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
@@ -199,7 +199,7 @@ async fn append_tool_output_with_time(
                     let writer = OutputWriter::ToolExecution {
                         tool_call_doc_id: binding.tool_call_doc_id.clone(),
                     };
-                    let rows = crate::session::load_source_rows_in_txn(
+                    let rows = crate::session::load_source_shapes_in_txn(
                         txn,
                         &binding.request_doc_id,
                         &source,
@@ -210,25 +210,22 @@ async fn append_tool_output_with_time(
                     .await?;
                     let same_attempt = rows
                         .iter()
-                        .filter(|row| row.segment.created_at == created_at)
+                        .filter(|row| row.shape.created_at == created_at)
                         .collect::<Vec<_>>();
                     anyhow::ensure!(
                         same_attempt.len() <= 1,
                         "canonical tool output append has ambiguous retry identity"
                     );
                     anyhow::ensure!(
-                        rows.iter().all(|row| row.segment.close.is_none()),
+                        rows.iter().all(|row| row.shape.close.is_none()),
                         "cannot append raw output after tool source closure"
                     );
                     let prior = rows
                         .iter()
-                        .filter(|row| row.segment.created_at != created_at)
-                        .map(|row| ObservedSegment {
-                            doc_id: &row.doc_id,
-                            segment: &row.segment,
-                        })
+                        .filter(|row| row.shape.created_at != created_at)
+                        .map(|row| ObservedShape::from_shape(&row.doc_id, &row.shape))
                         .collect::<Vec<_>>();
-                    let extent = gents_protocol::output::extent::inspect_open_source(
+                    let extent = gents_protocol::output::extent::inspect_open_source_shape(
                         &prior,
                         &binding.request_doc_id,
                         &source,
@@ -236,7 +233,7 @@ async fn append_tool_output_with_time(
                     )
                     .map_err(anyhow::Error::from)?;
                     anyhow::ensure!(
-                        extent.streams.len() <= 1,
+                        extent.stream_bytes.len() <= 1,
                         "tool raw output source has unexpected multiple streams"
                     );
                     let ordinal = extent.segments;
@@ -264,8 +261,16 @@ async fn append_tool_output_with_time(
                         created_at,
                     };
                     if let Some(existing) = same_attempt.first() {
+                        let recorded = crate::session::load_output_segment_in_txn(
+                            txn,
+                            &existing.doc_id,
+                            &binding.node_did,
+                            &binding.session_id,
+                            binding.requester_did.as_deref(),
+                        )
+                        .await?;
                         anyhow::ensure!(
-                            existing.segment == segment,
+                            recorded.segment == segment,
                             "canonical tool output retry conflicts with the recorded segment"
                         );
                         return Ok(ToolOutputAppendReceipt {

@@ -1,10 +1,16 @@
 use serde_json::Value;
 
-use super::{OutputSegment, OutputSource, TranscriptMessage};
+use super::{OutputSegment, OutputSegmentShape, OutputSource, TranscriptMessage};
 use crate::graphql::{escape_graphql_string, graphql_input_literal, GraphqlError};
 
 pub const AGENT_OUTPUT_SEGMENT_FIELDS: &str = "node_did requester_did session_id \
 request_doc_id source ordinal writer runs payload close created_at _docID";
+
+/// `AGENT_OUTPUT_SEGMENT_FIELDS` without `payload`. A reader that only needs
+/// a source's cross-record structure selects these, so neither the transport
+/// nor the decoder is charged for the bytes already recorded.
+pub const AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS: &str = "node_did requester_did session_id \
+request_doc_id source ordinal writer runs close created_at _docID";
 
 pub const AGENT_MESSAGE_FIELDS: &str = "message_key session_id node_did requester_did \
 request_doc_id publication outcome sequence role native_id blocks created_at _docID";
@@ -40,6 +46,12 @@ pub struct OutputSegmentRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct OutputSegmentShapeRow {
+    pub doc_id: String,
+    pub shape: OutputSegmentShape,
+}
+
+#[derive(Debug, Clone)]
 pub struct TranscriptMessageRow {
     pub doc_id: String,
     pub message: TranscriptMessage,
@@ -69,6 +81,16 @@ pub fn decode_output_segment_row(row: &Value) -> Result<OutputSegmentRow, Canoni
     let segment: OutputSegment = serde_json::from_value(document)
         .map_err(|source| CanonicalRowError::Decode { collection, source })?;
     Ok(OutputSegmentRow { doc_id, segment })
+}
+
+pub fn decode_output_segment_shape_row(
+    row: &Value,
+) -> Result<OutputSegmentShapeRow, CanonicalRowError> {
+    let collection = "AgentOutputSegment";
+    let (doc_id, document) = split_physical_doc_id(row, collection)?;
+    let shape: OutputSegmentShape = serde_json::from_value(document)
+        .map_err(|source| CanonicalRowError::Decode { collection, source })?;
+    Ok(OutputSegmentShapeRow { doc_id, shape })
 }
 
 pub fn decode_transcript_message_row(
@@ -115,6 +137,28 @@ pub fn source_output_segments_query(
     ))
 }
 
+/// The payload-free projection of `source_output_segments_query`. The same
+/// no-row-limit obligation applies: a limited read could hide a conflicting
+/// observation of the same source.
+pub fn source_output_segment_shapes_query(
+    request_doc_id: &str,
+    source: &OutputSource,
+) -> Result<String, CanonicalRowError> {
+    let filter = source_output_segments_filter(request_doc_id, source)?;
+    Ok(format!(
+        "{{ AgentOutputSegment(filter: {{ {filter} }}) {{ {AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS} }} }}"
+    ))
+}
+
+/// One physical segment with its payload, for the rare read that must compare
+/// a whole recorded record: an idempotent retry proving it already wrote.
+pub fn output_segment_document_query(doc_id: &str) -> String {
+    format!(
+        "{{ AgentOutputSegment(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}",
+        escape_graphql_string(doc_id)
+    )
+}
+
 /// DefraDB JSON filters match indexed scalar leaves. This discriminator may
 /// also match another typed source; callers must verify full source equality.
 pub fn output_source_discriminator(source: &OutputSource) -> Value {
@@ -152,6 +196,21 @@ pub fn decode_scoped_request_output_segments(
         session_id,
         requester_did,
         decode_output_segment_row,
+    )
+}
+
+pub fn decode_scoped_request_output_segment_shapes(
+    rows: &[Value],
+    node_did: &str,
+    session_id: Option<&str>,
+    requester_did: Option<&str>,
+) -> Result<Vec<OutputSegmentShapeRow>, CanonicalRowError> {
+    decode_scoped_canonical_rows(
+        rows,
+        node_did,
+        session_id,
+        requester_did,
+        decode_output_segment_shape_row,
     )
 }
 

@@ -7,6 +7,8 @@ use super::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 
 mod ownership;
+#[cfg(test)]
+pub(crate) use ownership::without_child_relationship_repair;
 pub(crate) use ownership::{
     publish_agent_session_child_relationships_with_access,
     recover_agent_session_child_relationships_with_access,
