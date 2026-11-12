@@ -80,7 +80,9 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         .await
         .expect("approval was not reached");
     let session = harness.hook.session_id().await.unwrap();
-    let row = super::background_budget::tool_row(&harness.access, &session, child).await;
+    let row =
+        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
+            .await;
     let request = gents_protocol::process_control::OperatorProcessControlRequest {
         node_did: key.node_did.clone(),
         session_id: session.clone(),
@@ -114,7 +116,9 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
             live_execution_cancelled: true
         } | gents_toolcalls::call::control::CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
     ));
-    let row = super::background_budget::tool_row(&harness.access, &session, child).await;
+    let row =
+        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
+            .await;
     assert_eq!(row["lifecycle_state"], expected.durable_state);
     assert!(executions
         .process_record(child, &request.tool_call_doc_id)
@@ -128,8 +132,8 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     .await
     .unwrap();
     assert_eq!(
-        super::background_budget::tool_row(&harness.access, &session, child).await
-            ["lifecycle_state"],
+        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
+            .await["lifecycle_state"],
         expected.durable_state
     );
     hook_execution_fixtures()
@@ -298,7 +302,12 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
         .await
         .expect("background command did not settle");
         let session = harness.hook.session_id().await.unwrap();
-        let row = super::background_budget::tool_row(&harness.access, &session, child).await;
+        let row = gents_toolcalls::test_support::background_hook::tool_row(
+            &harness.access,
+            &session,
+            child,
+        )
+        .await;
         assert_eq!(
             row["lifecycle_state"],
             if allowed { "completed" } else { "failed" },
@@ -443,13 +452,14 @@ async fn admission_harness(
 ) -> AdmissionHarness {
     let dir = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let fixture = super::background_budget::budget_hook_fixture(
+    let fixture = gents_toolcalls::test_support::background_hook::budget_hook_fixture(
         "background-admission",
         BackgroundToolRegistry::default(),
         BackgroundExecutionRegistry::default(),
+        gents_automation::lifecycle_hooks::composition(),
     )
     .await;
-    let super::background_budget::BudgetHookFixture {
+    let gents_toolcalls::test_support::background_hook::BudgetHookFixture {
         db,
         user,
         access,

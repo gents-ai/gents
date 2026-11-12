@@ -434,10 +434,11 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
 async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
     use gents_documents::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
 
-    let fixture = background_budget::budget_hook_fixture(
+    let fixture = gents_toolcalls::test_support::background_hook::budget_hook_fixture(
         "selected-tool-dispatch",
         BackgroundToolRegistry::default(),
         BackgroundExecutionRegistry::default(),
+        gents_automation::lifecycle_hooks::composition(),
     )
     .await;
     let node = fixture.db.node.clone();

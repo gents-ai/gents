@@ -10,13 +10,14 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
     );
     assert!(expected.legal);
     for during_completion in [false, true] {
-        let fixture = super::background_budget::budget_hook_fixture(
+        let fixture = gents_toolcalls::test_support::background_hook::budget_hook_fixture(
             "dropped-wait",
             BackgroundToolRegistry::default(),
             BackgroundExecutionRegistry::default(),
+            gents_automation::lifecycle_hooks::composition(),
         )
         .await;
-        let super::background_budget::BudgetHookFixture {
+        let gents_toolcalls::test_support::background_hook::BudgetHookFixture {
             db,
             user,
             access,
@@ -37,7 +38,8 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
         let args = r#"{"tool_call_id":"missing-process"}"#;
         let signer = hook_managed_identity(&hook, request).await;
         accept_hook_tool_call(&hook, call, "wait_process", args, None).await;
-        let admitted = super::background_budget::tool_row(&access, &session, call).await;
+        let admitted =
+            gents_toolcalls::test_support::background_hook::tool_row(&access, &session, call).await;
         let document = admitted["_docID"].as_str().unwrap();
         if during_completion {
             let reached = Arc::new(tokio::sync::Notify::new());
@@ -63,7 +65,10 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             let mut pending = Box::pin(hook.on_tool_call("wait_process", None, call, args));
             let committed = async {
                 loop {
-                    let row = super::background_budget::tool_row(&access, &session, call).await;
+                    let row = gents_toolcalls::test_support::background_hook::tool_row(
+                        &access, &session, call,
+                    )
+                    .await;
                     if row["lifecycle_state"] == "running" {
                         break;
                     }
@@ -82,7 +87,8 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             drop(pending);
             drop(handles);
         }
-        let row = super::background_budget::tool_row(&access, &session, call).await;
+        let row =
+            gents_toolcalls::test_support::background_hook::tool_row(&access, &session, call).await;
         assert_eq!(row["lifecycle_state"], "running");
         assert!(hook.in_flight_lifecycles.lock().await.is_empty());
         assert_eq!(
@@ -126,7 +132,8 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
         .await
         .unwrap();
         assert_eq!(report.tool_calls_terminalized, 1);
-        let settled = super::background_budget::tool_row(&access, &session, call).await;
+        let settled =
+            gents_toolcalls::test_support::background_hook::tool_row(&access, &session, call).await;
         assert_eq!(settled["_docID"], admitted["_docID"]);
         assert_eq!(
             settled["lifecycle_state"].as_str(),

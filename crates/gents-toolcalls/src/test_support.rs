@@ -410,3 +410,7 @@ pub mod stream_processor;
 
 pub mod queue;
 pub mod workspace_rejection;
+
+pub mod background_hook;
+
+pub mod script_composition;
