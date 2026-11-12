@@ -245,7 +245,7 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let observed = load_full_snapshot(node.as_ref())
+    let observed = load_node_scoped_snapshot(node.as_ref(), "did:test:selected")
         .await
         .expect("observer snapshot");
     assert!(observed.transcript_messages.is_empty());
@@ -868,7 +868,7 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
     let observation_doc = response["data"]["InferenceBackendObservation"][0]["_docID"]
         .as_str()
         .unwrap();
-    let snapshot = load_full_snapshot(&node).await?;
+    let snapshot = load_node_scoped_snapshot(&node, runtime.node_did()).await?;
     let operator = load_inference_configuration(&access, &backend.node_did).await?;
     let patch = fetch_doc_patch(&node, INFERENCE_BACKEND_NAME, &[doc_id])
         .await?
