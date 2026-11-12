@@ -1,3 +1,4 @@
+import Proofs.Conformance.EagerStreaming
 import Proofs.Conformance.BackendHealthRetention
 import Proofs.Conformance.InferenceDroppedPermit
 import Proofs.Conformance.EventSourceCursor
