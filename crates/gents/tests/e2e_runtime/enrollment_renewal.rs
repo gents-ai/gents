@@ -71,8 +71,11 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
     };
 
+    let contract = tokio::task::spawn_blocking(gents_lean_vocab::lean_contract_snapshot)
+        .await
+        .expect("load enrollment renewal contract before creating timed credentials");
     let modeled = |name: &str| {
-        gents_lean_vocab::lean_contract_snapshot()
+        contract
             .enrollment_renewal_intent_cases
             .iter()
             .find(|case| case.name == name)
@@ -157,10 +160,26 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         })
         .await
         .unwrap();
+    let before_invalid_signature = store.load_projection().await.unwrap();
     let signature_result = store.issue_renewal_offer(&forged).await;
     assert_eq!(signature_result.is_ok(), modeled("unsigned"));
     let invalid_signature = signature_result.unwrap_err();
-    assert!(format!("{invalid_signature:#}").contains("signature verification failed"));
+    assert!(
+        gents_protocol::error_chain::find_map_source(invalid_signature.as_ref(), |cause| {
+            cause
+                .downcast_ref::<gents_store::identity::IdentityError>()
+                .map(|error| {
+                    matches!(error, gents_store::identity::IdentityError::VerifyPayload { did, .. }
+                    if did == member.node_identity.did())
+                })
+        })
+        .unwrap_or(false),
+        "expected the member signature to be rejected: {invalid_signature:#}",
+    );
+    assert_eq!(
+        store.load_projection().await.unwrap(),
+        before_invalid_signature
+    );
     forged.member_sig = member
         .node_identity
         .sign(&forged.signing_payload())
