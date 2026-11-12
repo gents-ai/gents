@@ -345,28 +345,6 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     })
 }
 
-pub async fn submit_goal_backed_request_local(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: ::identity::Did,
-    node_did: &str,
-    session_id: &str,
-    objective: &str,
-    token_budget: Option<i64>,
-    request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
-    submit_goal_backed_request_with_identity(
-        node,
-        actor,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-        request,
-        None,
-    )
-    .await
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn submit_goal_backed_request_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,

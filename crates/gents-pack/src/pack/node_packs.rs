@@ -791,22 +791,30 @@ impl NodePacks<'_> {
         Ok((registry, response))
     }
 
-    /// Removes an assets or plugins pack: its home record and the plugin
-    /// records it owns, released together by the local removal owner, with
-    /// the plugin bytes no other record uses; then the node is told as
-    /// `actor` and releases its record. The plugins retire unless a Tools the
-    /// actor can read still selects one ([`super::ensure_plugins_unreferenced`]).
-    /// Returns the removal and the digests of the bytes it deleted.
+    /// Removes an assets or plugins pack under the plugin store lock: its
+    /// plugins retire unless a Tools the actor can read still selects one
+    /// ([`super::ensure_plugins_unreferenced`]), then the home record, the
+    /// plugin records it owns, its asset cache and the plugin bytes and
+    /// archive nothing else references are released
+    /// ([`super::home_removal::remove_checked`]), and the node is told as
+    /// `actor`. The second value is why the node was not told, when it was
+    /// not: a running runtime keeps the removed tools listed until its
+    /// configuration changes.
     pub async fn remove_home_pack(
         &self,
         coordinate: &str,
         record: HomePackInstall,
         actor: Option<::identity::Did>,
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
-    ) -> Result<(plugin_lifecycle::LocalPackRemoval, Vec<String>), HomePackRemovalError> {
+    ) -> Result<(super::home_removal::HomeRemoval, Option<String>), HomePackRemovalError> {
         let home = self
             .home
             .context("assets and plugins packs live in the node home")?;
+        let lock_home = home.to_owned();
+        let guard =
+            tokio::task::spawn_blocking(move || crate::plugin::store::try_lock_store(&lock_home))
+                .await
+                .context("plugin store lock task did not finish")??;
         let (namespace, _) = registry::split_pack_coordinate(coordinate);
         let plugins: BTreeSet<String> = record
             .plugins
@@ -816,6 +824,7 @@ impl NodePacks<'_> {
         if let Err(cause) =
             super::ensure_plugins_unreferenced(self.access, self.node_did, &plugins).await
         {
+            drop(guard);
             let selections = super::visible_plugin_selections(self.access, self.node_did, &plugins)
                 .await
                 .ok();
@@ -825,29 +834,12 @@ impl NodePacks<'_> {
                 cause,
             });
         }
-        let local_home = home.to_owned();
-        let local_coordinate = coordinate.to_owned();
-        let removal = tokio::task::spawn_blocking(move || {
-            plugin_lifecycle::remove_local(
-                &local_home,
-                &local_coordinate,
-                |current| {
-                    anyhow::ensure!(
-                        *current == record,
-                        "{local_coordinate} changed while checking plugin references; retry removal"
-                    );
-                    Ok(())
-                },
-                |()| Ok(()),
-            )
-            .and_then(|removal| {
-                let bytes = plugin_lifecycle::release_plugin_bytes(&local_home, &removal.plugins)?;
-                Ok((removal, bytes))
-            })
-        })
-        .await
-        .context("pack removal task did not finish")??;
-        if !removal.0.plugins.is_empty() {
+        let removal =
+            super::home_removal::remove_checked(guard, home, coordinate, record, Some(self.access))
+                .await?;
+        let unrecorded = if removal.plugins.is_empty() {
+            None
+        } else {
             super::record_plugin_retirement_as(
                 self.access,
                 self.node_did,
@@ -857,20 +849,22 @@ impl NodePacks<'_> {
                 profile_policy,
             )
             .await
-            .map_err(anyhow::Error::from)?;
-        }
-        Ok(removal)
+            .err()
+            .map(|error| format!("{:#}", anyhow::Error::from(error)))
+        };
+        Ok((removal, unrecorded))
     }
 
     /// Removes an installed documents pack's `PackInstallation` record and
-    /// everything it lists, then releases its home and plugin store records.
-    /// Nothing is resolved: no store or registry lookup.
+    /// everything it lists, then releases what it held in the node home
+    /// ([`super::home_removal::release_documents_pack`]). Nothing is
+    /// resolved: no store or registry lookup.
     pub async fn remove_documents(
         &self,
         coordinate: &str,
         edited: DriftPolicy,
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
-    ) -> Result<RemoveReport> {
+    ) -> Result<(RemoveReport, super::home_removal::DocumentsRelease)> {
         let report = super::remove_pack(
             self.access,
             self.node_did,
@@ -879,21 +873,14 @@ impl NodePacks<'_> {
             profile_policy,
         )
         .await?;
-        if let Some(home) = self.home {
-            super::forget_home_install(home, coordinate)?;
-            // The removal transaction retired these plugins (Lean
-            // `Configuration.pluginRetirementAllowed`), so their records go
-            // and so do the bytes no other record uses.
-            for removed in std::iter::once(&report).chain(&report.dependencies) {
-                let released = plugin_lifecycle::release_plugin_records(
-                    home,
-                    &removed.pack,
-                    &removed.documents.plugins,
-                )?;
-                plugin_lifecycle::release_plugin_bytes(home, &released)?;
+        let released = match self.home {
+            Some(home) => {
+                super::home_removal::release_documents_pack(home, Some(self.access), &report)
+                    .await?
             }
-        }
-        Ok(report)
+            None => Default::default(),
+        };
+        Ok((report, released))
     }
 }
 

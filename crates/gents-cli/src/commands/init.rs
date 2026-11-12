@@ -1327,12 +1327,10 @@ async fn initialize_runtime_home(
     {
         return Err(anyhow::anyhow!("seeded Tools document: {error}"));
     }
-    backend_doc.validate()?;
     inference_execution.validate()?;
     if let Some(sampling) = &sampling {
         sampling.validate()?;
     }
-    inference_profile.validate()?;
     let wide_open_preset_id = wide_open_tools_id_for_node(node_did);
     let mut documents = vec![
         replacement(Collection::InferenceBackend, &backend_doc)?,
@@ -1441,7 +1439,8 @@ async fn publish_home_config(
                     Collection::DefaultAgentSelection,
                     &gents_documents::DefaultAgentSelection::new(node_did, default_agent_did),
                 )?);
-                let plan = DesiredStateApplyPlan::new(documents)?;
+                let mut plan = DesiredStateApplyPlan::new(documents)?;
+                gents_inference::operations::admit_plan_in_txn(txn, &mut plan).await?;
                 apply_desired_state_plan(
                     txn,
                     &plan,

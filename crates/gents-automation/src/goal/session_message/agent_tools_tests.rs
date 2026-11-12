@@ -529,7 +529,7 @@ async fn explicit_stop_pauses_the_goal() {
     )
     .await
     .unwrap();
-    assert_eq!(receipt.status, "stop_requested");
+    assert_eq!(receipt.status.as_str(), "stop_requested");
     assert_eq!(
         canonical_goal(&message, &caused.node_did, &caused.session_id)
             .await

@@ -527,13 +527,12 @@ async fn run_inner(
     } else {
         None
     };
-    let policy = if received.request.overwrite {
-        gents_pack::pack::DriftPolicy::Overwrite
-    } else if received.request.keep {
-        gents_pack::pack::DriftPolicy::Keep
-    } else {
-        gents_pack::pack::DriftPolicy::Refuse
-    };
+    let policy = gents_pack::operations::pack::drift_policy(
+        gents_protocol::operations::pack::EditedDocuments::of_switches(
+            received.request.overwrite,
+            received.request.keep,
+        ),
+    );
     let approver = Arc::new(SessionApprover {
         socket: socket.clone(),
         next_id: AtomicU64::new(1),

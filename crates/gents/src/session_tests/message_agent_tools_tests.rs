@@ -1184,7 +1184,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
     )
     .await
     .unwrap();
-    assert_eq!(receipt.status, "stop_requested");
+    assert_eq!(receipt.status.as_str(), "stop_requested");
     assert_eq!(receipt.drained_request_ids, vec![caused.request_id.clone()]);
     assert!(gents_session::session::session_is_stopped(
         &node,

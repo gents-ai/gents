@@ -13,20 +13,6 @@ use crate::config_writes::ConfigApplyTxn;
 use crate::desired_state::{self, DesiredApplyBundle};
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
 
-pub(crate) async fn apply_delete_collection(
-    txn: &ConfigApplyTxn<'_>,
-    collection: Collection,
-    node_did: &str,
-    ids: &[String],
-) -> Result<usize> {
-    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(
-        ids.iter()
-            .map(|id| (collection, node_did.to_owned(), id.clone()))
-            .collect(),
-    )?;
-    Ok(apply_selected_plan(txn, &plan).await?.get(collection))
-}
-
 pub(crate) fn diff_has_pending_apply(
     counts: &desired_state::DesiredStateDiffCollectionsCounts,
 ) -> bool {
@@ -73,7 +59,8 @@ pub(crate) async fn apply_desired_state_changes(
                 .map(|id| (collection, bundle.node_did.clone(), id.clone())),
         );
     }
-    let plan = DesiredStateApplyPlan::new(documents)?.with_removals(removals)?;
+    let mut plan = DesiredStateApplyPlan::new(documents)?.with_removals(removals)?;
+    gents_inference::operations::admit_plan_in_txn(txn, &mut plan).await?;
     apply_selected_plan(txn, &plan).await
 }
 

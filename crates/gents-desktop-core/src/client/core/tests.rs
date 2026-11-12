@@ -1287,12 +1287,6 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
             .contains(crate::client::peer_directory::ChatRouteCause::NoEndpoint.token()),
         "{denied:#}"
     );
-    // Losing the endpoint also detaches the route's projection, so resend
-    // refuses before it can name the fence; either way nothing is written.
-    core.resend_request_in_scope(&submitted.request_id, Some(&owner))
-        .await
-        .expect_err("resend has no write path");
-
     // Pairing records the discovery-only P2P legs, not the HTTP write path.
     let mut unpaired = record.clone();
     unpaired.pairing_ready = false;

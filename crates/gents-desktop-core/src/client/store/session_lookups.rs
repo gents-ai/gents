@@ -232,13 +232,6 @@ impl ClientStore {
             .map(|index| &self.requests[*index])
     }
 
-    pub fn mailbox_items_for_requester(&self, requester_did: &str) -> Vec<&MailboxItemRow> {
-        self.mailbox_items
-            .iter()
-            .filter(|row| row.requester_did == requester_did)
-            .collect()
-    }
-
     pub fn row_count(&self) -> usize {
         self.nodes.len()
             + self.agents.len()

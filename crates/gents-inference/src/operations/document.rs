@@ -110,6 +110,17 @@ impl MergedWrite {
         self,
         txn: &ConfigApplyTxn<'_>,
     ) -> Result<PlannedWrite, OperationFailure> {
+        self.admit_beside_in_txn(txn, &[]).await
+    }
+
+    /// [`Self::admit_in_txn`] for a write that commits in one plan with
+    /// `pending`, backends the same plan writes: a profile may select one of
+    /// them before it is stored.
+    async fn admit_beside_in_txn(
+        self,
+        txn: &ConfigApplyTxn<'_>,
+        pending: &[InferenceBackend],
+    ) -> Result<PlannedWrite, OperationFailure> {
         let actor = acting(txn, &self.node_did).await?;
         let decode_auth = |doc: &Map<String, Value>| {
             serde_json::from_value::<BackendAuth>(doc.get("auth").cloned().unwrap_or(Value::Null))
@@ -144,11 +155,12 @@ impl MergedWrite {
                     .and_then(|stored| stored.get("backend_id"))
                     .and_then(Value::as_str);
                 if current_id != Some(candidate.backend_id.as_str()) {
-                    admit_backend_choice_in_txn(
+                    admit_backend_choice_beside_in_txn(
                         txn,
                         &self.node_did,
                         current_id,
                         &candidate.backend_id,
+                        pending,
                     )
                     .await?;
                 }
@@ -257,13 +269,30 @@ pub async fn admit_backend_choice_in_txn(
     current_backend_id: Option<&str>,
     next_backend_id: &str,
 ) -> Result<(), OperationFailure> {
+    admit_backend_choice_beside_in_txn(txn, node_did, current_backend_id, next_backend_id, &[])
+        .await
+}
+
+async fn admit_backend_choice_beside_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    current_backend_id: Option<&str>,
+    next_backend_id: &str,
+    pending: &[InferenceBackend],
+) -> Result<(), OperationFailure> {
     let current = match current_backend_id {
         Some(id) => load_inference_backend_in_txn(txn, node_did, id).await?,
         None => None,
     };
-    let next = load_inference_backend_in_txn(txn, node_did, next_backend_id)
-        .await?
-        .ok_or_else(|| InferenceOperationError::Missing {
+    let planned = pending
+        .iter()
+        .find(|backend| backend.node_did == node_did && backend.backend_id == next_backend_id)
+        .cloned();
+    let next = match planned {
+        Some(backend) => Some(backend),
+        None => load_inference_backend_in_txn(txn, node_did, next_backend_id).await?,
+    }
+    .ok_or_else(|| InferenceOperationError::Missing {
             document: InferenceDocument::Backend,
             id: next_backend_id.to_owned(),
         })?;
@@ -413,4 +442,89 @@ pub async fn remove(
         })
         .await
         .map_err(Into::into)
+}
+
+/// A plan's failure to pass the inference rules, naming the document kind
+/// whose admission refused it.
+#[derive(Debug, thiserror::Error)]
+pub enum PlanAdmissionFailure {
+    #[error(transparent)]
+    Backend(OperationFailure),
+    #[error(transparent)]
+    Profile(OperationFailure),
+}
+
+impl PlanAdmissionFailure {
+    pub fn document(&self) -> InferenceDocument {
+        match self {
+            Self::Backend(_) => InferenceDocument::Backend,
+            Self::Profile(_) => InferenceDocument::Profile,
+        }
+    }
+
+    pub fn into_failure(self) -> OperationFailure {
+        match self {
+            Self::Backend(failure) | Self::Profile(failure) => failure,
+        }
+    }
+}
+
+impl gents_store::config_client::TransactionFailure for PlanAdmissionFailure {
+    fn config_client_error(&self) -> Option<&gents_store::config_client::ConfigClientError> {
+        match self {
+            Self::Backend(failure) | Self::Profile(failure) => failure.config_client_error(),
+        }
+    }
+}
+
+async fn admit_planned_document(
+    txn: &ConfigApplyTxn<'_>,
+    document: InferenceDocument,
+    value: &Value,
+    pending: &[InferenceBackend],
+) -> Result<Map<String, Value>, OperationFailure> {
+    let (node_did, write) = whole_document_write(document, value, WriteMode::Put)?;
+    let planned = merge_in_txn(txn, &node_did, &write)
+        .await?
+        .admit_beside_in_txn(txn, pending)
+        .await?;
+    Ok(planned.0.candidate)
+}
+
+/// Every backend and profile a bulk plan writes passes this handler's rules
+/// for the actor that signs `txn`, and is replaced in the plan by the
+/// candidate the handler admitted. The plan still applies and validates as
+/// one; a profile may select a backend the same plan writes.
+pub async fn admit_plan_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    plan: &mut DesiredStateApplyPlan,
+) -> Result<(), PlanAdmissionFailure> {
+    let mut pending = Vec::new();
+    for kind in [InferenceDocument::Backend, InferenceDocument::Profile] {
+        let wrap = |failure: OperationFailure| match kind {
+            InferenceDocument::Backend => PlanAdmissionFailure::Backend(failure),
+            InferenceDocument::Profile => PlanAdmissionFailure::Profile(failure),
+        };
+        for index in 0..plan.documents().len() {
+            let entry = &plan.documents()[index];
+            if entry.collection != target(kind).collection() {
+                continue;
+            }
+            let value = entry.add.clone();
+            let admitted = admit_planned_document(txn, kind, &value, &pending)
+                .await
+                .map_err(wrap)?;
+            if kind == InferenceDocument::Backend {
+                pending.push(
+                    serde_json::from_value(Value::Object(admitted.clone()))
+                        .context("InferenceBackend document is not valid")
+                        .map_err(invalid)
+                        .map_err(wrap)?,
+                );
+            }
+            plan.replace_admitted(index, Value::Object(admitted))
+                .map_err(|error| wrap(error.into()))?;
+        }
+    }
+    Ok(())
 }

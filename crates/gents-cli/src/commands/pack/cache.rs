@@ -1,89 +1,10 @@
-use std::path::Path;
-
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use gents_pack::pack::materialize::{
-    cache_root, cache_root_disposition, lock_exclusive, prune_stale_asset_cache, CacheRelease,
-};
-use gents_pack::pack::{HomePackInstall, PackKind};
-use gents_store::local::file_lock::FileLock;
+use gents_pack::pack::materialize::{lock_exclusive, prune_stale_asset_cache};
+use gents_pack::pack::PackKind;
 
 use crate::cli::PackPruneArgs;
-
-pub(super) struct PreparedCacheRelease {
-    root: std::path::PathBuf,
-    disposition: CacheRelease,
-    _lock: Option<FileLock>,
-}
-
-impl PreparedCacheRelease {
-    pub(super) fn finish(self) -> Result<CacheRelease> {
-        match self.disposition {
-            CacheRelease::Removed => {
-                std::fs::remove_dir_all(&self.root)
-                    .with_context(|| format!("removing {}", self.root.display()))?;
-                Ok(CacheRelease::Removed)
-            }
-            CacheRelease::Retained(reason) => Ok(CacheRelease::Retained(reason)),
-        }
-    }
-}
-
-pub(super) fn prepare_recorded_cache(
-    home: &Path,
-    coordinate: &str,
-    record: &HomePackInstall,
-) -> Result<PreparedCacheRelease> {
-    anyhow::ensure!(
-        record.coordinate == coordinate,
-        "pack receipt coordinate mismatch"
-    );
-    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
-    let expected = cache_root(Path::new(""), namespace, name, &record.digest)?;
-    let recorded = Path::new(&record.assets);
-    let unscoped = Path::new(gents_store::local::home::PACKS_DIR_NAME)
-        .join(name)
-        .join(gents_pack::pack::archive::digest_hex(&record.digest)?);
-    anyhow::ensure!(
-        recorded == expected || recorded == unscoped,
-        "{coordinate}'s recorded asset path {} does not match {}",
-        recorded.display(),
-        expected.display()
-    );
-    let root = home.join(recorded);
-    let Some(parent) = root.parent().filter(|parent| parent.is_dir()) else {
-        return Ok(PreparedCacheRelease {
-            root,
-            disposition: CacheRelease::Retained("already absent"),
-            _lock: None,
-        });
-    };
-    let lock = lock_exclusive(parent)?;
-    let disposition = cache_root_disposition(&root, || {
-        if recorded == unscoped {
-            let archive = gents_pack::pack::store::PackStore::new(home).open(&record.digest)?;
-            anyhow::ensure!(
-                archive.manifest().metadata.namespace == namespace
-                    && archive.manifest().name == name,
-                "{coordinate}'s recorded asset digest belongs to a different pack"
-            );
-            for path in gents_pack::pack::declared_paths(archive.manifest()) {
-                anyhow::ensure!(
-                    std::fs::read(root.join(&path))? == archive.asset(&path)?,
-                    "{coordinate}'s recorded asset {path} does not match {}",
-                    record.digest
-                );
-            }
-        }
-        Ok(())
-    })?;
-    Ok(PreparedCacheRelease {
-        root,
-        disposition,
-        _lock: Some(lock),
-    })
-}
 
 pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
@@ -123,6 +44,7 @@ mod tests {
     use super::super::test_support::{assets_pack_dir, local_pack_source};
     use super::*;
     use gents_pack::pack::materialize::{cache_lock, write_cache_marker};
+    use gents_store::local::file_lock::FileLock;
 
     #[tokio::test]
     async fn pruning_keeps_other_namespaces_and_recorded_unscoped_assets() {

@@ -9,7 +9,7 @@ use gents_protocol::operations::session::{
     session_order_key, SessionArchiveInput, SessionEntry, SessionForkBoundary, SessionForkCopied,
     SessionForkInput, SessionForkReceipt, SessionListInput, SessionOperationError, SessionRef,
     SessionRenameInput, SessionRenameReceipt, SessionResumeReceipt, SessionState,
-    SessionStopReceipt, SessionStopStatus,
+    SessionStopReceipt,
 };
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::session::{
@@ -372,7 +372,7 @@ pub async fn stop(
     reference: &SessionRef,
 ) -> Result<SessionStopReceipt, SessionOperationError> {
     let found = resolve(access, reference).await?;
-    let receipt = stop_session_with_access(
+    stop_session_with_access(
         node,
         access,
         &found.node_did,
@@ -380,14 +380,7 @@ pub async fn stop(
         found.requester_did.as_deref(),
     )
     .await
-    .map_err(|error| control_failure(error, &found))?;
-    Ok(SessionStopReceipt {
-        node_did: found.node_did,
-        session_id: receipt.session_id,
-        status: SessionStopStatus::of(receipt.interrupted_request_id.is_some()),
-        interrupted_request_id: receipt.interrupted_request_id,
-        drained_request_ids: receipt.drained_request_ids,
-    })
+    .map_err(|error| control_failure(error, &found))
 }
 
 pub async fn resume(

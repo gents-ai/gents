@@ -29,7 +29,6 @@ pub use mutations::{
     delete_trigger_on, upsert_event_source_on, upsert_node_on,
     upsert_schedule_on, upsert_skill_on, upsert_tool_service_registry_on, upsert_trigger_on,
 };
-pub use mutations::interrupt_request_on;
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{

@@ -115,12 +115,7 @@ pub async fn save(
 /// The fields a whole Skill document sets and clears, for a client that saves
 /// one: every writable field takes the document's value.
 pub fn document_patch(document: &SkillDocument) -> anyhow::Result<SelfConfigPatch> {
-    let value = serde_json::to_value(document)?;
-    Ok(SelfConfigTarget::Skill
-        .writable_fields()
-        .into_iter()
-        .map(|field| (field.to_owned(), value.get(field).cloned()))
-        .collect())
+    super::write::whole_document_patch(SelfConfigTarget::Skill, document)
 }
 
 /// How the path of a skill source is admitted before it is read.

@@ -220,9 +220,9 @@ impl PackInstaller {
 
     /// Removes an installed pack. An assets or plugins pack releases its home
     /// record and retires the plugins it owns; a documents pack removes its
-    /// `PackInstallation` record and everything it lists. Nothing is resolved
-    /// (no store or registry lookup) and no archive is released; use
-    /// `gents config pack remove` for that. `with_collections`
+    /// `PackInstallation` record and everything it lists. Both release the
+    /// cached assets, plugin bytes and archives nothing else references.
+    /// Nothing is resolved (no store or registry lookup). `with_collections`
     /// then also empties and removes each collection the pack's SDL declared
     /// that nothing else on the node names.
     pub(super) async fn remove(
@@ -240,7 +240,7 @@ impl PackInstaller {
         let access = self.core.access()?;
         let packs = self.packs(&access);
         if let Some(record) = packs.home_pack(&coordinate)? {
-            let (removal, plugin_bytes) = packs
+            let (removal, unrecorded) = packs
                 .remove_home_pack(
                     &coordinate,
                     record,
@@ -269,12 +269,13 @@ impl PackInstaller {
                 .filter(|_| !removal.plugins.is_empty());
             return ordered! {
                 "pack": coordinate,
-                "removed": json!({"kind": removal.record.kind, "plugins": removal.plugins, "plugin_bytes": plugin_bytes, "pages": removal.record.ux.iter().map(|page| page.name.clone()).collect::<Vec<_>>()}),
+                "removed": json!({"kind": removal.record.kind, "plugins": removal.plugins, "plugin_bytes": removal.plugin_bytes, "assets": removal.assets, "retained": removal.retained, "archives": removal.archives, "pages": removal.record.ux.iter().map(|page| page.name.clone()).collect::<Vec<_>>()}),
                 "effect": if removal.plugins.is_empty() {
-                    "The pack's install record was released. Its cached assets and archive stay until the operator runs `gents config pack prune`."
+                    "The pack's install record, its cached assets and the archive nothing else uses were released."
                 } else {
-                    "The pack's plugins are retired: no call resolves them and plugin list no longer shows them. Their records, the bytes no other plugin uses and the install record were released; the stored archive stays until the operator runs `gents config pack prune`."
+                    "The pack's plugins are retired: no call resolves them and plugin list no longer shows them. Their records, the bytes no other plugin uses, the install record, its cached assets and the archive nothing else uses were released."
                 },
+                "node_not_told": unrecorded.map(|reason| format!("The node was not told the plugins retired ({reason}): a running runtime keeps the removed tools listed, and their calls fail, until its configuration changes.")),
                 "source": source.map(|name| format!("The source document {name} is kept, and [\"plugin\",\"build\",{name:?}] installs it again. Delete it with the call below to stop building it.")),
                 "next_call": source.map(|name| json!({"argv":["plugin-source","preview","delete"],"target_id":name})),
             }
@@ -305,7 +306,7 @@ impl PackInstaller {
         )
         .await
         .map_err(refusal)?;
-        let report = match packs
+        let (report, released) = match packs
             .remove_documents(
                 &coordinate,
                 gents_pack::operations::pack::drift_policy(edited),
@@ -331,6 +332,7 @@ impl PackInstaller {
         ordered! {
             "pack": coordinate,
             "removed": report,
+            "released": released,
             "collections": with_collections.then_some(collections),
             "effect": if with_collections {
                 "The package's documents were removed. Each collection its install created that nothing else names was emptied and removed; the rest are listed with what keeps them."
