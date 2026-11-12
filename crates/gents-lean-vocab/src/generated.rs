@@ -2479,37 +2479,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +3004,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3093,7 +3061,6 @@ pub struct LeanContractSnapshot {
     pub identity_readiness_recovery_cases: Vec<serde_json::Value>,
     pub identity_readiness_observation_cases: Vec<serde_json::Value>,
     pub identity_readiness_settled_cases: Vec<LeanIdentityReadinessSettledCase>,
-    pub identity_startup_readiness_cases: Vec<LeanIdentityStartupReadinessCase>,
     pub goal_link_cases: Vec<LeanGoalLinkCase>,
     pub remote_agent_delivery_cases: Vec<LeanRemoteAgentDeliveryCase>,
     pub remote_agent_delivery_recovery_cases: Vec<serde_json::Value>,
@@ -6546,36 +6513,6 @@ pub struct LeanIdentityReplicaGrantCase {
 pub struct LeanIdentityRuntimeNacCase {
     pub may_start: bool,
     pub status: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanIdentityStartupJoin {
-    Pending,
-    Clean,
-    Failed { message: String },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanIdentityStartupOutcome {
-    Wait,
-    AwaitJoin,
-    Ready,
-    Timeout,
-    Premature,
-    Failed { message: String },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityStartupReadinessCase {
-    pub name: String,
-    pub join: LeanIdentityStartupJoin,
-    pub shutting_down: bool,
-    pub readiness: bool,
-    pub deadline: bool,
-    pub expected: LeanIdentityStartupOutcome,
 }
 
 #[derive(Debug, Clone, Deserialize)]

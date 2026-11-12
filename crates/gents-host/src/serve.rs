@@ -1628,88 +1628,131 @@ mod server_key_tests {
 mod shim_host_tests {
     use super::*;
 
+    const READINESS_DEADLINE: &str = "readiness deadline";
+
+    async fn probe_startup_readiness(
+        input: &gents_lean_vocab::families::startup_readiness_observe_outcome::ObserveInput<String>,
+        release_readiness: bool,
+    ) -> (bool, Result<()>) {
+        let mut runtime = ServeRuntime::new(crate::test_support::test_runtime_handle());
+        let shutdown = runtime.shutdown_tx.clone();
+        let join_kind = input.join.kind.clone();
+        let failure = input.join.message.clone().unwrap_or_default();
+        let pending_join = join_kind == "pending";
+        runtime.start(move |mut stop| async move {
+            match join_kind.as_str() {
+                "pending" => {
+                    let _ = stop.changed().await;
+                    Ok(())
+                }
+                "clean" => Ok(()),
+                "failed" => Err(anyhow::anyhow!(failure)),
+                other => panic!("unknown join case {other}"),
+            }
+        });
+        if !pending_join {
+            tokio::task::yield_now().await;
+        }
+        let initial = if input.shutting_down {
+            ProcessLifecycleState::ShuttingDown
+        } else {
+            ProcessLifecycleState::Ready
+        };
+        let (_process_tx, mut process_rx) = watch::channel(initial);
+        let ready = input.readiness;
+        let deadline = input.deadline;
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let mut wait = Box::pin(await_startup_readiness(
+            &mut runtime,
+            &mut process_rx,
+            async move {
+                if ready {
+                    Ok(())
+                } else if deadline {
+                    Err(anyhow::anyhow!(READINESS_DEADLINE))
+                } else {
+                    released.await.expect("readiness release is held");
+                    Ok(())
+                }
+            },
+        ));
+        let observed = match futures::poll!(wait.as_mut()) {
+            std::task::Poll::Ready(result) => (false, result),
+            std::task::Poll::Pending => {
+                let mut settled = None;
+                if release_readiness {
+                    release.send(()).expect("readiness is awaited");
+                    if let std::task::Poll::Ready(result) = futures::poll!(wait.as_mut()) {
+                        settled = Some(result);
+                    }
+                }
+                match settled {
+                    Some(result) => (true, result),
+                    None => {
+                        shutdown.send_replace(true);
+                        (true, wait.as_mut().await)
+                    }
+                }
+            }
+        };
+        drop(wait);
+        shutdown.send_replace(true);
+        runtime.join().await.unwrap();
+        observed
+    }
+
+    fn premature_exit() -> String {
+        format!(
+            "{:#}",
+            runtime_exit_before_readiness::<()>(Ok(())).unwrap_err()
+        )
+    }
+
     #[tokio::test]
     async fn startup_readiness_preserves_runtime_exit_cases() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["identity_startup_readiness_cases"]
-            .as_array()
-            .unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let mut runtime = ServeRuntime::new(crate::test_support::test_runtime_handle());
-            let shutdown = runtime.shutdown_tx.clone();
-            let join_kind = case["join"]["kind"].as_str().unwrap().to_owned();
-            let failure = case["join"]["message"].as_str().unwrap_or("").to_owned();
-            let pending_join = join_kind == "pending";
-            runtime.start(move |mut stop| async move {
-                match join_kind.as_str() {
-                    "pending" => {
-                        let _ = stop.changed().await;
-                        Ok(())
-                    }
-                    "clean" => Ok(()),
-                    "failed" => Err(anyhow::anyhow!(failure)),
-                    other => panic!("unknown join case {other}"),
+        let failed_context = runtime_exit_before_readiness::<()>(Err(anyhow::anyhow!("runtime")))
+            .unwrap_err()
+            .to_string();
+        for case in
+            gents_lean_vocab::families::startup_readiness_observe_outcome::cases::<String, String>()
+        {
+            let input = &case.input;
+            let (kind, message) = match probe_startup_readiness(input, true).await {
+                (false, Ok(())) => ("ready", None),
+                (false, Err(error)) if format!("{error:#}") == premature_exit() => {
+                    ("premature", None)
                 }
-            });
-            if !pending_join {
-                tokio::task::yield_now().await;
-            }
-            let initial = if case["shutting_down"].as_bool().unwrap() {
-                ProcessLifecycleState::ShuttingDown
-            } else {
-                ProcessLifecycleState::Ready
+                (false, Err(error)) if error.to_string() == failed_context => {
+                    ("failed", Some(error.root_cause().to_string()))
+                }
+                (false, Err(error)) if format!("{error:#}") == READINESS_DEADLINE => {
+                    ("timeout", None)
+                }
+                (false, Err(error)) => {
+                    panic!("{}: unclassified startup error {error:#}", input.name)
+                }
+                (true, Ok(())) => ("wait", None),
+                (true, Err(error)) => {
+                    assert_eq!(format!("{error:#}"), premature_exit(), "{}", input.name);
+                    ("await_join", None)
+                }
             };
-            let (_process_tx, mut process_rx) = watch::channel(initial);
-            let ready = case["readiness"].as_bool().unwrap();
-            let deadline = case["deadline"].as_bool().unwrap();
-            let mut wait = Box::pin(await_startup_readiness(
-                &mut runtime,
-                &mut process_rx,
-                async move {
-                    if ready {
-                        Ok(())
-                    } else if deadline {
-                        Err(anyhow::anyhow!("readiness deadline"))
-                    } else {
-                        std::future::pending::<Result<()>>().await
-                    }
-                },
-            ));
-            let first = futures::poll!(wait.as_mut());
-            let expected = case["expected"]["kind"].as_str().unwrap();
-            match expected {
-                "wait" | "await_join" => {
-                    assert!(first.is_pending(), "{case}: {first:?}");
-                    shutdown.send_replace(true);
-                    let error = wait.as_mut().await.unwrap_err();
-                    assert!(
-                        format!("{error:#}").contains("runtime stopped before durable readiness")
-                    );
-                }
-                "ready" => assert!(
-                    matches!(&first, std::task::Poll::Ready(Ok(()))),
-                    "{case}: {first:?}"
-                ),
-                "timeout" | "premature" | "failed" => {
-                    let std::task::Poll::Ready(Err(error)) = &first else {
-                        panic!("{case}: {first:?}")
-                    };
-                    let expected_message = match expected {
-                        "timeout" => "readiness deadline",
-                        "premature" => "runtime stopped before durable readiness",
-                        _ => case["expected"]["message"].as_str().unwrap(),
-                    };
-                    assert!(
-                        format!("{error:#}").contains(expected_message),
-                        "{case}: {error:#}"
-                    );
-                }
-                other => panic!("unknown modeled outcome {other}"),
+            if matches!(kind, "wait" | "await_join") {
+                let (pending, stopped) = probe_startup_readiness(input, false).await;
+                assert!(pending, "{}", input.name);
+                assert_eq!(
+                    format!("{:#}", stopped.unwrap_err()),
+                    premature_exit(),
+                    "{}",
+                    input.name
+                );
             }
-            drop(wait);
-            shutdown.send_replace(true);
-            runtime.join().await.unwrap();
+            case.check(
+                gents_lean_vocab::families::startup_readiness_observe_outcome::ObserveOutput {
+                    kind: kind.to_owned(),
+                    message,
+                },
+            );
         }
     }
 

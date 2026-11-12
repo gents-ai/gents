@@ -78,7 +78,7 @@ import Proofs.Store.Identity.OperationsConformance
 import Proofs.Store.Identity.EvalRecords
 import Proofs.Store.Identity.OptimizationPromotion
 import Proofs.Store.Identity.DirectoryPublication
-import Proofs.Store.Identity.StartupReadiness
+import Proofs.Conformance.Identity.StartupReadiness
 import Proofs.Store.Identity.NodeProvisioningConformance
 import Proofs.Store.Identity.GrantSetsConformance
 import Proofs.Store.Identity.ClientAgentCreation
@@ -769,8 +769,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OperationsConformance.observationCasesJson ++ ","
     ++ "\"identity_readiness_settled_cases\":"
       ++ Identity.OperationsConformance.settledCasesJson ++ ","
-    ++ "\"identity_startup_readiness_cases\":"
-      ++ Identity.StartupReadiness.casesJson ++ ","
     ++ "\"identity_callback_parent_actor_cases\":"
       ++ Identity.AutomationConformance.callbackParentCasesJson ++ ","
 
