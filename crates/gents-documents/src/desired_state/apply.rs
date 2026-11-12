@@ -125,6 +125,15 @@ pub async fn revoke_agent_catalog(
 }
 
 async fn node_doc_id(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<String> {
+    find_node_doc_id(txn, node_did)
+        .await?
+        .with_context(|| format!("Node {node_did:?} is unavailable to the Node relation grant"))
+}
+
+pub(crate) async fn find_node_doc_id(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+) -> Result<Option<String>> {
     let rendered = {
         use gents_protocol::document_query::{fields::node as fields, Filter, Query, Selection};
         Query::select(Selection::doc_id())
@@ -133,12 +142,13 @@ async fn node_doc_id(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<String>
             .render()
     };
     let response = txn.run(&rendered).await?;
-    gents_protocol::graphql::graphql_rows_from_response(&response, "Node")
-        .first()
-        .and_then(|row| row.get("_docID"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .with_context(|| format!("Node {node_did:?} is unavailable to the Node relation grant"))
+    Ok(
+        gents_protocol::graphql::graphql_rows_from_response(&response, "Node")
+            .first()
+            .and_then(|row| row.get("_docID"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    )
 }
 
 /// The runtime obtains this physical Node binding through its own native read

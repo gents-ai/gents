@@ -19,6 +19,7 @@ mod lsp_config;
 pub mod mailbox_write_decl;
 mod projection_acp;
 pub use projection_acp::parse_projection_resource_map;
+pub mod agent_permission;
 mod agent_target;
 mod agent_tool_config;
 pub mod automation;
