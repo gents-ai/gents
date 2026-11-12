@@ -1948,16 +1948,7 @@ mod tests {
                     .is_empty()
             );
         }
-        let household_owner = gents_store::identity::KeyIdentity::load_or_create(
-            std::env::temp_dir().join(format!("reduction-owner-{}.key", uuid::Uuid::new_v4())),
-            None,
-        )
-        .unwrap();
-        gents_store::identity::GrantSet::HouseholdOwner
-            .grant(&reader, &household_owner.did().parse().unwrap())
-            .await
-            .unwrap();
-        db.client_access(&household_owner)
+        access
             .delete_actor_relationship(
                 "AgentSession",
                 &session,

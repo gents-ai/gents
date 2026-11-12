@@ -395,21 +395,9 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         session_before_retry["data"]["AgentSession"][0]["relationships_pending"],
         false
     );
-    let household_owner = gents_store::identity::KeyIdentity::load_or_create(
-        identity_dir.path().join("household-owner.key"),
-        None,
-    )
-    .unwrap();
-    gents_store::identity::GrantSet::HouseholdOwner
-        .grant(
-            &node_actor,
-            &identity::Did::new(household_owner.did()).unwrap(),
-        )
-        .await
-        .unwrap();
     let removed = node
         .delete_dac_actor_relationship(
-            household_owner.did(),
+            agent.did(),
             "AgentSession",
             session_doc,
             "working_agent",
@@ -423,7 +411,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         .unwrap();
     let restored = node
         .delete_dac_actor_relationship(
-            household_owner.did(),
+            agent.did(),
             "AgentSession",
             session_doc,
             "working_agent",
@@ -592,7 +580,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         .iter()
         .find(|case| case.name == "interrupted_then_repaired")
         .unwrap();
-    db.client_access(&household_owner)
+    access
         .delete_resource_relationship("AgentSession", session_doc, "parent", "agents", &agent_doc)
         .await
         .unwrap();
@@ -704,7 +692,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
             expected
         );
     }
-    db.client_access(&household_owner)
+    access
         .delete_resource_relationship(
             "TriggerFire",
             receipt_doc,
