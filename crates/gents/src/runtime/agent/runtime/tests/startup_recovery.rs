@@ -588,6 +588,105 @@ async fn startup_publication_follows_the_lean_persistence_model() {
     }
 }
 
+/// The readiness model does not cover slot workers: a failed startup source
+/// shuts the generation-one slot down and `run_agent` returns only after it exits.
+#[tokio::test]
+async fn startup_source_failure_returns_only_after_the_slot_exits() {
+    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    let fixture = held_runtime_fixture_with_status(
+        "startup-source-slot-join",
+        "backend-startup-source-slot-join",
+        mock_endpoint.endpoint(),
+        1,
+        "healthy",
+    )
+    .await;
+    let agent = crate::Gents::from_default_agent_documents(
+        fixture.db.node.clone(),
+        fixture.db.node_identity.clone(),
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let writer = Arc::new(ScriptedStartupWriter {
+        source: std::sync::Mutex::new(std::iter::repeat_n("fail".to_owned(), 5).collect()),
+        ..Default::default()
+    });
+    let (slot_started_tx, mut slot_started_rx) = mpsc::unbounded_channel();
+    let (slot_shutdown_tx, mut slot_shutdown_rx) = mpsc::unbounded_channel();
+    let (slot_exited_tx, mut slot_exited_rx) = mpsc::unbounded_channel();
+    let slot_exit_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let slot_runner: super::startup::TestSlotRunner = {
+        let slot_exit_gate = slot_exit_gate.clone();
+        Arc::new(move |generation, mut shutdown| {
+            let slot_started_tx = slot_started_tx.clone();
+            let slot_shutdown_tx = slot_shutdown_tx.clone();
+            let slot_exited_tx = slot_exited_tx.clone();
+            let slot_exit_gate = slot_exit_gate.clone();
+            Box::pin(async move {
+                let _ = slot_started_tx.send(generation);
+                let _ = shutdown.changed().await;
+                let _ = slot_shutdown_tx.send(generation);
+                slot_exit_gate
+                    .acquire_owned()
+                    .await
+                    .expect("slot exit gate closed")
+                    .forget();
+                let _ = slot_exited_tx.send(generation);
+                Ok(())
+            })
+        })
+    };
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut run = tokio::spawn(
+        super::startup::run_agent_with_readiness_writer_and_slot_runner(
+            agent,
+            shutdown_rx,
+            writer,
+            Duration::from_millis(1),
+            Some(slot_runner),
+        ),
+    );
+    assert_eq!(
+        tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_started_rx.recv())
+            .await
+            .expect("generation-one slot must start"),
+        Some(1)
+    );
+    assert_eq!(
+        tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_shutdown_rx.recv())
+            .await
+            .expect("slot runner must observe owned startup shutdown"),
+        Some(1)
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut run)
+            .await
+            .is_err(),
+        "run_agent returned while its generation-one slot was still gated"
+    );
+    slot_exit_gate.add_permits(1);
+    assert_eq!(
+        tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_exited_rx.recv())
+            .await
+            .expect("generation-one worker must report exit"),
+        Some(1)
+    );
+    let error = tokio::time::timeout(STARTUP_DEADLOCK_GUARD, run)
+        .await
+        .expect("startup source failure must terminate run_agent boundedly")
+        .expect("run_agent task must join")
+        .expect_err("startup source failure cannot become clean shutdown");
+    assert!(
+        format!("{error:#}").contains("durably publish startup agent_config readiness source"),
+        "runtime returned the wrong failure: {error:#}"
+    );
+}
+
 #[tokio::test]
 async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_runtime() {
     let fixture = held_runtime_fixture_with_status(
