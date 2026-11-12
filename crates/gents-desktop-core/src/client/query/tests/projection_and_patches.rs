@@ -602,14 +602,11 @@ fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
 
 #[test]
 fn direct_session_read_matches_the_lean_model() {
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["client_direct_session_read_cases"]
-        .as_array()
-        .unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().client_direct_session_read_cases;
     assert!(!cases.is_empty());
     let row = serde_json::json!({"node_did":"node", "session_id":"session", "agent_did":"agent", "created_at":"now"});
     for case in cases {
-        let rows = match case["session_row"].as_str().unwrap() {
+        let rows = match case.session_row.as_str() {
             "absent" => vec![],
             "canonical" => vec![row.clone()],
             "duplicate" => vec![row.clone(), row.clone()],
@@ -628,7 +625,7 @@ fn direct_session_read_matches_the_lean_model() {
             Ok(Some(_)) => "visible",
             Err(_) => "integrity_fault",
         };
-        assert_eq!(actual, case["expected"].as_str().unwrap(), "{case}");
+        assert_eq!(actual, case.expected.as_str(), "{case:?}");
     }
 }
 
