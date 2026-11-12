@@ -188,44 +188,97 @@ async fn inbound_uri_escape_is_policy_denied() {
 }
 
 #[tokio::test]
-async fn invalid_inbound_file_is_rejected_before_server_start() {
-    if !python3_available() {
-        return;
+async fn lsp_entries_start_servers_as_the_lean_model() {
+    use gents_lean_vocab::families::lsp_server_start_entries as family;
+    for case in family::cases::<String, String, LspAction, String, String>() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname='t'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        let lib = root.path().join("lib.rs");
+        std::fs::write(&lib, "fn x() {}\n").unwrap();
+        let file = match case.input.file.as_str() {
+            "absent" => None,
+            "workspace_path" => Some("lib.rs".to_string()),
+            "foreign_uri" => Some("untitled:outside".to_string()),
+            other => panic!("unknown Lean file argument {other}"),
+        };
+        let pool = LspPool::new();
+        let (refusal, report) = match (case.input.entry.as_str(), case.input.action) {
+            ("tool_call", Some(action)) => {
+                let tool = LspTool::new(
+                    sample_config(
+                        root.path().to_path_buf(),
+                        FileToolMode::ReadOnly,
+                        "s-entries",
+                        vec![fixture_server(FIXTURE_PY.into())],
+                    ),
+                    pool.clone(),
+                )
+                .unwrap();
+                let positioned = file.is_some();
+                let result = tool
+                    .call(LspArgs {
+                        action: serde_json::to_value(action)
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .into(),
+                        file,
+                        line: positioned.then_some(1),
+                        symbol: positioned.then(|| "x".to_string()),
+                        query: None,
+                        new_name: None,
+                        apply: None,
+                        payload: None,
+                        timeout: Some(5),
+                        limit: None,
+                    })
+                    .await;
+                match result {
+                    Ok(output) => {
+                        let report = if output.contains("fixture (not started") {
+                            Some("not_started".to_string())
+                        } else if output.contains("fixture (ready)")
+                            || output.contains("fixture (starting/indexing)")
+                        {
+                            Some("running".to_string())
+                        } else {
+                            None
+                        };
+                        (None, report)
+                    }
+                    Err(ToolError::ReportedFailure {
+                        class: FailureClass::PolicyDenied,
+                        text,
+                    }) if text.contains("unsupported URI") => {
+                        (Some("unsupported_uri".to_string()), None)
+                    }
+                    Err(error) => panic!("{:?}: {error}", case.input),
+                }
+            }
+            ("post_write", None) => {
+                let config = sample_config(
+                    root.path().to_path_buf(),
+                    FileToolMode::ReadWrite,
+                    "s-entries",
+                    vec![fixture_server(FIXTURE_PY.into())],
+                );
+                let _ = LspWritethrough::new(pool.clone(), config)
+                    .after_mutation(&lib)
+                    .await;
+                (None, None)
+            }
+            _ => panic!("unknown Lean LSP entry {:?}", case.input),
+        };
+        case.check(family::Observation {
+            refusal,
+            starts_server: pool.live_count().await > 0,
+            report,
+        });
     }
-    let root = tempfile::tempdir().unwrap();
-    std::fs::write(
-        root.path().join("Cargo.toml"),
-        "[package]\nname='t'\nversion='0.1.0'\n",
-    )
-    .unwrap();
-    let pool = LspPool::new();
-    let tool = LspTool::new(
-        sample_config(
-            root.path().to_path_buf(),
-            FileToolMode::ReadOnly,
-            "invalid-before-start",
-            vec![fixture_server(FIXTURE_PY.into())],
-        ),
-        pool.clone(),
-    )
-    .unwrap();
-    let error = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("untitled:outside".into()),
-            line: Some(1),
-            symbol: Some("outside".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: Some(5),
-            limit: None,
-        })
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("unsupported URI"), "{error}");
-    assert_eq!(pool.live_count().await, 0);
 }
 
 #[tokio::test]
@@ -565,81 +618,6 @@ fn text_edit_rejects_a_mid_codepoint_utf8_position() {
     )
     .unwrap_err();
     assert!(error.contains("multibyte"), "{error}");
-}
-
-#[tokio::test]
-async fn status_does_not_start_a_server() {
-    if !python3_available() {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
-    std::fs::write(
-        root.path().join("Cargo.toml"),
-        "[package]\nname='t'\nversion='0.1.0'\n",
-    )
-    .unwrap();
-    let pool = LspPool::new();
-    let tool = LspTool::new(
-        sample_config(
-            root.path().to_path_buf(),
-            FileToolMode::ReadOnly,
-            "s-status",
-            vec![fixture_server(FIXTURE_PY.into())],
-        ),
-        pool.clone(),
-    )
-    .unwrap();
-    let output = tool
-        .call(LspArgs {
-            action: "status".into(),
-            file: None,
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
-        .await
-        .expect("status");
-    assert!(
-        output.contains("fixture (not started — run a server-backed action"),
-        "{output}"
-    );
-    assert_eq!(pool.live_count().await, 0);
-}
-
-#[tokio::test]
-async fn writethrough_does_not_start_a_client() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("lib.rs");
-    std::fs::write(&path, "fn x() {}\n").unwrap();
-    let pool = LspPool::new();
-    let config = sample_config(
-        root.path().to_path_buf(),
-        FileToolMode::ReadWrite,
-        "s-wt",
-        vec![CatalogServer {
-            name: "fixture".into(),
-            command: "python3".into(),
-            args: vec!["-c".into(), FIXTURE_PY.into()],
-            file_types: vec![".rs".into()],
-            root_markers: vec!["Cargo.toml".into()],
-            is_linter: false,
-            priority: 1,
-            language_id: Some("rust".into()),
-            init_options: None,
-            settings: None,
-            capabilities: None,
-            workspace_ready_timings: None,
-            warmup_timeout_ms: None,
-        }],
-    );
-    let writethrough = LspWritethrough::new(pool.clone(), config);
-    let _ = writethrough.after_mutation(&path).await;
-    assert_eq!(pool.live_count().await, 0);
 }
 
 #[tokio::test]
