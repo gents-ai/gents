@@ -497,10 +497,6 @@ pub fn lean_prompt_assembly_retention_cases() -> &'static [LeanPromptAssemblyRet
     &lean_contract_snapshot().prompt_assembly_retention_cases
 }
 
-pub fn lean_prompt_assembly_sanitize_cases() -> &'static [LeanPromptAssemblySanitizeCase] {
-    &lean_contract_snapshot().prompt_assembly_sanitize_cases
-}
-
 pub fn lean_prompt_assembly_service_tier_cases() -> &'static [LeanPromptAssemblyServiceTierCase] {
     &lean_contract_snapshot().prompt_assembly_service_tier_cases
 }
@@ -3304,7 +3300,6 @@ pub struct LeanContractSnapshot {
     pub terminal_diagnostic_replay_cases: Vec<LeanTerminalDiagnosticReplayCase>,
     pub compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
-    pub prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
     pub provider_tool_identity_cases: Vec<serde_json::Value>,
     pub prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
     pub routing_affinity_cases: Vec<LeanRoutingAffinityCase>,
@@ -9557,15 +9552,6 @@ pub struct LeanPromptAssemblyRow {
     pub content: Vec<LeanPromptAssemblyItem>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanPromptAssemblySanitizeCase {
-    pub name: String,
-    pub input: Vec<LeanPromptAssemblyRow>,
-    pub expected: Vec<LeanPromptAssemblyRow>,
-    pub expected_twice: Vec<LeanPromptAssemblyRow>,
-    pub splits: Vec<LeanPromptAssemblySplit>,
-}
-
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct LeanPromptAssemblyServiceTierCase {
     pub family: String,
@@ -9574,12 +9560,6 @@ pub struct LeanPromptAssemblyServiceTierCase {
     pub allowed: bool,
     #[serde(deserialize_with = "required_nullable")]
     pub wire: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanPromptAssemblySplit {
-    pub index: usize,
-    pub expected: Vec<LeanPromptAssemblyRow>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

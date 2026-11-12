@@ -110,19 +110,9 @@ structure PromptAssemblyRowCase where
   content : List PromptAssemblyItemCase
   deriving Repr
 
-/-- The same shape with an unpaired call between reasoning and text: pairing
-drops that block, so the retained persisted indices are not contiguous. -/
-structure PromptAssemblySplitCase where
-  index : Nat
-  expected : List PromptAssemblyRowCase
-  deriving Repr
-
 structure PromptAssemblySanitizeCase where
   name : String
   input : List PromptAssemblyRowCase
-  expected : List PromptAssemblyRowCase
-  expectedTwice : List PromptAssemblyRowCase
-  splits : List PromptAssemblySplitCase
   deriving Repr
 
 structure PromptAssemblyLayerCase where
@@ -232,14 +222,14 @@ def promptAssemblyAssistantOrderCases : List PromptAssemblyAssistantOrderCase :=
       [.text 4, .other 5, .call 13, .other 6]
   ]
 
-private def announcedIds (content : List Item) : List Nat :=
+def announcedIds (content : List Item) : List Nat :=
   content.filterMap Item.callId?
 
-private def roleName : Transcript.MessageRole → String
+def roleName : Transcript.MessageRole → String
   | .user => "user"
   | .assistant => "assistant"
 
-private def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
+def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
   match pr.row.kind with
   | .ordinary =>
     { role := roleName pr.row.role
@@ -257,7 +247,7 @@ private def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
     , callIds := [callId]
     , content := pr.content.map itemCase }
 
-private def rowCases (rows : List ProviderRow) : List PromptAssemblyRowCase :=
+def rowCases (rows : List ProviderRow) : List PromptAssemblyRowCase :=
   rows.map rowCase
 
 private def mkRow (sequence : Nat) (role : Transcript.MessageRole)
@@ -422,20 +412,9 @@ theorem witnessOutputsAreProviderValid :
     (witnessesHaveUniqueCallIds witness hwitness)
     (witnessesAreCoherent witness hwitness)
 
-private def splitCases (rows : List ProviderRow) : List PromptAssemblySplitCase :=
-  (List.range (rows.length + 1)).map fun index =>
-    { index := index
-    , expected := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal (rows.drop index)) }
-
 private def sanitizeCase (witness : String × List ProviderRow) :
     PromptAssemblySanitizeCase :=
-  let rows := witness.2
-  let once := PromptAssembly.Provider.sanitizeForProviderGlobal rows
-  { name := witness.1
-  , input := rowCases rows
-  , expected := rowCases once
-  , expectedTwice := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal once)
-  , splits := splitCases rows }
+  { name := witness.1, input := rowCases witness.2 }
 
 def promptAssemblySanitizeCases : List PromptAssemblySanitizeCase :=
   witnessTranscripts.map sanitizeCase

@@ -2276,8 +2276,7 @@ def caseCoverage : List CoverageEntry :=
       "WakeInputCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_sanitize_cases"
-      "PromptAssemblySanitizeCases")
+      "family" "contracts_prompt_assembly_sanitize")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_layer_cases"

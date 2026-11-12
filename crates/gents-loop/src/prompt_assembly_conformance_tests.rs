@@ -263,3 +263,42 @@ fn generated_assistant_order_cases_bind_selected_provider_order() {
         }
     });
 }
+
+#[test]
+fn generated_sanitize_cases_drive_the_production_sanitizer() {
+    use crate::compaction::sanitize_history_for_provider;
+    use gents_lean_vocab::families::contracts_prompt_assembly_sanitize as family;
+    use gents_lean_vocab::families::contracts_prompt_assembly_sanitize_split as split;
+    family::replay(|case| {
+        let input = recode::<_, Vec<Row>>(&case.input);
+        assert_eq!(
+            rows_of(&messages_of(&input)),
+            input,
+            "row -> Message -> row must be the identity ({})",
+            case.name
+        );
+        let once = sanitize_history_for_provider(
+            ProviderInputProfile::OpenAiChatCompletions,
+            messages_of(&input),
+        );
+        let twice = sanitize_history_for_provider(
+            ProviderInputProfile::OpenAiChatCompletions,
+            once.clone(),
+        );
+        family::SanitizeOutput {
+            expected: recode(&rows_of(&once)),
+            twice: recode(&rows_of(&twice)),
+        }
+    });
+    split::replay(|case| {
+        let input = recode::<_, Vec<Row>>(&case.input);
+        let index = usize::try_from(case.index).expect("split index fits");
+        let suffix = input
+            .get(index..)
+            .unwrap_or_else(|| panic!("{}: split {index} exceeds the input", case.name));
+        recode::<_, Vec<split::PromptAssemblyRowCase>>(&rows_of(&sanitize_history_for_provider(
+            ProviderInputProfile::OpenAiChatCompletions,
+            messages_of(suffix),
+        )))
+    });
+}

@@ -168,23 +168,55 @@ def promptAssemblyRowJson (row : PromptAssemblyRowCase) : String :=
 def promptAssemblyRowsJson (rows : List PromptAssemblyRowCase) : String :=
   jsonArray (rows.map promptAssemblyRowJson)
 
-def promptAssemblySplitJson (split : PromptAssemblySplitCase) : String :=
-  "{"
-    ++ "\"index\":" ++ toString split.index ++ ","
-    ++ "\"expected\":" ++ promptAssemblyRowsJson split.expected
-    ++ "}"
+deriving instance Lean.ToJson for PromptAssemblySanitizeCase
 
-def promptAssemblySanitizeCaseJson (witness : PromptAssemblySanitizeCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"input\":" ++ promptAssemblyRowsJson witness.input ++ ","
-    ++ "\"expected\":" ++ promptAssemblyRowsJson witness.expected ++ ","
-    ++ "\"expected_twice\":" ++ promptAssemblyRowsJson witness.expectedTwice ++ ","
-    ++ "\"splits\":" ++ jsonArray (witness.splits.map promptAssemblySplitJson)
-    ++ "}"
+/-- The model row an emitted row names, at its position in the transcript. The
+emitted witnesses number their rows by position, so the position is the row's
+message id and sequence. -/
+def _root_.Conformance.ContractCases.PromptAssemblyRowCase.toModel (sequence : Nat) (row : PromptAssemblyRowCase) :
+    PromptAssembly.Provider.ProviderRow :=
+  let role : Transcript.MessageRole := if row.role == "assistant" then .assistant else .user
+  let kind : Transcript.MessageKind := match row.kind, row.callIds with
+    | "assistantToolCalls", ids => .assistantToolCalls ids.toFinset
+    | "toolResult", [callId] => .toolResult callId ⟨0, callId, 0⟩
+    | _, _ => .ordinary
+  { row := ⟨sequence, 0, sequence, role, kind⟩, content := row.content.map (·.toModel) }
 
-def promptAssemblySanitizeCasesJson : String :=
-  jsonArray (promptAssemblySanitizeCases.map promptAssemblySanitizeCaseJson)
+def promptAssemblyRowsToModel (rows : List PromptAssemblyRowCase) :
+    List PromptAssembly.Provider.ProviderRow :=
+  rows.zipIdx.map fun (row, index) => row.toModel index
+
+structure SanitizeOutput where
+  expected : List PromptAssemblyRowCase
+  twice : List PromptAssemblyRowCase
+  deriving Lean.ToJson
+
+/-- A loaded transcript sanitized for a grouped provider, once and again:
+production `sanitize_history_for_provider`. -/
+@[conformance_family]
+def promptAssemblySanitize : Family PromptAssemblySanitizeCase SanitizeOutput where
+  inputs := promptAssemblySanitizeCases
+  model := fun i =>
+    let once := PromptAssembly.Provider.sanitizeForProviderGlobal
+      (promptAssemblyRowsToModel i.input)
+    { expected := rowCases once
+      twice := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal once) }
+
+structure SanitizeSplitInput where
+  name : String
+  input : List PromptAssemblyRowCase
+  index : Nat
+  deriving Lean.ToJson
+
+/-- The suffix of a loaded transcript from each position, sanitized on its own:
+production `sanitize_history_for_provider` on a history that starts mid-turn. -/
+@[conformance_family]
+def promptAssemblySanitizeSplit : Family SanitizeSplitInput (List PromptAssemblyRowCase) where
+  inputs := promptAssemblySanitizeCases.flatMap fun c =>
+    (List.range (c.input.length + 1)).map fun index => { name := c.name, input := c.input, index }
+  model := fun i =>
+    rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal
+      ((promptAssemblyRowsToModel i.input).drop i.index))
 
 def promptAssemblyModeSanitizeCaseJson
     (witness : PromptAssemblyModeSanitizeCase) : String :=

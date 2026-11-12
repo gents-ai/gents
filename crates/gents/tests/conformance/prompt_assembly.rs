@@ -7,7 +7,7 @@ use gents_loop::claude_messages_body::MessagesBodyError;
 use gents_loop::provider_input::ProviderInputProfile;
 
 use gents_lean_vocab::{
-    lean_prompt_assembly_claude_replay_cases, lean_prompt_assembly_sanitize_cases,
+    lean_prompt_assembly_claude_replay_cases,
     native_claude_reasoning_parts, native_claude_replay_content, LeanClaudeReplayBlock,
     LeanPromptAssemblyItem, LeanPromptAssemblyRow,
 };
@@ -216,78 +216,6 @@ fn rows_of(messages: &[Message]) -> Vec<LeanPromptAssemblyRow> {
 
 fn messages_of(rows: &[LeanPromptAssemblyRow]) -> Vec<Message> {
     rows.iter().map(message_of_row).collect()
-}
-
-#[test]
-fn generated_rows_round_trip_through_production_messages() {
-    let cases = lean_prompt_assembly_sanitize_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no PromptAssembly sanitize cases"
-    );
-    for case in cases {
-        for rows in [&case.input, &case.expected, &case.expected_twice] {
-            assert_eq!(
-                &rows_of(&messages_of(rows)),
-                rows,
-                "row -> Message -> row must be the identity ({})",
-                case.name
-            );
-        }
-    }
-}
-
-#[test]
-fn generated_sanitize_cases_drive_the_production_sanitizer() {
-    let cases = lean_prompt_assembly_sanitize_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no PromptAssembly sanitize cases"
-    );
-
-    for case in cases {
-        let once = sanitize_history_for_provider(
-            ProviderInputProfile::OpenAiChatCompletions,
-            messages_of(&case.input),
-        );
-        assert_eq!(
-            rows_of(&once),
-            case.expected,
-            "sanitize disagrees with the Lean model on case {:?}",
-            case.name
-        );
-
-        let twice = sanitize_history_for_provider(
-            ProviderInputProfile::OpenAiChatCompletions,
-            once.clone(),
-        );
-        assert_eq!(
-            rows_of(&twice),
-            case.expected_twice,
-            "sanitize is not idempotent on case {:?}",
-            case.name
-        );
-
-        for split in &case.splits {
-            assert!(
-                split.index <= case.input.len(),
-                "generated split index {} exceeds input length on case {:?}",
-                split.index,
-                case.name
-            );
-            let suffix = messages_of(&case.input[split.index..]);
-            assert_eq!(
-                rows_of(&sanitize_history_for_provider(
-                    ProviderInputProfile::OpenAiChatCompletions,
-                    suffix
-                )),
-                split.expected,
-                "sanitize disagrees with the Lean model on case {:?} at split {}",
-                case.name,
-                split.index
-            );
-        }
-    }
 }
 
 fn profile_of_order(mode: gents_lean_vocab::LeanAssistantOrderMode) -> ProviderInputProfile {
