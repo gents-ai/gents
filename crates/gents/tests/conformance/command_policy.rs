@@ -48,16 +48,6 @@ fn generated_command_policy_cases_cover_policy_sandbox_and_env_contracts() {
     );
     assert_eq!(curl.denied_command.as_deref(), Some("curl"));
 
-    let workspace = lean_command_sandbox_case("workspace_write_enforced_selects_macos_seatbelt");
-    assert_eq!(workspace.decision, "selected");
-    assert_eq!(workspace.sandbox.as_deref(), Some("macos_seatbelt"));
-
-    let unrestricted = lean_command_sandbox_case("unrestricted_selects_unsandboxed_unrestricted");
-    assert_eq!(
-        unrestricted.sandbox.as_deref(),
-        Some("unsandboxed_unrestricted")
-    );
-
     let key = lean_command_env_case("env_key_marker_dropped");
     assert_eq!(key.input_name, "OPENAI_API_KEY");
     assert_eq!(key.expected_output_value, None);

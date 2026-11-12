@@ -24,14 +24,14 @@ use super::file_tools::edit_file::EditFileTool;
 use super::file_tools::read_tools::{GlobTool, GrepTool, ListFilesTool, ReadFileTool};
 use super::file_tools::write_file::WriteFileTool;
 use super::shared::{
-    build_shell_env_from_vars, select_sandbox_for_policy, validate_command_policy,
-    validate_read_only_command, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
-    ToolContext, ToolError, WorkspaceAuthority,
+    build_shell_env_from_vars, select_sandbox, validate_command_policy, validate_read_only_command,
+    CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, ToolContext, ToolError,
+    WorkspaceAuthority,
 };
 use super::*;
 use gents_lean_vocab::{
     lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
-    lean_command_sandbox_cases, LeanCommandPolicyCase,
+    LeanCommandPolicyCase,
 };
 
 #[tokio::test]
@@ -1350,43 +1350,24 @@ fn generated_command_policy_cases_cover_read_only_safety_matrix() {
 
 #[test]
 fn generated_command_sandbox_cases_match_rust_selection() {
-    for case in lean_command_sandbox_cases() {
-        let mode = rust_command_execution_mode(&case.mode);
-        let result = select_sandbox_for_policy(mode, case.workspace_write_sandbox_enforced);
-
-        match case.decision.as_str() {
-            "selected" => assert_eq!(
-                result.unwrap(),
-                case.sandbox.as_deref().unwrap(),
-                "Lean CommandPolicy sandbox case {} must match Rust sandbox label",
-                case.name
-            ),
-            "denied" => {
-                let error = result.unwrap_err().to_string();
-                assert_eq!(
-                    case.denial_reason.as_deref(),
-                    Some(if mode == CommandExecutionMode::ArtifactWrite {
-                        "artifactWriteSandboxUnavailable"
-                    } else {
-                        "workspaceWriteSandboxUnavailable"
-                    }),
-                    "Lean CommandPolicy sandbox case {} denied for unexpected reason",
-                    case.name
-                );
-                assert!(
-                    error.contains("workspace_write")
-                        || error.contains("artifact_write")
-                        || error.contains("sandbox-exec"),
-                    "Lean CommandPolicy sandbox case {} expected workspace_write denial, got: {error}",
-                    case.name
-                );
+    gents_lean_vocab::families::contracts_command_sandbox_selection::replay::<CommandExecutionMode>(
+        |i| {
+            let selected = select_sandbox(i.mode, i.workspace_write_sandbox_enforced);
+            gents_lean_vocab::families::contracts_command_sandbox_selection::SandboxOutput {
+                decision: if selected.is_ok() {
+                    "selected"
+                } else {
+                    "denied"
+                }
+                .into(),
+                sandbox: selected.as_ref().ok().map(|sandbox| (*sandbox).to_owned()),
+                denial_reason: selected
+                    .as_ref()
+                    .err()
+                    .map(|reason| reason.to_contract().to_owned()),
             }
-            other => panic!(
-                "Lean CommandPolicy sandbox case {} emitted unknown decision {other:?}",
-                case.name
-            ),
-        }
-    }
+        },
+    );
 }
 
 #[test]

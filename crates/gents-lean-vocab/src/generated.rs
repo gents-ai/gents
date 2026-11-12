@@ -113,9 +113,6 @@ pub fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {
     &lean_contract_snapshot().command_policy_cases
 }
 
-pub fn lean_command_sandbox_cases() -> &'static [LeanCommandSandboxCase] {
-    &lean_contract_snapshot().command_sandbox_cases
-}
 
 pub fn lean_compaction_canonical_projection_cases() -> &'static [LeanCanonicalCompactionCase] {
     &lean_contract_snapshot().compaction_canonical_projection_cases
@@ -3246,7 +3243,6 @@ pub struct LeanContractSnapshot {
     pub boundaries: Vec<LeanBoundary>,
     pub deviations: Vec<LeanDeviation>,
     pub command_policy_cases: Vec<LeanCommandPolicyCase>,
-    pub command_sandbox_cases: Vec<LeanCommandSandboxCase>,
     pub command_isolation_cases: Vec<LeanCommandIsolationCase>,
     pub artifact_mode_meet_cases: Vec<serde_json::Value>,
     pub artifact_admission_cases: Vec<serde_json::Value>,
