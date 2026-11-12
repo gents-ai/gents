@@ -682,7 +682,8 @@ async fn scheduled_cycles_match_the_lean_trace() {
                 })
                 .await;
         }
-        let listener = ModelsListener::start();
+        // A revision names the endpoint alone, so a revision change is an endpoint change.
+        let listeners = [ModelsListener::start(), ModelsListener::start()];
         let health = BackendHealthMap::new();
         let mut schedule = ProbeSchedule::default();
         let options = BackendProberOptions {
@@ -694,6 +695,7 @@ async fn scheduled_cycles_match_the_lean_trace() {
         for (index, step) in case.input.steps.iter().enumerate() {
             let mut current = Vec::new();
             for wire in &step.backends {
+                let listener = &listeners[usize::try_from(wire.revision).unwrap()];
                 let endpoint = if wire.reachable {
                     listener.endpoint()
                 } else {
@@ -701,8 +703,9 @@ async fn scheduled_cycles_match_the_lean_trace() {
                 };
                 let mut backend = fixture.backend(&format!("backend-{}", wire.id), endpoint);
                 backend.enabled = wire.enabled;
-                backend.discovery_timeout_secs = Some(5 + i64::try_from(wire.revision).unwrap());
                 backend.name = format!("step-{index}");
+                backend.tags = vec![format!("step-{index}")];
+                backend.max_concurrent = Some(1 + i64::try_from(index).unwrap());
                 fixture.write(&backend).await;
                 current.push(backend);
             }
