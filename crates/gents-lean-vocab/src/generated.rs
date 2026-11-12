@@ -725,10 +725,6 @@ pub fn lean_trigger_dispatch_cases() -> &'static [LeanTriggerDispatchCase] {
     &lean_contract_snapshot().trigger_dispatch_cases
 }
 
-pub fn lean_workspace_binding_cases() -> &'static [LeanWorkspaceBindingCase] {
-    &lean_contract_snapshot().workspace_binding_cases
-}
-
 pub fn lean_workspace_cases() -> &'static [LeanWorkspaceCase] {
     &lean_contract_snapshot().workspace_cases
 }
@@ -3390,7 +3386,6 @@ pub struct LeanContractSnapshot {
     pub identity_contracts: Vec<LeanIdentityContract>,
     pub pack_eval_subject_cases: Vec<LeanPackEvalSubjectCase>,
     pub workspace_cases: Vec<LeanWorkspaceCase>,
-    pub workspace_binding_cases: Vec<LeanWorkspaceBindingCase>,
     pub callback_cases: Vec<LeanCallbackCase>,
     pub callback_retry_cases: Vec<LeanCallbackRetryCase>,
     pub callback_recovery_cases: Vec<LeanCallbackRecoveryCase>,
@@ -12159,32 +12154,6 @@ pub struct LeanWorkspaceAdmissionCase {
     pub admitted: bool,
     pub complete: bool,
     pub occupied: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanWorkspaceBindingCase {
-    pub name: String,
-    pub workspace_id: String,
-    pub workspace_state: String,
-    pub workspace_seal_hash: Option<String>,
-    pub owner_node_did: String,
-    pub creation_policy: String,
-    pub existing: Vec<LeanWorkspaceBindingRef>,
-    pub candidate: LeanWorkspaceBindingRef,
-    pub git_metadata_write: bool,
-    pub agent_command_mode: String,
-    pub legal: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanWorkspaceBindingRef {
-    pub binding_id: String,
-    pub workspace_id: String,
-    pub request_id: String,
-    pub authority: String,
-    pub node_did: String,
-    pub seal_hash: Option<String>,
-    pub state: String,
 }
 
 #[derive(Debug, Deserialize)]

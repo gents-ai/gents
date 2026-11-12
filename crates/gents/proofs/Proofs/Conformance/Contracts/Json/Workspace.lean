@@ -1,11 +1,14 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
 import Proofs.Session.Workspace.Conformance
+import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Session
 
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
 open CommandPolicy
+open Lean
 
 def workspaceCaseJson (witness : Workspace.Conformance.WorkspaceCase) : String :=
   "{"
@@ -19,40 +22,91 @@ def workspaceCaseJson (witness : Workspace.Conformance.WorkspaceCase) : String :
 def workspaceCasesJson : String :=
   jsonArray (Workspace.Conformance.workspaceCases.map workspaceCaseJson)
 
-def bindingWitnessJson (workspaceId : String)
-    (witness : Workspace.Conformance.BindingWitness) : String :=
-  "{"
-    ++ "\"binding_id\":" ++ jsonString witness.bindingId ++ ","
-    ++ "\"workspace_id\":" ++ jsonString workspaceId ++ ","
-    ++ "\"request_id\":" ++ jsonString witness.requestId ++ ","
-    ++ "\"authority\":" ++ jsonString witness.authority.toDefraDB ++ ","
-    ++ "\"node_did\":" ++ jsonString witness.nodeDid ++ ","
-    ++ "\"seal_hash\":" ++ jsonOptionalString witness.sealHash ++ ","
-    ++ "\"state\":" ++ jsonString witness.state.toDefraDB
-    ++ "}"
+/-- The wire carries each workspace and binding enum as its DefraDB name, the
+string production stores and compares. -/
+private def ofWire {α : Type} (decode : String → Option α) (fallback : α) (value : String) : α :=
+  (decode value).getD fallback
 
-def workspaceBindingCaseJson
-    (witness : Workspace.Conformance.WorkspaceBindingCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"workspace_id\":" ++ jsonString witness.workspaceId ++ ","
-    ++ "\"workspace_state\":" ++ jsonString witness.workspaceState.toDefraDB ++ ","
-    ++ "\"workspace_seal_hash\":" ++ jsonOptionalString witness.workspaceSealHash ++ ","
-    ++ "\"owner_node_did\":" ++ jsonString witness.ownerNodeDid ++ ","
-    ++ "\"creation_policy\":" ++ jsonString witness.creationPolicy.toDefraDB ++ ","
-    ++ "\"existing\":"
-      ++ jsonArray
-        (witness.existing.map (bindingWitnessJson witness.workspaceId)) ++ ","
-    ++ "\"candidate\":"
-      ++ bindingWitnessJson witness.workspaceId witness.candidate ++ ","
-    ++ "\"git_metadata_write\":" ++ boolString witness.gitMetadataWrite ++ ","
-    ++ "\"agent_command_mode\":"
-      ++ jsonString witness.agentCommandMode.toDefraDB ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal
-    ++ "}"
+structure BindingWire where
+  bindingId : String
+  workspaceId : String
+  requestId : String
+  authority : String
+  nodeDid : String
+  sealHash : Option String
+  state : String
+  deriving ToJson
 
-def workspaceBindingCasesJson : String :=
-  jsonArray
-    (Workspace.Conformance.workspaceBindingCases.map workspaceBindingCaseJson)
+def BindingWire.ofWitness (workspaceId : String) (b : Workspace.Conformance.BindingWitness) :
+    BindingWire :=
+  { bindingId := b.bindingId, workspaceId, requestId := b.requestId
+    authority := b.authority.toDefraDB, nodeDid := b.nodeDid, sealHash := b.sealHash
+    state := b.state.toDefraDB }
+
+def BindingWire.toWitness (b : BindingWire) : Workspace.Conformance.BindingWitness :=
+  { bindingId := b.bindingId, requestId := b.requestId
+    authority := ofWire BindingAuthority.fromDefraDB? .readOnly b.authority
+    nodeDid := b.nodeDid, sealHash := b.sealHash
+    state := ofWire BindingState.fromDefraDB? .denied b.state }
+
+structure BindingInput where
+  name : String
+  workspaceId : String
+  workspaceState : String
+  workspaceSealHash : Option String
+  ownerNodeDid : String
+  creationPolicy : String
+  existing : List BindingWire
+  candidate : BindingWire
+  gitMetadataWrite : Bool
+  agentCommandMode : ExecutionMode
+  deriving ToJson
+
+def BindingInput.ofCase (c : Workspace.Conformance.WorkspaceBindingCase) : BindingInput :=
+  { name := c.name, workspaceId := c.workspaceId
+    workspaceState := c.workspaceState.toDefraDB
+    workspaceSealHash := c.workspaceSealHash, ownerNodeDid := c.ownerNodeDid
+    creationPolicy := c.creationPolicy.toDefraDB
+    existing := c.existing.map (BindingWire.ofWitness c.workspaceId)
+    candidate := BindingWire.ofWitness c.workspaceId c.candidate
+    gitMetadataWrite := c.gitMetadataWrite, agentCommandMode := c.agentCommandMode }
+
+def BindingInput.toCase (i : BindingInput) : Workspace.Conformance.WorkspaceBindingCase :=
+  { name := i.name, workspaceId := i.workspaceId
+    workspaceState := ofWire WorkspaceState.fromDefraDB? .provisionFailed i.workspaceState
+    workspaceSealHash := i.workspaceSealHash, ownerNodeDid := i.ownerNodeDid
+    creationPolicy := ofWire CreationPolicy.fromDefraDB? .gitWorktreeDiff i.creationPolicy
+    existing := i.existing.map BindingWire.toWitness
+    candidate := i.candidate.toWitness
+    gitMetadataWrite := i.gitMetadataWrite, agentCommandMode := i.agentCommandMode
+    legal := false }
+
+/-- Premise: production binds a workspace under its owner node, so a binding's
+owner is the workspace owner by construction; and git metadata writes are denied
+by the spawn policy of the command, not by refusing the binding. Binding
+admission therefore decides neither of these cases. -/
+def bindingAdmissionUnreachedNames : List String :=
+  [ "non_owner_node_cannot_claim"
+  , "git_worktree_diff_read_write_git_metadata_write_illegal" ]
+
+@[conformance_family]
+def workspaceBindingAdmission : Family BindingInput Bool where
+  inputs :=
+    (Workspace.Conformance.workspaceBindingCases.filter fun c =>
+      !bindingAdmissionUnreachedNames.contains c.name).map BindingInput.ofCase
+  model := fun i => Workspace.Conformance.bindingCaseLegal i.toCase
+
+/-- model-production-gap: the model refuses a binding whose node is not the
+workspace owner and a read-write binding that would write git metadata on a
+git-worktree-diff workspace; `admit_workspace_binding` takes neither the
+workspace owner nor the command's git metadata writes, because production sets
+the binding owner from the workspace and denies git metadata writes in the
+command's spawn policy. -/
+@[conformance_family]
+def workspaceBindingAdmissionUnreached : Family BindingInput Bool where
+  inputs :=
+    (Workspace.Conformance.workspaceBindingCases.filter fun c =>
+      bindingAdmissionUnreachedNames.contains c.name).map BindingInput.ofCase
+  model := fun i => Workspace.Conformance.bindingCaseLegal i.toCase
 
 end Conformance.Contracts

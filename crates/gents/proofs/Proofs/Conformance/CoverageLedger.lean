@@ -2492,10 +2492,10 @@ def caseCoverage : List CoverageEntry :=
       "WorkspaceCases"
       "Replay these cases through the production Workspace lifecycle owner after its canonical node fields migrate; the deleted test-local state table was not implementation coverage.")
       "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "workspace_binding_cases"
-      "WorkspaceBindingCases"
-      "Replay these cases through the production Workspace binding admission owner after node-field migration; do not restore the deleted test-local binding predicate.")
+  , tagged (consumerCoverage "family" "contracts_workspace_binding_admission")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "contracts_workspace_binding_admission_unreached"
+      "model-production-gap: binding admission takes neither the workspace owner nor the command's git metadata writes; production sets a binding's owner from the workspace and denies git metadata writes in the command spawn policy, so the non-owner and git-metadata cases have no production path through admit_workspace_binding.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "callback_cases"

@@ -2024,3 +2024,33 @@ mod operator_base_freeze;
 
 #[path = "tests/integrate_writer_receipt.rs"]
 mod integrate_writer_receipt;
+
+#[test]
+fn binding_admission_follows_the_lean_workspace_binding_model() {
+    use gents_lean_vocab::families::contracts_workspace_binding_admission::BindingWire;
+    fn doc(witness: &BindingWire) -> super::WorkspaceBindingDoc {
+        super::WorkspaceBindingDoc {
+            workspace_doc_id: None,
+            binding_id: witness.binding_id.clone(),
+            workspace_id: witness.workspace_id.clone(),
+            request_id: witness.request_id.clone(),
+            request_doc_id: format!("doc-{}", witness.request_id),
+            authority: witness.authority.clone(),
+            owner_node_did: witness.node_did.clone(),
+            seal_hash: witness.seal_hash.clone(),
+            lifecycle_state: witness.state.clone(),
+        }
+    }
+    gents_lean_vocab::families::contracts_workspace_binding_admission::replay::<String>(|i| {
+        let existing: Vec<_> = i.existing.iter().map(doc).collect();
+        super::binding::admit_workspace_binding(
+            &i.workspace_id,
+            &i.workspace_state,
+            i.workspace_seal_hash.as_deref(),
+            &existing,
+            doc(&i.candidate),
+            false,
+        )
+        .is_ok()
+    });
+}
