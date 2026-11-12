@@ -14,8 +14,6 @@ GROUPS = {
     "canonical_spawned_target_rejection_cases": "LeanSpawnedTargetRejectionCase",
     "interrupt_queue_cases": "LeanInterruptQueueCase",
     "canonical_payload_presentation_cases": "LeanPayloadPresentationCase",
-    "terminal_diagnostic_presentation_cases": "LeanTerminalDiagnosticPresentationCase",
-    "terminal_diagnostic_replay_cases": "LeanTerminalDiagnosticReplayCase",
     "canonical_output_projection_cases": "LeanCanonicalOutputProjectionCase",
     "reasoning_audit_cases": "LeanReasoningAuditCase",
     "reasoning_signature_cases": "LeanReasoningSignatureCase",

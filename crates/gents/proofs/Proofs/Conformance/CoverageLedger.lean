@@ -2118,13 +2118,17 @@ def caseCoverage : List CoverageEntry :=
       "The four generated cases bind presented payload-field bytes and missing-dependency failure to native canonical reconstruction; stored-byte quantities remain Lean expectations. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
       "canonical-output" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "terminal_diagnostic_presentation_cases"
-      "TerminalDiagnosticPresentationCases"
+      "family"
+      "terminal_diagnostic_contracts_presentation_plan"
       "Eight valid generated inputs bind exact native presentation ranges, literals, and rendered bytes. Two invalid UTF-8 inputs are rejected at the adapter representation boundary via String::from_utf8; the production presentation helper accepts typed strings. This pure binding does not establish capture of uncommitted process bytes, terminal CAS authority, crash recovery, or provider continuation; those remain obligations of their existing owners.")
       "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "terminal_diagnostic_replay_cases"
-      "TerminalDiagnosticReplayCases")
+      "family"
+      "terminal_diagnostic_contracts_streamed_failure")
+      "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "terminal_diagnostic_replay_contracts_stored_replay")
       "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "compaction_projection_join_cases"

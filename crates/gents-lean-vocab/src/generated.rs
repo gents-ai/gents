@@ -681,14 +681,6 @@ pub fn lean_task_hook_run_cases() -> &'static [LeanTaskHookRunCase] {
     &lean_contract_snapshot().task_hook_run_cases
 }
 
-pub fn lean_terminal_diagnostic_presentation_cases() -> &'static [LeanTerminalDiagnosticPresentationCase] {
-    &lean_contract_snapshot().terminal_diagnostic_presentation_cases
-}
-
-pub fn lean_terminal_diagnostic_replay_cases() -> &'static [LeanTerminalDiagnosticReplayCase] {
-    &lean_contract_snapshot().terminal_diagnostic_replay_cases
-}
-
 pub fn lean_title_admission_join_cases() -> &'static [LeanTitleAdmissionJoinCase] {
     &lean_contract_snapshot().title_admission_join_cases
 }
@@ -3279,10 +3271,6 @@ pub struct LeanContractSnapshot {
     pub retry_selection_cases: Vec<LeanRetrySelectionCase>,
     pub canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
-    pub terminal_diagnostic_presentation_cases: Vec<
-        LeanTerminalDiagnosticPresentationCase,
-    >,
-    pub terminal_diagnostic_replay_cases: Vec<LeanTerminalDiagnosticReplayCase>,
     pub compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
@@ -11428,37 +11416,6 @@ pub enum LeanTaskOutcome {
 pub enum LeanTaskPrimaryError {
     Hook { hook_id: String },
     Agent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTerminalDiagnosticPresentationCase {
-    pub name: String,
-    pub raw: Vec<u8>,
-    pub cause: Vec<u8>,
-    pub tail_budget: u64,
-    pub expected: LeanTerminalDiagnosticPresentationExpected,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanTerminalDiagnosticPresentationExpected {
-    Ok { presentation: LeanPresentation, rendered: Vec<u8> },
-    InvalidUtf8,
-    UnexpectedError { error: String },
-}
-
-/// `Conformance.TerminalDiagnosticReplayContracts`: whether a stored
-/// interrupted-call diagnostic replays under a (possibly changed) budget.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTerminalDiagnosticReplayCase {
-    pub name: String,
-    pub raw: Vec<u8>,
-    pub cause: Vec<u8>,
-    pub configured_budget: u64,
-    pub stored: LeanPresentation,
-    pub accepted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
