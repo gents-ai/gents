@@ -79,7 +79,8 @@ def restage (event : Resumed) : List (List (Row Nat Fact)) → Outcome Unit Nat 
         let active : Fact := .goal { goal with status := .active }
         if shown.any (fun request => !request.terminal) then
           .proceed () [.write (.update ref revision active)]
-        else if shown.isEmpty then .refuse "goal has no authenticated predecessor to resume"
+        else if shown.isEmpty then
+          .refuse "goal has no authenticated predecessor to resume; resume was not applied"
         else
           .proceed () [.write (.update ref revision active),
             .core (continuation event goal)]

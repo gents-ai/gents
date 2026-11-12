@@ -1,8 +1,5 @@
 use super::*;
-use gents_lean_vocab::{
-    lean_lifecycle_hook_goal_resume_cases, LeanGoalResumeDecision, LeanGoalResumeGoal,
-    LeanGoalResumeReference, LeanGoalResumeResult, LeanGoalResumeStatus,
-};
+use gents_lean_vocab::families::hooks_contracts_goal_resume as family;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -24,22 +21,14 @@ fn goal_id(goal: u64) -> String {
     format!("goal-{goal}")
 }
 
-fn status(status: LeanGoalResumeStatus) -> &'static str {
-    match status {
-        LeanGoalResumeStatus::Active => "active",
-        LeanGoalResumeStatus::Paused => "paused",
-        LeanGoalResumeStatus::Complete => "complete",
-    }
-}
-
-fn reference(lean: &LeanGoalResumeReference) -> GoalAssignmentInput {
+fn reference(lean: &family::ResumeReferenceWire) -> GoalAssignmentInput {
     GoalAssignmentInput {
         goal_id: goal_id(lean.goal),
         root_request_doc_id: lean.root.map(doc),
     }
 }
 
-fn goal_row(node: &str, agent: &str, goal: &LeanGoalResumeGoal) -> Row {
+fn goal_row(node: &str, agent: &str, goal: &family::Goal<String>) -> Row {
     Row {
         doc: DocRef::new("Goal", GOAL_DOC),
         revision: 1,
@@ -51,7 +40,7 @@ fn goal_row(node: &str, agent: &str, goal: &LeanGoalResumeGoal) -> Row {
             "node_did": node,
             "agent_did": agent,
             "objective": "finish the resumed work",
-            "status": status(goal.status),
+            "status": goal.status,
             "assignment_root_request_doc_id": goal.root.map(doc),
             "continuation_sequence": 0,
             "tokens_used": 0,
@@ -80,22 +69,33 @@ fn session_row(node: &str) -> Row {
     }
 }
 
-fn goal_of(value: &serde_json::Value) -> LeanGoalResumeGoal {
-    let goal = value["goal_id"]
-        .as_str()
-        .and_then(|id| id.strip_prefix("goal-"))
-        .and_then(|id| id.parse().ok())
-        .expect("generated goal identity");
-    let status = match value["status"].as_str() {
-        Some("active") => LeanGoalResumeStatus::Active,
-        Some("paused") => LeanGoalResumeStatus::Paused,
-        Some("complete") => LeanGoalResumeStatus::Complete,
-        other => panic!("unmodelled Goal status {other:?}"),
-    };
-    let root = value["assignment_root_request_doc_id"]
-        .as_str()
-        .map(|root| root.strip_prefix("physical-").unwrap().parse().unwrap());
-    LeanGoalResumeGoal { goal, status, root }
+fn number(value: &str, prefix: &str) -> u64 {
+    value.strip_prefix(prefix).unwrap().parse().unwrap()
+}
+
+fn goal_of(value: &serde_json::Value) -> family::Goal<String> {
+    let status = value["status"].as_str().unwrap();
+    assert!(
+        matches!(status, "active" | "paused" | "complete"),
+        "unmodelled Goal status {status}"
+    );
+    family::Goal {
+        goal: number(value["goal_id"].as_str().unwrap(), "goal-"),
+        status: status.to_owned(),
+        root: value["assignment_root_request_doc_id"]
+            .as_str()
+            .map(|root| number(root, "physical-")),
+    }
+}
+
+fn reference_of(input: &Option<GoalAssignmentInput>) -> Option<family::ResumeReferenceWire> {
+    input.as_ref().map(|reference| family::ResumeReferenceWire {
+        goal: number(&reference.goal_id, "goal-"),
+        root: reference
+            .root_request_doc_id
+            .as_deref()
+            .map(|root| number(root, "physical-")),
+    })
 }
 
 fn written(effects: &[Effect]) -> Option<&serde_json::Value> {
@@ -127,7 +127,7 @@ fn merged(row: &Row, input: Option<&serde_json::Value>) -> Row {
 
 async fn request_rows(
     identity: &KeyIdentity,
-    case: &gents_lean_vocab::LeanLifecycleHookGoalResumeCase,
+    case: &family::GoalResumeInput<String>,
 ) -> Vec<Row> {
     let mut rows = Vec::new();
     for (index, request) in case.requests.iter().enumerate() {
@@ -169,23 +169,52 @@ async fn request_rows(
     rows
 }
 
-fn assert_decision(
-    name: &str,
-    point: &str,
+fn request_wire(row: &Row) -> family::ResumeRequestWire {
+    let request: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(row.value.clone()).unwrap();
+    family::ResumeRequestWire {
+        id: number(request.doc_id.as_deref().unwrap(), "physical-"),
+        terminal: request.lifecycle_state != Some(RequestLifecycleState::Processing),
+        trigger: request
+            .caused_by_trigger_id
+            .as_deref()
+            .map(|goal| number(goal, "goal-")),
+        reference: reference_of(&request.input.and_then(|input| input.goal_assignment)),
+    }
+}
+
+fn decision(
     decided: &Result<Vec<Effect>>,
-    expected: &LeanGoalResumeDecision,
     before: &Row,
-) {
-    match (decided, expected) {
-        (Err(_), LeanGoalResumeDecision::Refuse { .. }) => {}
-        (Ok(effects), LeanGoalResumeDecision::Proceed { goal, .. }) => {
-            assert_eq!(
-                written(effects).map(|input| goal_of(&merged(before, Some(input)).value)),
-                goal.clone(),
-                "{name}: {point} Goal write"
-            );
-        }
-        (actual, expected) => panic!("{name}: {point} decided {actual:?}, model {expected:?}"),
+    created_doc: u64,
+) -> family::ResumeDecisionWire<String> {
+    match decided {
+        Err(error) => family::ResumeDecisionWire {
+            kind: "refuse".into(),
+            reason: Some(error.to_string()),
+            goal: None,
+            create: None,
+        },
+        Ok(effects) => family::ResumeDecisionWire {
+            kind: "proceed".into(),
+            reason: None,
+            goal: written(effects).map(|input| goal_of(&merged(before, Some(input)).value)),
+            create: created(effects).map(|create| {
+                assert_eq!(
+                    create.caused_by_trigger_kind.as_deref(),
+                    create.caused_by_trigger_id.as_ref().map(|_| GOAL_TRIGGER_KIND),
+                    "a requested continuation names the Goal trigger kind"
+                );
+                family::ResumeCreateWire {
+                    id: created_doc,
+                    trigger: create
+                        .caused_by_trigger_id
+                        .as_deref()
+                        .map(|goal| number(goal, "goal-")),
+                    reference: reference_of(&create.input.goal_assignment),
+                }
+            }),
+        },
     }
 }
 
@@ -193,12 +222,11 @@ fn assert_decision(
 /// and, after core creates the continuation, at `request.create.stage`.
 #[tokio::test]
 async fn generated_goal_resume_cases_drive_the_resume_and_binding_listeners() {
-    let cases = lean_lifecycle_hook_goal_resume_cases();
-    assert_eq!(cases.len(), 5);
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
     let node = identity.did().to_owned();
-    for case in cases {
+    for modeled in gents_lean_vocab::families::hooks_contracts_goal_resume::cases::<String>() {
+        let case = &modeled.input;
         let goal = goal_row(&node, &node, &case.goal);
         let sessions = vec![session_row(&node)];
         let requests = request_rows(&identity, case).await;
@@ -211,76 +239,62 @@ async fn generated_goal_resume_cases_drive_the_resume_and_binding_listeners() {
             &event,
             &[sessions.clone(), vec![goal.clone()], requests.clone()],
         );
-        assert_decision(&case.name, "resume", &restaged, &case.restage, &goal);
+        let restage = decision(&restaged, &goal, case.next);
+        let refused = restaged.as_ref().err().map(ToString::to_string);
         let effects = restaged.unwrap_or_default();
         let resumed = merged(&goal, written(&effects));
         let continuation = created(&effects);
-        let expected_create = match &case.restage {
-            LeanGoalResumeDecision::Proceed { create, .. } => create.clone(),
-            LeanGoalResumeDecision::Refuse { .. } => None,
-        };
-        assert_eq!(
-            continuation.as_ref().map(|create| (
-                create.caused_by_trigger_kind.clone(),
-                create.caused_by_trigger_id.clone(),
-                create.input.goal_assignment.clone(),
-            )),
-            expected_create.as_ref().map(|create| (
-                Some(GOAL_TRIGGER_KIND.to_owned()),
-                create.trigger.map(goal_id),
-                create.reference.as_ref().map(reference),
-            )),
-            "{}: requested continuation",
-            case.name
-        );
         let mut current = resumed.clone();
-        match (continuation, &case.bind, expected_create) {
-            (Some(request), Some(expected), Some(create)) => {
-                let event = RequestCreated {
-                    request,
-                    doc_id: doc(create.id),
-                };
-                let reads = BindResumedRoot {
-                    manifest: manifest(),
-                }
-                .reads(&event);
-                assert_eq!(reads.len(), 2, "{}: binding reads", case.name);
-                let bound =
-                    BindResumedRoot::effects(&event, &[sessions.clone(), vec![resumed.clone()]]);
-                assert_decision(&case.name, "binding", &bound, expected, &resumed);
-                current = merged(&resumed, bound.ok().as_deref().and_then(written));
+        let bind = continuation.clone().map(|request| {
+            let event = RequestCreated {
+                request,
+                doc_id: doc(case.next),
+            };
+            let reads = BindResumedRoot {
+                manifest: manifest(),
             }
-            (None, None, None) => {}
-            (actual, expected, _) => {
-                panic!(
-                    "{}: created {actual:?}, model binding {expected:?}",
-                    case.name
-                )
-            }
-        }
-        match &case.result {
-            LeanGoalResumeResult::Ok {
-                goals,
-                requests: after,
-            } => {
-                assert_eq!(
-                    vec![goal_of(&current.value)],
-                    *goals,
-                    "{}: Goal after the resume",
-                    case.name
-                );
-                assert_eq!(
-                    after.len(),
-                    case.requests.len() + usize::from(case.bind.is_some()),
-                    "{}: requests after the resume",
-                    case.name
-                );
-            }
-            LeanGoalResumeResult::Error { .. } => assert!(
-                matches!(case.restage, LeanGoalResumeDecision::Refuse { .. }),
-                "{}: a failed resume is a refusal",
-                case.name
-            ),
-        }
+            .reads(&event);
+            assert_eq!(reads.len(), 2, "{}: binding reads", case.name);
+            let bound =
+                BindResumedRoot::effects(&event, &[sessions.clone(), vec![resumed.clone()]]);
+            let decided = decision(&bound, &resumed, case.next);
+            current = merged(&resumed, bound.ok().as_deref().and_then(written));
+            decided
+        });
+        let result = match refused {
+            Some(reason) => family::ResumeResultWire {
+                kind: "error".into(),
+                goals: Vec::new(),
+                requests: Vec::new(),
+                refusal: Some(family::ResumeRefusalWire {
+                    kind: "refused".into(),
+                    plugin: Some(manifest().name.into()),
+                    reason: Some(reason),
+                }),
+            },
+            None => family::ResumeResultWire {
+                kind: "ok".into(),
+                goals: vec![goal_of(&current.value)],
+                requests: continuation
+                    .iter()
+                    .map(|create| family::ResumeRequestWire {
+                        id: case.next,
+                        terminal: false,
+                        trigger: create
+                            .caused_by_trigger_id
+                            .as_deref()
+                            .map(|goal| number(goal, "goal-")),
+                        reference: reference_of(&create.input.goal_assignment),
+                    })
+                    .chain(requests.iter().map(request_wire))
+                    .collect(),
+                refusal: None,
+            },
+        };
+        modeled.check(family::GoalResumeOutput {
+            restage,
+            bind,
+            result,
+        });
     }
 }

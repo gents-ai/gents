@@ -6,6 +6,7 @@ import Proofs.Session.Hooks.Prepared
 import Proofs.Automation.Hooks.QueueScope
 import Proofs.Automation.Hooks.GoalResume
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.HooksContracts
 open Hooks
@@ -567,28 +568,6 @@ def goalResumeCases : List GoalResumeCase :=
   , { name := "goal_without_predecessor_refuses"
     , goal := ⟨7, .paused, none⟩, requests := [] } ]
 
-private def statusString : GoalResume.Status → String
-  | .active => "active"
-  | .paused => "paused"
-  | .complete => "complete"
-
-private def optionNat : Option Nat → String
-  | some value => toString value
-  | none => "null"
-
-private def goalJson (goal : GoalResume.Goal) : String :=
-  "{\"goal\":" ++ toString goal.goal ++ ",\"status\":" ++ jsonString (statusString goal.status) ++
-    ",\"root\":" ++ optionNat goal.root ++ "}"
-
-private def referenceJson : Option (Nat × Option Nat) → String
-  | some (goal, root) => "{\"goal\":" ++ toString goal ++ ",\"root\":" ++ optionNat root ++ "}"
-  | none => "null"
-
-private def resumeRequestJson (request : Resume.Request) : String :=
-  "{\"id\":" ++ toString request.id ++ ",\"terminal\":" ++ boolJson request.terminal ++
-    ",\"trigger\":" ++ optionNat request.trigger ++
-    ",\"reference\":" ++ referenceJson request.reference ++ "}"
-
 private def writtenGoal (effects : List (Effect Nat GoalResume.Fact Resume.CreateArgs)) :
     Option GoalResume.Goal :=
   effects.findSome? fun effect =>
@@ -596,40 +575,113 @@ private def writtenGoal (effects : List (Effect Nat GoalResume.Fact Resume.Creat
     | .write (.update _ _ (.goal goal)) => some goal
     | _ => none
 
-private def goalDecisionJson (createdOf : Bool) :
-    Outcome Unit Nat GoalResume.Fact Resume.CreateArgs → String
-  | .refuse reason => "{\"kind\":\"refuse\",\"reason\":" ++ jsonString reason ++ "}"
-  | .proceed _ effects =>
-      "{\"kind\":\"proceed\",\"goal\":" ++ ((writtenGoal effects).map goalJson).getD "null" ++
-        (if createdOf then
-          ",\"create\":" ++ ((effects.findSome? fun effect =>
-            match effect with
-            | .core args => some ("{\"id\":" ++ toString args.id ++
-                ",\"trigger\":" ++ optionNat args.trigger ++
-                ",\"reference\":" ++ referenceJson args.reference ++ "}")
-            | .write _ => none).getD "null")
-        else "") ++ "}"
+deriving instance Lean.ToJson for Hooks.GoalResume.Status, Hooks.GoalResume.Goal
 
-private def goalResumeResultJson :
-    Except Refusal (State Resume.Session Nat GoalResume.Fact × List Unit) → String
-  | .ok (state, _) =>
-      "{\"kind\":\"ok\",\"goals\":" ++ jsonArray (state.docs.filterMap fun row =>
-          match row.value with
-          | .goal goal => some (goalJson goal)
-          | .request _ => none) ++
-        ",\"requests\":" ++ jsonArray (state.core.requests.map resumeRequestJson) ++ "}"
-  | .error refusal => "{\"kind\":\"error\",\"refusal\":" ++ refusalJson refusal ++ "}"
+structure ResumeReferenceWire where
+  goal : Nat
+  root : Option Nat
+  deriving Lean.ToJson
 
-private def goalResumeCaseJson (c : GoalResumeCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"goal\":" ++ goalJson c.goal ++
-    ",\"requests\":" ++ jsonArray (c.requests.map resumeRequestJson) ++
-    ",\"next\":" ++ toString c.next ++
-    ",\"restage\":" ++ goalDecisionJson true c.restaged ++
-    ",\"bind\":" ++ ((c.bound.map (goalDecisionJson false)).getD "null") ++
-    ",\"result\":" ++ goalResumeResultJson c.result ++ "}"
+def ResumeReferenceWire.ofModel : Option (Nat × Option Nat) → Option ResumeReferenceWire
+  | some (goal, root) => some ⟨goal, root⟩
+  | none => none
 
-def goalResumeCasesJson : String := jsonArray (goalResumeCases.map goalResumeCaseJson)
+def ResumeReferenceWire.toModel : Option ResumeReferenceWire → Option (Nat × Option Nat)
+  | some reference => some (reference.goal, reference.root)
+  | none => none
+
+structure ResumeRequestWire where
+  id : Nat
+  terminal : Bool
+  trigger : Option Nat
+  reference : Option ResumeReferenceWire
+  deriving Lean.ToJson
+
+def ResumeRequestWire.ofModel (request : Resume.Request) : ResumeRequestWire :=
+  ⟨request.id, request.terminal, request.trigger, ResumeReferenceWire.ofModel request.reference⟩
+
+def ResumeRequestWire.toModel (request : ResumeRequestWire) : Resume.Request :=
+  { id := request.id, agent := resumeAgent, signer := resumeAgent, terminal := request.terminal
+    trigger := request.trigger, reference := ResumeReferenceWire.toModel request.reference }
+
+structure ResumeCreateWire where
+  id : Nat
+  trigger : Option Nat
+  reference : Option ResumeReferenceWire
+  deriving Lean.ToJson
+
+structure ResumeDecisionWire where
+  kind : String
+  reason : Option String
+  goal : Option GoalResume.Goal
+  create : Option ResumeCreateWire
+  deriving Lean.ToJson
+
+def ResumeDecisionWire.ofModel :
+    Outcome Unit Nat GoalResume.Fact Resume.CreateArgs → ResumeDecisionWire
+  | .refuse reason => ⟨"refuse", some reason, none, none⟩
+  | .proceed _ effects => ⟨"proceed", none, writtenGoal effects, effects.findSome? fun effect =>
+      match effect with
+      | .core args => some ⟨args.id, args.trigger, ResumeReferenceWire.ofModel args.reference⟩
+      | .write _ => none⟩
+
+structure ResumeRefusalWire where
+  kind : String
+  plugin : Option String
+  reason : Option String
+  deriving Lean.ToJson
+
+def ResumeRefusalWire.ofModel : Refusal → ResumeRefusalWire
+  | .core => ⟨"core", none, none⟩
+  | .refused plugin reason => ⟨"refused", some plugin, some reason⟩
+  | .invalid plugin => ⟨"invalid", some plugin, none⟩
+  | .conflict plugin => ⟨"conflict", some plugin, none⟩
+
+structure ResumeResultWire where
+  kind : String
+  goals : List GoalResume.Goal
+  requests : List ResumeRequestWire
+  refusal : Option ResumeRefusalWire
+  deriving Lean.ToJson
+
+def ResumeResultWire.ofModel :
+    Except Refusal (State Resume.Session Nat GoalResume.Fact × List Unit) → ResumeResultWire
+  | .ok (state, _) => ⟨"ok", state.docs.filterMap (fun row =>
+        match row.value with
+        | .goal goal => some goal
+        | .request _ => none),
+      state.core.requests.map ResumeRequestWire.ofModel, none⟩
+  | .error refusal => ⟨"error", [], [], some (ResumeRefusalWire.ofModel refusal)⟩
+
+structure GoalResumeInput where
+  name : String
+  goal : GoalResume.Goal
+  requests : List ResumeRequestWire
+  next : Nat
+  deriving Lean.ToJson
+
+def GoalResumeInput.toCase (i : GoalResumeInput) : GoalResumeCase :=
+  ⟨i.name, i.goal, i.requests.map ResumeRequestWire.toModel, i.next⟩
+
+structure GoalResumeOutput where
+  restage : ResumeDecisionWire
+  bind : Option ResumeDecisionWire
+  result : ResumeResultWire
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalResume : Family GoalResumeInput GoalResumeOutput where
+  inputs := goalResumeCases.map fun c =>
+    ⟨c.name, c.goal, c.requests.map ResumeRequestWire.ofModel, c.next⟩
+  model := fun i =>
+    let c := i.toCase
+    { restage := ResumeDecisionWire.ofModel c.restaged
+      bind := c.bound.map ResumeDecisionWire.ofModel
+      result := ResumeResultWire.ofModel c.result }
+
+example : goalResumeCases.all (fun c =>
+    (GoalResumeInput.toCase ⟨c.name, c.goal, c.requests.map ResumeRequestWire.ofModel, c.next⟩).requests
+      == c.requests) := by native_decide
 
 /-! Claim verdicts: `Hooks.combine` and `Hooks.gate`. -/
 
