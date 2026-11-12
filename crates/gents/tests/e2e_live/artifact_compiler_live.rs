@@ -39,7 +39,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     let db = test_db("artifact-compiler-live").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let did = identity.did().to_owned();
-    let target = crate::support::live_inference::live_target();
+    let target = crate::support::live_inference::live_target().await;
     let actors = crate::support::live_inference::bind_target(&db, &target).await;
     let agent_did = actors.agent_did().to_owned();
     let backend_id = target.backend_id().to_owned();

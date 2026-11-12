@@ -28,7 +28,7 @@ struct RenderedRequestRow {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
 async fn live_seeds_reach_the_provider() {
-    let target = live_target();
+    let target = live_target().await;
 
     let db = test_db("live-seed").await;
     let actors = bind_target(&db, &target).await;

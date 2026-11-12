@@ -169,7 +169,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let db = test_db("lsp-live").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
 
-    let actors = bind_target(&db, &live_target()).await;
+    let actors = bind_target(&db, &live_target().await).await;
     let (node_did, agent_did) = (actors.node_did().to_owned(), actors.agent_did().to_owned());
     let reader = &actors.fixture.access;
 

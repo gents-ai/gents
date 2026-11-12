@@ -134,7 +134,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
         "set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored to run the concurrent multi-wave live e2e"
     );
 
-    let target = live_target();
+    let target = live_target().await;
     eprintln!(
         "[p2p-admission-live] target={} model={} waves={CONCURRENT_WAVES} push_workers=1 peers=2",
         target.name,

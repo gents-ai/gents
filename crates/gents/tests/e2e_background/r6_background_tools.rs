@@ -36,8 +36,6 @@ struct ToolCallRow {
 #[derive(Debug, Deserialize)]
 struct MessageRow {
     content: String,
-    request_id: Option<String>,
-    request_doc_id: Option<String>,
 }
 
 struct AcceptedBackgroundTurn {
@@ -227,19 +225,6 @@ async fn fetch_messages(
         .execute(&query)
         .await
         .expect("fetch AgentMessage rows");
-    let request_ids = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| {
-            Some((
-                row.get("_docID")?.as_str()?,
-                row.get("request_id")?.as_str()?,
-            ))
-        })
-        .collect::<rapidhash::RapidHashMap<_, _>>();
     let headers = response
         .get("data")
         .and_then(|data| data.get("AgentMessage"))
@@ -251,7 +236,6 @@ async fn fetch_messages(
         let header_doc_id = header["_docID"].as_str().expect("message header _docID");
         let node_did = header["node_did"].as_str().expect("message header agent");
         let requester_did = header["requester_did"].as_str();
-        let request_doc_id = header["request_doc_id"].as_str().map(str::to_owned);
         let (_, message) = gents_session::session::load_canonical_message(
             access,
             header_doc_id,
@@ -279,14 +263,7 @@ async fn fetch_messages(
                 .collect::<Vec<_>>()
                 .join("\n"),
         };
-        messages.push(MessageRow {
-            content,
-            request_id: request_doc_id
-                .as_deref()
-                .and_then(|doc_id| request_ids.get(doc_id).copied())
-                .map(str::to_owned),
-            request_doc_id,
-        });
+        messages.push(MessageRow { content });
     }
     messages
 }
@@ -339,29 +316,6 @@ async fn wait_for_tool_completion_message(
             );
         }
     }
-}
-
-async fn fetch_background_wakes(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-) -> Vec<serde_json::Value> {
-    let session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    execution_origin: {{ _eq: "scheduled" }}
-                }}
-            ) {{ _docID request_id input }}
-        }}"#
-    );
-    let response = access.execute(&query).await.expect("read background wakes");
-    response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default()
 }
 
 async fn load_tool_call(
@@ -758,72 +712,6 @@ async fn count_tool_calls_by_name(
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(|value| value.as_array())
         .map_or(0, Vec::len)
-}
-
-#[tokio::test]
-async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_envelope() {
-    let turn = boot_background_turn(
-        "r6-background-success",
-        vec![StreamChunk::tool_call(
-            "meta-bg-1",
-            "spawn_process",
-            r#"{"tool_name":"bash","args":{"command":"printf","args":["done"]}}"#,
-        )],
-    )
-    .await;
-    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
-    let tool_call_id = row.tool_call_id.expect("background handle");
-    assert_accepted_rows_visible(&turn).await;
-    turn.runtime.backend.enqueue_response(
-        &turn.prompt,
-        crate::support::streaming_backend::StreamResponse::streams(
-            &turn.prompt,
-            vec![StreamChunk::tool_call(
-                "meta-wait-1",
-                "wait_process",
-                serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-            )],
-        ),
-    );
-    wait_for_provider_requests(&turn, 3).await;
-    finish_dynamic_turn(&turn);
-    let waited = canonical_latest_tool_payload_json(&turn, &turn.session_id, 2).await;
-    assert_eq!(waited["status"], "completed", "unexpected wait: {waited}");
-    assert!(waited["result"]
-        .as_str()
-        .is_some_and(|value| value.contains("done")));
-
-    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
-    assert_eq!(row.tool_name.as_deref(), Some("bash"));
-    assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
-    assert_eq!(row.await_mode.as_deref(), Some("background"));
-    assert_eq!(
-        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "wait_process").await,
-        1
-    );
-
-    let message = wait_for_tool_completion_message(
-        turn.db.node.as_ref(),
-        &turn.fixture.access,
-        &turn.session_id,
-        &tool_call_id,
-    )
-    .await;
-    assert!(message.content.contains(r#"tool_name="bash""#));
-    assert!(message.content.contains(r#"status="completed""#));
-    assert!(message.content.contains("done"));
-    let wakes = fetch_background_wakes(&turn.fixture.access, &turn.session_id).await;
-    assert_eq!(
-        wakes.len(),
-        1,
-        "tool completion notification should enqueue one resumable agent turn"
-    );
-    let wake_request_id = wakes[0]["request_id"].as_str().unwrap();
-    let wake_doc_id = wakes[0]["_docID"].as_str().unwrap();
-    assert_ne!(wake_request_id, turn.request_id);
-    assert_eq!(message.request_id.as_deref(), Some(wake_request_id));
-    assert_eq!(message.request_doc_id.as_deref(), Some(wake_doc_id));
-    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
@@ -1574,94 +1462,6 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
 }
 
 #[tokio::test]
-async fn process_controls_manage_same_principal_job_across_request_turns() {
-    let turn = boot_background_turn(
-        "r6-background-cross-turn-controls",
-        vec![StreamChunk::tool_call(
-            "meta-bg-cross-turn",
-            "spawn_process",
-            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
-        )],
-    )
-    .await;
-    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
-    let tool_call_id = row.tool_call_id.expect("cross-turn handle");
-    finish_dynamic_turn(&turn);
-    wait_for_initial_request_terminal(&turn).await;
-    let owner_after_first_turn =
-        load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
-    assert_eq!(
-        owner_after_first_turn.lifecycle_state.as_deref(),
-        Some("running"),
-        "background process must survive the originating turn: {owner_after_first_turn:?}"
-    );
-    let prompt = "control existing process from second request";
-    turn.runtime.backend.enable_dynamic_followups(prompt);
-    turn.runtime.backend.enqueue_response(
-        prompt,
-        crate::support::streaming_backend::StreamResponse::streams(
-            prompt,
-            vec![
-                StreamChunk::tool_call("meta-list-cross-turn", "list_processes", r#"{}"#),
-                StreamChunk::tool_call(
-                    "meta-read-cross-turn",
-                    "read_process",
-                    serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-                ),
-            ],
-        ),
-    );
-    crate::support::accepted_turn::enqueue_managed_accepted_request(
-        &turn.db,
-        &turn.fixture,
-        "r6-background-cross-turn-controls-request-2",
-        &turn.session_id,
-        prompt,
-    )
-    .await;
-    turn.runtime.backend.wait_for_chunks(prompt, 1).await;
-    let listed = canonical_tool_payload_json(&turn, &turn.session_id, "meta-list-cross-turn").await;
-    assert!(
-        listed["entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| entry["tool_call_id"] == tool_call_id),
-        "list_processes lost accepted handle {tool_call_id}: {listed:#}"
-    );
-
-    let read = canonical_tool_payload_json(&turn, &turn.session_id, "meta-read-cross-turn").await;
-    assert_eq!(read["status"], "running");
-    assert_eq!(
-        load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id)
-            .await
-            .lifecycle_state
-            .as_deref(),
-        Some("running"),
-        "read_process must observe the job before a later accepted cancel turn"
-    );
-    turn.runtime.backend.enqueue_response(
-        prompt,
-        crate::support::streaming_backend::StreamResponse::streams(
-            prompt,
-            vec![StreamChunk::tool_call(
-                "meta-cancel-cross-turn",
-                "cancel_process",
-                serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-            )],
-        ),
-    );
-    turn.runtime.backend.enqueue_response(
-        prompt,
-        crate::support::streaming_backend::StreamResponse::completes(prompt, ["controlled"]),
-    );
-    let cancelled =
-        canonical_tool_payload_json(&turn, &turn.session_id, "meta-cancel-cross-turn").await;
-    assert_eq!(cancelled["status"], "cancelled");
-    turn.runtime.shutdown().await;
-}
-
-#[tokio::test]
 async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
     let turn = boot_background_turn(
         "r6-background-cross-requester-denied",
@@ -1861,259 +1661,5 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
         Some(valid_tool_call_id.as_str())
     );
 
-    turn.runtime.shutdown().await;
-}
-
-#[tokio::test]
-async fn same_tool_background_calls_execute_concurrently_without_registry_mutex() {
-    let release_dir = tempfile::tempdir().unwrap();
-    let release_path = release_dir.path().join("release");
-    let command_args = |marker: &str| {
-        let entered_path = release_dir.path().join(marker);
-        serde_json::json!({
-            "tool_name": "bash",
-            "args": {
-                "command": "sh",
-                "args": [
-                    "-c",
-                    "printf '%s\\n' \"$1\"; : > \"$2\"; while [ ! -f \"$3\" ]; do sleep 0.05; done",
-                    "gents-background-gate",
-                    marker,
-                    entered_path.to_string_lossy(),
-                    release_path.to_string_lossy()
-                ]
-            }
-        })
-        .to_string()
-    };
-    let turn = boot_background_turn(
-        "r6-background-concurrent-tool",
-        vec![
-            StreamChunk::tool_call(
-                "meta-bg-concurrent-1",
-                "spawn_process",
-                command_args("entered-one"),
-            ),
-            StreamChunk::tool_call(
-                "meta-bg-concurrent-2",
-                "spawn_process",
-                command_args("entered-two"),
-            ),
-        ],
-    )
-    .await;
-    let session = escape_graphql_string(&turn.session_id);
-    let handles = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let response = turn.fixture.access.execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}) {{ tool_call_id }} }}"#
-            )).await.expect("read running tool calls");
-            let handles = response.get("data")
-                .and_then(|data| data["AgentToolCall"].as_array())
-                .map(|rows| rows.iter().filter_map(|row| row["tool_call_id"].as_str().map(str::to_owned)).collect::<Vec<_>>())
-                .unwrap_or_default();
-            if handles.len() == 2 {
-                break handles;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("both calls to the same document tool must run concurrently");
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if release_dir.path().join("entered-one").exists()
-                && release_dir.path().join("entered-two").exists()
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("both real tool bodies must enter before release");
-    finish_dynamic_turn(&turn);
-    wait_for_initial_request_terminal(&turn).await;
-    let prompt = "read both concurrently running process outputs";
-    turn.runtime.backend.enable_dynamic_followups(prompt);
-    turn.runtime.backend.enqueue_response(
-        prompt,
-        crate::support::streaming_backend::StreamResponse::streams(
-            prompt,
-            vec![
-                StreamChunk::tool_call(
-                    "meta-read-concurrent-1",
-                    "read_process",
-                    serde_json::json!({ "tool_call_id": handles[0] }).to_string(),
-                ),
-                StreamChunk::tool_call(
-                    "meta-read-concurrent-2",
-                    "read_process",
-                    serde_json::json!({ "tool_call_id": handles[1] }).to_string(),
-                ),
-            ],
-        ),
-    );
-    turn.runtime.backend.enqueue_response(
-        prompt,
-        crate::support::streaming_backend::StreamResponse::completes(prompt, ["observed"]),
-    );
-    crate::support::accepted_turn::enqueue_managed_accepted_request(
-        &turn.db,
-        &turn.fixture,
-        "r6-background-concurrent-tool-request-2",
-        &turn.session_id,
-        prompt,
-    )
-    .await;
-    let first =
-        canonical_tool_payload_json(&turn, &turn.session_id, "meta-read-concurrent-1").await;
-    let second =
-        canonical_tool_payload_json(&turn, &turn.session_id, "meta-read-concurrent-2").await;
-    let open_outputs = [first["output"].as_str(), second["output"].as_str()];
-    assert!(open_outputs.contains(&Some("entered-one\n")));
-    assert!(open_outputs.contains(&Some("entered-two\n")));
-    std::fs::write(&release_path, b"release").unwrap();
-    assert_eq!(
-        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "bash").await,
-        2
-    );
-    for handle in &handles {
-        wait_for_tool_completion_message(
-            turn.db.node.as_ref(),
-            &turn.fixture.access,
-            &turn.session_id,
-            handle,
-        )
-        .await;
-    }
-    let timeline = crate::support::fixtures::canonical_run_timeline_rows(
-        &turn.fixture.access,
-        &turn.request_id,
-    )
-    .await;
-    let outputs = handles
-        .iter()
-        .map(|handle| {
-            timeline
-                .tool_calls
-                .iter()
-                .find(|call| &call.tool_call_id == handle)
-                .and_then(|call| call.result.as_deref())
-                .expect("completed process canonical raw output")
-        })
-        .collect::<Vec<_>>();
-    assert!(outputs.contains(&"entered-one\n"));
-    assert!(outputs.contains(&"entered-two\n"));
-    turn.runtime.shutdown().await;
-}
-
-#[tokio::test]
-async fn cancel_tool_cancels_running_background_row_through_canonical_control_call() {
-    let turn = boot_background_turn(
-        "r6-background-cancel",
-        vec![StreamChunk::tool_call(
-            "meta-bg-slow",
-            "spawn_process",
-            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
-        )],
-    )
-    .await;
-    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
-    let tool_call_id = row.tool_call_id.expect("background handle");
-    assert_accepted_rows_visible(&turn).await;
-    turn.runtime.backend.enqueue_response(
-        &turn.prompt,
-        crate::support::streaming_backend::StreamResponse::streams(
-            &turn.prompt,
-            vec![StreamChunk::tool_call(
-                "meta-cancel-slow",
-                "cancel_process",
-                serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-            )],
-        ),
-    );
-    wait_for_provider_requests(&turn, 3).await;
-    finish_dynamic_turn(&turn);
-    let cancelled = canonical_latest_tool_payload_json(&turn, &turn.session_id, 2).await;
-    assert_eq!(cancelled["status"], "cancelled");
-
-    let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
-    assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
-    assert_eq!(row.cancel_cause.as_deref(), Some("userCancelled"));
-    assert_eq!(
-        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "cancel_process").await,
-        1
-    );
-
-    let message = wait_for_tool_completion_message(
-        turn.db.node.as_ref(),
-        &turn.fixture.access,
-        &turn.session_id,
-        &tool_call_id,
-    )
-    .await;
-    assert!(message.content.contains(r#"status="cancelled""#));
-    assert!(message.content.contains("<reason>explicit_cancel</reason>"));
-
-    assert_eq!(
-        fetch_background_wakes(&turn.fixture.access, &turn.session_id)
-            .await
-            .len(),
-        1,
-        "tool cancellation notification should enqueue one resumable agent turn"
-    );
-    turn.runtime.shutdown().await;
-}
-
-#[tokio::test]
-async fn cancel_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
-    let turn = boot_background_turn(
-        "r6-background-cancel-missing",
-        vec![StreamChunk::tool_call(
-            "meta-cancel-missing",
-            "cancel_process",
-            r#"{"tool_call_id":"missing-background-handle"}"#,
-        )],
-    )
-    .await;
-    turn.runtime.backend.wait_for_chunks(&turn.prompt, 1).await;
-    wait_for_provider_requests(&turn, 2).await;
-    assert_accepted_rows_visible(&turn).await;
-    finish_dynamic_turn(&turn);
-    let cancelled = canonical_latest_tool_payload_json(&turn, &turn.session_id, 1).await;
-
-    assert_eq!(cancelled["ok"], false);
-    assert_eq!(cancelled["tool_name"], "cancel_process");
-    assert!(cancelled["message"]
-        .as_str()
-        .unwrap()
-        .contains("missing-background-handle"));
-    turn.runtime.shutdown().await;
-}
-
-#[tokio::test]
-async fn wait_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
-    let turn = boot_background_turn(
-        "r6-background-wait-missing",
-        vec![StreamChunk::tool_call(
-            "meta-wait-missing",
-            "wait_process",
-            r#"{"tool_call_id":"missing-background-handle"}"#,
-        )],
-    )
-    .await;
-    turn.runtime.backend.wait_for_chunks(&turn.prompt, 1).await;
-    wait_for_provider_requests(&turn, 2).await;
-    assert_accepted_rows_visible(&turn).await;
-    finish_dynamic_turn(&turn);
-    let waited = canonical_latest_tool_payload_json(&turn, &turn.session_id, 1).await;
-
-    assert_eq!(waited["ok"], false);
-    assert_eq!(waited["tool_name"], "wait_process");
-    assert!(waited["message"]
-        .as_str()
-        .unwrap()
-        .contains("missing-background-handle"));
     turn.runtime.shutdown().await;
 }

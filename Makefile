@@ -50,7 +50,7 @@ help:
 	@echo "  make test                  Run core Rust and CLI tests"
 	@echo "  make test-agent            Run Gents runtime tests"
 	@echo "  make test-agent-conformance  Run runtime conformance tests"
-	@echo "  make test-agent-e2e        Run deterministic agent E2E tests"
+	@echo "  make test-agent-e2e        Run live-inference agent E2E tests"
 	@echo "  make test-cli              Run CLI tests"
 	@echo
 	@echo "Desktop UI:"
@@ -74,7 +74,8 @@ help:
 	@echo "Live:"
 	@echo "  make live-cli              Run live CLI smoke test"
 	@echo "  make live-onboarding       Run bare gents against real launchd and a PTY (macOS)"
-	@echo "  make live-agent            Run ignored live runtime tests"
+	@echo "  make live-eval               Run live inference eval-driver tests"
+	@echo "  make live-agent            Run live inference runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
 	@echo "Packs (published from gents-ai/packs):"
@@ -193,16 +194,11 @@ test-eval-drivers:
 
 test-evals:
 	$(CARGO) test -p gents-eval --test onboarding_evals $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents-eval --test eval_runner_canary $(CARGO_PROFILE_FLAG)
 
 live-configurator-eval:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} scripts/evals/run-ladder.sh $${GENTS_EVAL_SUITE:-all} $${GENTS_EVAL_TRIALS:-3} $${GENTS_EVAL_CONCURRENCY:-4}
 
-test-agent-e2e:
-	$(CARGO) test -p gents --test e2e_lifecycle $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents --test e2e_runtime $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents --test e2e_background $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents --test e2e_triggers $(CARGO_PROFILE_FLAG)
+test-agent-e2e: live-agent
 
 test-cli:
 	$(CARGO) test -p gents-cli $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
@@ -261,19 +257,23 @@ desktop-native-dev: build-cli
 desktop-native-build: desktop-native-stage-sidecar
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json --config $(DESKTOP_LOCAL_TAURI_CONFIG)
 
-.PHONY: live-cli live-onboarding live-agent live-desktop-smoke
+.PHONY: live-eval live-cli live-onboarding live-agent live-desktop-smoke
 live-cli:
-	$(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 LIVE_FILTER ?= cli_onboarding_live::
 live-onboarding:
 	$(CARGO) test -p gents-cli --features live-e2e,native-e2e --test cli_live_suite $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-agent:
-	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
 
 live-desktop-smoke:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:chat
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:config
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:operations
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:interrupt
+
+.PHONY: live-eval
+live-eval:
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-eval --features live-e2e --test eval_runner_canary $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1

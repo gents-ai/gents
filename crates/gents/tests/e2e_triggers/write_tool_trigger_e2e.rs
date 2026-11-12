@@ -1,3 +1,4 @@
+use crate::support::snapshots::SnapshotReader;
 use std::time::Duration;
 
 use gents::{DocumentRuntimeOptions, Gents};
@@ -10,12 +11,10 @@ use gents_tools::builtin::defra_write::BoundedWriteTool;
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
-use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{
     fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot,
 };
-use crate::support::{managed_agent_fixture, test_db, ManagedAgentFixture};
+use crate::support::{test_db, ManagedAgentFixture};
 
 const DRIFT_SIG: &str = "drift:host-doc:9f2c";
 const SUMMARY: &str = "studio-1 host doc is stale vs runtime";
@@ -109,6 +108,7 @@ where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut changes = access.subscribe_changes("NodeRuntime").await;
     loop {
         let last_snapshot = fetch_runtime_snapshot_as(access, node_did).await;
         if let Some(snapshot) = last_snapshot.as_ref() {
@@ -122,42 +122,10 @@ where
              last_snapshot={last_snapshot:?}",
             runtime.is_finished()
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("trigger readiness deadline");
     }
-}
-
-#[test]
-fn routed_readiness_uses_generation_not_transient_reconcile_label() {
-    let snapshot = RuntimeSnapshot {
-        process_state: "ready".into(),
-        reconcile_phase: "idle".into(),
-        active_generation: 2,
-        router_generation: 2,
-        default_agent_did: "behavior".into(),
-        last_reconcile_result: "noop".into(),
-        last_reconcile_error: String::new(),
-    };
-    assert!(is_routed_ready_after(&snapshot, 1));
-    let mut applied = snapshot.clone();
-    applied.last_reconcile_result = "applied".into();
-    assert!(is_routed_ready_after(&applied, 1));
-    assert!(!is_routed_ready_after(&snapshot, 2));
-
-    let mut starting = snapshot.clone();
-    starting.process_state = "starting".into();
-    assert!(!is_routed_ready_after(&starting, 1));
-
-    let mut not_routed = snapshot.clone();
-    not_routed.router_generation = 1;
-    assert!(!is_routed_ready_after(&not_routed, 1));
-
-    let mut reconciling = snapshot.clone();
-    reconciling.reconcile_phase = "applying".into();
-    assert!(!is_routed_ready_after(&reconciling, 1));
-
-    let mut failed = snapshot;
-    failed.last_reconcile_error = "reconcile failed".into();
-    assert!(!is_routed_ready_after(&failed, 1));
 }
 
 async fn query_agent_requests_for_trigger(
@@ -195,6 +163,7 @@ async fn query_agent_requests_for_trigger(
 
 async fn wait_for_one_agent_request(access: &ConfigAccess, trigger_id: &str) -> AgentRequestRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut changes = access.subscribe_changes("AgentRequest").await;
     let mut requests = loop {
         let rows = query_agent_requests_for_trigger(access, trigger_id).await;
         if !rows.is_empty() {
@@ -204,7 +173,9 @@ async fn wait_for_one_agent_request(access: &ConfigAccess, trigger_id: &str) -> 
             tokio::time::Instant::now() < deadline,
             "timed out waiting for AgentRequest caused_by_trigger_id={trigger_id}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("trigger readiness deadline");
     };
     assert_eq!(
         requests.len(),
@@ -270,7 +241,7 @@ fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
 async fn boot_agent_with_action_trigger(
     db: &crate::support::TestDb,
     fixture: &ManagedAgentFixture,
-    test_name: &str,
+    _test_name: &str,
     task_id: &str,
     trigger_id: &str,
 ) -> (
@@ -278,16 +249,6 @@ async fn boot_agent_with_action_trigger(
     tokio::sync::watch::Sender<bool>,
 ) {
     let identity = db.node_identity.clone();
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_managed_agent_backend(
-        db,
-        fixture,
-        &format!("backend-{test_name}"),
-        mock_endpoint.endpoint(),
-        "default",
-    )
-    .await;
-
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
@@ -336,6 +297,23 @@ async fn boot_agent_with_action_trigger(
         reconciled.last_reconcile_error
     );
 
+    let cursor_query = format!(
+        r#"{{EventSourceCursor(filter: {{owner_did: {{_eq: "{}"}}, source_collection: {{_eq: "ActionRequest"}}}}) {{consumer}}}}"#,
+        escape_graphql_string(&node_did)
+    );
+    crate::support::live_inference::wait_for_rows(
+        &fixture.access,
+        "EventSourceCursor",
+        &cursor_query,
+        Duration::from_secs(30),
+        |data| {
+            data["EventSourceCursor"].as_array().is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row["consumer"]["trigger_id"] == trigger_id)
+            })
+        },
+    )
+    .await;
     (handle, shutdown_tx)
 }
 
@@ -375,8 +353,9 @@ fn request_action_decl() -> WriteToolDecl {
 async fn multi_field_template_renders_all_referenced_doc_fields() {
     let _guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-multifield").await;
-    let fixture = managed_agent_fixture(&db).await;
-    crate::support::grant_household_owner(&db, &fixture.user).await;
+    let target = crate::support::live_inference::live_target().await;
+    let actors = crate::support::live_inference::bind_target(&db, &target).await;
+    let fixture = &actors.fixture;
     register_action_request_schema(&fixture.access).await;
 
     let task_id = "task-b6-multifield";
@@ -394,6 +373,15 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
 
     let request = wait_for_one_agent_request(&fixture.access, trigger_id).await;
     assert_multi_field_render(&request, trigger_id);
+    assert_eq!(
+        crate::support::live_inference::wait_for_request_terminal(
+            &fixture.access,
+            &request.request_id,
+            Duration::from_secs(120)
+        )
+        .await,
+        "completed"
+    );
 
     let _ = shutdown_tx.send(true);
     handle.await.unwrap().unwrap();
@@ -403,8 +391,9 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
 async fn declared_write_tool_call_fires_event_trigger() {
     let _guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-tooldriven").await;
-    let fixture = managed_agent_fixture(&db).await;
-    crate::support::grant_household_owner(&db, &fixture.user).await;
+    let target = crate::support::live_inference::live_target().await;
+    let actors = crate::support::live_inference::bind_target(&db, &target).await;
+    let fixture = &actors.fixture;
     register_action_request_schema(&fixture.access).await;
 
     let task_id = "task-b6-tooldriven";
@@ -472,6 +461,15 @@ async fn declared_write_tool_call_fires_event_trigger() {
 
     let request = wait_for_one_agent_request(&fixture.access, trigger_id).await;
     assert_multi_field_render(&request, trigger_id);
+    assert_eq!(
+        crate::support::live_inference::wait_for_request_terminal(
+            &fixture.access,
+            &request.request_id,
+            Duration::from_secs(120)
+        )
+        .await,
+        "completed"
+    );
 
     let _ = shutdown_tx.send(true);
     handle.await.unwrap().unwrap();

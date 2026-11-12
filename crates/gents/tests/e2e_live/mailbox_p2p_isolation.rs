@@ -1,10 +1,6 @@
-mod support;
+use crate::support;
 
-use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
-use gents_session::session::mailbox::{
-    FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext,
-};
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::{sync::Arc, time::Duration};
@@ -40,18 +36,19 @@ async fn node(
 #[tokio::test]
 async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
     let keys = tempfile::tempdir().unwrap();
-    let source_key =
-        Arc::new(KeyIdentity::load_or_create(keys.path().join("source.key"), None).unwrap());
-    let recipient = KeyIdentity::load_or_create(keys.path().join("recipient.key"), None).unwrap();
+    let source_db = support::test_p2p_db_without_node("mailbox-live-p2p", Default::default()).await;
+    let actors = crate::mailbox_live::configure(&source_db, false).await;
+    let source = source_db.node.clone();
+    let source_key = source_db.node_identity.clone();
+    let recipient = &actors.fixture.user;
+    let agent = actors.fixture.agent.clone();
     let outsider =
         Arc::new(KeyIdentity::load_or_create(keys.path().join("outsider.key"), None).unwrap());
-    let source_dir = tempfile::tempdir().unwrap();
     let receiver_dir = tempfile::tempdir().unwrap();
-    let source = node(source_key.clone(), source_dir.path()).await;
     let receiver = node(outsider.clone(), receiver_dir.path()).await;
-    let binding = gents_store::identity::provision_agent_identity(source_key.as_ref()).unwrap();
-    let agent =
-        gents_store::identity::resolve_agent_identity(source_key.as_ref(), &binding).unwrap();
+    let runtime = support::live_inference::boot_live_agent(&source_db, source_key.clone())
+        .await
+        .unwrap();
     let admin = ConfigAccess::local_as(source.clone(), source_key.did().parse().unwrap());
     for actor in [agent.did(), recipient.did(), outsider.did()] {
         for permission in [
@@ -72,36 +69,22 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         agent.as_ref(),
     )
     .unwrap();
-    let context = MailboxStampContext {
-        requester_did: recipient.did().into(),
-        node_did: source_key.did().into(),
-        agent_did: agent.did().into(),
-        session_id: None,
-    };
-    let args = FileMailboxItemArgs {
-        kind: MailboxKind::Flag,
-        action: MailboxAction::Ack,
-        title: "Private recipient notice".into(),
-        summary: None,
-        payload: None,
-        source_kind: MailboxSourceKind::Agent,
-        source_id: "p2p-mailbox-notice".into(),
-        session_id: None,
-        request_id: None,
-        cause_doc_id: None,
-        expected_collection: None,
-        parent_item_id: None,
-        deadline_at: None,
-    };
-    let item = gents_session::session::mailbox::stamp_create_with_access(
-        &source,
-        &access,
-        &context,
-        args,
-        &[],
+    crate::mailbox_live::file(
+        &actors,
+        serde_json::json!({"title":"Private recipient notice"}),
+    )
+    .await;
+    let item = gents_session::operations::mailbox::list(
+        &actors.fixture.access,
+        &gents_protocol::operations::mailbox::MailboxListInput {
+            requester_did: Some(recipient.did().to_owned()),
+            ..Default::default()
+        },
     )
     .await
-    .unwrap();
+    .unwrap()
+    .pop()
+    .expect("live model filed the private item");
     let doc = gents_store::graphql::escape_graphql_string(&item.doc_id);
     let query = format!(
         "{{ MailboxItem(filter: {{_docID: {{_eq: \"{doc}\"}}}}) {{ _docID _version {{ cid }} }} }}"
@@ -184,6 +167,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
             .is_err(),
         "unrelated peer obtained mailbox block: {pull:?}"
     );
+    runtime.shutdown().await;
     source.shutdown().await.unwrap();
     receiver.shutdown().await.unwrap();
 }

@@ -48,27 +48,14 @@ fn init_live_test_tracing() {
     });
 }
 
-fn live_enabled() -> bool {
-    std::env::var("GENTS_LIVE_SESSION_MESSAGE").as_deref() == Ok("1")
-}
-
-fn backgrounding_live_enabled() -> bool {
-    std::env::var("GENTS_LIVE_BACKGROUNDING").as_deref() == Ok("1")
-}
-
 fn completion_marker(tool_call_id: &str, tool_name: &str) -> String {
     format!(r#"<tool-completion tool_call_id="{tool_call_id}" tool_name="{tool_name}""#)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
+#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_local_create_session() -> Result<()> {
-    if !live_enabled() {
-        tracing::info!("GENTS_LIVE_SESSION_MESSAGE is not 1; skipping live local agent_new");
-        return Ok(());
-    }
-
-    let target = live_target();
+    let target = live_target().await;
     target.assert_reachable().await;
 
     let db = test_db("session-message-live-local").await;
@@ -227,14 +214,11 @@ async fn live_local_create_session() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_BACKGROUNDING=1 and pass --ignored"]
+#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
-    if !backgrounding_live_enabled() {
-        return Ok(());
-    }
     init_live_test_tracing();
 
-    let target = live_target();
+    let target = live_target().await;
     assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("backgrounding live workspace");
@@ -994,13 +978,10 @@ tool: reply with one short sentence that repeats, verbatim, every code word repo
 notifications you have received so far in this conversation.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
+#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_fan_out_list_and_continue() -> Result<()> {
-    if !live_enabled() {
-        return Ok(());
-    }
     init_live_test_tracing();
-    let target = live_target();
+    let target = live_target().await;
     assert_model_available(&target).await;
 
     let alpha_first = code_word("ALPHA");
@@ -1275,13 +1256,10 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
+#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
-    if !live_enabled() {
-        return Ok(());
-    }
     init_live_test_tracing();
-    let target = live_target();
+    let target = live_target().await;
     assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("interrupt live workspace");
@@ -1491,13 +1469,10 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
+#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_hop_bound_stops_chain() -> Result<()> {
-    if !live_enabled() {
-        return Ok(());
-    }
     init_live_test_tracing();
-    let target = live_target();
+    let target = live_target().await;
     assert_model_available(&target).await;
 
     let db = test_db("session-message-live-hop").await;
@@ -1769,13 +1744,10 @@ const MIDDLE_AGENT_NAME: &str = "live-middle";
 const LEAF_AGENT_NAME: &str = "live-leaf";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
+#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_interrupt_does_not_cascade() -> Result<()> {
-    if !live_enabled() {
-        return Ok(());
-    }
     init_live_test_tracing();
-    let target = live_target();
+    let target = live_target().await;
     assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("no-cascade workspace");
@@ -2042,13 +2014,10 @@ sentence that repeats, verbatim, every code word reported in the notifications."
 const STEERED_AGENT_NAME: &str = "live-steered";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
+#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_agent_message_interrupt_steers() -> Result<()> {
-    if !live_enabled() {
-        return Ok(());
-    }
     init_live_test_tracing();
-    let target = live_target();
+    let target = live_target().await;
     assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("steer workspace");
@@ -2239,13 +2208,10 @@ WAITING_FOR_WORKER. Once a background completion notification has arrived, call 
 with the code word it reports, verbatim.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
+#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
-    if !live_enabled() {
-        return Ok(());
-    }
     init_live_test_tracing();
-    let target = live_target();
+    let target = live_target().await;
     assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("goal workspace");
@@ -2585,10 +2551,6 @@ async fn soak_coverage(fx: &LiveNode, op_requests: &[String]) -> SoakCoverage {
     coverage
 }
 
-fn soak_enabled() -> bool {
-    live_enabled() && std::env::var("GENTS_LIVE_SOAK").as_deref() == Ok("1")
-}
-
 struct SoakSeed(u64);
 
 impl Drop for SoakSeed {
@@ -2604,13 +2566,10 @@ impl Drop for SoakSeed {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 GENTS_LIVE_SOAK=1 and pass --ignored"]
+#[ignore = "extended live scenario: set GENTS_LIVE_TARGET and pass --ignored"]
 async fn live_randomized_soak() -> Result<()> {
     use rand::{Rng, SeedableRng};
 
-    if !soak_enabled() {
-        return Ok(());
-    }
     init_live_test_tracing();
     let seed = std::env::var("GENTS_LIVE_SOAK_SEED")
         .ok()
@@ -2629,7 +2588,7 @@ async fn live_randomized_soak() -> Result<()> {
         iterations,
         "[live-soak] start; reproduce with GENTS_LIVE_SOAK_SEED={seed}"
     );
-    let target = live_target();
+    let target = live_target().await;
     assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("soak workspace");
