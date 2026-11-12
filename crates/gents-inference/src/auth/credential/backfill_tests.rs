@@ -200,7 +200,7 @@ async fn a_refresh_racing_a_remove_does_not_revive_the_row() {
 
 #[tokio::test]
 async fn a_refresh_racing_a_disable_keeps_it_disabled() {
-    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
         "credential-refresh",
         gents_store::node_extension::Extensions::none(),
     )
@@ -211,7 +211,7 @@ async fn a_refresh_racing_a_disable_keeps_it_disabled() {
     seed_expired_grok(&access, did, None).await;
     let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
     refresh_racing(&node, did, async {
-        set_account_enabled(&access, did, &credential_id, false)
+        set_account_enabled(&user_access, did, &credential_id, false)
             .await
             .unwrap();
     })

@@ -57,6 +57,7 @@ fn provision_agents(
 }
 
 struct Fixture {
+    _db: crate::test_support::TestDb,
     cache: crate::usage_observation::UsageCache,
     node: Arc<EmbeddedNode>,
     access: ConfigAccess,
@@ -71,22 +72,18 @@ impl Fixture {
         Self::build(&["a", "b", "c", "d"]).await
     }
 
-    /// The node's held runtime root is the native admin and the Node owner, so
-    /// every fixture document is written by that signed actor.
+    /// Only a User changes an account (`Inference.Operations`
+    /// `accountOperationAdmitted`), so every fixture document is written
+    /// through the enrolled User's client access on a protected node.
     async fn build(accounts: &[&'static str]) -> Self {
-        let node = Arc::new(
-            gents_store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        let did_owned = node.node_identity_did().unwrap().to_owned();
+        let (db, _user, access) = crate::test_support::signed_test_node_without_agent(
+            "profile-switch",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
+        let node = db.node.clone();
+        let did_owned = db.node_identity.did().to_owned();
         let did = did_owned.as_str();
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
-        gents_documents::test_support::bootstrap_signed_test_node(&access, did).await;
         for (provider, name) in [
             (CLAUDE_OAUTH_PROVIDER, "Claude"),
             (XAI_OAUTH_PROVIDER, "Grok"),
@@ -122,6 +119,7 @@ impl Fixture {
         }
         let agents = provision_agents(did, &["x", "y", "z"]);
         let fixture = Self {
+            _db: db,
             cache: Default::default(),
             node,
             access,

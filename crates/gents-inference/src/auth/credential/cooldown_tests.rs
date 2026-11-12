@@ -264,7 +264,7 @@ async fn a_reused_slot_names_the_new_account() {
 
 #[tokio::test]
 async fn a_disabled_or_removed_row_names_the_account() {
-    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
         "credential-cooldown",
         gents_store::node_extension::Extensions::none(),
     )
@@ -290,7 +290,7 @@ async fn a_disabled_or_removed_row_names_the_account() {
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
     );
-    set_account_enabled(&access, did, &credential_id, false)
+    set_account_enabled(&user_access, did, &credential_id, false)
         .await
         .unwrap();
     let disabled = bearer
