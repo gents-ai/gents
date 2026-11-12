@@ -723,12 +723,11 @@ mod tests {
     }
 
     #[test]
-    fn modeled_policy_exposure_controls_the_resource() {
-        for case in &gents_lean_vocab::lean_contract_snapshot().policy_resource_exposure_cases {
-            let categories = case.categories.iter().cloned().collect::<BTreeSet<_>>();
-            let exposed = model_resources(&categories, false).contains(&"policy");
-            assert_eq!(exposed, case.exposed, "{categories:?}");
-        }
+    fn contracts_policy_resource_exposure_matches_lean() {
+        gents_lean_vocab::families::contracts_policy_resource_exposure::replay(|i| {
+            let categories = i.categories.iter().cloned().collect::<BTreeSet<_>>();
+            model_resources(&categories, false).contains(&"policy")
+        });
     }
 
     #[test]
