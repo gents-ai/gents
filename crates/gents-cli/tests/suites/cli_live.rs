@@ -869,6 +869,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
                 "agent",
                 "clone",
                 default_agent,
+                "--home",
+                home_arg,
                 "--graphql",
                 &graphql,
                 "--display-name",
