@@ -2611,7 +2611,12 @@ mod tests {
                 Ok(initial) => {
                     fresh_init_grants_and_keeps_revocation(&home, &initial, &snapshot).await
                 }
-                Err(_) => {
+                Err(error) => {
+                    assert!(
+                        format!("{error:#}").contains("bootstrap was already attempted"),
+                        "{}: {error:#}",
+                        case.input.name
+                    );
                     assert!(
                         !default_data_dir(&home).join("MANIFEST").exists(),
                         "{}",

@@ -471,6 +471,8 @@ mod tests {
                 let kind = action.kind.as_str();
                 let write_ok = action.write_ok.unwrap_or(true);
                 if !write_ok && (kind == "disable" || (kind == "enable" && configured)) {
+                    // The native owner must read its current consent before the
+                    // external storage fault replaces the marker with a directory.
                     owner.status().await;
                     match tokio::fs::remove_file(&path).await {
                         Ok(()) => {}
