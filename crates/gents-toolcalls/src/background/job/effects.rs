@@ -503,7 +503,6 @@ mod tests {
     use defra_node::Node as EmbeddedNode;
 
     use super::{admit_scratch, interrupt_slots, spawn_cwd, write_scratch};
-    use gents_lean_vocab::lean_plugin_scratch_cases;
     use gents_protocol::job::JobScratch;
     use gents_protocol::session::SessionScope;
     use gents_store::config_client::ConfigAccess;
@@ -689,9 +688,9 @@ mod tests {
         };
         let stored =
             gents_documents::load_agent(&admission.node, &admission.node_did, &caller.agent_did)
-            .await
-            .unwrap()
-            .expect("caller Agent");
+                .await
+                .unwrap()
+                .expect("caller Agent");
         let agent = gents_store::identity::resolve_agent_identity(
             admission.runtime.as_ref(),
             &gents_protocol::agent_identity::AgentIdentityBinding {
@@ -1327,24 +1326,16 @@ mod tests {
     /// `plugin_job::effects::admit_scratch`.
     #[test]
     fn generated_plugin_job_resource_cases_drive_scratch() {
-        let scratch = lean_plugin_scratch_cases();
-        assert_eq!(scratch.len(), 13, "Lean scratch rows drifted");
-        for (index, row) in scratch.iter().enumerate() {
-            let allowed = row.cwd_allowed;
-            assert_eq!(
-                admit_scratch(
-                    &row.cwd,
-                    &|_path: &str| allowed,
-                    &row.tool_call_id,
-                    &row.name,
-                    row.size,
-                    row.count,
-                ),
-                row.expected,
-                "scratch {index}: {}/{}",
-                row.tool_call_id,
-                row.name
-            );
-        }
+        gents_lean_vocab::families::plugin_resources_scratch_admissions::replay(|i| {
+            let allowed = i.cwd_allowed;
+            admit_scratch(
+                &i.cwd,
+                &|_path: &str| allowed,
+                &i.tool_call_id,
+                &i.name,
+                i.size,
+                u32::try_from(i.count).unwrap(),
+            )
+        });
     }
 }

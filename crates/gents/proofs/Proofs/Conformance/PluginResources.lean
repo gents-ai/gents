@@ -376,10 +376,22 @@ def scratchCases : List ScratchCase :=
 def scratchVerdict (c : ScratchCase) : Option String :=
   scratchAdmitted scratchCwd (fun _ => c.cwdAllowed) c.toolCallId c.name c.size c.count
 
-private def scratchJson : Json := toJson <| scratchCases.map fun c => Json.mkObj [
-  ("cwd", toJson scratchCwd), ("cwd_allowed", toJson c.cwdAllowed),
-  ("tool_call_id", toJson c.toolCallId), ("handle", toJson c.handle), ("name", toJson c.name),
-  ("size", toJson c.size), ("count", toJson c.count), ("expected", toJson (scratchVerdict c))]
+structure ScratchInput where
+  cwd : String
+  cwdAllowed : Bool
+  toolCallId : String
+  handle : String
+  name : String
+  size : Nat
+  count : Nat
+  deriving ToJson
+
+@[conformance_family]
+def scratchAdmissions : Family ScratchInput (Option String) where
+  inputs := scratchCases.map fun c =>
+    { cwd := scratchCwd, cwdAllowed := c.cwdAllowed, toolCallId := c.toolCallId,
+      handle := c.handle, name := c.name, size := c.size, count := c.count }
+  model := fun i => scratchVerdict ⟨i.cwdAllowed, i.toolCallId, i.handle, i.name, i.size, i.count⟩
 
 theorem job_resource_regressions :
     scratchCases.map scratchVerdict =
@@ -661,9 +673,6 @@ def pluginResourceCallAccessCasesJson : String :=
 
 def pluginResourceReceiptCasesJson : String :=
   Conformance.PluginReceipt.casesJson.compress
-
-def pluginResourceScratchCasesJson : String :=
-  scratchJson.compress
 
 def pluginResourceHostImportCasesJson : String :=
   hostImportJson.compress
