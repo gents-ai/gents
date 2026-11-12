@@ -2907,7 +2907,6 @@ pub struct LeanContractSnapshot {
     pub goal_operator_resume_cases: Vec<LeanGoalOperatorResumeCase>,
     pub goal_resume_publication_cases: Vec<LeanGoalResumePublicationCase>,
     pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,
-    pub goal_config_reactivation_cases: Vec<LeanGoalConfigReactivationCase>,
     pub goal_reset_resume_cases: Vec<LeanGoalResetResumeCase>,
     pub trigger_delivery_admission_cases: serde_json::Value,
     pub trigger_delivery_queue_cases: serde_json::Value,
@@ -4922,14 +4921,6 @@ pub struct LeanGoalClientReceiptCaseRecovered {
     pub command_id: u64,
     pub digest: u64,
     pub outcome: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalConfigReactivationCase {
-    pub allowed: bool,
-    pub current: String,
-    pub target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

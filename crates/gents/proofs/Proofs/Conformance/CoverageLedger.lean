@@ -1937,8 +1937,8 @@ def caseCoverage : List CoverageEntry :=
       "GoalOperatorResumeOnCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_config_reactivation_cases"
-      "GoalConfigReactivationCases")
+      "family"
+      "goal_operator_resume_contracts_config")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_reset_resume_cases"
