@@ -672,6 +672,45 @@ pub fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>) {
 const LEAN_CONTRACT_TARGET: &str = "Proofs.Conformance.Contracts:olean";
 const LEAN_CONTRACT_FILE: &str = "Proofs/Conformance/Contracts.lean";
 
+/// A test that passes while the cases it reads are wrong compares nothing.
+/// `GENTS_SNAPSHOT_MUTATION=<key>` flips every boolean and bumps every number
+/// under that snapshot key, and `<key>.<field>` only those in fields of that
+/// name; a reader of the key must then fail. Nothing in the repository sets
+/// it: the conversion gate does.
+fn mutated_snapshot(json: String) -> String {
+    let Ok(mutation) = std::env::var("GENTS_SNAPSHOT_MUTATION") else {
+        return json;
+    };
+    let (key, field) = match mutation.split_once('.') {
+        Some((key, field)) => (key, Some(field)),
+        None => (mutation.as_str(), None),
+    };
+    let mut snapshot: serde_json::Value = serde_json::from_str(&json).expect("snapshot JSON");
+    let cases = snapshot.get_mut(key).expect("mutated snapshot key");
+    mutate_leaves(cases, field, field.is_none());
+    snapshot.to_string()
+}
+
+fn mutate_leaves(value: &mut serde_json::Value, field: Option<&str>, selected: bool) {
+    match value {
+        serde_json::Value::Bool(flag) if selected => *flag = !*flag,
+        serde_json::Value::Number(number) if selected => {
+            *value = serde_json::Value::from(number.as_u64().unwrap_or(0) + 1);
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                mutate_leaves(item, field, selected);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (name, item) in fields {
+                mutate_leaves(item, field, selected || field == Some(name.as_str()));
+            }
+        }
+        _ => {}
+    }
+}
+
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
     let proofs_dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../gents/proofs"));
     let stdout = gents_lean_contract::run_prepared_generator(
@@ -683,6 +722,7 @@ fn load_lean_contract_snapshot() -> LeanContractSnapshot {
     let json = gents_lean_contract::extract_contract_json(&stdout)
         .unwrap_or_else(|error| panic!("failed to load Lean conformance contract JSON: {error:#}"))
         .to_owned();
+    let json = mutated_snapshot(json);
 
     serde_json::from_str(&json).unwrap_or_else(|error| {
         let excerpt = json_excerpt_at(&json, error.line(), error.column(), 512);
