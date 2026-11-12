@@ -3014,7 +3014,6 @@ pub struct LeanContractSnapshot {
     pub workspace_liveness_cases: Vec<LeanWorkspaceLivenessCase>,
     pub workspace_child_cases: Vec<LeanWorkspaceChildCase>,
     pub workspace_quickstart_selection_cases: Vec<LeanWorkspaceQuickstartSelectionCase>,
-    pub pack_placement_reader_cases: Vec<LeanPackPlacementReaderCase>,
     pub native_route_cases: Vec<LeanNativeRouteCase>,
     pub workspace_datastore_write_cases: Vec<LeanWorkspaceDatastoreWriteCase>,
     pub workspace_root_access_cases: Vec<LeanWorkspaceRootAccessCase>,
@@ -7790,21 +7789,6 @@ pub struct LeanPackOperatorWireCase {
     pub home: bool,
     pub operator: bool,
     pub ready: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPackPlacementReaderCase {
-    pub declared: Vec<String>,
-    pub readers: Vec<LeanPackPlacementReaderCaseReadersItem>,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPackPlacementReaderCaseReadersItem {
-    pub actor: String,
-    pub read: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

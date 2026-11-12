@@ -72,13 +72,4 @@ theorem grants_never_exceed_the_installer :
     foreignInstall.relations.length = fixture.relations.length ∧
     ["writer", "reviewer"].map (readable foreignInstall) = [false, false] := by native_decide
 
-def casesJson : String :=
-  let states : List (String × State) :=
-    [("installed", installed), ("reinstalled_after_revoke", reinstalledAfterRevoke),
-     ("removed", removed)]
-  (Lean.toJson (states.map fun (name, state) => Lean.Json.mkObj
-    [("state", Lean.toJson name), ("declared", Lean.toJson declared),
-     ("readers", Lean.toJson (["user", "writer", "reviewer", "integrator", "other"].map fun actor =>
-        Lean.Json.mkObj [("actor", Lean.toJson actor), ("read", Lean.toJson (readable state actor))]))])).compress
-
 end Identity.PackPlacementReaders
