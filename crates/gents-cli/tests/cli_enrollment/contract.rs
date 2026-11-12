@@ -1138,14 +1138,14 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         let operator_response = call(&operator, key.clone()).await?;
         anyhow::ensure!(operator_response.status().is_success(),
             "runtime operator could not observe enrolled request activity: {}", operator_response.status());
-        let contract: Value = gents_lean_contract::load_contract_snapshot()?;
-        let expected_waiting = &contract["inference_observation_cases"][1]["expected"][0];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().inference_observation_cases;
+        let expected_waiting = cases[1].expected[0].as_deref();
         timeout(Duration::from_secs(7), async {
             loop {
                 let response = call(owner.node_identity(), key.clone()).await?;
                 anyhow::ensure!(response.status().is_success(), "silent activity became unavailable");
                 let observation: Value = response.json().await?;
-                if &observation["activity"] == expected_waiting { return Ok::<_, anyhow::Error>(()); }
+                if observation["activity"].as_str() == expected_waiting { return Ok::<_, anyhow::Error>(()); }
                 sleep(Duration::from_millis(100)).await;
             }
         }).await.context("waiting for silent provider observation")??;

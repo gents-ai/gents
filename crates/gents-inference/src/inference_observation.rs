@@ -192,10 +192,11 @@ mod tests {
         let registry = InferenceObservationRegistry::default();
         let _guard = registry.begin(key()).unwrap();
         let snapshot = registry.snapshot(&key()).unwrap();
-        let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let expected = &gents_lean_vocab::lean_contract_snapshot().inference_observation_cases[0]
+            .expected[0];
         assert_eq!(
             serde_json::to_value(snapshot.activity).unwrap(),
-            contract["inference_observation_cases"][0]["expected"][0]
+            serde_json::to_value(expected).unwrap()
         );
     }
 

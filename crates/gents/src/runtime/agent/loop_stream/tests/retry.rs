@@ -578,8 +578,8 @@ async fn owned_hook_observes_retry_and_clears_after_execution() {
             RawStreamingChoice::FinalResponse(()),
         ]),
     ]);
-    let expected: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let expected_retry = expected["inference_observation_cases"][0]["expected"][1].clone();
+    let expected_retry = &gents_lean_vocab::lean_contract_snapshot().inference_observation_cases[0]
+        .expected[1];
     scope_request(scope, async {
         let stream = run_loop_stream(
             model,
@@ -611,7 +611,7 @@ async fn owned_hook_observes_retry_and_clears_after_execution() {
         let retry = registry.snapshot(&key).expect("backoff is observable");
         assert_eq!(
             serde_json::to_value(retry.activity).unwrap(),
-            expected_retry
+            serde_json::to_value(expected_retry).unwrap()
         );
         assert!(!serde_json::to_string(&retry).unwrap().contains("reset"));
         while let Some(item) = stream.next().await {

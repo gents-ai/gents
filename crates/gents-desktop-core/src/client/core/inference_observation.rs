@@ -129,7 +129,6 @@ impl super::ClientCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
 
     fn target(session: &str) -> InferenceTarget {
         InferenceTarget {
@@ -140,50 +139,59 @@ mod tests {
         }
     }
 
+    fn activity(name: &str) -> InferenceActivity {
+        serde_json::from_value(serde_json::Value::String(name.to_owned())).unwrap()
+    }
+
     #[test]
     fn generated_inference_observation_traces() {
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["inference_observation_cases"].as_array().unwrap();
+        let cases = &gents_lean_vocab::lean_contract_snapshot().inference_observation_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let mut owner = InferenceObservationOwner {
                 target: Some(target("session")),
                 ..Default::default()
             };
-            for (action, expected) in case["actions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .zip(case["expected"].as_array().unwrap())
-            {
-                let actual = match action["kind"].as_str().unwrap() {
+            for (action, expected) in case.actions.iter().zip(&case.expected) {
+                let actual = match action.kind.as_str() {
                     "select" => {
                         owner.select(
-                            serde_json::from_value(action["target"].clone()).unwrap(),
-                            action["terminal"].as_bool().unwrap(),
+                            action.target.as_ref().map(|target| InferenceTarget {
+                                node: target.node.clone(),
+                                session: target.session.clone(),
+                                request: target.request.clone(),
+                                generation: target.generation.clone(),
+                            }),
+                            action.terminal.unwrap(),
                         );
                         owner.observation.as_ref().map(|o| o.activity)
                     }
                     "receive" => {
-                        let item = &action["observation"];
+                        let item = action.observation.as_ref().unwrap();
                         let incoming = InferenceObservation {
-                            target: serde_json::from_value(item["target"].clone()).unwrap(),
-                            turn: item["turn"].as_u64().unwrap(),
-                            attempt: item["attempt"].as_u64().unwrap(),
-                            sequence: item["sequence"].as_u64().unwrap(),
-                            observed_at: item["observed_at"].as_u64().unwrap(),
-                            activity: serde_json::from_value(item["activity"].clone()).unwrap(),
+                            target: InferenceTarget {
+                                node: item.target.node.clone(),
+                                session: item.target.session.clone(),
+                                request: item.target.request.clone(),
+                                generation: item.target.generation.clone(),
+                            },
+                            turn: item.turn,
+                            attempt: item.attempt,
+                            sequence: item.sequence,
+                            observed_at: item.observed_at,
+                            activity: activity(&item.activity),
                         };
-                        owner.receive(action["epoch"].as_u64().unwrap(), incoming);
+                        owner.receive(action.epoch.unwrap(), incoming);
                         owner.observation.as_ref().map(|o| o.activity)
                     }
-                    "project" => owner.project(
-                        action["now"].as_u64().unwrap(),
-                        action["max_age"].as_u64().unwrap(),
-                    ),
+                    "project" => owner.project(action.now.unwrap(), action.max_age.unwrap()),
                     _ => panic!("unknown generated action"),
                 };
-                assert_eq!(serde_json::to_value(actual).unwrap(), *expected, "{case}");
+                assert_eq!(
+                    serde_json::to_value(actual).unwrap(),
+                    serde_json::to_value(expected).unwrap(),
+                    "{case:?}"
+                );
             }
         }
     }
