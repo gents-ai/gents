@@ -1,3 +1,4 @@
+pub mod background_completion;
 pub mod plugin;
 
 #[cfg(any(test, feature = "test-fixtures"))]

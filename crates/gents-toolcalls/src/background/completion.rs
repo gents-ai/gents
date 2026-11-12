@@ -18,6 +18,8 @@ pub mod session_message;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use session_message::turn_assignment_handoff;
 mod side_effects;
+#[cfg(test)]
+mod pushdown_tests;
 
 pub use notification_delivery::append_background_tool_completion;
 pub(crate) use notification_delivery::append_background_tool_completion_for_parent;
