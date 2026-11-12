@@ -302,37 +302,6 @@ fn profile_of_order(mode: gents_lean_vocab::LeanAssistantOrderMode) -> ProviderI
 }
 
 #[test]
-fn generated_assistant_order_cases_bind_selected_provider_order() {
-    use gents_inference::compaction::history::normalize_assistant_content_order;
-    let cases = gents_lean_vocab::lean_prompt_assembly_assistant_order_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let profile = profile_of_order(case.order_mode);
-        let input = vec![Message::Assistant {
-            request_id: None,
-            id: None,
-            content: case.input.iter().map(assistant_item).collect(),
-        }];
-        let once = normalize_assistant_content_order(profile, input);
-        assert_eq!(once.len(), 1, "{}", case.name);
-        assert_eq!(
-            row_of_message(&once[0]).content,
-            case.expected,
-            "{}",
-            case.name
-        );
-        let twice = normalize_assistant_content_order(profile, once);
-        assert_eq!(twice.len(), 1, "{}", case.name);
-        assert_eq!(
-            row_of_message(&twice[0]).content,
-            case.expected_twice,
-            "{}",
-            case.name
-        );
-    }
-}
-
-#[test]
 fn generated_mode_sanitize_cases_bind_composed_provider_view() {
     let cases = gents_lean_vocab::lean_prompt_assembly_mode_sanitize_cases();
     assert!(!cases.is_empty());

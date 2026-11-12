@@ -437,10 +437,6 @@ pub fn lean_process_transition_cases() -> &'static [LeanLifecycleTransitionCase]
     &lean_contract_snapshot().process_transition_cases
 }
 
-pub fn lean_prompt_assembly_assistant_order_cases() -> &'static [LeanPromptAssemblyAssistantOrderCase] {
-    &lean_contract_snapshot().prompt_assembly_assistant_order_cases
-}
-
 pub fn lean_prompt_assembly_budget_cases() -> &'static [LeanPromptAssemblyBudgetCase] {
     &lean_contract_snapshot().prompt_assembly_budget_cases
 }
@@ -3309,7 +3305,6 @@ pub struct LeanContractSnapshot {
     pub compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
-    pub prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
     pub provider_tool_identity_cases: Vec<serde_json::Value>,
     pub prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
     pub routing_affinity_cases: Vec<LeanRoutingAffinityCase>,
@@ -9294,16 +9289,6 @@ pub struct LeanProcessStopCase {
     pub outcome: String,
     pub cancel_reply: String,
     pub durable_state: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyAssistantOrderCase {
-    pub name: String,
-    pub order_mode: LeanAssistantOrderMode,
-    pub input: Vec<LeanPromptAssemblyItem>,
-    pub expected: Vec<LeanPromptAssemblyItem>,
-    pub expected_twice: Vec<LeanPromptAssemblyItem>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -2378,8 +2378,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "provider_tool_identity_cases" "ProviderToolIdentityCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_assistant_order_cases"
-      "PromptAssemblyAssistantOrderCases"
+      "family" "contracts_prompt_assembly_assistant_order"
       "Checks the mode-selected native assistant-content ordering helper. It does not establish that every provider dispatch selects the correct mode.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

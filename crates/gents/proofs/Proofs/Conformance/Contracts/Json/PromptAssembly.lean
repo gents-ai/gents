@@ -131,17 +131,31 @@ def promptAssemblyItemJson (item : PromptAssemblyItemCase) : String :=
     ++ "\"value\":" ++ toString item.value
     ++ "}"
 
-def promptAssemblyAssistantOrderCaseJson
-    (witness : PromptAssemblyAssistantOrderCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"order_mode\":" ++ jsonString witness.orderMode ++
-    ",\"input\":" ++ jsonArray (witness.input.map promptAssemblyItemJson) ++
-    ",\"expected\":" ++ jsonArray (witness.expected.map promptAssemblyItemJson) ++
-    ",\"expected_twice\":" ++
-      jsonArray (witness.expectedTwice.map promptAssemblyItemJson) ++ "}"
+deriving instance Lean.ToJson for PromptAssemblyItemCase, PromptAssemblyRowCase,
+  PromptAssembly.Content.OrderMode, PromptAssemblyAssistantOrderCase
 
-def promptAssemblyAssistantOrderCasesJson : String :=
-  jsonArray (promptAssemblyAssistantOrderCases.map promptAssemblyAssistantOrderCaseJson)
+/-- The model item an emitted content item names. -/
+def _root_.Conformance.ContractCases.PromptAssemblyItemCase.toModel (item : PromptAssemblyItemCase) : PromptAssembly.Content.Item :=
+  match item.item with
+  | "text" => .text item.value
+  | "other" => .other item.value
+  | _ => .call item.value
+
+structure AssistantOrderOutput where
+  expected : List PromptAssemblyItemCase
+  twice : List PromptAssemblyItemCase
+  deriving Lean.ToJson
+
+/-- One assistant turn's content order for a provider order mode, once and
+again: production `normalize_assistant_content_order`. -/
+@[conformance_family]
+def promptAssemblyAssistantOrder :
+    Family PromptAssemblyAssistantOrderCase AssistantOrderOutput where
+  inputs := promptAssemblyAssistantOrderCases
+  model := fun i =>
+    let once := PromptAssembly.Content.normalizeFor i.orderMode (i.input.map (·.toModel))
+    { expected := once.map itemCase
+      twice := (PromptAssembly.Content.normalizeFor i.orderMode once).map itemCase }
 
 def promptAssemblyRowJson (row : PromptAssemblyRowCase) : String :=
   "{"

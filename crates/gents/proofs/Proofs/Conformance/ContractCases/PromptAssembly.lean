@@ -205,30 +205,21 @@ structure PromptAssemblyRetentionCase where
   rollingSummaryInputBudget : Nat
   deriving Repr
 
-private def itemCase : Item → PromptAssemblyItemCase
+def itemCase : Item → PromptAssemblyItemCase
   | .text index => { item := "text", value := index }
   | .other index => { item := "other", value := index }
   | .call callId => { item := "call", value := callId }
 
 structure PromptAssemblyAssistantOrderCase where
   name : String
-  orderMode : String
+  orderMode : PromptAssembly.Content.OrderMode
   input : List PromptAssemblyItemCase
-  expected : List PromptAssemblyItemCase
-  expectedTwice : List PromptAssemblyItemCase
   deriving Repr
 
 private def assistantOrderCase (name : String)
     (mode : PromptAssembly.Content.OrderMode) (items : List Item) :
     PromptAssemblyAssistantOrderCase :=
-  let once := PromptAssembly.Content.normalizeFor mode items
-  { name
-  , orderMode := match mode with
-      | .grouped => "grouped"
-      | .nativePreserved => "nativePreserved"
-  , input := items.map itemCase
-  , expected := once.map itemCase
-  , expectedTwice := (PromptAssembly.Content.normalizeFor mode once).map itemCase }
+  { name, orderMode := mode, input := items.map itemCase }
 
 def promptAssemblyAssistantOrderCases : List PromptAssemblyAssistantOrderCase :=
   [ assistantOrderCase "interleaved-grouped" .grouped
