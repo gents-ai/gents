@@ -14,18 +14,19 @@ structure DemoteObservation where
   pending : Bool
   gateOpen : Bool
   cancelled : Bool
-  fatal : Bool
+  fatal : Option String
   committed : Bool
   deriving ToJson
 
 /-- An exhausted Agent can release startup only after its demotion is durable.
-Failure closes admission and asks the owning runtime to stop. A stale generation
+Failure closes admission and hands the owning runtime the persistence failure
+itself as the reason to stop. A stale generation
 cannot change the current obligation or claim a committed demotion. -/
 def demote (input : DemoteInput) : DemoteObservation :=
   if !input.pending || !input.registered then
-    ⟨some false, input.pending, true, false, false, false⟩
-  else if !input.durable then ⟨none, true, false, true, true, false⟩
-  else ⟨some true, false, true, false, false, true⟩
+    ⟨some false, input.pending, true, false, none, false⟩
+  else if !input.durable then ⟨none, true, false, true, some "readinessWrite", false⟩
+  else ⟨some true, false, true, false, none, true⟩
 
 structure ReadyInput where
   closing : Bool
