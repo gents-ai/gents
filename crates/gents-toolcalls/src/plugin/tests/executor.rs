@@ -1850,9 +1850,11 @@ mod job_calls {
             .unwrap();
         let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_job_opening_cases;
         let expected = |name: &str| {
-            cases.iter().find(|case| case["name"] == name).unwrap()["commits"]
-                .as_bool()
+            cases
+                .iter()
+                .find(|case| case.name == name)
                 .unwrap()
+                .commits
         };
         let mut wrong_pin = create.clone();
         wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
