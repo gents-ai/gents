@@ -12,7 +12,7 @@ use gents_desktop_core::preference::{
 };
 use gents_protocol::operations::install_repair::{
     Blocker, ClientObservation, Finding, IncompatibleStore, IncompatibleStoreKind, RefusalAction,
-    RefusalObservation, RepairClientInput, RepairClientReceipt,
+    RefusalObservation, RepairClientInput, RepairClientReceipt, RepairClientScope,
 };
 
 use super::ClientExclusion;
@@ -142,7 +142,7 @@ pub async fn execute(
     lifecycle: &dyn ClientExclusion,
     receipt: &mut RepairClientReceipt,
 ) -> Result<(), Blocker> {
-    let result = if let Some(kind) = input.store_refusal {
+    let result = if let RepairClientScope::Store { kind } = input.scope {
         let action = super::planning::refusal_action(&RefusalObservation {
             fresh: true,
             missing_key: kind == IncompatibleStoreKind::MissingStoreKey,
@@ -187,20 +187,24 @@ async fn execute_inner(
     receipt: &mut RepairClientReceipt,
 ) -> Result<()> {
     let paths = DesktopPaths::from_root(input.root.clone());
-    if let Some(kept_at) = set_aside_unreadable_peer_directory(paths.peer_directory_path()).await? {
-        receipt
-            .findings
-            .push(Finding::ClientConnectionsSetAside { kept_at });
-    }
-    let pref_path = paths.root().join(MANAGED_SERVER_CONFIG);
-    if let Ok(bytes) = tokio::fs::read(&pref_path).await {
-        if serde_json::from_slice::<StoredManagedServer>(&bytes)
-            .is_err_and(|e| e.classify() == serde_json::error::Category::Data)
+    if matches!(input.scope, RepairClientScope::All) {
+        if let Some(kept_at) =
+            set_aside_unreadable_peer_directory(paths.peer_directory_path()).await?
         {
-            let kept_at = set_aside_unreadable(&pref_path).await?;
             receipt
                 .findings
-                .push(Finding::ClientPreferenceSetAside { kept_at });
+                .push(Finding::ClientConnectionsSetAside { kept_at });
+        }
+        let pref_path = paths.root().join(MANAGED_SERVER_CONFIG);
+        if let Ok(bytes) = tokio::fs::read(&pref_path).await {
+            if serde_json::from_slice::<StoredManagedServer>(&bytes)
+                .is_err_and(|e| e.classify() == serde_json::error::Category::Data)
+            {
+                let kept_at = set_aside_unreadable(&pref_path).await?;
+                receipt
+                    .findings
+                    .push(Finding::ClientPreferenceSetAside { kept_at });
+            }
         }
     }
     let binding = binding_from_paths(&paths, input.node_home.as_deref()).await?;
@@ -239,6 +243,9 @@ async fn execute_inner(
             receipt.archive = Some(archive_store(input, &paths, None).await?);
             receipt.local_node_lost = true;
         }
+    }
+    if matches!(input.scope, RepairClientScope::Orphaned) {
+        return Ok(());
     }
     let kind = if client_store_from_other_version(&paths).await? {
         Some(IncompatibleStoreKind::OtherVersionSchema)

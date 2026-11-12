@@ -80,7 +80,12 @@ pub(in crate::tauri_commands) async fn retire_orphaned_client_state(
         return Ok(Default::default());
     }
     let _lifecycle = state.managed_server_lifecycle.lock().await;
-    super::repair::repair_client_state(state, &mut Vec::new(), None).await
+    super::repair::repair_client_state(
+        state,
+        &mut Vec::new(),
+        gents_protocol::operations::install_repair::RepairClientScope::Orphaned,
+    )
+    .await
 }
 
 pub(super) async fn retire_incompatible_home<R>(

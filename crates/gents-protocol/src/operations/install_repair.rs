@@ -509,10 +509,16 @@ pub struct ClientObservation {
     pub stale_local_peer: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum RepairClientScope {
+    All,
+    Orphaned,
+    Store { kind: IncompatibleStoreKind },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepairClientInput {
-    #[serde(default)]
-    pub store_refusal: Option<IncompatibleStoreKind>,
+    pub scope: RepairClientScope,
     pub root: PathBuf,
     pub user_home: PathBuf,
     pub node_home: Option<PathBuf>,
