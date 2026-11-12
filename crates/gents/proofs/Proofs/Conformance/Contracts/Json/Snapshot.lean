@@ -40,6 +40,11 @@ import Proofs.Conformance.PluginDataWrites
 import Proofs.Conformance.PluginHostCalls
 import Proofs.Conformance.CallbackAdmission
 import Proofs.Conformance.GoalResetAccount
+import Proofs.Conformance.WakeRedriveSweep
+import Proofs.Conformance.ToolAdmission
+import Proofs.Conformance.StartupPublication
+import Proofs.Conformance.RequestRepairScope
+import Proofs.Conformance.InterruptRequestDrain
 import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.ToolRoot
 import Proofs.Conformance.MCPHealthShutdown

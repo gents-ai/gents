@@ -1955,94 +1955,124 @@ async fn fetch_deadline_runtime_row(
 }
 
 #[tokio::test]
-async fn terminal_repair_sweep_ignores_foreign_did_claims() {
-    let db = test_db("terminal-repair-scope-foreign").await;
-    let actors = support::agent_requests::RequestActors::new(&db).await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = support::agent_requests::canonical_now();
-    let own_doc = actors
-        .create_request(support::agent_requests::RequestSeed::new(
-            &request_id,
-            &session_id,
-            &created_at,
-        ))
-        .await;
-    let request = actors.build_request(own_doc.clone(), request_id, session_id, created_at.clone());
-    let mut lifecycle = actors.lifecycle(request, DEADLINE_SECS, ExecutionOrigin::Interactive, "");
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    // A replica owned by another node's runtime, visible to the fixture Agent:
-    // the runtime root writes it as it would any replicated row, and the sweep
-    // must still ignore it because the node scope is foreign.
-    let foreign = tokio::task::spawn_blocking(|| support::fixtures::test_identity("foreign-owner"))
+async fn terminal_repair_sweep_follows_the_lean_scope_model() {
+    use gents_lean_vocab::families::request_repair_scope_sweep;
+    for case in
+        gents_lean_vocab::families::request_repair_scope_sweep::cases::<RequestLifecycleState>()
+    {
+        let db = test_db("terminal-repair-scope").await;
+        let actors = support::agent_requests::RequestActors::new(&db).await;
+        let foreign =
+            tokio::task::spawn_blocking(|| support::fixtures::test_identity("foreign-owner"))
+                .await
+                .unwrap();
+        let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+        let live = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let mut docs = Vec::new();
+        let mut held = Vec::new();
+        for row in &case.input.rows {
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let created_at = support::agent_requests::canonical_now();
+            let doc = if row.own_node {
+                let doc = actors
+                    .create_request(support::agent_requests::RequestSeed::new(
+                        &request_id,
+                        &session_id,
+                        &created_at,
+                    ))
+                    .await;
+                let request = actors.build_request(doc.clone(), request_id, session_id, created_at);
+                let mut lifecycle =
+                    actors.lifecycle(request, DEADLINE_SECS, ExecutionOrigin::Interactive, "");
+                if !row.lease_expired {
+                    lifecycle.set_execution_lease_duration(Duration::from_secs(3600));
+                }
+                assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+                if !row.lease_expired {
+                    held.push(lifecycle);
+                }
+                doc
+            } else {
+                let value = json!({
+                    "request_id": request_id,
+                    "purpose": "normal",
+                    "node_did": gents_store::identity::NodeIdentity::did(&foreign),
+                    "agent_did": actors.agent_did(),
+                    "session_id": session_id,
+                    "retry_root_request": request_id,
+                    "content": "foreign replica",
+                    "lifecycle_state": "pending",
+                    "execution_origin": "interactive",
+                    "created_at": created_at,
+                    "retry_count": 0,
+                    "max_retries": 3,
+                });
+                let agent = ::identity::Did::new(actors.agent_did()).unwrap();
+                let doc = gents_store::config_client::ConfigAccess::local_as(
+                    db.node.clone(),
+                    ::identity::Did::new(db.node_identity.did()).unwrap(),
+                )
+                .transact_write("test.foreign_claim_replica", |txn| {
+                    let (value, agent) = (&value, &agent);
+                    Box::pin(async move {
+                        let response = txn
+                            .execute_with_variables(
+                                "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                                &json!({"input": value}),
+                            )
+                            .await?;
+                        let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
+                        txn.add_actor_relationship("AgentRequest", &doc, "working_agent", agent)
+                            .await?;
+                        Ok::<_, anyhow::Error>(doc)
+                    })
+                })
+                .await
+                .unwrap();
+                actors
+                    .set_lifecycle_state(&doc, RequestLifecycleState::Claimed)
+                    .await;
+                doc
+            };
+            if row.lease_expired || !row.own_node {
+                let lease = if row.lease_expired { &expired } else { &live };
+                actors
+                    .update_request(&doc, json!({ "execution_lease_expires_at": lease }))
+                    .await;
+            }
+            if row.interrupt_requested {
+                actors
+                    .set_interrupt_requested_at(&doc, &chrono::Utc::now().to_rfc3339())
+                    .await;
+            }
+            docs.push(doc);
+        }
+        let mut before = Vec::new();
+        for doc in &docs {
+            before.push(fetch_request_snapshot(&actors, doc).await);
+        }
+        let report = RequestLifecycle::repair_terminal_requests_with_identities(
+            &db.node,
+            db.node_identity.did(),
+            std::slice::from_ref(actors.agent()),
+        )
         .await
         .unwrap();
-    let foreign_request_id = uuid::Uuid::new_v4().to_string();
-    let value = json!({
-        "request_id": foreign_request_id,
-        "purpose": "normal",
-        "node_did": gents_store::identity::NodeIdentity::did(&foreign),
-        "agent_did": actors.agent_did(),
-        "session_id": uuid::Uuid::new_v4().to_string(),
-        "retry_root_request": foreign_request_id,
-        "content": "foreign replica",
-        "lifecycle_state": "pending",
-        "execution_origin": "interactive",
-        "created_at": created_at,
-        "retry_count": 0,
-        "max_retries": 3,
-    });
-    let agent = ::identity::Did::new(actors.agent_did()).unwrap();
-    let foreign_doc = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did()).unwrap(),
-    )
-    .transact_write("test.foreign_claim_replica", |txn| {
-        let (value, agent) = (&value, &agent);
-        Box::pin(async move {
-            let response = txn
-                .execute_with_variables(
-                    "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
-                    &json!({"input": value}),
-                )
-                .await?;
-            let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
-            txn.add_actor_relationship("AgentRequest", &doc, "working_agent", agent)
-                .await?;
-            Ok::<_, anyhow::Error>(doc)
-        })
-    })
-    .await
-    .unwrap();
-    actors
-        .set_lifecycle_state(&foreign_doc, RequestLifecycleState::Claimed)
-        .await;
-    let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    for doc_id in [&own_doc, &foreign_doc] {
-        actors
-            .update_request(doc_id, json!({ "execution_lease_expires_at": expired }))
-            .await;
+        let mut rows = Vec::new();
+        for (doc, before) in docs.iter().zip(&before) {
+            let after = fetch_request_snapshot(&actors, doc).await;
+            rows.push(request_repair_scope_sweep::RowObservation {
+                state: after.lifecycle_state,
+                changed: &after != before,
+            });
+        }
+        case.check(request_repair_scope_sweep::Output {
+            repaired: report.repaired as u64,
+            rows,
+        });
+        drop(held);
     }
-    let foreign_before = fetch_request_snapshot(&actors, &foreign_doc).await;
-    let report = RequestLifecycle::repair_terminal_requests_with_identities(
-        &db.node,
-        db.node_identity.did(),
-        std::slice::from_ref(actors.agent()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.repaired, 1);
-    assert_eq!(
-        fetch_request_snapshot(&actors, &own_doc)
-            .await
-            .lifecycle_state,
-        RequestLifecycleState::Failed,
-    );
-    assert_eq!(
-        fetch_request_snapshot(&actors, &foreign_doc).await,
-        foreign_before
-    );
 }
 
 async fn fetch_request_snapshot_with_access(
