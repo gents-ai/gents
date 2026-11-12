@@ -7,7 +7,6 @@ use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_protocol::row::AgentRequest;
 use gents_session::request::aggregate_token_limit::parse_aggregate_token_limit;
 use gents_store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
-use gents_tools::surface::AgentToolSurfaceConfig;
 
 fn request() -> AgentRequest {
     AgentRequest {

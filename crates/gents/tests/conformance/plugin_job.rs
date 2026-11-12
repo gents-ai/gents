@@ -12,11 +12,8 @@
 //! the model does not carry (a prompt, a title, a write's body) is left empty.
 //! Composed wire traces carry the actual resolution table and raw ceilings.
 use gents_lean_vocab::{
-    lean_plugin_job_authority_cases, lean_plugin_job_key_cases, lean_plugin_job_lineage_cases,
-    lean_plugin_job_wire_cases, LeanPluginJobAuthorityCase, LeanPluginJobRecord,
-    LeanPluginJobWireCase, LeanPluginJobWireKind,
-    lean_plugin_job_authority_cases, lean_plugin_job_control_cases,
-    lean_plugin_job_wire_cases, LeanPluginJobAdoptionCase,
+    lean_plugin_job_authority_cases, lean_plugin_job_wire_cases, LeanPluginJobAuthorityCase,
+    LeanPluginJobRecord, LeanPluginJobWireCase, LeanPluginJobWireKind,
 };
 use gents_pack::pack::home_install::{
     installer_provenance, record_after_install_via, recorded_provenance, InstalledVia,
@@ -32,7 +29,7 @@ use gents_protocol::job::{
 };
 use gents_protocol::job_settings::{policy_valid, wire_targets_from};
 use gents_toolcalls::background::job::origin::call_origin;
-use gents_toolcalls::test_support::plugin_job::{job_policy, row, spelled, target_ids};
+use gents_toolcalls::test_support::plugin_job::{job_policy, spelled, target_ids};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};

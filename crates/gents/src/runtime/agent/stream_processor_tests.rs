@@ -2,8 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents_inference::llm::message::{
-    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
-    UserContent,
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResultContent, UserContent,
 };
 use gents_inference::llm::HookAction;
 use gents_loop::provider_input::ProviderInputProfile;

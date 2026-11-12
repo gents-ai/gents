@@ -2,14 +2,13 @@ use super::agent_management::{model_agent_mutate, model_agent_preview};
 use super::command::agents::agent_params;
 use super::*;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
+use gents_toolcalls::test_support::self_config::{
+    call_config_tool, config, config_call, node_identity, take_agent_tool, SelfConfigFixture,
+};
 use gents_tools::builtin::self_config::ops::ApplyRequest;
 use gents_tools::builtin::self_config::test_support::{
     agent_inspect, agent_request, anchored_request, backend_request, profile_create_request,
     profile_request, profile_target_request, protect_working_agent, tools_request,
-};
-use gents_toolcalls::test_support::self_config::{
-    SelfConfigFixture, call_config_tool, config, config_call, node_identity,
-    take_agent_tool, test_plugins,
 };
 
 mod live_documents;
@@ -89,13 +88,6 @@ impl rig::completion::CompletionModel for RootReadModel {
     }
 }
 
-        gents_toolcalls::test_support::grant_modeled_direct_sets(
-            &db.node,
-            db.node_identity.did(),
-            "default-agent",
-            &binding.agent_did,
-        )
-        .await;
 #[tokio::test]
 async fn config_tool_access_follows_the_modeled_managed_route() {
     let fixture = SelfConfigFixture::new("config-tool-route").await;

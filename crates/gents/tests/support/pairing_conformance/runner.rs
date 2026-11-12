@@ -11,8 +11,8 @@ use serde::Deserialize;
 
 use crate::support::{first_optional_row, test_db, TestDb};
 
-use gents_p2p::test_support::pairing_invariants::ObservedSnapshot;
 use super::scenario::{Action, NodeId, Scenario};
+use gents_p2p::test_support::pairing_invariants::ObservedSnapshot;
 use gents_p2p::test_support::pairing_invariants::PairingActual;
 use gents_p2p::{p2p_reconcile::PairingApplied, p2p_reconcile::PairingDesired};
 

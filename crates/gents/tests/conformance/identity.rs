@@ -1,6 +1,5 @@
-use acp::{DocumentACP, DocumentPermission, Identity};
+use acp::{DocumentPermission, Identity};
 use identity::Did;
-use std::sync::Arc;
 
 #[tokio::test]
 async fn modeled_configuration_grants_use_authenticated_native_relations() -> anyhow::Result<()> {

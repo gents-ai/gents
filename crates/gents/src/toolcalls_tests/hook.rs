@@ -1,7 +1,15 @@
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use gents_inference::llm::message::{
+    AssistantContent, Message, ToolCall, ToolFunction, UserContent,
+};
 use gents_inference::llm::{HookAction, ToolCallHookAction};
+use gents_store::identity::NodeIdentity;
+use serde_json::json;
 
+use defra_node::Node as EmbeddedNode;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 

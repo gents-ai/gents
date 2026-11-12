@@ -1,5 +1,8 @@
-use gents_protocol::request_admission::{AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation, RuntimeInternalSourceKind};
 use gents_lean_vocab::{lean_agent_request_admission_cases, lean_causal_hop_contract};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
+    RuntimeInternalSourceKind,
+};
 
 #[test]
 fn generated_agent_request_admission_cases_match_shared_projector() {
@@ -195,4 +198,3 @@ fn generated_causal_hop_cases_match_native_materializer() {
         );
     }
 }
-

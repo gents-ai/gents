@@ -1,10 +1,10 @@
 use super::*;
-use gents_toolcalls::test_support::background_completion::{
-    admission_verifier, background_hints, desktop_owned_session,
-};
 use gents_automation::goal::continuation::{goal_continuation_identity, prepare_goal_continuation};
 use gents_session::request::lifecycle::RequestTerminalOutcome;
 use gents_session::session;
+use gents_toolcalls::test_support::background_completion::{
+    admission_verifier, background_hints, desktop_owned_session,
+};
 
 async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
     db.agent_access.execute(query).await.unwrap()["data"].clone()

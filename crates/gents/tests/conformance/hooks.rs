@@ -52,4 +52,3 @@ fn generated_lifecycle_hook_rerun_cases_drive_the_transaction_classifier() {
         );
     }
 }
-

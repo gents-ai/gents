@@ -43,16 +43,6 @@ async fn goal_creation_actors(
     (fixture.user, fixture.agent)
 }
 
-/// The working Agent's own signed access, the only actor its controller writes run as.
-fn agent_access(db: &TestDb, agent: &Arc<dyn NodeIdentity>) -> ConfigAccess {
-    ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap()
-}
-
 async fn load_goal_as(
     access: &ConfigAccess,
     node_did: &str,

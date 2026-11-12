@@ -11,12 +11,10 @@ use gents_session::request::lifecycle::queue::mutation::{
     session_request_create_mutation, SessionRequestFields,
 };
 use gents_session::request::lifecycle::queue::*;
-use gents_session::request::lifecycle::test_support::{hints, parent_request, wake_queue_input};
+use gents_session::request::lifecycle::test_support::{hints, wake_queue_input};
 use gents_session::request::lifecycle::test_support::{test_db, TestDb};
 use gents_session::request::lifecycle::ExecutionOrigin;
-use gents_session::request::lifecycle::{
-    extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
-};
+use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use gents_session::request::streaming::DefraStreamWriter;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
@@ -24,7 +22,6 @@ use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
-use tempfile::TempDir;
 
 #[derive(Debug, Deserialize)]
 struct QueueRow {

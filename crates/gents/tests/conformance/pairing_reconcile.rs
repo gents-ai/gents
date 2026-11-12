@@ -1,10 +1,8 @@
-use std::path::PathBuf;
-use gents_p2p::p2p_reconcile::{DiffOp};
-use gents_p2p::test_support::pairing_invariants::{check_liveness, check_safety, ObservedSnapshot};
 use crate::support::pairing_conformance::runner::Harness;
 use crate::support::pairing_conformance::scenario::Scenario;
-    lean_pairing_reconcile_cases, lean_pairing_reconcile_sweep_scheduling_cases,
-    LeanPairingReconcileSnapshot,
+use gents_p2p::p2p_reconcile::DiffOp;
+use gents_p2p::test_support::pairing_invariants::{check_liveness, check_safety, ObservedSnapshot};
+use std::path::PathBuf;
 
 fn fixture_path(fixture: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -82,4 +80,3 @@ async fn filter_change_reinstalls_replicator() {
         "reconverged pairing must not keep tearing down, got {ops:?}"
     );
 }
-

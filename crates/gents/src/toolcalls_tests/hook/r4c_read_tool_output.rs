@@ -5,10 +5,10 @@ use gents_loop::tool::{ToolDyn, ToolError};
 use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use serde_json::{json, Value};
 
+use crate::support::test_db;
 use gents_toolcalls::call::hook::fixtures::r4c_private_support::{
     accepted_call, assert_accepted_control_rows, setup_private_hook,
 };
-use crate::support::test_db;
 
 struct StaticTool {
     name: &'static str,
@@ -64,7 +64,14 @@ async fn setup_hook(
     let db = test_db(test_name).await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    let hook = setup_private_hook(&db.node, &db.node_identity, &request_id, &session_id, registry).await;
+    let hook = setup_private_hook(
+        &db.node,
+        &db.node_identity,
+        &request_id,
+        &session_id,
+        registry,
+    )
+    .await;
     (db, hook, session_id, request_id)
 }
 
@@ -74,7 +81,14 @@ async fn setup_hook_on_db(
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> (DefraSessionHook, String, String) {
-    let hook = setup_private_hook(&db.node, &db.node_identity, request_id, session_id, registry).await;
+    let hook = setup_private_hook(
+        &db.node,
+        &db.node_identity,
+        request_id,
+        session_id,
+        registry,
+    )
+    .await;
     (hook, session_id.to_string(), request_id.to_string())
 }
 

@@ -3,8 +3,8 @@ use gents_inference::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
-use gents_loop::provider_input::ProviderInputProfile;
 use gents_loop::claude_messages_body::MessagesBodyError;
+use gents_loop::provider_input::ProviderInputProfile;
 
 use gents_lean_vocab::{
     lean_prompt_assembly_claude_replay_cases, lean_prompt_assembly_sanitize_cases,
