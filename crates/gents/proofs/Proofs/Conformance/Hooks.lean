@@ -6,9 +6,10 @@ import Proofs.Session.Hooks.Prepared
 import Proofs.Automation.Hooks.QueueScope
 import Proofs.Automation.Hooks.GoalResume
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.HooksContracts
-open Hooks
+open Lean Hooks
 open Conformance.Contracts (jsonString jsonArray jsonStringArray)
 
 abbrev HookEffect := Effect String String String
@@ -660,12 +661,47 @@ def combineCases : List CombineCase :=
     , verdicts := [.retire "superseded" (successorOf "r3"), .retire "superseded" (successorOf "r2")] }
   , { name := "single_leave_queued", verdicts := [.leaveQueued] } ]
 
-private def combineCaseJson (c : CombineCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"verdicts\":" ++ jsonArray (c.verdicts.map verdictJson) ++
-    ",\"combined\":" ++ verdictJson (Hooks.combine c.verdicts) ++ "}"
+structure SuccessorWire where
+  requestId : String
+  requestDocId : String
+  deriving ToJson
 
-def combineCasesJson : String := jsonArray (combineCases.map combineCaseJson)
+structure VerdictWire where
+  kind : String
+  reason : Option String
+  successor : Option SuccessorWire
+  deriving ToJson
+
+def VerdictWire.ofModel : ClaimVerdict → VerdictWire
+  | .allow => ⟨"allow", none, none⟩
+  | .leaveQueued => ⟨"leave_queued", none, none⟩
+  | .retire reason successor =>
+      ⟨"retire", some reason, some ⟨successor.request, successor.doc⟩⟩
+  | .reject reason => ⟨"reject", some reason, none⟩
+
+def VerdictWire.toModel (wire : VerdictWire) : ClaimVerdict :=
+  match wire.kind, wire.reason, wire.successor with
+  | "leave_queued", _, _ => .leaveQueued
+  | "retire", some reason, some successor =>
+      .retire reason ⟨successor.requestId, successor.requestDocId⟩
+  | "reject", some reason, _ => .reject reason
+  | _, _, _ => .allow
+
+structure CombinationInput where
+  name : String
+  verdicts : List VerdictWire
+  deriving ToJson
+
+structure CombinationOutput where
+  combined : VerdictWire
+  deriving ToJson
+
+@[conformance_family]
+def verdictCombination : Family CombinationInput CombinationOutput where
+  inputs := combineCases.map fun c =>
+    { name := c.name, verdicts := c.verdicts.map VerdictWire.ofModel }
+  model := fun i =>
+    { combined := VerdictWire.ofModel (Hooks.combine (i.verdicts.map VerdictWire.toModel)) }
 
 structure GateCase where
   name : String

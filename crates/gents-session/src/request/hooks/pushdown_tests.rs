@@ -15,8 +15,9 @@ use crate::request::hooks::queue_scope::{
 use crate::request::hooks::stage::{
     gate, owed, stage, stage_dropping, ApplyFailure, HookError, Host, Plugin, Staged,
 };
+use gents_lean_vocab::families::hooks_contracts_verdict_combination::{self as combination};
 use gents_lean_vocab::{
-    lean_lifecycle_hook_admit_cases, lean_lifecycle_hook_combine_cases,
+    lean_lifecycle_hook_admit_cases,
     lean_lifecycle_hook_delivery_cases, lean_lifecycle_hook_effect_cases,
     lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_grant_cases,
     lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_owed_delivery_cases,
@@ -654,18 +655,57 @@ async fn generated_lifecycle_hook_must_commit_cases_drive_dropping_staging() {
     }
 }
 
-#[test]
-fn generated_lifecycle_hook_combine_cases_drive_verdict_combination() {
-    let cases = lean_lifecycle_hook_combine_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(
-            combine(case.verdicts.iter().map(verdict)),
-            verdict(&case.combined),
-            "{}",
-            case.name
-        );
+fn claim_verdict(wire: &combination::VerdictWire) -> ClaimVerdict {
+    let reason = || wire.reason.clone().expect("the verdict carries its reason");
+    match wire.kind.as_str() {
+        "allow" => ClaimVerdict::Allow,
+        "leave_queued" => ClaimVerdict::LeaveQueued,
+        "retire" => {
+            let successor = wire
+                .successor
+                .as_ref()
+                .expect("a retirement names its successor");
+            ClaimVerdict::Retire {
+                reason: reason(),
+                successor: Successor {
+                    request_id: successor.request_id.clone(),
+                    request_doc_id: successor.request_doc_id.clone(),
+                },
+            }
+        }
+        "reject" => ClaimVerdict::Reject { reason: reason() },
+        other => panic!("the model has no verdict {other}"),
     }
+}
+
+fn verdict_wire(verdict: &ClaimVerdict) -> combination::VerdictWire {
+    let (kind, reason, successor) = match verdict {
+        ClaimVerdict::Allow => ("allow", None, None),
+        ClaimVerdict::LeaveQueued => ("leave_queued", None, None),
+        ClaimVerdict::Retire { reason, successor } => (
+            "retire",
+            Some(reason.clone()),
+            Some(combination::SuccessorWire {
+                request_id: successor.request_id.clone(),
+                request_doc_id: successor.request_doc_id.clone(),
+            }),
+        ),
+        ClaimVerdict::Reject { reason } => ("reject", Some(reason.clone()), None),
+    };
+    combination::VerdictWire {
+        kind: kind.to_owned(),
+        reason,
+        successor,
+    }
+}
+
+#[test]
+fn verdict_combination_follows_the_lean_model() {
+    gents_lean_vocab::families::hooks_contracts_verdict_combination::replay(|input: &combination::CombinationInput| {
+        combination::CombinationOutput {
+            combined: verdict_wire(&combine(input.verdicts.iter().map(claim_verdict))),
+        }
+    });
 }
 
 #[tokio::test]
