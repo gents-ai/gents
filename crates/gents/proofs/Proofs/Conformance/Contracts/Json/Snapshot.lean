@@ -1,3 +1,4 @@
+import Proofs.Conformance.MailboxContent
 import Proofs.Conformance.ManualRequest
 import Proofs.Conformance.PendingRejection
 import Proofs.Conformance.ManagedExecSpawn
