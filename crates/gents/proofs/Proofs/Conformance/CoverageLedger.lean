@@ -2212,9 +2212,13 @@ def caseCoverage : List CoverageEntry :=
       "access_review_context_selection"
       "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "access_review_task_eligibility")
+      "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "access_review_task_cases"
-      "AccessReviewTaskCases"
+      "family"
+      "access_review_selected_task_eligibility"
       "Generated Task documents bind node, task, agent, operator-selected policy text, eligibility and excluded execution effects. Store lookup, template evaluation, policy fingerprint integrity, concurrent edits and provider behavior remain native adapter boundaries.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
