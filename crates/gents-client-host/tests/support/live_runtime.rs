@@ -146,37 +146,16 @@ async fn run(root: &Path, goal: bool, editor: bool) -> Result<()> {
         let agent = deployment["client"]["deployments"].as_array().unwrap().iter()
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
-        configure(&mut client, &mut id, node, &agent, &target).await?;
-        let receipt = if goal {
-            client.try_call(id, "desktop_goal_control", json!({"request": {
-                "nodeDid":node, "agentDid":agent,
-                "action":{"kind":"create", "objective":"Acknowledge the goal briefly. Do not call tools.", "tokenBudget":"1000"}
-            }})).await?
-        } else {
-            client.try_call(id, "desktop_chat_send", json!({"request": {
-                "nodeDid": node, "agentDid": agent,
-                "content": "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.",
-                "delivery": "queue",
-            }})).await?
-        };
+        configure(&mut client, &mut id, node, &agent, &target, goal).await?;
+        let receipt = client.try_call(id, "desktop_chat_send", json!({"request": {
+            "nodeDid": node, "agentDid": agent,
+            "content": if goal { "Acknowledge this predecessor briefly. Do not call tools." } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools." },
+            "delivery": "queue",
+        }})).await?;
         id += 1;
         let session = receipt["sessionId"].as_str().context("submitted session")?;
         let request = receipt["requestId"].as_str().context("submitted request")?;
-        if goal {
-            let goal_id = receipt["goalId"].as_str().context("created goal")?;
-            let mut view = wait_goal(&mut client, &mut updates, &mut id, node, session, "active").await?;
-            ensure!(view["goal"]["goalId"] == goal_id, "the goal observation names another goal");
-            for state in ["paused", "active", "paused"] {
-                let result = client.try_call(id, "desktop_goal_control", json!({"request": {
-                    "nodeDid":node, "sessionId":session, "sessionDocId":view["sessionDocId"],
-                    "expected":view["goal"]["revision"],
-                    "action":{"kind":if state == "active" { "resume" } else { "pause" }},
-                }})).await?;
-                id += 1;
-                ensure!(result["goalId"] == goal_id, "goal control selected a different goal");
-                view = wait_goal(&mut client, &mut updates, &mut id, node, session, state).await?;
-            }
-        } else {
+        if !goal {
         let live = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({
             "nodeDid":node,"sessionId":session,"timelineLimit":40,
         }), |projection| {
@@ -202,6 +181,26 @@ async fn run(root: &Path, goal: bool, editor: bool) -> Result<()> {
         let wrong = client.try_call(id, "desktop_request_output", json!({"nodeDid":node,"sessionId":"another-session","requestId":request})).await;
         id += 1;
         ensure!(wrong.is_err() || wrong.is_ok_and(|value| value["output"]["kind"] == "loading"), "request output escaped its session");
+        if goal {
+            let author_paths = paths.clone();
+            let author = tokio::task::spawn_blocking(move || gents_desktop_core::client::PrincipalIdentity::load_existing(&author_paths)).await??;
+            let author_access = ConfigAccess::Graphql(GraphqlEndpoint::as_principal(ready["graphql"].as_str().context("runtime GraphQL endpoint")?, author.did()).with_client_signing_capability(author.client_signing_capability()?)?);
+            let seeded = gents_automation::goal::seed_goal_from_access(&author_access, node, session,
+                Some("Give one short completion sentence, then call update_goal with status complete."),
+                Some(gents_protocol::goal_status::GoalStatus::Paused), Some(Some(16000)), None).await?;
+            let view = wait_goal(&mut client, &mut updates, &mut id, node, session, "paused").await?;
+            ensure!(view["goal"]["goalId"] == seeded.goal_id);
+            let resumed = client.try_call(id, "desktop_goal_control", json!({"request": {
+                "nodeDid":node, "sessionId":session, "sessionDocId":view["sessionDocId"],
+                "expected":view["goal"]["revision"], "action":{"kind":"resume"}
+            }})).await?;
+            id += 1;
+            let resumed_request = resumed["requestId"].as_str().context("resumed goal request")?;
+            ensure!(resumed["goalId"] == seeded.goal_id && resumed_request != request);
+            ensure!(wait_for_request_terminal(&access, resumed_request, WAIT).await == "completed");
+            wait_goal(&mut client, &mut updates, &mut id, node, session, "complete").await?;
+            projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == resumed_request && value["turnState"] == "completed").await?;
+        }
         if editor {
             super::super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), "live").await?;
             let evidence: Value = serde_json::from_slice(&tokio::fs::read(root.join("editor-live-canonical.json")).await?)?;
@@ -248,7 +247,7 @@ async fn run(root: &Path, goal: bool, editor: bool) -> Result<()> {
                         &mut id,
                         node,
                         &session,
-                        "paused",
+                        "complete",
                     )
                     .await?;
                 }
@@ -275,6 +274,7 @@ async fn configure(
     node: &str,
     agent: &str,
     target: &InferenceTarget,
+    goal: bool,
 ) -> Result<()> {
     let setup = client
         .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
@@ -285,9 +285,16 @@ async fn configure(
         .and_then(|agents| agents.iter().find(|value| value["agent_did"] == agent))
         .context("selected Agent configuration")?
         .clone();
+    if goal {
+        selected["context_id"] = json!("native-live-goal-context");
+    }
     let profile = target.profile(node);
     selected["inference_profile_id"] = json!(profile.profile_id);
     let mut document = json!({"node":{"node_did":node},"agents":[selected],"inference_backends":[target.backend(node)],"inference_profiles":[profile]});
+    if goal {
+        document["contexts"] = json!([{"node_did":node,"context_id":"native-live-goal-context","tools_id":"native-live-goal-tools","system_prompt":"Answer ordinary requests briefly. When the Goal is resumed, fulfill its objective and call update_goal with status complete. Do not create another Goal."}]);
+        document["tools"] = json!([{"node_did":node,"tools_id":"native-live-goal-tools","built_ins":{"enable_goal_tools":true}}]);
+    }
     if let Some(sampling) = target.sampling(node) {
         document["inference_sampling"] = json!([sampling]);
     }

@@ -264,7 +264,7 @@ async fn managed_runtime_replacement_preserves_running_input_enrollment_and_tran
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn enrolled_client_starts_pauses_and_resumes_the_current_goal_turn() -> Result<()> {
+async fn enrolled_client_resumes_a_durable_goal_and_observes_completion() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::Goal).await.with_context(|| {
         ["runtime.log", "runtime.err", "client-host.log"]
