@@ -120,25 +120,21 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
     assert_eq!(calls["data"]["InferenceCall"].as_array().unwrap().len(), 2);
 }
 
-async fn auto_resume_access() -> (gents_store::config_client::ConfigAccess, String) {
+async fn auto_resume_access() -> (
+    gents_inference::test_support::TestDb,
+    gents_store::config_client::ConfigAccess,
+    String,
+) {
     use gents_store::identity::NodeIdentity;
-    let directory = tempfile::tempdir().unwrap();
-    let root =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("root.key"), None)
-            .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "goal-auto-resume",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
-    let node = std::sync::Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(root.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     // Production projects the AgentBaseline from each live Agent document; this
     // fixture has no projection pass, so the node admin grants it.
     gents_store::identity::GrantSet::AgentBaseline
@@ -174,12 +170,12 @@ async fn auto_resume_access() -> (gents_store::config_client::ConfigAccess, Stri
             .await
             .unwrap();
     }
-    (access, root.did().to_owned())
+    (db, access, root.did().to_owned())
 }
 
 #[tokio::test]
 async fn auto_resume_field_round_trips_through_the_live_schema() {
-    let (access, owner) = auto_resume_access().await;
+    let (_db, access, owner) = auto_resume_access().await;
     let goal = set_goal_from_access(&access, &owner, "session", Some("ship"), None, None, None)
         .await
         .unwrap();
@@ -198,7 +194,7 @@ async fn auto_resume_field_round_trips_through_the_live_schema() {
 
 #[tokio::test]
 async fn auto_resume_operator_setter_stores_it() {
-    let (access, owner) = auto_resume_access().await;
+    let (_db, access, owner) = auto_resume_access().await;
     let created = set_goal_from_access(&access, &owner, "s", Some("ship"), None, None, Some(true))
         .await
         .unwrap();
@@ -211,7 +207,7 @@ async fn auto_resume_operator_setter_stores_it() {
 
 #[tokio::test]
 async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
-    let (access, owner) = auto_resume_access().await;
+    let (_db, access, owner) = auto_resume_access().await;
     set_goal_from_access(&access, &owner, "s", Some("ship"), None, None, Some(true))
         .await
         .unwrap();

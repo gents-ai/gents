@@ -817,15 +817,14 @@ async fn selected_configuration_requires_and_observes_user_grant() {
 
 #[tokio::test]
 async fn build_fails_closed_without_node_did() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = defra_node::Node::builder()
-        .data_path(tempdir.path().join("data"))
-        .build()
-        .await
-        .expect("node");
+    let db = gents_inference::test_support::test_db(
+        "self-config-empty-node-did",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
-        std::sync::Arc::new(node),
+        db.node.clone(),
         String::new(),
         None,
         &config(&["agent"]),
@@ -840,15 +839,14 @@ async fn build_fails_closed_without_node_did() {
 
 #[tokio::test]
 async fn build_registers_gated_family() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = defra_node::Node::builder()
-        .data_path(tempdir.path().join("data"))
-        .build()
-        .await
-        .expect("node");
+    let db = gents_inference::test_support::test_db(
+        "self-config-gated-family",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
-        std::sync::Arc::new(node),
+        db.node.clone(),
         "did:key:zSelfConfigTest".to_string(),
         None,
         &config(&["agent", "backend"]),
@@ -8101,18 +8099,15 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
         assert_eq!(result.is_ok(), case.accepted, "{}: {result:?}", case.name);
         if let Err(error) = result {
             if !case.native_authorized {
-                let denied = gents_protocol::error_chain::find_map_source(
-                    &error,
-                    |cause| {
-                        cause
+                let denied = gents_protocol::error_chain::find_map_source(&error, |cause| {
+                    cause
                     .downcast_ref::<gents_store::config_client::ConfigClientError>()
                     .map(|error| {
                         error.is_permission_denied()
                             || error.is_missing_or_denied_write()
                             || matches!(error, gents_store::config_client::ConfigClientError::ConfigurationMutationNotApplied { .. })
                     })
-                    },
-                );
+                });
                 assert_eq!(denied, Some(true), "{}: {error:#}", case.name);
             }
         }

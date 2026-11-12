@@ -441,7 +441,6 @@ mod tests {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use gents_session::request::lifecycle::RequestLifecycle;
     use gents_session::request::streaming::DefraStreamWriter;
-    use gents_store::schema::ensure_runtime_schemas;
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
 
@@ -639,26 +638,16 @@ mod tests {
     #[tokio::test]
     async fn cancel_background_tool_call_terminalizes_row_and_token() {
         use crate::call::lifecycle::admission_fixture::claimed_signed_request;
-        use gents_store::identity::KeyIdentity;
 
-        let data_path = std::env::temp_dir().join(format!(
-            "agent-tool-control-cancel-{}",
-            uuid::Uuid::new_v4()
+        let db = gents_inference::test_support::test_db(
+            "agent-tool-control-cancel",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
+        let node_identity = Arc::new(gents_store::test_support::held_runtime_identity(
+            db.node_identity.did(),
         ));
-        std::fs::create_dir_all(&data_path).unwrap();
-        let node_identity =
-            Arc::new(KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap());
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .data_path(&data_path)
-                .with_node_identity_did(gents_store::identity::NodeIdentity::did(
-                    node_identity.as_ref(),
-                ))
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
 
         let owner = node.node_identity_did().unwrap().to_owned();
         let node_did = owner.as_str();
@@ -856,8 +845,6 @@ mod tests {
         .unwrap()
         .expect("sibling row");
         assert!(sibling.is_running());
-
-        let _ = std::fs::remove_dir_all(&data_path);
     }
 
     #[cfg(unix)]
@@ -948,24 +935,15 @@ mod tests {
         use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
         use gents_store::identity::NodeIdentity;
-        let data_path = std::env::temp_dir().join(format!(
-            "agent-tool-control-custom-cancel-{}",
-            uuid::Uuid::new_v4()
+        let node_db = gents_inference::test_support::test_db(
+            "owned-cancel-persists-custom-completion-",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let identity = Arc::new(gents_store::test_support::held_runtime_identity(
+            node_db.node_identity.did(),
         ));
-        std::fs::create_dir_all(&data_path).unwrap();
-        let identity = Arc::new(
-            gents_store::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None)
-                .unwrap(),
-        );
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .data_path(&data_path)
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
         let node_did = identity.did().to_string();
         let node_scope = gents_store::graphql::escape_graphql_string(&node_did);
         gents_store::config_client::ConfigAccess::local(node.clone()).write(
@@ -1142,6 +1120,5 @@ mod tests {
             wake["content"].as_str(),
             Some(BACKGROUND_COMPLETION_WAKE_PROMPT)
         );
-        let _ = std::fs::remove_dir_all(&data_path);
     }
 }

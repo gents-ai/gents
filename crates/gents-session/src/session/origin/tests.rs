@@ -146,17 +146,12 @@ fn group_caused_keeps_every_request_of_one_call() {
 
 #[tokio::test]
 async fn caused_requests_projection_omits_a_call_with_two_requests() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path().join("node"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "caused-requests-projection-omits-a-call-",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     for (request_id, call) in [("a1", "call-one"), ("b1", "call-two"), ("b2", "call-two")] {
         create(
             &node,
@@ -195,17 +190,12 @@ fn ids(links: &[SessionLink]) -> Vec<&str> {
 
 #[tokio::test]
 async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_distinct() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path().join("node"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "physical-request-scope-batch-keeps-reque",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let requested = seed(
         &node,
         "requested",
@@ -238,17 +228,12 @@ async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_d
 
 #[tokio::test]
 async fn a_parent_pointer_without_a_verified_starter_is_only_messaging() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path().join("node"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "a-parent-pointer-without-a-verified-star",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let parent = seed(&node, "p1", "parent", "2026-09-26T00:00:01Z", None).await;
     seed_session(&node, "parent", None).await;
     seed(&node, "s1", "existing", "2026-09-26T00:00:00Z", None).await;
@@ -300,17 +285,12 @@ async fn a_parent_pointer_without_a_verified_starter_is_only_messaging() {
 /// label-only read is ambiguous there.
 #[tokio::test]
 async fn recorded_opening_reads_the_exact_session_scope() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path().join("node"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "recorded-opening-reads-the-exact-session",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     seed_opened_session(&node, "did:test:node", "child", "bae-own-opening").await;
     seed_opened_session(&node, "did:test:peer", "child", "bae-peer-opening").await;
     seed_session(&node, "plain", None).await;

@@ -17,9 +17,9 @@ use rapidhash::{HashMapExt, RapidHashMap};
 const SESSION: &str = "edit-session";
 
 struct Fixture {
+    db: gents_inference::test_support::TestDb,
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
-    endpoint: String,
     _dir: tempfile::TempDir,
     original: String,
     agent_did: String,
@@ -29,36 +29,15 @@ struct Fixture {
 impl Fixture {
     async fn empty() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let identity: Arc<dyn NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap());
-        let key = gents_store::identity::load_file_identity(&dir.path().join("node.key"))
-            .unwrap()
-            .private_key_bytes();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-        // Edit authority is observed through native node permissions, which
-        // exist only on a node with node ACP and its signing key.
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .data_path(dir.path())
-                .with_node_identity_did(identity.did())
-                .with_signing_key(defra_node::SigningKey::Ed25519(key))
-                .with_node_acp_enabled()
-                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let db = gents_inference::test_support::test_db(
+            "session-input-edit",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = db.node.clone();
+        let identity = db.node_identity.clone();
         let binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
-        let access = ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, identity.did())
-                .with_client_signing_capability(identity.client_signing_capability().unwrap())
-                .unwrap()
-                .with_client_signed_agent_creates(),
-        );
+        let access = db.client_access(identity.as_ref());
         gents_documents::test_support::bootstrap_signed_test_node(&access, identity.did()).await;
         gents_inference::test_support::install_test_agent_binding_with_access(
             identity.did(),
@@ -111,9 +90,9 @@ impl Fixture {
             Ok::<_, anyhow::Error>(())
         })).await.unwrap();
         Self {
+            db,
             node,
             identity,
-            endpoint,
             _dir: dir,
             original: String::new(),
             agent_did: binding.agent_did,
@@ -122,15 +101,7 @@ impl Fixture {
     }
 
     fn client_access(&self) -> ConfigAccess {
-        ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(
-                &self.endpoint,
-                self.identity.did(),
-            )
-            .with_client_signing_capability(self.identity.client_signing_capability().unwrap())
-            .unwrap()
-            .with_client_signed_agent_creates(),
-        )
+        self.db.client_access(self.identity.as_ref())
     }
 
     async fn new() -> Self {

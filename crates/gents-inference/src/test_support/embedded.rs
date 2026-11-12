@@ -266,6 +266,30 @@ pub async fn test_db(name: &str, composition: gents_store::node_extension::Exten
     db
 }
 
+/// A served test node that runs as `node_did`, whose key this process holds,
+/// for fixtures whose Agents derive from a fixed root.
+pub async fn test_db_as(
+    name: &str,
+    node_did: &str,
+    composition: gents_store::node_extension::Extensions,
+) -> TestDb {
+    let tempdir = tempfile::Builder::new()
+        .prefix(&format!("gents-{name}-"))
+        .tempdir()
+        .expect("tempdir");
+    let (did, key) = (node_did.to_owned(), tempdir.path().join("node.key"));
+    tokio::task::spawn_blocking(move || {
+        gents_store::test_support::write_held_identity_key(&did, &key)
+    })
+    .await
+    .expect("write the node key");
+    let mut db = test_db_at(tempdir.path(), None, composition)
+        .await
+        .expect("test node");
+    db.tempdir = Some(tempdir);
+    db
+}
+
 /// Starts the node over the home at `path`, creating it when absent and
 /// reopening it when a previous `TestDb` left it there. The home is retained
 /// after the node stops.

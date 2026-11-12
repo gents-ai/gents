@@ -1474,9 +1474,7 @@ pub async fn reconcile_client_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{
-        client_access, grant_operator_user, seed_owned_agent, serve_client_node,
-    };
+    use crate::test_support::{grant_operator_user, seed_owned_agent, serve_client_node};
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_store::identity::{KeyIdentity, NodeIdentity};
     use std::sync::Arc;
@@ -1560,20 +1558,15 @@ mod tests {
 
     #[tokio::test]
     async fn local_self_materialization_publishes_bound_session_before_claim() {
-        let home = tempfile::tempdir().unwrap();
-        let runtime: Arc<dyn NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
+        let db = gents_inference::test_support::test_db(
+            "local-self-materialization-publishes-bou",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
+        let runtime: Arc<dyn NodeIdentity> = Arc::new(
+            gents_store::test_support::held_runtime_identity(db.node_identity.did()),
         );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
         let runtime_did = identity::Did::new(runtime.did()).unwrap();
         let runtime_access = ConfigAccess::local_as(node.clone(), runtime_did.clone());
         let escaped_runtime = gents_store::graphql::escape_graphql_string(runtime.did());
@@ -1685,12 +1678,16 @@ mod tests {
             .find(|case| case["name"] == "reserved_session")
             .expect("modeled client goal reservation");
         let home = tempfile::tempdir().unwrap();
-        let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let (node, endpoint) = serve_client_node(&runtime).await;
+        let (db, runtime) = serve_client_node(
+            "goal-reservation-retains-user-owned-sess",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
         grant_operator_user(&node, &runtime, &user).await;
         let agent = gents_store::identity::provision_agent_identity(&runtime).unwrap();
-        let access = client_access(&endpoint, &user);
+        let access = db.client_access(&user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
         grant_agent_baseline(&node, &runtime, &agent.agent_did).await;
         let request = AgentRequestCreate::base(
@@ -1808,12 +1805,16 @@ mod tests {
     #[tokio::test]
     async fn client_session_and_request_commit_or_roll_back_together() {
         let home = tempfile::tempdir().unwrap();
-        let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let (node, endpoint) = serve_client_node(&runtime).await;
+        let (db, runtime) = serve_client_node(
+            "client-session-and-request-commit-or-rol",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
         grant_operator_user(&node, &runtime, &user).await;
         let agent = gents_store::identity::provision_agent_identity(&runtime).unwrap();
-        let access = client_access(&endpoint, &user);
+        let access = db.client_access(&user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
         grant_agent_baseline(&node, &runtime, &agent.agent_did).await;
         let node_owner = access
@@ -2034,13 +2035,17 @@ mod tests {
     #[tokio::test]
     async fn client_retry_recovers_only_its_authenticated_signed_publication() {
         let home = tempfile::tempdir().unwrap();
-        let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let other = KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
-        let (node, endpoint) = serve_client_node(&runtime).await;
+        let (db, runtime) = serve_client_node(
+            "client-retry-recovers-only-its-authentic",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
         grant_operator_user(&node, &runtime, &user).await;
         let agent = gents_store::identity::provision_agent_identity(&runtime).unwrap();
-        let access = client_access(&endpoint, &user);
+        let access = db.client_access(&user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
@@ -2161,12 +2166,16 @@ mod tests {
     #[tokio::test]
     async fn client_send_is_idempotent_on_its_request_identity() {
         let home = tempfile::tempdir().unwrap();
-        let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let (node, endpoint) = serve_client_node(&runtime).await;
+        let (db, runtime) = serve_client_node(
+            "client-send-is-idempotent-on-its-request",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
         grant_operator_user(&node, &runtime, &user).await;
         let agent = gents_store::identity::provision_agent_identity(&runtime).unwrap();
-        let access = client_access(&endpoint, &user);
+        let access = db.client_access(&user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
         let signed_in = |session: &'static str,
                          request_id: &'static str,

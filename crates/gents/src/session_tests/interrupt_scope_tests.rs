@@ -13,17 +13,11 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         .unwrap();
     assert_eq!(case.preserved_foreign_requester_request_ids.len(), 1);
     assert_eq!(case.preserved_foreign_owner_request_ids.len(), 1);
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_automation::triggers::callback::test_node_builder()
-            .data_path(dir.path().join("db"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_automation::triggers::callback::test_node_builder(
+        "generated-interrupt-drain-preserves-fore",
+    )
+    .await;
+    let node = db.node.clone();
     let root_did = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
     gents_automation::triggers::callback::seed_test_agent(&node, root_did).await;
     let agent = gents_automation::triggers::callback::test_agent_identity();
@@ -175,17 +169,11 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
 
 #[tokio::test]
 async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_automation::triggers::callback::test_node_builder()
-            .data_path(dir.path().join("db"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_automation::triggers::callback::test_node_builder(
+        "logical-interrupt-latches-only-as-the-si",
+    )
+    .await;
+    let node = db.node.clone();
     let root_did = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
     gents_automation::triggers::callback::seed_test_agent(&node, root_did).await;
     let agent = gents_automation::triggers::callback::test_agent_identity();

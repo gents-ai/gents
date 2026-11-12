@@ -2,31 +2,21 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::sync::Notify;
 
-use defra_node::Node as EmbeddedNode;
 use gents_inference::backends::registry::lookup_backend_observation;
 use gents_loop::tool::Tool;
 use gents_store::config_client::ConfigAccess;
-use gents_store::identity::NodeIdentity;
 use gents_tools::builtin::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
 
 #[tokio::test]
 async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
     const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(10);
-    let keys = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(keys.path().join("reader.key"), None)
-            .unwrap();
-    let owner = identity.did().to_owned();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(owner.clone())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "backend-observation-reads",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did().to_owned();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let writer_node = Arc::clone(&node);

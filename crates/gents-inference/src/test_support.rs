@@ -1,7 +1,7 @@
 mod embedded;
 pub use embedded::{
     signed_test_node, signed_test_node_from_db, signed_test_node_without_agent,
-    signed_test_node_without_agent_from_db, test_db, test_db_at, TestDb,
+    signed_test_node_without_agent_from_db, test_db, test_db_as, test_db_at, TestDb,
 };
 
 use gents_documents::test_support::{

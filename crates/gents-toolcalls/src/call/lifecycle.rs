@@ -616,7 +616,12 @@ mod tests {
 
     #[tokio::test]
     async fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
-        let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+        let node_db = gents_inference::test_support::test_db(
+            "tool-row-kind-is-session-message-for-age",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
         let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
         let kind_of = |tool_name: &str| {
             ToolCallLifecycle::new(

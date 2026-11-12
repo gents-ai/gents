@@ -1,26 +1,20 @@
 use super::*;
 
-async fn selected_surface_runtime() -> (std::sync::Arc<defra_node::Node>, ToolRuntimeContext) {
+async fn selected_surface_runtime() -> (gents_inference::test_support::TestDb, ToolRuntimeContext) {
     use gents_store::identity::NodeIdentity as _;
-    let home = tempfile::tempdir().unwrap();
-    let root =
-        gents_store::identity::KeyIdentity::load_or_create(home.path().join("root"), None).unwrap();
+    let db = gents_inference::test_support::test_db(
+        "selected-surface",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let node_did = root.did().to_owned();
-    let node = std::sync::Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(&node_did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
-    let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), node_did);
+    let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node, node_did);
     runtime.agent_identity = Some(agent);
-    (node, runtime)
+    (db, runtime)
 }
 
 fn config_for_selected_surface(
@@ -537,7 +531,8 @@ fn selection_mcp_service_allowlist_is_deduped() {
 
 #[tokio::test]
 async fn required_mcp_service_needs_agent_scoped_measured_availability() {
-    let (node, _runtime) = crate::mcp::meta::tests::test_node().await;
+    let (db, _runtime) = crate::mcp::meta::tests::test_node().await;
+    let node = db.node.clone();
     crate::mcp::meta::tests::seed_registry_service(&node, "research", "127.0.0.1", 9213).await;
     let node_did = node.node_identity_did().unwrap();
     let access = gents_store::config_client::ConfigAccess::local_as(
@@ -798,15 +793,12 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
 
 #[tokio::test]
 async fn defra_query_tool_gated_by_selection() {
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "defra-query-tool-gated-by-selection",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let enabled = AgentToolSurfaceConfig::from_selection(
         "ops",
@@ -849,7 +841,8 @@ async fn defra_query_tool_gated_by_selection() {
 
 #[tokio::test]
 async fn context_budget_tool_gated_by_selection() {
-    let (node, runtime) = selected_surface_runtime().await;
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
 
     let enabled = AgentToolSurfaceConfig::from_selection(
         "ops",
@@ -899,7 +892,8 @@ async fn context_budget_tool_gated_by_selection() {
 async fn write_tools_register_under_declared_names() {
     use gents_documents::{WriteToolDecl, WriteToolField};
 
-    let (node, runtime) = selected_surface_runtime().await;
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
     node.add_collection("type ActionRequest { summary: String }")
         .await
         .unwrap();
@@ -942,7 +936,8 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
 
-    let (node, runtime) = selected_surface_runtime().await;
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
     node.add_collection(
         "type TallyOwner { label: String tallies: [Tally] } type Tally { label: String owner: TallyOwner @primary }",
     )
@@ -986,15 +981,12 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
 async fn plugin_only_bindings_are_captured_for_trigger_execution() {
     use gents_documents::{PluginToolRef, WriteToolField, WriteToolFieldFill};
 
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "plugin-only-bindings-are-captured-for-tr",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let selected = AgentToolSurfaceConfig::from_selection(
         "evidence",
         ResolvedToolSelection {
@@ -1044,7 +1036,8 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
 
 #[tokio::test]
 async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
-    let (node, runtime) = selected_surface_runtime().await;
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
 
     let granted = config_for_selected_surface(
         &runtime.node_did,
@@ -1082,22 +1075,16 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
 async fn query_tool_is_advertised_and_registered() {
     use gents_documents::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
 
-    let keys = tempfile::tempdir().unwrap();
-    let identity = std::sync::Arc::new(
-        gents_store::identity::KeyIdentity::load_or_create(keys.path().join("query.key"), None)
-            .unwrap(),
-    );
+    let db = gents_inference::test_support::test_db(
+        "query-tool",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = std::sync::Arc::new(gents_store::test_support::held_runtime_identity(
+        db.node_identity.did(),
+    ));
     let node_did = gents_store::identity::NodeIdentity::did(&*identity).to_owned();
-    let node = std::sync::Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(&node_did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
 
     let surface = config_for_selected_surface(
         &node_did,
@@ -1268,7 +1255,8 @@ fn default_surface_enables_session_reads_and_disables_goal_creation() {
 
 #[tokio::test]
 async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
-    let (node, runtime) = selected_surface_runtime().await;
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
     let surface = AgentToolSurfaceConfig::from_selection(
         "benchmark",
         ResolvedToolSelection {
@@ -1307,15 +1295,12 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
 
 #[tokio::test]
 async fn goal_tools_are_independent_from_generic_meta_tools() {
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "goal-tools-are-independent-from-generic-",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let surface = AgentToolSurfaceConfig::from_selection(
         "durable",
         ResolvedToolSelection {
@@ -1346,7 +1331,8 @@ async fn goal_tools_are_independent_from_generic_meta_tools() {
 
 #[tokio::test]
 async fn goal_creation_requires_its_separate_capability() {
-    let (node, runtime) = selected_surface_runtime().await;
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
 
     let without_create = AgentToolSurfaceConfig::from_selection(
         "durable",
@@ -1403,15 +1389,12 @@ async fn goal_creation_requires_its_separate_capability() {
 
 #[tokio::test]
 async fn operator_ceiling_can_deny_goal_creation_only() {
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "operator-ceiling-can-deny-goal-creation-",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let mut ceiling_policy = ToolPolicySurface::runtime_all();
     ceiling_policy.goal_create = false;
     let ceiling = ToolCeiling::meta_only().with_policy(ceiling_policy);
@@ -1443,15 +1426,12 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
 
 #[tokio::test]
 async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off() {
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "operator-ceiling-denies-all-goal-mutatio",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let mut ceiling_policy = ToolPolicySurface::runtime_all();
     ceiling_policy.goal_tools = false;
     let ceiling = ToolCeiling::meta_only().with_policy(ceiling_policy);
@@ -1651,15 +1631,12 @@ fn absent_groups_grant_nothing_and_goal_controls_are_independent() {
 
 #[tokio::test]
 async fn session_history_tool_follows_selection() {
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "session-history-tool-follows-selection",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let disabled = AgentToolSurfaceConfig::from_selection(
         "ops",
@@ -1800,7 +1777,8 @@ async fn publish_test_root(
 
 #[tokio::test]
 async fn tool_construction_rechecks_current_workspace_root_policy() {
-    let (node, runtime) = selected_surface_runtime().await;
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
     let ceiling = tempfile::tempdir().unwrap();
     let selected = ceiling.path().join("selected");
     std::fs::create_dir_all(&selected).unwrap();
@@ -1861,7 +1839,8 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
 
 #[tokio::test]
 async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_ceiling() {
-    let (node, runtime) = selected_surface_runtime().await;
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
     let allowed = tempfile::tempdir().unwrap();
     publish_test_root(&node, &runtime, &allowed.path().to_string_lossy()).await;
     let agent = runtime.agent_identity.as_ref().unwrap();
@@ -2264,15 +2243,12 @@ fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
 
 #[tokio::test]
 async fn agent_config_alias_expands_to_config_scope() {
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "agent-config-alias-expands-to-config-sco",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let surface = AgentToolSurfaceConfig::from_selection(
         "ops",

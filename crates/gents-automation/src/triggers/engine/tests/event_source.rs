@@ -2,12 +2,12 @@ use super::*;
 
 #[tokio::test]
 async fn event_source_reads_seed_and_group_as_selected_agent() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "event-source-reads-seed-and-group-as-sel",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     node.add_collection("type SelectionProbe { kind: String @index message: String }")
         .await
         .unwrap();
@@ -76,13 +76,12 @@ async fn event_source_reads_seed_and_group_as_selected_agent() {
 
 #[tokio::test]
 async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "startup-seeding-covers-every-document-be",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let ids =
         crate::triggers::engine::event_delivery::source_scan::tests::create_source_documents(&node)
             .await;
@@ -153,8 +152,8 @@ impl gents_store::subscription_source::UpdateSubscriptionSource for FakeUpdateSu
 
 #[tokio::test]
 async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real_one_does() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     node.add_collection("type BranchableProbe { value: String }")
         .await
         .unwrap();
@@ -214,8 +213,8 @@ async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real
 
 #[tokio::test]
 async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_document() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     let trigger = resolved_event_trigger(
         "receipt-trigger",
         "WorkspaceReceipt",
@@ -280,8 +279,8 @@ impl crate::triggers::snapshot_observer::RuntimeSnapshotObserver for Subscriptio
 
 #[tokio::test]
 async fn event_source_acknowledges_exact_configuration_after_subscription_setup() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     node.add_collection("type ReadyInput { value: String }")
         .await
         .unwrap();
@@ -325,13 +324,12 @@ async fn event_source_acknowledges_exact_configuration_after_subscription_setup(
 
 #[tokio::test]
 async fn event_source_retries_schema_visibility_before_subscription_readiness() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "event-source-retries-schema-visibility-b",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let snapshot = snapshot_with_event_triggers(
         1,
         RapidHashMap::from_iter([(
@@ -367,13 +365,12 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
 
 #[tokio::test]
 async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "event-source-does-not-acknowledge-failed",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let triggers = RapidHashMap::from_iter([(
         "missing".into(),
         resolved_event_trigger("missing", "AbsentInput", resolved_task("observe")),
@@ -402,13 +399,12 @@ async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations()
 
 #[tokio::test]
 async fn event_source_repairs_failed_seed_on_later_reconcile_before_readiness() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "event-source-repairs-failed-seed-on-late",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let triggers = RapidHashMap::from_iter([(
         "eventual".into(),
         resolved_event_trigger("eventual", "EventualInput", resolved_task("observe")),
@@ -555,41 +551,28 @@ fn snapshot_with_event_triggers(
     Arc::new(resolved.activate(generation, RapidHashMap::new()))
 }
 
-/// The fixture Node's managed Agent; durable arrival delivery reads and seeds
-/// cursors through this Agent's signer, which must belong to the test node.
-fn configured_event_agent() -> Arc<ResolvedAgent> {
-    static AGENT: std::sync::OnceLock<Arc<ResolvedAgent>> = std::sync::OnceLock::new();
-    AGENT
-        .get_or_init(|| {
-            use gents_store::identity::NodeIdentity;
-            let root = crate::triggers::callback::test_root_identity();
-            let mut agent = event_test_behavior().as_ref().clone();
-            agent.agent_identity = crate::triggers::callback::test_agent_identity();
-            agent.agent_did = agent.agent_identity.did().to_owned();
-            agent.node = Arc::new(RuntimeNode {
-                node_did: root.did().to_owned(),
-                identity: Arc::new(root),
-                default_agent_did: agent.agent_did.clone(),
-                display_name: None,
-                enabled: true,
-            });
-            Arc::new(agent)
-        })
-        .clone()
+/// The Agent of the test node `node_did`; durable arrival delivery reads and
+/// seeds cursors through this Agent's signer, which must belong to that node.
+fn configured_event_agent(node_did: &str) -> Arc<ResolvedAgent> {
+    let mut agent = event_test_behavior().as_ref().clone();
+    agent.agent_identity = crate::triggers::callback::test_agent_identity();
+    agent.agent_did = agent.agent_identity.did().to_owned();
+    agent.node = Arc::new(RuntimeNode {
+        node_did: node_did.to_owned(),
+        identity: Arc::new(gents_store::test_support::held_runtime_identity(node_did)),
+        default_agent_did: agent.agent_did.clone(),
+        display_name: None,
+        enabled: true,
+    });
+    Arc::new(agent)
 }
 
 /// A node whose identity, Node row and Agent match `configured_event_agent`.
-async fn configured_event_node() -> Arc<defra_node::Node> {
-    let node = Arc::new(
-        crate::triggers::callback::test_node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    crate::triggers::callback::seed_test_agent(&node, gents_store::test_support::PIN_FIXED_DID)
-        .await;
-    node
+/// The returned `TestDb` keeps the node running.
+async fn configured_event_node() -> gents_inference::test_support::TestDb {
+    let db = crate::triggers::callback::test_node_builder("event-source").await;
+    crate::triggers::callback::seed_test_agent(&db.node, db.node_identity.did()).await;
+    db
 }
 
 /// Persist each trigger's Task, EventSource and Trigger as the owning user so
@@ -600,7 +583,11 @@ async fn configured_event_snapshot(
     generation: u64,
     triggers: RapidHashMap<String, ResolvedEventTrigger>,
 ) -> Arc<ActiveRuntimeSnapshot> {
-    let agent = configured_event_agent();
+    let node_did = node
+        .node_identity_did()
+        .expect("test node runtime identity")
+        .to_owned();
+    let agent = configured_event_agent(&node_did);
     let mut configured = RapidHashMap::with_capacity(triggers.len());
     for (id, mut trigger) in triggers {
         trigger.task.agent_did = agent.agent_did.clone();
@@ -624,7 +611,7 @@ async fn configured_event_snapshot(
             });
         crate::triggers::callback::seed_test_configuration(
             node,
-            gents_store::test_support::PIN_FIXED_DID,
+            &node_did,
             vec![
                 (
                     gents_store::collection::Collection::Task,
@@ -664,7 +651,7 @@ async fn configured_event_snapshot(
         RapidHashMap::new(),
     )
     .with_node(agent.node.clone())
-    .with_local_did(gents_store::test_support::PIN_FIXED_DID.into())
+    .with_local_did(node_did.clone())
     .with_automation(gents_documents::automation::ResolvedAutomation {
         event_triggers: configured,
         ..Default::default()
@@ -825,13 +812,12 @@ async fn admit_selected_event(
 
 #[tokio::test]
 async fn event_source_reconciles_subscriptions_on_generation_bump() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "event-source-reconciles-subscriptions-on",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let task = resolved_task("ignored");
     let snap1 = snapshot_with_event_triggers(
@@ -872,7 +858,8 @@ async fn event_source_reconciles_subscriptions_on_generation_bump() {
 
 #[tokio::test]
 async fn event_source_next_fire_emits_intent_on_matching_real_event() {
-    let node = configured_event_node().await;
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     let webhook_sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -963,16 +950,9 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
 
 #[tokio::test]
 async fn a_callback_result_fires_its_bindings_event_source_once() {
-    use gents_store::identity::NodeIdentity as _;
-    let root = crate::triggers::callback::test_root_identity();
-    let owner = root.did().to_owned();
-    let node = Arc::new(
-        crate::triggers::callback::test_node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = crate::triggers::callback::test_node_builder("callback-result-fires-once").await;
+    let node = node_db.node.clone();
+    let owner = node_db.node_identity.did().to_owned();
     crate::triggers::callback::seed_test_agent(&node, &owner).await;
 
     let task = ResolvedTask {
@@ -1003,7 +983,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
     behavior.agent_did = behavior.agent_identity.did().to_owned();
     behavior.node = Arc::new(gents_store::identity::RuntimeNode {
         node_did: owner.clone(),
-        identity: Arc::new(root),
+        identity: Arc::new(gents_store::test_support::held_runtime_identity(&owner)),
         default_agent_did: behavior.agent_did.clone(),
         display_name: None,
         enabled: true,
@@ -1076,8 +1056,8 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
 
 #[tokio::test]
 async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_scope() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     node.add_collection(
         r#"type GroupMember {
             run_id: String
@@ -1150,8 +1130,8 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
 
 #[tokio::test]
 async fn per_group_timeout_uses_durable_first_seen_clock() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     node.add_collection(
         r#"type DurableGroupMember {
             run_id: String
@@ -1189,7 +1169,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
     // The owning Agent created this group clock before the runtime restarted;
     // its first observation is already past the group timeout.
     let trigger = snapshot.active_event_triggers()["durable-group-trigger"].clone();
-    let owner = configured_event_agent().node_did().to_owned();
+    let owner = node_db.node_identity.did().to_owned();
     let (group_key, consumer_config_key) =
         EventSource::group_state_keys(&owner, &trigger, "run-old");
     let state = gents_protocol::event_delivery::EventGroupState {
@@ -1205,7 +1185,9 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
         quiesced_at: None,
         quiesced_reason: None,
     };
-    let agent_did = configured_event_agent().agent_did.clone();
+    let agent_did = configured_event_agent(node_db.node_identity.did())
+        .agent_did
+        .clone();
     crate::triggers::callback::test_agent_access(&node)
         .transact_write("test.durable_group_clock", |txn| {
             let (owner, state, agent_did) = (&owner, &state, &agent_did);
@@ -1246,13 +1228,12 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
 
 #[tokio::test]
 async fn correlation_populated_after_create_remains_eligible_for_delivery() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "correlation-populated-after-create-remai",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     node.add_collection(
         r#"type DeferredCorrelationMember {
             run_id: String @index
@@ -1359,8 +1340,8 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
         logical_doc, pending_doc,
         "siblings must share one physical source row"
     );
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     node.add_collection(
         r#"type MixedCorrelationMember {
             run_id: String @index
@@ -1460,13 +1441,12 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
 
 #[tokio::test]
 async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "startup-seed-defers-only-the-incomplete-",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     node.add_collection(
         r#"type SeededMixedCorrelationMember {
             run_id: String @index
@@ -1540,8 +1520,8 @@ async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() 
 
 #[tokio::test]
 async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     node.add_collection(
         r#"type QuiescedGroupMember {
             run_id: String @index
@@ -1625,19 +1605,19 @@ fn group_state_identity_changes_only_with_membership_definition() {
         ..resolved_event_trigger("group-trigger", "GroupMember", task)
     };
     let initial =
-        EventSource::group_state_keys(configured_event_agent().node_did(), &trigger, "run-a");
+        EventSource::group_state_keys(gents_store::test_support::PIN_FIXED_DID, &trigger, "run-a");
 
     trigger.task.prompt_template = "changed prompt".into();
     trigger.expected_count = Some(3);
     assert_eq!(
-        EventSource::group_state_keys(configured_event_agent().node_did(), &trigger, "run-a"),
+        EventSource::group_state_keys(gents_store::test_support::PIN_FIXED_DID, &trigger, "run-a"),
         initial,
         "task and policy changes must not restart a group's first-seen clock",
     );
 
     trigger.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
     assert_ne!(
-        EventSource::group_state_keys(configured_event_agent().node_did(), &trigger, "run-a"),
+        EventSource::group_state_keys(gents_store::test_support::PIN_FIXED_DID, &trigger, "run-a"),
         initial,
         "membership filter changes must use fresh recovery state",
     );
@@ -1645,13 +1625,12 @@ fn group_state_identity_changes_only_with_membership_definition() {
 
 #[tokio::test]
 async fn generation_bump_recovers_only_when_group_membership_definition_changes() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "generation-bump-recovers-only-when-group",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     node.add_collection(
         r#"type RecoveryFingerprintMember {
             run_id: String
@@ -1721,8 +1700,8 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
 
 #[tokio::test]
 async fn event_source_filter_probe_gates_fire_on_operator_filter() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
 
     // `kind` must be indexed for DefraDB's filter evaluator to accept `_eq`
     // on a non-_docID field in a limit-1 query.
@@ -1822,8 +1801,8 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
 
 #[tokio::test]
 async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
 
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -1940,13 +1919,12 @@ async fn create_event_trigger_doc(
 
 #[tokio::test]
 async fn concurrent_trigger_fire_count_updates_are_not_lost() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "concurrent-trigger-fire-count-updates-ar",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let trigger_id = "trigger-concurrent-fire-count";
     create_event_trigger_doc(&node, trigger_id, "task-webhook", "WebhookEvent").await;
     let node_did = event_test_behavior().node_did().to_owned();
@@ -2001,8 +1979,8 @@ async fn observed_trigger(node: &defra_node::Node, owner_did: &str, id: &str) ->
 
 #[tokio::test]
 async fn event_source_on_result_writes_runtime_fields_on_fired() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
 
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -2069,12 +2047,8 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
     let mut fired_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig = observed_trigger(
-            node.as_ref(),
-            configured_event_agent().node_did(),
-            "trigger-fired",
-        )
-        .await;
+        let trig =
+            observed_trigger(node.as_ref(), node_db.node_identity.did(), "trigger-fired").await;
         if trig["last_status"].as_str() == Some("fired") {
             fired_trigger = Some(trig);
             break;
@@ -2103,8 +2077,8 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
 
 #[tokio::test]
 async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
 
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -2131,7 +2105,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     .await;
     gents_documents::update_trigger_runtime_fields(
         &node,
-        configured_event_agent().node_did(),
+        node_db.node_identity.did(),
         "trigger-skip-err",
         gents_documents::TriggerRuntimeUpdate {
             fire_count_delta: Some(0),
@@ -2185,7 +2159,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let trig = observed_trigger(
             node.as_ref(),
-            configured_event_agent().node_did(),
+            node_db.node_identity.did(),
             "trigger-skip-err",
         )
         .await;
@@ -2212,7 +2186,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 
     EventSource::spawn_runtime_field_write(
         node.clone(),
-        configured_event_agent().node_did().to_owned(),
+        node_db.node_identity.did().to_owned(),
         trigger_id.clone(),
         source_doc_id.clone(),
         FireResult::Errored {
@@ -2225,7 +2199,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let trig = observed_trigger(
             node.as_ref(),
-            configured_event_agent().node_did(),
+            node_db.node_identity.did(),
             "trigger-skip-err",
         )
         .await;
@@ -2250,13 +2224,12 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 
 #[tokio::test]
 async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "event-source-skips-event-for-doc-already",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -2344,8 +2317,8 @@ async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
 
 #[tokio::test]
 async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     let webhook_sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -2424,8 +2397,8 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
 
 #[tokio::test]
 async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     let webhook_sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -2493,8 +2466,8 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
 
 #[tokio::test]
 async fn event_source_tries_all_triggers_when_first_filter_misses() {
-    let node = configured_event_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = configured_event_node().await;
+    let node = node_db.node.clone();
     let webhook_sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -2572,13 +2545,12 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
 
 #[tokio::test]
 async fn event_source_reconcile_excludes_invalid_source_collection_identifiers() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "event-source-reconcile-excludes-invalid-",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let task = resolved_task("ignored");
     let snapshot = snapshot_with_event_triggers(

@@ -50,7 +50,9 @@ impl ToolDyn for RepeatProbe {
     }
 }
 
-async fn tool_call_rows(reader: &gents_store::config_client::ConfigAccess) -> Vec<serde_json::Value> {
+async fn tool_call_rows(
+    reader: &gents_store::config_client::ConfigAccess,
+) -> Vec<serde_json::Value> {
     let response = reader
         .execute(
             "query { AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }",
@@ -100,7 +102,8 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
                 .map(|(event, _)| event.clone())
                 .collect::<std::collections::VecDeque<_>>(),
         ));
-        let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let node = db.node.clone();
         let mut turns = observed
             .iter()
             .enumerate()
@@ -223,7 +226,8 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
 
 #[tokio::test]
 async fn repeated_identical_bash_failure_stops_the_loop() {
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let root = tempfile::tempdir().unwrap();
     let mut turns = (0..6)
         .map(|index| {
@@ -309,7 +313,8 @@ impl ToolDyn for EnvelopeShapedTool {
 
 #[tokio::test]
 async fn envelope_shaped_errors_from_other_tools_keep_their_hint() {
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let mut turns = (0..5)
         .map(|index| {
             vec![

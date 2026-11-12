@@ -281,32 +281,25 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
 #[tokio::test]
 async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     let home = tempfile::tempdir().unwrap();
-    let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let other_user = KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "http-client-session-grants",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let agent = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let sibling = gents_store::identity::provision_agent_identity(&runtime).unwrap();
-    let endpoint = format!("http://{address}/api/v0/graphql");
+    let endpoint = db.client_endpoint().to_owned();
+    let relationship_url = endpoint.replace("/graphql", "/acp/node/relationship");
     let endpoint_for = |actor: &KeyIdentity| {
         gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, actor.did())
             .with_client_signing_capability(actor.client_signing_capability().unwrap())
             .unwrap()
     };
-    let access = ConfigAccess::Graphql(endpoint_for(&user));
+    let access = db.client_access(&user);
     let node_endpoint = endpoint_for(&runtime);
     assert!(ConfigAccess::graphql_as(&endpoint, user.did())
         .execute("{ AgentSession { _docID } }")
@@ -331,7 +324,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
             let response = node_endpoint
                 .authorize(
                     client
-                        .post(format!("http://{address}/api/v0/acp/node/relationship"))
+                        .post(relationship_url.as_str())
                         .json(&serde_json::json!({"Relation": relation, "TargetActor": did})),
                 )
                 .unwrap()

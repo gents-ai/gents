@@ -678,16 +678,13 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
     let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-    let node = std::sync::Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "task-assignment-root-fences-older-chain-",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
     let access = ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(agent.did()).unwrap(),

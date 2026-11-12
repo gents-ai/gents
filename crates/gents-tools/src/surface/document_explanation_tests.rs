@@ -4,7 +4,6 @@ use crate::surface::{
 use gents_store::config_client::ConfigAccess;
 use rapidhash::{HashSetExt, RapidHashSet};
 use serde_json::json;
-use std::sync::Arc;
 
 #[test]
 fn document_explanation_resolves_target_owner_separately_from_destination() {
@@ -40,12 +39,12 @@ fn document_explanation_resolves_target_owner_separately_from_destination() {
 
 #[tokio::test]
 async fn measured_explanation_uses_scoped_endpoint_health_not_registry_presence() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "measured-explanation-uses-scoped-endpoin",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     gents_store::test_support::acp_policies::install_identity_acp_policies(&node)
         .await
         .unwrap();

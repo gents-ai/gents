@@ -72,22 +72,24 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     let backend = gents_inference::llm::backend_client::BackendClient::OpenAiResponses(client);
     let issuer = backend.replay_issuer().unwrap().expect("Responses route");
     let family = backend.provider_family().to_owned();
-    let gents_inference::llm::backend_client::BackendClient::OpenAiResponses(client) = backend else {
+    let gents_inference::llm::backend_client::BackendClient::OpenAiResponses(client) = backend
+    else {
         unreachable!("constructed above")
     };
     let model = client.completion_model("gpt-test");
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
     let mut config = owned_config(4);
-    config.on_rendered_request = Some(gents_inference::rendered_request::scope::ambient_arming_sink(
-        scope_kind,
-    ));
-    config.provider_input_counter = Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
-        gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
-        gents_loop::openai_wire::OpenAiWireApi::Responses,
-        "gpt-test",
-    ));
+    config.on_rendered_request =
+        Some(gents_inference::rendered_request::scope::ambient_arming_sink(scope_kind));
+    config.provider_input_counter =
+        Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
+            gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
+            gents_loop::openai_wire::OpenAiWireApi::Responses,
+            "gpt-test",
+        ));
     let profile = config.provider_input_counter.profile();
     let request_commit_cid = lifecycle
         .request_commit_cid()
@@ -104,7 +106,9 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     let capture_factory =
         gents_inference::rendered_request::defra_rendered_request_capture_factory_for_signer(
             node.clone(),
-            lifecycle.managed_agent_signer().expect("claimed Agent signer"),
+            lifecycle
+                .managed_agent_signer()
+                .expect("claimed Agent signer"),
         )
         .unwrap();
     let capture_scope = gents_inference::rendered_request::scope_from_factory(

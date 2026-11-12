@@ -35,8 +35,13 @@ fn call(operation: &str, input: Value, filter: Option<Value>) -> WriteParams {
         options,
     }
 }
-async fn fixture() -> (Arc<defra_node::Node>, WriteTool) {
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+async fn fixture() -> (gents_inference::test_support::TestDb, WriteTool) {
+    let db = gents_inference::test_support::test_db(
+        "application-write",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
     node.add_collection(
         "type Parcel { reference: String status: String tags: [String] payload: JSON }",
     )
@@ -47,7 +52,7 @@ async fn fixture() -> (Arc<defra_node::Node>, WriteTool) {
         BTreeSet::from(["Parcel".into()]),
         None,
     );
-    (node, tool)
+    (db, tool)
 }
 async fn apply(tool: &WriteTool, preview: WriteParams) -> Result<Value> {
     let receipt = tool.execute(&preview).await?;
@@ -57,7 +62,8 @@ async fn apply(tool: &WriteTool, preview: WriteParams) -> Result<Value> {
 
 #[tokio::test]
 async fn preview_create_update_delete_and_fresh_reads_preserve_json() {
-    let (node, tool) = fixture().await;
+    let (db, tool) = fixture().await;
+    let node = db.node.clone();
     let create = call(
         "create",
         json!({"reference":"a\" } bad { x","status":"queued","tags":[],"payload":{"empty":[],"a-b":[null]}}),
@@ -110,7 +116,8 @@ async fn preview_create_update_delete_and_fresh_reads_preserve_json() {
 
 #[tokio::test]
 async fn changed_targets_and_overbroad_selection_never_apply() {
-    let (node, tool) = fixture().await;
+    let (db, tool) = fixture().await;
+    let node = db.node.clone();
     for reference in ["one", "two", "three"] {
         apply(
             &tool,
@@ -178,7 +185,8 @@ async fn changed_targets_and_overbroad_selection_never_apply() {
 
 #[tokio::test]
 async fn managed_credentials_scope_and_injection_are_refused() {
-    let (node, tool) = fixture().await;
+    let (db, tool) = fixture().await;
+    let node = db.node.clone();
     for (collection, expected) in [
         ("Tools", "Gents-managed"),
         ("OAuthCredential", "credentials"),
@@ -201,7 +209,12 @@ async fn managed_credentials_scope_and_injection_are_refused() {
 
 #[tokio::test]
 async fn native_relationship_input_uses_the_target_document_id() {
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "native-relationship-input-uses-the-targe",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     node.add_collection(
         "type Writer { name: String books: [Volume] } type Volume { title: String author: Writer }",
     )
@@ -368,7 +381,7 @@ mod plugin {
         node: Arc<defra_node::Node>,
         runtime: identity::Did,
         agent: Arc<dyn gents_store::identity::NodeIdentity>,
-        _home: tempfile::TempDir,
+        _db: gents_inference::test_support::TestDb,
     }
 
     impl std::ops::Deref for Fixture {
@@ -380,23 +393,15 @@ mod plugin {
 
     async fn node() -> Fixture {
         use gents_store::identity::NodeIdentity;
-        let home = tempfile::tempdir().unwrap();
-        let path = home.path().join("runtime.key");
-        let runtime = gents_store::identity::KeyIdentity::load_or_create(&path, None).unwrap();
+        let db = gents_inference::test_support::test_db(
+            "application-write-plugin",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
+        let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
-        let key = gents_store::identity::load_file_identity(&path)
-            .unwrap()
-            .private_key_bytes();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .with_signing_key(defra_node::SigningKey::Ed25519(key))
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
-        );
         let runtime_did = identity::Did::new(runtime.did()).unwrap();
         let owner = ConfigAccess::local_as(node.clone(), runtime_did.clone());
         // Beyond the baseline, production Agents hold CollectionGet through datastore tools and
@@ -423,7 +428,7 @@ mod plugin {
             node,
             runtime: runtime_did,
             agent,
-            _home: home,
+            _db: db,
         }
     }
 

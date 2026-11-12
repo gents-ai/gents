@@ -6,11 +6,10 @@ use gents_inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResultContent, UserContent,
 };
 use gents_inference::llm::{HookAction, ToolCallHookAction};
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
 use defra_node::Node as EmbeddedNode;
-use gents_store::schema::ensure_runtime_schemas;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 
@@ -27,17 +26,12 @@ mod wait_settlement;
 
 #[tokio::test]
 async fn list_processes_skip_publishes_canonical_tool_result() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "list-processes-skip-publishes-canonical-",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("list processes"), &[])
         .await;
@@ -81,17 +75,12 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
 
 #[tokio::test]
 async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "wait-and-cancel-process-skip-publish-can",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("control processes"), &[])
         .await;
@@ -414,16 +403,14 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
         .filter(|case| case.inputs.iter().all(|input| input.policy_allows))
     {
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
-            let home = tempfile::tempdir().unwrap();
-            let root = KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
-            let node = Arc::new(
-                EmbeddedNode::builder()
-                    .with_node_identity_did(root.did())
-                    .build()
-                    .await
-                    .unwrap(),
-            );
-            ensure_runtime_schemas(&node).await.unwrap();
+            let node_db = gents_inference::test_support::test_db(
+                "dispatch-receipt-scripts-bind-call-hook-",
+                gents_automation::lifecycle_hooks::composition(),
+            )
+            .await;
+            let node = node_db.node.clone();
+            let root =
+                gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
             let mut hook = DefraSessionHook::with_identity(node.clone(), root.did(), policy);
             assert!(matches!(
                 hook.on_completion_call(&user_text_message("Run a tool"), &[])

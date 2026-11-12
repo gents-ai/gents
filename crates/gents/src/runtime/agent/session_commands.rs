@@ -511,39 +511,23 @@ mod tests {
 
     #[tokio::test]
     async fn generated_session_command_discovery_uses_held_agent_and_native_visibility() {
+        let db = gents_inference::test_support::test_db(
+            "session-command-discovery",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = db.node.clone();
+        let identity = Arc::new(gents_store::test_support::held_runtime_identity(
+            db.node_identity.did(),
+        ));
         let temp = tempfile::tempdir().unwrap();
-        let identity = Arc::new(
-            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
-                .unwrap(),
-        );
         let user =
             gents_store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
                 .unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
         let binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
         let agent =
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
-        let access = ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(
-                format!("http://{address}/api/v0/graphql"),
-                user.did(),
-            )
-            .with_client_signing_capability(user.client_signing_capability().unwrap())
-            .unwrap()
-            .with_client_signed_agent_creates(),
-        );
+        let access = db.client_access(&user);
         let (session_doc_id, agent_doc_id) = access.transact_write("test.sweep.session", |txn| Box::pin(async {
             let root = txn.execute_client_signed_create("mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
                 &serde_json::json!({"input": {"node_did":identity.did()}}), gents_protocol::schemas::NODE).await?;

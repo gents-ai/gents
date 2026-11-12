@@ -162,21 +162,13 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
         "caller_interrupt_observer_completes_wait_call_preserves_background_process",
     );
     assert!(case.legal);
-    let dir = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(dir.path())
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "generated-wait-observer-interrupt-preser",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
     gents_inference::test_support::install_test_agent(&node, identity.did(), "general").await;
     let executions = BackgroundExecutionRegistry::default();
     let hook = signed_hook_as(&node, identity.did(), FailurePolicy::default())
@@ -280,15 +272,12 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
 
 #[tokio::test]
 async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "accepted-cross-agent-process-controls-pr",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let executions = BackgroundExecutionRegistry::default();
     let owner = signed_hook(&node, FailurePolicy::default())
@@ -464,7 +453,7 @@ mod job_control {
     use gents_store::config_client::ConfigAccess;
 
     struct JobHook {
-        _dir: tempfile::TempDir,
+        _db: gents_inference::test_support::TestDb,
         node: Arc<EmbeddedNode>,
         executions: BackgroundExecutionRegistry,
         owner: DefraSessionHook,
@@ -474,25 +463,14 @@ mod job_control {
 
     impl JobHook {
         pub async fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            let identity = gents_store::identity::KeyIdentity::load_or_create(
-                dir.path().join("owner.key"),
-                None,
+            let db = gents_inference::test_support::test_db(
+                "job-hook",
+                gents_session::test_support::no_lifecycle_plugins(),
             )
-            .unwrap();
-            let node = Arc::new(
-                EmbeddedNode::builder()
-                    .data_path(dir.path())
-                    .with_node_identity_did(identity.did())
-                    .build()
-                    .await
-                    .unwrap(),
-            );
-            gents_store::schema::ensure_runtime_schemas(&node)
-                .await
-                .unwrap();
+            .await;
+            let node = db.node.clone();
             let executions = BackgroundExecutionRegistry::default();
-            let owner = signed_hook_as(&node, identity.did(), FailurePolicy::default())
+            let owner = signed_hook_as(&node, db.node_identity.did(), FailurePolicy::default())
                 .await
                 .with_background_tool_registry(BackgroundToolRegistry::from_tools(
                     vec![Box::new(PendingTool)],
@@ -512,7 +490,7 @@ mod job_control {
                 .on_completion_call(&user_text_message("run job control work"), &[])
                 .await;
             Self {
-                _dir: dir,
+                _db: db,
                 node,
                 executions,
                 owner,

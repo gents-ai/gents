@@ -7,15 +7,9 @@ use serde_json::Value;
 /// The DID of [`fixture_signer`]; sessions it starts carry receipts it signed.
 pub const FIXTURE_DID: &str = "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z";
 
-/// A node builder with its own node identity, for fixtures that write rows as that node.
-pub fn node_builder() -> defra_node::NodeBuilder {
-    use gents_store::identity::NodeIdentity as _;
-
-    let directory = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
-            .unwrap();
-    defra_node::Node::builder().with_node_identity_did(identity.did())
+/// A started node with its own node identity, for fixtures that write rows as that node.
+pub async fn started_node(name: &str) -> gents_inference::test_support::TestDb {
+    gents_inference::test_support::test_db(name, crate::test_support::no_lifecycle_plugins()).await
 }
 
 /// A fixed test key, so fixture rows can name its DID as a constant.

@@ -113,22 +113,14 @@ async fn dispatch_with_lost_receipt(
 
 #[tokio::test]
 async fn agent_new_inherits_the_signed_caller_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None)
-            .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "agent-new-cwd",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let did = identity.did().to_owned();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(&did)
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     let mut hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
     let session = hook.session_id().await.unwrap();
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -143,7 +135,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
     );
-    create.input.cwd = Some(dir.path().to_string_lossy().into_owned());
+    create.input.cwd = Some(db.data_path().to_string_lossy().into_owned());
     let lifecycle = crate::call::lifecycle::admission_fixture::claimed_signed_request_create(
         &node, &identity, create,
     )
@@ -182,7 +174,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
         .await;
         assert_eq!(
             caused["input"]["cwd"],
-            dir.path().to_string_lossy().as_ref()
+            db.data_path().to_string_lossy().as_ref()
         );
     }
     node.shutdown().await.expect("shut down test node");
@@ -190,21 +182,13 @@ async fn agent_new_inherits_the_signed_caller_directory() {
 
 #[tokio::test]
 async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
-    let dir = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "lost-commit-receipt",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let did = identity.did().to_owned();
     let mut hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
     let session = hook.session_id().await.unwrap();
@@ -249,13 +233,9 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         &caused_row.request_id,
         "done",
         &agent_signer,
-        Arc::new(
-            gents_store::identity::KeyIdentity::load_existing(
-                dir.path().join("test-agent.key"),
-                None,
-            )
-            .unwrap(),
-        ),
+        Arc::new(gents_store::test_support::held_runtime_identity(
+            db.node_identity.did(),
+        )),
     )
     .await;
     for expected in [1, 0] {

@@ -2,7 +2,8 @@ use super::*;
 
 #[tokio::test]
 async fn captured_context_details_require_exact_owner_and_admission_identity() {
-    let node = seeded_node().await;
+    let db = seeded_node().await;
+    let node = db.node.clone();
     let mut context = load_session_investigation(
         &gents_store::config_client::ConfigAccess::local(node.clone()),
         PIN_FIXED_DID,
@@ -181,7 +182,8 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
 
 #[tokio::test]
 async fn ui_accounting_separates_compaction_usage_from_current_context() {
-    let node = seeded_node().await;
+    let db = seeded_node().await;
+    let node = db.node.clone();
     let before = load_session_investigation(
         &gents_store::config_client::ConfigAccess::local(node.clone()),
         PIN_FIXED_DID,

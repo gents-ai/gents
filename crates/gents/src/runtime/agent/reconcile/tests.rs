@@ -19,13 +19,12 @@ use gents_store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use gents_store::schema::ensure_runtime_schemas;
 use gents_tools::surface::{AgentToolSurfaceConfig, AgentWithTools, ToolCeiling, ToolSurface};
 
-async fn test_node() -> Arc<defra_node::Node> {
-    Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
+async fn test_node() -> gents_inference::test_support::TestDb {
+    gents_inference::test_support::test_db(
+        "reconcile",
+        gents_automation::lifecycle_hooks::composition(),
     )
+    .await
 }
 
 fn test_identity(name: &str) -> KeyIdentity {
@@ -220,8 +219,8 @@ fn background_child_request(index: usize, agent_did: &str) -> AgentRequest {
 
 #[tokio::test]
 async fn operator_write_changes_snapshot_fingerprint() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let lineage = AgentLineage::provision("pairing-contract");
     let mut initial_agent = lineage.revision("general");
     Arc::make_mut(&mut initial_agent.agent).system_prompt = "before operator write".to_string();
@@ -244,8 +243,8 @@ async fn operator_write_changes_snapshot_fingerprint() {
 
 #[tokio::test]
 async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let runtime_node = stub_runtime_node();
 
     let mut unset = PendingAgent::new("general")
@@ -308,7 +307,8 @@ async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints()
 
 #[tokio::test]
 async fn pairing_desired_read_failure_applies_no_operations() {
-    assert!(read_failure_is_noop_self_loop(test_node().await).await);
+    let db = test_node().await;
+    assert!(read_failure_is_noop_self_loop(db.node.clone()).await);
 }
 
 async fn read_failure_is_noop_self_loop(node: Arc<defra_node::Node>) -> bool {
@@ -348,8 +348,8 @@ async fn read_failure_is_noop_self_loop(node: Arc<defra_node::Node>) -> bool {
 
 #[tokio::test]
 async fn reconcile_install_applies_added_agent() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-install"));
     let current_resolved = ResolvedRuntimeSnapshot::from_parts(
@@ -375,8 +375,8 @@ async fn reconcile_install_applies_added_agent() {
 
 #[tokio::test]
 async fn reconcile_teardown_applies_removed_agent() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-teardown"));
     let current_resolved = snapshot_for_agents(&node, "general", vec![agent_config]).await;
@@ -402,8 +402,8 @@ async fn reconcile_teardown_applies_removed_agent() {
 
 #[tokio::test]
 async fn slot_panic_restarts_agent() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-slot-crash"));
     let tool_surface = Arc::new(
@@ -490,8 +490,8 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
         }
     }
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("slot-abort-on-owner-drop"));
     let tool_surface = Arc::new(
@@ -545,8 +545,8 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
 
 #[tokio::test]
 async fn agent_slot_fans_out_background_children_to_backend_capacity() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
 
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("background-fanout"));
@@ -684,8 +684,8 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
 
 #[tokio::test]
 async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
@@ -1049,8 +1049,8 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
 async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     use gents_documents::BackendAuth;
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
@@ -1249,8 +1249,8 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     let publish = lean_runtime_reconcile_case("publish_changed_snapshot");
     assert!(publish.legal);
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
@@ -1400,8 +1400,8 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let apply_failed = lean_runtime_reconcile_case("apply_failed_clears_pending");
     assert!(apply_failed.legal);
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
@@ -1627,8 +1627,8 @@ impl SlotFailurePolicy for FailSecondRegistrationPolicy {
 
 #[tokio::test]
 async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let lineage = AgentLineage::provision("register-failure");
     let agent_did = lineage.binding.agent_did.clone();
     let initial = lineage.revision("general");
@@ -1713,8 +1713,8 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
 
 #[tokio::test]
 async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let runtime_node = stub_runtime_node();
     let initial = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("retired-drain-failure"));
@@ -1803,8 +1803,8 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
 
 #[tokio::test]
 async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let lineage = AgentLineage::provision("source-failure");
     let agent_did = lineage.binding.agent_did.clone();
     let initial = lineage.revision("general");
@@ -1953,8 +1953,8 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
 
 #[tokio::test]
 async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let source_attempted = Arc::new(Notify::new());
     let source_release = Arc::new(Semaphore::new(0));
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
@@ -2085,8 +2085,8 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
 
 #[tokio::test]
 async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
@@ -2290,8 +2290,8 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         }
     }
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let runtime_status = runtime_status_handle(
         &node,
         node.node_identity_did()
@@ -2459,8 +2459,8 @@ async fn plugin_resolution_surfaces(
 
 #[tokio::test]
 async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_slot() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let runtime_node = stub_runtime_node();
     let (agent_config, absent_surface, installed_surface) = plugin_resolution_surfaces(&node).await;
 

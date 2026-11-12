@@ -1,6 +1,3 @@
-use std::sync::Arc;
-
-use defra_node::Node as EmbeddedNode;
 use gents_loop::tool::Tool as _;
 use gents_protocol::tool_names::SCHEMA_TOOL_NAME;
 use gents_store::config_client::ConfigAccess;
@@ -15,17 +12,12 @@ fn args(value: Value) -> SchemaParams {
 async fn call(tool: &SchemaTool, value: Value) -> Value {
     serde_json::from_str(&tool.call(args(value)).await.unwrap()).unwrap()
 }
-async fn node() -> Arc<EmbeddedNode> {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    node
+async fn node() -> gents_inference::test_support::TestDb {
+    gents_inference::test_support::test_db(
+        "schema-help-node",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await
 }
 
 #[tokio::test]

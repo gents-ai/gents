@@ -28,15 +28,8 @@ async fn test_node() -> Arc<EmbeddedNode> {
     // request rows are authorized by their creator and working Agent, as in
     // production. The managed Agent signer bound by `test_lifecycle` names
     // this node.
-    let node = Arc::new(
-        gents_automation::triggers::callback::test_node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(node.as_ref())
-        .await
-        .unwrap();
+    let db = gents_automation::triggers::callback::test_node_builder("test-node").await;
+    let node = db.node.clone();
     gents_automation::triggers::callback::seed_test_agent(&node, &test_node_did()).await;
     node
 }

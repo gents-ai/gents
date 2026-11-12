@@ -38,24 +38,14 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         } else {
             "task-deleted"
         };
-        let path =
-            std::env::temp_dir().join(format!("recovery-closeout-{name}-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&path).unwrap();
-        let identity =
-            gents_store::identity::KeyIdentity::load_or_create(path.join("agent.key"), None)
-                .unwrap();
-        let node_did = identity.did().to_owned();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .data_path(&path)
-                .with_node_identity_did(&node_did)
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let db = gents_inference::test_support::test_db(
+            &format!("recovery-closeout-{name}"),
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
+        let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+        let node_did = db.node_identity.did().to_owned();
         let node_scope = gents_store::graphql::escape_graphql_string(&node_did);
         gents_store::config_client::ConfigAccess::local(node.clone())
             .write(
@@ -299,7 +289,6 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
         node.shutdown().await.expect("shut down test node");
-        std::fs::remove_dir_all(path).unwrap();
     }
 }
 

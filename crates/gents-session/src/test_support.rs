@@ -545,26 +545,15 @@ pub async fn seed_owned_agent(
         .unwrap();
 }
 
-/// Serves a fixture node over loopback HTTP. A user's configuration is
-/// published only through its client-signed endpoint; embedded access
-/// refuses non-runtime writes by design.
-pub async fn serve_client_node(runtime: &dyn NodeIdentity) -> (Arc<defra_node::Node>, String) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .enable_signing()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    (node, format!("http://{address}/api/v0/graphql"))
+/// A node served over HTTP through the protected start, with the runtime
+/// identity it runs as.
+pub async fn serve_client_node(
+    name: &str,
+    composition: gents_store::node_extension::Extensions,
+) -> (gents_inference::test_support::TestDb, KeyIdentity) {
+    let db = gents_inference::test_support::test_db(name, composition).await;
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+    (db, runtime)
 }
 
 /// Grants the user the `OperatorUser` set as the runtime admin, as
@@ -580,14 +569,6 @@ pub async fn grant_operator_user(
         .grant(&admin, &identity::Did::new(user.did()).unwrap())
         .await
         .unwrap();
-}
-
-pub fn client_access(endpoint: &str, identity: &KeyIdentity) -> ConfigAccess {
-    ConfigAccess::Graphql(
-        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
-            .with_client_signing_capability(identity.client_signing_capability().unwrap())
-            .unwrap(),
-    )
 }
 
 pub async fn sequenced_history_on(

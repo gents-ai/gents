@@ -176,12 +176,17 @@ pub fn test_root_identity() -> gents_store::identity::KeyIdentity {
     gents_store::test_support::pin_fixed_signing_identity(home.path())
 }
 
+/// Starts a callback test node through the protected start as
+/// `test_root_identity()`.
 #[cfg(any(test, feature = "test-fixtures"))]
-pub fn test_node_builder() -> defra_node::NodeBuilder {
+pub async fn test_node_builder(name: &str) -> gents_inference::test_support::TestDb {
     use gents_store::identity::NodeIdentity as _;
-    defra_node::Node::builder()
-        .with_node_identity_did(test_root_identity().did())
-        .with_node_acp_enabled()
+    gents_inference::test_support::test_db_as(
+        name,
+        test_root_identity().did(),
+        crate::lifecycle_hooks::composition(),
+    )
+    .await
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -247,9 +252,12 @@ pub(crate) fn test_snapshot(
 #[cfg(any(test, feature = "test-fixtures"))]
 pub async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &str) {
     let agent = test_agent_did();
+    let local = node
+        .node_identity_did()
+        .expect("test node runtime identity");
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap(),
+        identity::Did::new(local).unwrap(),
     );
     for permission in [
         gents_store::config_client::NodePermission::DocumentRead,
@@ -306,9 +314,12 @@ pub(crate) async fn seed_test_configuration(
         })
         .collect();
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
+    let local = node
+        .node_identity_did()
+        .expect("test node runtime identity");
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap(),
+        identity::Did::new(local).unwrap(),
     );
     access
         .transact_write("test.callback.seed_configuration", |txn| {
@@ -329,9 +340,12 @@ pub(crate) async fn seed_test_configuration(
 
 #[cfg(test)]
 pub(crate) async fn grant_test_node_administrator(node: &Arc<defra_node::Node>, user: &str) {
+    let local = node
+        .node_identity_did()
+        .expect("test node runtime identity");
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap(),
+        identity::Did::new(local).unwrap(),
     );
     for permission in [
         gents_store::config_client::NodePermission::DocumentRead,
@@ -357,9 +371,12 @@ pub(crate) async fn grant_test_node_administrator(node: &Arc<defra_node::Node>, 
 
 #[cfg(test)]
 pub(crate) async fn grant_test_node_read(node: &Arc<defra_node::Node>, user: &str) {
+    let local = node
+        .node_identity_did()
+        .expect("test node runtime identity");
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap(),
+        identity::Did::new(local).unwrap(),
     );
     access
         .grant_node_permission(

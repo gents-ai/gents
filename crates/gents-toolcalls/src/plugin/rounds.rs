@@ -372,14 +372,12 @@ mod tests {
     /// a request's own `job_calls.state` wins.
     #[tokio::test]
     async fn a_job_step_keeps_its_stored_state_across_rounds() {
-        let dir = tempfile::tempdir().unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .data_path(dir.path())
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node_db = gents_inference::test_support::test_db(
+            "a-job-step-keeps-its-stored-state-across",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
         let caller = job_calls::JobCaller::new(
             node.clone(),
             ProcessControlScope {

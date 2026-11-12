@@ -99,17 +99,12 @@ async fn apply(tool: &SchemaTool, mut value: Value) -> Value {
     let preview = call(tool, value).await;
     call(tool, preview["next_call"]["args"].clone()).await
 }
-async fn node() -> Arc<EmbeddedNode> {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    node
+async fn node() -> gents_inference::test_support::TestDb {
+    gents_inference::test_support::test_db(
+        "schema-help",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await
 }
 
 /// Schema tool acting as the node's runtime owner, the signed actor for the
@@ -130,7 +125,8 @@ async fn schema_publication_matches_executable_lean_contract() {
         if !case["native_allowed"].as_bool().unwrap() {
             continue;
         }
-        let node = node().await;
+        let db = node().await;
+        let node = db.node.clone();
         let tool = SchemaTool::new(node.clone());
         let access = ConfigAccess::local(node.clone());
         let grant = case["grant"].as_bool().unwrap();
@@ -200,17 +196,15 @@ async fn schema_publication_uses_agent_native_authority() {
             continue;
         }
         let home = tempfile::tempdir().unwrap();
-        let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
+        let db = gents_inference::test_support::test_db(
+            "schema-help-publication",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
+        let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(runtime.did())
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
-        );
         let agent_did = identity::Did::new(agent.did()).unwrap();
         let did_only =
             gents_store::identity::RegisteredIdentity::from_registered_did(agent.did(), None)
@@ -288,20 +282,17 @@ async fn schema_publication_uses_agent_native_authority() {
 #[tokio::test]
 async fn schema_view_and_materialization_use_managed_agent_authority() {
     use gents_store::config_client::NodePermission;
-    use gents_store::identity::{KeyIdentity, NodeIdentity};
+    use gents_store::identity::NodeIdentity;
 
-    let home = tempfile::tempdir().unwrap();
-    let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
+    let db = gents_inference::test_support::test_db(
+        "schema-help-managed-agent",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
     let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
     owner
         .add_collection("type AgentViewInput { name: String }")
@@ -419,7 +410,8 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
 
 #[tokio::test]
 async fn additive_recovery_preserves_documents_and_rejects_stale_preview() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     let access = ConfigAccess::local(node.clone());
     let installed = apply(
@@ -501,7 +493,8 @@ async fn additive_recovery_preserves_documents_and_rejects_stale_preview() {
 
 #[tokio::test]
 async fn schema_recovery_help_and_grant_are_independent_of_config() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     for path in [
         vec!["help"],
@@ -559,7 +552,8 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
         wasm.len() > 16,
         "schema migration coverage requires the fixture lens build"
     );
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = runtime_owned_tool(&node);
     let access = ConfigAccess::local_as(
         node.clone(),
@@ -642,7 +636,8 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
 
 #[tokio::test]
 async fn view_creation_is_previewed_and_discoverable() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     apply(&tool,json!({"argv":["collection","create"],"options":{"sdl":"type ViewInput { title: String }"}})).await;
     apply(&tool,json!({"argv":["view","create"],"options":{"query":"ViewInput { title }","sdl":"type Titles { title: String }"}})).await;
@@ -656,7 +651,8 @@ async fn view_creation_is_previewed_and_discoverable() {
 
 #[tokio::test]
 async fn batch_retains_prior_commit_and_does_not_attempt_later_calls() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     let access = ConfigAccess::local(node);
     let first=call(&tool,json!({"argv":["collection","preview","create"],"options":{"sdl":"type BatchFirst { title: String }"}})).await;
@@ -679,7 +675,8 @@ async fn batch_retains_prior_commit_and_does_not_attempt_later_calls() {
 
 #[tokio::test]
 async fn malformed_schema_previews_return_executable_help_without_publication() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     apply(
         &tool,
@@ -712,7 +709,8 @@ async fn malformed_schema_previews_return_executable_help_without_publication() 
 
 #[tokio::test]
 async fn config_shaped_schema_calls_preview_then_apply_without_rewriting_the_receipt() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     let access = ConfigAccess::local(node);
     let help = tool
@@ -765,7 +763,8 @@ async fn config_shaped_schema_calls_preview_then_apply_without_rewriting_the_rec
 
 #[tokio::test]
 async fn misplaced_preview_returns_the_corrected_call_without_publishing() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     let request = json!({"argv":["collection","create"],"options":{"preview":true,"sdl":"type RecoveryShape { value: String }"}});
     let error: Value =
@@ -793,7 +792,8 @@ async fn misplaced_preview_returns_the_corrected_call_without_publishing() {
 
 #[tokio::test]
 async fn schema_argument_recovery_preserves_intent_without_publishing() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     let sdl = "type SyntaxProbe { title: String }";
     for request in [
@@ -819,7 +819,8 @@ async fn schema_argument_recovery_preserves_intent_without_publishing() {
 
 #[tokio::test]
 async fn schema_help_with_command_context_does_not_mutate() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     let help = tool.call(args(json!({"argv":["collection","update","--help"],"target_id":"Absent","options":{"patch":[{"op":"remove","path":"/Absent/Fields/0"}]}}))).await.unwrap();
     assert!(help.starts_with("collection preview update"));
@@ -846,7 +847,8 @@ async fn schema_help_with_command_context_does_not_mutate() {
 
 #[tokio::test]
 async fn invalid_sdl_points_to_its_concept_without_rewriting_it() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     for (sdl, expected) in [
         (
@@ -909,7 +911,8 @@ const SCRATCH_SDL: &str = "type Scratch { title: String @index }";
 
 #[tokio::test]
 async fn collection_cleanup_empties_removes_and_frees_the_name() {
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     let access = ConfigAccess::local(node.clone());
     apply(
@@ -1006,7 +1009,8 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
         pack::HomePackInstall, pack::PackKind, pack::PackUxPlugin, pack::UxContributions,
     };
 
-    let node = node().await;
+    let db = node().await;
+    let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap().to_owned();
     let home = tempfile::tempdir().unwrap();
     let tool = SchemaTool {

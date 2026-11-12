@@ -622,12 +622,12 @@ mod tests {
 
     #[tokio::test]
     async fn agent_data_caller_never_uses_a_node_identity() {
-        let node = Arc::new(
-            gents_store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node_db = gents_inference::test_support::test_db(
+            "agent-data-caller-never-uses-a-node-iden",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
         let runtime = node.node_identity_did().unwrap().to_owned();
         let routing = "did:key:routing";
         assert!(DataCaller::for_agent(node.clone(), routing, &runtime).is_err());

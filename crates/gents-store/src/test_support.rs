@@ -76,32 +76,35 @@ impl Drop for EnvVarGuard {
     }
 }
 
-/// Recovers the runtime root held by this process for `node_did`. Loading a
-/// `KeyIdentity` registers its signing key with DefraDB; Agent derivation
-/// needs the held key, which `RegisteredIdentity` never carries.
-pub fn held_runtime_identity(node_did: &str) -> crate::identity::KeyIdentity {
-    use crate::identity::NodeIdentity as _;
+/// Writes the private key this process holds for `node_did` to `path`.
+pub fn write_held_identity_key(node_did: &str, path: &std::path::Path) {
     let config = defra_core::signing::get_identity(node_did)
         .unwrap_or_else(|| panic!("fixture node identity {node_did} is not held in this process"));
     assert!(
         config.has_local_private_key(),
         "fixture node identity {node_did} has no local private key"
     );
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).expect("create held identity key");
+    file.write_all(&config.private_key_bytes)
+        .expect("write held identity key");
+}
+
+/// Recovers the runtime root held by this process for `node_did`. Loading a
+/// `KeyIdentity` registers its signing key with DefraDB; Agent derivation
+/// needs the held key, which `RegisteredIdentity` never carries.
+pub fn held_runtime_identity(node_did: &str) -> crate::identity::KeyIdentity {
+    use crate::identity::NodeIdentity as _;
     let dir = tempfile::tempdir().expect("held identity directory");
     let path = dir.path().join("runtime.key");
-    {
-        use std::io::Write as _;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&path).expect("create held identity key");
-        file.write_all(&config.private_key_bytes)
-            .expect("write held identity key");
-    }
+    write_held_identity_key(node_did, &path);
     let identity = crate::identity::KeyIdentity::load_existing(path.clone(), None)
         .expect("reload held runtime identity");
     assert_eq!(identity.did(), node_did);

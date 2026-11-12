@@ -283,16 +283,11 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             case.name,
             uuid::Uuid::new_v4()
         ));
-        let node = Arc::new(
-            gents_automation::triggers::callback::test_node_builder()
-                .data_path(&path)
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let db = gents_automation::triggers::callback::test_node_builder(
+            "generated-auxiliary-cases-drive-owned-be",
+        )
+        .await;
+        let node = db.node.clone();
         gents_automation::triggers::callback::seed_test_agent(
             &node,
             gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
@@ -684,16 +679,11 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             case.name,
             uuid::Uuid::new_v4()
         ));
-        let node = Arc::new(
-            gents_automation::triggers::callback::test_node_builder()
-                .data_path(&path)
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let db = gents_automation::triggers::callback::test_node_builder(
+            "generated-auxiliary-cases-drive-non-clau",
+        )
+        .await;
+        let node = db.node.clone();
         gents_automation::triggers::callback::seed_test_agent(
             &node,
             gents_session::request::lifecycle::test_support::PIN_FIXED_DID,

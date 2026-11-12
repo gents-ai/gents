@@ -707,13 +707,13 @@ mod tests {
         let other_binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let other_agent =
             gents_store::identity::resolve_agent_identity(&root, &other_binding).unwrap();
-        let node = std::sync::Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(root.did())
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node_db = gents_inference::test_support::test_db(
+            "shared-clock-survives-restart-and-quiesc",
+            crate::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let access = gents_store::config_client::ConfigAccess::local_managed_agent(
             node.clone(),
             agent.did().parse().unwrap(),

@@ -4,10 +4,9 @@ use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_store::config_client::session_children::*;
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::NodeIdentity;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::sync::Arc;
 
 #[derive(Deserialize)]
 struct Case {
@@ -62,18 +61,13 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
             continue;
         }
         exercised.insert(case.name.clone());
-        let temp = tempfile::tempdir().unwrap();
-        let root = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(root.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "modeled-request-child-bindings-use-real-",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let root_access = gents_store::config_client::ConfigAccess::local_as(
             node.clone(),
             root.did().parse().unwrap(),

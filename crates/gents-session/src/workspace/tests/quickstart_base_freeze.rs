@@ -3,14 +3,15 @@ use super::*;
 #[tokio::test]
 async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts() {
     use gents_store::identity::NodeIdentity;
-    use std::sync::Arc;
 
     let fx = tokio::task::spawn_blocking(Fixture::new).await.unwrap();
-    let runtime = gents_store::identity::KeyIdentity::load_or_create(
-        fx._root.path().join("runtime.key"),
-        None,
+    let db = gents_inference::test_support::test_db(
+        "quickstart-base-freeze",
+        crate::test_support::no_lifecycle_plugins(),
     )
-    .unwrap();
+    .await;
+    let node = db.node.clone();
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let user =
         gents_store::identity::KeyIdentity::load_or_create(fx._root.path().join("user.key"), None)
             .unwrap();
@@ -19,22 +20,6 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         None,
     )
     .unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .enable_signing()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-            .data_path(fx._root.path().join("db"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     let binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let writer_binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let reader_binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
@@ -65,18 +50,8 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
                 .unwrap();
         }
     }
-    let endpoint = format!("http://{address}/api/v0/graphql");
-    let operator = gents_store::config_client::ConfigAccess::Graphql(
-        gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
-            .with_client_signing_capability(user.client_signing_capability().unwrap())
-            .unwrap()
-            .with_client_signed_agent_creates(),
-    );
-    let outsider_access = gents_store::config_client::ConfigAccess::Graphql(
-        gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, outsider.did())
-            .with_client_signing_capability(outsider.client_signing_capability().unwrap())
-            .unwrap(),
-    );
+    let operator = db.client_access(&user);
+    let outsider_access = db.client_access(&outsider);
     let (node_doc, agent_doc): (String, String) = operator.transact_write("test.quickstart.owner", |txn| Box::pin(async {
         let node_result = txn.execute_client_signed_create("mutation($input: NodeMutationInputArg!) { create_Node(input:$input) {_docID} }",
             &serde_json::json!({"input":{"node_did":runtime.did()}}), gents_protocol::schemas::NODE).await?;

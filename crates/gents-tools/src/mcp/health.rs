@@ -1312,7 +1312,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         use anyhow::Context;
         use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
-        use gents_store::config_client::{GraphqlEndpoint, NodePermission};
+        use gents_store::config_client::NodePermission;
         use gents_store::identity::NodeIdentity;
 
         let model = lean_identity_household_cases()
@@ -1330,26 +1330,19 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let user =
             gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
-        let runtime =
-            gents_store::identity::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
         let agent =
             gents_store::identity::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
         let sibling =
             gents_store::identity::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
         let outsider =
             gents_store::identity::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        let address = listener.local_addr()?;
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(runtime.did())
-                .with_node_acp_enabled()
-                .with_http(defra_node::HttpConfig::with_listener(listener)?)
-                .with_storage_backend(defra_node::StorageBackend::Regolith)
-                .data_path(dir.path().join("node"))
-                .build()
-                .await?,
-        );
+        let mut db = gents_inference::test_support::test_db(
+            "health-persistence",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
+        let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         node.add_dac_policy_with_counter_as(
             &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
             gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
@@ -1360,13 +1353,7 @@ mod tests {
         node.add_collection(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
             .await?;
         let access = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
-            Ok(ConfigAccess::Graphql(
-                GraphqlEndpoint::as_principal(
-                    format!("http://{address}/api/v0/graphql"),
-                    actor.did(),
-                )
-                .with_client_signing_capability(actor.client_signing_capability()?)?,
-            ))
+            Ok(db.client_access(actor))
         };
         let user_access = access(&user)?;
         let runtime_access =
@@ -1488,24 +1475,10 @@ mod tests {
             .contains("service"));
         drop(user_access);
         drop(runtime_access);
-        node.shutdown().await?;
         drop(node);
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        let address = listener.local_addr()?;
-        let restarted = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(runtime.did())
-                .with_node_acp_enabled()
-                .with_http(defra_node::HttpConfig::with_listener(listener)?)
-                .with_storage_backend(defra_node::StorageBackend::Regolith)
-                .data_path(dir.path().join("node"))
-                .build()
-                .await?,
-        );
-        let user_access = ConfigAccess::Graphql(
-            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
-                .with_client_signing_capability(user.client_signing_capability()?)?,
-        );
+        db.simulate_process_crash().await?;
+        let restarted = db.node.clone();
+        let user_access = db.client_access(&user);
         let context = HealthPersistenceContext {
             node: &restarted,
             node_did: runtime.did(),
@@ -1554,7 +1527,8 @@ mod tests {
             counts
         }
 
-        let (node, runtime) = crate::mcp::meta::tests::test_node().await;
+        let (db, runtime) = crate::mcp::meta::tests::test_node().await;
+        let node = db.node.clone();
         let map = ServiceHealthMap::new();
         let context = HealthPersistenceContext {
             node: &node,
@@ -1912,8 +1886,10 @@ mod tests {
 
     #[tokio::test]
     async fn persisted_health_rows_are_node_scoped_and_stale_rows_sweep_within_the_agent() {
-        let (node_a, _root_a) = crate::mcp::meta::tests::test_node().await;
-        let (node_b, _root_b) = crate::mcp::meta::tests::test_node().await;
+        let (db_a, _root_a) = crate::mcp::meta::tests::test_node().await;
+        let (db_b, _root_b) = crate::mcp::meta::tests::test_node().await;
+        let node_a = db_a.node.clone();
+        let node_b = db_b.node.clone();
         for node in [&node_a, &node_b] {
             crate::mcp::meta::tests::seed_registry_service(
                 node,
@@ -1998,7 +1974,8 @@ mod tests {
     #[tokio::test]
     async fn queued_health_probe_rechecks_service_visibility_and_route() {
         for revoke in [false, true] {
-            let (node, _runtime) = crate::mcp::meta::tests::test_node().await;
+            let (db, _runtime) = crate::mcp::meta::tests::test_node().await;
+            let node = db.node.clone();
             crate::mcp::meta::tests::seed_registry_service(&node, "a", "first", 9001).await;
             crate::mcp::meta::tests::seed_registry_service(&node, "b", "old", 9002).await;
             let did = node.node_identity_did().unwrap();
@@ -2144,7 +2121,8 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_collapses_twins_to_the_row_readers_select() {
-        let (node, runtime) = crate::mcp::meta::tests::test_node().await;
+        let (db, runtime) = crate::mcp::meta::tests::test_node().await;
+        let node = db.node.clone();
         let node_did = runtime.did();
         let mut created = std::collections::BTreeMap::<&str, Vec<String>>::new();
         for (service, updated_at, endpoint) in [

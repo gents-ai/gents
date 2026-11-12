@@ -627,19 +627,13 @@ mod tests {
         assert!(result.is_err());
     }
 
-    async fn seeded_node() -> Arc<EmbeddedNode> {
-        // The runtime holds the root its fixture Agents derive from.
-        let root = crate::test_support::test_root_identity();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(gents_store::identity::NodeIdentity::did(&root))
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(node.as_ref())
-            .await
-            .unwrap();
+    async fn seeded_node() -> gents_inference::test_support::TestDb {
+        let db = gents_inference::test_support::test_db(
+            "context-budget",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
 
         for mutation in [
             r#"mutation {
@@ -758,7 +752,7 @@ mod tests {
         )
         .await;
 
-        node
+        db
     }
 
     async fn call_as(tool: &ContextBudgetTool, agent_did: &str, session_id: &str) -> String {
@@ -885,7 +879,8 @@ mod tests {
 
     #[tokio::test]
     async fn context_budget_tool_ignores_other_agents_and_sessions_on_the_node() {
-        let node = seeded_node().await;
+        let db = seeded_node().await;
+        let node = db.node.clone();
         seed_foreign_dispatches(&node).await;
         let tool = ContextBudgetTool::new(node, "did:key:z-context");
 
@@ -929,7 +924,8 @@ mod tests {
 
     #[tokio::test]
     async fn fallback_context_window_does_not_use_another_nodes_profile() {
-        let node = seeded_node().await;
+        let db = seeded_node().await;
+        let node = db.node.clone();
         let tool = ContextBudgetTool::new(Arc::clone(&node), "did:key:z-context");
         let output = call_as(&tool, &agent_context_did(), "session-without-accounting").await;
         let own: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
@@ -958,7 +954,8 @@ mod tests {
 
     #[tokio::test]
     async fn context_budget_tool_fails_closed_without_caller_identity() {
-        let node = seeded_node().await;
+        let db = seeded_node().await;
+        let node = db.node.clone();
         let tool = ContextBudgetTool::new(node, "did:key:z-context");
 
         let error = Tool::call(&tool, ContextBudgetParams {})
@@ -972,7 +969,8 @@ mod tests {
 
     #[tokio::test]
     async fn context_budget_tool_reports_persisted_context_signal() {
-        let node = seeded_node().await;
+        let db = seeded_node().await;
+        let node = db.node.clone();
         let tool = ContextBudgetTool::new(node, "did:key:z-context");
 
         let output = call_as(&tool, &agent_context_did(), "session-context").await;

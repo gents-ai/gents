@@ -60,23 +60,18 @@ use std::sync::{
     Arc,
 };
 
-pub(crate) async fn test_node() -> (Arc<defra_node::Node>, gents_store::identity::KeyIdentity) {
+pub(crate) async fn test_node() -> (
+    gents_inference::test_support::TestDb,
+    gents_store::identity::KeyIdentity,
+) {
     use gents_store::identity::NodeIdentity;
-    let directory = tempfile::tempdir().unwrap();
-    let runtime =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("runtime"), None)
-            .unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_owner(runtime.did().to_owned())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "mcp-node",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(runtime.did()).unwrap(),
@@ -89,7 +84,7 @@ pub(crate) async fn test_node() -> (Arc<defra_node::Node>, gents_store::identity
         )
         .await
         .unwrap();
-    (node, runtime)
+    (db, runtime)
 }
 
 pub(crate) async fn seed_registry_service(
@@ -129,7 +124,8 @@ pub(crate) async fn seed_registry_service(
 }
 
 async fn remote_node() -> (Arc<defra_node::Node>, gents_store::identity::KeyIdentity) {
-    let (node, runtime) = test_node().await;
+    let (db, runtime) = test_node().await;
+    let node = db.node.clone();
     seed_registry_service(&node, "shared", "remote", 8080).await;
     (node, runtime)
 }

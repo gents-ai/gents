@@ -2,7 +2,6 @@ use anyhow::Result;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use serde_json::json;
-use std::sync::Arc;
 
 fn claude_sign_in(did: &str, who: &str) -> gents_inference::auth::credential::OAuthCredential {
     gents_inference::auth::claude::credential_from_login_tokens(
@@ -28,8 +27,12 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
         AccountPick,
     };
     let did = "did:key:z6MkTestProfileEvents";
-    let node = Arc::new(gents_store::test_support::node_builder().build().await?);
-    gents_store::schema::ensure_runtime_schemas(&node).await?;
+    let db = gents_inference::test_support::test_db(
+        "account-events",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
     let access = ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(

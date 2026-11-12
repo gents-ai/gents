@@ -11,20 +11,16 @@ use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 
-/// A Node whose runtime root is `root`. Agents derived from `root` are then the
-/// Node's own Agents, and their rows are written through their managed signer.
-async fn rooted_node(root: &KeyIdentity) -> Arc<EmbeddedNode> {
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(root.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    node
+/// A started Node and its runtime root, which is the Node's identity. Agents
+/// derived from the root are the Node's own Agents.
+async fn rooted_node() -> (gents_inference::test_support::TestDb, KeyIdentity) {
+    let db = gents_inference::test_support::test_db(
+        "output-obligation",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+    (db, root)
 }
 
 /// An Agent DID derives from the runtime root and a creation nonce.
@@ -226,9 +222,8 @@ async fn terminalize_accepted_tool(
 #[tokio::test]
 async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
     for interrupted in [true, false] {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-        let node = rooted_node(&identity).await;
+        let (db, identity) = rooted_node().await;
+        let node = db.node.clone();
         let now = chrono::Utc::now();
         let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let valid_until =
@@ -330,9 +325,8 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
     let cases = &gents_lean_vocab::lean_contract_snapshot().logical_output_obligation_cases;
     assert_eq!(cases.len(), 11);
     for case in cases {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-        let node = rooted_node(&identity).await;
+        let (db, identity) = rooted_node().await;
+        let node = db.node.clone();
         let agent = derived_agent(&identity);
         assert_ne!(identity.did(), agent.did());
         let automated = case["automated_root"].as_bool().unwrap();
@@ -558,9 +552,8 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             "a negative count is not a canonical positive integer",
         ),
     ] {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-        let node = rooted_node(&identity).await;
+        let (db, identity) = rooted_node().await;
+        let node = db.node.clone();
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "request-count-fail-closed",
@@ -620,9 +613,8 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
 
 #[tokio::test]
 async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
-    let temp = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-    let node = rooted_node(&identity).await;
+    let (db, identity) = rooted_node().await;
+    let node = db.node.clone();
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "request-count-conflict",

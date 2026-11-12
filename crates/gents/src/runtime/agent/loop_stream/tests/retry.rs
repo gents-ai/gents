@@ -551,7 +551,7 @@ async fn repeated_reasoning_rejection_fails_after_its_one_repair() {
 async fn owned_hook_observes_retry_and_clears_after_execution() {
     use gents_inference::inference_observation::{InferenceKey, InferenceObservationRegistry};
     use gents_inference::rendered_request::scope::{scope_request, test_scope};
-    let (_node, hook, _writer, lifecycle) = owned_test_hook().await;
+    let (_db, hook, _writer, lifecycle) = owned_test_hook().await;
     let request = lifecycle.request();
     let registry = InferenceObservationRegistry::default();
     let key = InferenceKey {

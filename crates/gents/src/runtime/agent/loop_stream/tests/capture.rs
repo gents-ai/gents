@@ -444,7 +444,9 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
 
         let mut loop_config = config(0);
         loop_config.on_rendered_request = Some(
-            gents_inference::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Inference),
+            gents_inference::rendered_request::scope::ambient_arming_sink(
+                CaptureScopeKind::Inference,
+            ),
         );
 
         let collected = scope_request(scope, async {
@@ -477,11 +479,11 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
 
 #[tokio::test]
 async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
-    use gents_store::graphql::escape_graphql_string;
     use gents_inference::rendered_request::capture_key as derive_capture_key;
     use gents_inference::rendered_request::{
         DefraRenderedRequestSink, ProvenanceManifest, RenderedRequestSource, CAPTURE_VERSION,
     };
+    use gents_store::graphql::escape_graphql_string;
 
     let cases = gents_lean_vocab::lean_rendered_capture_cases();
     assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
@@ -505,25 +507,19 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         // Each case runs under its own held node root, whose managed Agent signs
         // the captures. The node DID, Agent and session are real, so the sink's
         // signer and session-binding checks run unchanged.
-        let key_dir = tempfile::tempdir().unwrap();
-        let root: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
-            gents_store::identity::KeyIdentity::load_or_create(key_dir.path().join("node.key"), None).unwrap(),
-        );
+        let db = gents_inference::test_support::test_db(
+            "capture-case",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let root = db.node_identity.clone();
         // The Lean node witness only distinguishes cases; each case's held root
         // already gives it a distinct, real node DID.
         let _ = case.node_did;
         let node_did = root.did().to_owned();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(&node_did)
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node).await.unwrap();
+        let node = db.node.clone();
         let binding = gents_store::identity::provision_agent_identity(root.as_ref()).unwrap();
-        let agent =
-            gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
         let agent_did = binding.agent_did.clone();
         gents_inference::test_support::install_test_agent_binding(
             &node,
@@ -677,7 +673,7 @@ const CAPTURE_SCOPE_SINK: &str = "inference.1";
 #[tokio::test]
 async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction() {
     use gents_loop::provider_input::routing_affinity::current;
-    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let session = hook.session_id().await.unwrap();
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen_for_observer = seen.clone();
@@ -794,7 +790,7 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
 
 #[tokio::test]
 async fn other_provider_loop_has_no_codex_affinity() {
-    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("done".into()),
         RawStreamingChoice::FinalResponse(()),

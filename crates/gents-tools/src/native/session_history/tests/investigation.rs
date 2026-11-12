@@ -2,7 +2,8 @@ use super::*;
 
 #[tokio::test]
 async fn sessions_get_reports_timeline_tools_usage_and_compactions() {
-    let node = seeded_node().await;
+    let db = seeded_node().await;
+    let node = db.node.clone();
     let tool = SessionHistoryTool::new(
         node,
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
@@ -49,7 +50,8 @@ async fn sessions_get_reports_timeline_tools_usage_and_compactions() {
 
 #[tokio::test]
 async fn sessions_get_fails_usage_totals_closed_for_partial_rows() {
-    let node = seeded_node().await;
+    let db = seeded_node().await;
+    let node = db.node.clone();
     let response = node
         .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "request-a-new"}}) { _docID } }"#)
         .await;
@@ -133,7 +135,8 @@ async fn sessions_get_fails_usage_totals_closed_for_partial_rows() {
 
 #[tokio::test]
 async fn sessions_get_does_not_join_duplicate_logical_request_ids() {
-    let node = seeded_node().await;
+    let db = seeded_node().await;
+    let node = db.node.clone();
     let identities = tempfile::tempdir().unwrap();
     let identity = pin_fixed_signing_identity(identities.path());
     let mut duplicate = gents_protocol::request_admission::AgentRequestCreate::base(

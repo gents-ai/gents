@@ -6,7 +6,12 @@ use gents_tools::surface::ToolCeiling;
 
 #[tokio::test]
 async fn builder_requires_backend_admission_before_checking_node_identity() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "builder-requires-backend-admission-befor",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let identity = Arc::new(test_identity("builder-unsigned-node"));
 
     let error = match Gents::builder()

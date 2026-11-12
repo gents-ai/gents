@@ -4,7 +4,7 @@ use gents_protocol::request_admission::{
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
-use gents_store::config_client::{GraphqlEndpoint, NodePermission};
+use gents_store::config_client::NodePermission;
 use gents_store::identity::KeyIdentity;
 
 /// Native document ACP governs block reads, so the signer is verified from the
@@ -26,25 +26,17 @@ async fn verified_signer_as(
 async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> anyhow::Result<()> {
     let cases = &gents_lean_vocab::lean_contract_snapshot().session_input_edit_native_claim_cases;
     for case in cases {
+        let db = gents_inference::test_support::test_db(
+            "verified-graph",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let root = db.node_identity.clone();
+        let node = db.node.clone();
         let directory = tempfile::tempdir()?;
-        let root: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(
-            directory.path().join("root.key"),
-            None,
-        )?);
         let user = KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
         let collaborator =
             KeyIdentity::load_or_create(directory.path().join("collaborator.key"), None)?;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        let addr = listener.local_addr()?;
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(root.did())
-                .with_node_acp_enabled()
-                .with_http(defra_node::HttpConfig::with_listener(listener)?)
-                .build()
-                .await?,
-        );
-        gents_store::schema::ensure_runtime_schemas(&node).await?;
         let binding = gents_store::identity::provision_agent_identity(root.as_ref())?;
         let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding)?;
         let admin = ConfigAccess::local_as(node.clone(), root.did().parse()?);
@@ -60,10 +52,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                     .await?;
             }
         }
-        let endpoint =
-            GraphqlEndpoint::as_principal(format!("http://{addr}/api/v0/graphql"), user.did())
-                .with_client_signing_capability(user.client_signing_capability()?)?;
-        let access = ConfigAccess::Graphql(endpoint);
+        let access = db.client_access(&user);
         let (node_doc, agent_doc) = access.transact_write("test.edit.seed", |txn| {
             let root = &root;
             let binding = &binding;
@@ -157,11 +146,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         } else {
             &collaborator
         };
-        let edit_access = ConfigAccess::Graphql(
-            GraphqlEndpoint::as_principal(format!("http://{addr}/api/v0/graphql"), author.did())
-                .with_client_signing_capability(author.client_signing_capability()?)?
-                .with_client_signed_agent_creates(),
-        );
+        let edit_access = db.client_access(author);
         // The selected request is the User's; a collaborator cannot read it,
         // so the client helper refuses to prepare that edit. The modeled
         // denial is the Agent's: the collaborator's command is crafted from

@@ -207,21 +207,15 @@ mod tests {
                 created_at: "2026-01-01T00:00:00Z".into(),
             };
             let directory = tempfile::tempdir().unwrap();
-            let node = std::sync::Arc::new(
-                crate::triggers::callback::test_node_builder()
-                    .data_path(directory.path())
-                    .build()
-                    .await
-                    .unwrap(),
-            );
-            gents_store::schema::ensure_runtime_schemas(&node)
-                .await
-                .unwrap();
-            crate::triggers::callback::seed_test_agent(
-                &node,
-                gents_store::test_support::PIN_FIXED_DID,
+            let mut db = gents_inference::test_support::test_db_at(
+                directory.path(),
+                None,
+                crate::lifecycle_hooks::composition(),
             )
-            .await;
+            .await
+            .unwrap();
+            let node = db.node.clone();
+            crate::triggers::callback::seed_test_agent(&node, db.node_identity.did()).await;
             let agent = crate::triggers::callback::test_agent_identity();
             let terminal = modeled["terminal"].as_bool().unwrap();
             let state = if terminal { "completed" } else { "pending" };
@@ -266,15 +260,9 @@ mod tests {
                     Ok::<_, anyhow::Error>(())
                 })
             }).await.unwrap();
-            node.shutdown().await.expect("node shutdown");
             drop(node);
-            let node = std::sync::Arc::new(
-                crate::triggers::callback::test_node_builder()
-                    .data_path(directory.path())
-                    .build()
-                    .await
-                    .unwrap(),
-            );
+            db.simulate_process_crash().await.unwrap();
+            let node = db.node.clone();
             let expected = case["post"]["outcomes"].as_array().unwrap().len();
             let before = case["pre"]["outcomes"].as_array().unwrap().len();
             assert_eq!(

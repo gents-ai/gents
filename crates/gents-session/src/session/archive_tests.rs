@@ -162,21 +162,13 @@ async fn work_rows(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> serde_
 
 #[tokio::test]
 async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stopping_work() {
-    let home = tempfile::tempdir().unwrap();
-    let actor = key(home.path(), "actor").await;
-    let data = home.path().join("data");
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(&data)
-            .with_node_identity_did(actor.did())
-            .with_node_acp_owner(actor.did().to_owned())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let mut db = gents_inference::test_support::test_db(
+        "archive-restore-survive-reopen-and-reje",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let actor = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     create_session(&node, &actor).await.unwrap();
     create_work(&node, &actor).await;
     let work = work_rows(&node, &actor).await;
@@ -215,17 +207,9 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     );
     assert_eq!(read_as(&node, &actor).await.unwrap(), expected);
     assert_eq!(work_rows(&node, &actor).await, work);
-    node.shutdown().await.expect("shut down test node");
     drop(node);
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(&data)
-            .with_node_identity_did(actor.did())
-            .with_node_acp_owner(actor.did().to_owned())
-            .build()
-            .await
-            .unwrap(),
-    );
+    db.simulate_process_crash().await.unwrap();
+    let node = db.node.clone();
     assert_eq!(read_as(&node, &actor).await.unwrap(), expected);
     assert_eq!(work_rows(&node, &actor).await, work);
     let other_window = Arc::clone(&node);

@@ -12,7 +12,6 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::{json, Value};
-use std::sync::Arc;
 
 fn assignment_value(value: &LeanGoalAssignmentHistoryCaseVersionsItem) -> Value {
     json!({
@@ -37,7 +36,11 @@ fn versions(
                 goal,
                 format!("commit-{}", value.commit),
                 value.height as i64,
-                value.parents.iter().map(|id| format!("commit-{id}")).collect(),
+                value
+                    .parents
+                    .iter()
+                    .map(|id| format!("commit-{id}"))
+                    .collect(),
             )
         })
         .collect()
@@ -125,7 +128,7 @@ async fn generated_assignment_histories_drive_goal_version_selection() {
                 | "reused_goal_id_keeps_old_assignment"
                 | "later_complete_goal_cannot_complete_older_active_assignment"
         ) {
-            persisted_history(case, &identities).await;
+            persisted_history(case).await;
         }
     }
 }
@@ -160,18 +163,19 @@ async fn persist_request(
     gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
-async fn persisted_history(case: &LeanGoalAssignmentHistoryCase, identities: &[KeyIdentity]) {
+async fn persisted_history(case: &LeanGoalAssignmentHistoryCase) {
+    let db = gents_inference::test_support::test_db(
+        "goal-assignment-history",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let temp = tempfile::tempdir().unwrap();
+    let identities = [
+        gents_store::test_support::held_runtime_identity(db.node_identity.did()),
+        KeyIdentity::load_or_create(temp.path().join("two.key"), None).unwrap(),
+    ];
     let identity = &identities[0];
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     let access =
         ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap());
     let mut roots = RapidHashMap::new();
@@ -191,10 +195,14 @@ async fn persisted_history(case: &LeanGoalAssignmentHistoryCase, identities: &[K
             persist_request(&access, identity, root, Some(reference)).await,
         );
     }
-    let reference = case.entry.reference.as_ref().map(|reference| GoalAssignmentInput {
-        goal_id: format!("goal-{}", reference.goal),
-        root_request_doc_id: Some(roots[&reference.root].clone()),
-    });
+    let reference = case
+        .entry
+        .reference
+        .as_ref()
+        .map(|reference| GoalAssignmentInput {
+            goal_id: format!("goal-{}", reference.goal),
+            root_request_doc_id: Some(roots[&reference.root].clone()),
+        });
     let entry_id = case.entry.doc;
     let request_doc = if let Some(doc) = roots.get(&entry_id) {
         doc.clone()
@@ -204,7 +212,8 @@ async fn persisted_history(case: &LeanGoalAssignmentHistoryCase, identities: &[K
     let mut documents: RapidHashMap<u64, String> = RapidHashMap::new();
     for version in &case.versions {
         let model_doc = version.document;
-        let mut value = serde_json::to_value(goal(&assignment_value(version), identities)).unwrap();
+        let mut value =
+            serde_json::to_value(goal(&assignment_value(version), &identities)).unwrap();
         value.as_object_mut().unwrap().remove("_docID");
         value["status"] = json!(version.status);
         value["objective"] = json!("Keep each assignment tied to its own work");
