@@ -1,3 +1,4 @@
+import Proofs.Conformance.PluginGrantDeclaration
 import Proofs.Conformance.EnrollmentRenewalNotices
 import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.UsageWrite

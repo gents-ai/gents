@@ -163,6 +163,36 @@ fn a_pack_cannot_declare_a_network_grant_the_host_cannot_serve() {
 }
 
 #[test]
+fn declared_network_grants_are_servable_exactly_when_the_model_says() {
+    gents_lean_vocab::families::plugin_grant_declaration_accepted::replay::<String>(|input| {
+        let net = match input.net.as_str() {
+            "no_net" => NetAccess::None,
+            "any_host" => NetAccess::OutboundHttp(None),
+            "hosts" => NetAccess::OutboundHttp(Some(
+                input
+                    .entries
+                    .iter()
+                    .map(|entry| match (entry.wildcard, entry.literal) {
+                        (true, true) => "*.10.0.0.1".to_owned(),
+                        (true, false) => "*.example.com".to_owned(),
+                        (false, true) => "10.0.0.1".to_owned(),
+                        (false, false) => "api.example.com".to_owned(),
+                    })
+                    .collect(),
+            )),
+            "raw_tcp" => NetAccess::OutboundFull(None),
+            other => panic!("unknown net kind {other}"),
+        };
+        let manifold = Manifold {
+            net,
+            http_timeout_ms: input.http_timeout_ms,
+            ..Manifold::sealed()
+        };
+        validate_declared(&manifold).is_ok()
+    });
+}
+
+#[test]
 fn a_sealed_or_empty_grant_offers_no_network() {
     assert!(Session::for_grant(PLUGIN, &Manifold::sealed())
         .unwrap()
