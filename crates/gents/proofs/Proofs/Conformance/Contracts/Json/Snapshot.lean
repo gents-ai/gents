@@ -1,3 +1,4 @@
+import Proofs.Conformance.SessionInputEditMalformed
 import Proofs.Conformance.StartupReadiness
 import Proofs.Conformance.ProviderViewCallKeys
 import Proofs.Conformance.ToolSurfaceArtifact
