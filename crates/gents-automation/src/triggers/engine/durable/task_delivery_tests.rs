@@ -575,7 +575,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     let trace = gents_lean_vocab::lean_contract_snapshot()
         .identity_publication_cases
         .iter()
-        .find(|case| case["name"] == "interrupted_then_repaired")
+        .find(|case| case.name == "interrupted_then_repaired")
         .unwrap();
     access
         .delete_resource_relationship("AgentSession", session_doc, "parent", "agents", &agent_doc)
@@ -601,8 +601,10 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         .await
         .unwrap();
     assert_eq!(
-        recovered["data"]["AgentSession"][0]["relationships_pending"],
-        trace["steps"][1]["after"]["pending"]
+        recovered["data"]["AgentSession"][0]["relationships_pending"]
+            .as_bool()
+            .unwrap(),
+        trace.steps[1].after.pending
     );
     let request_row = access
         .execute(&format!(

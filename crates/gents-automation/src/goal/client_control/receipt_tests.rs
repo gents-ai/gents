@@ -358,7 +358,10 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
     let snapshot = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
     let seed: Case =
         serde_json::from_value(snapshot["goal_client_receipt_cases"][0].clone()).unwrap();
-    for trace in snapshot["identity_publication_cases"].as_array().unwrap() {
+    for trace in gents_lean_vocab::lean_contract_snapshot()
+        .identity_publication_cases
+        .iter()
+    {
         let mut driver = Driver::new(&seed.initial).await;
         let (command_doc, command) = driver.command(&seed.command).await;
         let node = &driver.fixture.node;
@@ -404,8 +407,10 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
         );
         assert_eq!(
             agent_access.execute(&query).await.unwrap()["data"]["AgentSessionGoalReceipt"][0]
-                ["relationships_pending"],
-            trace["initial"]["pending"]
+                ["relationships_pending"]
+                .as_bool()
+                .unwrap(),
+            trace.initial.pending
         );
         assert!(
             user_access.execute(&query).await.unwrap()["data"]["AgentSessionGoalReceipt"]
@@ -413,8 +418,8 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
                 .unwrap()
                 .is_empty()
         );
-        for step in trace["steps"].as_array().unwrap() {
-            if step["parent_ok"] == true && step["reader_ok"] != true {
+        for step in &trace.steps {
+            if step.parent_ok && !step.reader_ok {
                 agent_access
                     .add_resource_relationship(
                         "AgentSessionGoalReceipt",
@@ -426,13 +431,13 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
                     .await
                     .unwrap();
             }
-            if step["parent_ok"] == true && step["reader_ok"] == true {
+            if step.parent_ok && step.reader_ok {
                 let identity: Arc<dyn NodeIdentity> = driver.fixture.identity.clone();
                 process_command_at(node, &identity, &command_doc, &actor, stamp(seed.now))
                     .await
                     .unwrap();
             }
-            if step["revoke_parent"] == true {
+            if step.revoke_parent {
                 agent_access
                     .delete_resource_relationship(
                         "AgentSessionGoalReceipt",
@@ -446,19 +451,20 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
             }
             let agent_rows = agent_access.execute(&query).await.unwrap();
             assert_eq!(
-                agent_rows["data"]["AgentSessionGoalReceipt"][0]["relationships_pending"],
-                step["after"]["pending"],
+                agent_rows["data"]["AgentSessionGoalReceipt"][0]["relationships_pending"]
+                    .as_bool()
+                    .unwrap(),
+                step.after.pending,
                 "{}",
-                trace["name"]
+                trace.name
             );
             let visible = !user_access.execute(&query).await.unwrap()["data"]
                 ["AgentSessionGoalReceipt"]
                 .as_array()
                 .unwrap()
                 .is_empty();
-            let expected =
-                step["after"]["parent_granted"] == true || step["after"]["reader_granted"] == true;
-            assert_eq!(visible, expected, "{}", trace["name"]);
+            let expected = step.after.parent_granted || step.after.reader_granted;
+            assert_eq!(visible, expected, "{}", trace.name);
         }
         node.shutdown().await.expect("node shutdown");
     }
