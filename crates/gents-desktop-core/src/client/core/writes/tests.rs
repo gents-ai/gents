@@ -52,7 +52,8 @@ fn chat_write_fence_matches_lean() {
                 .as_ref()
                 .map_or("did:key:runtime", |record| record.node_did.as_str())
                 .to_owned();
-            let refusal = chat_route_refusal(&node_did, record.as_ref()).map(|refusal| refusal.cause());
+            let refusal =
+                chat_route_refusal(&node_did, record.as_ref()).map(|refusal| refusal.cause());
             match ensure_peer_chat_ready(&node_did, record.as_ref()) {
                 Ok(()) => assert_eq!(refusal, None, "{record:?}"),
                 Err(error) => {
@@ -74,7 +75,10 @@ fn chat_write_fence_matches_lean() {
             assert_eq!(owning.is_some(), refusal.is_none(), "{record:?}");
             refusals.push(refusal);
         }
-        assert!(refusals.windows(2).all(|pair| pair[0] == pair[1]), "{refusals:?}");
+        assert!(
+            refusals.windows(2).all(|pair| pair[0] == pair[1]),
+            "{refusals:?}"
+        );
         case.check(
             gents_lean_vocab::families::chat_readiness_cases_write_fence::FenceOutput {
                 refusal: refusals[0],

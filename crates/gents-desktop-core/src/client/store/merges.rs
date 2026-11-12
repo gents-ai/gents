@@ -284,26 +284,28 @@ mod overlay_tests {
             ];
             let observed = stores
                 .iter()
-                .map(|store| gents_lean_vocab::families::client_request_cache_identity_merge::MergeOutput {
-                    rows: observed_rows(store),
-                    turn_doc: case.selected_doc.map(|selected_doc| {
-                        let selected_doc = format!("doc-{selected_doc}");
-                        let selected = store
-                            .requests
-                            .iter()
-                            .find(|row| row.doc_id.as_deref() == Some(selected_doc.as_str()))
-                            .expect("selected physical request row");
-                        let scoped = store
-                            .requests
-                            .iter()
-                            .filter(|row| {
-                                row.node_did == selected.node_did
-                                    && row.session_id == selected.session_id
-                            })
-                            .collect::<Vec<_>>();
-                        let tip = super::super::turns::session_turn_request(&scoped, selected);
-                        parse_num(tip.doc_id.as_deref(), "doc-").expect("turn document")
-                    }),
+                .map(|store| {
+                    gents_lean_vocab::families::client_request_cache_identity_merge::MergeOutput {
+                        rows: observed_rows(store),
+                        turn_doc: case.selected_doc.map(|selected_doc| {
+                            let selected_doc = format!("doc-{selected_doc}");
+                            let selected = store
+                                .requests
+                                .iter()
+                                .find(|row| row.doc_id.as_deref() == Some(selected_doc.as_str()))
+                                .expect("selected physical request row");
+                            let scoped = store
+                                .requests
+                                .iter()
+                                .filter(|row| {
+                                    row.node_did == selected.node_did
+                                        && row.session_id == selected.session_id
+                                })
+                                .collect::<Vec<_>>();
+                            let tip = super::super::turns::session_turn_request(&scoped, selected);
+                            parse_num(tip.doc_id.as_deref(), "doc-").expect("turn document")
+                        }),
+                    }
                 })
                 .collect::<Vec<_>>();
             assert_eq!(
@@ -321,7 +323,9 @@ mod overlay_tests {
             .and_then(|value| value.parse::<u64>().ok())
     }
 
-    fn observed_rows(store: &ClientStore) -> Vec<gents_lean_vocab::families::client_request_cache_identity_merge::Row<String>> {
+    fn observed_rows(
+        store: &ClientStore,
+    ) -> Vec<gents_lean_vocab::families::client_request_cache_identity_merge::Row<String>> {
         let mut rows = store
             .requests
             .iter()

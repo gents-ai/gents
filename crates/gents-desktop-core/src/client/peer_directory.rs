@@ -1128,15 +1128,21 @@ pub(crate) mod tests {
             gents_lean_vocab::families::chat_readiness_cases_saved_record::cases::<ChatRouteCause>()
         {
             let route = case.input.route.as_ref().expect("a saved record");
-            let record =
-                chat_case_record(route.source.as_deref(), route.operator_endpoint, route.managed);
+            let record = chat_case_record(
+                route.source.as_deref(),
+                route.operator_endpoint,
+                route.managed,
+            );
             let mut refusals = Vec::new();
             for peer in with_route_observations(&record) {
                 let refusal = peer.chat_refusal();
                 assert_eq!(peer.is_chat_ready(), refusal.is_none(), "{peer:?}");
                 refusals.push(refusal);
             }
-            assert!(refusals.windows(2).all(|pair| pair[0] == pair[1]), "{refusals:?}");
+            assert!(
+                refusals.windows(2).all(|pair| pair[0] == pair[1]),
+                "{refusals:?}"
+            );
             case.check(
                 gents_lean_vocab::families::chat_readiness_cases_saved_record::FenceOutput {
                     refusal: refusals[0],
@@ -1154,9 +1160,9 @@ pub(crate) mod tests {
 
     #[test]
     fn chat_next_action_tokens_match_lean() {
-        gents_lean_vocab::families::client_chat_readiness_next_action_token::replay::<
-            ChatNextAction,
-        >(|i| i.next_action.token().to_owned());
+        gents_lean_vocab::families::client_chat_readiness_next_action_token::replay::<ChatNextAction>(
+            |i| i.next_action.token().to_owned(),
+        );
     }
 
     async fn joined(directory: &mut PeerDirectory, digest: &str, expires_at: &str) -> PeerRecord {

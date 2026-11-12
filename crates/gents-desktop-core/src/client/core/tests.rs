@@ -1649,7 +1649,10 @@ async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
                 ),
             });
         }
-        assert!(refusals.windows(2).all(|pair| pair[0] == pair[1]), "{refusals:?}");
+        assert!(
+            refusals.windows(2).all(|pair| pair[0] == pair[1]),
+            "{refusals:?}"
+        );
         case.check(
             gents_lean_vocab::families::chat_readiness_cases_write_selection::FenceOutput {
                 refusal: refusals[0],
