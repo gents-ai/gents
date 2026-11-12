@@ -3,7 +3,6 @@ use crate::admission::BackendAdmissionConfig;
 use crate::backends::provider::BackendProviderKind;
 use gents_documents::inference_backend::derive_display_state;
 use gents_lean_vocab::families::contracts_catalog_refresh_scenarios as family;
-use gents_lean_vocab::lean_backend_health_admission_cases;
 use gents_loop::openai_wire::OpenAiWireApi;
 
 fn base_backend() -> InferenceBackend {
@@ -106,70 +105,40 @@ fn node_oauth_account_ref_round_trips_and_stays_absent_when_none() {
 
 #[test]
 fn generated_backend_health_admission_cases_match_registry_and_admission_policy() {
-    let cases = lean_backend_health_admission_cases();
-    assert_eq!(cases.len(), 7);
+    use gents_lean_vocab::families::backend_health_admission_admission as wire;
 
-    for case in cases {
+    gents_lean_vocab::families::backend_health_admission_admission::replay::<String, String>(
+        |input: &wire::ObservedInput<String>| {
         let mut backend = base_backend();
-        backend.backend_id = case.name.clone();
-        backend.enabled = case.enabled;
+        backend.enabled = input.enabled;
         let observation = InferenceBackendObservation {
             metadata_doc_id: None,
             backend_id: backend.backend_id.clone(),
             catalogs: Vec::new(),
-            probe_status: Some(case.probe_status.clone()),
+            probe_status: Some(input.probe_status.clone()),
             last_probe: None,
         };
         let admission_config = BackendAdmissionConfig::from_backend(&backend, &observation)
             .expect("valid backend config and observation");
-
+        let available = admission_config.is_available();
         assert_eq!(
             crate::admission::document_configured_from_fields(
                 backend.enabled,
                 observation.probe_status.as_deref().unwrap()
             ),
-            case.expected_available,
-            "{} document-configured availability drifted from Lean case",
-            case.name
+            available,
+            "{input:?}: document-configured availability and admission availability disagree"
         );
-        assert_eq!(
-            admission_config.is_available(),
-            case.expected_available,
-            "{} admission availability drifted from Lean case",
-            case.name
-        );
-        assert_eq!(
-            case.admission_decision.as_str(),
-            if case.expected_available {
-                "available"
-            } else {
-                "unavailable"
-            },
-            "{}",
-            case.name
-        );
-        assert!(
-            case.observed_document_only,
-            "{} must stay scoped to the observed backend document",
-            case.name
-        );
-        assert!(
-            !case.external_endpoint_freshness_claimed,
-            "{} must not claim endpoint/provider freshness",
-            case.name
-        );
-    }
+        wire::AdmissionOutput {
+            available,
+            admission_decision: if available { "available" } else { "unavailable" }.to_owned(),
+        }
+        },
+    );
 }
 
 #[test]
-fn display_state_matches_every_lean_backend_health_admission_case() {
-    let cases = lean_backend_health_admission_cases();
-    assert_eq!(
-        cases.len(),
-        7,
-        "Lean witness count drifted from operator UI expectations"
-    );
-
+fn display_state_names_every_probe_status() {
     for (enabled, status, expected) in [
         (false, "healthy", "disabled"),
         (true, "healthy", "available"),
@@ -181,14 +150,6 @@ fn display_state_matches_every_lean_backend_health_admission_case() {
         (true, "unrecognized", "unknown"),
     ] {
         assert_eq!(derive_display_state(enabled, status), expected);
-    }
-    for case in cases {
-        assert_eq!(
-            derive_display_state(case.enabled, &case.probe_status) == "available",
-            case.expected_available,
-            "{}",
-            case.name
-        );
     }
 }
 

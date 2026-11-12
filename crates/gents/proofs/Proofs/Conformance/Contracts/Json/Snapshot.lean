@@ -874,9 +874,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"storage_observation_runtime_cases\":"
       ++ jsonArray
         (storageObservationRuntimeCases.map storageObservationRuntimeCaseJson) ++ ","
-    ++ "\"backend_health_admission_cases\":"
-      ++ jsonArray
-        (backendHealthAdmissionCases.map backendHealthAdmissionCaseJson) ++ ","
     ++ "\"native_filesystem_boundary_cases\":"
       ++ jsonArray
         (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","

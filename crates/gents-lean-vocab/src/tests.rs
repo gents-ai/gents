@@ -428,12 +428,6 @@ fn lean_executable_contracts_cover_initial_domains() {
         8
     );
     assert_eq!(
-        lean_contract_snapshot()
-            .backend_health_admission_cases
-            .len(),
-        7
-    );
-    assert_eq!(
         lean_contract_snapshot().frontend_client_shell_case_count,
         lean_contract_snapshot().frontend_client_shell_cases.len()
     );
