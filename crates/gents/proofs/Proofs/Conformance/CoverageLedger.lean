@@ -2171,20 +2171,20 @@ def caseCoverage : List CoverageEntry :=
       "WorkspaceCommandGrantAnswers")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_command_grant_lookups"
-      "WorkspaceCommandGrantLookups")
+      "family"
+      "workspace_command_grants_lookup")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "workspace_command_grant_revocations"
       "WorkspaceCommandGrantRevocations")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_permission_write_cases"
-      "WorkspacePermissionWriteCases")
+      "family"
+      "workspace_permissions_selection")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_permission_write_cases"
-      "WorkspacePermissionWriteCases"
+      "family"
+      "workspace_permissions_persisted_selection"
       "Generated transitions drive persisted selections with policy fingerprints on one Task ID, stale revisions, missing reviewers, retained references, no-op writes and exhausted revisions. Concurrent locking and filesystem failure handling need adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2228,8 +2228,18 @@ def caseCoverage : List CoverageEntry :=
       "Generated decisions drive the shared path guard with real files, hard links, nested approval queues, missing targets and failed filesystem inspection. File-tool regressions verify that both reads and writes reject operator aliases before touching contents. Filesystem handle identity and concurrent external namespace changes remain native premises.")
       "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_permission_cases"
-      "WorkspacePermissionCases"
+      "family"
+      "workspace_permissions_routing"
+      "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "workspace_permissions_sandboxed_background"
+      "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "workspace_permissions_unsandboxed_background"
       "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

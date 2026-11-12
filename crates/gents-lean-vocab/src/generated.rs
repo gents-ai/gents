@@ -3110,10 +3110,7 @@ pub struct LeanContractSnapshot {
     pub goal_session_observation_cases: Vec<serde_json::Value>,
     pub goal_session_fold_cases: Vec<serde_json::Value>,
     pub workspace_command_grant_answers: Vec<serde_json::Value>,
-    pub workspace_command_grant_lookups: Vec<serde_json::Value>,
     pub workspace_command_grant_revocations: Vec<serde_json::Value>,
-    pub workspace_permission_write_cases: Vec<LeanWorkspacePermissionWriteCase>,
-    pub workspace_permission_cases: Vec<serde_json::Value>,
     pub operator_path_cases: Vec<serde_json::Value>,
     pub access_review_task_cases: Vec<LeanAccessReviewTaskCase>,
     pub plugin_approval_cases: Vec<LeanPluginApprovalCase>,
@@ -12434,37 +12431,6 @@ pub struct LeanWorkspacePathCapabilityCaseExpectedWriter {
 pub struct LeanWorkspacePathCapabilityCaseExpectedWriterCapability {
     pub mode: String,
     pub paths: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspacePermissionWriteCase {
-    pub accepted: bool,
-    pub changed: bool,
-    pub expected: u64,
-    pub mode: String,
-    pub next: Option<LeanWorkspacePermissionWriteCaseNext>,
-    pub previous: Option<LeanWorkspacePermissionWriteCasePrevious>,
-    #[serde(rename = "requestedTask")]
-    pub requested_task: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspacePermissionWriteCaseNext {
-    pub mode: String,
-    #[serde(rename = "reviewTask")]
-    pub review_task: Option<u64>,
-    pub revision: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspacePermissionWriteCasePrevious {
-    pub mode: String,
-    #[serde(rename = "reviewTask")]
-    pub review_task: Option<u64>,
-    pub revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
