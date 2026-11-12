@@ -285,10 +285,6 @@ pub fn lean_lifecycle_hook_gate_cases() -> &'static [LeanLifecycleHookGateCase] 
     &lean_contract_snapshot().lifecycle_hook_gate_cases
 }
 
-pub fn lean_lifecycle_hook_goal_halt_cases() -> &'static [LeanLifecycleHookGoalHaltCase] {
-    &lean_contract_snapshot().lifecycle_hook_goal_halt_cases
-}
-
 pub fn lean_lifecycle_hook_goal_resume_cases() -> &'static [LeanLifecycleHookGoalResumeCase] {
     &lean_contract_snapshot().lifecycle_hook_goal_resume_cases
 }
@@ -3327,7 +3323,6 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_admit_cases: Vec<LeanLifecycleHookAdmitCase>,
     pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
     pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
-    pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
     pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -5041,24 +5036,6 @@ pub struct LeanGoalFreshSessionInputCaseInput {
 pub struct LeanGoalFreshSessionInputCaseInputReference {
     pub goal: u64,
     pub root: Option<u64>,
-}
-
-/// An RFC 3339 text with the instant, in nanoseconds since the epoch, the
-/// model compares; `None` where the text does not parse.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalHaltStamp {
-    pub text: String,
-    pub instant: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanGoalHaltVerdict {
-    Inactive,
-    ChangedAfter,
-    UnreadableHalt,
-    Pause { status: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -6832,16 +6809,6 @@ pub struct LeanLifecycleHookGateCase {
 pub enum LeanLifecycleHookGateResult {
     Ok { verdicts: Vec<LeanLifecycleHookVerdict>, combined: LeanLifecycleHookVerdict },
     Error { refusal: LeanLifecycleHookRefusal },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookGoalHaltCase {
-    pub name: String,
-    pub status: Option<String>,
-    pub updated: Option<LeanGoalHaltStamp>,
-    pub halt: LeanGoalHaltStamp,
-    pub verdict: LeanGoalHaltVerdict,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

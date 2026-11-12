@@ -1323,8 +1323,8 @@ def caseCoverage : List CoverageEntry :=
       "Production Selector::stale classifies and renders every case from row facts. The facts' extraction from AgentRequest rows (receipt verification, the parent read by document) and the retirement through the pending-supersede path are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_goal_halt_cases"
-      "LifecycleHookGoalHaltCases"
+      "family"
+      "hook_decisions_goal_halt"
       "Production halt_verdict, with its RFC 3339 parsing, decides every case. The Goal write and outcome settlement PauseOnHalt stages for a pause verdict are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

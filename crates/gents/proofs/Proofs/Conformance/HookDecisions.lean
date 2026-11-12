@@ -179,30 +179,58 @@ def goalHaltCases : List GoalHaltCase :=
   , { name := "a_blocked_goal_is_left_alone", status := some .blocked, updated := none
     , halt := nine } ]
 
-def GoalHaltCase.goal (c : GoalHaltCase) : Option GoalHalt.Goal :=
-  c.status.map fun status =>
-    ⟨⟨status, 0, false, false⟩, c.updated.bind (·.instant)⟩
+structure StampWire where
+  text : String
+  instant : Option Int
+  deriving Lean.ToJson
 
-def GoalHaltCase.verdict (c : GoalHaltCase) : GoalHalt.Verdict :=
-  GoalHalt.verdict c.goal c.halt.instant
+def StampWire.ofStamp (stamp : Stamp) : StampWire := { text := stamp.text, instant := stamp.instant }
 
-private def stampJson (stamp : Stamp) : String :=
-  "{\"text\":" ++ jsonString stamp.text ++ ",\"instant\":" ++
-    ((stamp.instant.map toString).getD "null") ++ "}"
+structure GoalHaltInput where
+  name : String
+  status : Option String
+  updated : Option StampWire
+  halt : StampWire
+  deriving Lean.ToJson
 
-private def verdictJson : GoalHalt.Verdict → String
-  | .inactive => "{\"kind\":\"inactive\"}"
-  | .changedAfter => "{\"kind\":\"changed_after\"}"
-  | .unreadableHalt => "{\"kind\":\"unreadable_halt\"}"
-  | .pause paused => "{\"kind\":\"pause\",\"status\":" ++ jsonString paused.status.toDefraDB ++ "}"
+inductive HaltVerdictKind where
+  | inactive
+  | changedAfter
+  | unreadableHalt
+  | pause
+  deriving Lean.ToJson
 
-private def goalHaltCaseJson (c : GoalHaltCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"status\":" ++ optionJson (c.status.map Goals.Status.toDefraDB) ++
-    ",\"updated\":" ++ ((c.updated.map stampJson).getD "null") ++
-    ",\"halt\":" ++ stampJson c.halt ++ ",\"verdict\":" ++ verdictJson c.verdict ++ "}"
+structure PausedGoalWire where
+  status : String
+  blockedAudits : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  deriving Lean.ToJson
 
-def goalHaltCasesJson : String := jsonArray (goalHaltCases.map goalHaltCaseJson)
+structure GoalHaltOutput where
+  kind : HaltVerdictKind
+  paused : Option PausedGoalWire
+  deriving Lean.ToJson
+
+def GoalHaltOutput.ofVerdict : GoalHalt.Verdict → GoalHaltOutput
+  | .inactive => { kind := .inactive, paused := none }
+  | .changedAfter => { kind := .changedAfter, paused := none }
+  | .unreadableHalt => { kind := .unreadableHalt, paused := none }
+  | .pause paused =>
+      { kind := .pause
+        paused := some { status := paused.status.toDefraDB, blockedAudits := paused.blockedAudits
+                         wrapupRequested := paused.wrapupRequested
+                         wrapupCompleted := paused.wrapupCompleted } }
+
+@[conformance_family]
+def goalHalt : Family GoalHaltInput GoalHaltOutput where
+  inputs := goalHaltCases.map fun c =>
+    { name := c.name, status := c.status.map Goals.Status.toDefraDB
+      updated := c.updated.map StampWire.ofStamp, halt := StampWire.ofStamp c.halt }
+  model := fun i =>
+    let goal := (i.status.bind Goals.Status.fromDefraDB?).map fun status =>
+      (⟨⟨status, 0, false, false⟩, i.updated.bind (·.instant)⟩ : GoalHalt.Goal)
+    GoalHaltOutput.ofVerdict (GoalHalt.verdict goal i.halt.instant)
 
 /-! The bound on a declared history read (`Hooks.historyPermitted`). -/
 

@@ -1,10 +1,7 @@
-use gents_automation::goal::lifecycle_hooks::{halt_verdict, HaltVerdict};
-use gents_automation::goal::GoalState;
 use gents_lean_vocab::{
-    lean_lifecycle_hook_goal_halt_cases, lean_lifecycle_hook_supersede_cases, LeanGoalHaltVerdict, LeanSupersedeAncestry,
-    LeanSupersedeLink, LeanSupersedeReference, LeanSupersedeStale,
+    lean_lifecycle_hook_supersede_cases, LeanSupersedeAncestry, LeanSupersedeLink,
+    LeanSupersedeReference, LeanSupersedeStale,
 };
-use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_session::request::hooks::supersede::{
     Ancestry, BrokenLink, ParentFacts, PendingFacts, Retirement, Selector,
@@ -87,44 +84,6 @@ fn generated_lifecycle_hook_supersede_cases_drive_the_retirement_classifier() {
         assert_eq!(
             selector.stale(&rows, &parents),
             case.stale.iter().map(retirement).collect::<Vec<_>>(),
-            "{}",
-            case.name
-        );
-    }
-}
-
-fn verdict(lean: &LeanGoalHaltVerdict) -> HaltVerdict {
-    match lean {
-        LeanGoalHaltVerdict::Inactive => HaltVerdict::Inactive,
-        LeanGoalHaltVerdict::ChangedAfter => HaltVerdict::ChangedAfter,
-        LeanGoalHaltVerdict::UnreadableHalt => HaltVerdict::UnreadableHalt,
-        LeanGoalHaltVerdict::Pause { status } => HaltVerdict::Pause(GoalState {
-            status: GoalStatus::parse(status).expect("the model pauses to a known status"),
-            blocked_audits: 0,
-            wrapup_requested: false,
-            wrapup_completed: false,
-        }),
-    }
-}
-
-#[test]
-fn generated_lifecycle_hook_goal_halt_cases_drive_the_halt_verdict() {
-    let cases = lean_lifecycle_hook_goal_halt_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let state = case.status.as_deref().map(|status| GoalState {
-            status: GoalStatus::parse(status).expect("the model names a known status"),
-            blocked_audits: 0,
-            wrapup_requested: false,
-            wrapup_completed: false,
-        });
-        assert_eq!(
-            halt_verdict(
-                state,
-                case.updated.as_ref().map(|stamp| stamp.text.as_str()),
-                &case.halt.text,
-            ),
-            verdict(&case.verdict),
             "{}",
             case.name
         );
