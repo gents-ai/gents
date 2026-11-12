@@ -986,12 +986,21 @@ impl Inference<'_> {
         if shape.fields.is_empty() {
             return "serde_json::Value".to_owned();
         }
-        if !shape.fields.keys().all(|key| is_field_name(key)) {
+        let identifier = |key: &String| {
+            key.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
+                && key
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        };
+        if !shape.fields.keys().all(identifier) {
             let mut merged = Shape::default();
             for child in shape.fields.values() {
                 merge(&mut merged, child);
             }
-            let inner = self.infer(&merged, &format!("{name}Entry"));
+            let mut inner = self.infer(&merged, &format!("{name}Entry"));
+            if merged.nulls > 0 {
+                inner = format!("Option<{inner}>");
+            }
             return format!("BTreeMap<String, {inner}>");
         }
         let mut name = name.to_owned();
@@ -1004,12 +1013,16 @@ impl Inference<'_> {
             if child.nulls > 0 || child.seen < shape.objects {
                 ty = format!("Option<{ty}>");
             }
-            let raw = if KEYWORDS.contains(&key.as_str()) {
+            let field = rename(key, Some(&"snake_case".to_owned()), true);
+            let raw = if KEYWORDS.contains(&field.as_str()) {
                 "r#"
             } else {
                 ""
             };
-            body.push_str(&format!("pub {raw}{key}: {ty},"));
+            if &field != key {
+                body.push_str(&format!("#[serde(rename = {key:?})] "));
+            }
+            body.push_str(&format!("pub {raw}{field}: {ty},"));
         }
         self.structs.insert(
             name.clone(),
@@ -1161,7 +1174,12 @@ fn patch_fields(
     }
 }
 
-pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<String>>) -> Output {
+pub fn generate(
+    snapshot: &Value,
+    sources: &[Source],
+    only: Option<&BTreeSet<String>>,
+    type_keys: &BTreeSet<String>,
+) -> Output {
     let oracle = Oracle::parse(sources);
     let root = oracle
         .decoders
@@ -1319,6 +1337,32 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
                         .unnamed
                         .iter_mut()
                         .for_each(|field| bump(&mut field.vis));
+                }
+                for field in item.fields.iter_mut().filter(|_| name == ROOT) {
+                    let key = field.ident.as_ref().unwrap().to_string();
+                    let Some(shape) = untyped
+                        .get(&format!("{ROOT}.{key}"))
+                        .filter(|_| type_keys.contains(&key))
+                        .filter(|_| {
+                            ["serde_json::Value", "Vec<serde_json::Value>"]
+                                .contains(&show(&field.ty).as_str())
+                        })
+                    else {
+                        continue;
+                    };
+                    let listed = show(&field.ty).starts_with("Vec<");
+                    let stem = format!("Lean{}", camel(&key));
+                    let ty = match (listed, stem.strip_suffix("Cases")) {
+                        (true, Some(stem)) => {
+                            format!("Vec<{}>", inference.infer(shape, &format!("{stem}Case")))
+                        }
+                        (true, None) => {
+                            format!("Vec<{}>", inference.infer(shape, &format!("{stem}Item")))
+                        }
+                        (false, _) => inference.infer(shape, &stem),
+                    };
+                    field.ty = syn::parse_str(&ty).unwrap();
+                    patches.push(format!("{ROOT}.{key}: typed as {ty}"));
                 }
             }
             Item::Enum(item) => {

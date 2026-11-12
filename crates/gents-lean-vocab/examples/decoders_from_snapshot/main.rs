@@ -77,6 +77,7 @@ fn main() {
     let mut write = false;
     let mut report = None;
     let mut layer = None;
+    let mut type_keys = BTreeSet::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--snapshot" => snapshot = args.next(),
@@ -84,8 +85,14 @@ fn main() {
             "--report" => report = args.next(),
             "--layer" => layer = args.next(),
             "--write" => write = true,
+            "--type-keys" => type_keys.extend(
+                args.next()
+                    .expect("--type-keys key,key")
+                    .split(',')
+                    .map(str::to_owned),
+            ),
             other => panic!(
-                "unknown argument {other}; usage: [--snapshot FILE] [--src DIR] [--layer crate,crate] [--report FILE] [--write]"
+                "unknown argument {other}; usage: [--snapshot FILE] [--src DIR] [--layer crate,crate] [--type-keys key,key] [--report FILE] [--write]"
             ),
         }
     }
@@ -99,7 +106,7 @@ fn main() {
         let crates_dir = src.parent().unwrap().parent().unwrap().to_path_buf();
         layer_keys(&sources, &crates_dir, &layer.split(',').collect::<Vec<_>>())
     });
-    let output = generator::generate(&snapshot, &sources, only.as_ref());
+    let output = generator::generate(&snapshot, &sources, only.as_ref(), &type_keys);
 
     let mut deleted = 0;
     let mut emptied = Vec::new();
