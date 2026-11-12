@@ -89,10 +89,6 @@ pub fn lean_capture_scope_cases() -> &'static [LeanCaptureScopeCase] {
     &lean_contract_snapshot().capture_scope_cases
 }
 
-pub fn lean_client_agent_readiness_cases() -> &'static [LeanClientAgentReadinessCase] {
-    &lean_contract_snapshot().client_agent_readiness_cases
-}
-
 pub fn lean_client_session_queue_order_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().client_session_queue_order_cases
 }
@@ -403,10 +399,6 @@ pub fn lean_plugin_job_authority_cases() -> &'static [LeanPluginJobAuthorityCase
 
 pub fn lean_plugin_job_control_cases() -> &'static [LeanPluginJobControlCase] {
     &lean_contract_snapshot().plugin_job_control_cases
-}
-
-pub fn lean_plugin_job_key_cases() -> &'static [LeanPluginJobKeyCase] {
-    &lean_contract_snapshot().plugin_job_key_cases
 }
 
 pub fn lean_plugin_job_lineage_cases() -> &'static [LeanPluginJobLineageCase] {
@@ -2131,23 +2123,6 @@ pub struct LeanClaudeTaggedReplayRow {
     pub blocks: Vec<LeanClaudeReplayInputBlock>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LeanClientAgentReadinessCase {
-    pub name: String,
-    pub observation_present: bool,
-    pub observation_kind: String,
-    pub process_state: String,
-    pub active_generation: u64,
-    pub router_generation: u64,
-    pub runnable: bool,
-    pub unavailable: bool,
-    pub startup_demoted: bool,
-    pub runtime_unavailable_reason: String,
-    pub expected_state: String,
-    pub expected_reason: Option<String>,
-    pub expected_runtime_admissible: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanClientChatReadinessCase {
@@ -2925,7 +2900,6 @@ pub struct LeanContractSnapshot {
     pub goal_wake_receipt_cases: Vec<LeanGoalWakeReceiptCase>,
     pub goal_tool_context_cases: Vec<LeanGoalToolContextCase>,
     pub goal_input_binding_cases: Vec<LeanGoalInputBindingCase>,
-    pub goal_fresh_session_input_cases: Vec<LeanGoalFreshSessionInputCase>,
     pub session_message_goal_input_cases: Vec<LeanSessionMessageGoalInputCase>,
     pub goal_delivery_input_cases: Vec<serde_json::Value>,
     pub goal_operator_resume_cases: Vec<LeanGoalOperatorResumeCase>,
@@ -2992,7 +2966,6 @@ pub struct LeanContractSnapshot {
     pub plugin_calls_route_cases: Vec<LeanPluginCallsRouteCase>,
     pub plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,
     pub plugin_job_adoption_cases: Vec<LeanPluginJobAdoptionCase>,
-    pub plugin_job_key_cases: Vec<LeanPluginJobKeyCase>,
     pub plugin_job_control_cases: Vec<LeanPluginJobControlCase>,
     pub plugin_job_authority_cases: Vec<LeanPluginJobAuthorityCase>,
     pub plugin_job_wire_cases: Vec<LeanPluginJobWireCase>,
@@ -3188,7 +3161,6 @@ pub struct LeanContractSnapshot {
         LeanRuntimeConfigurationAdmissionCase,
     >,
     pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
-    pub client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub snapshot_demotion_cases: Vec<LeanSnapshotDemotionCase>,
     pub plugin_reference_cases: Vec<serde_json::Value>,
@@ -5068,40 +5040,6 @@ pub struct LeanGoalFirstRequestBindingCase {
 pub struct LeanGoalFirstRequestBindingCaseReference {
     pub goal_id: String,
     pub root_request_doc_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalFreshSessionInputCase {
-    pub expected: LeanGoalFreshSessionInputCaseExpected,
-    pub input: LeanGoalFreshSessionInputCaseInput,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalFreshSessionInputCaseExpected {
-    pub authored: u64,
-    pub continuation: bool,
-    pub creation: Option<serde_json::Value>,
-    pub queued: bool,
-    pub reference: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalFreshSessionInputCaseInput {
-    pub authored: u64,
-    pub continuation: bool,
-    pub creation: Option<String>,
-    pub queued: bool,
-    pub reference: Option<LeanGoalFreshSessionInputCaseInputReference>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalFreshSessionInputCaseInputReference {
-    pub goal: u64,
-    pub root: Option<u64>,
 }
 
 /// An RFC 3339 text with the instant, in nanoseconds since the epoch, the
@@ -8663,14 +8601,6 @@ pub struct LeanPluginJobControlTarget {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanPluginJobDecodedKey {
-    pub root: String,
-    pub slot: String,
-    pub attempt: u32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanPluginJobDurableRead {
     pub session_stopped: bool,
     pub now_millis: u64,
@@ -8730,29 +8660,6 @@ pub struct LeanPluginJobInstallExpected {
     pub provenance: String,
 }
 
-/// `Conformance.PluginJob.keyCasesJson`: one spawn key, the message numbers
-/// probed, and the strings the Lean encoders and `decodeRetryKey?` produce.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobKeyCase {
-    pub name: String,
-    pub root: String,
-    pub slot: String,
-    pub attempt: u32,
-    pub messages: Vec<u32>,
-    pub expected: LeanPluginJobKeyExpected,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobKeyExpected {
-    pub retry_key: String,
-    pub session_id: String,
-    pub message_keys: Vec<LeanPluginJobMessageKey>,
-    pub decoded: Option<LeanPluginJobDecodedKey>,
-    pub message_keys_decode: bool,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPluginJobKill {
@@ -8787,13 +8694,6 @@ pub struct LeanPluginJobLineageQuery {
     #[serde(deserialize_with = "required_nullable")]
     pub expected_opening_doc_id: Option<String>,
     pub listed_start: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobMessageKey {
-    pub n: u32,
-    pub key: String,
 }
 
 #[derive(Debug, Deserialize)]

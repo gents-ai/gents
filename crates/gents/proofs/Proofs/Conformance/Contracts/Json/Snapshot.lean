@@ -1047,7 +1047,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_calls_route_cases\":" ++ Conformance.PluginResources.routeCasesJson ++ ","
     ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
     ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
-    ++ "\"plugin_job_key_cases\":" ++ Conformance.PluginJob.keyCasesJson ++ ","
     ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
     ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
     ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","

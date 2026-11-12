@@ -1699,8 +1699,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobControlCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_job_key_cases"
-      "PluginJobKeyCases")
+      "family"
+      "plugin_job_spawn_keys")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "plugin_job_authority_cases"
