@@ -1,4 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Tools
 import Proofs.Conformance.ContractCases
 import Proofs.Session.ToolExecution
 import Proofs.Tools.MCPHealth.Executable
@@ -86,42 +88,151 @@ def processStopCaseJson (witness : ProcessStopCase) : String :=
     ++ "\"durable_state\":" ++ jsonString witness.durableState
     ++ "}"
 
-def toolPreflightCaseJson (witness : ToolExecution.PreflightCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"health\":" ++ jsonString witness.health.toDefraDB ++ ","
-    ++ "\"schema_status\":" ++ jsonString witness.schema.toDefraDB ++ ","
-    ++ "\"decision\":" ++ jsonString witness.decision.toContract ++ ","
-    ++ "\"failure_class\":"
-      ++ jsonOptionalString ((witness.decision.failureClass).map ToolExecution.FailureClass.toDefraDB)
-    ++ "}"
+deriving instance Lean.ToJson for ToolExecution.SchemaStatus, ToolExecution.ToolOperation,
+  ToolExecution.IdempotencyEvidence, ToolExecution.RetryDisposition
 
-def toolRetryCaseJson (witness : ToolExecution.RetryCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"operation\":" ++ jsonString witness.operation.toDefraDB ++ ","
-    ++ "\"idempotency\":" ++ jsonString witness.idempotency.toDefraDB ++ ","
-    ++ "\"failure_class\":" ++ jsonString witness.failure.toDefraDB ++ ","
-    ++ "\"disposition\":" ++ jsonString witness.disposition.toDefraDB
-    ++ "}"
+structure ToolPreflightInput where
+  name : String
+  health : ToolExecution.Health
+  schemaStatus : ToolExecution.SchemaStatus
+  deriving Lean.ToJson
 
-def mcpHealthCaseJson (witness : Proofs.MCPHealth.TransitionCase) : String :=
-  let nextCountStr : String :=
-    match witness.nextCount with
-    | none => "null"
-    | some n => toString n
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"start_state\":" ++ jsonString witness.startState.toDefraDB ++ ","
-    ++ "\"start_count\":" ++ toString witness.startCount ++ ","
-    ++ "\"event\":" ++ jsonString witness.event.toDefraDB ++ ","
-    ++ "\"threshold_k\":" ++ toString witness.thresholdK ++ ","
-    ++ "\"next_state\":"
-      ++ jsonOptionalString
-          (witness.nextState.map Proofs.MCPHealth.HealthState.toDefraDB) ++ ","
-    ++ "\"next_count\":" ++ nextCountStr ++ ","
-    ++ "\"rust_projection\":" ++ jsonOptionalString witness.rustProjection
-    ++ "}"
+structure ToolPreflightOutput where
+  decision : String
+  failureClass : Option String
+  deriving Lean.ToJson
+
+def toolPreflightOf (i : ToolPreflightInput) : ToolPreflightOutput :=
+  let decision := ToolExecution.preflight i.health i.schemaStatus
+  { decision := decision.toContract
+  , failureClass := decision.failureClass.map ToolExecution.FailureClass.toDefraDB }
+
+def toolPreflightInputs : List ToolPreflightInput :=
+  ToolExecution.preflightCases.map fun c =>
+    { name := c.name, health := c.health, schemaStatus := c.schema }
+
+@[conformance_family]
+def toolPreflight : Family ToolPreflightInput ToolPreflightOutput where
+  inputs := toolPreflightInputs
+  model := toolPreflightOf
+
+/-- Discovery validates no arguments: only its unchecked-schema cases have a
+discovery counterpart, where dispatch is the endpoint contact and discovery
+reports no failure class. -/
+@[conformance_family]
+def toolPreflightDiscover : Family ToolPreflightInput String where
+  inputs := toolPreflightInputs.filter fun i => i.schemaStatus == .unchecked
+  model := fun i => (ToolExecution.preflight i.health i.schemaStatus).toContract
+
+structure ToolRetryInput where
+  name : String
+  operation : ToolExecution.ToolOperation
+  idempotency : ToolExecution.IdempotencyEvidence
+  failureClass : String
+  deriving Lean.ToJson
+
+def ToolRetryInput.ofCase (c : ToolExecution.RetryCase) : ToolRetryInput :=
+  { name := c.name, operation := c.operation, idempotency := c.idempotency
+    failureClass := c.failure.toDefraDB }
+
+def toolRetryDisposition (i : ToolRetryInput) : ToolExecution.RetryDisposition :=
+  match ToolExecution.FailureClass.all.find? (·.toDefraDB == i.failureClass) with
+  | some failure => ToolExecution.retryDisposition i.operation i.idempotency failure
+  | none => .doNotRetry
+
+def toolRetryReached (c : ToolExecution.RetryCase) (operation : ToolExecution.ToolOperation) :
+    Bool :=
+  c.operation == operation && c.idempotency == .unknown && c.failure == .transport
+
+/-- The MCP pool's `list_tools` path: a transport failure without idempotency
+evidence. -/
+@[conformance_family]
+def toolRetryListTools : Family ToolRetryInput ToolExecution.RetryDisposition where
+  inputs := (ToolExecution.retryCases.filter (toolRetryReached · .mcpListTools)).map .ofCase
+  model := toolRetryDisposition
+
+/-- The MCP pool's `call_tool` path: a transport failure after dispatch without
+idempotency metadata. -/
+@[conformance_family]
+def toolRetryCall : Family ToolRetryInput ToolExecution.RetryDisposition where
+  inputs := (ToolExecution.retryCases.filter (toolRetryReached · .mcpCall)).map .ofCase
+  model := toolRetryDisposition
+
+/-- model-production-gap: production has no retry classifier; the MCP pool
+retries a `list_tools` transport failure and never retries `call_tool`, and no
+production path carries idempotency evidence or the other operations and
+failure classes. -/
+@[conformance_family]
+def toolRetryUnreached : Family ToolRetryInput ToolExecution.RetryDisposition where
+  inputs := (ToolExecution.retryCases.filter fun c =>
+    !toolRetryReached c .mcpListTools && !toolRetryReached c .mcpCall).map .ofCase
+  model := toolRetryDisposition
+
+structure McpHealthInput where
+  name : String
+  startState : Proofs.MCPHealth.HealthState
+  startCount : Nat
+  event : String
+  thresholdK : Nat
+  deriving Lean.ToJson
+
+structure McpHealthOutput where
+  nextState : Option Proofs.MCPHealth.HealthState
+  nextCount : Option Nat
+  rustProjection : Option ToolExecution.Health
+  deriving Lean.ToJson
+
+def mcpHealthStep (i : McpHealthInput) : McpHealthOutput :=
+  let next := if h : i.thresholdK ≥ 1 then
+      (Proofs.MCPHealth.Event.all.find? (·.toDefraDB == i.event)).bind fun e =>
+        Proofs.MCPHealth.step? { state := i.startState, failureCount := i.startCount } e
+          (Proofs.MCPHealth.Threshold.ofNat i.thresholdK h)
+    else none
+  { nextState := next.map (·.state)
+  , nextCount := next.map (·.failureCount)
+  , rustProjection := next.map fun sm => Proofs.MCPHealth.healthProjection sm.state }
+
+@[conformance_family]
+def mcpHealthTransition : Family McpHealthInput McpHealthOutput where
+  inputs := Proofs.MCPHealth.transitionCases.map fun c =>
+    { name := c.name, startState := c.startState, startCount := c.startCount
+      event := c.event.toDefraDB, thresholdK := c.thresholdK }
+  model := mcpHealthStep
+
+structure McpHealthViewInput where
+  name : String
+  nextState : Proofs.MCPHealth.HealthState
+  nextCount : Nat
+  thresholdK : Nat
+  deriving Lean.ToJson
+
+/-- The operator view projects only a surviving service model: a removed
+service has no row. -/
+@[conformance_family]
+def mcpHealthView : Family McpHealthViewInput ToolExecution.Health where
+  inputs := Proofs.MCPHealth.transitionCases.filterMap fun c =>
+    match c.nextState, c.nextCount with
+    | some s, some n => some { name := c.name, nextState := s, nextCount := n, thresholdK := c.thresholdK }
+    | _, _ => none
+  model := fun i => Proofs.MCPHealth.healthProjection i.nextState
+
+example : Proofs.MCPHealth.transitionCases.all (fun c =>
+    c.thresholdK ≥ 1 &&
+    (c.nextState != some .evicted || c.event == .probeFail) &&
+    c.nextState.isSome == c.nextCount.isSome &&
+    c.rustProjection.isSome == c.nextState.isSome) = true := by
+  native_decide
+
+example :
+    Proofs.MCPHealth.transitionCases.any (·.thresholdK == 3) = true ∧
+    Proofs.MCPHealth.transitionCases.any (·.thresholdK ≥ 2) = true ∧
+    Proofs.MCPHealth.transitionCases.any (fun c => c.thresholdK == 1 &&
+      c.startState == .healthy && c.event == .probeFail && c.nextState == some .evicted) = true ∧
+    [Proofs.MCPHealth.HealthState.healthy, .degraded, .evicted].all (fun s =>
+      Proofs.MCPHealth.transitionCases.any (·.nextState == some s)) = true ∧
+    Proofs.MCPHealth.transitionCases.any (fun c => c.nextState.isSome && c.thresholdK == 1) = true ∧
+    Proofs.MCPHealth.transitionCases.any (fun c => c.nextState.isSome && c.thresholdK ≥ 2) = true := by
+  native_decide
 
 def backendHealthCaseJson (witness : Proofs.BackendHealth.TransitionCase) : String :=
   "{"

@@ -16,11 +16,6 @@ def artifactBindingJson : Option ArtifactBinding → String
     ",\"private_root_eligible\":" ++ boolString c.privateRootEligible ++
     ",\"sandbox_enforced\":" ++ boolString c.sandboxEnforced ++ "}"
 
-def artifactModeMeetCasesJson : String := jsonArray <|
-  ArtifactCases.meetCases.map fun (a, b, result) =>
-    "{\"left\":" ++ jsonString a.toDefraDB ++ ",\"right\":" ++
-    jsonString b.toDefraDB ++ ",\"expected\":" ++ jsonString result.toDefraDB ++ "}"
-
 def artifactAdmissionCasesJson : String := jsonArray <|
   ArtifactCases.admissionCases.map fun (name, mode, binding, expected) =>
     "{\"name\":" ++ jsonString name ++ ",\"mode\":" ++ jsonString mode.toDefraDB ++

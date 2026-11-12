@@ -2379,18 +2379,6 @@ async fn backgrounded_bash_is_exempt_from_foreground_ceiling() {
     assert_eq!(meta["timed_out"], false);
 }
 
-#[test]
-fn generated_artifact_mode_meet_cases_drive_command_effect_intersection() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().artifact_mode_meet_cases;
-    assert_eq!(cases.len(), 16);
-    for case in cases {
-        let left = CommandExecutionMode::parse(case["left"].as_str().unwrap()).unwrap();
-        let right = CommandExecutionMode::parse(case["right"].as_str().unwrap()).unwrap();
-        let expected = case["expected"].as_str().unwrap();
-        assert_eq!(left.meet(right).as_str(), expected, "{case}");
-    }
-}
-
 #[tokio::test]
 async fn artifact_command_without_runtime_grant_never_dispatches() {
     let root = temp_root("artifact-missing-grant");

@@ -15,9 +15,8 @@ use gents_documents::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
 };
 use gents_lean_vocab::{
-    lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_cases,
-    lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
-    LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
+    lean_self_config_cases, lean_self_config_field_tables, LeanSelfConfigCase,
+    LeanSelfConfigPatchEntry,
 };
 use gents_protocol::operations::inference::InferenceActor;
 use gents_protocol::tool_names::{CONFIG_TOOL_NAME, SELF_CONFIG_TOOL_NAMES};
@@ -260,7 +259,13 @@ fn typed_doc(
     doc
 }
 
-fn agent_catalog(inputs: &LeanAgentDecisionInputs) -> AgentCatalogView {
+type AgentDecisionInputs =
+    gents_lean_vocab::families::contracts_self_config_agent_decision::AgentDecisionInput<
+        String,
+        String,
+    >;
+
+fn agent_catalog(inputs: &AgentDecisionInputs) -> AgentCatalogView {
     AgentCatalogView {
         agents: inputs
             .agents
@@ -272,7 +277,7 @@ fn agent_catalog(inputs: &LeanAgentDecisionInputs) -> AgentCatalogView {
     }
 }
 
-fn agent_actor(inputs: &LeanAgentDecisionInputs) -> AgentActor {
+fn agent_actor(inputs: &AgentDecisionInputs) -> AgentActor {
     AgentActor {
         did: inputs.actor.did.clone(),
         catalog: inputs.actor.catalog,
@@ -280,7 +285,7 @@ fn agent_actor(inputs: &LeanAgentDecisionInputs) -> AgentActor {
     }
 }
 
-fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
+fn agent_operation(inputs: &AgentDecisionInputs) -> AgentOperation {
     match inputs.operation.as_str() {
         "create" => {
             let input = inputs
@@ -295,12 +300,12 @@ fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
             })
         }
         "edit" => AgentOperation::Edit(
-            entries_patch(
+            entries_patch(&gents_lean_vocab::family::recode::<_, Vec<LeanSelfConfigPatchEntry>>(
                 inputs
                     .edit_patch
                     .as_ref()
                     .unwrap_or_else(|| panic!("{}: edit without edit_patch", inputs.name)),
-            )
+            ))
             .into_iter()
             .map(|(field, value)| match field.as_str() {
                 "enabled" | "tags" => {
@@ -318,40 +323,34 @@ fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
 
 #[test]
 fn generated_agent_decision_cases_drive_production_agent_admission() {
-    let cases = lean_agent_decision_cases();
-    assert!(!cases.is_empty());
-    let mut names = BTreeSet::new();
-    for case in cases {
-        let inputs = &case.inputs;
-        assert!(
-            names.insert(inputs.name.as_str()),
-            "duplicate {}",
-            inputs.name
-        );
-        let decision = decide_agent_operation(
-            &agent_catalog(inputs),
-            &agent_actor(inputs),
-            &agent_operation(inputs),
-            &inputs.target,
-            inputs.make_default,
-        );
-        assert_eq!(
-            decision
-                .as_ref()
-                .err()
-                .map(|error| error.refusal().map(|refusal| refusal.as_str())),
-            case.refusal.as_deref().map(Some),
-            "{}: production agent admission (actor {:?}, front ends {:?}, accepted {}): {decision:?}",
-            inputs.name,
-            inputs.actor,
-            inputs.front_ends,
-            case.accepted
-        );
-        assert_eq!(decision.is_ok(), case.accepted, "{}", inputs.name);
-    }
+    gents_lean_vocab::families::contracts_self_config_agent_decision::replay::<String, String, String>(
+        |inputs| {
+            let decision = decide_agent_operation(
+                &agent_catalog(inputs),
+                &agent_actor(inputs),
+                &agent_operation(inputs),
+                &inputs.target,
+                inputs.make_default,
+            );
+            gents_lean_vocab::families::contracts_self_config_agent_decision::AgentDecisionOutput {
+                accepted: decision.is_ok(),
+                refusal: decision.as_ref().err().map(|error| {
+                    error
+                        .refusal()
+                        .unwrap_or_else(|| {
+                            panic!("{}: refused without an agent refusal: {error:?}", inputs.name)
+                        })
+                        .as_str()
+                        .to_string()
+                }),
+            }
+        },
+    );
 }
 
-fn decode_candidate(candidate: &LeanAgentCandidate) -> AgentCandidate {
+fn decode_candidate(
+    candidate: &gents_lean_vocab::families::contracts_self_config_agent_materialization::CandidateWire<String>,
+) -> AgentCandidate {
     let node_did = &candidate.node_did;
     AgentCandidate {
         agents: candidate
@@ -422,155 +421,125 @@ fn decode_candidate(candidate: &LeanAgentCandidate) -> AgentCandidate {
 
 #[test]
 fn generated_agent_materialization_cases_drive_production_agent_materialization() {
-    let cases = lean_agent_materialization_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let inputs = &case.inputs;
-        let node_did = case.candidate.node_did.as_str();
+    use gents_lean_vocab::families::contracts_self_config_agent_materialization as materialization;
+    gents_lean_vocab::families::contracts_self_config_agent_materialization::replay::<String, String, String>(|case| {
+        let mut decision = serde_json::to_value(case).expect("case encodes");
+        decision
+            .as_object_mut()
+            .expect("case is an object")
+            .remove("candidate");
+        let inputs: AgentDecisionInputs =
+            serde_json::from_value(decision).expect("decision inputs decode");
         let candidate = decode_candidate(&case.candidate);
-        let actual = materialize_agent(
-            &agent_catalog(inputs),
-            &agent_actor(inputs),
-            &agent_operation(inputs),
+        materialize_agent(
+            &agent_catalog(&inputs),
+            &agent_actor(&inputs),
+            &agent_operation(&inputs),
             &inputs.target,
             inputs.make_default,
             &candidate,
-            node_did,
-        );
-        match (&case.session, actual) {
-            (None, None) => {}
-            (Some(expected), Some(actual)) => {
-                assert_eq!(
-                    actual.instructions, expected.instructions,
-                    "{}",
-                    inputs.name
-                );
-                assert_eq!(actual.skill_ids, expected.skill_ids, "{}", inputs.name);
-                assert_eq!(actual.tool_names, expected.tool_names, "{}", inputs.name);
-                assert_eq!(actual.backend_id, expected.backend_id, "{}", inputs.name);
-                assert_eq!(actual.model, expected.model, "{}", inputs.name);
-                assert_eq!(
-                    actual
-                        .effort
-                        .map(|effort| serde_json::to_value(effort).expect("effort serializes")),
-                    expected.effort.clone().map(Value::String),
-                    "{}",
-                    inputs.name
-                );
-            }
-            (expected, actual) => panic!(
-                "{}: production materialization disagrees with Lean (expected session {}, got {})",
-                inputs.name,
-                expected.is_some(),
-                actual.is_some()
-            ),
-        }
-    }
-}
-
-fn network_mode(name: &str) -> CommandNetworkMode {
-    serde_json::from_value(Value::String(name.to_string()))
-        .unwrap_or_else(|error| panic!("network mode {name}: {error}"))
+            &case.candidate.node_did,
+        )
+        .map(|actual| materialization::SessionWire {
+            instructions: actual.instructions,
+            skill_ids: actual.skill_ids,
+            tool_names: actual.tool_names,
+            backend_id: actual.backend_id,
+            model: actual.model,
+            effort: actual.effort.map(|effort| {
+                serde_json::to_value(effort)
+                    .expect("effort serializes")
+                    .as_str()
+                    .expect("effort is a string")
+                    .to_string()
+            }),
+        })
+    });
 }
 
 #[test]
 fn generated_sibling_tools_cases_drive_production_tools_selection() {
-    let cases = lean_sibling_tools_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let requested = case.requested_network.as_deref().map(network_mode);
-        let existing = network_mode(&case.existing_network);
-        let admitted = admit_sibling_tools_target(&SiblingToolsTarget {
-            owner_matches: case.owner_matches,
-            shared_context: case.shared_context,
-            shared_tools: case.shared_tools,
-        })
-        .is_ok()
-            && validate_tool_network_selection(requested).is_ok();
-        assert_eq!(admitted, case.admitted, "{case:?}: production admission");
-        if !admitted {
-            continue;
-        }
-
-        let mut tools = gents_documents::Tools::default();
-        apply_tool_grant_selection(&mut tools, None, Some(existing));
-        apply_tool_grant_selection(&mut tools, None, requested);
-        let selected = tools
-            .host
-            .as_ref()
-            .and_then(|host| host.bash.as_ref())
-            .and_then(|bash| bash.network_mode)
-            .expect("existing network mode is materialized");
-        assert_eq!(selected, network_mode(&case.result_network), "{case:?}");
-        assert!(
-            selected.meet(existing) == selected,
-            "{case:?}: selection widened"
-        );
-    }
+    gents_lean_vocab::families::contracts_self_config_sibling_tools::replay::<CommandNetworkMode>(
+        |case| {
+            let admitted = admit_sibling_tools_target(&SiblingToolsTarget {
+                owner_matches: case.owner_matches,
+                shared_context: case.shared_context,
+                shared_tools: case.shared_tools,
+            })
+            .is_ok()
+                && validate_tool_network_selection(case.requested_network).is_ok();
+            let mut tools = gents_documents::Tools::default();
+            apply_tool_grant_selection(&mut tools, None, Some(case.existing_network));
+            apply_tool_grant_selection(&mut tools, None, case.requested_network);
+            let selected = tools
+                .host
+                .as_ref()
+                .and_then(|host| host.bash.as_ref())
+                .and_then(|bash| bash.network_mode)
+                .expect("existing network mode is materialized");
+            if admitted {
+                assert!(
+                    selected.meet(case.existing_network) == selected,
+                    "{case:?}: selection widened"
+                );
+            }
+            gents_lean_vocab::families::contracts_self_config_sibling_tools::SiblingToolsOutput {
+                admitted,
+                result_network: selected,
+            }
+        },
+    );
 }
 
 #[test]
 fn generated_self_config_selection_cases_drive_production_tools_selection() {
-    let cases = lean_self_config_selection_cases();
-    assert!(!cases.tool_flag_cases.is_empty());
-    for case in &cases.tool_flag_cases {
+    gents_lean_vocab::families::contracts_self_config_tool_flag::replay(|case| {
         let mut tools = gents_documents::Tools::default();
         apply_tool_grant_selection(&mut tools, Some(case.existing), None);
         apply_tool_grant_selection(&mut tools, case.requested, None);
-        assert_eq!(
-            tools
-                .integrations
-                .as_ref()
-                .and_then(|v| v.lsp.as_ref())
-                .is_some(),
-            case.selected,
-            "{case:?}: lsp"
-        );
         assert!(tools.self_config.is_none());
+        tools
+            .integrations
+            .as_ref()
+            .and_then(|v| v.lsp.as_ref())
+            .is_some()
+    });
+}
+
+fn job_guard_tools(integrations: Option<&Value>) -> Map<String, Value> {
+    let mut tools = Map::new();
+    tools.insert(
+        "self_config".into(),
+        serde_json::json!({"enable_self_config": true}),
+    );
+    if let Some(integrations) = integrations {
+        tools.insert("integrations".into(), integrations.clone());
     }
+    tools
 }
 
 /// Check the self-config grant slice for native-authorized model rows. The
 /// native authorization outcome is exercised by the signed database test.
 #[test]
 fn generated_self_config_job_guard_cases_drive_native_guard() {
-    let cases = lean_self_config_selection_cases();
-    assert!(!cases.job_guard_cases.is_empty());
-    let tools = |integrations: Option<&Value>| -> Map<String, Value> {
-        let mut tools = Map::new();
-        tools.insert(
-            "self_config".into(),
-            serde_json::json!({"enable_self_config": true}),
-        );
-        if let Some(integrations) = integrations {
-            tools.insert("integrations".into(), integrations.clone());
-        }
-        tools
-    };
-    for case in &cases.job_guard_cases {
-        if !case.native_authorized || !case.native_source_authorized {
-            continue;
-        }
+    gents_lean_vocab::families::contracts_self_config_job_guard::replay(|case| {
         let held = OperatorGrants::default();
-        let candidate = tools(Some(&case.candidate_integrations));
-        let accepted = match case.writer.as_str() {
+        let candidate = job_guard_tools(Some(
+            &serde_json::to_value(&case.candidate_integrations).expect("integrations encode"),
+        ));
+        match case.writer.as_str() {
             "model" if case.selected_before => {
-                let stored = tools(case.stored_integrations.as_ref());
-                guard_tools_keep_grants(&held, Some(&stored), &candidate).is_ok()
+                let stored = case
+                    .stored_integrations
+                    .as_ref()
+                    .map(|stored| serde_json::to_value(stored).expect("integrations encode"));
+                guard_tools_keep_grants(&held, Some(&job_guard_tools(stored.as_ref())), &candidate)
+                    .is_ok()
             }
             "model" => reselection_keeps_grants(&held, None, Some(&candidate)).is_ok(),
-            "operator" => {
-                assert!(
-                    case.accepted,
-                    "{}: operator writes bypass the guard",
-                    case.name
-                );
-                continue;
-            }
             other => panic!("{}: unknown writer {other:?}", case.name),
-        };
-        assert_eq!(accepted, case.accepted, "{}: {case:?}", case.name);
-    }
+        }
+    });
 }
 
 #[test]

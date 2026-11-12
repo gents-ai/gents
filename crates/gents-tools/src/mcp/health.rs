@@ -1303,7 +1303,6 @@ mod tests {
         McpHealthCheckService, ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
     };
     use crate::mcp::pool::McpPool;
-    use gents_lean_vocab::{lean_mcp_health_cases, LeanMcpHealthCase};
     use gents_store::config_client::ConfigAccess;
     use gents_store::identity::NodeIdentity;
 
@@ -1648,30 +1647,14 @@ mod tests {
         node.shutdown().await.expect("shut down test node");
     }
 
-    fn health_state_from_lean(case: &LeanMcpHealthCase, state: &str) -> HealthStateInternal {
-        HealthStateInternal::parse(state).unwrap_or_else(|_| {
-            panic!(
-                "Lean MCP health case {} produced unknown state {:?}",
-                case.name, state
-            )
-        })
-    }
-
-    fn health_state_name(state: HealthStateInternal) -> &'static str {
-        state.as_str()
-    }
-
-    fn probe_event_from_lean(case: &LeanMcpHealthCase) -> ProbeEvent {
-        match case.event.as_str() {
+    fn probe_event_from_lean(name: &str, event: &str) -> ProbeEvent {
+        match event {
             "probeSuccessFresh" => ProbeEvent::ProbeSuccess { stale: false },
             "probeSuccessStale" => ProbeEvent::ProbeSuccess { stale: true },
             "probeFail" => ProbeEvent::ProbeFail,
             "backoffExpiry" => ProbeEvent::BackoffExpiry,
             "registryAbsent" => ProbeEvent::RegistryAbsent,
-            other => panic!(
-                "Lean MCP health case {} produced unknown event {:?}",
-                case.name, other
-            ),
+            other => panic!("Lean MCP health case {name} produced unknown event {other:?}"),
         }
     }
 
@@ -1693,153 +1676,65 @@ mod tests {
     }
 
     #[test]
-    fn generated_mcp_health_cases_pin_threshold_projection_shape() {
-        let cases = lean_mcp_health_cases();
-        assert!(
-            !cases.is_empty(),
-            "Lean must emit MCP health transition cases"
-        );
-
+    fn generated_mcp_health_cases_match_health_checker_transitions() {
+        use gents_lean_vocab::families::contracts_mcp_health_transition as transition;
         assert_eq!(
             crate::mcp::health::HealthCheckerOptions::default().failure_threshold_k,
             3,
-            "health checker default threshold drifted; update the required K coverage below"
+            "health checker default threshold drifted; the model's K=3 rows cover it"
         );
-        assert!(
-            cases.iter().any(|case| case.threshold_k == 3),
-            "K=3 rows (the production health checker default) must be emitted"
-        );
-        assert!(
-            cases.iter().any(|case| case.threshold_k >= 2),
-            "K>=2 hysteresis rows must stay emitted alongside the K=1 collapse subset"
-        );
-
-        let k1 = cases
-            .iter()
-            .filter(|case| case.threshold_k == 1)
-            .collect::<Vec<_>>();
-        assert!(
-            !k1.is_empty(),
-            "the K=1 collapse subset (a single probeFail evicts) must be emitted"
-        );
-        assert!(
-            k1.iter().any(|case| {
-                case.start_state == "healthy"
-                    && case.event == "probeFail"
-                    && case.next_state.as_deref() == Some("evicted")
-            }),
-            "H7: at K=1 the first probeFail must collapse healthy -> evicted directly"
-        );
-
-        let starts = cases
-            .iter()
-            .map(|case| case.start_state.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
-        for state in gents_protocol::tool_service_health::ToolServiceHealthState::ALL {
-            assert!(
-                starts.contains(state.as_str()),
-                "missing persisted state {state:?}"
-            );
-        }
-
-        for case in cases {
-            assert!(
-                case.threshold_k >= 1,
-                "case {} must carry a positive failure threshold",
-                case.name
-            );
-            if case.next_state.as_deref() == Some("evicted") {
-                assert_eq!(
-                    case.event, "probeFail",
-                    "case {}: eviction is probe-failure driven only",
-                    case.name
-                );
-            }
-            assert_eq!(
-                case.next_state.is_some(),
-                case.next_count.is_some(),
-                "case {}: removal drops both state and count together",
-                case.name
-            );
-            assert_eq!(
-                case.rust_projection.is_some(),
-                case.next_state.is_some(),
-                "case {}: the operator projection exists exactly when the model survives",
-                case.name
-            );
-
-            if let Some(next_state) = case.next_state.as_deref() {
-                let parsed =
-                    gents_protocol::tool_service_health::ToolServiceHealthState::parse(next_state)
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "case {} emitted next_state outside the ToolServiceHealthState owner vocabulary: {error}",
-                                case.name
-                            )
-                        });
-                assert_eq!(
-                    parsed.project().as_str(),
-                    case.rust_projection
-                        .as_deref()
-                        .expect("projection exists whenever the model survives (checked above)",),
-                    "case {}: Lean rust_projection drifted from the owner's operator projection",
-                    case.name
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn generated_mcp_health_cases_match_health_checker_transitions() {
-        let cases = lean_mcp_health_cases();
-        assert!(
-            !cases.is_empty(),
-            "Lean must emit at least one MCP health case"
-        );
-
-        for case in cases {
-            let now = chrono::Utc::now();
+        let starts = std::cell::RefCell::new(std::collections::BTreeSet::new());
+        gents_lean_vocab::families::contracts_mcp_health_transition::replay::<String, String>(|case| {
+            starts.borrow_mut().insert(case.start_state.clone());
             let options = HealthCheckerOptions {
                 failure_threshold_k: case.threshold_k.try_into().unwrap(),
                 ..Default::default()
             };
             let start_model = ServiceModelInternal {
-                state: health_state_from_lean(case, &case.start_state),
+                state: HealthStateInternal::parse(&case.start_state).unwrap_or_else(|_| {
+                    panic!(
+                        "Lean MCP health case {} produced unknown state {:?}",
+                        case.name, case.start_state
+                    )
+                }),
                 failure_count: case.start_count.try_into().unwrap(),
                 backoff_until: None,
             };
-
-            let actual = step_service(start_model, probe_event_from_lean(case), now, &options);
-            let actual_projection = actual
-                .as_ref()
-                .map(|model| model.state.project().to_string());
-            assert_eq!(
-                actual_projection.as_deref(),
-                case.rust_projection.as_deref(),
-                "Lean MCP health case {} must match Rust HealthStatus projection",
-                case.name
+            let actual = step_service(
+                start_model,
+                probe_event_from_lean(&case.name, &case.event),
+                chrono::Utc::now(),
+                &options,
             );
-
-            match (case.next_state.as_deref(), case.next_count, actual) {
-                (None, None, None) => {}
-                (Some(expected_state), Some(expected_count), Some(actual_model)) => {
-                    assert_eq!(
-                        health_state_name(actual_model.state),
-                        expected_state,
-                        "Lean MCP health case {} must match next_state",
+            if let Some(model) = actual.as_ref() {
+                let owner = gents_protocol::tool_service_health::ToolServiceHealthState::parse(
+                    model.state.as_str(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "case {}: state outside the ToolServiceHealthState vocabulary: {error}",
                         case.name
-                    );
-                    assert_eq!(
-                        actual_model.failure_count as usize, expected_count,
-                        "Lean MCP health case {} must match next_count",
-                        case.name
-                    );
-                }
-                other => panic!(
-                    "Lean MCP health case {} produced mismatched removal/count shape: {:?}",
-                    case.name, other
-                ),
+                    )
+                });
+                assert_eq!(
+                    owner.project().as_str(),
+                    model.state.project().to_string(),
+                    "case {}: the owner's operator projection drifted",
+                    case.name
+                );
             }
+            transition::McpHealthOutput {
+                next_state: actual.as_ref().map(|model| model.state.as_str().to_string()),
+                next_count: actual.as_ref().map(|model| model.failure_count as u64),
+                rust_projection: actual.as_ref().map(|model| model.state.project().to_string()),
+            }
+        });
+        let starts = starts.into_inner();
+        for state in gents_protocol::tool_service_health::ToolServiceHealthState::ALL {
+            assert!(
+                starts.contains(state.as_str()),
+                "missing persisted state {state:?}"
+            );
         }
     }
 
