@@ -2,7 +2,9 @@
 //! `DocumentOperations`), with the inference owner's profile policy bound.
 
 use gents_inference::resolved::ProviderProfilePolicy;
-use gents_protocol::operations::document::{DeleteReceipt, DocumentReceipt, OperationActor};
+use gents_protocol::operations::document::{
+    DocumentDeleteReceipt, DocumentReceipt, OperationActor,
+};
 use gents_protocol::operations::skill::SkillOperationError;
 use gents_store::config_client::ConfigAccess;
 
@@ -51,7 +53,7 @@ pub async fn delete(
     access: &ConfigAccess,
     owner: &str,
     skill_id: &str,
-) -> Result<DeleteReceipt, SkillOperationError> {
+) -> Result<DocumentDeleteReceipt, SkillOperationError> {
     gents_documents::operations::skill::delete(
         access,
         OperationActor::User,
@@ -59,7 +61,6 @@ pub async fn delete(
         skill_id,
         None,
         &ProviderProfilePolicy,
-        true,
     )
     .await
     .map_err(gents_documents::operations::skill::finish)

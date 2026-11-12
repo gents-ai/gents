@@ -8,7 +8,9 @@ mod tools;
 
 use anyhow::Result;
 use gents_documents::apply_desired_state_plan;
-use gents_documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
+use gents_documents::operations::delete;
+use gents_documents::DesiredStateApplyPlan;
+use gents_protocol::operations::document::{DocumentDeleteError, OperationActor};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 
@@ -33,6 +35,8 @@ pub async fn apply_plan(
         .await
 }
 
+/// Deletes one document of `node_did` as the User. `Ok(0)` is a target that
+/// does not exist.
 pub async fn delete_scoped_document(
     access: &ConfigAccess,
     operation: &'static str,
@@ -40,28 +44,22 @@ pub async fn delete_scoped_document(
     node_did: &str,
     id: &str,
 ) -> Result<usize> {
-    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
-        collection,
-        node_did.to_owned(),
-        id.to_owned(),
-    )])?;
-    access
-        .transact_write(operation, |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                let existed = read_desired_state_record_in_txn(txn, collection, node_did, id)
-                    .await?
-                    .is_some();
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await?;
-                Ok(usize::from(existed))
-            })
-        })
-        .await
+    match delete::delete(
+        access,
+        operation,
+        node_did,
+        &[(collection, id.to_owned())],
+        OperationActor::User,
+        None,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    {
+        Ok(receipt) => Ok(receipt.targets.len()),
+        Err(DocumentDeleteError::TargetMissing { .. }) => Ok(0),
+        Err(DocumentDeleteError::Passthrough(error)) => Err(anyhow::anyhow!(error)),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[cfg(test)]

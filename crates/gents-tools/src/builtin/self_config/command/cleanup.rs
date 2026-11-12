@@ -1,4 +1,8 @@
 use super::*;
+use gents_documents::operations::delete;
+use gents_protocol::operations::document::{
+    DocumentDeleteError, DocumentDeletePreview, OperationActor,
+};
 use gents_session::session::output_render::ordered;
 
 impl ConfigCommandTool {
@@ -87,34 +91,54 @@ impl ConfigCommandTool {
         });
 
         let owner = self.node_did.clone();
+        let removals = targets
+            .iter()
+            .map(|(_, target, id)| (target.collection(), id.clone()))
+            .collect::<Vec<_>>();
         let preview = verb == "preview";
         if !preview {
             self.execution.enter_mutation();
         }
-        let operation = if preview {
-            "self_config.cleanup_preview"
+        let access = self.core.access()?;
+        let policy = gents_inference::resolved::ProviderProfilePolicy;
+        let receipt = if preview {
+            match delete::preview_delete(
+                &access,
+                "self_config.cleanup_preview",
+                &owner,
+                &removals,
+                OperationActor::Agent,
+                &policy,
+            )
+            .await
+            .map_err(|error| delete_failure(error, &targets))?
+            {
+                DocumentDeletePreview::Admitted(receipt) => receipt,
+                DocumentDeletePreview::Refused { refusal, error } => {
+                    let guidance = delete_guidance(&error, &targets);
+                    return ordered! {
+                        "admitted": false,
+                        "committed": false,
+                        "refusal": refusal.as_str(),
+                        "message": guidance.message,
+                        "next_call": guidance.next_call,
+                    }
+                    .pretty();
+                }
+            }
         } else {
-            "self_config.cleanup_remove"
+            delete::delete(
+                &access,
+                "self_config.cleanup_remove",
+                &owner,
+                &removals,
+                OperationActor::Agent,
+                expected_digest.as_deref(),
+                &policy,
+            )
+            .await
+            .map_err(|error| delete_failure(error, &targets))?
         };
-        let delete_targets = targets
-            .iter()
-            .map(|(_, target, id)| (*target, id.clone()))
-            .collect::<Vec<_>>();
-        let receipt = gents_documents::operations::delete::delete(
-            &self.core.access()?,
-            operation,
-            &gents_documents::operations::delete::DocumentDelete {
-                actor: gents_protocol::operations::document::OperationActor::Agent,
-                owner: &owner,
-                targets: &delete_targets,
-                digest: expected_digest.as_deref(),
-            },
-            &gents_inference::resolved::ProviderProfilePolicy,
-            !preview,
-        )
-        .await
-        .map_err(delete_refused)?;
-        let plan_digest = receipt.plan_digest;
         let receipt_targets = receipt
             .targets
             .iter()
@@ -128,6 +152,7 @@ impl ConfigCommandTool {
                 })
             })
             .collect::<Vec<_>>();
+        let plan_digest = receipt.plan_digest;
         ordered! {
             "committed": !preview,
             "operation": if preview { "preview cleanup" } else { "cleanup" },
@@ -148,31 +173,48 @@ impl ConfigCommandTool {
     }
 }
 
-/// A refused delete as the model reads it; a kept reference passes on as the
-/// reference owner's error for `failure_guidance`.
-fn delete_refused(failure: gents_documents::operations::delete::DeleteFailure) -> anyhow::Error {
-    use gents_documents::operations::delete::DeleteError;
-    use gents_documents::operations::OperationFailure;
-    use gents_protocol::operations::document::DocumentOperationError;
-    match failure {
-        OperationFailure::Other(error) => error,
-        OperationFailure::Operation(DeleteError::Referenced { reference, .. }) => reference.into(),
-        OperationFailure::Operation(DeleteError::Document(DocumentOperationError::Missing {
-            collection,
-            id,
-            ..
-        })) => {
-            anyhow!(
-                "no owned {collection} with ID {id:?}; list or inspect exact IDs before cleanup"
-            )
+fn delete_guidance(
+    error: &DocumentDeleteError,
+    targets: &[(String, SelfConfigTarget, String)],
+) -> CommandGuidance {
+    let message = match error {
+        DocumentDeleteError::StillReferenced {
+            target, target_id, ..
+        } => format!(
+            "Deletion would leave a broken reference to {target} {target_id:?}. Update the referring document to remove or redirect the reference, then retry deletion. Cause: {error}"
+        ),
+        error => gents_protocol::error_chain::ErrorChain(error).to_string(),
+    };
+    let requested = |collection: &str| {
+        targets
+            .iter()
+            .find(|(_, target, _)| target.collection().graphql_type() == collection)
+            .map(|(resource, _, _)| resource.as_str())
+    };
+    let next_call = match error {
+        DocumentDeleteError::TargetMissing { collection, .. } => {
+            requested(collection).map(|resource| json!({"argv":[resource,"list"]}))
         }
-        OperationFailure::Operation(DeleteError::Document(DocumentOperationError::Changed {
-            expected,
-            current,
-        })) => {
-            anyhow!("cleanup target content changed: preview authorized {expected:?}, current plan is {current:?}; preview again")
-        }
-        OperationFailure::Operation(DeleteError::Document(error)) => error.into(),
+        DocumentDeleteError::StillReferenced { collection, id, .. } => HELP_INDEX
+            .iter()
+            .find(|(resource, _)| {
+                cleanup_target(resource)
+                    .is_ok_and(|target| target.collection().graphql_type() == *collection)
+            })
+            .map(|(resource, _)| json!({"argv":[resource,"get"],"target_id":id})),
+        _ => None,
+    }
+    .unwrap_or_else(|| json!({"argv":["help","cleanup"]}));
+    CommandGuidance { message, next_call }
+}
+
+fn delete_failure(
+    error: DocumentDeleteError,
+    targets: &[(String, SelfConfigTarget, String)],
+) -> anyhow::Error {
+    match error {
+        DocumentDeleteError::Passthrough(error) => anyhow::anyhow!(error),
+        error => delete_guidance(&error, targets).into(),
     }
 }
 

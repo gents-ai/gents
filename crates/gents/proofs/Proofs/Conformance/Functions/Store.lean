@@ -1,5 +1,6 @@
 import Proofs.Store.Identity.GrantSets
 import Proofs.Store.Identity.EnrollmentGrant
+import Proofs.Store.SchemaInstall
 import Proofs.Conformance.Family
 
 namespace Identity.GrantSets
@@ -19,3 +20,11 @@ deriving instance Lean.ToJson for ApprovalStep
 attribute [conformance_function] afterGrant
 
 end Identity.EnrollmentGrant
+
+namespace SchemaInstall
+
+deriving instance Lean.ToJson for Live, Decision
+
+attribute [conformance_function] decide requestAdmitted
+
+end SchemaInstall

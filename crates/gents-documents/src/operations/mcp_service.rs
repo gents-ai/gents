@@ -1,5 +1,5 @@
 use gents_protocol::operations::document::{
-    DeleteReceipt, DocumentOperationError, DocumentReceipt, OperationActor, WriteMode,
+    DocumentDeleteReceipt, DocumentOperationError, DocumentReceipt, OperationActor, WriteMode,
 };
 use gents_protocol::operations::mcp_service::{
     EndpointHost, EndpointScheme, EndpointStorage, McpRegisterInput, McpServiceOperationError,
@@ -9,7 +9,6 @@ use gents_protocol::operations::StringUpdate;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use serde_json::{json, Map, Value};
 
-use super::delete::DocumentDelete;
 use super::write::{write_in_txn, DocumentWrite};
 use super::OperationFailure;
 use crate::inference_backend::AdvertisedProfilePolicy;
@@ -263,7 +262,7 @@ pub fn document_patch(document: &ToolServiceRegistry) -> anyhow::Result<SelfConf
         .collect())
 }
 
-/// Deletes one MCP service of `owner`, or previews the delete.
+/// Deletes one MCP service of `owner` through the one document delete.
 pub async fn delete(
     access: &ConfigAccess,
     actor: OperationActor,
@@ -271,21 +270,20 @@ pub async fn delete(
     service_id: &str,
     digest: Option<&str>,
     policy: &dyn AdvertisedProfilePolicy,
-    commit: bool,
-) -> Result<DeleteReceipt, McpServiceFailure> {
-    let targets = [(SelfConfigTarget::ToolServiceRegistry, service_id.to_owned())];
+) -> Result<DocumentDeleteReceipt, McpServiceFailure> {
+    let targets = [(
+        SelfConfigTarget::ToolServiceRegistry.collection(),
+        service_id.to_owned(),
+    )];
     super::delete::delete(
         access,
         "operations.mcp_service.delete",
-        &DocumentDelete {
-            actor,
-            owner,
-            targets: &targets,
-            digest,
-        },
+        owner,
+        &targets,
+        actor,
+        digest,
         policy,
-        commit,
     )
     .await
-    .map_err(|failure| failure.map(|error| McpServiceOperationError::Document(error.into())))
+    .map_err(|error| OperationFailure::Operation(McpServiceOperationError::Delete(error)))
 }

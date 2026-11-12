@@ -3,6 +3,7 @@ import Proofs.Store.Identity.RelationshipReplay
 import Proofs.Shared.Basic
 import Proofs.Automation.Process
 import Proofs.Store.Persistence
+import Proofs.Store.SchemaInstall
 import Proofs.Store.StorageObservation
 import Proofs.Store.StorageWriteGate
 import Proofs.Store.NativeCompletion
@@ -44,6 +45,7 @@ import Proofs.Clients.QueuedSteering
 import Proofs.Clients.OperationsDelivery
 import Proofs.Runtime.RuntimeReconcile
 import Proofs.P2P.PairingReconcile
+import Proofs.Documents.Operations
 import Proofs.Documents.ScopeTemplates
 import Proofs.Automation.Triggers
 import Proofs.Automation.Goals

@@ -113,8 +113,9 @@ pub use pairing_reader::{PairingObservation, PairingReadReason};
 pub use schema_contract::collection_schema_contract_digest;
 pub use schema_contract::{SchemaContractError, SchemaFieldDelta};
 pub use schema_install::{
-    apply_additive_schema_install, apply_schema_install, preview_additive_schema_install,
-    preview_schema_install, schema_install_mismatch, SchemaInstallError, SchemaInstallMismatch,
+    apply_client_schema_install, apply_schema_install, preview_client_schema_install,
+    preview_schema_install, schema_install_decision, schema_install_mismatch,
+    schema_install_refusal, schema_request_admitted, SchemaInstallError, SchemaInstallMismatch,
     SchemaInstallPlan,
 };
 pub use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;

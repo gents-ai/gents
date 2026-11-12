@@ -3,8 +3,8 @@ use std::error::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::document::{DocumentDeleteError, DocumentOperationError, DocumentPatch};
 use super::NextCall;
-use super::document::{DocumentOperationError, DocumentPatch};
 use super::StringUpdate;
 
 pub const RESOURCE: &str = "skill";
@@ -88,6 +88,8 @@ pub enum SkillOperationError {
     },
     #[error(transparent)]
     Document(#[from] DocumentOperationError),
+    #[error(transparent)]
+    Delete(#[from] DocumentDeleteError),
 }
 
 impl SkillOperationError {
@@ -101,6 +103,7 @@ impl SkillOperationError {
                 NextCall::Inspect { resource: "tools" }
             }
             Self::Document(error) => error.recovery(RESOURCE),
+            Self::Delete(error) => error.recovery(RESOURCE),
         }
     }
 

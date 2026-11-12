@@ -2,7 +2,9 @@
 //! `DocumentOperations`), with the inference owner's profile policy bound.
 
 use gents_inference::resolved::ProviderProfilePolicy;
-use gents_protocol::operations::document::{DeleteReceipt, DocumentReceipt, OperationActor};
+use gents_protocol::operations::document::{
+    DocumentDeleteReceipt, DocumentReceipt, OperationActor,
+};
 use gents_protocol::operations::mcp_service::{McpRegisterInput, McpServiceOperationError};
 use gents_store::config_client::ConfigAccess;
 
@@ -39,7 +41,7 @@ pub async fn delete(
     access: &ConfigAccess,
     owner: &str,
     service_id: &str,
-) -> Result<DeleteReceipt, McpServiceOperationError> {
+) -> Result<DocumentDeleteReceipt, McpServiceOperationError> {
     gents_documents::operations::mcp_service::delete(
         access,
         OperationActor::User,
@@ -47,7 +49,6 @@ pub async fn delete(
         service_id,
         None,
         &ProviderProfilePolicy,
-        true,
     )
     .await
     .map_err(gents_documents::operations::mcp_service::finish)

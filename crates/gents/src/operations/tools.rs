@@ -3,7 +3,7 @@
 //! here, since an Agent saves through its config tool.
 
 use gents_inference::resolved::ProviderProfilePolicy;
-use gents_protocol::operations::document::{DeleteReceipt, OperationActor};
+use gents_protocol::operations::document::{DocumentDeleteReceipt, OperationActor};
 use gents_protocol::operations::tools::{ToolsOperationError, ToolsSaveInput};
 use gents_store::config_client::ConfigAccess;
 use gents_tools::builtin::self_config::tools_operation::{finish, save_tools, ToolsActor};
@@ -77,24 +77,20 @@ pub async fn delete(
     access: &ConfigAccess,
     owner: &str,
     tools_id: &str,
-) -> Result<DeleteReceipt, ToolsOperationError> {
+) -> Result<DocumentDeleteReceipt, ToolsOperationError> {
     let targets = [(
-        gents_documents::patch::SelfConfigTarget::Tools,
+        gents_documents::patch::SelfConfigTarget::Tools.collection(),
         tools_id.to_owned(),
     )];
     gents_documents::operations::delete::delete(
         access,
         "operations.tools.delete",
-        &gents_documents::operations::delete::DocumentDelete {
-            actor: OperationActor::User,
-            owner,
-            targets: &targets,
-            digest: None,
-        },
+        owner,
+        &targets,
+        OperationActor::User,
+        None,
         &ProviderProfilePolicy,
-        true,
     )
     .await
-    .map_err(|failure| failure.map(|error| ToolsOperationError::Document(error.into())))
-    .map_err(finish)
+    .map_err(ToolsOperationError::Delete)
 }

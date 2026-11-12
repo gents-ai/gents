@@ -115,7 +115,7 @@ pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
     print_json(&json!({
         "deleted": receipt.targets.len(),
         "skill_id": args.skill_id,
-        "node_did": receipt.node_did,
+        "node_did": receipt.owner,
     }))
 }
 

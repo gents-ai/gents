@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use gents_documents::operations::delete;
+use gents_protocol::operations::document::{DocumentDeleteError, OperationActor};
 use gents_protocol::operations::inference::InferenceDocument;
 use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
@@ -7,9 +9,7 @@ use serde_json::{json, Value};
 use super::inference_failure::InferenceFailure;
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{ConfigListArgs, ConfigShowArgs};
-use crate::config_import::apply_delete_collection;
 use crate::config_writes::ConfigAccess;
-use crate::desired_state;
 use crate::request_helpers::resolve_dual_id;
 use crate::{graphql_rows, print_json, resolve_config_access};
 
@@ -73,6 +73,19 @@ pub(crate) const NODE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "node",
     collection: Collection::Node,
 };
+
+const DOCUMENT_SPECS: [ConfigDocumentSpec; 10] = [
+    BACKEND_SPEC,
+    AGENT_SPEC,
+    TOOLS_SPEC,
+    PROFILE_SPEC,
+    TRIGGER_SPEC,
+    SCHEDULE_SPEC,
+    MCP_SPEC,
+    SKILL_SPEC,
+    EVENT_SOURCE_SPEC,
+    CONTEXT_SPEC,
+];
 
 pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
@@ -144,51 +157,30 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .with_context(|| format!("resolving access for config {} rm", spec.noun))?;
-    let live = live_manifest_for_delete(
-        &access,
-        spec,
-        &id,
+    let node_did = super::binding::resolve_target_node_did(
+        None,
+        None,
         args.home.as_deref(),
         args.graphql.as_deref(),
+        Some(&access),
     )
     .await?;
-    let mut desired = live.clone();
-    remove_target(&mut desired, spec.collection, &id)?;
-
-    let deletes = desired_state::prune::prune_safe_deletes(&desired, &live)?;
-    let target_selected = deletes
-        .iter()
-        .any(|doc| doc.collection == spec.collection && doc.id == id);
-    if !target_selected {
-        anyhow::bail!("refused: {} {} is still referenced", spec.noun, id);
-    }
-    if deletes
-        .iter()
-        .any(|doc| doc.collection != spec.collection || doc.id != id)
-    {
-        anyhow::bail!(
-            "refused: deleting {} {} would select additional documents",
-            spec.noun,
-            id
-        );
-    }
-
-    let collection = spec.collection;
-    let node_did = &live.node.node_did;
-    let id_ref = &id;
-    let deleted = access
-        .transact_write("cli.config.delete", move |txn| {
-            Box::pin(async move {
-                apply_delete_collection(txn, collection, node_did, std::slice::from_ref(id_ref))
-                    .await
-            })
-        })
-        .await?;
+    let receipt = delete::delete(
+        &access,
+        "cli.config.delete",
+        &node_did,
+        &[(spec.collection, id.clone())],
+        OperationActor::User,
+        None,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .map_err(|error| delete_failure(spec, error))?;
     match output {
         OutputFormat::Json => print_json(&json!({
             "collection": spec.collection.graphql_type(),
             "id": id,
-            "deleted": deleted,
+            "deleted": receipt.targets.len(),
         })),
         _ => unreachable!("ensure_supported restricts config rm output formats"),
     }
@@ -220,6 +212,40 @@ pub(super) async fn inference_rm(document: InferenceDocument, args: ConfigShowAr
     }
 }
 
+fn delete_failure(spec: ConfigDocumentSpec, error: DocumentDeleteError) -> anyhow::Error {
+    let next = match &error {
+        DocumentDeleteError::Passthrough(_) => None,
+        DocumentDeleteError::StillReferenced { collection, id, .. } => Some(
+            DOCUMENT_SPECS
+                .iter()
+                .find(|referrer| referrer.collection.graphql_type() == *collection)
+                .map_or_else(
+                    || format!("gents utils data query find --collection {collection}"),
+                    |referrer| {
+                        format!("gents config {} show {id}", referrer.noun.replace(' ', "-"))
+                    },
+                ),
+        ),
+        DocumentDeleteError::TargetMissing { .. } => {
+            Some(format!("gents config {} list", spec.noun.replace(' ', "-")))
+        }
+        _ => Some(format!(
+            "gents config {} rm --help",
+            spec.noun.replace(' ', "-")
+        )),
+    };
+    match next {
+        Some(next) => anyhow::anyhow!(
+            "{}\nNext: {next}",
+            gents_protocol::error_chain::ErrorChain(&error)
+        ),
+        None => match error {
+            DocumentDeleteError::Passthrough(error) => anyhow::anyhow!(error),
+            error => error.into(),
+        },
+    }
+}
+
 fn resolve_config_id(spec: ConfigDocumentSpec, args: &ConfigShowArgs) -> Result<String> {
     resolve_dual_id(
         spec.noun,
@@ -227,27 +253,6 @@ fn resolve_config_id(spec: ConfigDocumentSpec, args: &ConfigShowArgs) -> Result<
         args.id.as_deref(),
         args.id_flag.as_deref(),
     )
-}
-
-async fn live_manifest_for_delete(
-    access: &ConfigAccess,
-    spec: ConfigDocumentSpec,
-    id: &str,
-    home: Option<&std::path::Path>,
-    graphql: Option<&str>,
-) -> Result<desired_state::DesiredStateManifest> {
-    let node_did =
-        super::binding::resolve_target_node_did(None, None, home, graphql, Some(access)).await?;
-    let bundle = crate::build_config_export_bundle(access, &node_did).await?;
-    let docs = bundle.docs_for_collection(spec.collection)?;
-    anyhow::ensure!(
-        docs.iter().any(|row| row
-            .get(spec.collection.unique_field())
-            .and_then(Value::as_str)
-            == Some(id)),
-        "target configuration is absent from the selected owner"
-    );
-    desired_state::manifest_from_export_bundle(&bundle)
 }
 
 pub(crate) async fn query_collection(
@@ -369,22 +374,6 @@ pub(crate) async fn load_one(
                 spec.collection.graphql_type()
             )
         })
-}
-
-fn remove_target(
-    manifest: &mut desired_state::DesiredStateManifest,
-    collection: Collection,
-    id: &str,
-) -> Result<()> {
-    let key = collection
-        .dir_name()
-        .context("node deletion is not a config document removal")?;
-    let mut encoded = serde_json::to_value(&*manifest)?;
-    if let Some(rows) = encoded.get_mut(key).and_then(Value::as_array_mut) {
-        rows.retain(|row| row.get(collection.unique_field()).and_then(Value::as_str) != Some(id));
-    }
-    *manifest = serde_json::from_value(encoded)?;
-    Ok(())
 }
 
 fn sort_rows(rows: &mut [Value], id_field: &str) {
