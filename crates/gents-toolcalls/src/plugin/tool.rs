@@ -424,9 +424,8 @@ mod tests {
         gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             None,tokio_util::sync::CancellationToken::new(),None,None,None,
             Some("book-run".into()),[("book_path".into(),"/books/one".into())].into(),false,async {
-                for case in gents_lean_vocab::lean_write_input_cases() {
-                    if case["filled"] != true { continue; }
-                    let value = match case["actual"].as_str() {
+                for case in gents_lean_vocab::families::contracts_write_input_plugin_fill::cases::<String>() {
+                    let value = match case.input.actual.as_deref() {
                         None => None, Some("text")=>Some(json!("/books/other")),
                         Some("integer")=>Some(json!(1)),Some("number")=>Some(json!(0.5)),
                         Some("boolean")=>Some(json!(false)),Some("array")=>Some(json!([1])),
@@ -436,9 +435,9 @@ mod tests {
                     if let Some(value)=value {input["path"]=value;}
                     let before=input.clone();
                     let result=fill_inputs(&mut input,&fields());
-                    assert_eq!(result.is_ok(),case["accepted"].as_bool().unwrap(),"{case}");
                     if result.is_ok() {assert_eq!(input,json!({"page":3,"path":"/books/one","run_id":"book-run"}));}
                     else {assert_eq!(input,before);}
+                    case.check(result.is_ok());
                 }
             }).await;
         let mut missing = json!({"page":3});

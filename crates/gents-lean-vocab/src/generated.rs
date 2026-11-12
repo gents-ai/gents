@@ -205,10 +205,6 @@ pub fn lean_fold_turn_input_cases() -> &'static [LeanFoldTurnInputCase] {
     &lean_contract_snapshot().fold_turn_input_cases
 }
 
-pub fn lean_goal_capability_resolution_cases() -> &'static [LeanGoalCapabilityResolutionCase] {
-    &lean_contract_snapshot().goal_capability_resolution_cases
-}
-
 pub fn lean_goal_continuation_materialization_cases() -> &'static [LeanGoalContinuationMaterializationCase] {
     &lean_contract_snapshot().goal_continuation_materialization_cases
 }
@@ -713,10 +709,6 @@ pub fn lean_tool_output_paging_cases() -> &'static [LeanToolOutputPagingCase] {
     &lean_contract_snapshot().tool_output_paging_cases
 }
 
-pub fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {
-    &lean_contract_snapshot().tool_policy_cases
-}
-
 pub fn lean_tool_preflight_cases() -> &'static [LeanToolPreflightCase] {
     &lean_contract_snapshot().tool_preflight_cases
 }
@@ -735,10 +727,6 @@ pub fn lean_workspace_binding_cases() -> &'static [LeanWorkspaceBindingCase] {
 
 pub fn lean_workspace_cases() -> &'static [LeanWorkspaceCase] {
     &lean_contract_snapshot().workspace_cases
-}
-
-pub fn lean_write_input_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().write_input_cases
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2479,37 +2467,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +2992,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3234,12 +3190,7 @@ pub struct LeanContractSnapshot {
     pub eval_outcome_cases: Vec<LeanEvalOutcomeCase>,
     pub eval_document_capture_cases: Vec<LeanEvalDocumentCaptureCase>,
     pub optimization_cases: LeanOptimizationCases,
-    pub tool_policy_cases: Vec<LeanToolPolicyCase>,
     pub application_write_cases: Vec<LeanApplicationWriteCase>,
-    pub field_read_cases: Vec<LeanFieldReadCase>,
-    pub write_input_cases: Vec<serde_json::Value>,
-    pub invocation_correlation_cases: Vec<LeanInvocationCorrelationCase>,
-    pub goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
     pub lsp_action_cases: Vec<LeanLspActionCase>,
     pub self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
     pub self_config_resource_read_exposure_cases: Vec<
@@ -4152,18 +4103,6 @@ pub struct LeanFeatureSurfaceRequirement {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanFieldReadCase {
-    pub granted: bool,
-    #[serde(rename = "hashOk")]
-    pub hash_ok: bool,
-    pub next: Option<u64>,
-    pub offset: u64,
-    pub present: bool,
-    pub widths: Vec<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanFileReviewRouteCase {
     pub demand_collection: String,
     pub direction: String,
@@ -4344,15 +4283,6 @@ pub struct LeanGoalBackedRuntimeCase {
     pub name: String,
     pub request: bool,
     pub session: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanGoalCapabilityResolutionCase {
-    pub name: String,
-    pub explicit_goal_tools: Option<bool>,
-    pub explicit_goal_create: Option<bool>,
-    pub expected_goal_tools: bool,
-    pub expected_goal_create: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -6740,14 +6670,6 @@ pub struct LeanInvalidToolProgressCase {
     pub composed_invalid_used: u64,
     pub name: String,
     pub outcomes: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInvocationCorrelationCase {
-    pub expected: Option<String>,
-    pub request: Option<String>,
-    pub supplied: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -11959,74 +11881,6 @@ pub struct LeanToolOutputProjectionCase {
     pub segments: Vec<LeanCanonicalSegment>,
     pub expected_state: Option<String>,
     pub expected_payload: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanToolPolicyCase {
-    pub name: String,
-    pub agent: LeanToolPolicySurfaceView,
-    pub ceiling: LeanToolPolicySurfaceView,
-    pub runtime: LeanToolPolicySurfaceView,
-    pub expected: LeanToolPolicySurfaceView,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanToolPolicySurfaceView {
-    pub file_rank: u8,
-    pub goal_tools: bool,
-    pub goal_create: bool,
-    pub defra_query: bool,
-    pub self_config: bool,
-    pub schema_management: bool,
-    pub p2p_read: bool,
-    pub p2p_mutate: bool,
-    pub p2p_mutation_allowed: bool,
-    pub session_history: bool,
-    pub context_budget: bool,
-    pub session_messages: bool,
-    pub skills: bool,
-    pub lsp: bool,
-    pub bash_mode: u8,
-    pub bash_net: u8,
-    pub bash_sandbox: bool,
-    pub bash_allowed_kind: String,
-    pub bash_allowed_prefixes: Vec<Vec<String>>,
-    pub bash_forbidden: Vec<Vec<String>>,
-    pub bash_read_only_kind: String,
-    pub bash_read_only_keys: Vec<String>,
-    pub cli_scope_kind: String,
-    pub cli_keys: Vec<String>,
-    pub mcp_probe: String,
-    pub mcp_scope_kind: String,
-    pub mcp_services: Vec<String>,
-    pub mcp_permits: bool,
-    pub defra_collections_scope_kind: String,
-    pub defra_collections_keys: Vec<String>,
-    pub self_config_categories_scope_kind: String,
-    pub self_config_categories_keys: Vec<String>,
-    pub agent_targets_scope_kind: String,
-    pub agent_targets_keys: Vec<String>,
-    pub background_tools_scope_kind: String,
-    pub background_tools_keys: Vec<String>,
-    pub write_probe_tool: String,
-    pub write_probe_collection: String,
-    pub write_scope_kind: String,
-    pub write_grants: Vec<LeanToolPolicyWriteGrant>,
-    pub write_fields: Vec<String>,
-    pub query_probe_tool: String,
-    pub query_probe_collection: String,
-    pub query_scope_kind: String,
-    pub query_grants: Vec<LeanToolPolicyWriteGrant>,
-    pub query_fields: Vec<String>,
-    pub plugin_tools_kind: String,
-    pub plugin_tools_keys: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanToolPolicyWriteGrant {
-    pub tool: String,
-    pub collection: String,
-    pub fields: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

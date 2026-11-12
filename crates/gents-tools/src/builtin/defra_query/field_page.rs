@@ -117,11 +117,10 @@ pub(super) fn recovery_metadata(rows: &Value) -> Vec<Value> {
 mod tests {
     use super::*;
     #[test]
-    fn field_pages_match_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().field_read_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let text: String = case
+    fn field_pages_match_the_lean_model() {
+        gents_lean_vocab::families::contracts_field_read::replay(|i| {
+            assert_eq!(MAX_FIELD_STRING_BYTES as u64, i.budget);
+            let text: String = i
                 .widths
                 .iter()
                 .map(|w| match w {
@@ -132,30 +131,26 @@ mod tests {
                     _ => panic!(),
                 })
                 .collect();
-            let granted = case.granted;
-            let present = case.present;
-            let matching = case.hash_ok;
             let hash = format!("sha256:{:x}", Sha256::digest(text.as_bytes()));
             let page = FieldPage {
                 doc_id: "doc".into(),
                 field: "value".into(),
-                offset_bytes: case.offset as usize,
-                expected_hash: present.then(|| if matching { hash } else { "changed".into() }),
+                offset_bytes: i.offset as usize,
+                expected_hash: i
+                    .present
+                    .then(|| if i.hash_ok { hash } else { "changed".into() }),
             };
-            let fields = if granted {
+            let fields = if i.granted {
                 vec!["value".into()]
             } else {
                 vec![]
             };
-            let result = page.read(&json!({"_docID":"doc","value":text}), &fields);
-            match case.next {
-                None => assert!(result.is_err(), "{case:?}"),
-                Some(next) => {
-                    let result = result.unwrap();
-                    assert_eq!(result["next_offset_bytes"], next);
-                    assert!(result["text"].as_str().unwrap().len() <= MAX_FIELD_STRING_BYTES);
-                }
-            }
-        }
+            page.read(&json!({"_docID":"doc","value":text}), &fields)
+                .ok()
+                .map(|result| {
+                    assert!(result["text"].as_str().unwrap().len() as u64 <= i.budget);
+                    result["next_offset_bytes"].as_u64().unwrap()
+                })
+        });
     }
 }

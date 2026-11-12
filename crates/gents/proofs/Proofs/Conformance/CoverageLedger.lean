@@ -648,8 +648,8 @@ def caseCoverage : List CoverageEntry :=
       "GoalCreateCases")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_capability_resolution_cases"
-      "GoalCapabilityResolutionCases")
+      "family"
+      "contracts_goal_capability_resolution")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "task_goal_publication_cases"
@@ -946,24 +946,32 @@ def caseCoverage : List CoverageEntry :=
       "OptimizationCases")
       "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "tool_policy_cases"
-      "ToolPolicyCases")
+      "family"
+      "contracts_tool_policy_composition")
       "tool-policy" [Surface.operatorUi, Surface.agentFacing]
   , tagged (consumerCoverage
       "application_write_cases"
       "ApplicationWriteCases")
       "tool-policy" [Surface.agentFacing, Surface.operatorCli]
   , tagged (consumerCoverage
-      "field_read_cases"
-      "FieldReadCases")
+      "family"
+      "contracts_field_read")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "write_input_cases"
-      "WriteInputCases")
+      "family"
+      "contracts_write_input")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "invocation_correlation_cases"
-      "InvocationCorrelationCases")
+      "family"
+      "contracts_write_input_query_filter")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_write_input_plugin_fill")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_invocation_correlation")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "lsp_action_cases"
