@@ -75,33 +75,25 @@ def boolJson (b : Bool) : String := if b then "true" else "false"
 
 structure ReparkInput where
   resuming : Bool
+  observedGeneration : Nat
+  observedExpiry : Nat
   expectedGeneration : Nat
   expectedExpiry : Nat
   now : Nat
+  deriving ToJson
 
-def reparkInputs : List ReparkInput :=
-  [ ⟨true, 7, 10, 10⟩, ⟨true, 7, 10, 11⟩, ⟨true, 7, 10, 9⟩,
-    ⟨false, 7, 10, 10⟩, ⟨true, 8, 10, 10⟩, ⟨true, 7, 11, 11⟩ ]
-
-def reparkObservedGeneration : Nat := 7
-
-def reparkObservedExpiry : Nat := 10
-
-def reparkInputJson (input : ReparkInput) : String :=
-  let pre := { RequestExecutionLease.initial Nat with
-    request := if input.resuming then .resumingBackend else .processing
-    lease := .active reparkObservedGeneration 5 reparkObservedExpiry,
-    usedGenerations := [reparkObservedGeneration], now := input.now }
-  let allowed := (RequestExecutionLease.step? pre
-    (.reparkExpiredResume .mutationWriteGate input.expectedGeneration input.expectedExpiry)).isSome
-  "{\"resuming\":" ++ boolJson input.resuming ++
-    ",\"observed_generation\":" ++ toString reparkObservedGeneration ++
-    ",\"observed_expiry\":" ++ toString reparkObservedExpiry ++
-    ",\"expected_generation\":" ++ toString input.expectedGeneration ++
-    ",\"expected_expiry\":" ++ toString input.expectedExpiry ++ ",\"now\":" ++ toString input.now ++
-    ",\"allowed\":" ++ boolJson allowed ++ "}"
-
-def reparkCasesJson : String := jsonArray (reparkInputs.map reparkInputJson)
+@[conformance_family]
+def repark : Family ReparkInput Bool where
+  inputs :=
+    [ ⟨true, 7, 10, 7, 10, 10⟩, ⟨true, 7, 10, 7, 10, 11⟩, ⟨true, 7, 10, 7, 10, 9⟩,
+      ⟨false, 7, 10, 7, 10, 10⟩, ⟨true, 7, 10, 8, 10, 10⟩, ⟨true, 7, 10, 7, 11, 11⟩ ]
+  model := fun i =>
+    let pre := { RequestExecutionLease.initial Nat with
+      request := if i.resuming then .resumingBackend else .processing
+      lease := .active i.observedGeneration 5 i.observedExpiry,
+      usedGenerations := [i.observedGeneration], now := i.now }
+    (RequestExecutionLease.step? pre
+      (.reparkExpiredResume .mutationWriteGate i.expectedGeneration i.expectedExpiry)).isSome
 
 def parkedFinalizeInputs : List (RequestState × RequestExecutionLease.Outcome) :=
   [RequestState.waitingForBackend, .resumingBackend, .processing, .pending].flatMap fun request =>

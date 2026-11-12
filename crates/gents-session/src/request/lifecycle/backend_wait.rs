@@ -605,22 +605,17 @@ mod tests {
 
     #[test]
     fn expired_resume_reparking_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_repark_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            assert_eq!(
-                can_repark_expired(
-                    case.resuming,
-                    &case.observed_generation,
-                    &case.expected_generation,
-                    case.observed_expiry,
-                    case.expected_expiry,
-                    case.now
-                ),
-                case.allowed,
-                "{case:?}"
-            );
-        }
+        let millis = |value: u64| i64::try_from(value).unwrap();
+        gents_lean_vocab::families::backend_wake_repark::replay(|i| {
+            can_repark_expired(
+                i.resuming,
+                &i.observed_generation,
+                &i.expected_generation,
+                millis(i.observed_expiry),
+                millis(i.expected_expiry),
+                millis(i.now),
+            )
+        });
     }
 
     #[test]

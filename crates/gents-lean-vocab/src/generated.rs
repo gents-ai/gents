@@ -1241,17 +1241,6 @@ pub struct LeanBackendProbeScheduleCase {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBackendReparkCase {
-    pub resuming: bool,
-    pub observed_generation: u64,
-    pub observed_expiry: i64,
-    pub expected_generation: u64,
-    pub expected_expiry: i64,
-    pub now: i64,
-    pub allowed: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanBackendResumedTurnCase {
     pub completed: Vec<u32>,
     pub next: usize,
@@ -3204,7 +3193,6 @@ pub struct LeanContractSnapshot {
     pub tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub tool_retry_cases: Vec<LeanToolRetryCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub backend_repark_cases: Vec<LeanBackendReparkCase>,
     pub backend_parked_finalize_cases: Vec<LeanBackendParkedFinalizeCase>,
     pub backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
     pub mcp_health_cases: Vec<LeanMcpHealthCase>,
