@@ -16,7 +16,7 @@ use gents_documents::patch::{
 };
 use gents_lean_vocab::{
     lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_cases,
-    lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
+    lean_self_config_selection_cases, lean_sibling_tools_cases,
     LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
 };
 use gents_protocol::operations::inference::InferenceActor;
@@ -48,46 +48,6 @@ fn entries_patch(entries: &[LeanSelfConfigPatchEntry]) -> SelfConfigPatch {
             (entry.field.clone(), value)
         })
         .collect()
-}
-
-#[test]
-fn self_config_field_tables_match_lean_contract() {
-    let tables = lean_self_config_field_tables();
-    let actual: BTreeSet<_> = ALL_SELF_CONFIG_TARGETS
-        .iter()
-        .map(|t| t.collection_name())
-        .collect();
-    let expected: BTreeSet<_> = tables.iter().map(|t| t.collection.as_str()).collect();
-    assert_eq!(actual, expected, "runtime self-config target inventory");
-    for table in tables {
-        let target =
-            SelfConfigTarget::from_collection_name(&table.collection).expect("runtime target");
-        assert_eq!(
-            table.unique_field,
-            target.unique_field(),
-            "{}",
-            table.collection
-        );
-        assert_eq!(table.category, target.category(), "{}", table.collection);
-        assert_eq!(
-            table.all_fields,
-            target.all_fields(),
-            "{}",
-            table.collection
-        );
-        assert_eq!(
-            table.writable_fields,
-            target.writable_fields(),
-            "{}",
-            table.collection
-        );
-        assert_eq!(
-            table.protected_fields,
-            target.protected_fields(),
-            "{}",
-            table.collection
-        );
-    }
 }
 
 #[test]

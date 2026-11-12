@@ -1,4 +1,5 @@
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 import Proofs.Tools.SelfConfig.Cases
 import Proofs.Tools.SelfConfig.Auth
 import Proofs.Tools.SelfConfig.Scope
@@ -11,18 +12,26 @@ open SelfConfig SelfConfig.ContractCases
 private def scBool (b : Bool) : String :=
   if b then "true" else "false"
 
-def selfConfigFieldTableJson (t : Target) : String :=
-  "{"
-    ++ "\"collection\":" ++ jsonString t.collectionName ++ ","
-    ++ "\"unique_field\":" ++ jsonString t.uniqueField ++ ","
-    ++ "\"category\":" ++ jsonString t.category ++ ","
-    ++ "\"all_fields\":" ++ jsonStringArray (allFields t) ++ ","
-    ++ "\"writable_fields\":" ++ jsonStringArray (writableFields t) ++ ","
-    ++ "\"protected_fields\":" ++ jsonStringArray (protectedFields t)
-  ++ "}"
+structure FieldTableInput where
+  collection : String
+  deriving Lean.ToJson
 
-def selfConfigFieldTablesJson : String :=
-  jsonArray (allTargets.map selfConfigFieldTableJson)
+structure FieldTable where
+  uniqueField : String
+  category : String
+  allFields : List String
+  writableFields : List String
+  protectedFields : List String
+  deriving Lean.ToJson
+
+def fieldTable (t : Target) : FieldTable :=
+  { uniqueField := t.uniqueField, category := t.category, allFields := allFields t
+    writableFields := writableFields t, protectedFields := protectedFields t }
+
+@[conformance_family]
+def selfConfigFieldTable : Family FieldTableInput (Option FieldTable) where
+  inputs := allTargets.map fun t => { collection := t.collectionName }
+  model := fun i => (allTargets.find? (·.collectionName == i.collection)).map fieldTable
 
 def selfConfigResourceReadExposureCasesJson : String :=
   let cases : List (String × Target × List String) :=

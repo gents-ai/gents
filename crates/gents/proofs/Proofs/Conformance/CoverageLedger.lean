@@ -970,8 +970,8 @@ def caseCoverage : List CoverageEntry :=
       "LspActionCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "self_config_field_tables"
-      "SelfConfigFieldTables")
+      "family"
+      "contracts_self_config_field_table")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "self_config_cases"

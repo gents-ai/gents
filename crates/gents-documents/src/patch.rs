@@ -281,6 +281,33 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn contracts_self_config_field_table_matches_lean() {
+        let mut modeled = std::collections::BTreeSet::new();
+        for case in gents_lean_vocab::families::contracts_self_config_field_table::cases() {
+            modeled.insert(case.input.collection.clone());
+            let owned = |fields: &[&str]| -> Vec<String> {
+                fields.iter().map(|field| (*field).to_owned()).collect()
+            };
+            case.check(
+                SelfConfigTarget::from_collection_name(&case.input.collection).map(|target| {
+                    gents_lean_vocab::families::contracts_self_config_field_table::FieldTable {
+                        unique_field: target.unique_field().to_owned(),
+                        category: target.category().to_owned(),
+                        all_fields: owned(target.all_fields()),
+                        writable_fields: owned(&target.writable_fields()),
+                        protected_fields: owned(&target.protected_fields()),
+                    }
+                }),
+            );
+        }
+        let runtime = ALL_SELF_CONFIG_TARGETS
+            .iter()
+            .map(|target| target.collection_name().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(runtime, modeled, "runtime self-config target inventory");
+    }
+
+    #[test]
     fn merge_sets_clears_and_contains() {
         let doc = json!({
             "agent_did": "beh-1",
