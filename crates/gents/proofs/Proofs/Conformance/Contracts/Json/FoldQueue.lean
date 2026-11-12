@@ -46,59 +46,6 @@ def turnInputCaseJson (entry : String × TurnInput String) : String :=
 
 def turnInputCasesJson : String := jsonArray (turnInputCases.map turnInputCaseJson)
 
-def publicationStepJson : CanonicalOutput.Execution.FoldPublication.Step → String
-  | .observeDeadline now deadline =>
-      "{\"kind\":\"observe_deadline\",\"now\":" ++ toString now ++
-      ",\"deadline\":" ++ toString deadline ++ "}"
-  | .cancelFirstPending => "{\"kind\":\"cancel_first_pending\"}"
-  | .enqueueSteering requestId =>
-      "{\"kind\":\"enqueue_steering\",\"request_id\":" ++ toString requestId ++ "}"
-  | .intake generation safe =>
-      "{\"kind\":\"intake\",\"generation\":" ++ toString generation ++
-      ",\"safe_boundary\":" ++ jsonOptionalBool (some safe) ++ "}"
-  | .finishOrIntake generation safe =>
-      "{\"kind\":\"finish_or_intake\",\"generation\":" ++ toString generation ++
-      ",\"safe_boundary\":" ++ jsonOptionalBool (some safe) ++ "}"
-  | .publishPrompt generation =>
-      "{\"kind\":\"publish_prompt\",\"generation\":" ++ toString generation ++ "}"
-  | .publishChangedPrompt generation =>
-      "{\"kind\":\"publish_changed_prompt\",\"generation\":" ++ toString generation ++ "}"
-  | .publishFolded generation requestId =>
-      "{\"kind\":\"publish_folded\",\"generation\":" ++ toString generation ++
-        ",\"request_id\":" ++ toString requestId ++ "}"
-  | .acceptTurn generation =>
-      "{\"kind\":\"accept_turn\",\"generation\":" ++ toString generation ++ "}"
-  | .recover expected fresh =>
-      "{\"kind\":\"recover\",\"expected\":" ++ toString expected ++
-        ",\"fresh\":" ++ toString fresh ++ "}"
-  | .terminalize generation =>
-      "{\"kind\":\"terminalize\",\"generation\":" ++ toString generation ++ "}"
-  | .finish => "{\"kind\":\"finish\"}"
-
-def publicationObservationJson
-    (value : CanonicalOutput.Execution.FoldPublication.Observation) : String :=
-  "{\"accepted\":" ++ jsonOptionalBool (some value.accepted) ++
-  ",\"active\":" ++ jsonOptionalNat value.active ++
-  ",\"pending\":" ++ jsonArray (value.pending.map toString) ++
-  ",\"folding\":" ++ jsonArray (value.folding.map toString) ++
-  ",\"terminal\":" ++ jsonArray (value.terminal.map toString) ++
-  ",\"authored_keys\":" ++ jsonArray (value.authoredKeys.map jsonString) ++ "}"
-
-def publicationCasesJsonFor (cases : List (String × List CanonicalOutput.Execution.FoldPublication.Step)) : String :=
-  jsonArray (cases.map fun (name, steps) =>
-  "{\"name\":" ++ jsonString name ++
-  ",\"head\":902,\"selected\":903" ++
-  ",\"steps\":" ++ jsonArray (steps.map publicationStepJson) ++
-  ",\"expected\":" ++ (match CanonicalOutput.Execution.FoldPublication.run steps with
-    | none => "null"
-    | some observations => jsonArray (observations.map publicationObservationJson)) ++ "}")
-
-def publicationCasesJson : String :=
-  publicationCasesJsonFor CanonicalOutput.Execution.FoldPublication.cases
-
-def steeringPublicationCasesJson : String :=
-  publicationCasesJsonFor CanonicalOutput.Execution.FoldPublication.steeringCases
-
 def retrySelectionCasesJson : String := jsonArray (retrySelectionCases.map fun value =>
   "{\"name\":" ++ jsonString value.name ++
   ",\"parent_published\":" ++ jsonOptionalBool (some value.parentPublished) ++
@@ -313,6 +260,165 @@ def handoverClaim : Family HandoverInput (Option HandoverQueue) where
       { name := i.name, pending := i.pending.map EntryWire.toModel, admitted := i.admitted }
     pure { active := claimed.active, folding := claimed.folding.map (·.requestId)
            pending := claimed.pending.map (·.requestId) }
+
+section Publication
+
+open CanonicalOutput.Execution.FoldPublication
+
+inductive StepKind where
+  | observeDeadline | cancelFirstPending | enqueueSteering | intake | finishOrIntake
+  | publishPrompt | publishChangedPrompt | publishFolded | acceptTurn | recover | terminalize
+  | finish
+  deriving ToJson
+
+structure StepWire where
+  kind : StepKind
+  now : Option Nat
+  deadline : Option Nat
+  requestId : Option Nat
+  generation : Option Nat
+  safeBoundary : Option Bool
+  expected : Option Nat
+  fresh : Option Nat
+  deriving ToJson
+
+def StepWire.empty (kind : StepKind) : StepWire :=
+  { kind, now := none, deadline := none, requestId := none, generation := none
+    safeBoundary := none, expected := none, fresh := none }
+
+def StepWire.ofModel : Step → StepWire
+  | .observeDeadline now deadline =>
+      { StepWire.empty .observeDeadline with now := some now, deadline := some deadline }
+  | .cancelFirstPending => StepWire.empty .cancelFirstPending
+  | .enqueueSteering requestId =>
+      { StepWire.empty .enqueueSteering with requestId := some requestId }
+  | .intake generation safe =>
+      { StepWire.empty .intake with generation := some generation, safeBoundary := some safe }
+  | .finishOrIntake generation safe =>
+      { StepWire.empty .finishOrIntake with
+        generation := some generation, safeBoundary := some safe }
+  | .publishPrompt generation =>
+      { StepWire.empty .publishPrompt with generation := some generation }
+  | .publishChangedPrompt generation =>
+      { StepWire.empty .publishChangedPrompt with generation := some generation }
+  | .publishFolded generation requestId =>
+      { StepWire.empty .publishFolded with
+        generation := some generation, requestId := some requestId }
+  | .acceptTurn generation => { StepWire.empty .acceptTurn with generation := some generation }
+  | .recover expected fresh =>
+      { StepWire.empty .recover with expected := some expected, fresh := some fresh }
+  | .terminalize generation => { StepWire.empty .terminalize with generation := some generation }
+  | .finish => StepWire.empty .finish
+
+def StepWire.toModel (step : StepWire) : Option Step :=
+  match step.kind with
+  | .observeDeadline => do pure (.observeDeadline (← step.now) (← step.deadline))
+  | .cancelFirstPending => some .cancelFirstPending
+  | .enqueueSteering => step.requestId.map .enqueueSteering
+  | .intake => do pure (.intake (← step.generation) (← step.safeBoundary))
+  | .finishOrIntake => do pure (.finishOrIntake (← step.generation) (← step.safeBoundary))
+  | .publishPrompt => step.generation.map .publishPrompt
+  | .publishChangedPrompt => step.generation.map .publishChangedPrompt
+  | .publishFolded => do pure (.publishFolded (← step.generation) (← step.requestId))
+  | .acceptTurn => step.generation.map .acceptTurn
+  | .recover => do pure (.recover (← step.expected) (← step.fresh))
+  | .terminalize => step.generation.map .terminalize
+  | .finish => some .finish
+
+structure PublicationInput where
+  name : String
+  head : Nat
+  selected : Nat
+  steps : List StepWire
+  deriving ToJson
+
+structure PublicationObservation where
+  accepted : Bool
+  active : Option Nat
+  pending : List Nat
+  folding : List Nat
+  terminal : List Nat
+  authoredKeys : List String
+  deriving ToJson
+
+def PublicationInput.ofCase (value : String × List Step) : PublicationInput :=
+  { name := value.1, head := activeEntry.requestId, selected := selectedEntry.requestId
+    steps := value.2.map StepWire.ofModel }
+
+def publicationRun (i : PublicationInput) : Option (List PublicationObservation) := do
+  let steps ← i.steps.mapM StepWire.toModel
+  let observations ← run steps
+  pure (observations.map fun o =>
+    { accepted := o.accepted, active := o.active, pending := o.pending, folding := o.folding
+      terminal := o.terminal, authoredKeys := o.authoredKeys })
+
+def unsafeBoundary (steps : List Step) : Bool :=
+  steps.any fun step => match step with
+    | .intake _ false | .finishOrIntake _ false => true
+    | _ => false
+
+/-- The served writer fixture intakes at the owned loop's safe boundary; an
+unsafe provider-stream boundary is the loop's, which has no durable queue. -/
+def servedPublicationCases : List (String × List Step) :=
+  CanonicalOutput.Execution.FoldPublication.cases ++
+    steeringCases.filter fun (_, steps) => !unsafeBoundary steps
+
+def unsafePublicationCases : List (String × List Step) :=
+  steeringCases.filter fun (_, steps) => unsafeBoundary steps
+
+@[conformance_family]
+def publicationScript : Family PublicationInput (Option (List PublicationObservation)) where
+  inputs := servedPublicationCases.map PublicationInput.ofCase
+  model := publicationRun
+
+structure UnsafeBoundaryObservation where
+  accepted : Bool
+  deriving ToJson
+
+@[conformance_family]
+def publicationUnsafeBoundary : Family PublicationInput UnsafeBoundaryObservation where
+  inputs := unsafePublicationCases.map PublicationInput.ofCase
+  model := fun i =>
+    { accepted := ((publicationRun i).bind List.getLast?).map (·.accepted) |>.getD true }
+
+/-- model-production-gap: the served writer fixture has no unsafe provider-stream
+boundary and the owned loop has no durable queue, so the per-step queue and
+authored-key observations of the unsafe boundary scripts are not replayed;
+publication_unsafe_boundary replays their refused intake through the loop. -/
+@[conformance_family]
+def publicationUnsafeBoundaryUnreached :
+    Family PublicationInput (Option (List PublicationObservation)) where
+  inputs := unsafePublicationCases.map PublicationInput.ofCase
+  model := publicationRun
+
+example : unsafePublicationCases.map (·.1) =
+    ["streaming_boundary_does_not_take_input", "natural_completion_during_stream_refuses"] := by
+  native_decide
+
+example : unsafePublicationCases.all fun (_, steps) =>
+    match (run steps).bind List.getLast? with
+    | some last => !last.accepted && last.active == some activeEntry.requestId &&
+        last.pending.length == 1
+    | none => false := by
+  native_decide
+
+example : (steeringCases.find? (·.1 == "natural_completion_intakes_late_input_before_terminal")).all
+    fun (_, steps) =>
+      match run steps with
+      | none => false
+      | some observations =>
+        let finishes := (steps.zip observations).filterMap fun (step, observed) =>
+          match step with
+          | .finishOrIntake _ _ => some observed
+          | _ => none
+        finishes.length == 2 &&
+          (finishes[0]?.map (·.active)) == some (some activeEntry.requestId) &&
+          (finishes[1]?.map (·.active)) == some none &&
+          (finishes[1]?.map (·.terminal.contains activeEntry.requestId)) == some true &&
+          (observations.getLast?.map (·.active)) == some none := by
+  native_decide
+
+end Publication
 
 end Families
 

@@ -552,53 +552,12 @@ async fn durable_facts(db: &TestDb, session_id: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn generated_fold_publication_scripts_bind_to_native_owners() {
-    use gents_lean_vocab::LeanFoldPublicationStep as Step;
-
-    let cases = gents_lean_vocab::lean_fold_publication_cases();
-    let steering_cases = gents_lean_vocab::lean_steering_publication_cases();
-    assert!(!cases.is_empty());
-    assert!(!steering_cases.is_empty());
-    let loop_boundary_cases = steering_cases
-        .iter()
-        .filter(|case| {
-            case.steps.iter().any(|step| {
-                matches!(
-                    step,
-                    Step::Intake {
-                        safe_boundary: false,
-                        ..
-                    } | Step::FinishOrIntake {
-                        safe_boundary: false,
-                        ..
-                    }
-                )
-            })
-        })
-        .map(|case| case.name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        loop_boundary_cases,
-        [
-            "streaming_boundary_does_not_take_input",
-            "natural_completion_during_stream_refuses"
-        ]
-    );
-    for case in cases.iter().chain(steering_cases).filter(|case| {
-        !case.steps.iter().any(|step| {
-            matches!(
-                step,
-                Step::Intake {
-                    safe_boundary: false,
-                    ..
-                } | Step::FinishOrIntake {
-                    safe_boundary: false,
-                    ..
-                }
-            )
-        })
-    }) {
-        let db = test_db(&case.name).await;
-        let session_id = format!("fold-publication-{}", case.name);
+    for case in
+        gents_lean_vocab::families::fold_queue_contracts_publication_script::cases::<String>()
+    {
+        let input = &case.input;
+        let db = test_db(&input.name).await;
+        let session_id = format!("fold-publication-{}", input.name);
         let (_authority_owner, authority) =
             gents_p2p::p2p_reconcile::enrollment_authority_channel();
         let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
@@ -607,15 +566,15 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             authority,
         );
         let mut bound = RapidHashMap::new();
-        let mut arrival_ids = vec![case.head, case.selected];
+        let mut arrival_ids = vec![input.head, input.selected];
         let mut saved_message = None;
         let clock_origin = chrono::Utc::now();
         let mut observed_now = None;
-        for (arrival, id) in [case.head, case.selected].into_iter().enumerate() {
+        for (arrival, id) in [input.head, input.selected].into_iter().enumerate() {
             let entry = LeanFoldQueueEntry {
                 request_id: id,
                 execution_origin: "interactive".into(),
-                delivery: if id == case.selected {
+                delivery: if id == input.selected {
                     "steer"
                 } else {
                     "queue"
@@ -631,7 +590,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             };
             bound.insert(id, enqueue_signed(&db, &session_id, &entry, arrival).await);
         }
-        let head_doc = bound[&case.head].clone();
+        let head_doc = bound[&input.head].clone();
         let writer = DefraStreamWriter::new_managed(
             db.node.clone(),
             db.agent_identity.as_ref(),
@@ -639,54 +598,56 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
         )
         .unwrap();
         let mut generations: RapidHashMap<u64, ActiveTurn> = RapidHashMap::new();
-        let mut first = claim_head(&db, &bound, case.head, &[case.selected]).await;
+        let mut first = claim_head(&db, &bound, input.head, &[input.selected]).await;
         first.begin(&writer).await;
         generations.insert(8, first);
         let scope: gents_protocol::rendered_request::CaptureScope = "inference.1".parse().unwrap();
-        assert_eq!(case.steps.len(), case.expected.len());
-        for (index, (step, expected)) in case.steps.iter().zip(&case.expected).enumerate() {
+        let mut observations = Vec::new();
+        for (index, step) in input.steps.iter().enumerate() {
+            let generation = step.generation.unwrap_or_default();
             let before = durable_facts(&db, &session_id).await;
-            let accepted = match step {
-                Step::ObserveDeadline { now, deadline } => {
-                    observed_now = Some(clock_origin + chrono::Duration::milliseconds(*now as i64));
+            let accepted = match step.kind.as_str() {
+                "observe_deadline" => {
+                    let (now, deadline) = (step.now.unwrap(), step.deadline.unwrap());
+                    observed_now = Some(clock_origin + chrono::Duration::milliseconds(now as i64));
                     for turn in generations.values_mut() {
                         turn.lifecycle.claimed_deadline_at =
-                            Some(clock_origin + chrono::Duration::milliseconds(*deadline as i64));
+                            Some(clock_origin + chrono::Duration::milliseconds(deadline as i64));
                     }
                     true
                 }
-                Step::PublishPrompt { generation } | Step::PublishChangedPrompt { generation } => {
-                    let content = if matches!(step, Step::PublishPrompt { .. }) {
+                "publish_prompt" | "publish_changed_prompt" => {
+                    let content = if step.kind == "publish_prompt" {
                         "prompt"
                     } else {
                         "changed prompt"
                     };
                     writer
                         .publish_authored_message(
-                            &generations[generation].lifecycle,
+                            &generations[&generation].lifecycle,
                             "prompt",
                             &gents_protocol::message::Message::user(content),
                         )
                         .await
                         .is_ok()
                 }
-                Step::PublishFolded {
-                    generation,
-                    request_id,
-                } => writer
+                "publish_folded" => writer
                     .publish_authored_message_with_time(
-                        &generations[generation].lifecycle,
-                        &folded_input_key(&bound[request_id]),
-                        &gents_protocol::message::Message::user(format!("message {request_id}")),
+                        &generations[&generation].lifecycle,
+                        &folded_input_key(&bound[&step.request_id.unwrap()]),
+                        &gents_protocol::message::Message::user(format!(
+                            "message {}",
+                            step.request_id.unwrap()
+                        )),
                         observed_now,
                     )
                     .await
                     .is_ok(),
-                Step::AcceptTurn { generation } => {
+                "accept_turn" => {
                     writer.start_provider_attempt(&head_doc, 0, 0, scope).await;
                     match writer
                         .publish_native_turn(
-                            &generations[generation].lifecycle,
+                            &generations[&generation].lifecycle,
                             0,
                             0,
                             &gents_protocol::message::Message::assistant("answer"),
@@ -700,8 +661,9 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         Err(_) => false,
                     }
                 }
-                Step::Recover { expected, fresh } => {
-                    let mut request = generations[expected].lifecycle.request().clone();
+                "recover" => {
+                    let (expected, fresh) = (step.expected.unwrap(), step.fresh.unwrap());
+                    let mut request = generations[&expected].lifecycle.request().clone();
                     request.deadline = None;
                     // The expired head is the Agent's own row; recovery resets it as the Agent.
                     db.agent_access.write(
@@ -717,18 +679,18 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         .await
                         .iter()
                         .filter(|row| {
-                            modeled_id(row) == case.selected
+                            modeled_id(row) == input.selected
                                 && row.lifecycle_state == RequestLifecycleState::Pending
                         })
                         .map(modeled_id)
                         .collect::<Vec<_>>();
                     let mut reclaimed = claim_request(&db, &bound, request, &still_queued).await;
                     reclaimed.begin(&writer).await;
-                    generations.insert(*fresh, reclaimed);
+                    generations.insert(fresh, reclaimed);
                     true
                 }
-                Step::Terminalize { generation } => generations
-                    .get_mut(generation)
+                "terminalize" => generations
+                    .get_mut(&generation)
                     .unwrap()
                     .lifecycle
                     .terminalize_owned(
@@ -738,38 +700,35 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     )
                     .await
                     .is_ok(),
-                Step::Finish => true,
-                Step::EnqueueSteering { request_id } => {
+                "finish" => {
+                    generations.clear();
+                    true
+                }
+                "enqueue_steering" => {
+                    let request_id = step.request_id.unwrap();
                     let entry = LeanFoldQueueEntry {
-                        request_id: *request_id,
+                        request_id,
                         execution_origin: "interactive".into(),
                         delivery: "steer".into(),
-                        order_key: *request_id,
+                        order_key: request_id,
                         source: "user".into(),
                         policy: "append".into(),
-                        queued_after: Some(case.head),
+                        queued_after: Some(input.head),
                         requester_id: Some(1),
                         turn_context: 0,
                         fresh: true,
                     };
                     let id = enqueue_signed(&db, &session_id, &entry, arrival_ids.len()).await;
-                    bound.insert(*request_id, id);
-                    arrival_ids.push(*request_id);
+                    bound.insert(request_id, id);
+                    arrival_ids.push(request_id);
                     true
                 }
-                Step::Intake {
-                    generation,
-                    safe_boundary,
-                }
-                | Step::FinishOrIntake {
-                    generation,
-                    safe_boundary,
-                } => {
+                "intake" | "finish_or_intake" => {
                     assert!(
-                        *safe_boundary,
+                        step.safe_boundary.unwrap(),
                         "unsafe provider boundary belongs to loop owner"
                     );
-                    let turn = generations.get_mut(generation).unwrap();
+                    let turn = generations.get_mut(&generation).unwrap();
                     if !turn.lifecycle.owns_execution().await.unwrap()
                         || !crate::request::lifecycle::RequestLifecycle::input_publication_before_deadline(
                             observed_now.unwrap_or_else(chrono::Utc::now),
@@ -797,7 +756,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                                     .0
                             })
                             .collect::<Vec<_>>();
-                        if !selected.is_empty() || matches!(step, Step::Intake { .. }) {
+                        if !selected.is_empty() || step.kind == "intake" {
                             turn.selected = selected;
                             true
                         } else {
@@ -811,7 +770,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         }
                     }
                 }
-                Step::CancelFirstPending => {
+                "cancel_first_pending" => {
                     let access = &db.agent_access;
                     let snapshot =
                         pending_user_queue(access, db.node_did(), &session_id, db.agent_did())
@@ -851,9 +810,9 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         false
                     }
                 }
+                kind => panic!("{}: no fixture step for {kind}", input.name),
             };
-            let label = format!("{} step {index} {step:?}", case.name);
-            assert_eq!(accepted, expected.accepted, "{label}: acceptance");
+            let label = format!("{} step {index} {step:?}", input.name);
             if !accepted {
                 assert_eq!(
                     durable_facts(&db, &session_id).await,
@@ -878,10 +837,6 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         .unwrap_or(key)
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(keys, expected.authored_keys, "{label}: authored keys");
-            if matches!(step, Step::Terminalize { .. }) {
-                continue;
-            }
             let rows = fold_rows(&db, &session_id).await;
             let state = |id: u64| {
                 rows.iter()
@@ -890,39 +845,43 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     .lifecycle_state
             };
             let head_active = matches!(
-                state(case.head),
+                state(input.head),
                 RequestLifecycleState::Claimed | RequestLifecycleState::Processing
             );
-            let latest = generations.keys().max().copied().unwrap();
-            let folding = if head_active {
-                generations[&latest]
-                    .selected
-                    .iter()
-                    .copied()
-                    .filter(|id| state(*id) == RequestLifecycleState::Pending)
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
+            let folding = generations
+                .keys()
+                .max()
+                .map(|latest| {
+                    generations[latest]
+                        .selected
+                        .iter()
+                        .copied()
+                        .filter(|id| state(*id) == RequestLifecycleState::Pending)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             let pending = arrival_ids
                 .iter()
                 .copied()
-                .filter(|id| *id != case.head)
+                .filter(|id| *id != input.head)
                 .filter(|id| state(*id) == RequestLifecycleState::Pending && !folding.contains(id))
                 .collect::<Vec<_>>();
-            let terminal = [case.head, case.selected]
+            let terminal = [input.head, input.selected]
                 .into_iter()
                 .filter(|id| state(*id).is_terminal())
                 .collect::<Vec<_>>();
-            assert_eq!(
-                head_active.then_some(case.head),
-                expected.active,
-                "{label}: active"
+            observations.push(
+                gents_lean_vocab::families::fold_queue_contracts_publication_script::PublicationObservation {
+                    accepted,
+                    active: head_active.then_some(input.head),
+                    pending,
+                    folding,
+                    terminal,
+                    authored_keys: keys,
+                },
             );
-            assert_eq!(folding, expected.folding, "{label}: selected");
-            assert_eq!(pending, expected.pending, "{label}: pending");
-            assert_eq!(terminal, expected.terminal, "{label}: terminal");
         }
+        case.check(Some(observations));
     }
 }
 

@@ -193,10 +193,6 @@ pub fn lean_file_inventory_closure_cases() -> &'static [LeanSessionClosureCase] 
     &lean_contract_snapshot().file_inventory_closure_cases
 }
 
-pub fn lean_fold_publication_cases() -> &'static [LeanFoldPublicationCase] {
-    &lean_contract_snapshot().fold_publication_cases
-}
-
 pub fn lean_fold_turn_input_cases() -> &'static [LeanFoldTurnInputCase] {
     &lean_contract_snapshot().fold_turn_input_cases
 }
@@ -639,10 +635,6 @@ pub fn lean_snapshot_demotion_cases() -> &'static [LeanSnapshotDemotionCase] {
 
 pub fn lean_startup_readiness_cases() -> &'static [LeanStartupReadinessCase] {
     &lean_contract_snapshot().startup_readiness_cases
-}
-
-pub fn lean_steering_publication_cases() -> &'static [LeanFoldPublicationCase] {
-    &lean_contract_snapshot().steering_publication_cases
 }
 
 pub fn lean_storage_observation_runtime_cases() -> &'static [LeanStorageObservationRuntimeCase] {
@@ -3257,8 +3249,6 @@ pub struct LeanContractSnapshot {
     pub interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
     pub session_control_cases: Vec<serde_json::Value>,
     pub fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
-    pub fold_publication_cases: Vec<LeanFoldPublicationCase>,
-    pub steering_publication_cases: Vec<LeanFoldPublicationCase>,
     pub queue_management_cases: Vec<LeanQueueManagementCase>,
     pub session_input_edit_cases: Vec<LeanSessionInputEditCase>,
     pub session_input_edit_client_observation_cases: Vec<
@@ -4132,44 +4122,6 @@ pub enum LeanFoldAuthoredKey {
     Context,
     Prompt,
     Folded { request_id: u64 },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFoldPublicationCase {
-    pub name: String,
-    pub head: u64,
-    pub selected: u64,
-    pub steps: Vec<LeanFoldPublicationStep>,
-    pub expected: Vec<LeanFoldPublicationObservation>,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFoldPublicationObservation {
-    pub accepted: bool,
-    pub active: Option<u64>,
-    pub pending: Vec<u64>,
-    pub folding: Vec<u64>,
-    pub terminal: Vec<u64>,
-    pub authored_keys: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanFoldPublicationStep {
-    ObserveDeadline { now: u64, deadline: u64 },
-    EnqueueSteering { request_id: u64 },
-    Intake { generation: u64, safe_boundary: bool },
-    FinishOrIntake { generation: u64, safe_boundary: bool },
-    CancelFirstPending,
-    PublishPrompt { generation: u64 },
-    PublishChangedPrompt { generation: u64 },
-    PublishFolded { generation: u64, request_id: u64 },
-    AcceptTurn { generation: u64 },
-    Recover { expected: u64, fresh: u64 },
-    Terminalize { generation: u64 },
-    Finish,
 }
 
 #[derive(Debug, Deserialize)]

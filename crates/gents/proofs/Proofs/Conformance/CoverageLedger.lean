@@ -1346,8 +1346,8 @@ def caseCoverage : List CoverageEntry :=
       "fold_queue_contracts_handover_claim")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "fold_publication_cases"
-      "FoldPublicationCases")
+      "family"
+      "fold_queue_contracts_publication_script")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "session_input_edit_cases"
@@ -1372,13 +1372,14 @@ def caseCoverage : List CoverageEntry :=
       "QueueExpiryBarrierCases")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "steering_publication_cases"
-      "SteeringPublicationCases"
-      "Six generated scripts bind signed pending rows, native intake, authored publication, cancellation, generation fencing and natural completion. The two unsafe streaming boundary scripts are consumed by the actual loop test registered separately; this native writer adapter does not invent a safe-boundary policy.")
+      "family"
+      "fold_queue_contracts_publication_unsafe_boundary"
+      "The owned loop refuses intake at both unsafe streaming boundaries; the served writer scripts in fold_queue_contracts_publication_script bind signed pending rows, native intake, authored publication, cancellation, generation fencing and natural completion.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "steering_publication_cases"
-      "SteeringUnsafeBoundaryCases")
+  , tagged (boundaryCoverage
+      "family"
+      "fold_queue_contracts_publication_unsafe_boundary_unreached"
+      "model-production-gap: the served writer fixture has no unsafe provider-stream boundary and the owned loop has no durable queue; fold_queue_contracts_publication_unsafe_boundary replays the refused intake through run_loop_stream.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "retry_selection_cases"

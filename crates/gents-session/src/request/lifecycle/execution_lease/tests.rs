@@ -1430,28 +1430,6 @@ async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
 
 #[tokio::test]
 async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved_header() {
-    let case = gents_lean_vocab::lean_steering_publication_cases()
-        .iter()
-        .find(|case| case.name == "natural_completion_intakes_late_input_before_terminal")
-        .expect("executable natural completion case");
-    let finishes = case
-        .steps
-        .iter()
-        .zip(&case.expected)
-        .filter_map(|(step, expected)| {
-            matches!(
-                step,
-                gents_lean_vocab::LeanFoldPublicationStep::FinishOrIntake { .. }
-            )
-            .then_some(expected)
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(finishes.len(), 2);
-    assert_eq!(finishes[0].active, Some(case.head));
-    assert_eq!(finishes[1].active, None);
-    assert!(finishes[1].terminal.contains(&case.head));
-    assert_eq!(case.expected.last().unwrap().active, None);
-
     let (node, _dir, identity, agent) = test_node().await;
 
     let access = agent_access(&node, &identity, &agent);

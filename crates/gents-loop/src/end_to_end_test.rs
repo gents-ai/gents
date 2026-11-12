@@ -977,20 +977,10 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
 ) {
     use crate::loop_stream::{run_loop_stream, FoldedPrompt, LoopStreamItem};
     use futures::StreamExt;
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["steering_publication_cases"].as_array().unwrap();
-    for name in [
-        "streaming_boundary_does_not_take_input",
-        "natural_completion_during_stream_refuses",
-    ] {
-        let case = cases.iter().find(|case| case["name"] == name).unwrap();
-        let step = case["steps"].as_array().unwrap().last().unwrap();
-        let expected = case["expected"].as_array().unwrap().last().unwrap();
-        assert_eq!(step["safe_boundary"], false);
-        assert_eq!(expected["accepted"], false);
-        assert_eq!(expected["active"], case["head"]);
-        assert_eq!(expected["pending"].as_array().unwrap().len(), 1);
-
+    for case in gents_lean_vocab::families::fold_queue_contracts_publication_unsafe_boundary::cases::<
+        String,
+    >() {
+        let name = case.input.name.as_str();
         let model = ScriptedModel::new(vec![
             vec![
                 RawStreamingChoice::Message("first ".into()),
@@ -1018,6 +1008,7 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
         let mut chunks = 0;
         let mut delivered = false;
         let mut final_text = None;
+        let mut intake_while_streaming = false;
         while let Some(item) = stream.next().await {
             match item.unwrap() {
                 LoopStreamItem::AuthoredInputReady { reply, .. } => {
@@ -1037,10 +1028,7 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
                     publications += 1;
                 }
                 LoopStreamItem::SteeringBoundary { reply } => {
-                    assert!(
-                        !streaming,
-                        "{name}: intake offered during provider streaming"
-                    );
+                    intake_while_streaming |= streaming;
                     let inputs = if pending {
                         assert_eq!(publications, 1);
                         pending = false;
@@ -1055,10 +1043,7 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
                     reply.send(Ok(inputs)).unwrap();
                 }
                 LoopStreamItem::FinishOrIntake { reply, .. } => {
-                    assert!(
-                        !streaming,
-                        "{name}: finish offered during provider streaming"
-                    );
+                    intake_while_streaming |= streaming;
                     assert_eq!(publications, 2);
                     reply
                         .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
@@ -1077,6 +1062,12 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
         assert!(!requests[0].contains("late correction"));
         assert!(requests[1].contains("first answer"));
         assert!(requests[1].contains("late correction"));
+        drop(requests);
+        case.check(
+            gents_lean_vocab::families::fold_queue_contracts_publication_unsafe_boundary::UnsafeBoundaryObservation {
+                accepted: intake_while_streaming,
+            },
+        );
     }
 }
 
