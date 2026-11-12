@@ -1,7 +1,6 @@
-use anyhow::{Context, Result};
-use gents_documents::patch::SelfConfigTarget;
-use gents_protocol::operations::document::WriteMode;
+use anyhow::Result;
 use gents_documents::apply_desired_state_plan;
+use gents_documents::patch::SelfConfigTarget;
 use gents_documents::read_desired_state_record_in_txn;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_documents::{EventSource, Schedule, Task, Trigger};
@@ -9,12 +8,15 @@ use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 
 pub async fn upsert_task_on(access: &ConfigAccess, document: &Task) -> Result<()> {
-    save_document(access, "desktop.task.save", SelfConfigTarget::Task, document).await
+    save_document(
+        access,
+        "desktop.task.save",
+        SelfConfigTarget::Task,
+        document,
+    )
+    .await
 }
 
-/// Saves a whole automation document through the one document write as the
-/// User: a field the document type does not let a client write keeps its
-/// stored value.
 async fn save_document<T>(
     access: &ConfigAccess,
     operation: &'static str,
@@ -24,38 +26,14 @@ async fn save_document<T>(
 where
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
-    use gents_documents::operations::write;
-    let value = serde_json::to_value(document)?;
-    let field = |name: &str| {
-        value
-            .get(name)
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-            .with_context(|| format!("{} requires {name}", target.collection_name()))
-    };
-    let (owner, id) = (field("node_did")?, field(target.unique_field())?);
-    let patch = write::whole_document_patch(target, document)?;
-    write::write(
+    gents_documents::operations::write::save_whole(
         access,
         operation,
-        &write::DocumentWrite {
-            target,
-            owner: &owner,
-            id: &id,
-            mode: WriteMode::Save,
-            patch: &patch,
-            node_binding: None,
-        },
-        &|merged| {
-            serde_json::from_value::<T>(serde_json::Value::Object(merged.clone()))
-                .map(drop)
-                .map_err(Into::into)
-        },
+        target,
+        document,
         &gents_inference::resolved::ProviderProfilePolicy,
-        true,
     )
-    .await
-    .map_err(write::finish)?;
+    .await?;
     Ok(())
 }
 
@@ -109,7 +87,13 @@ pub async fn delete_task_on(access: &ConfigAccess, node_did: &str, id: &str) -> 
 }
 
 pub async fn upsert_schedule_on(access: &ConfigAccess, document: &Schedule) -> Result<()> {
-    save_document(access, "desktop.schedule.save", SelfConfigTarget::Schedule, document).await
+    save_document(
+        access,
+        "desktop.schedule.save",
+        SelfConfigTarget::Schedule,
+        document,
+    )
+    .await
 }
 
 pub async fn delete_schedule_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
@@ -124,7 +108,13 @@ pub async fn delete_schedule_on(access: &ConfigAccess, node_did: &str, id: &str)
 }
 
 pub async fn upsert_trigger_on(access: &ConfigAccess, document: &Trigger) -> Result<()> {
-    save_document(access, "desktop.trigger.save", SelfConfigTarget::Trigger, document).await
+    save_document(
+        access,
+        "desktop.trigger.save",
+        SelfConfigTarget::Trigger,
+        document,
+    )
+    .await
 }
 
 pub async fn delete_trigger_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
@@ -139,7 +129,13 @@ pub async fn delete_trigger_on(access: &ConfigAccess, node_did: &str, id: &str) 
 }
 
 pub async fn upsert_event_source_on(access: &ConfigAccess, document: &EventSource) -> Result<()> {
-    save_document(access, "desktop.event_source.save", SelfConfigTarget::EventSource, document).await
+    save_document(
+        access,
+        "desktop.event_source.save",
+        SelfConfigTarget::EventSource,
+        document,
+    )
+    .await
 }
 
 pub async fn delete_event_source_on(

@@ -84,12 +84,10 @@ pub(super) async fn read_menu(
         MenuId::Tasks => load_task_inventory(&access, None)
             .await
             .map(|inventory| tasks(&inventory.tasks)),
-        MenuId::Mailbox => {
-            gents_session::operations::mailbox::list(&access, &Default::default())
-                .await
-                .map(|items| mailbox(&items))
-                .map_err(crate::commands::mailbox::failure)
-        }
+        MenuId::Mailbox => gents_session::operations::mailbox::list(&access, &Default::default())
+            .await
+            .map(|items| mailbox(&items))
+            .map_err(crate::commands::mailbox::failure),
         MenuId::Status => load_runtime_status_output(Some(home), &work.endpoint, node_did)
             .await
             .map(|output| status(&output)),
@@ -200,17 +198,15 @@ pub(super) async fn act(
                 Err(error) => Err(format!("Couldn’t delete {label}: {error:#}")),
             }
         }
-        MenuAct::Dismiss { item } => {
-            gents_session::operations::mailbox::dismiss(&access, item)
-                .await
-                .map(|_| "dismissed".to_string())
-                .map_err(|error| {
-                    format!(
-                        "could not dismiss it: {:#}",
-                        crate::commands::mailbox::failure(error)
-                    )
-                })
-        }
+        MenuAct::Dismiss { item } => gents_session::operations::mailbox::dismiss(&access, item)
+            .await
+            .map(|_| "dismissed".to_string())
+            .map_err(|error| {
+                format!(
+                    "could not dismiss it: {:#}",
+                    crate::commands::mailbox::failure(error)
+                )
+            }),
         MenuAct::SetFolderAccess { path, access } => grant(home, path, access)
             .await
             .map_err(|error| format!("{error:#}")),

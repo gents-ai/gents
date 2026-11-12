@@ -27,7 +27,10 @@ pub fn decide_write(mode: WriteMode, stored: bool) -> WriteOutcome {
 
 /// The patch a client holding the whole typed document stands for: every
 /// writable field set to the document's value, an empty one cleared.
-pub fn whole_document_patch<T>(target: SelfConfigTarget, document: &T) -> anyhow::Result<SelfConfigPatch>
+pub fn whole_document_patch<T>(
+    target: SelfConfigTarget,
+    document: &T,
+) -> anyhow::Result<SelfConfigPatch>
 where
     T: serde::Serialize,
 {
@@ -191,4 +194,74 @@ pub async fn write(
 
 pub fn finish(failure: WriteFailure) -> DocumentOperationError {
     failure.finish(DocumentOperationError::Passthrough)
+}
+
+/// Saves a whole typed document as the client holding it: its owner and id
+/// are the document's own and every writable field takes its value. A
+/// create also takes the fields only a create may set (a Task's `agent_did`);
+/// an update keeps their stored values.
+pub async fn save_whole<T>(
+    access: &ConfigAccess,
+    operation: &'static str,
+    target: SelfConfigTarget,
+    document: &T,
+    policy: &dyn AdvertisedProfilePolicy,
+) -> Result<DocumentReceipt, DocumentOperationError>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned,
+{
+    let value = serde_json::to_value(document)
+        .map_err(|error| DocumentOperationError::Passthrough(error.into()))?;
+    let field = |name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let (owner, id) = (field("node_did"), field(target.unique_field()));
+    if owner.trim().is_empty() {
+        return Err(DocumentOperationError::Invalid {
+            collection: target.collection_name(),
+            source: "node_did is required".into(),
+        });
+    }
+    let patch = whole_document_patch(target, document)
+        .map_err(|error| DocumentOperationError::Passthrough(error.into()))?;
+    let write = &DocumentWrite {
+        target,
+        owner: &owner,
+        id: &id,
+        mode: WriteMode::Save,
+        patch: &patch,
+        node_binding: None,
+    };
+    let value = &value;
+    access
+        .transact_write(operation, |txn| {
+            Box::pin(async move {
+                let mut candidate = candidate_in_txn(txn, write).await?;
+                if candidate.created {
+                    for name in target.all_fields() {
+                        if let Some(field) = value.get(*name).filter(|field| !field.is_null()) {
+                            candidate
+                                .merged
+                                .entry((*name).to_owned())
+                                .or_insert_with(|| field.clone());
+                        }
+                    }
+                }
+                serde_json::from_value::<T>(Value::Object(candidate.merged.clone())).map_err(
+                    |error| {
+                        OperationFailure::Operation(DocumentOperationError::Invalid {
+                            collection: target.collection_name(),
+                            source: error.into(),
+                        })
+                    },
+                )?;
+                publish_in_txn(txn, write, &candidate, policy, true).await
+            })
+        })
+        .await
+        .map_err(finish)
 }
