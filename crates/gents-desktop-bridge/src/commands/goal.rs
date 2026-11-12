@@ -361,69 +361,89 @@ mod tests {
     /// the owner's classifier and the DTO projection the desktop receives.
     #[test]
     fn generated_session_goal_views_name_their_cause() {
-        #[derive(serde::Deserialize)]
-        struct Contracts {
-            goal_session_observation_cases: Vec<Value>,
-        }
-        let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert_eq!(contracts.goal_session_observation_cases.len(), 20);
+        use gents_lean_vocab::families::goal_session_observation_contracts_presentation as family;
         let row = gents_protocol::session::decode_session_row(&json!({
             "_docID": "session-document", "session_id": "chat", "node_did": "did:key:node",
             "requester_did": "did:key:user", "agent_did": "did:key:agent",
             "created_at": "2026-11-08T00:00:00Z",
         }))
         .unwrap();
-        for case in &contracts.goal_session_observation_cases {
-            let session = match case["session"].as_str().unwrap() {
+        let number = |value: &str, prefix: &str| -> u64 {
+            value.strip_prefix(prefix).unwrap().parse().unwrap()
+        };
+        gents_lean_vocab::families::goal_session_observation_contracts_presentation::replay::<String, String>(|case: &family::Case<String>| {
+            let session = match case.session.as_str() {
                 "absent" => AgentSessionRowRead::Absent,
                 "present" => AgentSessionRowRead::Present(Box::new(row.clone())),
                 other => panic!("unmodeled session read {other}"),
             };
-            let projection = match case["projection"]["kind"].as_str().unwrap() {
+            let projection = match case.projection.kind.as_str() {
                 "missing" => gents_automation::goal::SessionGoalProjectionRead::Missing,
                 "unverified" => gents_automation::goal::SessionGoalProjectionRead::Unverified,
                 "verified" => gents_automation::goal::SessionGoalProjectionRead::Verified(
-                    Box::new(modeled_observation(&case["projection"]["goal"])),
+                    Box::new(modeled_observation(
+                        &serde_json::to_value(&case.projection.goal).unwrap(),
+                    )),
                 ),
                 other => panic!("unmodeled projection read {other}"),
             };
             let state = gents_automation::goal::observe_session_goal(&session, projection);
+            let root = match &state {
+                gents_automation::goal::SessionGoalObservationState::Observed(observation) => {
+                    observation.goal.as_ref().and_then(|goal| {
+                        goal.assignment_root_request_doc_id
+                            .as_deref()
+                            .map(|root| number(root, "request-document:"))
+                    })
+                }
+                _ => None,
+            };
             let dto = serde_json::to_value(session_goal_state(state, |observation| {
                 goal_view(observation, None)
             }))
             .unwrap();
-            let view = &case["expected_view"];
-            match view["kind"].as_str().unwrap() {
-                "goal" => {
-                    assert_eq!(dto["kind"], "observed", "{case}");
-                    assert_eq!(
-                        dto["observation"]["goal"]["goalId"],
-                        format!("goal:{}", view["goal"]["goal"]),
-                        "{case}"
-                    );
-                }
-                "no_goal" => {
-                    assert_eq!(dto["kind"], "observed", "{case}");
-                    assert!(dto["observation"]["goal"].is_null(), "{case}");
-                }
-                "unavailable" if view["cause"] == "session_not_readable" => {
-                    assert_eq!(dto["kind"], "no_readable_session", "{case}");
-                }
-                "unavailable" => {
-                    assert_eq!(dto["kind"], "unknown", "{case}");
-                    assert_eq!(dto["cause"], view["cause"], "{case}");
+            let view = match dto["kind"].as_str().unwrap() {
+                "observed" => match dto["observation"]["goal"]["goalId"].as_str() {
+                    Some(goal_id) => family::ViewWire {
+                        kind: "goal".into(),
+                        goal: Some(family::Reference {
+                            goal: number(goal_id, "goal:"),
+                            root,
+                        }),
+                        cause: None,
+                    },
+                    None => family::ViewWire {
+                        kind: "no_goal".into(),
+                        goal: None,
+                        cause: None,
+                    },
+                },
+                "no_readable_session" => family::ViewWire {
+                    kind: "unavailable".into(),
+                    goal: None,
+                    cause: Some("session_not_readable".into()),
+                },
+                "unknown" => {
                     let refused: gents_automation::goal::SessionGoalUnknownCause =
-                        serde_json::from_value(view["cause"].clone()).unwrap();
+                        serde_json::from_value(dto["cause"].clone()).unwrap();
                     assert_eq!(
                         dto["reason"],
                         gents_automation::goal::GoalInputRefused::from(refused).to_string(),
-                        "the view's reason is the refusal a send returns: {case}"
+                        "the view's reason is the refusal a send returns: {dto}"
                     );
+                    family::ViewWire {
+                        kind: "unavailable".into(),
+                        goal: None,
+                        cause: Some(dto["cause"].as_str().unwrap().to_owned()),
+                    }
                 }
                 other => panic!("unmodeled view {other}"),
+            };
+            family::ViewOutput {
+                view,
+                next: serde_json::from_value(dto["next"].clone()).unwrap(),
             }
-            assert_eq!(dto["next"], case["expected_next"], "{case}");
-        }
+        });
     }
 
     #[test]

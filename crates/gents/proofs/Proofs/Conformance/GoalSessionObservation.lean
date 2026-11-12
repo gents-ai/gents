@@ -1,15 +1,34 @@
 import Proofs.Automation.GoalAutomation.SessionObservation
+import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.GoalSessionObservationContracts
 
 open GoalAutomation.SessionObservation GoalAutomation.RequestAssignment GoalAutomation Lean
 
+deriving instance ToJson for GoalAutomation.SessionObservation.SessionRead,
+  GoalAutomation.SessionObservation.UnknownCause, GoalAutomation.SessionObservation.NextAction
+
+structure ProjectionWire where
+  kind : String
+  goal : Option Reference
+  deriving ToJson, DecidableEq
+
+def ProjectionWire.ofModel : ProjectionRead → ProjectionWire
+  | .missing => ⟨"missing", none⟩
+  | .unverified => ⟨"unverified", none⟩
+  | .verified goal => ⟨"verified", goal⟩
+
+def ProjectionWire.toModel (p : ProjectionWire) : ProjectionRead :=
+  if p.kind == "verified" then .verified p.goal
+  else if p.kind == "unverified" then .unverified else .missing
+
 structure Case where
   session : SessionRead
-  projection : ProjectionRead
+  projection : ProjectionWire
   captured : Option Reference
-  deriving DecidableEq, Repr
+  deriving ToJson
 
 def projections : List ProjectionRead :=
   [.missing, .unverified, .verified none, .verified (some ⟨1, none⟩),
@@ -18,19 +37,75 @@ def projections : List ProjectionRead :=
 def cases : List Case :=
   [SessionRead.absent, .present].flatMap fun session =>
     projections.flatMap fun projection =>
-      [none, some ⟨1, some 100⟩].map fun captured => ⟨session, projection, captured⟩
+      [none, some ⟨1, some 100⟩].map fun captured =>
+        ⟨session, ProjectionWire.ofModel projection, captured⟩
+
+example : cases.all (fun c => ProjectionWire.ofModel c.projection.toModel == c.projection) := by
+  native_decide
+
+def Case.state (c : Case) : State := observe c.session c.projection.toModel
+
+structure StateWire where
+  kind : String
+  cause : Option UnknownCause
+  goal : Option Reference
+  deriving ToJson
+
+def StateWire.ofModel : State → StateWire
+  | .noReadableSession => ⟨"no_readable_session", none, none⟩
+  | .unknown cause => ⟨"unknown", some cause, none⟩
+  | .observed goal => ⟨"observed", none, goal⟩
+
+structure PreparedWire where
+  kind : String
+  reference : Option Reference
+  deriving ToJson
+
+def PreparedWire.ofModel : PreparedInput → PreparedWire
+  | .pending => ⟨"pending", none⟩
+  | .prepared reference => ⟨"prepared", reference⟩
+
+structure ClassificationOutput where
+  state : StateWire
+  next : NextAction
+  bind : PreparedWire
+  refusal : Option UnknownCause
+  deriving ToJson
+
+@[conformance_family]
+def classification : Family Case ClassificationOutput where
+  inputs := cases
+  model := fun c =>
+    { state := StateWire.ofModel c.state, next := next c.state
+      bind := PreparedWire.ofModel (bind c.captured c.state)
+      refusal := refusal c.captured c.state }
+
+structure ViewWire where
+  kind : String
+  goal : Option Reference
+  cause : Option String
+  deriving ToJson
+
+def ViewWire.ofModel : View → ViewWire
+  | .goal goal => ⟨"goal", some goal, none⟩
+  | .noGoal => ⟨"no_goal", none, none⟩
+  | .unavailable .sessionNotReadable => ⟨"unavailable", none, some "session_not_readable"⟩
+  | .unavailable (.unknown .projectionMissing) => ⟨"unavailable", none, some "projection_missing"⟩
+  | .unavailable (.unknown .projectionUnverified) =>
+      ⟨"unavailable", none, some "projection_unverified"⟩
+
+structure ViewOutput where
+  view : ViewWire
+  next : NextAction
+  deriving ToJson
+
+@[conformance_family]
+def presentation : Family Case ViewOutput where
+  inputs := cases
+  model := fun c => { view := ViewWire.ofModel (view c.state), next := next c.state }
 
 def referenceJson (reference : Reference) : Json :=
   Json.mkObj [("goal", toJson reference.goal), ("root", toJson reference.root)]
-
-def sessionJson : SessionRead → Json
-  | .absent => "absent" | .present => "present"
-
-def projectionJson : ProjectionRead → Json
-  | .missing => Json.mkObj [("kind", "missing")]
-  | .unverified => Json.mkObj [("kind", "unverified")]
-  | .verified goal => Json.mkObj [("kind", "verified"),
-      ("goal", goal.map referenceJson |>.getD Json.null)]
 
 def unknownCauseJson : UnknownCause → Json
   | .projectionMissing => "projection_missing"
@@ -53,22 +128,6 @@ def viewJson : View → Json
 def nextJson : NextAction → Json
   | .controlGoal => "control_goal" | .startGoal => "start_goal"
   | .send => "send" | .awaitPublication => "await_publication"
-
-def preparedJson : PreparedInput → Json
-  | .pending => Json.mkObj [("kind", "pending")]
-  | .prepared reference => Json.mkObj [("kind", "prepared"),
-      ("reference", reference.map referenceJson |>.getD Json.null)]
-
-def caseJson (c : Case) : Json :=
-  let state := observe c.session c.projection
-  Json.mkObj [("session", sessionJson c.session), ("projection", projectionJson c.projection),
-    ("captured", c.captured.map referenceJson |>.getD Json.null),
-    ("expected_state", stateJson state), ("expected_view", viewJson (view state)),
-    ("expected_next", nextJson (next state)),
-    ("expected_bind", preparedJson (bind c.captured state)),
-    ("expected_refusal", (refusal c.captured state).map unknownCauseJson |>.getD Json.null)]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
 
 /-! Histories of reads the client folds (`SessionObservation.fold`). Session 1
 is the one shown; session 2 is another chat. -/

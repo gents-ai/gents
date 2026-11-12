@@ -1,4 +1,5 @@
 use super::*;
+use gents_lean_vocab::families::goal_session_observation_contracts_classification as family;
 use crate::goal::operator_resume::support::{Fixture, SESSION};
 use futures::FutureExt;
 use serde_json::{json, Value};
@@ -429,18 +430,48 @@ fn modeled_observation(goal: &Value, agent_did: &str) -> SessionGoalObservation 
     }
 }
 
-fn modeled_state(value: &SessionGoalObservationState) -> Value {
+fn modeled_number(value: &str, prefix: &str) -> u64 {
+    value.strip_prefix(prefix).unwrap().parse().unwrap()
+}
+
+fn modeled_goal(
+    reference: &gents_protocol::request_input::GoalAssignmentInput,
+) -> family::Reference {
+    family::Reference {
+        goal: modeled_number(&reference.goal_id, "goal:"),
+        root: reference
+            .root_request_doc_id
+            .as_deref()
+            .map(|root| modeled_number(root, "request-document:")),
+    }
+}
+
+fn modeled_state(value: &SessionGoalObservationState) -> family::StateWire<String> {
+    let cause = |cause: &SessionGoalUnknownCause| {
+        serde_json::from_value(serde_json::to_value(cause).unwrap()).unwrap()
+    };
     match value {
-        SessionGoalObservationState::NoReadableSession => json!({"kind": "no_readable_session"}),
-        SessionGoalObservationState::Unknown(cause) => json!({"kind": "unknown", "cause": cause}),
-        SessionGoalObservationState::Observed(observation) => json!({
-            "kind": "observed",
-            "goal": observation.goal.as_ref().map(|goal| json!({
-                "goal": goal.snapshot.goal_id.trim_start_matches("goal:").parse::<u64>().unwrap(),
-                "root": goal.assignment_root_request_doc_id.as_deref().map(|root|
-                    root.trim_start_matches("request-document:").parse::<u64>().unwrap()),
-            })),
-        }),
+        SessionGoalObservationState::NoReadableSession => family::StateWire {
+            kind: "no_readable_session".into(),
+            cause: None,
+            goal: None,
+        },
+        SessionGoalObservationState::Unknown(unknown) => family::StateWire {
+            kind: "unknown".into(),
+            cause: Some(cause(unknown)),
+            goal: None,
+        },
+        SessionGoalObservationState::Observed(observation) => family::StateWire {
+            kind: "observed".into(),
+            cause: None,
+            goal: observation.goal.as_ref().map(|goal| family::Reference {
+                goal: modeled_number(&goal.snapshot.goal_id, "goal:"),
+                root: goal
+                    .assignment_root_request_doc_id
+                    .as_deref()
+                    .map(|root| modeled_number(root, "request-document:")),
+            }),
+        },
     }
 }
 
@@ -490,18 +521,13 @@ async fn modeled_responses(case: &Value, agent: &dyn NodeIdentity) -> (Value, Va
 /// binder every send uses. Only the transport call itself is not replayed.
 #[tokio::test]
 async fn generated_session_goal_reads_classify_and_bind() {
-    #[derive(Deserialize)]
-    struct Contracts {
-        goal_session_observation_cases: Vec<Value>,
-    }
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_session_observation_cases.len(), 20);
     let home = tempfile::tempdir().unwrap();
     let agent =
         gents_store::identity::KeyIdentity::load_or_create(home.path().join("agent.key"), None)
             .unwrap();
-    for case in &contracts.goal_session_observation_cases {
-        let (session_response, projection_response) = modeled_responses(case, &agent).await;
+    for modeled in gents_lean_vocab::families::goal_session_observation_contracts_classification::cases::<String, String, String>() {
+        let case = serde_json::to_value(&modeled.input).unwrap();
+        let (session_response, projection_response) = modeled_responses(&case, &agent).await;
         let read = || async {
             let session = gents_store::config_client::agent_session::decode_agent_session_read(
                 &session_response,
@@ -521,27 +547,38 @@ async fn generated_session_goal_reads_classify_and_bind() {
             observe_session_goal(&session, projection)
         };
         let state = read().await;
-        assert_eq!(modeled_state(&state), case["expected_state"], "{case}");
-        assert_eq!(json!(state.next()), case["expected_next"], "{case}");
+        let observed_state = modeled_state(&state);
+        let next = serde_json::from_value(json!(state.next())).unwrap();
         let input = gents_protocol::request_input::RequestInput {
             goal_assignment: modeled_reference(&case["captured"]),
             ..Default::default()
         };
         let bound = bind_goal_input(input.clone(), state);
-        assert_eq!(
-            json!(bound.as_ref().err().map(|refused| refused.cause())),
-            case["expected_refusal"],
-            "{case}"
-        );
-        match case["expected_bind"]["kind"].as_str().unwrap() {
-            "pending" => assert!(bound.is_err(), "{case}"),
-            "prepared" => {
-                let mut expected = input;
-                expected.goal_assignment = modeled_reference(&case["expected_bind"]["reference"]);
-                assert_eq!(bound.unwrap(), expected, "{case}");
+        let refusal = bound
+            .as_ref()
+            .err()
+            .map(|refused| serde_json::from_value(json!(refused.cause())).unwrap());
+        let bind = match bound {
+            Err(_) => family::PreparedWire {
+                kind: "pending".into(),
+                reference: None,
+            },
+            Ok(prepared) => {
+                let mut unchanged = prepared.clone();
+                unchanged.goal_assignment = input.goal_assignment.clone();
+                assert_eq!(unchanged, input, "{case}: binding changes only the assignment");
+                family::PreparedWire {
+                    kind: "prepared".into(),
+                    reference: prepared.goal_assignment.as_ref().map(modeled_goal),
+                }
             }
-            other => panic!("unmodeled bind outcome {other}"),
-        }
+        };
+        modeled.check(family::ClassificationOutput {
+            state: observed_state,
+            next,
+            bind,
+            refusal,
+        });
     }
 }
 
