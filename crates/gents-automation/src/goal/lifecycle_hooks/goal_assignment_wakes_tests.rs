@@ -1,8 +1,11 @@
-use super::*;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
-use gents_protocol::request_input::GoalAssignmentInput;
+use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSource, RequestQueue};
+use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
+use gents_session::request::lifecycle::test_support::{test_db_with, TestDb};
+use gents_store::graphql::escape_graphql_string;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::{json, Value};
 
@@ -34,9 +37,12 @@ async fn parent(
             .as_u64()
             .map(|root| documents[&root].doc_id.clone()),
     });
-    crate::request::admission::sign_agent_request_create(db.agent_identity.as_ref(), &mut create)
-        .await
-        .unwrap();
+    gents_session::request::admission::sign_agent_request_create(
+        db.agent_identity.as_ref(),
+        &mut create,
+    )
+    .await
+    .unwrap();
     let mutation = create.graphql_mutation().unwrap();
     let node_did = db.node_did().to_owned();
     let agent_did = db.agent_did().to_owned();
@@ -47,7 +53,7 @@ async fn parent(
             let mutation = &mutation;
             let (node_did, agent_did, now) = (node_did.as_str(), agent_did.as_str(), now.as_str());
             Box::pin(async move {
-                crate::session::ensure_session_in_txn(
+                gents_session::session::ensure_session_in_txn(
                     txn,
                     session,
                     node_did,
@@ -63,7 +69,7 @@ async fn parent(
         })
         .await
         .unwrap();
-    let request = crate::request::binding::load_agent_request_with_access(
+    let request = gents_session::request::binding::load_agent_request_with_access(
         &db.agent_access,
         &create.request_id,
     )
@@ -93,7 +99,7 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
     assert_eq!(cases.len(), 10);
     for case in cases {
         let name = case["name"].as_str().unwrap();
-        let db = test_db(name).await;
+        let db = test_db_with(name, crate::lifecycle_hooks::composition()).await;
         let mut documents = RapidHashMap::new();
         let first = parent(&db, name, &case["first"], &mut documents).await;
         let second = parent(&db, name, &case["second"], &mut documents).await;
@@ -191,7 +197,7 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
             "{name}: assignment coalescing"
         );
         for (wake, field) in [(&first_wake, "first_scope"), (&second_wake, "second_scope")] {
-            let row = crate::request::binding::load_agent_request_with_access(
+            let row = gents_session::request::binding::load_agent_request_with_access(
                 &db.agent_access,
                 &wake.request_id,
             )

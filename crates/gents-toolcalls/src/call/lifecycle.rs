@@ -628,7 +628,7 @@ mod tests {
         let kind_of = |tool_name: &str| {
             ToolCallLifecycle::new(
                 node.clone(),
-                identity::Did::new("did:test:agent").unwrap(),
+                identity::Did::new(node_db.node_identity.did()).unwrap(),
                 "request".into(),
                 "session".into(),
                 "did:test:owner".into(),

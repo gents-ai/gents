@@ -263,11 +263,17 @@ impl TestDb {
 }
 
 pub async fn test_db(name: &str) -> TestDb {
-    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node(
-        name,
-        crate::test_support::no_lifecycle_plugins(),
-    )
-    .await;
+    test_db_with(name, crate::test_support::no_lifecycle_plugins()).await
+}
+
+/// A signed test node composed with `composition`, for tests that need a
+/// plugin (such as Goals) that the session crate cannot name.
+pub async fn test_db_with(
+    name: &str,
+    composition: gents_store::node_extension::Extensions,
+) -> TestDb {
+    let (db, user, user_access, binding) =
+        gents_inference::test_support::signed_test_node(name, composition).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let agent_identity = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding)

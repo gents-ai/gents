@@ -1,5 +1,5 @@
 use super::*;
-use crate::goal::operator_resume::support::{execute, Fixture, SESSION};
+use crate::goal::operator_resume::support::{execute, FixtureNode};
 use crate::goal::session_goal_control::process_command;
 use gents_lean_vocab::{
     LeanGoalClientControlCaseBeforeExecution, LeanGoalClientControlCaseExpectedExecution,
@@ -56,243 +56,268 @@ pub(super) async fn receipt(
         .map(|raw| serde_json::from_str(raw).unwrap())
 }
 
+/// Fixtures sharing a node slow down as it accumulates their documents, so
+/// the cases run on a small pool of nodes, a few at a time.
+const CASES_PER_NODE: usize = 32;
+const NODES_AT_ONCE: usize = 4;
+
 #[tokio::test]
 async fn generated_goal_client_controls_drive_signed_commands() {
+    use futures::StreamExt;
     let cases = &gents_lean_vocab::lean_contract_snapshot().goal_client_control_cases;
     assert_eq!(cases.len(), 756);
-    for case in cases {
-        let before_execution = before_execution_json(&case.before.execution);
-        let terminal_parent = !case.facts.unfinished_request;
-        let fixture = Fixture::new_with_parent_state(&before_execution, terminal_parent).await;
-        execute(&fixture.agent_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(&case.before.objective))).await;
-        let owner_access = fixture.user_access();
-        let session = owner_access
-            .transact_readonly("test.goal_session", |txn| {
-                Box::pin(async {
-                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-                        txn,
-                        fixture.identity.did(),
-                        SESSION,
+    futures::stream::iter(cases.chunks(CASES_PER_NODE))
+        .for_each_concurrent(NODES_AT_ONCE, |chunk| async move {
+            let node = FixtureNode::start().await;
+            for case in chunk {
+                drive_signed_command(&node, case).await;
+            }
+            node.shutdown().await;
+        })
+        .await;
+}
+
+async fn drive_signed_command(
+    node: &FixtureNode,
+    case: &gents_lean_vocab::LeanGoalClientControlCase,
+) {
+    let before_execution = before_execution_json(&case.before.execution);
+    let terminal_parent = !case.facts.unfinished_request;
+    let fixture = node
+        .fixture_with_parent_state(&before_execution, terminal_parent)
+        .await;
+    execute(
+        &fixture.agent_access(),
+        &format!(
+            r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&fixture.goal.doc_id),
+            escape_graphql_string(&case.before.objective)
+        ),
+    )
+    .await;
+    let owner_access = fixture.user_access();
+    let session = owner_access
+        .transact_readonly("test.goal_session", |txn| {
+            Box::pin(async {
+                gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    fixture.identity.did(),
+                    &fixture.session,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let (requester, access) = if !case.facts.authorized {
+        let requester = Arc::new(
+            tokio::task::spawn_blocking(|| {
+                gents_store::test_support::test_identity("goal-denied-requester")
+            })
+            .await
+            .unwrap(),
+        );
+        let requester_did = ::identity::Did::new(requester.did()).unwrap();
+        let admin = gents_store::config_client::ConfigAccess::local_as(
+            fixture.node.clone(),
+            ::identity::Did::new(fixture.identity.did()).unwrap(),
+        );
+        for permission in [
+            gents_store::config_client::NodePermission::CollectionGet,
+            gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::DocumentUpdate,
+            gents_store::config_client::NodePermission::DacRelationAdd,
+        ] {
+            admin
+                .grant_node_permission(&requester_did, permission)
+                .await
+                .unwrap();
+        }
+        owner_access
+            .add_actor_relationship("AgentSession", &session.doc_id, "reader", &requester_did)
+            .await
+            .unwrap();
+        owner_access
+            .add_actor_relationship(
+                "Agent",
+                &fixture.agent_doc_id,
+                "session_writer",
+                &requester_did,
+            )
+            .await
+            .unwrap();
+        let owner_endpoint = match &owner_access {
+            gents_store::config_client::ConfigAccess::Graphql(endpoint) => endpoint.url(),
+            gents_store::config_client::ConfigAccess::Local(_) => {
+                panic!("fixture requires held client access")
+            }
+        };
+        let access = gents_store::config_client::ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::as_principal(
+                owner_endpoint,
+                requester.did(),
+            )
+            .with_client_signing_capability(requester.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+        );
+        let decisions = fixture
+            .agent_access()
+            .transact_readonly("test.goal_denied_session_authority", |txn| {
+                let requester_did = &requester_did;
+                let session_doc = &session.doc_id;
+                Box::pin(async move {
+                    txn.observe_document_access(
+                        requester_did,
+                        "AgentSession",
+                        std::slice::from_ref(session_doc),
+                        defra_node::DocumentAccessMode::Named {
+                            permission: "update".into(),
+                            node_permission: acp::nac::NodePermission::DocumentUpdate,
+                        },
                     )
                     .await
                 })
             })
             .await
-            .unwrap()
             .unwrap();
-        let (requester, access) = if !case.facts.authorized {
-            let requester = Arc::new(
-                tokio::task::spawn_blocking(|| {
-                    gents_store::test_support::test_identity("goal-denied-requester")
-                })
-                .await
-                .unwrap(),
-            );
-            let requester_did = ::identity::Did::new(requester.did()).unwrap();
-            let admin = gents_store::config_client::ConfigAccess::local_as(
-                fixture.node.clone(),
-                ::identity::Did::new(fixture.identity.did()).unwrap(),
-            );
-            for permission in [
-                gents_store::config_client::NodePermission::CollectionGet,
-                gents_store::config_client::NodePermission::DocumentRead,
-                gents_store::config_client::NodePermission::DocumentUpdate,
-                gents_store::config_client::NodePermission::DacRelationAdd,
-            ] {
-                admin
-                    .grant_node_permission(&requester_did, permission)
-                    .await
-                    .unwrap();
-            }
-            owner_access
-                .add_actor_relationship("AgentSession", &session.doc_id, "reader", &requester_did)
-                .await
-                .unwrap();
-            owner_access
-                .add_actor_relationship(
-                    "Agent",
-                    &fixture.agent_doc_id,
-                    "session_writer",
-                    &requester_did,
-                )
-                .await
-                .unwrap();
-            let owner_endpoint = match &owner_access {
-                gents_store::config_client::ConfigAccess::Graphql(endpoint) => endpoint.url(),
-                gents_store::config_client::ConfigAccess::Local(_) => {
-                    panic!("fixture requires held client access")
-                }
-            };
-            let access = gents_store::config_client::ConfigAccess::Graphql(
-                gents_store::config_client::GraphqlEndpoint::as_principal(
-                    owner_endpoint,
-                    requester.did(),
-                )
-                .with_client_signing_capability(requester.client_signing_capability().unwrap())
-                .unwrap()
-                .with_client_signed_agent_creates(),
-            );
-            let decisions = fixture
-                .agent_access()
-                .transact_readonly("test.goal_denied_session_authority", |txn| {
-                    let requester_did = &requester_did;
-                    let session_doc = &session.doc_id;
-                    Box::pin(async move {
-                        txn.observe_document_access(
-                            requester_did,
-                            "AgentSession",
-                            std::slice::from_ref(session_doc),
-                            defra_node::DocumentAccessMode::Named {
-                                permission: "update".into(),
-                                node_permission: acp::nac::NodePermission::DocumentUpdate,
-                            },
-                        )
-                        .await
-                    })
-                })
-                .await
-                .unwrap();
-            assert_eq!(decisions, [defra_node::DocumentAccessDecision::Denied]);
-            (requester, access)
-        } else {
-            (fixture.user.clone(), owner_access)
-        };
-        let revision = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
-        let before = fixture.observe().await;
-        let operation = match case.operation.kind.as_str() {
-            "create" => GoalOperation::Create {
-                objective: case.operation.objective.clone().unwrap(),
-                token_budget: case.operation.budget,
+        assert_eq!(decisions, [defra_node::DocumentAccessDecision::Denied]);
+        (requester, access)
+    } else {
+        (fixture.user.clone(), owner_access)
+    };
+    let revision = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
+    let before = fixture.observe().await;
+    let operation = match case.operation.kind.as_str() {
+        "create" => GoalOperation::Create {
+            objective: case.operation.objective.clone().unwrap(),
+            token_budget: case.operation.budget,
+        },
+        "edit" => GoalOperation::Edit {
+            objective: case.operation.objective.clone(),
+            token_budget: case.operation.budget,
+        },
+        "pause" => GoalOperation::Pause {},
+        "resume" => GoalOperation::Resume {},
+        "stop" => GoalOperation::Stop {},
+        other => panic!("unknown modeled goal operation {other}"),
+    };
+    let now = Utc::now();
+    let mut command = SessionGoalControl {
+        version: SESSION_GOAL_CONTROL_VERSION,
+        command_id: uuid::Uuid::new_v4().to_string(),
+        requester_did: requester.did().into(),
+        requester_peer_id: None,
+        node_did: fixture.identity.did().into(),
+        agent_did: session.session.agent_did.clone(),
+        agent_doc_id: super::agent_document_for_test(
+            &access,
+            fixture.identity.did(),
+            &session.session.agent_did,
+        )
+        .await,
+        session_id: fixture.session.clone(),
+        session_doc_id: Some(session.doc_id),
+        issued_at: now.to_rfc3339(),
+        expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
+        expected: Some(GoalRevision {
+            document: if case.expected_revision.document == case.before.revision.document {
+                fixture.goal.doc_id.clone()
+            } else {
+                "foreign-goal-document".into()
             },
-            "edit" => GoalOperation::Edit {
-                objective: case.operation.objective.clone(),
-                token_budget: case.operation.budget,
+            composite: if case.expected_revision.composite == case.before.revision.composite {
+                revision.clone()
+            } else {
+                "stale-goal-commit".into()
             },
-            "pause" => GoalOperation::Pause {},
-            "resume" => GoalOperation::Resume {},
-            "stop" => GoalOperation::Stop {},
-            other => panic!("unknown modeled goal operation {other}"),
-        };
-        let now = Utc::now();
-        let mut command = SessionGoalControl {
-            version: SESSION_GOAL_CONTROL_VERSION,
-            command_id: uuid::Uuid::new_v4().to_string(),
-            requester_did: requester.did().into(),
-            requester_peer_id: None,
-            node_did: fixture.identity.did().into(),
-            agent_did: session.session.agent_did.clone(),
-            agent_doc_id: super::agent_document_for_test(
-                &access,
-                fixture.identity.did(),
-                &session.session.agent_did,
-            )
-            .await,
-            session_id: SESSION.into(),
-            session_doc_id: Some(session.doc_id),
-            issued_at: now.to_rfc3339(),
-            expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
-            expected: Some(GoalRevision {
-                document: if case.expected_revision.document == case.before.revision.document {
-                    fixture.goal.doc_id.clone()
-                } else {
-                    "foreign-goal-document".into()
-                },
-                composite: if case.expected_revision.composite == case.before.revision.composite {
-                    revision.clone()
-                } else {
-                    "stale-goal-commit".into()
-                },
-            }),
-            operation,
-            initial_request: None,
-            native_evidence: None,
-            signature: Vec::new(),
-        };
-        command.signature = requester
-            .sign(&command.signing_payload().unwrap())
-            .await
-            .unwrap();
-        let doc_id = persist_command(&access, &command).await;
-        let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
-        assert_eq!(
-            process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-                .await
-                .unwrap(),
-            None,
-            "{}",
-            case.name
-        );
-        let receipt = receipt(&access, &doc_id).await.unwrap();
-        receipt.validate_for(&command).unwrap();
-        assert!(identity
-            .verify(
-                &receipt.agent_did,
-                &receipt.signing_payload().unwrap(),
-                &receipt.signature
-            )
-            .await
-            .unwrap());
-        let current = fixture.current_goal().await;
-        match &case.expected {
-            Some(expected) => {
-                assert!(
-                    matches!(receipt.outcome, GoalControlOutcome::Applied { .. }),
-                    "{}: {:?}",
-                    case.name,
-                    receipt.outcome
-                );
-                assert_eq!(
-                    observed_execution(fixture.observe().await),
-                    expected.execution,
-                    "{} execution",
-                    case.name
-                );
-                assert_eq!(
-                    current.objective,
-                    expected.objective,
-                    "{} objective",
-                    case.name
-                );
-            }
-            None => {
-                assert!(
-                    matches!(receipt.outcome, GoalControlOutcome::Rejected { .. }),
-                    "{}",
-                    case.name
-                );
-                assert_eq!(
-                    fixture.observe().await,
-                    before,
-                    "{} unchanged execution",
-                    case.name
-                );
-                assert_eq!(
-                    current.objective,
-                    case.before.objective,
-                    "{} unchanged objective",
-                    case.name
-                );
-                assert_eq!(
-                    fixture.goal_commit(&fixture.goal.doc_id).await.cid,
-                    revision,
-                    "{} no goal write",
-                    case.name
-                );
-            }
-        }
-        let first_receipt = serde_json::to_value(receipt).unwrap();
+        }),
+        operation,
+        initial_request: None,
+        native_evidence: None,
+        signature: Vec::new(),
+    };
+    command.signature = requester
+        .sign(&command.signing_payload().unwrap())
+        .await
+        .unwrap();
+    let doc_id = persist_command(&access, &command).await;
+    let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
+    assert_eq!(
         process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
             .await
-            .unwrap();
-        assert_eq!(
-            serde_json::to_value(self::receipt(&access, &doc_id).await.unwrap()).unwrap(),
-            first_receipt,
-            "{} receipt replay",
-            case.name
-        );
-        fixture.node.shutdown().await.expect("node shutdown");
+            .unwrap(),
+        None,
+        "{}",
+        case.name
+    );
+    let receipt = receipt(&access, &doc_id).await.unwrap();
+    receipt.validate_for(&command).unwrap();
+    assert!(identity
+        .verify(
+            &receipt.agent_did,
+            &receipt.signing_payload().unwrap(),
+            &receipt.signature
+        )
+        .await
+        .unwrap());
+    let current = fixture.current_goal().await;
+    match &case.expected {
+        Some(expected) => {
+            assert!(
+                matches!(receipt.outcome, GoalControlOutcome::Applied { .. }),
+                "{}: {:?}",
+                case.name,
+                receipt.outcome
+            );
+            assert_eq!(
+                observed_execution(fixture.observe().await),
+                expected.execution,
+                "{} execution",
+                case.name
+            );
+            assert_eq!(
+                current.objective, expected.objective,
+                "{} objective",
+                case.name
+            );
+        }
+        None => {
+            assert!(
+                matches!(receipt.outcome, GoalControlOutcome::Rejected { .. }),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                fixture.observe().await,
+                before,
+                "{} unchanged execution",
+                case.name
+            );
+            assert_eq!(
+                current.objective, case.before.objective,
+                "{} unchanged objective",
+                case.name
+            );
+            assert_eq!(
+                fixture.goal_commit(&fixture.goal.doc_id).await.cid,
+                revision,
+                "{} no goal write",
+                case.name
+            );
+        }
     }
+    let first_receipt = serde_json::to_value(receipt).unwrap();
+    process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(self::receipt(&access, &doc_id).await.unwrap()).unwrap(),
+        first_receipt,
+        "{} receipt replay",
+        case.name
+    );
 }
 
 #[tokio::test]

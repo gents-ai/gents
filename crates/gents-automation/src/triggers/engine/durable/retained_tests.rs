@@ -121,26 +121,50 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         let name = case["name"].as_str().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
-        let (mut node_db, _user, _user_access, binding) =
-            gents_inference::test_support::signed_test_node(
+        let node_db = gents_inference::test_support::test_db_with_tool_policy(
+            "retained-task-outcomes-follow-modeled-as",
+            crate::lifecycle_hooks::composition(),
+            Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
+        )
+        .await;
+        let (mut node_db, _user, user_access, binding) =
+            gents_inference::test_support::signed_test_node_from_db(
+                node_db,
                 "retained-task-outcomes-follow-modeled-as",
-                crate::lifecycle_hooks::composition(),
             )
             .await;
         let node = node_db.node.clone();
         let identity =
             gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         // Task requests, receipts, Goals and outcomes belong to the Task's
-        // Agent; it writes and recovers them with its managed signer.
+        // Agent; it writes and recovers them with its managed signer, and
+        // retires the Goals it created through its selected Goal-creation tools.
         let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-        // The Task's Agent retires the Goals it created through the
-        // `goal-create` tool source, which this node's tool policy does not
-        // project.
-        ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap())
-            .grant_node_permission(
-                &::identity::Did::new(agent.did()).unwrap(),
-                gents_store::config_client::NodePermission::DocumentDelete,
-            )
+        let tools = serde_json::json!({
+            "node_did": identity.did(),
+            "tools_id": format!("{}:tools", binding.agent_did),
+            "built_ins": {"enable_goal_tools": true, "enable_goal_creation": true}
+        });
+        let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+            gents_documents::DesiredStateApplyDocument {
+                collection: gents_store::collection::Collection::Tools,
+                add: tools.clone(),
+                update: tools,
+            },
+        ])
+        .unwrap();
+        user_access
+            .transact_write("test.retained_task_agent_tools", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
             .await
             .unwrap();
         let agent_access = |node: &Arc<defra_node::Node>| {
