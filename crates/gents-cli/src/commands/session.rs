@@ -4,7 +4,7 @@ use gents_protocol::operations::session::{
 };
 use serde_json::json;
 
-use crate::cli::args::{ConfigListArgs, ConfigShowArgs, SessionCommand, SessionForkArgs};
+use crate::cli::args::{ConfigShowArgs, SessionCommand, SessionForkArgs, SessionListArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::operation_failure::OperationFailure;
 use crate::request_helpers::resolve_dual_id;
@@ -19,15 +19,17 @@ pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
     }
 }
 
-async fn session_list(args: ConfigListArgs) -> Result<()> {
+async fn session_list(args: SessionListArgs) -> Result<()> {
     let output = args
+        .list
         .output
         .ensure_supported("sessions list", &[OutputFormat::Table, OutputFormat::Json])?;
-    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
-        .await
-        .context("resolving access for session list")?;
+    let (access, _) =
+        resolve_config_access(args.list.home.as_deref(), args.list.graphql.as_deref())
+            .await
+            .context("resolving access for session list")?;
     let input = SessionListInput {
-        include_archived: true,
+        include_archived: args.include_archived,
         ..Default::default()
     };
     let entries = gents_session::operations::session::list(&access, &input)
