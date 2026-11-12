@@ -1508,9 +1508,14 @@ def caseCoverage : List CoverageEntry :=
       "Checks root projection for incomplete views; an ACL-bound authoritative root publication contract remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "mailbox_claimed_recipient_cases"
-      "MailboxClaimedRecipientCases"
+      "family"
+      "mailbox_access_claimed_recipient_served"
       "Connects a native User-authored client claim to the mailbox tool and recipient relationship, and after restart to the runtime notice; unattended provenance remains unavailable.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "mailbox_access_claimed_recipient_unreached"
+      "model-production-gap: no served fixture commits a client claim without its verified admission; mailbox_access_claimed_recipient_served replays the unadmitted lifecycle before its claim.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -1518,13 +1523,13 @@ def caseCoverage : List CoverageEntry :=
       "Exercises held-Agent reconciliation; newly configured recipients need authenticated source provenance.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "mailbox_runtime_notice_case"
-      "MailboxRuntimeNoticeCase"
-      "Checks deferred publication without a committed claim; delegated_http_claim_routes_mailbox_to_immediate_signer checks signer-addressed publication and acknowledgement replay after the claim.")
+      "family"
+      "mailbox_access_notice_publication"
+      "delegated_http_claim_routes_mailbox_to_immediate_signer publishes a notice for a missing request, an admitted but unclaimed request and a claimed request; acknowledgement replay after the claim remains scenario evidence.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "mailbox_native_policy"
-      "MailboxNativePolicyCases"
+      "family"
+      "mailbox_access_native"
       "Tests native mailbox publication and recipient revocation; authenticated producer provenance and durable runtime notices remain separate obligations.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage

@@ -122,25 +122,24 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     );
     lifecycle.bind_managed_agent(agent.as_ref())?;
     lifecycle.set_client_claim_admission(admission);
-    let modeled_claim = &gents_lean_vocab::lean_contract_snapshot().mailbox_claimed_recipient_cases;
-    let before = modeled_claim
-        .iter()
-        .find(|case| case.present && !case.committed)
-        .unwrap();
     assert_eq!(
         lifecycle.claimed_tool_context().is_ok(),
-        before.signer.is_some()
+        lifecycle.claimed_client_provenance().is_some()
     );
     assert_eq!(
         lifecycle.claim_with_identity().await?,
         ClaimOutcome::Claimed
     );
     let context = lifecycle.claimed_tool_context()?;
-    let after = modeled_claim
-        .iter()
-        .find(|case| case.present && case.committed)
-        .unwrap();
-    assert_eq!(context.admitted_client.is_some(), after.signer.is_some());
+    assert_eq!(
+        context
+            .admitted_client
+            .as_ref()
+            .map(|client| client.signer_did.clone()),
+        lifecycle
+            .claimed_client_provenance()
+            .map(|provenance| provenance.signer_did)
+    );
     assert_eq!(
         context.admitted_client.as_ref().unwrap().signer_did,
         user.did()
@@ -179,21 +178,30 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     )?
     .unwrap();
     assert_block_signer(&node, &version.cid, agent.did()).await;
-    let policy = &gents_lean_vocab::lean_contract_snapshot().mailbox_native_policy;
-    for (role, access) in [("user", &user_access), ("other", &outsider_access)] {
-        let expected = policy["checks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["actor"] == role && case["permission"] == "read")
-            .unwrap()["expected"]
-            .as_bool()
-            .unwrap();
+    let readable = |actor: &str, doc: &str| {
+        let (node, actor, doc) = (node.clone(), actor.to_owned(), doc.to_owned());
+        async move {
+            node.document_acp()
+                .check_doc_access(
+                    &defra_node::AcpIdentity::Authenticated(actor.parse()?),
+                    defra_node::DocumentPermission::Read,
+                    gents_protocol::schemas::MAILBOX_POLICY_ID,
+                    "mailbox_items",
+                    &doc,
+                )
+                .await
+                .map_err(anyhow::Error::from)
+        }
+    };
+    for (did, access) in [
+        (user.did(), &user_access),
+        (outsider.did(), &outsider_access),
+    ] {
         let result = access.execute(&query).await?;
         assert_eq!(
             !result["data"]["MailboxItem"].as_array().unwrap().is_empty(),
-            expected,
-            "{role}"
+            readable(did, doc).await?,
+            "{did}"
         );
     }
     assert!(crate::operations::mailbox::dismiss(&outsider_access, doc)
@@ -240,7 +248,6 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         summary: "Completed".into(),
         failed: false,
     };
-    let modeled_notice = &gents_lean_vocab::lean_contract_snapshot().mailbox_runtime_notice_case;
     // After the claimed request is terminal, as after a runtime restart, the
     // notice reaches the verified signer rather than the session owner.
     let notice = crate::session::mailbox::publish_runtime_notice(
@@ -250,9 +257,10 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         runtime_notice("mailbox-delegated-request"),
     )
     .await;
-    assert_eq!(
-        notice.is_ok(),
-        modeled_notice["claimed"]["document"].as_bool().unwrap()
+    let claimed_document = notice.is_ok();
+    let claimed_deferred = matches!(
+        notice,
+        Err(crate::session::mailbox::RuntimeNoticeError::MissingClaimProvenance)
     );
     let notice = notice?;
     assert_eq!(notice.requester_did, user.did());
@@ -261,31 +269,28 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
         gents_store::graphql::escape_graphql_string(&notice.doc_id)
     );
-    for (access, visible) in [
-        (
-            &user_access,
-            modeled_notice["claimed"]["recipient"].as_bool().unwrap(),
-        ),
-        (
-            &owner_access,
-            policy["checks"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|case| case["actor"] == "other" && case["permission"] == "read")
-                .unwrap()["expected"]
-                .as_bool()
-                .unwrap(),
-        ),
-    ] {
-        assert_eq!(
-            !access.execute(&notice_query).await?["data"]["MailboxItem"]
-                .as_array()
-                .unwrap()
-                .is_empty(),
-            visible
-        );
-    }
+    let visible = |access: &ConfigAccess, query: String| {
+        let access = access.clone();
+        async move {
+            Ok::<_, anyhow::Error>(
+                !access.execute(&query).await?["data"]["MailboxItem"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+            )
+        }
+    };
+    assert_eq!(
+        visible(&owner_access, notice_query.clone()).await?,
+        readable(owner.did(), &notice.doc_id).await?
+    );
+    let mut claimed_notice = Some(
+        gents_lean_vocab::families::mailbox_access_notice_publication::NoticeOutput {
+            document: claimed_document,
+            recipient: visible(&user_access, notice_query.clone()).await?,
+            deferred: claimed_deferred,
+        },
+    );
     crate::operations::mailbox::dismiss(&user_access, &notice.doc_id).await?;
     let replayed = crate::session::mailbox::publish_runtime_notice(
         &node,
@@ -316,20 +321,60 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     reply.caused_by_source_doc_id = Some(doc.to_owned());
     crate::request::admission::sign_agent_request_create(&user, &mut reply).await?;
     submit_client_request(&user_access, &reply).await?;
-    // Admitted and visible, but its claim has not committed.
-    assert_eq!(
-        matches!(
-            crate::session::mailbox::publish_runtime_notice(
+    let unclaimed_notice = |request_id: &'static str| {
+        let (node, agent, agent_access, user_access) = (
+            node.clone(),
+            agent.clone(),
+            agent_access.clone(),
+            user_access.clone(),
+        );
+        let runtime_did = runtime.did().to_owned();
+        async move {
+            let result = crate::session::mailbox::publish_runtime_notice(
                 &node,
-                runtime.did(),
+                &runtime_did,
                 std::slice::from_ref(&agent),
-                runtime_notice("mailbox-delegated-reply"),
+                runtime_notice(request_id),
             )
-            .await,
-            Err(crate::session::mailbox::RuntimeNoticeError::MissingClaimProvenance)
-        ),
-        modeled_notice["deferred"].as_bool().unwrap()
-    );
+            .await;
+            let deferred = matches!(
+                result,
+                Err(crate::session::mailbox::RuntimeNoticeError::MissingClaimProvenance)
+            );
+            let source = format!("service-update:{request_id}");
+            let filter = format!(
+                "{{ MailboxItem(filter: {{source_id: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
+                gents_store::graphql::escape_graphql_string(&source)
+            );
+            Ok::<_, anyhow::Error>(
+                gents_lean_vocab::families::mailbox_access_notice_publication::NoticeOutput {
+                    document: result.is_ok()
+                        || !agent_access.execute(&filter).await?["data"]["MailboxItem"]
+                            .as_array()
+                            .unwrap()
+                            .is_empty(),
+                    recipient: !user_access.execute(&filter).await?["data"]["MailboxItem"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty(),
+                    deferred,
+                },
+            )
+        }
+    };
+    // Admitted and visible, but its claim has not committed.
+    let mut unclaimed = Some(unclaimed_notice("mailbox-delegated-reply").await?);
+    let mut missing = Some(unclaimed_notice("mailbox-missing-request").await?);
+    for case in gents_lean_vocab::families::mailbox_access_notice_publication::cases() {
+        case.check(
+            match (case.input.present, case.input.claimed) {
+                (true, true) => claimed_notice.take(),
+                (true, false) => unclaimed.take(),
+                (false, _) => missing.take(),
+            }
+            .expect("one served observation per modeled notice"),
+        );
+    }
     let reply_row = agent_access.execute(&format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"mailbox-delegated-reply\"}}}}) {{ {} }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await?;
     let reply_row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(reply_row["data"]["AgentRequest"][0].clone())?;

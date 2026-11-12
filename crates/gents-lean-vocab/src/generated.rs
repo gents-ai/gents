@@ -2991,8 +2991,6 @@ pub struct LeanContractSnapshot {
     pub identity_agent_creator_cases: Vec<serde_json::Value>,
     pub identity_agent_block_signing_cases: Vec<LeanAgentBlockSigningCase>,
     pub identity_private_journal_policy: LeanPrivateJournalPolicy,
-    pub mailbox_runtime_notice_case: serde_json::Value,
-    pub mailbox_claimed_recipient_cases: Vec<LeanMailboxClaimedRecipientCase>,
     pub workspace_agent_selection_cases: Vec<serde_json::Value>,
     pub workspace_liveness_cases: Vec<LeanWorkspaceLivenessCase>,
     pub workspace_child_cases: Vec<LeanWorkspaceChildCase>,
@@ -3006,7 +3004,6 @@ pub struct LeanContractSnapshot {
     pub workspace_cleanup_cases: Vec<LeanWorkspaceCleanupCase>,
     pub workspace_publication_cases: LeanWorkspacePublicationCases,
     pub workspace_quickstart_cases: Vec<LeanWorkspaceQuickstartCase>,
-    pub mailbox_native_policy: serde_json::Value,
     pub session_input_edit_native_discovery_cases: Vec<
         LeanSessionInputEditNativeDiscoveryCase,
     >,
@@ -7328,17 +7325,6 @@ pub struct LeanLspActionCase {
     pub advertised: bool,
     pub action_authorized: bool,
     pub apply_authorized: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxClaimedRecipientCase {
-    pub agent_doc: Option<String>,
-    pub committed: bool,
-    pub present: bool,
-    pub request_doc: Option<String>,
-    pub session_doc: Option<String>,
-    pub signer: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
