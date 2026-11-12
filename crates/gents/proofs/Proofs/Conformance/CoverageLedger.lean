@@ -994,10 +994,15 @@ def caseCoverage : List CoverageEntry :=
       "sibling_tools_cases"
       "SiblingToolsCases")
       "self-config" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "session_recovery_cases"
-      "SessionRecoveryCases"
-      "Exercises desktop retry eligibility and successor lineage. Admission lease release remains an owner refinement: terminal-failed is the current adapter assumption, and emitted admission witnesses are not independently observed. Exact-row retryFromRows cases require the migrated query/transaction owner.")
+  , tagged (followUpCoverage
+      "family"
+      "contract_cases_session_recovery_unreached"
+      "model-production-gap: the model reissues over a session whose requests each carry an admission lease and a deadline clock; production reissue publishes a successor from persisted rows on a served node and records no per-request admission. The eligibility decision is replayed by session_operations_reissue_decision.")
+      "session-recovery" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "conformance_contract_cases_recovery_action_vocabulary"
+      "model-production-gap: the action vocabulary of contract_cases_session_recovery_unreached, which has no production path.")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "inference_slot_accounting_cases"

@@ -251,14 +251,6 @@ pub fn lean_tool_policy_case(name: &str) -> &'static LeanToolPolicyCase {
         .unwrap_or_else(|| panic!("Lean tool-policy case {name:?} was not emitted"))
 }
 
-pub fn lean_session_recovery_case(name: &str) -> &'static LeanSessionRecoveryCase {
-    lean_contract_snapshot()
-        .session_recovery_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean session-recovery case {name:?} was not emitted"))
-}
-
 pub fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
     lean_contract_snapshot()
         .frontend_client_shell_cases
