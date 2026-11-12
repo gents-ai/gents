@@ -10,6 +10,7 @@ import type {
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { getSurface } from "@/app/surfaces";
 import { duration } from "@/lib/duration";
 import { dockScopeOf, workspace } from "@/app/workspace";
 import { usePageShown } from "@/lib/visibility";
@@ -88,8 +89,8 @@ export function backgroundCalls(
     (t): t is RenderedToolCallView & { requestId: string; toolCallId: string } =>
       t.awaitMode === "background" &&
       Boolean(t.requestId && t.toolCallId) &&
-      /* a workflow run has its own tab */
-      !(t.jobProgress || t.jobState) &&
+      /* a workflow run has its own tab, where it is offered */
+      !(workflowsHaveTab() && (t.jobProgress || t.jobState)) &&
       t.presentation.kind !== "agent" &&
       (t.presentation.kind !== "process" || t.presentation.action === "spawn"),
   );
@@ -447,3 +448,5 @@ export function rememberBackgroundPlace(
 }
 
 export const resetBackgroundPlaces = () => places.clear();
+
+const workflowsHaveTab = () => !!getSurface("workflows");

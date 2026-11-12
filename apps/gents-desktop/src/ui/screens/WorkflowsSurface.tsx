@@ -10,7 +10,7 @@ import { AsciiLoader } from "@gents/ui/components/ascii-loader";
 import { Button } from "@gents/ui/components/button";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
-import type { SurfaceContext } from "@/app/surfaces";
+import { getSurface, type SurfaceContext } from "@/app/surfaces";
 import { dockScopeOf, workspace } from "@/app/workspace";
 import { useSelectedSessionValue, useSessionFacts } from "@/hooks/useSelectedSession";
 import { isTerminalJob, JobStateMark, JobStatePill, LiveAgents } from "./jobParts";
@@ -179,7 +179,8 @@ function RunPane({
     goal: where the run stands without scrolling back to its card, and the
     way into its tab. */
 export function WorkflowStrip({ sessionId }: { sessionId: string }) {
-  const going = useSessionWorkflows(sessionId).filter(
+  const offered = !!getSurface(WORKFLOWS_SURFACE);
+  const going = useSessionWorkflows(offered ? sessionId : null).filter(
     (tool) => !isTerminalJob(tool.jobState),
   );
   if (going.length === 0) return null;

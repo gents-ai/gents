@@ -17,6 +17,7 @@ import type {
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
 import { messagePlaces } from "@/app/messagePlaces";
+import { registerSurface } from "@/app/surfaces";
 import { workspace } from "@/app/workspace";
 import { writeSession } from "../src/hooks/sessionStore";
 import {
@@ -704,22 +705,33 @@ describe("the running in background group", () => {
     expect(screen.queryByRole("region", { name: "Running" })).toBeNull();
   });
 
-  it("leaves a workflow run in the session's rows to the Workflows tab", async () => {
-    const { app } = appWith(
-      [
-        command("job", "nightly-report", {
-          jobState: "running",
-          toolName: "report",
-          nodeDid: NODE,
-        }),
-      ],
-      [],
-    );
+  it("leaves a workflow run in the session's rows to the Workflows tab, where it is offered", async () => {
+    const run = command("job", "nightly-report", {
+      jobState: "running",
+      toolName: "report",
+      nodeDid: NODE,
+    });
+    const first = appWith([run], []);
+    const shown = render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(first.app),
+    });
+    /* without the tab the run stays here */
+    expect(screen.getByText(/nightly-report/)).toBeTruthy();
+    shown.unmount();
+    const unregister = registerSurface({
+      id: "workflows",
+      title: "Workflows",
+      icon: () => null,
+      placements: ["dock"],
+      render: () => null,
+    });
+    const second = appWith([run], []);
     render(<BackgroundSurface placement="dock" sessionId="parent" />, {
-      wrapper: withApp(app),
+      wrapper: withApp(second.app),
     });
     expect(screen.queryByText(/nightly-report/)).toBeNull();
     expect(screen.getByText("Nothing running")).toBeVisible();
+    unregister();
   });
 
   it("stops only the displayed native invocation", async () => {

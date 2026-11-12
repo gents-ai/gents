@@ -39,14 +39,16 @@ registerSurface({
   render: BackgroundSurface,
 });
 
-registerSurface({
-  id: WORKFLOWS_SURFACE,
-  title: "Workflows",
-  icon: Route,
-  placements: ["dock", "sheet"],
-  routes: ["session"],
-  render: WorkflowsSurface,
-});
+/* the flag applies at launch, so the tab is there for this run or not at all */
+if (flag("workflow-panel"))
+  registerSurface({
+    id: WORKFLOWS_SURFACE,
+    title: "Workflows",
+    icon: Route,
+    placements: ["dock", "sheet"],
+    routes: ["session"],
+    render: WorkflowsSurface,
+  });
 
 registerSurface({
   id: "changes",

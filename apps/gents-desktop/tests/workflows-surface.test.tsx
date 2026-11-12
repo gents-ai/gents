@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   DesktopSessionSnapshot,
@@ -8,7 +8,12 @@ import type {
 import type { JobProgress } from "@source-inc/gents-desktop-client/generated/JobProgress";
 
 import { JobProgressBody, JobStages } from "../src/ui/screens/jobParts";
-import { WorkflowStrip, WorkflowsSurface } from "../src/ui/screens/WorkflowsSurface";
+import { registerSurface } from "../src/ui/app/surfaces";
+import {
+  WORKFLOWS_SURFACE,
+  WorkflowStrip,
+  WorkflowsSurface,
+} from "../src/ui/screens/WorkflowsSurface";
 import { node, renderIn, testApp } from "./app-fixture";
 import { harnessWorkflowRuns } from "./ui-harness/desktopHarness";
 
@@ -106,6 +111,18 @@ describe("the session's Workflows tab", () => {
 });
 
 describe("the workflow strip above the composer", () => {
+  let unregister = () => {};
+  beforeEach(() => {
+    unregister = registerSurface({
+      id: WORKFLOWS_SURFACE,
+      title: "Workflows",
+      icon: () => null,
+      placements: ["dock"],
+      render: WorkflowsSurface,
+    });
+  });
+  afterEach(() => unregister());
+
   it("shows a running workflow's stage, and nothing once none is going", () => {
     const app = appWith([row()]);
     const view = renderIn(app, <WorkflowStrip sessionId="session-intro" />);
@@ -117,6 +134,12 @@ describe("the workflow strip above the composer", () => {
       appWith([row({ jobState: "completed", statusKind: "success" } as never)]),
       <WorkflowStrip sessionId="session-intro" />,
     );
+    expect(screen.queryByTestId("workflow-strip")).toBeNull();
+  });
+
+  it("isn't drawn without the Workflows tab", () => {
+    unregister();
+    renderIn(appWith([row()]), <WorkflowStrip sessionId="session-intro" />);
     expect(screen.queryByTestId("workflow-strip")).toBeNull();
   });
 
