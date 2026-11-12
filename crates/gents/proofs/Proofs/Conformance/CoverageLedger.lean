@@ -1635,8 +1635,17 @@ def caseCoverage : List CoverageEntry :=
       "PluginNetworkCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_call_access_cases"
-      "PluginCallAccessCases")
+      "family"
+      "plugin_resources_call_bindings")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_call_admissions")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "family"
+      "plugin_resources_call_admissions_unreached"
+      "model-production-gap: a declaration naming write fields under read access fails validation, so no installed plugin carries it and bind admission never runs for it.")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"

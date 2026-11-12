@@ -1035,8 +1035,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.PluginResources.pluginResourceModelSlotCasesJson ++ ","
     ++ "\"plugin_resource_network_cases\":"
       ++ Conformance.PluginResources.pluginResourceNetworkCasesJson ++ ","
-    ++ "\"plugin_resource_call_access_cases\":"
-      ++ Conformance.PluginResources.pluginResourceCallAccessCasesJson ++ ","
     ++ "\"plugin_resource_host_import_cases\":"
       ++ Conformance.PluginResources.pluginResourceHostImportCasesJson ++ ","
     ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","

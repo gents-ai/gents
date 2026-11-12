@@ -110,16 +110,56 @@ private def networkJson : Json := toJson <| grants.flatMap fun g =>
 
 end Network
 
-private def callAccessJson : Json := toJson <| [PluginAccess.read, .readWrite].flatMap fun declared =>
+deriving instance ToJson for PluginAccess
+
+structure CallAccessInput where
+  declared : PluginAccess
+  writeFields : Bool
+  setsWriteField : Bool
+  granted : Option PluginAccess
+  deriving ToJson
+
+private def callAccessInputs : List CallAccessInput :=
+  [PluginAccess.read, .readWrite].flatMap fun declared =>
   [false, true].flatMap fun writeFields =>
   [false, true].flatMap fun setsWriteField =>
-  [none, some PluginAccess.read, some .readWrite].map fun granted => Json.mkObj [
-    ("declared", toJson declared.spelling), ("write_fields", toJson writeFields),
-    ("sets_write_field", toJson setsWriteField),
-    ("granted", match granted with | none => Json.null | some access => toJson access.spelling),
-    ("valid", toJson (pluginBindingValid declared writeFields)),
-    ("call", toJson (pluginCallAccess declared writeFields setsWriteField).spelling),
-    ("admitted", toJson (pluginCallAdmitted declared granted writeFields setsWriteField))]
+  [none, some PluginAccess.read, some .readWrite].map fun granted =>
+    { declared, writeFields, setsWriteField, granted }
+
+structure BindingOutput where
+  valid : Bool
+  call : PluginAccess
+  deriving ToJson
+
+/-- The declaration's validity and the access a call needs are decided on the
+declaration alone, so every declared shape is replayed. -/
+@[conformance_family]
+def callBindings : Family CallAccessInput BindingOutput where
+  inputs := callAccessInputs
+  model := fun i =>
+    { valid := pluginBindingValid i.declared i.writeFields
+      call := pluginCallAccess i.declared i.writeFields i.setsWriteField }
+
+structure AdmissionOutput where
+  admitted : Bool
+  deriving ToJson
+
+/-- An installed plugin's bind admission. Only a valid declaration is installed,
+so only valid shapes reach it. -/
+@[conformance_family]
+def callAdmissions : Family CallAccessInput AdmissionOutput where
+  inputs := callAccessInputs.filter fun i => pluginBindingValid i.declared i.writeFields
+  model := fun i =>
+    { admitted := pluginCallAdmitted i.declared i.granted i.writeFields i.setsWriteField }
+
+/-- model-production-gap: a declaration that names write fields under read
+access fails validation, so no plugin with it is installed and bind admission
+is never reached for it; the model still decides its admission. -/
+@[conformance_family]
+def callAdmissionsUnreached : Family CallAccessInput AdmissionOutput where
+  inputs := callAccessInputs.filter fun i => !pluginBindingValid i.declared i.writeFields
+  model := fun i =>
+    { admitted := pluginCallAdmitted i.declared i.granted i.writeFields i.setsWriteField }
 
 deriving instance ToJson for PluginInvocation.Record
 
@@ -667,9 +707,6 @@ def pluginResourceModelSlotCasesJson : String :=
 
 def pluginResourceNetworkCasesJson : String :=
   networkJson.compress
-
-def pluginResourceCallAccessCasesJson : String :=
-  callAccessJson.compress
 
 def pluginResourceHostImportCasesJson : String :=
   hostImportJson.compress
