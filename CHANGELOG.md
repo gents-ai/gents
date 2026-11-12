@@ -229,6 +229,10 @@ source consistency checks, not a separate runtime compatibility version.
   Grok, is named when `gents` opens and otherwise ignored; delete it to stop the
   notice. Codex as a model provider, including `accounts login codex`, is
   unchanged.
+- `get_goal` reads the session's requests once and writes a Goal revision
+  only when the charged total or the active-time accrual actually changes.
+  Its database work no longer grows with the number of earlier Goal checks
+  in the session. Token accounting, including a paused Goal's, is unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
 
 ## 1.0.0-rc1 - 2026-11-03

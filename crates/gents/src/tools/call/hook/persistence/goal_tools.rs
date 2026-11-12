@@ -1,11 +1,13 @@
+use anyhow::Context as _;
 use chrono::Utc;
 use serde_json::json;
 
 use crate::goal::{
     create_goal_for_request_from_access, edit_active_goal_from_access, load_goal_tool_context,
-    next_blocked_audit, refresh_goal_usage_from_access, update_goal_fields_if_status_from_access,
-    CreateGoalForSessionError, GoalAction, GoalEdit, GoalStatus, RequestAssignmentObservation,
-    BLOCKED_AUDIT_THRESHOLD, CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
+    load_goal_tool_context_with_usage, next_blocked_audit, refresh_goal_usage_observed,
+    update_goal_fields_if_status_from_access, CreateGoalForSessionError, GoalAction, GoalEdit,
+    GoalStatus, GoalUsageObservation, RequestAssignmentObservation, BLOCKED_AUDIT_THRESHOLD,
+    CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
 };
 use crate::inference::llm::ToolCallHookAction;
 use crate::store::graphql::escape_graphql_string;
@@ -152,7 +154,7 @@ impl DefraSessionHook {
             super::helpers::json_string(json!({"error": "get_goal expects an empty object"}))
         } else {
             let context = async {
-                let mut context = load_goal_tool_context(
+                let (mut context, usage) = load_goal_tool_context_with_usage(
                     &crate::ConfigAccess::local_as(self.node.clone(), lifecycle.actor().clone()),
                     &self.node_did,
                     &session_id,
@@ -160,21 +162,25 @@ impl DefraSessionHook {
                     lifecycle.request_doc_id(),
                 )
                 .await?;
-                if context.can_write() {
-                    if let RequestAssignmentObservation::Assigned(goal) = &context.assignment {
-                        refresh_goal_usage_from_access(&lifecycle.access()?, goal).await?;
+                let writable = match &context.assignment {
+                    RequestAssignmentObservation::Assigned(goal) if context.can_write() => {
+                        Some(goal.clone())
                     }
-                    context = load_goal_tool_context(
-                        &crate::ConfigAccess::local_as(
-                            self.node.clone(),
-                            lifecycle.actor().clone(),
-                        ),
-                        &self.node_did,
-                        &session_id,
-                        &request_id,
-                        lifecycle.request_doc_id(),
+                    _ => None,
+                };
+                if let Some(goal) = writable {
+                    let charged = usage
+                        .context("Goal usage is missing for a caller that may write it")?
+                        .total;
+                    let (_, observation) = refresh_goal_usage_observed(
+                        &lifecycle.access()?,
+                        &goal,
+                        Some(i64::try_from(charged).unwrap_or(i64::MAX)),
                     )
                     .await?;
+                    if let GoalUsageObservation::Observed(current) = observation {
+                        context.observe_current(current.map(|current| *current));
+                    }
                 }
                 Ok::<_, anyhow::Error>(context)
             }
@@ -188,7 +194,7 @@ impl DefraSessionHook {
                 }
                 Ok(context) => {
                     let read_only = !context.can_write();
-                    match context.assignment {
+                    match &context.assignment {
                         RequestAssignmentObservation::None => {
                             super::helpers::json_string(json!({"goal": null}))
                         }
@@ -198,8 +204,9 @@ impl DefraSessionHook {
                                 json!({"error": "Goal caller attribution is unknown; continue from a verified request"}),
                             )
                         }
-                        RequestAssignmentObservation::Assigned(goal) => {
-                            let mut observed = crate::goal::snapshot(&goal, Utc::now());
+                        RequestAssignmentObservation::Assigned(ref assigned) => {
+                            let goal = context.observed_goal().unwrap_or(assigned);
+                            let mut observed = crate::goal::snapshot(goal, Utc::now());
                             if read_only {
                                 observed.active_time_seconds =
                                     goal.active_time_seconds.unwrap_or_default().max(0);

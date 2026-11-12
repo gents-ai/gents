@@ -123,8 +123,8 @@ pub use task_fire::{
     TaskGoalFireIdentity, TaskGoalFireRecoveryDecision, TaskGoalFireRecoveryDisposition,
     TaskGoalRequestBinding,
 };
-pub(crate) use tool_context::load_goal_tool_context;
 use tool_context::same_goal_assignment;
+pub(crate) use tool_context::{load_goal_tool_context, load_goal_tool_context_with_usage};
 pub use transition::{
     decide_model_goal_create, goal_continuation_materialization_step, goal_creation_fingerprint,
     goal_submission_step, GoalContinuationAction, GoalContinuationPhase, GoalCreateDisposition,
@@ -134,6 +134,7 @@ pub use transition::{
 pub(crate) use usage::session_token_usage_breakdown_in_txn;
 use usage::session_token_usage_in_txn;
 pub use usage::{refresh_goal_usage_from_access, session_token_usage, SessionTokenUsage};
+pub(crate) use usage::{refresh_goal_usage_observed, GoalUsageObservation};
 pub(crate) use write::pause_goal_for_interrupt_in_txn;
 use write::set_goal_in_txn;
 pub use write::{

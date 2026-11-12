@@ -299,6 +299,10 @@ pub(crate) struct RequestAssignments {
 }
 
 impl RequestAssignments {
+    pub(super) fn session_rows(&self) -> &[AgentRequestRow] {
+        &self.rows
+    }
+
     pub(super) fn observe_physical_request(
         &self,
         doc: &str,

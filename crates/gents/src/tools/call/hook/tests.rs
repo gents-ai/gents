@@ -20,6 +20,9 @@ mod transcript_native;
 #[path = "tests/goal_context.rs"]
 mod goal_context;
 
+#[path = "tests/goal_latency.rs"]
+mod goal_latency;
+
 #[path = "tests/background_panic.rs"]
 mod background_panic;
 
