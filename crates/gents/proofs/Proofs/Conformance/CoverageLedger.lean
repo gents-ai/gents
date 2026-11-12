@@ -1611,8 +1611,8 @@ def caseCoverage : List CoverageEntry :=
       "SchemaArgumentRepairCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "invalid_tool_progress_cases"
-      "InvalidToolProgressCases")
+      "family"
+      "invalid_tool_progress_contracts_composed")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "repeated_tool_failure_cases"

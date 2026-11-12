@@ -2479,37 +2479,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3000,7 +2969,6 @@ pub struct LeanContractSnapshot {
     pub logical_output_obligation_cases: Vec<LeanLogicalOutputObligationCase>,
     pub count_carrier_cases: serde_json::Value,
     pub schema_argument_repair_cases: Vec<LeanSchemaArgumentRepairCase>,
-    pub invalid_tool_progress_cases: Vec<LeanInvalidToolProgressCase>,
     pub repeated_tool_failure_cases: Vec<serde_json::Value>,
     pub tool_timeout_cases: LeanToolTimeoutCases,
     pub plugin_resource_consent_cases: serde_json::Value,
@@ -3035,7 +3003,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -6730,16 +6697,6 @@ pub struct LeanInterruptQueueObservation {
     pub pending: Vec<u64>,
     pub terminal: Vec<u64>,
     pub latched: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInvalidToolProgressCase {
-    pub composed_actions: Vec<String>,
-    pub composed_ending: Option<String>,
-    pub composed_invalid_used: u64,
-    pub name: String,
-    pub outcomes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
