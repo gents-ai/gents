@@ -3311,7 +3311,6 @@ pub struct LeanContractSnapshot {
     pub compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
     pub prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
-    pub provider_tool_identity_cases: Vec<serde_json::Value>,
     pub prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
     pub routing_affinity_cases: Vec<LeanRoutingAffinityCase>,
     pub retry_frontier_cases: Vec<LeanRetryFrontierCase>,

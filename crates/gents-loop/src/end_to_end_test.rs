@@ -327,9 +327,16 @@ pub(crate) fn test_loop_config() -> LoopConfig {
 #[cfg(feature = "native")]
 #[tokio::test]
 async fn cross_provider_tool_identity_allows_the_owned_loop_to_continue() {
-    use crate::provider_input::tool_call_identity_tests::{cases, counter, messages};
-    for case in cases().into_iter().filter(|case| case.responses) {
-        let mut history = messages(&case);
+    use crate::provider_input::tool_call_identity_tests::{counter, messages};
+    let cases = gents_lean_vocab::families::provider_tool_identity_continued::cases();
+    for case in &cases {
+        let identities = case
+            .input
+            .input
+            .iter()
+            .map(|wire| (wire.id.clone(), wire.call_id.clone()))
+            .collect::<Vec<_>>();
+        let mut history = messages(&identities);
         let prompt = history.pop().unwrap();
         let model = ScriptedModel::new(vec![vec![
             RawStreamingChoice::Message("continued".into()),
@@ -341,10 +348,12 @@ async fn cross_provider_tool_identity_allows_the_owned_loop_to_continue() {
         let answer = run_loop_to_text(model, prompt, history, Arc::new(Vec::new()), config)
             .await
             .unwrap();
-        assert_eq!(answer, "continued", "{}", case.name);
-        let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 1, "{}", case.name);
-        let dispatched: Vec<rig::message::Message> = serde_json::from_str(&requests[0]).unwrap();
+        assert_eq!(answer, "continued", "{:?}", case.input);
+        let dispatched: Vec<rig::message::Message> = {
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 1, "{:?}", case.input);
+            serde_json::from_str(&requests[0]).unwrap()
+        };
         let ids = dispatched
             .iter()
             .flat_map(|message| match message {
@@ -360,13 +369,7 @@ async fn cross_provider_tool_identity_allows_the_owned_loop_to_continue() {
                 _ => Vec::new(),
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            ids,
-            case.expected
-                .iter()
-                .map(|id| id.call_id.clone())
-                .collect::<Vec<_>>()
-        );
+        case.check(ids);
     }
 }
 

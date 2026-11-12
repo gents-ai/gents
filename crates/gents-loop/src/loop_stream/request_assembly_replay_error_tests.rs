@@ -558,12 +558,21 @@ async fn other_providers_never_receive_the_reserved_parameters() {
 async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
     use crate::backend_provider::BackendProviderKind;
     use crate::provider_input::tool_call_identity_tests::{
-        assert_responses_body, cases, counter, messages,
+        body_identities, counter, messages, observed_identities,
     };
-    for case in cases().into_iter().filter(|case| case.responses) {
-        let original = messages(&case);
+    use gents_lean_vocab::families::provider_tool_identity_assembled::IdentityWire;
+    let cases = gents_lean_vocab::families::provider_tool_identity_assembled::cases();
+    for case in &cases {
+        let identities = case
+            .input
+            .input
+            .iter()
+            .map(|wire| (wire.id.clone(), wire.call_id.clone()))
+            .collect::<Vec<_>>();
+        let original = messages(&identities);
         let prompt = original.last().unwrap().clone();
         let history = &original[..original.len() - 1];
+        let mut bodies = Vec::new();
         for provider in [
             BackendProviderKind::OpenAiCompatible,
             BackendProviderKind::ChatGptCodex,
@@ -604,15 +613,16 @@ async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
                 }
                 body
             };
-            let openai = provider != BackendProviderKind::XaiGrokOAuth;
-            assert_responses_body(&dispatch_body(&request), &case, openai);
-            assert_responses_body(
-                &config
-                    .provider_input_counter
-                    .project_body(&request)
-                    .unwrap(),
-                &case,
-                openai,
+            let dispatched = dispatch_body(&request);
+            assert_eq!(
+                body_identities(
+                    &config
+                        .provider_input_counter
+                        .project_body(&request)
+                        .unwrap()
+                ),
+                body_identities(&dispatched),
+                "{provider:?}"
             );
             super::replace_core_chat_history(
                 &mut request,
@@ -625,9 +635,24 @@ async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
                 &[TaggedMessage::unassociated(prompt.clone())],
             )
             .unwrap();
-            assert_responses_body(&dispatch_body(&request), &case, openai);
-            assert_eq!(original, messages(&case));
+            assert_eq!(
+                body_identities(&dispatch_body(&request)),
+                body_identities(&dispatched),
+                "{provider:?}"
+            );
+            assert_eq!(original, messages(&identities));
+            bodies.push(dispatched);
         }
+        case.check(
+            observed_identities(&bodies[0], &bodies[1], &bodies[2])
+                .into_iter()
+                .map(|observed| IdentityWire {
+                    id: observed.id,
+                    call_id: observed.call_id,
+                    openai_item_id: observed.openai_item_id,
+                })
+                .collect(),
+        );
     }
 }
 

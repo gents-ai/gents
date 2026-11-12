@@ -2375,7 +2375,13 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyClaudeCheckpointCases"
       "Models source-tagged selected assistant occurrences, the exact reduction split that keeps a pending tool round out of a summary, and the strict Claude codec. Replay selection is PromptAssemblyReasoningSuffixCases; this model does not prove tag issuance (#1693).")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "provider_tool_identity_cases" "ProviderToolIdentityCases")
+  , tagged (consumerCoverage "family" "provider_tool_identity_normalized")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "provider_tool_identity_projected")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "provider_tool_identity_assembled")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "provider_tool_identity_continued")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_assistant_order_cases"

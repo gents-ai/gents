@@ -1890,10 +1890,6 @@ structure ProviderToolIdentityCase where
   responses : Bool
   input : List PromptAssembly.ToolCallIdentity.Identity
 
-def ProviderToolIdentityCase.expected (row : ProviderToolIdentityCase) :
-    List PromptAssembly.ToolCallIdentity.Identity :=
-  row.input.map (PromptAssembly.ToolCallIdentity.project row.responses)
-
 def providerToolIdentityCases : List ProviderToolIdentityCase :=
   [ ⟨"foreign_tool_use_ids", true, [⟨"toolu_first", none⟩, ⟨"toolu_second", none⟩]⟩
   , ⟨"chat_completion_call_id", true, [⟨"call_chat", none⟩]⟩
