@@ -328,14 +328,15 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
 
 #[tokio::test]
 async fn generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().logical_output_obligation_cases;
-    assert_eq!(cases.len(), 11);
-    for case in cases {
+    for case in
+        gents_lean_vocab::families::logical_output_obligation_contracts_gate::cases::<String>()
+    {
+        let input = &case.input;
         let (db, identity) = rooted_node().await;
         let (db, agent) = live_agent(db, &identity).await;
         let node = db.node.clone();
         assert_ne!(identity.did(), agent.did());
-        let automated = case.automated_root;
+        let automated = input.automated_root;
         let mut root = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "output-root",
@@ -383,7 +384,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             root_request.request_hop,
         )
         .unwrap();
-        if !case.authenticated_child {
+        if !input.authenticated_child {
             child.caused_by_parent_request_doc_id = Some("wrong-physical-parent".into());
         }
         gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut child)
@@ -419,9 +420,9 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         let mut previous: Option<(RequestLifecycle, Option<String>)> = None;
         let mut writes_by_request: std::collections::BTreeMap<
             u64,
-            Vec<&gents_lean_vocab::LeanLogicalOutputObligationCaseWritesItem>,
+            Vec<&gents_lean_vocab::families::logical_output_obligation_contracts_gate::Write>,
         > = Default::default();
-        for write in &case.writes {
+        for write in &input.writes {
             let call = write.call_doc;
             if !stored.insert(call) {
                 continue;
@@ -448,14 +449,14 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             let mut last_message_doc_id: Option<String> = None;
             for (turn, write) in writes.iter().enumerate() {
                 let call = write.call_doc;
-                let expected = if !case.count_valid {
+                let expected = if !input.count_valid {
                     if call == 100 {
                         2
                     } else {
                         3
                     }
                 } else {
-                    case.expected_count.unwrap_or(2)
+                    input.expected_count.unwrap_or(2)
                 };
                 let (accepted, message_doc_id) = publish_accepted_turn(
                     &writer,
@@ -482,13 +483,13 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         let configured = vec![(
             "write_result".into(),
             gents_documents::WriteToolOutputObligation {
-                scope: if case.request_scope {
+                scope: if input.request_scope {
                     gents_documents::WriteToolOutputObligationScope::Request
                 } else {
                     gents_documents::WriteToolOutputObligationScope::Trigger
                 },
-                minimum_writes: case.minimum as usize,
-                expected_count_field: (case.expected_count.is_some() || !case.count_valid)
+                minimum_writes: input.minimum as usize,
+                expected_count_field: (input.expected_count.is_some() || !input.count_valid)
                     .then(|| "expected_total".into()),
             },
         )];
@@ -496,9 +497,9 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             match OutputObligationGate::for_request(node.clone(), &request, &configured).await {
                 Err(error) => {
                     assert!(
-                        !case.authenticated_child,
+                        !input.authenticated_child,
                         "{}: unexpected ancestry error {error:#}",
-                        case.name
+                        input.name
                     );
                     assert!(error.to_string().contains("parent is absent"), "{error:#}");
                     "reject"
@@ -509,9 +510,9 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     match gate.unmet().await {
                         Err(error) => {
                             assert!(
-                                !case.count_valid,
+                                !input.count_valid,
                                 "{}: unexpected gate error {error:#}",
-                                case.name
+                                input.name
                             );
                             assert!(error.to_string().contains("disagree"), "{error:#}");
                             "reject"
@@ -521,8 +522,8 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     }
                 }
             };
-        assert_eq!(observed, case.expected_decision.as_str(), "{}", case.name);
         node.shutdown().await.expect("node shutdown");
+        case.check(observed.to_string());
     }
 }
 

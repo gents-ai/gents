@@ -1025,8 +1025,8 @@ def caseCoverage : List CoverageEntry :=
       "CountCarrierCases")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "logical_output_obligation_cases"
-      "LogicalOutputObligationCases")
+      "family"
+      "logical_output_obligation_contracts_gate")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "completion_retry_cases"

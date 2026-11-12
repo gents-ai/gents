@@ -1761,7 +1761,7 @@ completion is gated by that same observed decision before the existing Goal
 status/sequence CAS; explicit operator controls are unchanged.
 
 The model proves outsider exclusion and duplicate observation stability, with
-11 generated `logical_output_obligation_cases` covering inherited eligibility,
+11 generated `logical_output_obligation_contracts_gate` cases covering inherited eligibility,
 combined writes, invalid edges, failed/duplicate observations, scopes and dynamic
 counts. The generated consumer uses signed requests and durable tool-call rows;
 a hook regression also checks actual model Goal completion. Existing expected
