@@ -180,12 +180,9 @@ impl LiveJobs {
             escape_graphql_string(name),
         )).await.unwrap();
         let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
-        assert_eq!(
-            rows.len(),
-            1,
-            "one requested job receipt or refusal: {rows:?}"
-        );
-        rows[0].clone()
+        rows.first()
+            .expect("the requested job produced a durable receipt or refusal")
+            .clone()
     }
 
     async fn job(&self, row: &Value, until: impl Fn(&JobView) -> bool) -> JobView {

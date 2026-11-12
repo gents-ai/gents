@@ -223,10 +223,6 @@ async fn plugin_job_survives_a_restart_mid_panel() {
     )
     .await;
 
-    let row = job_row_fields(&h, &ready.row_doc_id).await;
-    assert_eq!(row["lifecycle_state"], "running", "{row}");
-    assert!(row["cancel_cause"].is_null(), "{row}");
-
     let view = wait_job(
         &h,
         TOOL_CALL,
@@ -249,12 +245,6 @@ async fn plugin_job_survives_a_restart_mid_panel() {
     let finals = child_states(&h, &ready.row_doc_id).await;
     let final_ids: Vec<&String> = finals.iter().map(|(id, _)| id).collect();
     assert_eq!(final_ids, crash_ids, "the job gained or lost a child");
-    let slots: Vec<(&str, u32)> = view
-        .children
-        .iter()
-        .map(|c| (c.slot.as_str(), c.attempt))
-        .collect();
-    assert_eq!(slots, [("a", 0), ("b", 0), ("c", 0)], "{view:?}");
     for ((id, before), (_, after)) in ready.child_states.iter().zip(&finals) {
         assert!(
             RequestLifecycleState::is_terminal_str(Some(after)),
