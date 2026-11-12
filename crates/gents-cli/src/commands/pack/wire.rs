@@ -383,8 +383,33 @@ pub(crate) fn root_agent_rows(agents: &[gents::pack::InstallerRootAgent]) -> Val
         .collect()
 }
 
+/// The field an install's result carries its plan's rows under, from the
+/// install to the grant that follows it: over HTTP too, where the install
+/// runs in the runtime and the grant in the client. It is not part of a
+/// receipt: the command that grants takes it out and lists
+/// `host_tool_roots` instead.
+const PLANNED_ROOT_AGENTS: &str = "installer_root_agents";
+
+/// Puts an install's planned rows on its `result` ([`PLANNED_ROOT_AGENTS`]).
+pub(crate) fn attach_planned_root_agents(
+    result: &mut Value,
+    planned: &[gents::pack::InstallerRootAgent],
+) {
+    result[PLANNED_ROOT_AGENTS] = root_agent_rows(planned);
+}
+
+/// Takes the planned rows off an install's `result`, as `(pack, agent)`
+/// pairs: what an approval of that install alone was shown.
+pub(crate) fn take_planned_root_agents(result: &mut Value) -> Vec<(String, String)> {
+    let rows = result
+        .as_object_mut()
+        .and_then(|result| result.remove(PLANNED_ROOT_AGENTS))
+        .unwrap_or_default();
+    shown_root_agents(&rows)
+}
+
 /// The `(pack, agent)` pairs of report rows ([`root_agent_rows`]).
-pub(crate) fn shown_root_agents(rows: &Value) -> Vec<(String, String)> {
+fn shown_root_agents(rows: &Value) -> Vec<(String, String)> {
     rows.as_array()
         .into_iter()
         .flatten()
@@ -657,6 +682,27 @@ impl PackEffectApprover for LocalWireApprover {
 #[cfg(test)]
 mod next_command_tests {
     use clap::Parser as _;
+
+    /// An install's planned rows travel on its result to the grant and are
+    /// taken off it there, so they reach the grant from any install path
+    /// and never stay in a receipt.
+    #[test]
+    fn planned_root_agents_travel_on_the_result_and_leave_it() {
+        let planned = [gents::pack::InstallerRootAgent {
+            coordinate: "acme/hands".to_owned(),
+            agent: "hands-worker".to_owned(),
+            name: Some("Hands worker".to_owned()),
+            tools: "hands-tools".to_owned(),
+        }];
+        let mut result = serde_json::json!({"pack": "hands"});
+        super::attach_planned_root_agents(&mut result, &planned);
+        assert_eq!(
+            super::take_planned_root_agents(&mut result),
+            [("acme/hands".to_owned(), "hands-worker".to_owned())]
+        );
+        assert_eq!(result, serde_json::json!({"pack": "hands"}));
+        assert!(super::take_planned_root_agents(&mut result).is_empty());
+    }
 
     #[test]
     fn the_commands_wiring_names_parse() {

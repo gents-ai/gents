@@ -720,7 +720,7 @@ async fn install_documents_pack_resolved_inner(
         )
         .context("the pack documents were written, but the home install record was not")?;
     }
-    Ok(json!({
+    let mut result = json!({
         "pack": pack.manifest().name,
         "source": pack.label(),
         "digest": pack.digest(),
@@ -731,8 +731,9 @@ async fn install_documents_pack_resolved_inner(
         "dependencies": pack.manifest().metadata.dependencies,
         "schemas": schemas,
         "apply": apply,
-        "installer_root_agents": wire::root_agent_rows(&planned),
-    }))
+    });
+    wire::attach_planned_root_agents(&mut result, &planned);
+    Ok(result)
 }
 
 /// A plugins pack's slots as the review binds them, from the node its model
@@ -951,17 +952,14 @@ pub(super) async fn install_documents_report(
             // What the approver was shown: the rows a separate review named
             // back, or with none given the rows of this install's own plan,
             // which its receipt lists and `--grant-authority` approves.
-            let planned = output
-                .as_object_mut()
-                .and_then(|output| output.remove("installer_root_agents"))
-                .unwrap_or_default();
+            let planned = wire::take_planned_root_agents(&mut output);
             let shown = match &args.root_agents {
                 Some(reviewed) => reviewed
                     .iter()
                     .filter_map(|pair| pair.split_once('='))
                     .map(|(pack, agent)| (pack.to_owned(), agent.to_owned()))
                     .collect(),
-                None => wire::shown_root_agents(&planned),
+                None => planned,
             };
             let supplied = gents::pack::installer_tool_root(&access, &owner, None).await;
             let readers = match supplied {
