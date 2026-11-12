@@ -4989,6 +4989,7 @@ dependencies = [
  "futures",
  "gents-claude",
  "gents-documents",
+ "gents-inference",
  "gents-lean-contract",
  "gents-lean-vocab",
  "gents-loop",

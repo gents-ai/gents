@@ -93,9 +93,6 @@ mod automation_tests;
 mod toolcalls_tests;
 
 #[cfg(test)]
-mod documents_config_tests;
-
-#[cfg(test)]
 mod documents_selection_tests;
 
 #[cfg(test)]

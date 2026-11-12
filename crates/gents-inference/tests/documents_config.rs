@@ -2,8 +2,9 @@ use gents_documents::*;
 
 #[tokio::test]
 async fn tools_document_round_trips_defra_query_fields() {
-    let (db, _user, access, _binding) = crate::test_support::root::signed_test_node(
+    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node(
         "tools_document_round_trips_defra_query_fields",
+        gents_store::node_extension::Extensions::default(),
     )
     .await;
     let node_did = db.node_identity.did();
@@ -76,8 +77,11 @@ async fn tools_document_round_trips_defra_query_fields() {
 
 #[tokio::test]
 async fn tools_update_can_clear_lsp_config() {
-    let (db, _user, access, _binding) =
-        crate::test_support::root::signed_test_node("tools_update_can_clear_lsp_config").await;
+    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node(
+        "tools_update_can_clear_lsp_config",
+        gents_store::node_extension::Extensions::default(),
+    )
+    .await;
     let node_did = db.node_identity.did();
 
     let lsp = |config: Option<String>| Tools {
@@ -160,8 +164,9 @@ async fn tools_update_can_clear_lsp_config() {
 
 #[tokio::test]
 async fn tools_document_round_trips_read_only_commands() {
-    let (db, _user, access, _binding) = crate::test_support::root::signed_test_node(
+    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node(
         "tools_document_round_trips_read_only_commands",
+        gents_store::node_extension::Extensions::default(),
     )
     .await;
     let node_did = db.node_identity.did();
@@ -221,8 +226,11 @@ async fn tools_document_round_trips_read_only_commands() {
 
 #[tokio::test]
 async fn tools_document_round_trips_write_tools() {
-    let (db, _user, access, _binding) =
-        crate::test_support::root::signed_test_node("tools_document_round_trips_write_tools").await;
+    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node(
+        "tools_document_round_trips_write_tools",
+        gents_store::node_extension::Extensions::default(),
+    )
+    .await;
     let node_did = db.node_identity.did();
 
     let decls = vec![WriteToolDecl {
@@ -299,8 +307,9 @@ async fn tools_document_round_trips_write_tools() {
 
 #[tokio::test]
 async fn tools_document_round_trips_session_message_enablement() {
-    let (db, _user, access, _binding) = crate::test_support::root::signed_test_node(
+    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node(
         "tools_document_round_trips_session_message_enablement",
+        gents_store::node_extension::Extensions::default(),
     )
     .await;
     let node_did = db.node_identity.did();
@@ -347,8 +356,11 @@ async fn tools_document_round_trips_session_message_enablement() {
 
 #[tokio::test]
 async fn agent_description_round_trip_with_explicit_owner_fixture() {
-    let (db, _user, access, binding) =
-        crate::test_support::root::signed_test_node("agent_description_round_trip").await;
+    let (db, _user, access, binding) = gents_inference::test_support::signed_test_node(
+        "agent_description_round_trip",
+        gents_store::node_extension::Extensions::default(),
+    )
+    .await;
     let node_did = db.node_identity.did();
     let agent_did = &binding.agent_did;
 
@@ -435,9 +447,11 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
 
 #[tokio::test]
 async fn inference_retry_policy_fields_round_trip() {
-    let (db, _user, access, _binding) =
-        crate::test_support::root::signed_test_node("inference_retry_policy_fields_round_trip")
-            .await;
+    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node(
+        "inference_retry_policy_fields_round_trip",
+        gents_store::node_extension::Extensions::default(),
+    )
+    .await;
     let node_did = db.node_identity.did();
 
     let retry = InferenceRetryPolicy {
@@ -530,8 +544,11 @@ async fn inference_retry_policy_fields_round_trip() {
 async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_corruption() {
     use gents_store::identity::NodeIdentity;
 
-    let (db, _user, access, _binding) =
-        crate::test_support::root::signed_test_node("reference-owner-isolation").await;
+    let (db, _user, access, _binding) = gents_inference::test_support::signed_test_node(
+        "reference-owner-isolation",
+        gents_store::node_extension::Extensions::default(),
+    )
+    .await;
     let owner = db.node_identity.did();
     let foreign = tokio::task::spawn_blocking(|| {
         gents_store::test_support::test_identity("reference-foreign-node")
