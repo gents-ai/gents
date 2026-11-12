@@ -853,10 +853,9 @@ def caseCoverage : List CoverageEntry :=
       "TitleRequestAdmissionCases"
       "Model-derived signed title-purpose admission and pending-disposition inputs cover exact runtime-local-control parent-only provenance, forbidden request controls, unavailable observation retry, authoritative denial, and unchanged Pending on admit. Bind the generated rows to native signing, watcher admission, pending rejection and crash rediscovery owners before claiming native coverage.")
       "authenticated-enrollment" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "title_request_purpose_wire_cases"
-      "TitleRequestPurposeWireCases"
-      "Model-derived missing, unknown and explicit purpose wire inputs require a strict native decoder and signed-field selection. No native consumer is bound; absent purpose must never default to normal.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_title_purpose_wire")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_decision_cases"
