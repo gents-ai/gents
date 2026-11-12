@@ -328,6 +328,7 @@ export function PackInstallReview({
         pack,
         edited: choosesEdits ? edited : "refuse",
         grantAuthority: allow,
+        rootAgents: (folder?.rows ?? []).map((row) => `${row.pack}=${row.agent}`),
         inferenceSlots: (needs?.slots ?? [])
           .filter((slot) => slot.profile)
           .map((slot) => `${slot.name}=${slot.profile}`),
