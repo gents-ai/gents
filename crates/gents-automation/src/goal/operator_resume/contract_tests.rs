@@ -1,48 +1,90 @@
 use super::support;
 use super::*;
-use serde::Deserialize;
 use serde_json::json;
 use support::*;
 
-#[derive(Deserialize)]
-struct ResumeCase {
-    name: String,
-    before: serde_json::Value,
-    request: serde_json::Value,
-    commit: bool,
-    expected: serde_json::Value,
-    outcome: String,
-    #[serde(default)]
-    goal_status: Option<String>,
+pub(crate) fn resume_state_value(
+    state: &gents_lean_vocab::LeanGoalOperatorResumeCaseBefore,
+) -> serde_json::Value {
+    json!({
+        "status": state.status,
+        "blocked_audits": state.blocked_audits,
+        "wrapup_requested": state.wrapup_requested,
+        "wrapup_completed": state.wrapup_completed,
+        "sequence": state.sequence,
+        "last_continued_from": state.last_continued_from,
+        "latest_request": state.latest_request,
+        "children": state.children.iter().map(|child| json!({
+            "goal": child.goal,
+            "owner": child.owner,
+            "session": child.session,
+            "predecessor": child.predecessor,
+            "predecessor_doc": child.predecessor_doc,
+            "correlation": child.correlation,
+            "source_document": child.source_document,
+            "trigger_context": child.trigger_context,
+            "workspace_fingerprint": child.workspace_fingerprint,
+            "semantic_fingerprint": child.semantic_fingerprint,
+            "child": child.child,
+            "sequence": child.sequence,
+        })).collect::<Vec<_>>(),
+        "tokens_used": state.tokens_used,
+        "token_budget": state.token_budget,
+    })
 }
 
-#[derive(Deserialize)]
-struct Contracts {
-    pub goal_operator_resume_cases: Vec<ResumeCase>,
-    pub goal_wake_ancestry_cases: Vec<serde_json::Value>,
+fn resume_expected_value(
+    state: &gents_lean_vocab::LeanGoalOperatorResumeCaseExpected,
+) -> serde_json::Value {
+    json!({
+        "status": state.status,
+        "blocked_audits": state.blocked_audits,
+        "wrapup_requested": state.wrapup_requested,
+        "wrapup_completed": state.wrapup_completed,
+        "sequence": state.sequence,
+        "last_continued_from": state.last_continued_from,
+        "latest_request": state.latest_request,
+        "children": state.children.iter().map(|child| json!({
+            "goal": child.goal,
+            "owner": child.owner,
+            "session": child.session,
+            "predecessor": child.predecessor,
+            "predecessor_doc": child.predecessor_doc,
+            "correlation": child.correlation,
+            "source_document": child.source_document,
+            "trigger_context": child.trigger_context,
+            "workspace_fingerprint": child.workspace_fingerprint,
+            "semantic_fingerprint": child.semantic_fingerprint,
+            "child": child.child,
+            "sequence": child.sequence,
+        })).collect::<Vec<_>>(),
+        "tokens_used": state.tokens_used,
+        "token_budget": state.token_budget,
+    })
 }
 
 #[tokio::test]
 async fn generated_goal_operator_resume_cases_drive_real_transactions() {
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_operator_resume_cases.len(), 11);
-    let opening = contracts
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_operator_resume_cases;
+    assert_eq!(cases.len(), 11);
+    let opening = gents_lean_vocab::lean_contract_snapshot()
         .goal_wake_ancestry_cases
         .iter()
         .find(|case| {
-            case["name"] == "first_continuation_opens_assignment_without_reclassifying_parent"
+            case.name == "first_continuation_opens_assignment_without_reclassifying_parent"
         })
         .expect("modeled continuation assignment opening");
-    let opening_is_entry = opening["expected_entry"] == opening["current"];
+    let opening_is_entry = opening.expected_entry == Some(opening.current);
     let mut seen = std::collections::BTreeSet::new();
-    for case in contracts.goal_operator_resume_cases {
+    for case in cases {
         assert!(seen.insert(case.name.clone()), "duplicate generated case");
-        let f = Fixture::new(&case.before).await;
+        let before = resume_state_value(&case.before);
+        let f = Fixture::new(&before).await;
         let conflict = case.name == "foreign_fingerprint_conflicts";
-        if !case.before["children"].as_array().unwrap().is_empty() {
+        if !case.before.children.is_empty() {
             f.seed_child(conflict).await;
         }
-        if case.before["latest_request"] == 30 {
+        if case.before.latest_request == 30 {
             f.other_request("later-request", "2030-01-01T00:00:00Z", "completed")
                 .await;
         }
@@ -54,7 +96,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
             | "non_latest_parent_cannot_publish" | "foreign_fingerprint_conflicts" | "budget_limited_cannot_resume" => {},
             name => panic!("unmapped generated resume case {name}"),
         }
-        assert_eq!(f.observe().await, case.before, "{} initial", case.name);
+        assert_eq!(f.observe().await, before, "{} initial", case.name);
         let access = f.user_access();
         if !case.commit {
             assert_eq!(case.name, "staging_failure_rolls_back");
@@ -92,12 +134,12 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                 None,
             )
             .unwrap();
-            let identity: &dyn NodeIdentity = if case.request["authorized"] == false {
+            let identity: &dyn NodeIdentity = if !case.request.authorized {
                 &foreign
             } else {
                 f.user.as_ref()
             };
-            let predecessor = if case.request["parent_belongs_to_goal"] == false {
+            let predecessor = if !case.request.parent_belongs_to_goal {
                 "foreign-parent"
             } else {
                 PARENT
@@ -193,7 +235,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
         }
         assert_eq!(
             f.observe().await,
-            case.expected,
+            resume_expected_value(&case.expected),
             "{} durable result",
             case.name
         );
@@ -245,16 +287,18 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
 
 #[tokio::test]
 async fn waiting_requests_keep_resume_idle_guard_closed_without_duplicate_children() {
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    let initial = &contracts
-        .goal_operator_resume_cases
-        .iter()
-        .find(|case| case.name == "atomic_publication")
-        .unwrap()
-        .before;
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
+    let initial = resume_state_value(
+        &snapshot
+            .goal_operator_resume_cases
+            .iter()
+            .find(|case| case.name == "atomic_publication")
+            .unwrap()
+            .before,
+    );
     for state in [RequestLifecycleState::WorkspaceBindingPending] {
         assert!(!state.is_terminal());
-        let f = Fixture::new(initial).await;
+        let f = Fixture::new(&initial).await;
         f.other_request("waiting-existing", "2019-01-01T00:00:00Z", state.as_str())
             .await;
         let before = f.observe().await;
@@ -300,15 +344,17 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
         assert!(!result.has_errors(), "{:?}", result.errors);
         result.data.unwrap()
     }
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    let initial = &contracts
-        .goal_operator_resume_cases
-        .iter()
-        .find(|case| case.name == "atomic_publication")
-        .unwrap()
-        .before;
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
+    let initial = resume_state_value(
+        &snapshot
+            .goal_operator_resume_cases
+            .iter()
+            .find(|case| case.name == "atomic_publication")
+            .unwrap()
+            .before,
+    );
     for resume_first in [false, true] {
-        let f = Fixture::new(initial).await;
+        let f = Fixture::new(&initial).await;
         let remote = f.node.begin_transaction(false).await.unwrap();
         let goal_id = escape_graphql_string(&f.goal.goal_id);
         let query = format!(

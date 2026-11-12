@@ -1,3 +1,4 @@
+use super::contract_tests::resume_state_value;
 use super::support::{request_rows, Fixture, PARENT, SESSION};
 use super::*;
 use gents_protocol::request_admission::{
@@ -31,13 +32,15 @@ async fn update_goal_root(access: &ConfigAccess, doc_id: &str, root: Option<&str
 
 #[tokio::test]
 async fn user_goal_continuation_claim_fences_current_physical_binding() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let before = &snapshot["goal_operator_resume_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "atomic_publication")
-        .unwrap()["before"];
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
+    let before = resume_state_value(
+        &snapshot
+            .goal_operator_resume_cases
+            .iter()
+            .find(|case| case.name == "atomic_publication")
+            .unwrap()
+            .before,
+    );
 
     for scenario in [
         "valid",
@@ -50,7 +53,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
         "changed-edge",
         "changed-session",
     ] {
-        let f = Fixture::new_with_goal_author(before, true, None, true).await;
+        let f = Fixture::new_with_goal_author(&before, true, None, true).await;
         let user = f.user_access();
         let agent = f.agent_access();
         let admin = ConfigAccess::local_as(

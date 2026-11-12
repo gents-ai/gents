@@ -7,21 +7,17 @@ use serde::Deserialize;
 
 #[tokio::test]
 async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations() {
-    #[derive(Deserialize)]
-    struct Contracts {
-        goal_wake_ancestry_cases: Vec<serde_json::Value>,
-    }
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_wake_ancestry_cases.len(), 19);
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_wake_ancestry_cases;
+    assert_eq!(cases.len(), 19);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
     ];
-    for value in contracts.goal_wake_ancestry_cases {
-        let rows = value["rows"].as_array().unwrap();
+    for value in cases {
+        let rows = &value.rows;
         let case = Case {
-            name: value["name"].as_str().unwrap().into(),
+            name: value.name.clone(),
             scope: Scope {
                 owner: 1,
                 session: 1,
@@ -29,7 +25,26 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
             },
             rows: rows
                 .iter()
-                .map(|row| serde_json::from_value(row["request"].clone()).unwrap())
+                .map(|row| ModelRow {
+                    purpose: serde_json::from_value(serde_json::Value::String(
+                        row.request.purpose.clone(),
+                    ))
+                    .unwrap(),
+                    doc: row.request.doc,
+                    request: row.request.request,
+                    owner: row.request.owner,
+                    session: row.request.session,
+                    goal: row.request.goal,
+                    parent_doc: row.request.parent_doc,
+                    parent_request: row.request.parent_request,
+                    sequence: row.request.sequence,
+                    receipt_valid: row.request.receipt_valid,
+                    deterministic_identity: row.request.deterministic_identity,
+                    input_disposition: serde_json::from_value(serde_json::Value::String(
+                        row.request.input_disposition.clone(),
+                    ))
+                    .unwrap(),
+                })
                 .collect(),
             expected: None,
             assignment_root: None,
@@ -42,7 +57,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         };
         let mut built = Vec::new();
         for (model, facts) in case.rows.iter().zip(rows) {
-            let row = if facts["background_wake"] == true {
+            let row = if facts.background_wake {
                 let identity = fixture.identity(model.owner);
                 let parent = fixture.built.get(&model.parent_request.unwrap()).cloned();
                 let parent_id = parent
@@ -59,7 +74,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                     "review notifications",
                     "scheduled",
                     "2026-10-21T00:00:00Z",
-                    if facts["runtime_wake_receipt"] == true {
+                    if facts.runtime_wake_receipt {
                         AgentRequestAdmissionRecord::runtime_local_control(
                             identity.did(),
                             &parent_id,
@@ -85,7 +100,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                     interrupted_request_id: None,
                     background_completion_wake_version: Some(1),
                 });
-                if facts["tagged"] == true {
+                if facts.tagged {
                     create.input.goal_assignment =
                         Some(gents_protocol::request_input::GoalAssignmentInput {
                             goal_id: "goal-1".into(),
@@ -103,7 +118,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                 row
             } else {
                 let mut row = fixture.build(model.clone()).await;
-                if facts["tagged"] == true {
+                if facts.tagged {
                     let mut create = AgentRequestCreate::base(
                         model.purpose,
                         row.request_id.clone(),
@@ -138,21 +153,21 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         }
         let owner = identities[0].did();
         let by_doc = request_rows_by_doc(owner, "session-1", &built).unwrap();
-        let current = format!("physical-{}", value["current"].as_u64().unwrap());
-        let expected_goal = value["expected_goal"]
-            .as_u64()
+        let current = format!("physical-{}", value.current);
+        let expected_goal = value
+            .expected_goal
+            .as_ref()
+            .and_then(|goal| goal.as_u64())
             .map(|goal| format!("goal-{goal}"));
         let opening_facts = rows
             .iter()
-            .filter(|row| !row["opening_goals"].as_array().unwrap().is_empty())
+            .filter(|row| !row.opening_goals.is_empty())
             .map(|row| {
                 (
-                    format!("physical-{}", row["request"]["doc"].as_u64().unwrap()),
-                    row["opening_goals"]
-                        .as_array()
-                        .unwrap()
+                    format!("physical-{}", row.request.doc),
+                    row.opening_goals
                         .iter()
-                        .map(|goal| format!("goal-{}", goal.as_u64().unwrap()))
+                        .map(|goal| format!("goal-{goal}"))
                         .collect::<Vec<_>>(),
                 )
             })
@@ -180,16 +195,19 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         )
         .ok()
         .and_then(|row| row.doc_id.clone());
-        let expected = |field: &str| value[field].as_u64().map(|doc| format!("physical-{doc}"));
+        let expected_entry = value.expected_entry.map(|doc| format!("physical-{doc}"));
+        let expected_invocation_entry = value
+            .expected_invocation_entry
+            .map(|doc| format!("physical-{doc}"));
         assert_eq!(
             actual,
-            expected("expected_entry"),
+            expected_entry,
             "{}: assignment ancestry",
             case.name
         );
         assert_eq!(
             invocation,
-            expected("expected_invocation_entry"),
+            expected_invocation_entry,
             "{}: invocation ancestry",
             case.name
         );
