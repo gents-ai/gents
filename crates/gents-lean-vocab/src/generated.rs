@@ -697,10 +697,6 @@ pub fn lean_title_request_purpose_wire_cases() -> &'static [LeanTitleRequestPurp
     &lean_contract_snapshot().title_request_purpose_wire_cases
 }
 
-pub fn lean_title_usage_cases() -> &'static [LeanTitleUsageCase] {
-    &lean_contract_snapshot().title_usage_cases
-}
-
 pub fn lean_tool_output_paging_cases() -> &'static [LeanToolOutputPagingCase] {
     &lean_contract_snapshot().tool_output_paging_cases
 }
@@ -3123,7 +3119,6 @@ pub struct LeanContractSnapshot {
     pub title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
     pub title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
     pub title_text_cases: LeanTitleTextCases,
-    pub title_usage_cases: Vec<LeanTitleUsageCase>,
     pub provider_usage_cases: Vec<serde_json::Value>,
     pub title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub frontend_client_shell_case_count: usize,
@@ -11644,13 +11639,6 @@ pub struct LeanTitleRuntimeEvidence {
     pub title_parent: Option<LeanTitleParentEvidence>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleSignedPurpose {
-    pub physical: u64,
-    pub purpose: LeanRequestPurpose,
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanTitleTextCases {
@@ -11689,90 +11677,6 @@ pub struct LeanTitleTextCasesCaseCapturesItem {
     pub version: Option<serde_json::Value>,
     #[serde(rename = "workspaceUri")]
     pub workspace_uri: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleUsage {
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleUsageAction {
-    pub call_id: u64,
-    pub usage: LeanTitleUsage,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleUsageBinding {
-    pub purpose: LeanRequestPurpose,
-    pub physical: u64,
-    pub logical: u64,
-    pub parent_physical: u64,
-    pub parent_logical: u64,
-    pub node: u64,
-    pub session: u64,
-    pub authenticated: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleUsageBindingFact {
-    pub physical: u64,
-    pub binding: LeanTitleUsageBinding,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleUsageCase {
-    pub name: String,
-    pub parent: LeanTitleUsageParent,
-    pub rows: Vec<LeanTitleUsageRow>,
-    pub signed_purposes: Vec<LeanTitleSignedPurpose>,
-    pub title_bindings: Vec<LeanTitleUsageBindingFact>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub usage_action: Option<LeanTitleUsageAction>,
-    pub expected_before: LeanTitleUsageResult,
-    pub expected_after: LeanTitleUsageResult,
-    pub budget_before: LeanUsageBudgetResult,
-    pub budget_after: LeanUsageBudgetResult,
-    pub goal_before: LeanUsageBudgetResult,
-    pub goal_after: LeanUsageBudgetResult,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleUsageParent {
-    pub physical: u64,
-    pub logical: u64,
-    pub node: u64,
-    pub session: u64,
-    pub state: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanTitleUsageResult {
-    Ok { normal_public: LeanTitleUsage, parent_inclusive_audit: LeanTitleUsage },
-    Error { error: String },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleUsageRow {
-    pub key: u64,
-    pub call_id: u64,
-    pub request_physical: u64,
-    pub request_logical: u64,
-    pub backend: String,
-    pub state: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub terminal_stamp: Option<u64>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub usage: Option<LeanTitleUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -11991,13 +11895,6 @@ pub struct LeanTriggerDispatchCase {
     pub target_nonterminal_count_after: Option<usize>,
     pub request_count_before: usize,
     pub request_count_after: usize,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanUsageBudgetResult {
-    Ok { used: u64 },
-    Error { error: String },
 }
 
 #[derive(Debug, Deserialize)]

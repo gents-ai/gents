@@ -465,7 +465,6 @@ async fn load_parent_catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_lean_vocab::{LeanTitleUsageCase, LeanTitleUsageResult};
 
     #[test]
     fn request_index_rows_preserve_exact_node_usage_and_ignore_malformed_twins() {
@@ -505,33 +504,41 @@ mod tests {
         assert_eq!(actual, baseline);
     }
 
+    type UsageInput = gents_lean_vocab::families::title_usage_catalog::UsageInput<String, String>;
+
+    fn purpose(wire: &str) -> RequestPurpose {
+        serde_json::from_value(serde_json::Value::String(wire.to_owned()))
+            .unwrap_or_else(|error| panic!("unknown signed purpose {wire:?}: {error}"))
+    }
+
     fn native_catalog(
-        case: &LeanTitleUsageCase,
+        input: &UsageInput,
         after_action: bool,
     ) -> (BTreeMap<String, String>, Vec<CallRow>) {
         let mut request_ids = BTreeMap::new();
         request_ids.insert(
-            format!("request-{}", case.parent.physical),
-            case.parent.logical.to_string(),
+            format!("request-{}", input.parent.physical),
+            input.parent.logical.to_string(),
         );
-        for fact in &case.signed_purposes {
-            if gents_protocol::request_admission::RequestPurpose::from(fact.purpose).is_auxiliary()
-            {
+        for fact in &input.signed_purposes {
+            if purpose(&fact.purpose).is_auxiliary() {
                 request_ids.insert(
                     format!("request-{}", fact.physical),
-                    case.title_bindings
+                    input
+                        .title_bindings
                         .iter()
                         .find(|binding| binding.physical == fact.physical)
                         .map_or_else(String::new, |binding| binding.binding.logical.to_string()),
                 );
             }
         }
-        let calls = case
+        let calls = input
             .rows
             .iter()
             .map(|row| {
                 let usage = if after_action {
-                    case.usage_action
+                    input
+                        .usage_action
                         .as_ref()
                         .filter(|action| action.call_id == row.call_id)
                         .map(|action| &action.usage)
@@ -560,177 +567,124 @@ mod tests {
         (request_ids, calls)
     }
 
-    fn assert_totals(case: &LeanTitleUsageCase, after_action: bool) {
-        let (request_ids, calls) = native_catalog(case, after_action);
-        let actual = project_catalog(
-            &format!("request-{}", case.parent.physical),
-            &case.parent.logical.to_string(),
-            &request_ids,
-            calls,
-        );
-        let expected = if after_action {
-            &case.expected_after
-        } else {
-            &case.expected_before
-        };
-        match expected {
-            LeanTitleUsageResult::Ok {
-                normal_public,
-                parent_inclusive_audit,
-            } => {
-                let actual = actual.expect(&case.name);
-                assert_eq!(
-                    actual.normal_public.prompt_tokens,
-                    normal_public.prompt_tokens
-                );
-                assert_eq!(
-                    actual.normal_public.completion_tokens,
-                    normal_public.completion_tokens
-                );
-                assert_eq!(
-                    actual.parent_inclusive_audit.prompt_tokens,
-                    parent_inclusive_audit.prompt_tokens
-                );
-                assert_eq!(
-                    actual.parent_inclusive_audit.completion_tokens,
-                    parent_inclusive_audit.completion_tokens
-                );
-            }
-            LeanTitleUsageResult::Error { error } if error == "conflicting_call_id" => {
-                let error = actual.expect_err(&case.name);
-                assert_eq!(
-                    error.root_cause().to_string(),
-                    "one call ID has conflicting persisted rows",
-                    "{} rejected for the wrong reason",
-                    case.name,
-                );
-            }
-            _ => panic!("{} is outside the physical catalog binding", case.name),
+    fn catalog_error(name: &str, error: &anyhow::Error) -> String {
+        match error.root_cause().to_string().as_str() {
+            "one call ID has conflicting persisted rows" => "conflicting_call_id".to_owned(),
+            other => panic!("{name} failed outside the modeled catalog errors: {other}"),
         }
     }
 
-    fn assert_goal_usage_cases() {
-        use gents_lean_vocab::LeanUsageBudgetResult;
-
-        for name in [
-            "empty_budget_has_no_spend",
-            "normal_public_usage",
-            "title_audit_only",
-            "normal_plus_title_parent_inclusive",
-            "access_review_usage_is_parent_inclusive_audit_only",
-            "normal_review_and_title_have_separate_goal_charges",
-            "duplicate_review_call_has_one_goal_charge",
-            "access_review_late_usage_restores_budget_observation",
-            "failed_access_review_usage_still_reduces_budget",
-        ] {
-            let case = gents_lean_vocab::lean_title_usage_cases()
-                .iter()
-                .find(|case| case.name == name)
-                .unwrap();
-            for after in [false, true] {
-                let (mut ids, mut calls) = native_catalog(case, after);
-                let titles: Vec<_> = case
-                    .signed_purposes
-                    .iter()
-                    .filter(|fact| RequestPurpose::from(fact.purpose) == RequestPurpose::TitleAudit)
-                    .map(|fact| format!("request-{}", fact.physical))
-                    .collect();
-                ids.retain(|doc, _| !titles.contains(doc));
-                calls.retain(|call| ids.contains_key(&call.request_doc_id));
-                let expected = if after {
-                    &case.goal_after
-                } else {
-                    &case.goal_before
-                };
-                let LeanUsageBudgetResult::Ok { used } = expected else {
-                    panic!("unexpected model goal error for {name}: {expected:?}")
-                };
-                assert_eq!(
-                    project_goal_catalog(&ids, calls).unwrap().total,
-                    *used,
-                    "{name}"
-                );
-            }
+    fn budget_error(name: &str, error: &anyhow::Error) -> String {
+        if error
+            .to_string()
+            .contains("requires reported provider usage")
+        {
+            "unreported_usage".to_owned()
+        } else {
+            catalog_error(name, error)
         }
     }
 
     #[test]
     fn generated_title_usage_cases_bind_native_catalog_and_late_usage() {
-        let names = [
-            "normal_public_usage",
-            "title_audit_only",
-            "access_review_usage_is_parent_inclusive_audit_only",
-            "normal_plus_title_parent_inclusive",
-            "title_late_usage_after_parent_terminal",
-            "exact_duplicate_call_counts_once",
-            "conflicting_call_id_fails_closed",
-        ];
-        let cases = gents_lean_vocab::lean_title_usage_cases();
-        for name in names {
-            let case = cases
-                .iter()
-                .find(|case| case.name == name)
-                .unwrap_or_else(|| panic!("missing model usage case {name}"));
-            assert_totals(case, false);
-            assert_totals(case, true);
-        }
+        use gents_lean_vocab::families::title_usage_catalog::{
+            CatalogOutput, TokenPair, TotalsResult,
+        };
+        let observe = |input: &UsageInput, after_action: bool| {
+            let (request_ids, calls) = native_catalog(input, after_action);
+            match project_catalog(
+                &format!("request-{}", input.parent.physical),
+                &input.parent.logical.to_string(),
+                &request_ids,
+                calls,
+            ) {
+                Ok(totals) => TotalsResult {
+                    kind: "ok".to_owned(),
+                    normal_public: Some(TokenPair {
+                        prompt_tokens: totals.normal_public.prompt_tokens,
+                        completion_tokens: totals.normal_public.completion_tokens,
+                    }),
+                    parent_inclusive_audit: Some(TokenPair {
+                        prompt_tokens: totals.parent_inclusive_audit.prompt_tokens,
+                        completion_tokens: totals.parent_inclusive_audit.completion_tokens,
+                    }),
+                    error: None,
+                },
+                Err(error) => TotalsResult {
+                    kind: "error".to_owned(),
+                    normal_public: None,
+                    parent_inclusive_audit: None,
+                    error: Some(catalog_error(&input.name, &error)),
+                },
+            }
+        };
+        gents_lean_vocab::families::title_usage_catalog::replay::<String, String>(|input| {
+            CatalogOutput {
+                expected_before: observe(input, false),
+                expected_after: observe(input, true),
+            }
+        });
     }
 
     #[test]
     fn generated_budget_recovery_cases_bind_signed_catalog_usage() {
-        use gents_lean_vocab::LeanUsageBudgetResult;
-
-        assert_goal_usage_cases();
-
-        let names = [
-            "empty_budget_has_no_spend",
-            "normal_public_usage",
-            "normal_plus_title_parent_inclusive",
-            "normal_missing_usage_blocks_budget_restart",
-            "access_review_usage_is_parent_inclusive_audit_only",
-            "access_review_missing_usage_blocks_budget_restart",
-            "access_review_zero_usage_blocks_budget_restart",
-            "access_review_late_usage_restores_budget_observation",
-            "failed_access_review_usage_still_reduces_budget",
-            "title_late_usage_after_parent_terminal",
-            "exact_duplicate_call_counts_once",
-            "conflicting_call_id_fails_closed",
-        ];
-        let cases = gents_lean_vocab::lean_title_usage_cases();
-        for name in names {
-            let case = cases.iter().find(|case| case.name == name).unwrap();
-            for after in [false, true] {
-                let (request_ids, calls) = native_catalog(case, after);
-                let result = project_budget_catalog(&request_ids, calls);
-                let expected = if after {
-                    &case.budget_after
-                } else {
-                    &case.budget_before
-                };
-                match expected {
-                    LeanUsageBudgetResult::Ok { used } => {
-                        assert_eq!(result.unwrap(), *used, "{name}");
-                    }
-                    LeanUsageBudgetResult::Error { error } => {
-                        let failure = result.unwrap_err();
-                        if error == "unreported_usage" {
-                            assert!(
-                                failure
-                                    .to_string()
-                                    .contains("requires reported provider usage"),
-                                "{name}: {failure}"
-                            );
-                        } else {
-                            assert_eq!(error, "conflicting_call_id");
-                            assert_eq!(
-                                failure.to_string(),
-                                "one call ID has conflicting persisted rows",
-                                "{name}"
-                            );
-                        }
-                    }
-                }
+        use gents_lean_vocab::families::title_usage_budget::{BudgetOutput, BudgetResult};
+        let observe = |input: &UsageInput, after_action: bool| {
+            let (request_ids, calls) = native_catalog(input, after_action);
+            match project_budget_catalog(&request_ids, calls) {
+                Ok(used) => BudgetResult {
+                    kind: "ok".to_owned(),
+                    used: Some(used),
+                    error: None,
+                },
+                Err(error) => BudgetResult {
+                    kind: "error".to_owned(),
+                    used: None,
+                    error: Some(budget_error(&input.name, &error)),
+                },
             }
-        }
+        };
+        gents_lean_vocab::families::title_usage_budget::replay::<String, String>(|input| {
+            let input: UsageInput = gents_lean_vocab::family::recode(input);
+            BudgetOutput {
+                budget_before: observe(&input, false),
+                budget_after: observe(&input, true),
+            }
+        });
+    }
+
+    #[test]
+    fn generated_goal_usage_cases_bind_goal_catalog() {
+        use gents_lean_vocab::families::title_usage_goal::{BudgetResult, GoalOutput};
+        let observe = |input: &UsageInput, after_action: bool| {
+            let (mut request_ids, mut calls) = native_catalog(input, after_action);
+            let titles: Vec<_> = input
+                .signed_purposes
+                .iter()
+                .filter(|fact| purpose(&fact.purpose) == RequestPurpose::TitleAudit)
+                .map(|fact| format!("request-{}", fact.physical))
+                .collect();
+            request_ids.retain(|doc, _| !titles.contains(doc));
+            calls.retain(|call| request_ids.contains_key(&call.request_doc_id));
+            match project_goal_catalog(&request_ids, calls) {
+                Ok(usage) => BudgetResult {
+                    kind: "ok".to_owned(),
+                    used: Some(usage.total),
+                    error: None,
+                },
+                Err(error) => BudgetResult {
+                    kind: "error".to_owned(),
+                    used: None,
+                    error: Some(catalog_error(&input.name, &error)),
+                },
+            }
+        };
+        gents_lean_vocab::families::title_usage_goal::replay::<String, String>(|input| {
+            let input: UsageInput = gents_lean_vocab::family::recode(input);
+            GoalOutput {
+                goal_before: observe(&input, false),
+                goal_after: observe(&input, true),
+            }
+        });
     }
 }

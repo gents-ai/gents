@@ -1086,10 +1086,29 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "inference_registry_admission")
       "inference-call" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "title_usage_cases"
-      "TitleUsageCases"
-      "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports, duplicate-call accounting and goal charges that include reviews while excluding titles. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
+  , tagged (consumerCoverage
+      "family"
+      "title_usage_catalog")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "title_usage_budget")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "title_usage_goal")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "title_usage_catalog_unreached"
+      "model-production-gap: purpose and binding admission (missing purpose or binding, unauthenticated or cross-purpose bindings, foreign parent scope, mismatched call key) happens in verify_historical_auxiliary_receipt over signed AgentRequest rows on a served node; the pure catalog projections never see these inputs.")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "title_usage_budget_unreached"
+      "model-production-gap: purpose and binding admission (missing purpose or binding, unauthenticated or cross-purpose bindings, foreign parent scope, mismatched call key) happens in verify_historical_auxiliary_receipt over signed AgentRequest rows on a served node; the pure catalog projections never see these inputs.")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "title_usage_goal_unreached"
+      "model-production-gap: the goal usage query never loads title-audit rows while projectGoal validates the whole catalog, so a conflict confined to title-audit rows (conflicting_call_id_fails_closed) cannot reach production's goal charge; purpose and binding admission (missing purpose or binding, unauthenticated or cross-purpose bindings, foreign parent scope, mismatched call key) happens in verify_historical_auxiliary_receipt over signed AgentRequest rows on a served node; the pure catalog projections never see these inputs.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_health_cases"
