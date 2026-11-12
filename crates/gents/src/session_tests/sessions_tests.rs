@@ -254,8 +254,8 @@ async fn retry_frontier_matches_lean_admission() {
             std::time::Duration::ZERO,
         )
         .unwrap();
-        if case["running"].as_bool().unwrap() {
-            let mode = if case["background"].as_bool().unwrap() {
+        if case.running {
+            let mode = if case.background {
                 AwaitMode::Background
             } else {
                 AwaitMode::Foreground
@@ -276,7 +276,7 @@ async fn retry_frontier_matches_lean_admission() {
         } else {
             parent.begin_owned_execution(&writer).await.unwrap();
         }
-        if case["published"].as_bool().unwrap() {
+        if case.published {
             writer
                 .publish_authored_message(&parent, "prompt", &Message::user("Do the work"))
                 .await
@@ -287,13 +287,13 @@ async fn retry_frontier_matches_lean_admission() {
         request.doc_id = "successor".into();
         request.request_id = "successor".into();
         request.retry_parent_request_doc_id = Some(parent_doc.clone());
-        if !case["same_requester"].as_bool().unwrap() {
+        if !case.same_requester {
             request.requester_did = Some(other.did().into());
         }
-        if !case["same_session"].as_bool().unwrap() {
+        if !case.same_session {
             request.session_id = format!("fresh-session-{index}");
         }
-        if case["scoped_terminal"].as_bool().unwrap() {
+        if case.scoped_terminal {
             // A running parent already published its tool-call assistant
             // header, which the terminal must select rather than discard.
             let scope = parent.request().clone();
@@ -334,11 +334,11 @@ async fn retry_frontier_matches_lean_admission() {
                     Some("Stale"),
                 )
                 .await
-                .unwrap_or_else(|error| panic!("{case}: {error:#}"));
+                .unwrap_or_else(|error| panic!("{case:?}: {error:#}"));
         }
         let actual = gents_session::session::retry_has_published_input(node, &request).await;
-        assert_eq!(actual.ok(), case["expected"].as_bool(), "{case}");
-        if case["name"] == "ready" {
+        assert_eq!(actual.ok(), case.expected, "{case:?}");
+        if case.name == "ready" {
             let retry = gents_session::request::lifecycle::RetryLink {
                 parent_request_id: Some(parent_request_id.clone()),
                 parent_request_doc_id: Some(parent_doc.clone()),
@@ -376,7 +376,7 @@ async fn retry_frontier_matches_lean_admission() {
                 gents_session::session::retry_has_published_input(node, &request)
                     .await
                     .ok(),
-                case["expected"].as_bool(),
+                case.expected,
                 "retry chain must find the same authored input"
             );
         }
