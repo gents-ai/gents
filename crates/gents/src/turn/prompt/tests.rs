@@ -25,27 +25,16 @@ fn user_msg(text: &str) -> Message {
 
 #[test]
 fn mcp_discovery_guidance_matches_presented_operations_model() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["discovery_guidance_cases"].as_array().unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().discovery_guidance_cases;
     assert!(!cases.is_empty());
     for case in cases {
-        let tools = case["presented"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|name| name.as_str().unwrap())
-            .collect::<Vec<_>>();
-        let preamble = build_preamble(
-            "Instructions",
-            "worker",
-            &tools,
-            case["enabled"].as_bool().unwrap(),
-        );
+        let tools = case.presented.iter().map(|name| name.as_str()).collect::<Vec<_>>();
+        let preamble = build_preamble("Instructions", "worker", &tools, case.enabled);
         assert_eq!(
             preamble.contains("## Tool Discovery"),
-            case["expected"].as_bool().unwrap(),
+            case.expected,
             "{}",
-            case["name"]
+            case.name
         );
         for name in tools {
             assert!(
