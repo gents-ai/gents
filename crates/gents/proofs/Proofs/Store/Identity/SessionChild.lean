@@ -334,12 +334,6 @@ def localSelfPublicationCases : List (String × String × String × String) :=
    ("agent", "agent", "foreign", "agent"),
    ("agent", "agent", "agent", "foreign")]
 
-def localSelfPublicationCasesJson : String :=
-  (Lean.toJson (localSelfPublicationCases.map fun (actor, requester, signer, agent) =>
-    Lean.Json.mkObj [("actor", Lean.toJson actor), ("requester", Lean.toJson requester),
-      ("signer", Lean.toJson signer), ("agent", Lean.toJson agent),
-      ("allowed", Lean.toJson (localSelfPublicationAllowed actor requester signer agent))])).compress
-
 /-- An exact signed client request can be visible to its creator before its
 detached ACP1 grants complete. Its durable pending marker authorizes a retry
 only by the authenticated signer retaining that request. A cleared marker is

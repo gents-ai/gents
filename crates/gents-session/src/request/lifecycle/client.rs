@@ -1548,19 +1548,14 @@ mod tests {
 
     #[test]
     fn local_self_publication_matches_model() {
-        for case in &gents_lean_vocab::lean_contract_snapshot().local_self_publication_cases {
-            let field = |name: &str| case[name].as_str().unwrap();
-            assert_eq!(
-                local_self_publication_allowed(
-                    field("actor"),
-                    field("requester"),
-                    field("signer"),
-                    field("agent"),
-                ),
-                case["allowed"].as_bool().unwrap(),
-                "{case}",
-            );
-        }
+        gents_lean_vocab::families::session_child_local_self_publication_cases::replay(|input| {
+            local_self_publication_allowed(
+                &input.actor,
+                &input.requester,
+                &input.signer,
+                &input.agent,
+            )
+        });
     }
 
     #[tokio::test]

@@ -1,3 +1,4 @@
+import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
 import Proofs.Conformance.Identity.NodeProvisioning
 import Proofs.Conformance.HomeResolution
 import Proofs.Conformance.GraphqlName
@@ -295,8 +296,6 @@ def snapshotCaptureTailJson : String :=
       ++ Identity.SessionChild.childScopeCasesJson ++ ","
     ++ "\"goal_link_cases\":"
       ++ Identity.SessionChild.goalLinkCasesJson ++ ","
-    ++ "\"local_self_publication_cases\":"
-      ++ Identity.SessionChild.localSelfPublicationCasesJson ++ ","
     ++ "\"client_request_publication_cases\":"
       ++ Identity.SessionChild.clientRequestPublicationCasesJson ++ ","
     ++ "\"capture_scope_cases\":"
