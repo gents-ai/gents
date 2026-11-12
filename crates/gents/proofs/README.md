@@ -1780,7 +1780,7 @@ writer sealing and integration retain their existing owners. New integration
 now checks the writer receipt required by the model; an existing integrator
 receipt still governs replay.
 
-Sixteen `operator_base_freeze_cases` describe real executor/Git admission and
+The sixteen `operator_base_freeze_contracts_freeze` cases describe real executor/Git admission and
 replay boundaries through the real Git executor consumer. Native quickstart
 coverage additionally checks sealed persistence with no fabricated request,
 binding, response, or receipt. A fault-injection test checks placement repair

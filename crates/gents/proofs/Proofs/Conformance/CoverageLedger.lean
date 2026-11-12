@@ -1412,8 +1412,8 @@ def caseCoverage : List CoverageEntry :=
       boundaryCommandPolicyHostExecutionAssumptionsId)
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "operator_base_freeze_cases"
-      "OperatorBaseFreezeCases")
+      "family"
+      "operator_base_freeze_contracts_freeze")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "workspace_path_capability_cases"

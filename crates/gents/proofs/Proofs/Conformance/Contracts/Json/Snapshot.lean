@@ -1085,8 +1085,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.CausalHopContracts.sessionTargetCasesJson ++ ","
     ++ "\"causal_hop_session_list_cases\":"
       ++ Conformance.CausalHopContracts.sessionListCasesJson ++ ","
-    ++ "\"operator_base_freeze_cases\":"
-      ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
     ++ "\"file_inventory_direct_reader_cases\":"
