@@ -443,7 +443,35 @@ mod no_model {
 
     /// `command` under a shell that outlives it on the same terminal and prints that
     /// terminal's flags afterward, as the shell a person returns to would find them.
-    fn reporting_terminal_flags(command: &Command) -> Command {
+    fn reporting_terminal_flags(command: &Command) -> Result<Command> {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = command
+            .get_current_dir()
+            .context("terminal fixture needs a working directory")?
+            .join("terminal-tools");
+        fs::create_dir_all(&directory)?;
+        let forwarder = directory.join("stty");
+        fs::write(
+            &forwarder,
+            br#"#!/bin/sh
+/bin/stty "$@"
+status=$?
+if [ "$status" -eq 0 ] && [ "$#" -eq 1 ] && [ "$1" = "-echo" ]; then
+    printf '%s\n' GENTS_TEST_TERMINAL_ECHO_DISABLED >&2
+fi
+exit "$status"
+"#,
+        )?;
+        fs::set_permissions(&forwarder, fs::Permissions::from_mode(0o755))?;
+        let inherited = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("PATH"))
+            .map(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
+            .unwrap_or_else(|| std::env::var_os("PATH"));
+        let mut search = vec![directory];
+        if let Some(inherited) = inherited {
+            search.extend(std::env::split_paths(&inherited));
+        }
         let mut shell = Command::new("/bin/sh");
         shell
             .args([
@@ -462,7 +490,8 @@ mod no_model {
                 None => shell.env_remove(key),
             };
         }
-        shell
+        shell.env("PATH", std::env::join_paths(search)?);
+        Ok(shell)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -473,14 +502,17 @@ mod no_model {
         let mut command = live.first_run();
         command.arg("--home").arg(&folder);
 
-        let mut terminal =
-            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("key-prompt"))?;
+        let mut terminal = Terminal::spawn(
+            &reporting_terminal_flags(&command)?,
+            &live.log("key-prompt"),
+        )?;
         terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.answer(INFERENCE_QUESTION, "1").await?;
         terminal.answer("connection method for OpenAI", "2").await?;
         terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
-        // Echo goes off just after the prompt prints, and the interrupt has to find it off.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        terminal
+            .expect("GENTS_TEST_TERMINAL_ECHO_DISABLED", PROMPT)
+            .await?;
         terminal.send("\x03")?;
         terminal.expect_exit(130).await?;
 
@@ -499,7 +531,7 @@ mod no_model {
         command.arg("--home").arg(&folder);
 
         let mut terminal =
-            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("after-key"))?;
+            Terminal::spawn(&reporting_terminal_flags(&command)?, &live.log("after-key"))?;
         terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.answer(INFERENCE_QUESTION, "1").await?;
         terminal.answer("connection method for OpenAI", "2").await?;
@@ -552,14 +584,17 @@ mod no_model {
         let mut command = live.first_run();
         command.arg("--home").arg(&folder);
 
-        let mut terminal =
-            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("ctrl-d-key"))?;
+        let mut terminal = Terminal::spawn(
+            &reporting_terminal_flags(&command)?,
+            &live.log("ctrl-d-key"),
+        )?;
         terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.answer(INFERENCE_QUESTION, "1").await?;
         terminal.answer("connection method for OpenAI", "2").await?;
         terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
-        // Echo goes off just after the prompt prints, and the end of input has to find it off.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        terminal
+            .expect("GENTS_TEST_TERMINAL_ECHO_DISABLED", PROMPT)
+            .await?;
         terminal.send("\x04")?;
         let code = terminal.wait_exit(EXIT).await?;
         ensure!(code != 0, "{}", terminal.transcript());
