@@ -51,13 +51,13 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
     assert_eq!(cases.len(), 11);
     for case in cases {
         let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
-        let outcomes = case["outcomes"].as_array().unwrap();
+        let outcomes = &case.outcomes;
         let mut turns = outcomes
             .iter()
             .enumerate()
             .map(|(index, outcome)| {
                 vec![
-                    invalid_progress_call(index, outcome.as_str().unwrap()),
+                    invalid_progress_call(index, outcome.as_str()),
                     RawStreamingChoice::FinalResponse(()),
                 ]
             })
@@ -83,14 +83,13 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
         )
         .await;
-        let name = case["name"].as_str().unwrap();
-        let actions = case["composed_actions"]
-            .as_array()
-            .unwrap()
+        let name = case.name.as_str();
+        let actions = case
+            .composed_actions
             .iter()
-            .map(|action| action.as_str().unwrap())
+            .map(|action| action.as_str())
             .collect::<Vec<_>>();
-        let ending = case["composed_ending"].as_str();
+        let ending = case.composed_ending.as_deref();
         let error = collected.error.as_deref();
         assert_eq!(error.is_some(), ending.is_some(), "{name}: {error:?}");
         match (ending, error) {
@@ -140,7 +139,7 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             .count();
         assert_eq!(
             charged as u64,
-            case["composed_invalid_used"].as_u64().unwrap(),
+            case.composed_invalid_used,
             "{name} typed outcome mapping"
         );
         for (index, row) in answered_rows.iter().enumerate() {
