@@ -45,36 +45,46 @@ async fn fixture_goal(access: &ConfigAccess, node_did: &str, session_id: &str) -
 fn generated_continuation_assignments_preserve_physical_bindings() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().goal_continuation_assignment_cases;
     assert_eq!(cases.len(), 17);
+    let assignment = |goal_id: &str, root_request_doc_id: &Option<String>| GoalAssignmentInput {
+        goal_id: goal_id.to_owned(),
+        root_request_doc_id: root_request_doc_id.clone(),
+    };
     for case in cases {
-        let parent: Option<GoalAssignmentInput> =
-            serde_json::from_value(case["parent"].clone()).unwrap();
-        let expected: Option<GoalAssignmentInput> =
-            serde_json::from_value(case["expected"].clone()).unwrap();
+        let parent = case
+            .parent
+            .as_ref()
+            .map(|parent| assignment(&parent.goal_id, &parent.root_request_doc_id));
+        let expected = case
+            .expected
+            .as_ref()
+            .map(|expected| assignment(&expected.goal_id, &expected.root_request_doc_id));
         assert_eq!(
             continuation_reference(
-                case["goal"].as_str().unwrap(),
-                case["current"].as_str(),
-                case["parent_doc"].as_str().unwrap(),
+                &case.goal,
+                case.current.as_deref(),
+                &case.parent_doc,
                 parent.as_ref(),
-                case["receipt_doc"].as_str(),
+                case.receipt_doc.as_deref(),
             ),
             expected,
             "{}",
-            case["name"]
+            case.name
         );
-        for edge in case["edges"].as_array().unwrap() {
-            let child: Option<GoalAssignmentInput> =
-                serde_json::from_value(edge["child"].clone()).unwrap();
+        for edge in &case.edges {
+            let child = edge
+                .child
+                .as_ref()
+                .map(|child| assignment(&child.goal_id, &child.root_request_doc_id));
             assert_eq!(
                 continuation_reference_matches(
-                    case["goal"].as_str().unwrap(),
-                    case["parent_doc"].as_str().unwrap(),
+                    &case.goal,
+                    &case.parent_doc,
                     parent.as_ref(),
                     child.as_ref(),
                 ),
-                edge["accepted"].as_bool().unwrap(),
-                "{}: {edge}",
-                case["name"]
+                edge.accepted,
+                "{}: {edge:?}",
+                case.name
             );
         }
     }
