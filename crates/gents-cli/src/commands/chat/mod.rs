@@ -12,7 +12,7 @@ use crate::operation_failure::OperationFailure;
 use crate::request_helpers::{client_signer, request_ref, wait_for_request};
 use crate::RequestOutputEnvelope;
 
-pub(crate) use streaming::{load_existing_tool_call_keys, stream_turn_progress};
+pub(crate) use streaming::stream_turn_progress;
 
 /// A turn's own deadlines end it sooner; this only bounds a runtime that stops answering.
 const PRINT_TIMEOUT_SECS: u64 = 86_400;

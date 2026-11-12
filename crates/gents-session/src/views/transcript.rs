@@ -423,6 +423,13 @@ impl ToolCallRows {
         }
     }
 
+    pub fn for_request(scope: SessionScope, request_doc_id: impl Into<String>) -> Self {
+        let mut view = Self::new(Scope::Session(scope));
+        view.request_doc_ids = Some(vec![request_doc_id.into()]);
+        view.order = ToolOrder::Started;
+        view
+    }
+
     pub fn running(scope: Scope) -> Self {
         let mut view = Self::new(scope);
         view.lifecycle_states = Some(vec!["running".to_owned()]);
