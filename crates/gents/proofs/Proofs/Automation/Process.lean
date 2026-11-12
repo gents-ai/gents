@@ -67,6 +67,14 @@ inductive Transition : ProcessState → ProcessState → Prop where
       (activeRequestCount : Nat) →
       activeRequestCount = 0 →
       Transition .shuttingDown .shutdown
+  /-- A newly started process adopts the durable state its predecessor left
+  behind. A runtime killed without shutdown leaves its last durable state in
+  place; the store has no liveness signal and document age is not a lease, so
+  the successor's own claim is the only fact that separates the two processes.
+  A cleanly shut-down state is already fail-closed and is not reclaimed. -/
+  | restart_claim (pre : ProcessState) :
+      pre ≠ .shutdown →
+      Transition pre .recovering
 
 inductive Action where
   | startupRecover (ctx : StartupContext)
@@ -74,6 +82,7 @@ inductive Action where
   | recoveryComplete
   | beginShutdown
   | finishShutdown (activeRequestCount : Nat)
+  | restartClaim
   deriving DecidableEq, Repr
 
 def step? (pre : ProcessState) : Action → Option ProcessState
@@ -96,6 +105,27 @@ def step? (pre : ProcessState) : Action → Option ProcessState
         some .shutdown
       else
         none
+  | .restartClaim =>
+      if pre = .shutdown then none else some .recovering
+
+/-- A restart claim can never assert readiness: it is the fail-closed half of
+adoption, so no durable predecessor state lets a claiming process report work
+it has not yet admitted. -/
+theorem restart_claim_never_ready (pre : ProcessState) :
+    step? pre .restartClaim ≠ some .ready := by
+  cases pre <;> simp [step?]
+
+/-- Claiming is idempotent, so a process that claims an already-recovering row
+performs no further state change and the publisher owes no extra write. -/
+theorem restart_claim_is_idempotent :
+    step? .recovering .restartClaim = some .recovering := by
+  simp [step?]
+
+/-- A cleanly shut-down row is already fail-closed and carries its predecessor's
+final picture; claiming leaves it untouched. -/
+theorem shutdown_is_absorbing_under_claim :
+    step? .shutdown .restartClaim = none := by
+  simp [step?]
 
 inductive Trace : ProcessState → ProcessState → Prop where
   | refl {s : ProcessState} : Trace s s
@@ -148,6 +178,12 @@ theorem step_sound
       subst pre
       subst post
       simpa using Transition.finish_shutdown activeRequestCount h_zero
+  | restartClaim =>
+      by_cases h_shutdown : pre = .shutdown
+      · simp [step?, h_shutdown] at h_step
+      · simp [step?, h_shutdown] at h_step
+        subst h_step
+        exact Transition.restart_claim pre h_shutdown
 
 theorem transition_complete
     {pre post : ProcessState}
@@ -169,6 +205,9 @@ theorem transition_complete
   | finish_shutdown activeRequestCount h_zero =>
       refine ⟨.finishShutdown activeRequestCount, ?_⟩
       simp [step?, h_zero]
+  | restart_claim pre h_shutdown =>
+      refine ⟨.restartClaim, ?_⟩
+      simp [step?, h_shutdown]
 
 theorem replay_sound
     {pre post : ProcessState}

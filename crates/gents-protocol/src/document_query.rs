@@ -672,7 +672,18 @@ where
                 .iter()
                 .map(|(field, direction)| format!("{field}: {}", direction.as_str()))
                 .collect();
-            arguments.push(format!("order: {{{}}}", order.join(", ")));
+            if order.len() == 1 {
+                arguments.push(format!("order: {{{}}}", order[0]));
+            } else {
+                arguments.push(format!(
+                    "order: [{}]",
+                    order
+                        .iter()
+                        .map(|field| format!("{{{field}}}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
         }
         if let Some(limit) = self.limit {
             let reference = variables.bind("Int", Value::from(limit));
@@ -1147,6 +1158,27 @@ mod tests {
             json!({"v0": hostile, "v1": ["pending", "claimed"], "v2": 5})
         );
         assert!(!rendered.document.contains(hostile));
+    }
+
+    #[test]
+    fn multi_field_order_round_trips_through_defradb_parser() {
+        let rendered = Query::select(Selection::new().field(request::REQUEST_ID))
+            .order_by(request::CREATED_AT, Direction::Desc)
+            .order_by(request::DOC_ID, Direction::Asc)
+            .render();
+        let parsed = query::parse_query(&rendered.document).unwrap();
+        let order = parsed[0].order_by.as_ref().unwrap();
+        assert_eq!(order.conditions.len(), 2);
+        assert_eq!(order.conditions[0].fields, vec![request::CREATED_AT.name()]);
+        assert_eq!(order.conditions[1].fields, vec![request::DOC_ID.name()]);
+        assert_eq!(
+            order.conditions[0].direction,
+            query::mapper::OrderDirection::Desc
+        );
+        assert_eq!(
+            order.conditions[1].direction,
+            query::mapper::OrderDirection::Asc
+        );
     }
 
     #[test]
