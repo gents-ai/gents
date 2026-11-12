@@ -1,6 +1,5 @@
 use gents_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
 
-use super::*;
 use crate::loop_stream::TaggedMessage;
 
 #[test]
@@ -100,11 +99,9 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
             gents_protocol::message::ToolResult {
                 id: "call-1".to_string(),
                 call_id: Some("call-1".to_string()),
-                content: vec![ToolResultContent::Text(
-                    gents_protocol::message::Text {
-                        text: "done".to_string(),
-                    },
-                )],
+                content: vec![ToolResultContent::Text(gents_protocol::message::Text {
+                    text: "done".to_string(),
+                })],
             },
         )],
     }];
@@ -252,11 +249,9 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
                 gents_protocol::message::ToolResult {
                     id: "call-1".to_string(),
                     call_id: Some("call-1".to_string()),
-                    content: vec![ToolResultContent::Text(
-                        gents_protocol::message::Text {
-                            text: "call-1-result".to_string(),
-                        },
-                    )],
+                    content: vec![ToolResultContent::Text(gents_protocol::message::Text {
+                        text: "call-1-result".to_string(),
+                    })],
                 },
             )],
         },

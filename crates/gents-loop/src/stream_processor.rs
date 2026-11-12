@@ -972,8 +972,8 @@ mod rendered_reasoning_contract;
 
 #[cfg(test)]
 mod tests {
-    use super::{render_reasoning_text, AssistantMessageContent, CompletionMessage};
     use super::AssistantTurnAccumulator;
+    use super::{render_reasoning_text, AssistantMessageContent, CompletionMessage};
     use crate::provider_input::ProviderInputProfile;
     use gents_protocol::message::{AssistantContent, Message, Reasoning};
 
@@ -1109,8 +1109,8 @@ mod tests {
 
     #[test]
     fn generated_reasoning_delta_cases_coalesce_native_parts() {
-        use gents_protocol::message::ReasoningContent;
         use gents_lean_vocab::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
+        use gents_protocol::message::ReasoningContent;
 
         for case in lean_reasoning_delta_cases() {
             let mut accumulator = AssistantTurnAccumulator::default();
@@ -1127,7 +1127,9 @@ mod tests {
                             signature: signature.map(|signature| signature.to_string()),
                         }],
                     }),
-                    Part::Text { bytes } => accumulator.push_text(std::str::from_utf8(bytes).unwrap()),
+                    Part::Text { bytes } => {
+                        accumulator.push_text(std::str::from_utf8(bytes).unwrap())
+                    }
                 }
             }
             accumulator.push_reasoning_delta(
@@ -1163,5 +1165,4 @@ mod tests {
             assert_eq!(actual, case.expected, "{}", case.name);
         }
     }
-
 }

@@ -906,7 +906,9 @@ mod tests {
             arguments: String,
             kind: String,
         }
-        let cases: Vec<Case> = serde_json::from_str(include_str!("../../../gents/tests/fixtures/tool_argument_failure.json"))
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../../gents/tests/fixtures/tool_argument_failure.json"
+        ))
         .unwrap();
         let cases: Vec<_> = cases
             .into_iter()
@@ -943,5 +945,4 @@ mod tests {
             assert_eq!(calls.load(Ordering::SeqCst), 0);
         }
     }
-
 }

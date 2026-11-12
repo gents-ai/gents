@@ -248,8 +248,7 @@ fn generated_retention_cases_drive_production_compaction_target() {
         );
         assert!(actual <= case.configured_keep_recent, "{}", case.name);
         assert!(actual <= case.available_input, "{}", case.name);
-        let band =
-            crate::provider_input::budget::recovery_band_budget(case.effective_input_budget);
+        let band = crate::provider_input::budget::recovery_band_budget(case.effective_input_budget);
         let reserved = case.fixed_input + case.effective_summary_output;
         if reserved <= band {
             assert!(
@@ -285,12 +284,8 @@ fn generated_retention_cases_drive_production_compaction_target() {
 fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
     let third = usize::MAX / 3;
     for value in [0, 1, third, third.saturating_add(1), usize::MAX] {
-        let retained = crate::provider_input::budget::compaction_retention_target(
-            usize::MAX,
-            value,
-            0,
-            0,
-        );
+        let retained =
+            crate::provider_input::budget::compaction_retention_target(usize::MAX, value, 0, 0);
         assert_eq!(retained.checked_add(value.div_ceil(5)), Some(value));
         assert_eq!(
             crate::provider_input::budget::compaction_retention_target(

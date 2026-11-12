@@ -367,7 +367,10 @@ mod tests {
                     .map(|(&prompt, &completion)| {
                         (
                             Some(i64::try_from(prompt).expect("fixture prompt tokens fit i64")),
-                            Some(i64::try_from(completion).expect("fixture completion tokens fit i64")),
+                            Some(
+                                i64::try_from(completion)
+                                    .expect("fixture completion tokens fit i64"),
+                            ),
                         )
                     }),
             )
@@ -381,7 +384,8 @@ mod tests {
                 .snapshot()
                 .expect("rehydrated ledger is available");
             assert_eq!(
-                ledger.effective_output_tokens(case.input_tokens, case.configured_max_output_tokens,),
+                ledger
+                    .effective_output_tokens(case.input_tokens, case.configured_max_output_tokens,),
                 case.effective_output_tokens,
                 "{}: dispatch clamp drifted from Lean",
                 case.name
@@ -438,5 +442,4 @@ mod tests {
             );
         }
     }
-
 }
