@@ -39,7 +39,7 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
     row["admission_signature"] = json!(bs58::encode(&request.admission.signature).into_string());
     row["lifecycle_state"] = json!("completed");
     let root: AgentRequestRow = serde_json::from_value(row).unwrap();
-    let goal: gents_automation::goal::GoalDocument = serde_json::from_value(json!({
+    let goal: crate::goal::GoalDocument = serde_json::from_value(json!({
         "_docID":"goal-document", "goal_id":"goal", "node_did":did, "session_id":"chat",
         "assignment_root_request_doc_id":"physical-root", "status":"active"
     }))
@@ -60,7 +60,7 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
                 composite: "goal-commit".into(),
             },
             assignment_root_request_doc_id: goal.assignment_root_request_doc_id.clone(),
-            snapshot: gents_automation::goal::snapshot(&goal, now),
+            snapshot: crate::goal::snapshot(&goal, now),
         }),
     };
     let latest = SessionRequestObservation {
@@ -141,7 +141,7 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
             "wrong-current-request" => latest.request_id = "different-logical-request".into(),
             _ => {}
         }
-        let actual = gents_automation::goal::awaiting_goal_question_ids(
+        let actual = crate::goal::awaiting_goal_question_ids(
             &observation,
             &latest,
             &requests,
