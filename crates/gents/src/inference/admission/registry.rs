@@ -10,6 +10,7 @@ use super::config::BackendAdmissionConfig;
 use super::controller::{BackendAdmissionController, CapacityPool, InferenceCallRecord};
 use super::permit::AdmissionPermit;
 use super::persistence::persist_terminal_call;
+use crate::drop_cleanup::{CleanupTracker, DropCleanup};
 
 #[cfg(test)]
 #[path = "registry_contract_tests.rs"]
@@ -27,6 +28,7 @@ struct AdmissionRegistryInner {
     node: Arc<EmbeddedNode>,
     runtime_instance_id: String,
     backends: Mutex<RapidHashMap<String, BackendAdmission>>,
+    drop_cleanup: CleanupTracker,
 }
 
 struct BackendAdmission {
@@ -41,8 +43,17 @@ impl AdmissionRegistry {
                 node,
                 runtime_instance_id: uuid::Uuid::new_v4().to_string(),
                 backends: Mutex::new(RapidHashMap::new()),
+                drop_cleanup: CleanupTracker::new(),
             }),
         }
+    }
+
+    /// Resolves once every terminal row owed by a dropped permit or queued
+    /// guard of this registry is durable. The tracker counts in production so
+    /// the owner can be flushed; only its tests await the point today.
+    #[cfg(test)]
+    pub(crate) async fn drop_cleanup_idle(&self) {
+        self.inner.drop_cleanup.idle().await;
     }
 
     fn backends(&self) -> std::sync::MutexGuard<'_, RapidHashMap<String, BackendAdmission>> {
@@ -204,6 +215,7 @@ impl AdmissionRegistry {
                         self.inner.node.clone(),
                         pending,
                         connection,
+                        DropCleanup::tracked(&self.inner.drop_cleanup),
                         cancel_observer,
                         terminal_failure_observer,
                     )
