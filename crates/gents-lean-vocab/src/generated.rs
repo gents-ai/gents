@@ -517,10 +517,6 @@ pub fn lean_queued_steering_guard_cases() -> &'static [LeanQueuedSteeringGuardCa
     &lean_contract_snapshot().queued_steering_guard_cases
 }
 
-pub fn lean_queued_steering_trace_cases() -> &'static [LeanQueuedSteeringTraceCase] {
-    &lean_contract_snapshot().queued_steering_trace_cases
-}
-
 pub fn lean_r4c_background_work_cases() -> &'static [LeanR4cBackgroundWorkCase] {
     &lean_contract_snapshot().r4c_background_work_cases
 }
@@ -3204,7 +3200,6 @@ pub struct LeanContractSnapshot {
     pub command_env_cases: Vec<LeanCommandEnvCase>,
     pub live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub request_progress_cases: Vec<LeanRequestProgressCase>,
-    pub queued_steering_trace_cases: Vec<LeanQueuedSteeringTraceCase>,
     pub queued_steering_guard_cases: Vec<LeanQueuedSteeringGuardCase>,
     pub interrupt_delivery_cases: Vec<LeanInterruptDeliveryCase>,
     pub agent_steer_disposition_cases: Vec<LeanAgentSteerDispositionCase>,
@@ -9529,72 +9524,6 @@ pub struct LeanQueueManagementState {
     pub terminal: Vec<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum LeanQueuedSteeringAction {
-    Enqueue,
-    ClaimWithoutBegin,
-    ClaimAndBegin,
-    LatchInterrupt,
-    InterruptBeforeClaim,
-    AdmissionReject,
-    FailBeforeStream,
-    DedupLose,
-    Expire,
-    InterruptClaimed,
-    InterruptProcessing,
-    Fail,
-    Finish,
-    BindWorkspace,
-    Claim,
-    BeginInference,
-    ContinueProcessing,
-    Publish,
-    PrepareFails,
-    Capture,
-    Send,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanQueuedSteeringCandidate {
-    pub closing: LeanCanonicalSegment,
-    pub message: super::canonical_output::LeanCanonicalMessage<LeanPayloadSpec>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanQueuedSteeringCapture {
-    #[serde(rename = "nodeDid")]
-    pub node_did: u64,
-    #[serde(rename = "sessionId")]
-    pub session_id: u64,
-    #[serde(rename = "requestDocId")]
-    pub request_doc_id: u64,
-    #[serde(rename = "turnIndex")]
-    pub turn_index: u64,
-    pub attempt: u64,
-    #[serde(rename = "bodyToken")]
-    pub body_token: u64,
-    #[serde(rename = "priorBodyToken")]
-    pub prior_body_token: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanQueuedSteeringEntry {
-    #[serde(rename = "requestId")]
-    pub request_id: u64,
-    #[serde(rename = "createdAt")]
-    pub created_at: u64,
-    pub source: String,
-    pub policy: String,
-    #[serde(rename = "queueKey")]
-    pub queue_key: Option<u64>,
-    #[serde(rename = "queuedAfter")]
-    pub queued_after: Option<u64>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanQueuedSteeringGuardCase {
@@ -9602,37 +9531,6 @@ pub struct LeanQueuedSteeringGuardCase {
     #[serde(rename = "prefixAdmitted")]
     pub prefix_admitted: bool,
     pub admitted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanQueuedSteeringTraceCase {
-    pub name: String,
-    pub actions: Vec<LeanQueuedSteeringAction>,
-    #[serde(rename = "requestId")]
-    pub request_id: u64,
-    #[serde(rename = "requestDocId")]
-    pub request_doc_id: u64,
-    #[serde(rename = "contentToken")]
-    pub content_token: u64,
-    pub entry: LeanQueuedSteeringEntry,
-    #[serde(rename = "interruptAt")]
-    pub interrupt_at: Option<u64>,
-    #[serde(rename = "preparedCandidate")]
-    pub prepared_candidate: Option<LeanQueuedSteeringCandidate>,
-    pub capture: LeanQueuedSteeringCapture,
-    #[serde(rename = "lifecycleState")]
-    pub lifecycle_state: String,
-    #[serde(rename = "acceptedInput")]
-    pub accepted_input: bool,
-    #[serde(rename = "queueActive")]
-    pub queue_active: Option<u64>,
-    #[serde(rename = "admissionVisible")]
-    pub admission_visible: bool,
-    #[serde(rename = "canonicalAuthoredCount")]
-    pub canonical_authored_count: u64,
-    #[serde(rename = "providerSendPermitted")]
-    pub provider_send_permitted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

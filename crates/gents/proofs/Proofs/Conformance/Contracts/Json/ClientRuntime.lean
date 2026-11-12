@@ -346,70 +346,475 @@ def canonicalMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
     jsonArray (message.blocks.map (messageBlockJson payloadSpecJson)) ++
     ",\"created_at\":" ++ toString message.createdAt ++ "}"
 
-private def queuedSteeringActionJson : QueuedSteering.Action → String
-  | .enqueue => jsonString "enqueue"
-  | .claimWithoutBegin => jsonString "claimWithoutBegin"
-  | .claimAndBegin => jsonString "claimAndBegin"
-  | .latchInterrupt => jsonString "latchInterrupt"
-  | .terminate .interruptBeforeClaim => jsonString "interruptBeforeClaim"
-  | .terminate .admissionReject => jsonString "admissionReject"
-  | .terminate .failBeforeStream => jsonString "failBeforeStream"
-  | .terminate .dedupLose => jsonString "dedupLose"
-  | .terminate .expire => jsonString "expire"
-  | .terminate .interruptClaimed => jsonString "interruptClaimed"
-  | .terminate .interruptProcessing => jsonString "interruptProcessing"
-  | .terminate .fail => jsonString "fail"
-  | .terminate .finish => jsonString "finish"
-  | .terminate .bindWorkspace => jsonString "bindWorkspace"
-  | .terminate .claim => jsonString "claim"
-  | .terminate .beginInference => jsonString "beginInference"
-  | .terminate .continueProcessing => jsonString "continueProcessing"
-  | .terminate (.parkBackend true) => jsonString "parkBackendClosed"
-  | .terminate (.parkBackend false) => jsonString "parkBackendUnclosed"
-  | .terminate (.resumeBackend true) => jsonString "resumeBackendReady"
-  | .terminate (.resumeBackend false) => jsonString "resumeBackendNotReady"
-  | .terminate .beginResumed => jsonString "beginResumed"
-  | .terminate .interruptResuming => jsonString "interruptResuming"
-  | .terminate .expireResuming => jsonString "expireResuming"
-  | .terminate .interruptBackendWait => jsonString "interruptBackendWait"
-  | .terminate .expireBackendWait => jsonString "expireBackendWait"
-  | .publish => jsonString "publish"
-  | .prepareFails => jsonString "prepareFails"
-  | .capture => jsonString "capture"
-  | .send => jsonString "send"
+def queuedSteeringActionName : QueuedSteering.Action → String
+  | .enqueue => "enqueue"
+  | .claimWithoutBegin => "claimWithoutBegin"
+  | .claimAndBegin => "claimAndBegin"
+  | .latchInterrupt => "latchInterrupt"
+  | .terminate .interruptBeforeClaim => "interruptBeforeClaim"
+  | .terminate .admissionReject => "admissionReject"
+  | .terminate .failBeforeStream => "failBeforeStream"
+  | .terminate .dedupLose => "dedupLose"
+  | .terminate .expire => "expire"
+  | .terminate .interruptClaimed => "interruptClaimed"
+  | .terminate .interruptProcessing => "interruptProcessing"
+  | .terminate .fail => "fail"
+  | .terminate .finish => "finish"
+  | .terminate .bindWorkspace => "bindWorkspace"
+  | .terminate .claim => "claim"
+  | .terminate .beginInference => "beginInference"
+  | .terminate .continueProcessing => "continueProcessing"
+  | .terminate (.parkBackend true) => "parkBackendClosed"
+  | .terminate (.parkBackend false) => "parkBackendUnclosed"
+  | .terminate (.resumeBackend true) => "resumeBackendReady"
+  | .terminate (.resumeBackend false) => "resumeBackendNotReady"
+  | .terminate .beginResumed => "beginResumed"
+  | .terminate .interruptResuming => "interruptResuming"
+  | .terminate .expireResuming => "expireResuming"
+  | .terminate .interruptBackendWait => "interruptBackendWait"
+  | .terminate .expireBackendWait => "expireBackendWait"
+  | .publish => "publish"
+  | .prepareFails => "prepareFails"
+  | .capture => "capture"
+  | .send => "send"
 
-def queuedSteeringTraceJson (witness : QueuedSteering.TraceObservation) : String :=
+namespace QueuedSteeringTrace
+
+open Lean CanonicalOutput
+
+structure SourceWire where
+  kind : String
+  auxiliaryKind : Option String := none
+  scope : Option Nat := none
+  turn : Option Nat := none
+  attempt : Option Nat := none
+  call : Option Nat := none
+  key : Option Nat := none
+  deriving ToJson
+
+def auxiliaryKindName : AuxiliaryKind → String
+  | .compaction => "compaction"
+  | .compactionFallback => "compaction_fallback"
+  | .title => "title"
+  | .accessReview => "access_review"
+
+def SourceWire.ofModel : Source → SourceWire
+  | .provider scope turn attempt =>
+      { kind := "provider", scope := scope, turn := turn, attempt := attempt }
+  | .auxiliary kind scope turn attempt =>
+      { kind := "auxiliary", auxiliaryKind := auxiliaryKindName kind, scope := scope,
+        turn := turn, attempt := attempt }
+  | .toolEffectArguments call => { kind := "tool_effect_arguments", call := call }
+  | .tool call => { kind := "tool", call := call }
+  | .authored key => { kind := "authored", key := key }
+
+structure CoordinateWire where
+  request : Nat
+  source : SourceWire
+  deriving ToJson
+
+structure WriterWire where
+  kind : String
+  generation : Option Nat := none
+  call : Option Nat := none
+  deriving ToJson
+
+def WriterWire.ofModel : Writer → WriterWire
+  | .request generation => { kind := "request", generation := generation }
+  | .tool call => { kind := "tool", call := call }
+
+def outcomeName : CanonicalOutput.Outcome → String
+  | .complete => "complete"
+  | .«partial» => "partial"
+
+structure ToolWire where
+  id : String
+  callId : Option String
+  name : String
+  deriving ToJson
+
+structure DeclarationWire where
+  block : Nat
+  part : Nat
+  kind : String
+  tool : Option ToolWire
+  mediaKind : Option String
+  deriving ToJson
+
+def DeclarationWire.ofModel (declaration : CanonicalOutput.Declaration) : DeclarationWire :=
+  { block := declaration.block, part := declaration.part,
+    kind := payloadKindJson declaration.kind,
+    tool := declaration.tool.map fun tool =>
+      { id := tool.id, callId := tool.callId, name := tool.name },
+    mediaKind := declaration.mediaKind.map mediaKindJson }
+
+structure RunWire where
+  stream : Nat
+  bytes : Nat
+  declaration : Option DeclarationWire
+  deriving ToJson
+
+structure FlushWire where
+  ordinal : Nat
+  runs : List RunWire
+  payload : List Nat
+  deriving ToJson
+
+structure ClosureWire where
+  kind : String
+  outcome : Option String := none
+  segments : Option Nat := none
+  streamBytes : Option (List Nat) := none
+  deriving ToJson
+
+def ClosureWire.ofModel : Closure → ClosureWire
+  | .retracted => { kind := "retracted" }
+  | .closed outcome segments streamBytes =>
+      { kind := "closed", outcome := outcomeName outcome, segments := segments,
+        streamBytes := streamBytes }
+
+structure SegmentWire where
+  id : Nat
+  coordinate : CoordinateWire
+  writer : WriterWire
+  flush : Option FlushWire
+  close : Option ClosureWire
+  createdAt : Nat
+  deriving ToJson
+
+def SegmentWire.ofModel (segment : Segment) : SegmentWire :=
+  { id := segment.id,
+    coordinate := { request := segment.coordinate.request,
+                    source := SourceWire.ofModel segment.coordinate.source },
+    writer := WriterWire.ofModel segment.writer,
+    flush := segment.flush.map fun flush =>
+      { ordinal := flush.ordinal,
+        runs := flush.runs.map fun run =>
+          { stream := run.stream, bytes := run.bytes,
+            declaration := run.declaration.map DeclarationWire.ofModel },
+        payload := flush.payload.map (·.toNat) },
+    close := segment.close.map ClosureWire.ofModel,
+    createdAt := segment.createdAt }
+
+structure RefWire where
+  closeId : Nat
+  stream : Nat
+  deriving ToJson
+
+def RefWire.ofModel (ref : PayloadRef) : RefWire := { closeId := ref.closeId, stream := ref.stream }
+
+structure PartWire where
+  kind : String
+  start : Option Nat := none
+  stop : Option Nat := none
+  bytes : Option (List Nat) := none
+  deriving ToJson
+
+structure PresentationWire where
+  kind : String
+  parts : Option (List PartWire) := none
+  deriving ToJson
+
+def PresentationWire.ofModel : Presentation → PresentationWire
+  | .full => { kind := "full" }
+  | .composed parts =>
+      let wire : PresentationPart → PartWire
+        | .range start stop => { kind := "range", start := start, stop := stop }
+        | .literal bytes => { kind := "literal", bytes := bytes.map (·.toNat) }
+      { kind := "composed", parts := some (parts.map wire) }
+
+structure PayloadWire where
+  reference : RefWire
+  presentation : PresentationWire
+  deriving ToJson
+
+/-- A prepared steering input is one authored text block, so other block kinds
+carry only their kind; `prepared_candidates_are_text` states it for every trace. -/
+structure BlockWire where
+  kind : String
+  payload : Option PayloadWire
+  deriving ToJson
+
+def BlockWire.ofModel : MessageBlock PayloadSpec → BlockWire
+  | .text payload =>
+      let wire : PayloadWire :=
+        { reference := RefWire.ofModel payload.reference
+          presentation := PresentationWire.ofModel payload.presentation }
+      { kind := "text", payload := some wire }
+  | .reasoning _ _ => { kind := "reasoning", payload := none }
+  | .toolCall .. => { kind := "tool_call", payload := none }
+  | .toolResult .. => { kind := "tool_result", payload := none }
+  | .media _ => { kind := "media", payload := none }
+
+structure PublicationWire where
+  kind : String
+  generation : Option Nat := none
+  call : Option Nat := none
+  origin : Option Nat := none
+  deriving ToJson
+
+def PublicationWire.ofModel : MessagePublication → PublicationWire
+  | .requestExecution generation => { kind := "request_execution", generation := generation }
+  | .requestRecovery generation => { kind := "request_recovery", generation := generation }
+  | .toolDelivery call => { kind := "tool_delivery", call := call }
+  | .fork origin => { kind := "fork", origin := origin }
+
+structure HeaderWire where
+  id : Nat
+  session : Nat
+  request : Option Nat
+  origin : Option Nat
+  refs : List RefWire
+  outcome : String
+  role : String
+  publication : PublicationWire
+  deriving ToJson
+
+structure MessageWire where
+  header : HeaderWire
+  key : String
+  sequence : Nat
+  nativeId : Option String
+  nativeRequestId : Option String
+  blocks : List BlockWire
+  createdAt : Nat
+  deriving ToJson
+
+def MessageWire.ofModel (message : MessageEnvelope) : MessageWire :=
+  let h := message.header
+  { header := { id := h.id, session := h.session, request := h.request, origin := h.origin,
+                refs := h.refs.map RefWire.ofModel, outcome := outcomeName h.outcome,
+                role := roleJson h.role, publication := PublicationWire.ofModel h.publication },
+    key := message.key, sequence := message.sequence, nativeId := message.nativeId,
+    nativeRequestId := message.nativeRequestId, blocks := message.blocks.map BlockWire.ofModel,
+    createdAt := message.createdAt }
+
+structure CandidateWire where
+  closing : SegmentWire
+  message : MessageWire
+  deriving ToJson
+
+structure EntryWire where
+  requestId : Nat
+  createdAt : Nat
+  source : String
+  policy : String
+  queueKey : Option Nat
+  queuedAfter : Option Nat
+  deriving ToJson
+
+structure CaptureWire where
+  nodeDid : Nat
+  sessionId : Nat
+  requestDocId : Nat
+  turnIndex : Nat
+  attempt : Nat
+  bodyToken : Nat
+  priorBodyToken : Option Nat
+  deriving ToJson
+
+structure ObservationWire where
+  requestId : Nat
+  requestDocId : Nat
+  entry : EntryWire
+  interruptAt : Option Nat
+  preparedCandidate : Option CandidateWire
+  capture : CaptureWire
+  lifecycleState : String
+  acceptedInput : Bool
+  queueActive : Option Nat
+  admissionVisible : Bool
+  canonicalAuthoredCount : Nat
+  providerSendPermitted : Bool
+  deriving ToJson
+
+def ObservationWire.ofModel (witness : QueuedSteering.TraceObservation) : ObservationWire :=
   let script := witness.caseScript
-  let candidate := script.candidate.map fun prepared =>
-    "{\"closing\":" ++ canonicalSegmentJson prepared.closing ++
-      ",\"message\":" ++ canonicalMessageJson prepared.message ++ "}"
   let key := script.capture.key
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"actions\":" ++ jsonArray (script.actions.map queuedSteeringActionJson) ++
-    ",\"requestId\":" ++ toString witness.requestId ++
-    ",\"requestDocId\":" ++ toString witness.requestDocId ++
-    ",\"contentToken\":" ++ toString witness.contentToken ++
-    ",\"entry\":{\"requestId\":" ++ toString script.entry.requestId ++
-    ",\"createdAt\":" ++ toString script.entry.createdAt ++
-    ",\"source\":" ++ jsonString script.entry.source.toDefraDB ++
-    ",\"policy\":" ++ jsonString script.entry.policy.toDefraDB ++
-    ",\"queueKey\":" ++ optionalNatJson script.entry.queueKey ++
-    ",\"queuedAfter\":" ++ optionalNatJson script.entry.queuedAfter ++ "}" ++
-    ",\"interruptAt\":" ++ optionalNatJson script.interruptAt ++
-    ",\"preparedCandidate\":" ++ candidate.getD "null" ++
-    ",\"capture\":{\"nodeDid\":" ++ toString key.nodeDid ++
-    ",\"sessionId\":" ++ toString key.sessionId ++
-    ",\"requestDocId\":" ++ toString key.requestId ++
-    ",\"turnIndex\":" ++ toString key.turnIndex ++
-    ",\"attempt\":" ++ toString key.attempt ++
-    ",\"bodyToken\":" ++ toString script.capture.request.value ++
-    ",\"priorBodyToken\":" ++ optionalNatJson (script.capture.priorBinding.map (·.value)) ++ "}" ++
-    ",\"lifecycleState\":" ++ jsonString witness.lifecycleState ++
-    ",\"acceptedInput\":" ++ boolString witness.acceptedInput ++
-    ",\"queueActive\":" ++ optionalNatJson witness.queueActive ++
-    ",\"admissionVisible\":" ++ boolString witness.admissionVisible ++
-    ",\"canonicalAuthoredCount\":" ++ toString witness.canonicalAuthoredCount ++
-    ",\"providerSendPermitted\":" ++ boolString witness.providerSendPermitted ++ "}"
+  { requestId := witness.requestId, requestDocId := witness.requestDocId,
+    entry := { requestId := script.entry.requestId, createdAt := script.entry.createdAt,
+               source := script.entry.source.toDefraDB, policy := script.entry.policy.toDefraDB,
+               queueKey := script.entry.queueKey, queuedAfter := script.entry.queuedAfter },
+    interruptAt := script.interruptAt,
+    preparedCandidate := script.candidate.map fun prepared =>
+      { closing := SegmentWire.ofModel prepared.closing,
+        message := MessageWire.ofModel prepared.message },
+    capture := { nodeDid := key.nodeDid, sessionId := key.sessionId, requestDocId := key.requestId,
+                 turnIndex := key.turnIndex, attempt := key.attempt,
+                 bodyToken := script.capture.request.value,
+                 priorBodyToken := script.capture.priorBinding.map (·.value) },
+    lifecycleState := witness.lifecycleState, acceptedInput := witness.acceptedInput,
+    queueActive := witness.queueActive, admissionVisible := witness.admissionVisible,
+    canonicalAuthoredCount := witness.canonicalAuthoredCount,
+    providerSendPermitted := witness.providerSendPermitted }
+
+def actionNames (witness : QueuedSteering.TraceObservation) : List String :=
+  witness.caseScript.actions.map queuedSteeringActionName
+
+structure ScriptInput where
+  name : String
+  actions : List String
+  contentToken : Nat
+  deriving ToJson
+
+def ScriptInput.ofModel (witness : QueuedSteering.TraceObservation) : ScriptInput :=
+  { name := witness.name, actions := actionNames witness, contentToken := witness.contentToken }
+
+def observationNamed (name : String) : Option QueuedSteering.TraceObservation :=
+  QueuedSteering.traceObservations.find? (·.name == name)
+
+theorem trace_names_are_unique :
+    (QueuedSteering.traceObservations.map (·.name)).eraseDups.length =
+      QueuedSteering.traceObservations.length := by
+  native_decide
+
+def tracesWithActions (scripts : List (List String)) : List QueuedSteering.TraceObservation :=
+  QueuedSteering.traceObservations.filter fun witness => actionNames witness ∈ scripts
+
+structure PendingOutput where
+  lifecycleState : String
+  acceptedInput : Bool
+  canonicalAuthoredCount : Nat
+  deriving ToJson
+
+/-- A pending steering request reaches a terminal without a claim only by an
+interrupt before its claim or an admission rejection; the served scenario
+enqueues a production-signed request and drives one of the two. -/
+@[conformance_family]
+def pendingTerminal : Family ScriptInput (Option PendingOutput) where
+  inputs := (tracesWithActions [["enqueue", "interruptBeforeClaim"], ["enqueue", "admissionReject"]]).map
+    ScriptInput.ofModel
+  model := fun i => (observationNamed i.name).map fun witness =>
+    { lifecycleState := witness.lifecycleState, acceptedInput := witness.acceptedInput,
+      canonicalAuthoredCount := witness.canonicalAuthoredCount }
+
+structure OwnedOutput where
+  lifecycleState : String
+  acceptedInput : Bool
+  canonicalAuthoredCount : Nat
+  queueActive : Bool
+  deriving ToJson
+
+/-- The served owned scenario claims and begins a production-signed steering
+request and terminalizes it before any authored publication, by failure or by
+a latched interrupt; it executes no context preparation or provider dispatch. -/
+@[conformance_family]
+def ownedTerminal : Family ScriptInput (Option OwnedOutput) where
+  inputs := (tracesWithActions
+    [["enqueue", "claimAndBegin", "prepareFails", "fail", "capture", "send"],
+     ["enqueue", "claimAndBegin", "prepareFails", "latchInterrupt", "interruptProcessing",
+      "capture", "send"]]).map ScriptInput.ofModel
+  model := fun i => (observationNamed i.name).map fun witness =>
+    { lifecycleState := witness.lifecycleState, acceptedInput := witness.acceptedInput,
+      canonicalAuthoredCount := witness.canonicalAuthoredCount,
+      queueActive := witness.queueActive.isSome }
+
+structure PublicationInput where
+  name : String
+  actions : List String
+  prompt : String
+  deriving ToJson
+
+structure PublicationOutput where
+  canonicalAuthoredCount : Nat
+  providerSendPermitted : Bool
+  deriving ToJson
+
+def preparedPrompt (witness : QueuedSteering.TraceObservation) : String :=
+  ((witness.caseScript.candidate.bind (·.closing.flush)).bind fun flush =>
+    String.fromUTF8? (ByteArray.mk flush.payload.toArray)).getD ""
+
+/-- The owned loop publishes the prepared input once and enters the provider
+stream; a conflicting capture binding has no loop fixture, so only the
+publication handoff is replayed there. -/
+@[conformance_family]
+def publication : Family PublicationInput (Option PublicationOutput) where
+  inputs := (QueuedSteering.traceObservations.filter fun witness =>
+      witness.name == "queued_steering_publishes_once_only_after_owned_execution_start").map
+    fun witness => { name := witness.name, actions := actionNames witness,
+                     prompt := preparedPrompt witness }
+  model := fun i => (observationNamed i.name).map fun witness =>
+    { canonicalAuthoredCount := witness.canonicalAuthoredCount,
+      providerSendPermitted := witness.providerSendPermitted }
+
+/-- model-production-gap: no native owner exposes the whole steering trace
+observation (admission visibility, capture binding, queue head and prepared
+candidate); claimed pre-start failure, prepublication send denial, conflicting
+capture and exact replay scripts have no native replay. -/
+@[conformance_family]
+def traceUnreached : Family ScriptInput (Option ObservationWire) where
+  inputs := QueuedSteering.traceObservations.map ScriptInput.ofModel
+  model := fun i => (observationNamed i.name).map ObservationWire.ofModel
+
+def pendingFacts (witness : QueuedSteering.TraceObservation) : Bool :=
+  let entry := witness.caseScript.entry
+  entry.requestId == witness.requestId && entry.source.toDefraDB == "steering" &&
+    entry.policy.toDefraDB == "append" && entry.queueKey.isNone && entry.queuedAfter.isSome &&
+    (actionNames witness != ["enqueue", "interruptBeforeClaim"] || witness.caseScript.interruptAt.isSome)
+
+example : (tracesWithActions [["enqueue", "interruptBeforeClaim"], ["enqueue", "admissionReject"]]).all
+    pendingFacts := by
+  native_decide
+
+def ownedFacts (witness : QueuedSteering.TraceObservation) : Bool :=
+  witness.acceptedInput && !witness.providerSendPermitted && witness.canonicalAuthoredCount == 0 &&
+    witness.queueActive.isNone && witness.caseScript.interruptAt.isNone
+
+example : (tracesWithActions
+    [["enqueue", "claimAndBegin", "prepareFails", "fail", "capture", "send"],
+     ["enqueue", "claimAndBegin", "prepareFails", "latchInterrupt", "interruptProcessing",
+      "capture", "send"]]).all ownedFacts := by
+  native_decide
+
+def connectedFacts (witness : QueuedSteering.TraceObservation) : Bool :=
+  witness.requestId == witness.caseScript.entry.requestId &&
+    witness.caseScript.capture.key.requestId == witness.requestDocId &&
+    !witness.caseScript.actions.isEmpty && witness.acceptedInput &&
+    (!(witness.lifecycleState == "failed" || witness.lifecycleState == "interrupted") ||
+      witness.queueActive.isNone)
+
+example : QueuedSteering.traceObservations.length = 9 ∧
+    QueuedSteering.traceObservations.all connectedFacts := by
+  native_decide
+
+def candidateFacts (witness : QueuedSteering.TraceObservation) : Bool :=
+  match witness.caseScript.candidate with
+  | none => false
+  | some prepared =>
+      let segment := prepared.closing
+      let message := prepared.message
+      match segment.coordinate.source, segment.writer, message.header.publication,
+          message.blocks, segment.flush with
+      | .authored _, .request generation, .requestExecution owner, [.text payload], some flush =>
+          match flush.runs with
+          | [run] =>
+              segment.coordinate.request == witness.requestDocId && owner == generation &&
+                message.header.request == some witness.requestDocId &&
+                message.header.role == .user && message.header.outcome == .complete &&
+                payload.presentation == .full && payload.reference.closeId == segment.id &&
+                payload.reference.stream == 0 && message.header.refs == [payload.reference] &&
+                flush.ordinal == 0 && run.stream == payload.reference.stream &&
+                run.bytes == flush.payload.length &&
+                (run.declaration.map fun d => d.block == 0 && d.part == 0 && d.kind == .text) == some true &&
+                segment.close == some (.closed .complete 1 [run.bytes])
+          | _ => false
+      | _, _, _, _, _ => false
+
+example : (QueuedSteering.traceObservations.filter fun witness =>
+      witness.name == "queued_steering_publishes_once_only_after_owned_execution_start").all
+    candidateFacts := by
+  native_decide
+
+theorem prepared_candidates_are_text :
+    QueuedSteering.traceObservations.all (fun witness =>
+      (witness.caseScript.candidate.map fun prepared =>
+        prepared.message.blocks.all fun block =>
+          match block with
+          | .text _ => true
+          | _ => false).getD true) = true := by
+  native_decide
+
+end QueuedSteeringTrace
 
 private def streamsJson (streams : CanonicalOutput.Streams) : String :=
   jsonArray (streams.map fun stream => "{\"declaration\":" ++ declarationJson stream.1 ++

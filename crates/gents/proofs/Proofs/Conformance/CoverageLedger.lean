@@ -728,20 +728,25 @@ def caseCoverage : List CoverageEntry :=
       "contracts_pending_user_turn")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
-      "queued_steering_trace_cases"
-      "QueuedSteeringTraceCases"
-      "Native binding covers only the two true-pending interruptBeforeClaim and admissionReject scripts: signed raw content/input survive and no canonical output rows appear. It does not bind claimed or owned terminal paths, provider-send denial, capture conflict, exact replay, or pending-turn UI visibility.")
+      "family"
+      "contracts_queued_steering_trace_pending_terminal"
+      "Binds the two true-pending interruptBeforeClaim and admissionReject scripts: signed raw content/input survive and no canonical output rows appear. It does not bind claimed or owned terminal paths, provider-send denial, capture conflict, exact replay, or pending-turn UI visibility.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "queued_steering_trace_cases"
-      "QueuedSteeringTraceCases"
+      "family"
+      "contracts_queued_steering_trace_owned_terminal"
       "Native binding covers the two modeled owned prepublication failure/interruption terminal-owner suffixes after a production-signed steering enqueue: claim/begin, physical interrupt latch where modeled, real NoMessage terminalization, retained signed content/input, and zero canonical output/active request. It does not inject a daemon context-preparation error or hook cancellation, execute provider dispatch, inspect the pending-turn UI projection, or verify fresh admission at claim. Those upstream and projection premises remain unbound.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "queued_steering_trace_cases"
-      "QueuedSteeringTraceCases"
-      "Native binding covers only the publication-before-provider-stream-entry script: it reconstructs the generated prepared prompt from its canonical candidate and observes the durable authored header before the provider stream opens. It does not execute generated steering queue ingress, inspect the UI admissionVisible projection or serialized capture body, or prove native lease authorization. Claimed pre-start failure, prepublication send denial, conflicting capture, and exact replay scripts remain model-derived/decoder-checked only.")
+      "family"
+      "contracts_queued_steering_trace_publication"
+      "Native binding covers only the publication-before-provider-stream-entry script: it sends the modeled prepared prompt and observes the durable authored header before the provider stream opens. It does not execute generated steering queue ingress, inspect the UI admissionVisible projection or serialized capture body, or prove native lease authorization. Claimed pre-start failure, prepublication send denial, conflicting capture, and exact replay scripts remain model-derived/decoder-checked only.")
       "prompt-assembly" [Surface.agentFacing]
+  , tagged (boundaryCoverage
+      "family"
+      "contracts_queued_steering_trace_trace_unreached"
+      "model-production-gap: no native owner exposes the whole steering trace observation (admission visibility, capture binding, queue head and prepared candidate); claimed pre-start failure, prepublication send denial, conflicting capture and exact replay scripts have no native replay.")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "pack_finality_cases"
       "PackFinalityCases"

@@ -910,8 +910,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (liveOverlayCases.map liveOverlayCaseJson) ++ ","
     ++ "\"request_progress_cases\":"
       ++ jsonArray (requestProgressCases.map requestProgressCaseJson) ++ ","
-    ++ "\"queued_steering_trace_cases\":"
-      ++ jsonArray (QueuedSteering.traceObservations.map queuedSteeringTraceJson) ++ ","
     ++ "\"queued_steering_guard_cases\":"
       ++ jsonArray (QueuedSteering.guardObservations.map queuedSteeringGuardJson) ++ ","
     ++ "\"remote_agent_delivery_cases\":" ++ Request.RemoteDelivery.casesJson ++ ","
