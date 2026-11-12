@@ -931,9 +931,11 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "apply_reconcile_contract_cases_publish_if_cases")
       "apply-reconcile" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "eval_outcome_cases"
-      "EvalOutcomeCases")
+  , tagged (consumerCoverage "family" "eval_classification")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "eval_subject_causability")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "eval_document_capture")
       "eval" [Surface.operatorCli]
   , tagged (consumerCoverage
       "optimization_cases"

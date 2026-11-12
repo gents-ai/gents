@@ -390,7 +390,6 @@ fn lean_executable_contracts_cover_initial_domains() {
         lean_vocabulary_values("RequestState").len().pow(2)
     );
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
-    assert_eq!(lean_contract_snapshot().eval_outcome_cases.len(), 33);
     assert_eq!(
         lean_contract_snapshot().optimization_cases.decisions.len(),
         32

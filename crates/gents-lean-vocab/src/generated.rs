@@ -157,14 +157,6 @@ pub fn lean_enrollment_encoding_cases() -> &'static [LeanEnrollmentEncodingCase]
     &lean_contract_snapshot().enrollment_encoding_cases
 }
 
-pub fn lean_eval_document_capture_cases() -> &'static [LeanEvalDocumentCaptureCase] {
-    &lean_contract_snapshot().eval_document_capture_cases
-}
-
-pub fn lean_eval_outcome_cases() -> &'static [LeanEvalOutcomeCase] {
-    &lean_contract_snapshot().eval_outcome_cases
-}
-
 pub fn lean_event_delivery_convergence_traces() -> &'static [LeanEventDeliveryConvergenceTrace] {
     &lean_contract_snapshot().event_delivery_convergence_traces
 }
@@ -3193,8 +3185,6 @@ pub struct LeanContractSnapshot {
     pub pack_finality_cases: Vec<serde_json::Value>,
     pub hosted_plugin_cases: Vec<serde_json::Value>,
     pub readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
-    pub eval_outcome_cases: Vec<LeanEvalOutcomeCase>,
-    pub eval_document_capture_cases: Vec<LeanEvalDocumentCaptureCase>,
     pub optimization_cases: LeanOptimizationCases,
     pub tool_policy_cases: Vec<LeanToolPolicyCase>,
     pub application_write_cases: Vec<LeanApplicationWriteCase>,
@@ -3977,23 +3967,6 @@ pub struct LeanEnrollmentTraceStep {
     pub current_approval: bool,
     pub peer_admitted: bool,
     pub ready: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanEvalDocumentCaptureCase {
-    pub collection: String,
-    pub fields: Vec<String>,
-    pub filter_fields: Vec<String>,
-    pub filter: serde_json::Value,
-    pub allowed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanEvalOutcomeCase {
-    pub kind: String,
-    pub provider_reason: Option<String>,
-    pub class: String,
-    pub subject_causable: bool,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]

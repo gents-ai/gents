@@ -1,45 +1,58 @@
 import Proofs.Runtime.Eval
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.Eval
 
 open Conformance.Contracts
 open _root_.Eval
 
-private def boolJson (b : Bool) : String := if b then "true" else "false"
+deriving instance Lean.ToJson for OutcomeKind, ProviderReason, EvidenceClass
 
-private def reasonJson : Option ProviderReason → String
-  | none => "null"
-  | some r => jsonString r.toDefraDB
+structure OutcomeInput where
+  kind : OutcomeKind
+  providerReason : Option ProviderReason
+  deriving Lean.ToJson
 
-private def row (k : OutcomeKind) (r : Option ProviderReason) : String :=
-  "{\"kind\":" ++ jsonString k.toDefraDB
-    ++ ",\"provider_reason\":" ++ reasonJson r
-    ++ ",\"class\":" ++ jsonString (classify k r).toDefraDB
-    ++ ",\"subject_causable\":" ++ boolJson (subjectCausable k r) ++ "}"
+def outcomeInputs : List OutcomeInput :=
+  allKinds.flatMap fun kind =>
+    ([none] ++ allReasons.map some).map fun providerReason => { kind, providerReason }
 
-def evalOutcomeCasesJson : String :=
-  jsonArray (allKinds.flatMap fun k =>
-    ([none] ++ allReasons.map some).map fun r => row k r)
+@[conformance_family]
+def classification : Conformance.Family OutcomeInput EvidenceClass where
+  inputs := outcomeInputs
+  model := fun i => classify i.kind i.providerReason
 
-private def captureRow (collection : String) (fields filterFields : List String)
-    (nested : Bool) : String :=
+@[conformance_family]
+def subjectCausability : Conformance.Family OutcomeInput Bool where
+  inputs := outcomeInputs
+  model := fun i => subjectCausable i.kind i.providerReason
+
+structure CaptureInput where
+  collection : String
+  fields : List String
+  filterFields : List String
+  /-- The capture filter as JSON text: one `{"_eq":"$trial"}` clause per filter field,
+  wrapped in `_or` when nested. -/
+  filter : String
+  deriving Lean.ToJson
+
+def captureFilter (filterFields : List String) (nested : Bool) : String :=
   let filter := "{" ++ String.intercalate "," (filterFields.map fun field =>
     jsonString field ++ ":{\"_eq\":\"$trial\"}") ++ "}"
-  let filter := if nested then "{\"_or\":[" ++ filter ++ "]}" else filter
-  "{\"collection\":" ++ jsonString collection ++
-    ",\"fields\":" ++ jsonStringArray fields ++
-    ",\"filter_fields\":" ++ jsonStringArray filterFields ++
-    ",\"filter\":" ++ filter ++
-    ",\"allowed\":" ++ boolJson (documentCaptureAllowed collection fields filterFields) ++ "}"
+  if nested then "{\"_or\":[" ++ filter ++ "]}" else filter
 
-def evalDocumentCaptureCasesJson : String := jsonArray <|
-  (["Task", "Agent"] ++ ScopeTemplates.credentialCollections).flatMap fun collection =>
-    [[], ["backend_id"], ["backend_id", "endpoint", "enabled", "max_concurrent"],
-      ["auth"], ["backend_id", "auth"], ["credential_id"], ["access_token"],
-      ["refresh_token"], ["id_token"]].flatMap fun fields =>
-        [[], ["node_did"], ["auth"], ["node_did", "auth"], ["access_token"],
-          ["refresh_token"], ["id_token"]].flatMap fun filterFields =>
-            [false, true].map fun nested => captureRow collection fields filterFields nested
+@[conformance_family]
+def documentCapture : Conformance.Family CaptureInput Bool where
+  inputs :=
+    (["Task", "Agent"] ++ ScopeTemplates.credentialCollections).flatMap fun collection =>
+      [[], ["backend_id"], ["backend_id", "endpoint", "enabled", "max_concurrent"],
+        ["auth"], ["backend_id", "auth"], ["credential_id"], ["access_token"],
+        ["refresh_token"], ["id_token"]].flatMap fun fields =>
+          [[], ["node_did"], ["auth"], ["node_did", "auth"], ["access_token"],
+            ["refresh_token"], ["id_token"]].flatMap fun filterFields =>
+              [false, true].map fun nested =>
+                { collection, fields, filterFields, filter := captureFilter filterFields nested }
+  model := fun i => documentCaptureAllowed i.collection i.fields i.filterFields
 
 end Conformance.Eval
