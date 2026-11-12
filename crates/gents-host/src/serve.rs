@@ -1143,13 +1143,19 @@ async fn serve_foreground(
     if home_watch::home_replaced(&home_dir, home_identity).await {
         home_watch::exit_home_gone(&home_dir);
     }
-    tracing::info!(target: "gents::shutdown", stage = "agent_drain", "server shutdown stage started");
-    let runtime_result = runtime.finish(serve_result).await;
-    tracing::info!(target: "gents::shutdown", stage = "agent_drain", "server shutdown stage completed");
+    let runtime_result = gents::runtime::shutdown::observe_stage(
+        "agent_drain",
+        gents::runtime::shutdown::agent_drain_budget(),
+        runtime.finish(serve_result),
+    )
+    .await;
 
-    tracing::info!(target: "gents::shutdown", stage = "node_close", "server shutdown stage started");
-    runtime.shutdown_node().await;
-    tracing::info!(target: "gents::shutdown", stage = "node_close", "server shutdown stage completed");
+    gents::runtime::shutdown::observe_stage(
+        "node_close",
+        gents::runtime::shutdown::node_close_budget(),
+        runtime.shutdown_node(),
+    )
+    .await;
     runtime_result
 }
 

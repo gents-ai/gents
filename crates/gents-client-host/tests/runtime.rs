@@ -3274,16 +3274,18 @@ async fn stop(child: &mut Child) -> Result<()> {
     }
     #[cfg(windows)]
     child.interrupt()?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    // The runtime's own orderly teardown is longer than any one stage of it,
+    // so a deadline picked here cannot tell a slow stop from a stalled one.
+    let deadline = tokio::time::Instant::now() + gents::runtime::shutdown::shutdown_budget();
     #[cfg(unix)]
     let status = tokio::time::timeout_at(deadline, child.wait())
         .await
-        .context("fixture process did not exit after interrupt")??;
+        .context("fixture process did not exit within the runtime's shutdown budget")??;
     #[cfg(windows)]
     let status = {
         let status = tokio::time::timeout_at(deadline, child.wait_for_exit())
             .await
-            .context("fixture process did not exit after console interrupt")??;
+            .context("fixture process did not exit within the runtime's shutdown budget")??;
         tokio::time::timeout_at(deadline, child.finish_output())
             .await
             .context("fixture process exited but console output cleanup did not finish")??;
