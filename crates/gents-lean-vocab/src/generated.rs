@@ -3320,7 +3320,6 @@ pub struct LeanContractSnapshot {
     pub routing_affinity_cases: Vec<LeanRoutingAffinityCase>,
     pub retry_frontier_cases: Vec<LeanRetryFrontierCase>,
     pub retry_entry_cases: Vec<LeanRetryEntryCase>,
-    pub current_input_cases: Vec<LeanCurrentInputCase>,
     pub wake_input_cases: Vec<LeanWakeInputCase>,
     pub prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
@@ -3500,22 +3499,6 @@ pub struct LeanCrossActorObservation {
     pub agent_invoke: bool,
     pub node_permission_enforced: bool,
     pub requester_node_permission: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCurrentInputCase {
-    pub name: String,
-    pub current_request: String,
-    pub headers: Vec<LeanCurrentInputHeader>,
-    pub retained_indices: Vec<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCurrentInputHeader {
-    pub request: String,
-    pub kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

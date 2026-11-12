@@ -4,6 +4,7 @@ import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Session.Compaction.Executable
 import Proofs.Session.PromptAssembly.ClaudeWire
 import Proofs.Session.PromptAssembly.ResponsesStorage
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -50,14 +51,12 @@ def retryEntryCasesJson : String := jsonArray (
         (history.getLast? == some 4)).map toString) ++
     ",\"publish\":" ++ toString (PromptAssembly.CurrentInput.publishesAuthoredInput resume) ++ "}")
 
-def currentInputCaseJson (witness : CurrentInputCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-  ",\"current_request\":" ++ jsonString witness.currentRequest ++
-  ",\"headers\":" ++ jsonArray (witness.headers.map fun row =>
-    "{\"request\":" ++ jsonString row.request ++ ",\"kind\":" ++ jsonString row.kind ++ "}") ++
-  ",\"retained_indices\":" ++ jsonArray (witness.retainedIndices.map toString) ++ "}"
+deriving instance Lean.ToJson for CurrentInputHeaderCase, CurrentInputCase
 
-def currentInputCasesJson : String := jsonArray (currentInputCases.map currentInputCaseJson)
+@[conformance_family]
+def currentInputSelection : Family CurrentInputCase (List Nat) where
+  inputs := currentInputCases
+  model := CurrentInputCase.retainedIndices
 
 def wakeInputCasesJson : String := jsonArray (wakeInputCases.map fun witness =>
   "{\"name\":" ++ jsonString witness.name ++

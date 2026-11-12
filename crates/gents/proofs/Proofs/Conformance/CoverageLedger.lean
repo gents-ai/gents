@@ -2275,8 +2275,8 @@ def caseCoverage : List CoverageEntry :=
       "RoutingAffinityCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "current_input_cases"
-      "CurrentInputCases"
+      "family"
+      "contracts_current_input_selection"
       "Binds canonical header classification and selection to CurrentInput. Full reconstructed-history regression additionally covers retaining a current-request tool result; arbitrary imported-seed reachability is not claimed.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
