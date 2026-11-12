@@ -1,4 +1,4 @@
-use gents_tools::native::edit_match::{
+use crate::native::edit_match::{
     decide, EditOutcome, EditRequest, MatchMode, Operation, Strategy,
 };
 
@@ -12,7 +12,8 @@ fn ladder_req<'a>(old: &'a str, new: &'a str, replace_all: bool) -> EditRequest<
     }
 }
 
-pub(super) fn exact_priority_is_never_shadowed() {
+#[test]
+fn edit_match_exact_priority_is_never_shadowed() {
     let content = "target: 1\n  target: 1  \nend\n";
     match decide(content, &ladder_req("target: 1\n", "hit: 2\n", false)) {
         EditOutcome::Applied {
@@ -25,7 +26,8 @@ pub(super) fn exact_priority_is_never_shadowed() {
     }
 }
 
-pub(super) fn ladder_fires_at_the_strictest_matching_rung() {
+#[test]
+fn edit_match_ladder_fires_at_the_strictest_matching_rung() {
     let cases = [
         ("let x = 1;\n", "let x = 1;", Strategy::Exact),
         ("let x = 1;\n", "let x = 1;   ", Strategy::TrailingWs),
@@ -45,7 +47,8 @@ pub(super) fn ladder_fires_at_the_strictest_matching_rung() {
     }
 }
 
-pub(super) fn ambiguity_gate_requires_unique_or_replace_all() {
+#[test]
+fn edit_match_ambiguity_gate_requires_unique_or_replace_all() {
     let content = "dup\nmiddle\ndup\n";
     match decide(content, &ladder_req("dup", "x", false)) {
         EditOutcome::Ambiguous { count, .. } => assert_eq!(count, 2),
@@ -64,7 +67,8 @@ pub(super) fn ambiguity_gate_requires_unique_or_replace_all() {
     }
 }
 
-pub(super) fn decision_is_pure_and_deterministic() {
+#[test]
+fn edit_match_decision_is_pure_and_deterministic() {
     let content = "a\nvalue = 1\nz\n";
     let req = ladder_req("value = 1", "value = 2", false);
     let first = decide(content, &req);
@@ -78,7 +82,8 @@ pub(super) fn decision_is_pure_and_deterministic() {
     }
 }
 
-pub(super) fn noop_is_reported_not_applied() {
+#[test]
+fn edit_match_noop_is_reported_not_applied() {
     let content = "same\n";
     match decide(content, &ladder_req("same", "same", false)) {
         EditOutcome::Noop { strategy } => assert_eq!(strategy, Strategy::Exact),
@@ -86,7 +91,8 @@ pub(super) fn noop_is_reported_not_applied() {
     }
 }
 
-pub(super) fn operations_desugar_onto_the_single_matcher() {
+#[test]
+fn edit_match_operations_desugar_onto_the_single_matcher() {
     let content = "anchor\nrest\n";
     let mut req = ladder_req("anchor", "\nadded", false);
     req.operation = Operation::InsertAfter;
@@ -102,7 +108,8 @@ pub(super) fn operations_desugar_onto_the_single_matcher() {
     }
 }
 
-pub(super) fn overlapping_windows_apply_disjoint_selection() {
+#[test]
+fn edit_match_overlapping_windows_apply_disjoint_selection() {
     let content = "a \na \na ";
     let mut req = ladder_req("a\na", "", true);
     req.operation = Operation::Delete;
@@ -119,7 +126,8 @@ pub(super) fn overlapping_windows_apply_disjoint_selection() {
     }
 }
 
-pub(super) fn near_miss_is_diagnosed_never_applied() {
+#[test]
+fn edit_match_near_miss_is_diagnosed_never_applied() {
     let content = "max_turns: 20\n";
     match decide(
         content,
@@ -133,7 +141,8 @@ pub(super) fn near_miss_is_diagnosed_never_applied() {
     }
 }
 
-pub(super) fn relaxed_rung_hits_respect_the_ambiguity_gate() {
+#[test]
+fn edit_match_relaxed_rung_hits_respect_the_ambiguity_gate() {
     let content = "  let x = 1;\n  let x = 1;\n";
     match decide(content, &ladder_req("        let x = 1;", "hit", false)) {
         EditOutcome::Ambiguous { count, .. } => assert_eq!(count, 2),
@@ -141,7 +150,8 @@ pub(super) fn relaxed_rung_hits_respect_the_ambiguity_gate() {
     }
 }
 
-pub(super) fn insert_before_desugar_applies_to_every_replace_all_site() {
+#[test]
+fn edit_match_insert_before_desugar_applies_to_every_replace_all_site() {
     let content = "anchor\nrest\n";
     let mut request = ladder_req("anchor", "before:", false);
     request.operation = Operation::InsertBefore;

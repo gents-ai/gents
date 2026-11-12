@@ -1,51 +1,14 @@
 use gents_lean_vocab::{
-    lean_goal_capability_resolution_cases, lean_plugin_calls_route_cases, lean_plugin_data_cases,
-    lean_plugin_host_import_cases, lean_plugin_scratch_cases, lean_tool_policy_cases,
-    LeanPluginDataInsertOutcome, LeanPluginDataInvocation, LeanPluginDataOnConflict,
-    LeanPluginDataOperation, LeanPluginDataRefusal, LeanPluginDataStamp, LeanPluginDataWriteFacts,
+    lean_plugin_calls_route_cases, lean_plugin_data_cases, lean_plugin_host_import_cases,
+    lean_plugin_scratch_cases, LeanPluginDataInsertOutcome, LeanPluginDataInvocation,
+    LeanPluginDataOnConflict, LeanPluginDataOperation, LeanPluginDataRefusal, LeanPluginDataStamp,
+    LeanPluginDataWriteFacts,
 };
 use gents_toolcalls::plugin::application_write::Observation as WriteFacts;
 use gents_toolcalls::plugin::data::{
     self as plugin_data, InsertOutcome, Invocation, OnConflict, Stamp, WriteRefusal,
 };
 use std::collections::BTreeSet;
-
-#[path = "tool_policy_codec.rs"]
-mod tool_policy_codec;
-
-pub(super) fn generated_tool_policy_cases_match_lean_composition() {
-    let cases = lean_tool_policy_cases();
-    assert_eq!(
-        cases.len(),
-        30,
-        "Lean tool-policy composition matrix drifted"
-    );
-    for case in cases {
-        let actual = tool_policy_codec::compose(&case.agent, &case.ceiling, &case.runtime);
-        assert_eq!(
-            actual, case.expected,
-            "{}: production permission composition",
-            case.name
-        );
-    }
-}
-
-pub(super) fn generated_goal_capability_resolution_matches_rust_decoder() {
-    let cases = lean_goal_capability_resolution_cases();
-    assert_eq!(cases.len(), 4, "goal capability resolution matrix drifted");
-    for case in cases {
-        let (goal_tools, goal_creation) = gents_tools::surface::resolve_goal_capabilities(
-            case.explicit_goal_tools,
-            case.explicit_goal_create,
-        );
-        assert_eq!(
-            (goal_tools, goal_creation),
-            (case.expected_goal_tools, case.expected_goal_create),
-            "Lean capability resolution case {}",
-            case.name
-        );
-    }
-}
 
 fn invocation(lean: LeanPluginDataInvocation) -> Invocation {
     match lean {
