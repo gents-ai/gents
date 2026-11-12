@@ -167,34 +167,38 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
     Ok(())
 }
 
-async fn query(node: &defra_node::Node, document: &str) -> serde_json::Value {
-    let response = node.execute(document).await;
-    assert!(!response.has_errors(), "{document}: {:?}", response.errors);
-    response.data.expect("database result")
+async fn query(
+    admin: &gents_store::config_client::ConfigAccess,
+    document: &str,
+) -> serde_json::Value {
+    let response = admin.execute(document).await.unwrap();
+    assert!(response.get("errors").is_none(), "{document}: {response}");
+    response.get("data").cloned().expect("database result")
+}
+
+async fn mutate(
+    admin: &gents_store::config_client::ConfigAccess,
+    operation: &'static str,
+    document: &str,
+) -> serde_json::Value {
+    let response = admin.write(operation, document).await.unwrap();
+    assert!(response.get("errors").is_none(), "{document}: {response}");
+    response.get("data").cloned().expect("database result")
 }
 
 async fn runtime_seal_case(unowned: bool) {
     let fx = Fixture::new();
-    let db_dir = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(db_dir.path().join("agent.key"), None)
-            .unwrap();
-    let did = identity.did();
-    let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
-    let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .enable_signing()
-            .data_path(db_dir.path().join("db"))
-            .with_node_identity_did(did)
-            .with_node_acp_owner(did.to_owned())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "runtime-seal",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let binding =
+        gents_store::identity::provision_agent_identity(db.node_identity.as_ref()).unwrap();
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let admin =
         gents_store::config_client::ConfigAccess::local_as(node.clone(), did.parse().unwrap());
     for permission in [
@@ -211,8 +215,9 @@ async fn runtime_seal_case(unowned: bool) {
     node.add_collection("type CapabilityReviewVerdict { workspace_id: String accepted: Boolean }")
         .await
         .unwrap();
-    let node_data = query(
-        &node,
+    let node_data = mutate(
+        &admin,
+        "test.capability.node",
         &format!(
             r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
             did
@@ -222,7 +227,7 @@ async fn runtime_seal_case(unowned: bool) {
     let node_doc =
         gents_store::graphql::created_doc_id(&serde_json::json!({"data":node_data}), "Node")
             .unwrap();
-    let agent_data = query(&node, &format!(r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "{}", creation_nonce: "{}", enabled: true}}) {{_docID}} }}"#, did, agent.did(), binding.creation_nonce)).await;
+    let agent_data = mutate(&admin, "test.capability.agent", &format!(r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "{}", creation_nonce: "{}", enabled: true}}) {{_docID}} }}"#, did, agent.did(), binding.creation_nonce)).await;
     let agent_doc =
         gents_store::graphql::created_doc_id(&serde_json::json!({"data":agent_data}), "Agent")
             .unwrap();
@@ -325,20 +330,25 @@ async fn runtime_seal_case(unowned: bool) {
     create.workspace_id = Some(created.workspace.workspace_id.clone());
     create.workspace_authority = Some("readWrite".into());
     create.workspace_owner_node_did = Some(created.workspace.owner_node_did.clone());
-    crate::request::admission::sign_agent_request_create(&identity, &mut create)
+    crate::request::admission::sign_agent_request_create(db.node_identity.as_ref(), &mut create)
         .await
         .unwrap();
-    query(&node, &create.graphql_mutation().unwrap()).await;
-    let response = node
-        .execute(&format!(
+    mutate(
+        &admin,
+        "test.capability.request",
+        &create.graphql_mutation().unwrap(),
+    )
+    .await;
+    let response = query(
+        &admin,
+        &format!(
             "{{ AgentRequest {{ {} }} }}",
             gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-        ))
-        .await;
+        ),
+    )
+    .await;
     let row: gents_protocol::row::AgentRequestRow =
-        gents_store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .unwrap();
+        serde_json::from_value(response["AgentRequest"][0].clone()).unwrap();
     let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
     admin
         .add_actor_relationship(
@@ -385,7 +395,7 @@ async fn runtime_seal_case(unowned: bool) {
         )
         .unwrap();
     }
-    query(&node, r#"mutation { create_CapabilityReviewVerdict(input: { workspace_id: "runtime-capability", accepted: true }) { _docID } }"#).await;
+    mutate(&admin, "test.capability.verdict", r#"mutation { create_CapabilityReviewVerdict(input: { workspace_id: "runtime-capability", accepted: true }) { _docID } }"#).await;
     let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
     let before_readme = fs::read(fx.repo.join("README.md")).unwrap();
     let result = seal_on_writer_success(&node, agent.as_ref(), &request, Some(&fx.repo)).await;
@@ -416,7 +426,7 @@ async fn runtime_seal_case(unowned: bool) {
     } else {
         result.expect("owned untracked file seals through the runtime");
         let receipts = query(
-            &node,
+            &admin,
             "{ WorkspaceReceipt { _docID _version { cid height fieldName } } }",
         )
         .await;
@@ -439,7 +449,7 @@ async fn runtime_seal_case(unowned: bool) {
             .unwrap();
     }
     let durable = query(
-        &node,
+        &admin,
         r#"{
         CapabilityReviewVerdict { accepted }
         IsolatedWorkspace { lifecycle_state seal_hash path_capability }
@@ -498,8 +508,6 @@ async fn runtime_seal_case(unowned: bool) {
     assert!(!fx.repo.join(".tmp-build/test-build.log").exists());
     drop(owner);
     node.shutdown().await.expect("shut down test node");
-    // Keep the DB directory alive for Defra background tasks.
-    std::mem::forget(db_dir);
 }
 
 #[tokio::test]
