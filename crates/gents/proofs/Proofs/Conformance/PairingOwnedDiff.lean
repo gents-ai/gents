@@ -89,6 +89,8 @@ private def inputs : List Input :=
       [{ bare (identity home) with observed := some [route] }]
   , scenario "stale_dial_observation_repairs" (owned)
       [{ bare route with observed := some [moved] }]
+  , scenario "restored_unfiltered_stale_address_repairs" (owned [phone] ["AgentRequest"])
+      [{ bare route with collections := some ["AgentRequest"], filter := some [], observed := some [moved] }]
   , scenario "other_peer_observation_repairs" (owned)
       [{ bare route with observed := some [identity away] }]
   , scenario "two_observations_repair" (owned)
