@@ -1631,8 +1631,12 @@ def caseCoverage : List CoverageEntry :=
       "plugin_resources_limit_budget")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_network_cases"
-      "PluginNetworkCases")
+      "family"
+      "plugin_resources_network_admission")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_address_public")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_call_access_cases"

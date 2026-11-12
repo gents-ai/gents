@@ -8,6 +8,7 @@ import Proofs.Tools.ToolPolicy.PluginCalls
 import Proofs.Tools.ToolPolicy.PluginData
 import Proofs.Conformance.PluginEffects
 import Proofs.Conformance.Family
+import Std.Data.HashMap
 import Lean
 
 namespace Conformance.PluginResources
@@ -107,17 +108,54 @@ private def targets : List (Target × List Addr) :=
       (Target.mk https (.ip ip) port, [ip])
   named ++ literal
 
-private def renderGrant : Grant → Json
-  | .sealed => Json.null
-  | .anyHost => Json.str "any"
-  | .hosts es => toJson (es.map renderEntry)
+inductive GrantScope where
+  | any
+  deriving ToJson, BEq, Hashable
 
-private def networkJson : Json := toJson <| grants.flatMap fun g =>
-  targets.map fun (t, addrs) => Json.mkObj [
-    ("grant", renderGrant g), ("url", toJson (renderTarget t)),
-    ("addresses", toJson (addrs.map renderAddr)),
-    ("public", toJson (addrs.map ipPublic)),
-    ("expected", toJson (allowed g t addrs))]
+/-- A plugin's HTTP grant: any host, or the listed host entries. -/
+structure HttpGrant where
+  scope : Option GrantScope
+  hosts : List String
+  deriving ToJson, BEq, Hashable
+
+structure NetworkInput where
+  grant : Option HttpGrant
+  url : String
+  addresses : List String
+  deriving ToJson, BEq, Hashable
+
+private def grantWire : Grant → Option HttpGrant
+  | .sealed => none
+  | .anyHost => some ⟨some .any, []⟩
+  | .hosts es => some ⟨none, es.map renderEntry⟩
+
+private def networkCases : List (Grant × Target × List Addr) :=
+  grants.flatMap fun g => targets.map fun (t, addrs) => (g, t, addrs)
+
+private def networkWire (c : Grant × Target × List Addr) : NetworkInput :=
+  { grant := grantWire c.1, url := renderTarget c.2.1, addresses := c.2.2.map renderAddr }
+
+private def networkAllowed : Std.HashMap NetworkInput Bool :=
+  networkCases.foldl (fun table (g, t, addrs) => table.insert (networkWire (g, t, addrs)) (allowed g t addrs)) {}
+
+@[conformance_family]
+def networkAdmission : Family NetworkInput Bool where
+  inputs := networkCases.map networkWire
+  model := fun i => networkAllowed.getD i false
+
+private def addressSets : List (List Addr) := (targets.map (·.2)).eraseDups
+
+private def addressesPublic : Std.HashMap (List String) (List Bool) :=
+  addressSets.foldl (fun table addrs => table.insert (addrs.map renderAddr) (addrs.map ipPublic)) {}
+
+structure AddressInput where
+  addresses : List String
+  deriving ToJson
+
+@[conformance_family]
+def addressPublic : Family AddressInput (List Bool) where
+  inputs := addressSets.map fun addrs => { addresses := addrs.map renderAddr }
+  model := fun i => addressesPublic.getD i.addresses []
 
 end Network
 
@@ -485,9 +523,6 @@ def pluginResourceToolEffectTerminalCasesJson : String :=
 
 def pluginResourceToolEffectAccountingCasesJson : String :=
   PluginEffects.accountingCasesJson.compress
-
-def pluginResourceNetworkCasesJson : String :=
-  networkJson.compress
 
 def pluginResourceCallAccessCasesJson : String :=
   callAccessJson.compress
