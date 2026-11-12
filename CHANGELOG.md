@@ -6,6 +6,11 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## 1.0.0-rc2 - 2026-11-10
 
+- Desktop: a relaunch after the first run reaches the app again instead of
+  stopping at "Startup paused · The background node could not be checked". The
+  readiness check now reads the local Node's status with the key that set that
+  home up, which is the one the Node admits as its administrator; enrolling the
+  desktop's own key never made it one (#3645).
 - Breaking: a home created by v1.0.0-rc1 or v1.0.0-rc0 is not opened,
   converted or migrated. Starting on one stops before any write and says to
   back it up or delete it and run `gents`; see

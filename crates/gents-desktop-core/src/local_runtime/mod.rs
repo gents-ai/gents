@@ -441,33 +441,37 @@ pub async fn fetch_hosted_runtime_status(
 }
 
 /// The User key that administers a co-hosted home, and so reads its private
-/// status. Provisioning (`gents init`) makes the CLI client key under
-/// `desktop`'s root the home's first admin; the desktop's own key becomes an
-/// admin only once its managed pairing into that Node completes, which its
-/// peer directory records (`PeerRecord::records_completed_enrollment_into`).
-/// The choice follows that record, never a refused read, and the co-hosted
-/// runtime's node key is never a candidate. `running` is the started client's
-/// capability, which is the desktop key.
+/// status: a private read admits only the served Node or a DID native NAC
+/// reports as its owner or `admin` (HttpAccess.lean `decide` and `readsAs`).
+/// Provisioning is the local fact that establishes one: `gents init` grants
+/// `GrantSet::HouseholdOwner`, the only set carrying that native relation, to
+/// the CLI client key under `desktop`'s root. Enrollment derives the Node
+/// document's `administrator` relation and direct node permissions only
+/// (`EnrollmentGrantTuple::derived`), so a completed enrollment never makes
+/// its member a private-status reader and is not consulted here. `running` is
+/// the started client's capability, which is the desktop key; it and the
+/// stored desktop key serve a root provisioning never wrote a CLI key under.
+/// The co-hosted runtime's node key is never a candidate, and a refused read
+/// never selects another key.
 pub async fn hosted_status_signer(
     desktop: &DesktopPaths,
-    node_did: Option<&str>,
-    peers: &[crate::client::PeerRecord],
+    _node_did: Option<&str>,
+    _peers: &[crate::client::PeerRecord],
     running: Option<gents::store::config_client::ClientSigningCapability>,
 ) -> Option<gents::store::config_client::ClientSigningCapability> {
+    if let Some(provisioned) = load_status_signer(desktop.cli_client()).await {
+        return Some(provisioned);
+    }
+    if running.is_some() {
+        return running;
+    }
+    load_status_signer(desktop.clone()).await
+}
+
+async fn load_status_signer(
+    paths: DesktopPaths,
+) -> Option<gents::store::config_client::ClientSigningCapability> {
     use gents::store::identity::NodeIdentity as _;
-    let desktop_enrolled = node_did.is_some_and(|node_did| {
-        peers
-            .iter()
-            .any(|peer| peer.records_completed_enrollment_into(node_did))
-    });
-    let paths = if desktop_enrolled {
-        if running.is_some() {
-            return running;
-        }
-        desktop.clone()
-    } else {
-        desktop.cli_client()
-    };
     match tokio::task::spawn_blocking(move || {
         crate::client::PrincipalIdentity::load_existing(&paths)
             .and_then(|user| Ok(user.client_signing_capability()?))
@@ -476,7 +480,7 @@ pub async fn hosted_status_signer(
     {
         Ok(Ok(capability)) => Some(capability),
         Ok(Err(error)) => {
-            tracing::debug!(desktop_enrolled, error = %format!("{error:#}"), "no administering User key to read hosted runtime status");
+            tracing::debug!(error = %format!("{error:#}"), "no administering User key to read hosted runtime status");
             None
         }
         Err(error) => {

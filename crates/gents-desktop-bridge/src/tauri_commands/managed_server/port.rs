@@ -30,8 +30,9 @@ pub(super) enum PortReadiness {
 }
 
 /// The status reader is the User key that administers `node_home`
-/// (`local_runtime::hosted_status_signer`), chosen from this desktop's peer
-/// directory: the running client's when it has one, else the stored file.
+/// (`local_runtime::hosted_status_signer`): the key provisioning made that
+/// home's native admin, else the running client's capability or this
+/// desktop's stored key.
 pub(super) async fn user_status_signer(
     state: &DesktopAppState,
     node_home: &Path,
