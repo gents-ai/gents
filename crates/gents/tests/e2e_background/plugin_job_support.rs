@@ -25,12 +25,8 @@ use crate::support::accepted_turn::{
 use crate::support::fixtures::{
     agent_target, bind_selected_managed_agent_backend, configure_agent_tools_as,
 };
-use crate::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
-};
-use crate::support::{
-    managed_agent_fixture, test_db, test_db_from_home, ManagedAgentFixture, TestDb,
-};
+use crate::support::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan};
+use crate::support::{managed_agent_fixture, test_db_from_home, ManagedAgentFixture, TestDb};
 
 pub(crate) const PARENT: &str = "plugin-job-parent";
 pub(crate) const CHILD: &str = "plugin-job-child";
