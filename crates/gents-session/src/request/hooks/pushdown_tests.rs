@@ -18,6 +18,7 @@ use crate::request::hooks::stage::{
 use gents_lean_vocab::families::hooks_contracts_delivery_step::{self as delivery_step};
 use gents_lean_vocab::families::hooks_contracts_effect_commit::{self as effect_commit};
 use gents_lean_vocab::families::hooks_contracts_grant_validity::{self as grant_validity};
+use gents_lean_vocab::families::hooks_contracts_must_commit_staging::{self as must_commit};
 use gents_lean_vocab::families::hooks_contracts_owed_derive::{self as owed_derive};
 use gents_lean_vocab::families::hooks_contracts_owed_prune::{self as owed_prune};
 use gents_lean_vocab::families::hooks_contracts_owed_trace::{self as owed_trace};
@@ -26,12 +27,11 @@ use gents_lean_vocab::families::hooks_contracts_refusable_staging::{self as stag
 use gents_lean_vocab::families::hooks_contracts_verdict_combination::{self as combination};
 use gents_lean_vocab::{
     
-    lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_must_commit_cases,
-    lean_lifecycle_hook_queue_scope_cases, LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
+    lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_queue_scope_cases, LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
     LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
     LeanLifecycleHookPartition,
     LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
-    LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookState, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
+    LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
 use serde_json::Value;
 
@@ -138,13 +138,6 @@ fn verdict(lean: &LeanLifecycleHookVerdict) -> ClaimVerdict {
 struct Snapshot {
     core: Vec<String>,
     rows: Vec<Row>,
-}
-
-fn snapshot_of(lean: &LeanLifecycleHookState) -> Snapshot {
-    Snapshot {
-        core: lean.core.clone(),
-        rows: lean.rows.iter().map(row).collect(),
-    }
 }
 
 /// An in-memory lifecycle transaction. Row order follows Lean `Store`: a
@@ -474,13 +467,6 @@ where
     })
 }
 
-fn string_plugins(scripts: &[LeanLifecycleHookScript<String>]) -> Vec<Plugin<(), String>> {
-    scripts
-        .iter()
-        .map(|script| plugin(script, String::clone))
-        .collect()
-}
-
 fn effect_of(wire: &effect_commit::EffectWire) -> Effect {
     let doc = || {
         DocRef::new(
@@ -799,48 +785,48 @@ async fn refusable_staging_follows_the_lean_model() {
     }
 }
 
+/// Production stages a must-commit point only after core's transition
+/// committed in the same transaction (`points::request_terminal` runs after
+/// the terminal compare-and-set), so a refused transition stages nothing.
 #[tokio::test]
-async fn generated_lifecycle_hook_must_commit_cases_drive_dropping_staging() {
-    let cases = lean_lifecycle_hook_must_commit_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        if case.transition_refused {
-            assert_eq!(case.committed, None, "{}", case.name);
-            assert!(case.owed.is_empty(), "{}", case.name);
-            continue;
-        }
-        let expected = case
-            .committed
-            .as_ref()
-            .unwrap_or_else(|| panic!("{}: core's transition commits", case.name));
-        for name in &case.read_failed {
-            let script = case
+async fn must_commit_staging_follows_the_lean_model() {
+    for case in gents_lean_vocab::families::hooks_contracts_must_commit_staging::cases() {
+        let input = &case.input;
+        for name in &input.read_failed {
+            let script = input
                 .plugins
                 .iter()
                 .find(|script| &script.name == name)
-                .unwrap_or_else(|| panic!("{}: unknown plugin {name}", case.name));
+                .unwrap_or_else(|| panic!("{}: unknown plugin {name}", input.name));
             assert!(
                 !script.reads.is_empty(),
                 "{}: a failed read needs a declared read",
-                case.name
+                input.name
             );
         }
-        let mut core = case.world.core.clone();
-        core.push(case.transition.clone());
-        let host = StoreDouble::new(&case.world, core, &case.read_failed);
-        let plugins = string_plugins(&case.plugins);
-        let staged = stage_dropping(&host, &plugins, &(), &[])
-            .await
-            .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
-        let dropped: Vec<bool> = staged.iter().map(Staged::is_owed).collect();
-        assert_eq!(dropped, expected.dropped, "{}: dropped", case.name);
-        assert_eq!(owed(&staged), case.owed, "{}: owed", case.name);
-        assert_eq!(
-            host.snapshot(),
-            snapshot_of(&expected.state),
-            "{}: state",
-            case.name
-        );
+        let scripts: Vec<staging::ScriptWire> = gents_lean_vocab::family::recode(&input.plugins);
+        let plugins = text_plugins(&scripts);
+        let output = if input.transition_refused {
+            must_commit::MustCommitOutput {
+                committed: None,
+                owed: Vec::new(),
+            }
+        } else {
+            let mut core = input.world.core.clone();
+            core.push(input.transition.clone());
+            let host = host_of(&input.world, Some(core), &input.read_failed);
+            let staged = stage_dropping(&host, &plugins, &(), &[])
+                .await
+                .unwrap_or_else(|error| panic!("{}: {error:?}", input.name));
+            must_commit::MustCommitOutput {
+                committed: Some(must_commit::CommittedWire {
+                    state: state_of(&host.snapshot()),
+                    dropped: staged.iter().map(Staged::is_owed).collect(),
+                }),
+                owed: owed(&staged).into_iter().map(str::to_owned).collect(),
+            }
+        };
+        case.check(output);
     }
 }
 

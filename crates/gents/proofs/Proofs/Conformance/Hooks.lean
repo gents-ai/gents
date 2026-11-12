@@ -782,19 +782,40 @@ def mustCommitCases : List MustCommitCase :=
   , { name := "core_refusal_commits_nothing", world := stageWorld
     , plugins := [notesPlugin, tagsPlugin], transitionRefused := true } ]
 
-private def mustCommitCaseJson (c : MustCommitCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"world\":" ++ worldJson c.world ++
-    ",\"plugins\":" ++ jsonArray (c.plugins.map (scriptJson jsonString)) ++
-    ",\"transition\":" ++ jsonString c.transition ++
-    ",\"transition_refused\":" ++ boolJson c.transitionRefused ++
-    ",\"read_failed\":" ++ jsonStringArray c.readFailed ++
-    ",\"committed\":" ++ ((c.result.map fun result =>
-      "{\"state\":" ++ stateJson result.1 ++
-        ",\"dropped\":" ++ jsonArray (result.2.map boolJson) ++ "}").getD "null") ++
-    ",\"owed\":" ++ jsonStringArray c.owedNames ++ "}"
+structure MustCommitInput where
+  name : String
+  world : WorldWire
+  plugins : List ScriptWire
+  transition : String
+  transitionRefused : Bool
+  readFailed : List String
+  deriving ToJson
 
-def mustCommitCasesJson : String := jsonArray (mustCommitCases.map mustCommitCaseJson)
+structure CommittedWire where
+  state : StateWire
+  dropped : List Bool
+  deriving ToJson
+
+structure MustCommitOutput where
+  committed : Option CommittedWire
+  owed : List String
+  deriving ToJson
+
+@[conformance_family]
+def mustCommitStaging : Family MustCommitInput MustCommitOutput where
+  inputs := mustCommitCases.map fun c =>
+    { name := c.name, world := WorldWire.ofModel c.world
+    , plugins := c.plugins.map (ScriptWire.ofModel ValueWire.ofText)
+    , transition := c.transition, transitionRefused := c.transitionRefused
+    , readFailed := c.readFailed }
+  model := fun i =>
+    let c : MustCommitCase :=
+      { name := i.name, world := i.world.toModel
+      , plugins := i.plugins.map (ScriptWire.toModel ValueWire.toText)
+      , transition := i.transition, transitionRefused := i.transitionRefused
+      , readFailed := i.readFailed }
+    { committed := c.result.map fun result => ⟨StateWire.ofModel result.1, result.2⟩
+      owed := c.owedNames }
 
 /-! Re-run requests through owner wrappers: `Hooks.rerunSurvives`. -/
 

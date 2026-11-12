@@ -582,8 +582,6 @@ def snapshotRequestCasesJson : String :=
     ++ "\"goal_backed_runtime_cases\":" ++ runtimeGoalPublicationCasesJson ++ ","
     ++ "\"goal_continuation_materialization_cases\":"
       ++ goalContinuationMaterializationCasesJson ++ ","
-    ++ "\"lifecycle_hook_must_commit_cases\":"
-      ++ Conformance.HooksContracts.mustCommitCasesJson ++ ","
     ++ "\"lifecycle_hook_rerun_cases\":"
       ++ Conformance.HooksContracts.rerunCasesJson ++ ","
     ++ "\"lifecycle_hook_goal_resume_cases\":"

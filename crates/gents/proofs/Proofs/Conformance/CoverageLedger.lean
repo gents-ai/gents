@@ -1288,8 +1288,8 @@ def caseCoverage : List CoverageEntry :=
       "hooks_contracts_refusable_staging")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_must_commit_cases"
-      "LifecycleHookMustCommitCases")
+      "family"
+      "hooks_contracts_must_commit_staging")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "lifecycle_hook_rerun_cases"

@@ -281,10 +281,6 @@ pub fn lean_lifecycle_hook_history_cases() -> &'static [LeanLifecycleHookHistory
     &lean_contract_snapshot().lifecycle_hook_history_cases
 }
 
-pub fn lean_lifecycle_hook_must_commit_cases() -> &'static [LeanLifecycleHookMustCommitCase] {
-    &lean_contract_snapshot().lifecycle_hook_must_commit_cases
-}
-
 pub fn lean_lifecycle_hook_queue_scope_cases() -> &'static [LeanLifecycleHookQueueScopeCase] {
     &lean_contract_snapshot().lifecycle_hook_queue_scope_cases
 }
@@ -3347,7 +3343,6 @@ pub struct LeanContractSnapshot {
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
-    pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
     pub lifecycle_hook_rerun_cases: Vec<LeanLifecycleHookRerunCase>,
     pub lifecycle_hook_goal_resume_cases: Vec<LeanLifecycleHookGoalResumeCase>,
     pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
@@ -6800,26 +6795,6 @@ pub struct LeanLifecycleHookHistoryCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookMustCommitCase {
-    pub name: String,
-    pub world: LeanLifecycleHookWorld,
-    pub plugins: Vec<LeanLifecycleHookScript<String>>,
-    pub transition: String,
-    pub transition_refused: bool,
-    pub read_failed: Vec<String>,
-    pub committed: Option<LeanLifecycleHookMustCommitted>,
-    pub owed: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookMustCommitted {
-    pub state: LeanLifecycleHookState,
-    pub dropped: Vec<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LeanLifecycleHookPartition {
     Ok { partition: Vec<LeanLifecycleHookScopeKey> },
@@ -6889,13 +6864,6 @@ pub enum LeanLifecycleHookScopeAnswer {
 pub struct LeanLifecycleHookScopeKey {
     pub plugin: String,
     pub key: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookState {
-    pub core: Vec<String>,
-    pub rows: Vec<LeanLifecycleHookRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
