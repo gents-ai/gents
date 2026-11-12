@@ -230,6 +230,22 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
     }
 }
 
+#[test]
+fn generated_claimed_identity_candidates_follow_the_session_agent() {
+    gents_lean_vocab::families::goal_claimed_publication_contracts_identity_candidate::replay(
+        |case| {
+            let resolve = |name: &str| format!("did:key:z-{name}");
+            gents_lean_vocab::families::goal_claimed_publication_contracts_identity_candidate::CandidateOutput {
+                candidate_allowed: crate::triggers::engine::goal_source::goal_candidate_in_scope(
+                    &resolve(&case.actor),
+                    &resolve(&case.selected),
+                    &resolve(&case.parent),
+                ),
+            }
+        },
+    );
+}
+
 #[tokio::test]
 async fn generated_claimed_identity_cases_drive_real_transactions() {
     let located = gents_lean_vocab::lean_contract_snapshot()
@@ -238,7 +254,9 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
         .find(|case| case.name == "claimed_active_publishes_without_reclaim")
         .unwrap();
     let before = before_value(&located.before);
-    for case in &gents_lean_vocab::lean_contract_snapshot().goal_claimed_identity_cases {
+    for case in
+        gents_lean_vocab::families::goal_claimed_publication_contracts_identity_staged::cases()
+    {
         let fixture = Fixture::new(&before).await;
         let agent = fixture.parent.agent_did.as_str();
         let node = fixture.identity.did();
@@ -247,8 +265,8 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
             "node" => node,
             _ => panic!("unknown modeled identity"),
         };
-        assert_eq!(resolve(&case.selected), agent);
-        let signer: &dyn NodeIdentity = if case.signer == "agent" {
+        assert_eq!(resolve(&case.input.selected), agent);
+        let signer: &dyn NodeIdentity = if case.input.signer == "agent" {
             fixture.agent.as_ref()
         } else {
             fixture.identity.as_ref()
@@ -268,8 +286,8 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
         .await
         .unwrap()
         .unwrap();
-        let actor = identity::Did::new(resolve(&case.actor)).unwrap();
-        let txn = if case.actor == "agent" {
+        let actor = identity::Did::new(resolve(&case.input.actor)).unwrap();
+        let txn = if case.input.actor == "agent" {
             ConfigApplyTxn::begin_local_with_signer(
                 &fixture.node,
                 actor,
@@ -282,19 +300,7 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
                 .await
                 .unwrap()
         };
-        assert_eq!(
-            crate::triggers::engine::goal_source::goal_candidate_in_scope(
-                resolve(&case.actor),
-                resolve(&case.selected),
-                resolve(&case.parent)
-            ),
-            case.candidate_allowed
-        );
-        if resolve(&case.parent) != fixture.parent.agent_did {
-            txn.discard().await.unwrap();
-            fixture.node.shutdown().await.expect("node shutdown");
-            continue;
-        }
+        assert_eq!(resolve(&case.input.parent), fixture.parent.agent_did);
         let result = stage_claimed_continuation(
             &txn,
             signer,
@@ -305,13 +311,10 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
             &std::sync::Mutex::new(None),
         )
         .await;
-        assert_eq!(
-            result.is_ok(),
-            case.allowed,
-            "modeled identity case: signer={} actor={} parent={}",
-            case.signer,
-            case.actor,
-            case.parent
+        case.check(
+            gents_lean_vocab::families::goal_claimed_publication_contracts_identity_staged::StagedOutput {
+                allowed: result.is_ok(),
+            },
         );
         txn.discard().await.unwrap();
         fixture.node.shutdown().await.expect("node shutdown");

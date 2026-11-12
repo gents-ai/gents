@@ -231,16 +231,50 @@ def identityCases : List (String × String × String × String) :=
    ("agent", "agent", "node", "agent"),
    ("agent", "agent", "agent", "node")]
 
-def identityCaseJson (c : String × String × String × String) : String :=
-  let (selected, signer, actor, parent) := c
-  "{\"selected\":" ++ Conformance.Contracts.jsonString selected ++
-  ",\"signer\":" ++ Conformance.Contracts.jsonString signer ++
-  ",\"actor\":" ++ Conformance.Contracts.jsonString actor ++
-  ",\"parent\":" ++ Conformance.Contracts.jsonString parent ++
-  ",\"allowed\":" ++ (if continuationIdentityValid selected signer actor parent then "true" else "false") ++
-  ",\"candidate_allowed\":" ++ (if goalCandidateInScope actor selected parent then "true" else "false") ++ "}"
+structure IdentityInput where
+  selected : String
+  signer : String
+  actor : String
+  parent : String
+  deriving Lean.ToJson
 
-def identityCasesJson : String := Conformance.Contracts.jsonArray (identityCases.map identityCaseJson)
+def IdentityInput.ofCase (c : String × String × String × String) : IdentityInput :=
+  let (selected, signer, actor, parent) := c
+  { selected, signer, actor, parent }
+
+structure CandidateOutput where
+  candidateAllowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def identityCandidate : Family IdentityInput CandidateOutput where
+  inputs := identityCases.map IdentityInput.ofCase
+  model := fun i => { candidateAllowed := goalCandidateInScope i.actor i.selected i.parent }
+
+structure StagedOutput where
+  allowed : Bool
+  deriving Lean.ToJson
+
+/-- The claimed-publication fixture stages a continuation from its one parent
+request, which the selected Agent owns, so only cases whose parent is the
+selected identity can be staged. -/
+def identityStagedCases : List (String × String × String × String) :=
+  identityCases.filter fun (selected, _, _, parent) => parent == selected
+
+@[conformance_family]
+def identityStaged : Family IdentityInput StagedOutput where
+  inputs := identityStagedCases.map IdentityInput.ofCase
+  model := fun i => { allowed := continuationIdentityValid i.selected i.signer i.actor i.parent }
+
+/-- model-production-gap: no production scenario stages a claimed continuation
+from a parent request owned by another identity; the goal source never offers
+such a parent (`identityCandidate`), and the staging fixture has no foreign
+parent request. -/
+@[conformance_family]
+def identityStagedUnreached : Family IdentityInput StagedOutput where
+  inputs := (identityCases.filter fun (selected, _, _, parent) => parent != selected).map
+    IdentityInput.ofCase
+  model := fun i => { allowed := continuationIdentityValid i.selected i.signer i.actor i.parent }
 
 structure TargetInput where
   name : String

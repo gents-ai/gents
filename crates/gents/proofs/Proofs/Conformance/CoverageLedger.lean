@@ -1946,6 +1946,19 @@ def caseCoverage : List CoverageEntry :=
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "goal_claimed_publication_contracts_identity_candidate")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_claimed_publication_contracts_identity_staged")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "goal_claimed_publication_contracts_identity_staged_unreached"
+      "model-production-gap: no production scenario stages a claimed continuation from a parent request owned by another identity; the goal source never offers such a parent and the staging fixture has no foreign parent request.")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "goal_operator_resume_contracts_publication")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage

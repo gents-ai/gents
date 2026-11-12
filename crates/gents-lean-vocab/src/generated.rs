@@ -2878,7 +2878,6 @@ pub struct LeanContractSnapshot {
     pub state_machines: Vec<LeanStateMachineContract>,
     pub pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
     pub goal_claimed_publication_cases: Vec<LeanGoalClaimedPublicationCase>,
-    pub goal_claimed_identity_cases: Vec<LeanGoalClaimedIdentityCase>,
     pub goal_wake_coalescing_cases: Vec<serde_json::Value>,
     pub goal_wake_ancestry_cases: Vec<LeanGoalWakeAncestryCase>,
     pub goal_request_scope_cases: Vec<serde_json::Value>,
@@ -4275,17 +4274,6 @@ pub struct LeanGoalCapabilityResolutionCase {
     pub explicit_goal_create: Option<bool>,
     pub expected_goal_tools: bool,
     pub expected_goal_create: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedIdentityCase {
-    pub actor: String,
-    pub allowed: bool,
-    pub candidate_allowed: bool,
-    pub parent: String,
-    pub selected: String,
-    pub signer: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
