@@ -1,3 +1,4 @@
+import Proofs.Conformance.AccountResolver
 import Proofs.Conformance.Identity.NetworkProtocol
 import Proofs.Conformance.ClaudePromptAssembly
 import Proofs.Conformance.Identity.WorkspaceCallbackSelection

@@ -1,6 +1,5 @@
 use super::*;
 
-const DID: &str = "did:key:zResolver";
 const PROVIDER: &str = "xai-oauth";
 
 fn row(
@@ -32,126 +31,39 @@ fn row(
     }
 }
 
-fn picked<'c>(rows: &'c [OAuthCredential], pick: AccountPick<'_>) -> Option<&'c str> {
-    pick_oauth_credential(rows, DID, PROVIDER, pick).map(|row| row.credential_id.as_str())
+fn credential(
+    account: &gents_lean_vocab::families::account_resolver_order::Account,
+) -> OAuthCredential {
+    row(
+        &account.owner,
+        &account.provider,
+        &account.credential_id,
+        account.account_ref.as_deref(),
+        account.connected_at.map(|seconds| seconds as i64),
+        account.enabled,
+    )
 }
 
 #[test]
-fn pool_holds_every_enabled_account_of_the_node_in_resolver_order() {
-    let rows = [
-        row(DID, PROVIDER, "late", Some("late"), Some(2_000), true),
-        row(DID, PROVIDER, "off", Some("off"), Some(500), false),
-        row(
-            "did:key:zOther",
-            PROVIDER,
-            "foreign",
-            Some("f"),
-            Some(100),
-            true,
-        ),
-        row(
-            DID,
-            "chatgpt-codex",
-            "other-provider",
-            None,
-            Some(100),
-            true,
-        ),
-        row(DID, PROVIDER, "original", None, None, true),
-        row(DID, PROVIDER, "early", Some("early"), Some(1_000), true),
-    ];
-    let pool: Vec<_> = pick_oauth_pool(&rows, DID, PROVIDER)
-        .into_iter()
-        .map(|row| row.credential_id.as_str())
-        .collect();
-    assert_eq!(pool, ["original", "early", "late"]);
-    assert_eq!(
-        pool.first().copied(),
-        picked(&rows, AccountPick::ProviderDefault),
-        "a pool resolves through its first account"
-    );
-}
+fn account_resolution_matches_the_lean_model() {
+    use gents_lean_vocab::families::account_resolver_order as family;
 
-#[test]
-fn pool_is_empty_without_an_enabled_account() {
-    let rows = [row(DID, PROVIDER, "off", None, None, false)];
-    assert!(pick_oauth_pool(&rows, DID, PROVIDER).is_empty());
-}
-
-#[test]
-fn resolver_picks_the_earliest_connected_enabled_account() {
-    let rows = [
-        row(DID, PROVIDER, "late", Some("late"), Some(2_000), true),
-        row(DID, PROVIDER, "early", Some("early"), Some(1_000), true),
-    ];
-    assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("early"));
-}
-
-#[test]
-fn resolver_skips_a_disabled_account() {
-    let rows = [
-        row(DID, PROVIDER, "off", Some("off"), Some(500), false),
-        row(DID, PROVIDER, "on", Some("on"), Some(1_000), true),
-    ];
-    assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("on"));
-}
-
-#[test]
-fn resolver_sorts_a_missing_connection_time_first() {
-    let rows = [
-        row(DID, PROVIDER, "timed", Some("timed"), Some(1_000), true),
-        row(DID, PROVIDER, "untimed", None, None, true),
-    ];
-    assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("untimed"));
-}
-
-#[test]
-fn resolver_breaks_equal_times_by_credential_id() {
-    let rows = [
-        row(DID, PROVIDER, "b", Some("b"), Some(1_000), true),
-        row(DID, PROVIDER, "a", Some("a"), Some(1_000), true),
-    ];
-    assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("a"));
-}
-
-#[test]
-fn resolver_never_returns_another_node_or_provider() {
-    let rows = [
-        row("did:key:zOther", PROVIDER, "other-did", None, None, true),
-        row(DID, "chatgpt-codex", "other-provider", None, None, true),
-        row(DID, PROVIDER, "mine", None, Some(1_000), true),
-    ];
-    assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("mine"));
-    let foreign = [row("did:key:zOther", PROVIDER, "b", Some("b"), None, true)];
-    assert_eq!(picked(&foreign, AccountPick::Reference(Some("b"))), None);
-}
-
-#[test]
-fn resolver_returns_nothing_when_no_account_is_enabled() {
-    let rows = [row(DID, PROVIDER, "off", None, None, false)];
-    assert_eq!(picked(&rows, AccountPick::ProviderDefault), None);
-    assert_eq!(picked(&rows, AccountPick::Reference(None)), None);
-}
-
-#[test]
-fn resolver_reference_names_exactly_one_account() {
-    let rows = [
-        row(DID, PROVIDER, "earlier", Some("earlier"), Some(1_000), true),
-        row(DID, PROVIDER, "original", None, Some(2_000), true),
-        row(DID, PROVIDER, "b", Some("b"), Some(3_000), true),
-    ];
-    assert_eq!(
-        picked(&rows, AccountPick::Reference(None)),
-        Some("original")
-    );
-    assert_eq!(picked(&rows, AccountPick::Reference(Some("b"))), Some("b"));
-    assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("earlier"));
-
-    let disabled = [
-        row(DID, PROVIDER, "original", None, None, true),
-        row(DID, PROVIDER, "b", Some("b"), Some(1_000), false),
-    ];
-    assert_eq!(picked(&disabled, AccountPick::Reference(Some("b"))), None);
+    family::replay(|input: &family::Input| {
+        let rows: Vec<OAuthCredential> = input.rows.iter().map(credential).collect();
+        let pick = if input.pick_default {
+            AccountPick::ProviderDefault
+        } else {
+            AccountPick::Reference(input.account_ref.as_deref())
+        };
+        family::Resolution {
+            pool: pick_oauth_pool(&rows, &input.owner, &input.provider)
+                .into_iter()
+                .map(|row| row.credential_id.clone())
+                .collect(),
+            selected: pick_oauth_credential(&rows, &input.owner, &input.provider, pick)
+                .map(|row| row.credential_id.clone()),
+        }
+    });
 }
 
 #[tokio::test]
