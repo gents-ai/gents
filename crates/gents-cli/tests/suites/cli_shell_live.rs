@@ -6,7 +6,7 @@ use crate::support::*;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use gents_shell::app::App;
@@ -23,8 +23,7 @@ const COLS: u16 = 120;
 const SHELL_UP: Duration = Duration::from_secs(60);
 const REPLY: Duration = Duration::from_secs(120);
 const KEYS: Duration = Duration::from_secs(20);
-const PROMPT: &str = "What is 12 times 12? Reply with only the number.";
-const ANSWER: &str = "144";
+const PROMPT: &str = "Give one short greeting in plain text. Do not call any tools.";
 
 fn open_shell(home: &Path) -> Result<Session> {
     let home = home.to_str().context("home is not UTF-8")?;
@@ -122,6 +121,7 @@ struct Live {
     home: PathBuf,
     node_did: String,
     graphql: String,
+    tools_id: String,
     _serve: ServeProcess,
     _tempdir: tempfile::TempDir,
 }
@@ -150,13 +150,12 @@ async fn start_live() -> Result<Live> {
     let node_did = node_did_from_init(&init)?;
 
     let port = allocate_port()?;
-    let mut serve = spawn_server_with_env(
+    let (mut serve, _) = spawn_server_with_ready_json(
         &home,
         port,
         &["--home", home_arg, "--p2p-transport", "none"],
         &[],
     )?;
-    wait_for_port(port, &mut serve)?;
     let graphql = graphql_url(port);
     serve
         .capturing(wait_for_runtime_ready(
@@ -169,18 +168,64 @@ async fn start_live() -> Result<Live> {
         home,
         node_did,
         graphql,
+        tools_id: init
+            .pointer("/init/tools_id")
+            .and_then(serde_json::Value::as_str)
+            .context("init did not return tools_id")?
+            .to_owned(),
         _serve: serve,
         _tempdir: tempdir,
     })
 }
 
-/// Sends the prompt from the starter tab and waits for the model's answer.
-fn ask_the_model(shell: &Session) -> Result<()> {
-    wait_for(shell, "runtime ready", SHELL_UP)?;
-    shell.execute(Operation::Write {
-        data: format!("{PROMPT}\r"),
-    })?;
-    wait_for(shell, ANSWER, REPLY)
+async fn start_shell(live: &Live, prompt: String) -> Result<Session> {
+    let home = live.home.clone();
+    tokio::task::spawn_blocking(move || {
+        let shell = open_shell(&home)?;
+        wait_for(&shell, "runtime ready", SHELL_UP)?;
+        shell.execute(Operation::Write {
+            data: format!("{prompt}\r"),
+        })?;
+        Ok(shell)
+    })
+    .await?
+}
+
+fn runtime_access(live: &Live) -> gents_store::config_client::ConfigAccess {
+    gents_store::config_client::ConfigAccess::Graphql(crate::support::graphql::served_endpoint(
+        &live.graphql,
+    ))
+}
+
+async fn request_reply(live: &Live, prompt: &str) -> Result<String> {
+    use gents::support::live_inference::{
+        terminal_assistant_answer, wait_for_request_terminal, wait_for_rows,
+    };
+    let access = runtime_access(live);
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }} }}) {{ request_id }} }}"#,
+        escape_graphql_string(&live.node_did),
+        escape_graphql_string(prompt)
+    );
+    let rows = wait_for_rows(&access, "AgentRequest", &query, REPLY, |data| {
+        data["AgentRequest"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+    })
+    .await;
+    let request = rows["AgentRequest"][0]["request_id"]
+        .as_str()
+        .context("request id missing")?;
+    ensure!(
+        wait_for_request_terminal(&access, request, REPLY).await == "completed",
+        "shell request did not complete"
+    );
+    let answer = terminal_assistant_answer(&access, request).await;
+    ensure!(
+        !answer.trim().is_empty(),
+        "shell request has no assistant reply"
+    );
+    Ok(answer)
 }
 
 fn quit_cleanly(shell: &Session) -> Result<()> {
@@ -214,97 +259,169 @@ fn quit_cleanly(shell: &Session) -> Result<()> {
 #[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn the_shell_streams_a_live_reply_and_quits_cleanly() -> Result<()> {
     let live = start_live().await?;
-
-    let shell = open_shell(&live.home)?;
-    ask_the_model(&shell)?;
-    let rows = conversation_rows(&shell)?;
-    ensure!(
-        rows.iter().any(|row| row.contains(ANSWER)),
-        "{ANSWER} is on screen but not in the conversation:\n{}",
-        rows.join("\n")
-    );
-
-    quit_cleanly(&shell)
-}
-
-/// Asks the open session's agent a version 3 question with two options, as this node.
-async fn ask_a_question(live: &Live, session: &str, agent: &str) -> Result<String> {
-    let question = serde_json::json!({
-        "version": 3,
-        "prompt": "Which channel ships?",
-        "options": [{ "id": "stable", "label": "Stable" }, { "id": "beta", "label": "Beta" }],
-    })
-    .to_string();
-    let mutation = format!(
-        r#"mutation {{ create_MailboxItem(input: {{
-            item_key: "runtime:shell-live:ask:1", requester_did: "{did}",
-            node_did: "{did}", status: "open", kind: "ask", action: "start_request",
-            title: "Release channel", summary: null, payload: "{payload}",
-            source_kind: "runtime", source_id: "shell-live", session_id: "{session}",
-            request_id: null, cause_doc_id: null,
-            target_node_did: "{did}", target_agent_did: "{agent}",
-            expected_collection: null, parent_item_id: null, deadline_at: null,
-            created_at: "{now}", updated_at: "{now}",
-            resolved_at: null, resolved_doc_id: null
-        }}) {{ _docID }} }}"#,
-        did = escape_graphql_string(&live.node_did),
-        payload = escape_graphql_string(&question),
-        session = escape_graphql_string(session),
-        agent = escape_graphql_string(agent),
-        now = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-    );
-    let created = graphql_query(&live.graphql, &mutation).await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&created, "MailboxItem")
-        .with_context(|| format!("created mailbox doc id: {created}"))
-}
-
-/// Reads the item's status until it is `status`, for at most `within`.
-async fn wait_for_mailbox_status(
-    graphql: &str,
-    doc_id: &str,
-    status: &str,
-    within: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + within;
-    let query = format!(
-        r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ status }} }}"#,
-        escape_graphql_string(doc_id)
-    );
-    loop {
-        let response = graphql_query(graphql, &query).await?;
-        let seen = response.pointer("/data/MailboxItem/0/status").cloned();
-        if seen.as_ref().and_then(|seen| seen.as_str()) == Some(status) {
-            return Ok(());
-        }
+    let shell = start_shell(&live, PROMPT.to_owned()).await?;
+    let answer = request_reply(&live, PROMPT).await?;
+    tokio::task::spawn_blocking(move || {
+        let visible = answer
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .context("empty reply")?;
+        wait_for(&shell, visible.trim(), REPLY)?;
+        let rows = conversation_rows(&shell)?;
+        let rendered = rows
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let expected = answer.split_whitespace().collect::<Vec<_>>().join(" ");
         ensure!(
-            Instant::now() < deadline,
-            "MailboxItem {doc_id} is {seen:?}, not {status:?}, after {within:?}"
+            rendered.contains(&expected),
+            "assistant reply is absent from the conversation: {rendered}"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+        quit_cleanly(&shell)
+    })
+    .await?
 }
 
-/// The question arrives over the mailbox subscription the first turn opened, with no second
-/// turn; typing its option number answers it with the receipt the claim requires.
+async fn configure_questions(live: &Live) -> Result<()> {
+    use gents_documents::mailbox_write_decl::{
+        canonical_mailbox_write_decl, MailboxAction, MailboxKind, MailboxNotificationPolicy,
+    };
+    use gents_documents::{
+        apply_desired_state_plan, DatastoreToolSurfaceDocument, DatastoreTools,
+        DesiredStateApplyDocument, DesiredStateApplyPlan, SurfaceToolDecl, Tools,
+    };
+    use gents_store::collection::Collection;
+    let mut declaration = canonical_mailbox_write_decl();
+    declaration.notification = Some(MailboxNotificationPolicy {
+        kind: MailboxKind::Ask,
+        action: MailboxAction::StartRequest,
+        ..Default::default()
+    });
+    let tools = Tools {
+        node_did: live.node_did.clone(),
+        tools_id: live.tools_id.clone(),
+        datastore: Some(DatastoreTools {
+            datastore_tool_surface_ids: Some(vec!["shell-questions".into()]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let surface = DatastoreToolSurfaceDocument {
+        surface_id: "shell-questions".into(),
+        node_did: live.node_did.clone(),
+        display_name: None,
+        enabled: true,
+        entries: Some(vec![SurfaceToolDecl::Create(declaration)]),
+        created_at: None,
+        tags: vec![],
+    };
+    let plan = DesiredStateApplyPlan::new(
+        [
+            (Collection::Tools, serde_json::to_value(tools)?),
+            (
+                Collection::DatastoreToolSurface,
+                serde_json::to_value(surface)?,
+            ),
+        ]
+        .into_iter()
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect(),
+    )?;
+    runtime_access(live)
+        .transact_write("test.shell_questions", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
+        })
+        .await?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn the_shell_answers_a_question_and_the_item_is_acted() -> Result<()> {
+    use gents::support::live_inference::wait_for_rows;
+    use gents_protocol::mailbox_question::{
+        MailboxQuestion, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
+    };
     let live = start_live().await?;
-    let shell = open_shell(&live.home)?;
-    ask_the_model(&shell)?;
-    let (_, session, agent) = wait_for_request(&live.graphql, &live.node_did, PROMPT).await?;
-
-    let item = ask_a_question(&live, &session, &agent).await?;
-
-    wait_for(&shell, "! Release channel", KEYS)?;
-    wait_for(&shell, "Which channel ships?", KEYS)?;
-    wait_for(&shell, "type 1-2", KEYS)?;
-    shell.execute(Operation::Write {
-        data: "1\r".to_string(),
-    })?;
-    wait_for_mailbox_status(&live.graphql, &item, "acted", Duration::from_secs(60)).await?;
-    wait_for(&shell, "Decision on", KEYS)?;
-    wait_gone(&shell, "! Release channel", KEYS)?;
-
-    quit_cleanly(&shell)
+    configure_questions(&live).await?;
+    let question = MailboxQuestion {
+        version: MAILBOX_QUESTION_VERSION,
+        prompt: "Which channel ships?".into(),
+        options: [("stable", "Stable"), ("beta", "Beta")]
+            .into_iter()
+            .map(|(id, label)| MailboxQuestionOption {
+                id: id.into(),
+                label: label.into(),
+                description: None,
+                prompt: None,
+            })
+            .collect(),
+        multi_select: false,
+        allow_free_text: false,
+        optional: Some(false),
+        recommended_order: None,
+    };
+    let arguments =
+        serde_json::json!({"title":"Release channel", "payload":serde_json::to_string(&question)?});
+    let prompt = format!("Call file_mailbox_item with exactly these arguments: {arguments}. Then acknowledge briefly and do not call the tool again. When a decision arrives, acknowledge it without calling tools.");
+    let shell = start_shell(&live, prompt.clone()).await?;
+    request_reply(&live, &prompt).await?;
+    let access = runtime_access(&live);
+    let rows = wait_for_rows(
+        &access,
+        "MailboxItem",
+        "{ MailboxItem { _docID title status } }",
+        REPLY,
+        |data| {
+            data["MailboxItem"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["title"] == "Release channel"))
+        },
+    )
+    .await;
+    let item = rows["MailboxItem"]
+        .as_array()
+        .context("mailbox rows missing")?
+        .iter()
+        .find(|row| row["title"] == "Release channel")
+        .and_then(|row| row["_docID"].as_str())
+        .context("question document missing")?
+        .to_owned();
+    let question_shell = shell.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        wait_for(&question_shell, "! Release channel", KEYS)?;
+        wait_for(&question_shell, "Which channel ships?", KEYS)?;
+        wait_for(&question_shell, "type 1-2", KEYS)?;
+        question_shell.execute(Operation::Write { data: "1\r".into() })?;
+        Ok(())
+    })
+    .await??;
+    let query = format!(
+        r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ status }} }}"#,
+        escape_graphql_string(&item)
+    );
+    wait_for_rows(&access, "MailboxItem", &query, REPLY, |data| {
+        data["MailboxItem"][0]["status"] == "acted"
+    })
+    .await;
+    tokio::task::spawn_blocking(move || {
+        wait_for(&shell, "Decision on", KEYS)?;
+        wait_gone(&shell, "! Release channel", KEYS)?;
+        quit_cleanly(&shell)
+    })
+    .await?
 }

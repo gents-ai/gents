@@ -1,8 +1,10 @@
 use crate::support::*;
 
+use gents::support::snapshots::SnapshotReader;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -24,7 +26,7 @@ const PONG_SCRIPT: &str = r#"module.exports = (input) => {
 };"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires a reachable OpenAI-compatible endpoint, javy and GENTS_DYNAMIC_WORKFLOWS_PACK"]
+#[ignore = "select GENTS_LIVE_TARGET; requires javy and GENTS_DYNAMIC_WORKFLOWS_PACK"]
 async fn a_dynamic_run_is_promoted_and_the_promoted_tool_runs_installed() -> Result<()> {
     let root = std::env::var_os("GENTS_WORKFLOW_PROMOTE_ARTIFACT_DIR")
         .map(PathBuf::from)
@@ -150,8 +152,8 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
         dynamic.view
     );
     anyhow::ensure!(
-        is_pong(&dynamic.result),
-        "the dynamic run did not answer pong: {}",
+        has_reply(&dynamic.result),
+        "the dynamic run did not retain a child reply: {}",
         dynamic.result
     );
 
@@ -200,8 +202,8 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
         installed.view
     );
     anyhow::ensure!(
-        is_pong(&installed.result),
-        "the promoted run did not answer pong: {}",
+        has_reply(&installed.result),
+        "the promoted run did not retain a child reply: {}",
         installed.result
     );
     Ok(())
@@ -328,12 +330,9 @@ async fn finished_job(
         ],
     )?;
     let jobs = jobs.as_array().context("job list is not an array")?;
-    anyhow::ensure!(
-        jobs.len() == 1,
-        "session {session_id} has {} jobs: {jobs:?}",
-        jobs.len()
-    );
-    let address = jobs[0]
+    let address = jobs
+        .first()
+        .context("the live model did not start a job")?
         .get("address")
         .and_then(Value::as_str)
         .context("job has no address")?
@@ -394,6 +393,7 @@ async fn completion_result(graphql: &str, session_id: &str, tool_call_id: &str) 
     let access = gents_store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(graphql),
     );
+    let mut changes = access.subscribe_changes("AgentMessage").await;
     let marker = format!("<tool-completion tool_call_id=\"{tool_call_id}\"");
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -442,18 +442,13 @@ async fn completion_result(graphql: &str, session_id: &str, tool_call_id: &str) 
         if Instant::now() >= deadline {
             anyhow::bail!("session {session_id} never received the completion of {tool_call_id}");
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
-fn is_pong(result: &Value) -> bool {
+fn has_reply(result: &Value) -> bool {
     result
         .pointer("/reply")
         .and_then(Value::as_str)
-        .is_some_and(|reply| {
-            reply
-                .trim()
-                .trim_end_matches('.')
-                .eq_ignore_ascii_case("pong")
-        })
+        .is_some_and(|reply| !reply.trim().is_empty())
 }

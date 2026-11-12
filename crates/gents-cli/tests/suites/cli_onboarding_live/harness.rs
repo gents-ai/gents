@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
+use tokio::sync::Notify;
+use tokio::time::Instant;
 
 use anyhow::{bail, ensure, Context, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
@@ -283,6 +285,7 @@ pub(super) struct Terminal {
     input: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
     transcript: Arc<Mutex<Vec<u8>>>,
     drained: Arc<AtomicBool>,
+    changes: Arc<Notify>,
     cursor: usize,
     _master: Box<dyn MasterPty + Send>,
 }
@@ -311,6 +314,8 @@ impl Terminal {
         let input = Arc::new(Mutex::new(pair.master.take_writer()?));
         let transcript = Arc::new(Mutex::new(Vec::new()));
         let drained = Arc::new(AtomicBool::new(false));
+        let changes = Arc::new(Notify::new());
+        let changed = changes.clone();
         let replies = Arc::downgrade(&input);
         let output = transcript.clone();
         let finished = drained.clone();
@@ -331,6 +336,7 @@ impl Terminal {
                         .lock()
                         .expect("transcript lock")
                         .extend_from_slice(&buffer[..read]);
+                    changed.notify_one();
                     for &byte in &buffer[..read] {
                         for (index, (query, reply)) in TERMINAL_QUERIES.iter().enumerate() {
                             if byte != query[matched[index]] {
@@ -350,6 +356,7 @@ impl Terminal {
                     }
                 }
                 finished.store(true, Ordering::SeqCst);
+                changed.notify_one();
             })?;
         let child = pair
             .slave
@@ -361,6 +368,7 @@ impl Terminal {
             input,
             transcript,
             drained,
+            changes,
             cursor: 0,
             _master: pair.master,
         })
@@ -396,7 +404,7 @@ impl Terminal {
                     self.transcript()
                 );
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tokio::time::timeout_at(deadline, self.changes.notified()).await;
         }
     }
 
@@ -455,7 +463,7 @@ impl Terminal {
         loop {
             if let Some(status) = self.child.try_wait()? {
                 while !self.drained.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    let _ = tokio::time::timeout_at(deadline, self.changes.notified()).await;
                 }
                 return Ok(status.exit_code());
             }
@@ -465,7 +473,7 @@ impl Terminal {
                     self.transcript()
                 );
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tokio::time::timeout_at(deadline, self.changes.notified()).await;
         }
     }
 

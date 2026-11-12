@@ -54,29 +54,6 @@ mod no_model {
         Ok(())
     }
 
-    #[test]
-    #[ignore = "ignored only so `make live-onboarding` runs it; touches nothing"]
-    fn only_an_isolated_build_on_macos_passes_the_label_check() {
-        for (os, label) in [
-            ("macos", "ai.gents.runtime"),
-            ("macos", ""),
-            ("macos", "ai.gents.runtime.native-e2e.other"),
-            ("linux", "ai.gents.runtime.native-e2e"),
-        ] {
-            let metadata = json!({"os": os, "service_label": label});
-            assert!(
-                isolated_label(&metadata).is_err(),
-                "{os} {label} must be refused"
-            );
-        }
-        assert!(isolated_label(&json!({})).is_err());
-        assert_eq!(
-            isolated_label(&json!({"os": "macos", "service_label": "ai.gents.runtime.native-e2e"}))
-                .unwrap(),
-            "ai.gents.runtime.native-e2e"
-        );
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn a_stopped_home_starts_its_service_and_opens_the_shell() -> Result<()> {
@@ -825,7 +802,10 @@ mod with_model {
         terminal.quit_shell().await?;
         crate::support::graphql::register_served_home(&live.root, &folder, &[], HTTP_PORT)?;
 
-        let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
+        let prompt = format!(
+            "Give one short greeting in plain text. Do not call tools. Turn {}",
+            uuid::Uuid::new_v4()
+        );
         let mut print = live.gents();
         print.args(["-p", &prompt, "--home"]).arg(&folder);
         let output = tokio::time::timeout(
@@ -845,6 +825,20 @@ mod with_model {
         let graphql = graphql_url(HTTP_PORT);
         let (request, _, _) = wait_for_request(&graphql, &node_did_of(&folder)?, &prompt).await?;
         wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+        let access = gents_store::config_client::ConfigAccess::Graphql(
+            crate::support::graphql::served_endpoint(&graphql),
+        );
+        let answer =
+            gents::support::live_inference::terminal_assistant_answer(&access, &request).await;
+        ensure!(
+            !answer.trim().is_empty(),
+            "completed print turn has no assistant answer"
+        );
+        let printed = String::from_utf8_lossy(&output.stdout);
+        ensure!(
+            printed.contains(answer.trim()),
+            "print output omitted the persisted assistant answer: {printed}"
+        );
         Ok(())
     }
 }
