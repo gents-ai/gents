@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use gents_lean_vocab::{lean_contract_snapshot, lean_identity_household_cases, LeanIdentityAction};
+use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
 use gents_store::config_client::node_deferred_operation::*;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
 use gents_store::graphql::escape_graphql_string;
@@ -10,17 +10,8 @@ use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
 async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> Result<()> {
-    let cases = &lean_contract_snapshot().identity_deferred_operation_cases;
-    let case = |name: &str| {
-        cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .with_context(|| format!("missing deferred operation model {name}"))
-    };
-    let before = case("before-node")?;
-    let success = case("success")?;
-    let revoked = case("revoked-after-publication")?;
-    let foreign_owner = case("foreign-owner")?;
+    let mut linked = std::collections::BTreeMap::new();
+    let mut granted = std::collections::BTreeMap::new();
     let operations = lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "operations-parent-publication")
@@ -172,9 +163,12 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         };
         let query = format!("{{ {collection} {{_docID parent_linked}} }}");
         let own = runtime_access.execute(&query).await?;
-        assert_eq!(
-            own["data"][collection][0]["parent_linked"],
-            before["expected_linked"]
+        observe(
+            &mut linked,
+            "before-node",
+            own["data"][collection][0]["parent_linked"]
+                .as_bool()
+                .context("parent_linked marker")?,
         );
         for actor in [&user, &agent, &sibling, &outsider] {
             let response = access(actor)?.execute(&query).await?;
@@ -243,7 +237,11 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         let query = format!("{{ {collection} {{_docID node_doc_id parent_linked}} }}");
         let response = user_access.execute(&query).await?;
         let row = &response["data"][*collection][0];
-        assert_eq!(row["parent_linked"], success["expected_linked"]);
+        observe(
+            &mut linked,
+            "success",
+            row["parent_linked"].as_bool().context("parent_linked marker")?,
+        );
         assert_eq!(row["node_doc_id"], parent);
         let mutation = format!(
             r#"mutation {{ update_{collection}(docID: "{}", input: {{node_doc_id: "forged"}}) {{_docID}} }}"#,
@@ -278,11 +276,10 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         let response = user_access
             .execute(&format!("{{ {collection} {{_docID}} }}"))
             .await?;
-        assert_eq!(
+        observe(
+            &mut granted,
+            "revoked-after-publication",
             !gents_protocol::graphql::graphql_rows_from_response(&response, collection).is_empty(),
-            revoked["expected_granted"]
-                .as_bool()
-                .context("model grant")?
         );
     }
     node.shutdown().await?;
@@ -310,11 +307,10 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         let response = user_access
             .execute(&format!("{{ {collection} {{_docID}} }}"))
             .await?;
-        assert_eq!(
+        observe(
+            &mut granted,
+            "revoked-after-publication",
             !gents_protocol::graphql::graphql_rows_from_response(&response, collection).is_empty(),
-            revoked["expected_granted"]
-                .as_bool()
-                .context("model grant")?
         );
     }
     let foreign = user_access.write("test.deferred.foreign", r#"mutation { create_NetworkAdminPin(input: {pin_key:"foreign-pin", network_id:"foreign", admin_did:"did:test:admin", offer_id:"foreign", confirmed_at:"2026-01-01T00:00:00Z", parent_linked:false}) {_docID} }"#).await?;
@@ -331,10 +327,35 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
             gents_store::graphql::escape_graphql_string(&foreign),
         ))
         .await?;
-    assert_eq!(
-        observed["data"]["NetworkAdminPin"][0]["parent_linked"],
-        foreign_owner["expected_linked"]
+    observe(
+        &mut linked,
+        "foreign-owner",
+        observed["data"]["NetworkAdminPin"][0]["parent_linked"]
+            .as_bool()
+            .context("parent_linked marker")?,
     );
     reopened.shutdown().await?;
+    for case in gents_lean_vocab::families::identity_operations_deferred_runtime_linked::cases() {
+        let linked = linked
+            .remove(case.input.name.as_str())
+            .with_context(|| format!("the deferred scenario never reached {}", case.input.name))?;
+        case.check(gents_lean_vocab::families::identity_operations_deferred_runtime_linked::Linked { linked });
+    }
+    for case in gents_lean_vocab::families::identity_operations_deferred_runtime_granted::cases() {
+        let granted = granted
+            .remove(case.input.name.as_str())
+            .with_context(|| format!("the deferred scenario never reached {}", case.input.name))?;
+        case.check(gents_lean_vocab::families::identity_operations_deferred_runtime_granted::Granted { granted });
+    }
+    assert!(
+        linked.is_empty() && granted.is_empty(),
+        "unmodeled deferred observations: {linked:?} {granted:?}"
+    );
     Ok(())
+}
+
+fn observe(observed: &mut std::collections::BTreeMap<&'static str, bool>, name: &'static str, value: bool) {
+    if let Some(previous) = observed.insert(name, value) {
+        assert_eq!(previous, value, "{name}: every observation of one case agrees");
+    }
 }

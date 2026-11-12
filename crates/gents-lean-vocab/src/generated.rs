@@ -3023,13 +3023,8 @@ pub struct LeanContractSnapshot {
     pub identity_optimization_promotion_cases: Vec<serde_json::Value>,
     pub identity_readiness_preflight_cases: Vec<serde_json::Value>,
     pub identity_secret_publication_cases: Vec<serde_json::Value>,
-    pub identity_deferred_operation_cases: Vec<serde_json::Value>,
     pub identity_pairing_partition_cases: Vec<LeanIdentityPairingPartitionCase>,
-    pub identity_desired_publisher_cases: Vec<serde_json::Value>,
     pub identity_pairing_reader_cases: Vec<LeanIdentityPairingReaderCase>,
-    pub identity_pairing_reader_policy_cases: Vec<serde_json::Value>,
-    pub identity_local_registry_writer_cases: Vec<LeanIdentityLocalRegistryWriterCase>,
-    pub identity_discovery_policy_cases: Vec<LeanIdentityDiscoveryPolicyCase>,
     pub identity_client_transport_cases: Vec<LeanIdentityClientTransportCase>,
     pub identity_replica_grant_cases: Vec<LeanIdentityReplicaGrantCase>,
     pub identity_enrollment_policy_cases: Vec<LeanIdentityEnrollmentPolicyCase>,
@@ -5833,13 +5828,6 @@ pub struct LeanIdentityDerivationInput {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanIdentityDiscoveryPolicyCase {
-    pub allowed: bool,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanIdentityEnrollmentPolicyCase {
     pub actor: String,
     pub allowed: bool,
@@ -6067,15 +6055,6 @@ pub struct LeanIdentityHouseholdCase {
     pub callback_checkpoint_claim_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub ordinary_receipt_visibility_cases: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityLocalRegistryWriterCase {
-    pub creator: String,
-    pub name: String,
-    pub names_runtime: bool,
-    pub writer: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

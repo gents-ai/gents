@@ -149,12 +149,10 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         ConfigAccess, GraphqlEndpoint, NodePermission, PairingObservation, PairingReadReason,
     };
     use gents_store::identity::NodeIdentity;
-    let cases = &lean_contract_snapshot().identity_deferred_operation_cases;
-    let expected = |name: &str, field: &str| -> bool {
-        cases.iter().find(|case| case["name"] == name).unwrap()[field]
-            .as_bool()
-            .unwrap()
-    };
+    let mut linked = std::collections::BTreeMap::new();
+    let mut granted = std::collections::BTreeMap::new();
+    let mut read = std::collections::BTreeMap::new();
+    let mut managed = std::collections::BTreeMap::new();
     let directory = tempfile::tempdir()?;
     let runtime = Arc::new(gents_store::identity::KeyIdentity::load_or_create(
         directory.path().join("runtime"),
@@ -233,9 +231,11 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(
-        own["data"]["PeerPairingApplied"][0]["parent_linked"],
-        expected("before-node", "expected_linked")
+    linked.insert(
+        "before-node",
+        own["data"]["PeerPairingApplied"][0]["parent_linked"]
+            .as_bool()
+            .expect("parent_linked marker"),
     );
     for actor in [&user, &agent, &sibling, &outsider] {
         let response = http(actor)?
@@ -271,9 +271,11 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         gents_store::graphql::escape_graphql_string(&doc)
     );
     let visible = user_access.execute(&query).await?;
-    assert_eq!(
-        visible["data"]["PeerPairingApplied"][0]["parent_linked"],
-        expected("success", "expected_linked")
+    linked.insert(
+        "success",
+        visible["data"]["PeerPairingApplied"][0]["parent_linked"]
+            .as_bool()
+            .expect("parent_linked marker"),
     );
     let reader_cases = &lean_contract_snapshot().identity_pairing_reader_cases;
     let reader_expected = |name: &str| -> bool {
@@ -282,15 +284,6 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
             .find(|case| case.name == name)
             .unwrap()
             .expected_granted
-    };
-    let policy_cases = &lean_contract_snapshot().identity_pairing_reader_policy_cases;
-    let policy_expected = |name: &str, permission: &str| -> bool {
-        policy_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()[permission]
-            .as_bool()
-            .unwrap()
     };
     let agent_did = identity::Did::new(agent.did())?;
     let agent_access = http(&agent)?;
@@ -347,9 +340,9 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         visible_to_agent(&agent_access.execute(&query).await?),
         reader_expected("initial-grant")
     );
-    assert_eq!(
+    read.insert(
+        "sibling",
         visible_to_agent(&sibling_access.execute(&query).await?),
-        policy_expected("sibling", "read")
     );
     assert!(!visible_to_agent(&outsider_access.execute(&query).await?));
 
@@ -397,9 +390,9 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
             false,
         )
         .await?;
-    assert_eq!(
+    read.insert(
+        "tool-revoked",
         visible_to_agent(&agent_access.execute(&query).await?),
-        policy_expected("tool-revoked", "read")
     );
     user_access
         .set_pairing_reader(
@@ -423,9 +416,9 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
             true,
         )
         .await?;
-    assert_eq!(
+    read.insert(
+        "tool-only",
         visible_to_agent(&agent_access.execute(&query).await?),
-        policy_expected("tool-only", "read")
     );
     user_access
         .set_pairing_reader(
@@ -436,13 +429,9 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
             false,
         )
         .await?;
-    assert_eq!(
+    read.insert(
+        "both-revoked",
         visible_to_agent(&agent_access.execute(&query).await?),
-        policy_expected("both-revoked", "read")
-    );
-    assert_eq!(
-        reader_expected("explicit-revocation"),
-        policy_expected("both-revoked", "read")
     );
     let desired_doc = runtime_access.transact_write("test.pairing.desired", |txn| {
         let actor = identity::Did::new(runtime.did()).unwrap();
@@ -580,30 +569,32 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         )
         .await?;
     gents_store::config_client::recover_deferred_node_operations(&node, runtime.did()).await?;
-    assert!(!policy_expected("manager-revoked", "manage_reader"));
-    assert!(user_access
-        .set_pairing_reader(
-            PairingObservation::Applied,
-            &doc,
-            PairingReadReason::ToolView,
-            &agent_did,
-            true
-        )
-        .await
-        .is_err());
+    managed.insert(
+        "manager-revoked",
+        user_access
+            .set_pairing_reader(
+                PairingObservation::Applied,
+                &doc,
+                PairingReadReason::ToolView,
+                &agent_did,
+                true,
+            )
+            .await
+            .is_ok(),
+    );
     runtime_access
         .delete_resource_relationship("PeerPairingApplied", &doc, "parent", "nodes", &parent)
         .await?;
     state = store.load_applied("peer").await?;
     state.state.replicator_addresses = set(&["refresh"]);
     store.persist_applied("peer", &state).await?;
-    assert_eq!(
+    granted.insert(
+        "revoked-after-publication",
         !gents_protocol::graphql::graphql_rows_from_response(
             &user_access.execute(&query).await?,
-            "PeerPairingApplied"
+            "PeerPairingApplied",
         )
         .is_empty(),
-        expected("revoked-after-publication", "expected_granted")
     );
     assert!(!visible_to_agent(&agent_access.execute(&query).await?));
     drop(agent_access);
@@ -646,5 +637,33 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     );
     assert!(!visible_to_agent(&agent_access.execute(&query).await?));
     reopened.shutdown().await?;
+    for case in gents_lean_vocab::families::identity_operations_deferred_applied_linked::cases() {
+        let linked = linked
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the applied-pairing scenario never reached {}", case.input.name));
+        case.check(gents_lean_vocab::families::identity_operations_deferred_applied_linked::Linked { linked });
+    }
+    for case in gents_lean_vocab::families::identity_operations_deferred_applied_granted::cases() {
+        let granted = granted
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the applied-pairing scenario never reached {}", case.input.name));
+        case.check(gents_lean_vocab::families::identity_operations_deferred_applied_granted::Granted { granted });
+    }
+    for case in gents_lean_vocab::families::identity_operations_reader_policy_read::cases() {
+        let read = read
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the applied-pairing scenario never reached {}", case.input.name));
+        case.check(gents_lean_vocab::families::identity_operations_reader_policy_read::ReaderRead { read });
+    }
+    for case in gents_lean_vocab::families::identity_operations_reader_policy_manage::cases() {
+        let manage_reader = managed
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the applied-pairing scenario never reached {}", case.input.name));
+        case.check(gents_lean_vocab::families::identity_operations_reader_policy_manage::ManageReader { manage_reader });
+    }
+    assert!(
+        linked.is_empty() && granted.is_empty() && read.is_empty() && managed.is_empty(),
+        "unmodeled applied-pairing observations"
+    );
     Ok(())
 }

@@ -7,6 +7,7 @@ import Proofs.Conformance.Scope
 import Proofs.Conformance.EnrollmentAutoRenewal
 import Proofs.Conformance.EnrollmentCore
 import Proofs.Conformance.PairingSweepScheduling
+import Proofs.Conformance.Identity.Operations
 import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.InferenceObservationRegistry
@@ -707,20 +708,10 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OperationsConformance.preflightCasesJson ++ ","
     ++ "\"identity_secret_publication_cases\":"
       ++ Identity.OperationsConformance.secretPublicationCasesJson ++ ","
-    ++ "\"identity_deferred_operation_cases\":"
-      ++ Identity.OperationsConformance.deferredCasesJson ++ ","
     ++ "\"identity_pairing_partition_cases\":"
       ++ Identity.OperationsConformance.pairingPartitionCasesJson ++ ","
-    ++ "\"identity_desired_publisher_cases\":"
-      ++ Identity.OperationsConformance.desiredPublisherCasesJson ++ ","
     ++ "\"identity_pairing_reader_cases\":"
       ++ Identity.OperationsConformance.pairingReaderCasesJson ++ ","
-    ++ "\"identity_pairing_reader_policy_cases\":"
-      ++ Identity.OperationsConformance.pairingReaderPolicyCasesJson ++ ","
-    ++ "\"identity_local_registry_writer_cases\":"
-      ++ Identity.OperationsConformance.localRegistryWriterCasesJson ++ ","
-    ++ "\"identity_discovery_policy_cases\":"
-      ++ Identity.OperationsConformance.discoveryPolicyCasesJson ++ ","
     ++ "\"identity_client_transport_cases\":"
       ++ Identity.OperationsConformance.clientTransportCasesJson ++ ","
     ++ "\"identity_replica_grant_cases\":"

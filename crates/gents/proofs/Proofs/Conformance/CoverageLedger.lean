@@ -1532,6 +1532,26 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "revoke_follows_grant_steps")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_desired_publisher_unreached"
+      "model-production-gap: a store holds only its own Node's signer, so no production path writes a desired route as a foreign actor whose signer is held.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_registry_writer_unreached"
+      "model-production-gap: the replicated registry scenario creates no registry row naming another Node, so no production path observes its writer.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_reader_policy_unreached"
+      "model-production-gap: the applied-pairing scenario observes only the reads and reader management replayed by identity_operations_reader_policy_read and identity_operations_reader_policy_manage; the initial route access of the runtime, user and reader Agent and every route update decision are not observed.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_deferred_unreached"
+      "model-production-gap: the served scenarios observe only the parent link or grant the identity_operations_deferred_* families replay; no production path builds a foreign embedded runtime, an unregistered Node or a failed commit, or observes the recorded parent Node.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "node_file_requests_access"
