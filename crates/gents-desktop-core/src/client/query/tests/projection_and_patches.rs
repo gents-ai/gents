@@ -573,13 +573,23 @@ fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
     }
     let duplicated = serde_json::json!({"AgentRequest": [row.clone(), row.clone()]});
     assert!(lookup()
-        .decode(&duplicated, "did:test:agent", "session", None)
+        .decode(
+            serde_json::from_value(duplicated["AgentRequest"].clone()).unwrap(),
+            "did:test:agent",
+            "session",
+            None,
+        )
         .unwrap_err()
         .downcast_ref::<BridgeError>()
         .is_none());
     let arrived = serde_json::json!({"AgentRequest": [row]});
     let rows = lookup()
-        .decode(&arrived, "did:test:agent", "session", None)
+        .decode(
+            serde_json::from_value(arrived["AgentRequest"].clone()).unwrap(),
+            "did:test:agent",
+            "session",
+            None,
+        )
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].doc_id.as_deref(), Some("canonical-doc"));
@@ -881,7 +891,6 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
 #[tokio::test]
 async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers() -> Result<()> {
     let runtime = crate::test_fixtures::ServedRuntimeHome::start().await;
-    let node = runtime.node().clone();
     let backend: InferenceBackend = serde_json::from_value(serde_json::json!({
         "node_did":runtime.node_did(), "backend_id":"catalog-backend", "name":"Catalog",
         "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
