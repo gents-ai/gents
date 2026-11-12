@@ -1800,8 +1800,8 @@ def caseCoverage : List CoverageEntry :=
       "GoalWakeReceiptCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_wake_coalescing_cases"
-      "GoalWakeCoalescingCases")
+      "family"
+      "goal_wake_coalescing_contracts_assignment_wakes")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_wake_ancestry_cases"

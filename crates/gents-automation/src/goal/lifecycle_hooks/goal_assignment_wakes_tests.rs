@@ -1,3 +1,5 @@
+use gents_lean_vocab::families::goal_wake_coalescing_contracts_assignment_wakes as wakes;
+use gents_protocol::goal::RequestAssignmentScope;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -7,15 +9,15 @@ use gents_session::request::lifecycle::queue::persist_background_completion_with
 use gents_session::request::lifecycle::test_support::{test_db_with, TestDb};
 use gents_store::graphql::escape_graphql_string;
 use rapidhash::{HashMapExt, RapidHashMap};
-use serde_json::{json, Value};
+use serde_json::json;
 
 async fn parent(
     db: &TestDb,
     session: &str,
-    model: &Value,
+    model: &wakes::Entry,
     documents: &mut RapidHashMap<u64, AgentRequest>,
 ) -> AgentRequest {
-    let id = model["doc"].as_u64().unwrap();
+    let id = model.doc;
     if let Some(request) = documents.get(&id) {
         return request.clone();
     }
@@ -31,11 +33,9 @@ async fn parent(
         "2026-10-21T00:00:00Z",
         AgentRequestAdmissionRecord::local_self(db.agent_did()),
     );
-    create.input.goal_assignment = model["reference"].as_object().map(|_| GoalAssignmentInput {
-        goal_id: format!("goal-{}", model["reference"]["goal"]),
-        root_request_doc_id: model["reference"]["root"]
-            .as_u64()
-            .map(|root| documents[&root].doc_id.clone()),
+    create.input.goal_assignment = model.reference.as_ref().map(|reference| GoalAssignmentInput {
+        goal_id: format!("goal-{}", reference.goal),
+        root_request_doc_id: reference.root.map(|root| documents[&root].doc_id.clone()),
     });
     gents_session::request::admission::sign_agent_request_create(
         db.agent_identity.as_ref(),
@@ -93,29 +93,67 @@ fn queue(parent: &AgentRequest, key: u64) -> RequestQueue {
     }
 }
 
+fn scope_wire(
+    scope: anyhow::Result<gents_session::request::hooks::queue_scope::Partition>,
+    numbers: &RapidHashMap<String, u64>,
+) -> Option<wakes::ScopeWire> {
+    let partition = scope.ok()?;
+    let key = match partition.keys() {
+        [] => return None,
+        [(_, key)] => key,
+        keys => panic!("one plugin answers a wake's queue scope: {keys:?}"),
+    };
+    Some(match key {
+        RequestAssignmentScope::Unassigned => wakes::ScopeWire {
+            kind: "unassigned".into(),
+            goal: None,
+            root: None,
+            entry: None,
+        },
+        RequestAssignmentScope::Unresolved { entry_doc_id } => wakes::ScopeWire {
+            kind: "unresolved".into(),
+            goal: None,
+            root: None,
+            entry: Some(numbers[entry_doc_id]),
+        },
+        RequestAssignmentScope::Referenced(reference) => wakes::ScopeWire {
+            kind: "referenced".into(),
+            goal: Some(
+                reference
+                    .goal_id
+                    .strip_prefix("goal-")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            ),
+            root: reference
+                .root_request_doc_id
+                .as_ref()
+                .map(|root| numbers[root]),
+            entry: None,
+        },
+    })
+}
+
 #[tokio::test]
 async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_wake_coalescing_cases;
-    assert_eq!(cases.len(), 10);
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
+    for case in wakes::cases() {
+        let name = case.input.name.as_str();
         let db = test_db_with(name, crate::lifecycle_hooks::composition()).await;
         let mut documents = RapidHashMap::new();
-        let first = parent(&db, name, &case["first"], &mut documents).await;
-        let second = parent(&db, name, &case["second"], &mut documents).await;
+        let first = parent(&db, name, &case.input.first, &mut documents).await;
+        let second = parent(&db, name, &case.input.second, &mut documents).await;
         let mut goals: RapidHashMap<u64, String> = RapidHashMap::new();
         let mut first_goal = None;
-        for assignment in case["observed"].as_array().unwrap() {
-            let goal_id = assignment["goal"].as_u64().unwrap();
+        for assignment in &case.input.observed {
+            let goal_id = assignment.goal;
             let value = json!({
                 "goal_id":format!("goal-{goal_id}"), "node_did":db.node_did(), "session_id":name,
                 "objective":"Keep each wake with its original work", "status":"active",
-                "assignment_root_request_doc_id":assignment["root"].as_u64().map(|root| documents[&root].doc_id.clone()),
+                "assignment_root_request_doc_id":assignment.root.map(|root| documents[&root].doc_id.clone()),
                 "created_at":"2026-10-21T00:00:00Z", "updated_at":"2026-10-21T00:00:00Z"
             });
             let doc = goals.get(&goal_id).cloned();
-            // The runtime root owns the observed assignment, so it can retire it;
-            // the working Agent is granted read, as wake scoping reads it as the Agent.
             let agent = ::identity::Did::new(db.agent_did()).unwrap();
             let root = ::identity::Did::new(db.node_did()).unwrap();
             let result = gents_store::config_client::ConfigAccess::transact_local_write(&db.node, Some(root), "test.retained_wake_assignment", |txn| {
@@ -135,7 +173,7 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
             first_goal.get_or_insert_with(|| result.clone());
             goals.insert(goal_id, result);
         }
-        if case["retire_first"] == true {
+        if case.input.retire_first {
             gents_store::config_client::ConfigAccess::local_as(
                 db.node.clone(),
                 ::identity::Did::new(db.node_did()).unwrap(),
@@ -150,6 +188,47 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
             .await
             .unwrap();
         }
+        let numbers: RapidHashMap<String, u64> = documents
+            .iter()
+            .map(|(number, request)| (request.doc_id.clone(), *number))
+            .collect();
+        let node_did = db.node_did().to_owned();
+        let parents = [first.doc_id.clone(), second.doc_id.clone()];
+        let partitions = db
+            .agent_access
+            .transact_readonly("test.observe_wake_scopes", |txn| {
+                let (node_did, parents) = (node_did.as_str(), &parents);
+                Box::pin(async move {
+                    let scopes = gents_session::request::hooks::points::queue_scope(
+                        txn,
+                        node_did,
+                        name,
+                        parents.to_vec(),
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(
+                        parents
+                            .iter()
+                            .map(|doc| scopes.scope(doc))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+            })
+            .await
+            .unwrap();
+        let referenced: Vec<Option<GoalAssignmentInput>> = partitions
+            .iter()
+            .map(|scope| {
+                scope
+                    .as_ref()
+                    .ok()
+                    .and_then(|partition| partition.referenced().cloned())
+            })
+            .collect();
+        let mut scopes = partitions
+            .into_iter()
+            .map(|scope| scope_wire(scope, &numbers));
+        let (first_scope, second_scope) = (scopes.next().unwrap(), scopes.next().unwrap());
         let first_notice = "background-completion-notification:scope-first:tool";
         let second_notice = "background-completion-notification:scope-second:tool";
         let publish = |parent: AgentRequest, key: u64, notice: &'static str| {
@@ -170,33 +249,17 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
                 .await
             }
         };
-        let first_wake = publish(
-            first.clone(),
-            case["first_key"].as_u64().unwrap(),
-            first_notice,
-        )
-        .await
-        .unwrap();
-        let second_wake = publish(
-            second.clone(),
-            case["second_key"].as_u64().unwrap(),
-            second_notice,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            first_wake.created_request,
-            case["expected_wake"].as_bool().unwrap(),
-            "{name}: independent delivery"
-        );
+        let first_wake = publish(first.clone(), case.input.first_key, first_notice)
+            .await
+            .unwrap();
+        let second_wake = publish(second.clone(), case.input.second_key, second_notice)
+            .await
+            .unwrap();
+        let wake = first_wake.created_request;
         let first_wake = first_wake.request.unwrap();
         let second_wake = second_wake.request.unwrap();
-        assert_eq!(
-            first_wake.doc_id == second_wake.doc_id,
-            case["expected_coalesced"].as_bool().unwrap(),
-            "{name}: assignment coalescing"
-        );
-        for (wake, field) in [(&first_wake, "first_scope"), (&second_wake, "second_scope")] {
+        let coalesced = first_wake.doc_id == second_wake.doc_id;
+        for (wake, reference) in [(&first_wake, &referenced[0]), (&second_wake, &referenced[1])] {
             let row = gents_session::request::binding::load_agent_request_with_access(
                 &db.agent_access,
                 &wake.request_id,
@@ -204,19 +267,12 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
             .await
             .unwrap()
             .unwrap();
-            let scope = &case[field];
-            let reference = (scope["kind"] == "referenced").then(|| GoalAssignmentInput {
-                goal_id: format!("goal-{}", scope["goal"]),
-                root_request_doc_id: Some(
-                    documents[&scope["root"].as_u64().unwrap()].doc_id.clone(),
-                ),
-            });
             assert_eq!(
-                row.input.goal_assignment, reference,
+                &row.input.goal_assignment, reference,
                 "{name}: signed wake attribution"
             );
         }
-        let replay = publish(first, case["first_key"].as_u64().unwrap(), first_notice)
+        let replay = publish(first, case.input.first_key, first_notice)
             .await
             .unwrap()
             .request
@@ -246,5 +302,11 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
                 "{name}: retained notification journal"
             );
         }
+        case.check(wakes::Output {
+            coalesced,
+            wake,
+            first_scope,
+            second_scope,
+        });
     }
 }

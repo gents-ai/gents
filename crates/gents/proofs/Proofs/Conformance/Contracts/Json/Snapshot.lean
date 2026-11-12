@@ -440,8 +440,6 @@ def snapshotGoalCasesJson : String :=
       ++ Conformance.GoalRequestAssignmentContracts.casesJson ++ ","
     ++ "\"goal_wake_receipt_cases\":"
       ++ Conformance.GoalWakeReceiptContracts.casesJson ++ ","
-    ++ "\"goal_wake_coalescing_cases\":"
-      ++ Conformance.GoalWakeCoalescingContracts.casesJson ++ ","
     ++ "\"goal_wake_ancestry_cases\":"
       ++ Conformance.GoalWakeAncestryContracts.casesJson ++ ","
     ++ "\"goal_tool_context_cases\":"
