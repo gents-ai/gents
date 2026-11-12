@@ -1443,44 +1443,14 @@ async fn seed_receipt(agent: &gents_store::config_client::ConfigAccess, fire: &T
 
 #[tokio::test]
 async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
-    let cases = contract();
-    assert_eq!(
-        cases["trigger_fire_budget_default"].as_u64(),
-        Some(gents_documents::DEFAULT_MAX_FIRES_PER_HOUR as u64)
-    );
-    assert_eq!(
-        cases["trigger_fire_budget_status"].as_str(),
-        Some(gents_documents::BUDGET_EXHAUSTED_STATUS)
-    );
-    for case in cases["trigger_fire_budget_config_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let trigger = trigger_with_options(
-            None,
-            None,
-            case["configured"].as_u64().map(|value| value as u32),
-            case["receipted"].as_bool().unwrap(),
-        );
-        assert_eq!(
-            trigger.validate_options().is_ok(),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
     let now = chrono::DateTime::parse_from_rfc3339(BUDGET_NOW).unwrap();
-    for case in cases["trigger_fire_budget_cases"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
+    for case in gents_lean_vocab::families::trigger_delivery_fire_budget_admission::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
         let (_db, client, agent, materializer, task, owner, trigger_doc) =
             budget_fixture(&format!("fire-budget-{name}")).await;
-        let budget = trigger_with_options(
-            None,
-            None,
-            case["configured"].as_u64().map(|v| v as u32),
-            true,
-        )
-        .effective_max_fires_per_hour();
-        assert_eq!(budget as u64, case["budget"].as_u64().unwrap(), "{case}");
+        let budget = trigger_with_options(None, None, input.configured.map(|v| v as u32), true)
+            .effective_max_fires_per_hour();
         let current = budget_fire(&owner, "budget-fire", BUDGET_NOW.to_owned());
         let prepared = durable::PreparedFire {
             receipt: current.clone(),
@@ -1506,11 +1476,11 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
                 None,
             )
         };
-        if case["replay"].as_bool().unwrap() {
+        if input.replay {
             materialize().await.unwrap();
         }
-        for (index, age) in case["prior_ages"].as_array().unwrap().iter().enumerate() {
-            let at = now - chrono::Duration::seconds(age.as_i64().unwrap());
+        for (index, age) in input.prior_ages.iter().enumerate() {
+            let at = now - chrono::Duration::seconds(*age as i64);
             let prior = budget_fire(
                 &owner,
                 &format!("prior-{index}"),
@@ -1529,18 +1499,6 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
             .await
             .unwrap();
         let row = &row["data"]["Trigger"][0];
-        assert_eq!(admitted, case["admitted"].as_bool().unwrap(), "{name}");
-        assert_eq!(exhausted, case["stopped"].as_bool().unwrap(), "{name}");
-        assert_eq!(
-            row["enabled"].as_bool() == Some(false),
-            case["stopped"].as_bool().unwrap(),
-            "{name}: {row}"
-        );
-        assert_eq!(
-            row["last_status"].as_str(),
-            case["status"].as_str(),
-            "{name}"
-        );
         if exhausted {
             assert!(
                 row["last_error"]
@@ -1549,5 +1507,14 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
                 "{name}: {row}"
             );
         }
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_fire_budget_admission::FireBudgetOutput {
+                budget: u64::from(budget),
+                admitted,
+                exhausted,
+                stopped: row["enabled"].as_bool() == Some(false),
+                status: row["last_status"].as_str().map(str::to_owned),
+            },
+        );
     }
 }

@@ -402,52 +402,77 @@ def sessionConfig : Family SessionConfigInput SessionConfigOutput where
     { template := some "game:{{ doc.id }}", createSession := true }]
   model := fun i => { allowed := Triggers.SessionKey.configValid i.template i.createSession }
 
-structure BudgetScenario where
+structure FireBudgetInput where
   name : String
-  configured : Option Nat := none
-  priorAges : List Nat := []
-  replay : Bool := false
+  configured : Option Nat
+  priorAges : List Nat
+  replay : Bool
+  deriving Lean.ToJson
 
-def jsonOptionNat : Option Nat → String
-  | none => "null"
-  | some value => toString value
+structure FireBudgetOutput where
+  budget : Nat
+  admitted : Bool
+  exhausted : Bool
+  stopped : Bool
+  status : Option String
+  deriving Lean.ToJson
+
+structure FireBudgetConfigInput where
+  configured : Option Nat
+  receipted : Bool
+  deriving Lean.ToJson
+
+structure NoInput where
+  deriving Lean.ToJson
 
 /-- Ages are seconds before the fire; the window boundary is exercised in both
 directions so the receipt query's strictness is checked against the model. -/
-def budgetCase (scenario : BudgetScenario) : String :=
+def fireBudgetOutcome (scenario : FireBudgetInput) : FireBudgetOutput :=
   let now := 7200
   let times := scenario.priorAges.map (now - ·)
   let trigger : Triggers.FireBudget.Trigger := { admittedAt := times }
   let f := fire "budget-fire"
   let before : State := if scenario.replay then admit {} f else {}
-  let (after, stopped) := Triggers.FireBudget.admitBudgeted before trigger scenario.configured
+  let (after, afterTrigger) := Triggers.FireBudget.admitBudgeted before trigger scenario.configured
     "over budget" now f
-  object [
-    ("name", jsonString scenario.name), ("configured", jsonOptionNat scenario.configured),
-    ("prior_ages", jsonArray (scenario.priorAges.map toString)),
-    ("replay", toString scenario.replay),
-    ("budget", toString (Triggers.FireBudget.effective scenario.configured)),
-    ("window_count", toString (Triggers.FireBudget.windowCount times now)),
-    ("admitted", toString (decide (after.receipts.length > before.receipts.length))),
-    ("stopped", toString (!stopped.enabled)),
-    ("status", jsonOptionalString stopped.lastStatus)]
+  { budget := Triggers.FireBudget.effective scenario.configured
+    admitted := decide (after.receipts.length > before.receipts.length)
+    exhausted := !scenario.replay && decide (Triggers.FireBudget.decideFire
+      (Triggers.FireBudget.effective scenario.configured)
+      (Triggers.FireBudget.windowCount times now) = .exhausted)
+    stopped := !afterTrigger.enabled
+    status := afterTrigger.lastStatus }
 
-def budgetCases : List String := [
-  ({ name := "empty_window_admits", configured := some 2 } : BudgetScenario),
-  { name := "under_budget_admits", configured := some 2, priorAges := [10] },
-  { name := "at_budget_stops", configured := some 2, priorAges := [10, 20] },
-  { name := "boundary_receipt_is_outside_window", configured := some 2, priorAges := [10, 3600] },
-  { name := "inside_boundary_counts", configured := some 2, priorAges := [10, 3599] },
-  { name := "expired_receipts_do_not_count", configured := some 2, priorAges := [7200, 3601] },
-  { name := "default_budget_applies_without_configuration", priorAges := [10] },
-  { name := "replay_spends_no_budget", configured := some 1, priorAges := [10], replay := true }
-].map budgetCase
+@[conformance_family]
+def fireBudgetAdmission : Family FireBudgetInput FireBudgetOutput where
+  inputs := [
+    { name := "empty_window_admits", configured := some 2, priorAges := [], replay := false },
+    { name := "under_budget_admits", configured := some 2, priorAges := [10], replay := false },
+    { name := "at_budget_stops", configured := some 2, priorAges := [10, 20], replay := false },
+    { name := "boundary_receipt_is_outside_window", configured := some 2, priorAges := [10, 3600], replay := false },
+    { name := "inside_boundary_counts", configured := some 2, priorAges := [10, 3599], replay := false },
+    { name := "expired_receipts_do_not_count", configured := some 2, priorAges := [7200, 3601], replay := false },
+    { name := "default_budget_applies_without_configuration", configured := none, priorAges := [10], replay := false },
+    { name := "replay_spends_no_budget", configured := some 1, priorAges := [10], replay := true }]
+  model := fireBudgetOutcome
 
-def budgetConfigCases : List String :=
-  [(none, false), (none, true), (some 1, true), (some 1, false), (some 5000, true),
-   (some 0, true)].map fun (configured, receipted) =>
-    object [("configured", jsonOptionNat configured), ("receipted", toString receipted),
-      ("allowed", toString (Triggers.FireBudget.configValid configured receipted))]
+@[conformance_family]
+def fireBudgetConfig : Family FireBudgetConfigInput Bool where
+  inputs := [
+    { configured := none, receipted := false }, { configured := none, receipted := true },
+    { configured := some 1, receipted := true }, { configured := some 1, receipted := false },
+    { configured := some 5000, receipted := true }, { configured := some 0, receipted := true }]
+  model := fun i => Triggers.FireBudget.configValid i.configured i.receipted
+
+@[conformance_family]
+def fireBudgetDefault : Family NoInput Nat where
+  inputs := [{}]
+  model := fun _ => Triggers.FireBudget.defaultMaxPerHour
+
+@[conformance_family]
+def fireBudgetStatus : Family NoInput String where
+  inputs := [{}]
+  model := fun _ => Triggers.FireBudget.exhaustedStatus
 
 structure ObservedClaimInput where
   name : String
@@ -553,18 +578,6 @@ def triggerDeliveryCallbackVisibilityCasesJson : String :=
 
 def triggerDeliveryIdentityCasesJson : String :=
   jsonArray identityCases
-
-def triggerFireBudgetCasesJson : String :=
-  jsonArray budgetCases
-
-def triggerFireBudgetConfigCasesJson : String :=
-  jsonArray budgetConfigCases
-
-def triggerFireBudgetDefaultJson : String :=
-  toString Triggers.FireBudget.defaultMaxPerHour
-
-def triggerFireBudgetStatusJson : String :=
-  jsonString Triggers.FireBudget.exhaustedStatus
 
 def triggerDeliveryLatestAdmissionCasesJson : String :=
   jsonArray latestAdmissionCases
