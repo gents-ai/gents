@@ -177,7 +177,7 @@ impl LiveJobs {
             "completed"
         );
         let rows = self.live.access.execute(&format!(
-            r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID tool_call_id lifecycle_state}} }}"#,
+            r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID tool_call_id session_id lifecycle_state}} }}"#,
             escape_graphql_string(name),
         )).await.unwrap();
         let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
@@ -190,13 +190,28 @@ impl LiveJobs {
         let mut changes = self.live.access.subscribe_changes("AgentToolCall").await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
         loop {
-            let view = load_job_view(
+            let view = match load_job_view(
                 &self.live.access,
                 None,
                 JobKey::RowDocId(row["_docID"].as_str().unwrap().into()),
             )
             .await
-            .unwrap();
+            {
+                Ok(view) => view,
+                Err(error) => {
+                    let result = self.result(row).await;
+                    let arguments =
+                        gents_session::tool_call::query::result::load_tool_call_arguments(
+                            &self.live.access,
+                            row["_docID"].as_str().unwrap(),
+                            &self.live.node_did,
+                            row["session_id"].as_str().unwrap(),
+                            Some(self.actors.fixture.user.did()),
+                        )
+                        .await;
+                    panic!("job view failed: {error:?}; row={row}; result={result}; arguments={arguments:?}");
+                }
+            };
             if until(&view) {
                 return view;
             }
@@ -237,9 +252,26 @@ impl LiveJobs {
         }
     }
 
-    async fn refusal(&self, row: &Value) {
+    async fn result(&self, row: &Value) -> Value {
+        let result = gents_session::tool_call::query::result::load_tool_call_result(
+            &self.live.access,
+            row["_docID"].as_str().unwrap(),
+            &self.live.node_did,
+            row["session_id"].as_str().unwrap(),
+            Some(self.actors.fixture.user.did()),
+        )
+        .await
+        .unwrap();
+        let rendered =
+            gents_session::tool_call::query::result::render_tool_result(&result).unwrap();
+        serde_json::from_str(&rendered).unwrap_or_else(|_| json!({"text": rendered}))
+    }
+
+    async fn refusal(&self, row: &Value, expected_code: &str) {
         assert_eq!(row["lifecycle_state"], "failed");
         assert!(self.child_rows(row).await.is_empty());
+        let result = self.result(row).await;
+        assert_eq!(result["code"], expected_code, "{result}");
     }
 }
 
@@ -291,7 +323,7 @@ async fn spawn_cwd_with_dotdot_symlink_or_outside_caller_cwd_fails_closed_with_n
                 holding_plan(name, vec![child]).await,
             )
             .await;
-        h.refusal(&row).await;
+        h.refusal(&row, "plugin_job_policy_denied").await;
     }
     h.runtime.shutdown().await;
 }
@@ -321,7 +353,7 @@ async fn job_plan_addressed_to_a_peer_agent_is_refused_before_any_child() {
             holding_plan("peer", vec![spawn("a", "Acknowledge briefly.")]).await,
         )
         .await;
-    h.refusal(&row).await;
+    h.refusal(&row, "plugin_job_policy_denied").await;
     h.runtime.shutdown().await;
 }
 
@@ -523,7 +555,7 @@ async fn nine_concurrent_adoptions_on_one_request_leave_exactly_eight() {
         "completed"
     );
     let rows = h.live.access.execute(&format!(
-        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{REQUEST}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID tool_call_id lifecycle_state}} }}"#,
+        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{REQUEST}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID tool_call_id session_id lifecycle_state}} }}"#,
     )).await.unwrap();
     let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
     assert_eq!(rows.len(), 9, "all nine jobs were submitted: {rows:?}");
@@ -543,20 +575,7 @@ async fn nine_concurrent_adoptions_on_one_request_leave_exactly_eight() {
         assert_eq!(view.children.len(), 1);
         assert_eq!(view.children[0].state, JobChildState::Live);
     }
-    h.refusal(refused[0]).await;
-    let result = gents_session::tool_call::query::result::load_tool_call_result(
-        &h.live.access,
-        refused[0]["_docID"].as_str().unwrap(),
-        &h.live.node_did,
-        REQUEST,
-        Some(h.actors.fixture.user.did()),
-    )
-    .await
-    .unwrap();
-    let refusal: Value = serde_json::from_str(
-        &gents_session::tool_call::query::result::render_tool_result(&result).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(refusal["code"], "background_tool_budget_exceeded");
+    h.refusal(refused[0], "background_tool_budget_exceeded")
+        .await;
     h.runtime.shutdown().await;
 }
