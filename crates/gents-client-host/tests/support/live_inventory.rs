@@ -47,7 +47,7 @@ impl Inventory {
             .collect::<Vec<_>>();
         let next_prompt = edit_prompt(&[COUNT]);
         let repeated = COUNT + 1;
-        let intermediate = format!("Intermediate recorded version {repeated}\n");
+        let intermediate = format!("Intermediate recorded version {repeated}\r\n");
         let repeat_prompt = format!(
             "Perform these native file operations in order. First read_file {}. Then edit_file {}. Then edit_file {}. Finally write_file {} to the same final bytes. Do not change any other file. After they succeed, reply briefly.",
             json!({"path":file(repeated),"raw_json":true}),
@@ -245,11 +245,11 @@ fn file(index: usize) -> String {
 }
 
 fn before(index: usize) -> String {
-    format!("Original recorded file {index}\r\nretained original tail {index}\n")
+    format!("Original recorded file {index}\r\nretained original tail {index}\r\n")
 }
 
 fn after(index: usize) -> String {
-    format!("Updated recorded file {index}\r\nretained updated tail {index}\n")
+    format!("Updated recorded file {index}\r\nretained updated tail {index}\r\n")
 }
 
 fn later(index: usize) -> String {
