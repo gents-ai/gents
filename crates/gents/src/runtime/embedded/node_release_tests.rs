@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// would make them meaningless.
 const REPORT_ENV: &str = "GENTS_NODE_RELEASE_REPORT";
 const TEST_NAME: &str =
-    "store::local::node_release_tests::dropped_fixture_nodes_release_threads_and_descriptors";
+    "runtime::embedded::node_release_tests::dropped_fixture_nodes_release_threads_and_descriptors";
 const CYCLES: usize = 20;
 /// Process-wide residue that does not grow with cycles: lazily started
 /// threads, and a few store files whose handles close after their node is

@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::take_terminal_failure_for_test;
 use super::terminal_effects::{retain_file_changes, write_terminal_progress};
 use super::terminal_transaction::terminalize_transaction;
@@ -143,7 +143,7 @@ impl ToolCallLifecycle {
             publish_native_result,
         )
         .await?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         if take_terminal_failure_for_test(doc_id) {
             return Err(gents_store::config_client::classified_conflict_for_test().into());
         }
@@ -357,7 +357,7 @@ impl ToolCallLifecycle {
                         publish_native_result,
                     )
                     .await?;
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-fixtures"))]
                     if take_terminal_failure_for_test(&doc_id) {
                         return Err(gents_store::config_client::classified_conflict_for_test().into());
                     }

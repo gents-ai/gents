@@ -107,32 +107,56 @@ async fn node() -> gents_inference::test_support::TestDb {
     .await
 }
 
-/// Schema tool acting as a live Agent holding the permissions the `schema`
-/// tool source projects; the test node's tool policy projects no sources.
+/// Schema tool acting as a live Agent whose household owner's Tools select
+/// the schema tool, on a node whose projector uses the runtime's tool ceiling.
 async fn schema_agent_node() -> (gents_inference::test_support::TestDb, SchemaTool) {
-    use gents_store::config_client::NodePermission;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_store::identity::NodeIdentity;
-    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node(
+    let db = gents_inference::test_support::test_db_with_tool_policy(
         "schema-help-agent",
         gents_session::test_support::no_lifecycle_plugins(),
+        Arc::new(crate::surface::ToolCeiling::meta_only()),
     )
     .await;
+    let (db, user, access, binding) =
+        gents_inference::test_support::signed_test_node_from_db(db, "schema-help-agent").await;
     let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+    // Selecting the schema tool projects schema permissions only an owner
+    // holds; init makes the installing User the household owner.
+    gents_store::identity::GrantSet::HouseholdOwner
+        .grant(
+            &ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap()),
+            &identity::Did::new(user.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let tools = json!({
+        "node_did": runtime.did(),
+        "tools_id": format!("{}:tools", binding.agent_did),
+        "built_ins": {"enable_schema_tool": true}
+    });
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: gents_store::collection::Collection::Tools,
+        add: tools.clone(),
+        update: tools,
+    }])
+    .unwrap();
+    access
+        .transact_write("test.schema_agent.tools", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
     let agent_did = identity::Did::new(agent.did()).unwrap();
-    let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
-    for permission in [
-        NodePermission::CollectionGet,
-        NodePermission::CollectionPatch,
-        NodePermission::CollectionTruncate,
-        NodePermission::MigrationSet,
-        NodePermission::ViewAdd,
-    ] {
-        admin
-            .grant_node_permission(&agent_did, permission)
-            .await
-            .unwrap();
-    }
     let tool = SchemaTool {
         node_did: runtime.did().to_owned(),
         access: ConfigAccess::local_managed_agent(db.node.clone(), agent_did, agent.as_ref())

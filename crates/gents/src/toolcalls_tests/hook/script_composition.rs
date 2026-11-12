@@ -114,7 +114,12 @@ async fn goal_tool_uses_its_owner_when_composed() {
     )
     .await;
     bind_admitted_deadline(&fixture).await;
-    let hook = fixture.hook.with_goal_tool_authority(true, false);
+    let hook = fixture
+        .hook
+        .with_goal_tool_authority(true, false)
+        .with_goal_tools(Arc::new(
+            gents_automation::goal::goal_tools::GoalToolAnswers,
+        ));
     accept_hook_tool_call(&hook, "script", "plugin", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("plugin", None, "script", "{}").await,

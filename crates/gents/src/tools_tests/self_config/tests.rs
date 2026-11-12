@@ -632,6 +632,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let fixture = SelfConfigFixture::new("descendant-root-self-config").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     let node = fixture.db.node.clone();
     let identity = fixture.db.node_identity.clone();
     let owner = fixture.node_did().to_owned();
@@ -3079,7 +3080,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
     manifest.as_object_mut().unwrap().remove("schemas");
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (_home, plugins) = gents_toolcalls::test_support::home_with_pack_dir(&directory);
+    let (home, plugins) = gents_toolcalls::test_support::home_with_pack_dir(&directory);
     let (fixture, tools) = signed_pack_tool("inspect-documents-pack", plugins).await;
     let did = fixture.db.node_identity.did();
     let slot = format!("worker={}:inference", fixture.agent_did());
@@ -3236,6 +3237,9 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     );
     // A reinstall finds the collection the first install left behind. It did
     // not create it, so removing the pack with its collections keeps it.
+    gents_pack::pack::store::PackStore::new(home.path())
+        .import(&gents_pack::pack::archive::pack_dir(&directory).unwrap().0[..], None)
+        .unwrap();
     config_call(&tools, &install).await.unwrap();
     let adopted: Value =
         serde_json::from_str(&config_call(&tools, &with_collections).await.unwrap()).unwrap();
@@ -3257,6 +3261,9 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     };
     drop_collection().await;
 
+    gents_pack::pack::store::PackStore::new(home.path())
+        .import(&gents_pack::pack::archive::pack_dir(&directory).unwrap().0[..], None)
+        .unwrap();
     config_call(&tools, &install).await.unwrap();
     admin
         .write(
@@ -3284,6 +3291,9 @@ async fn pack_document_installation_uses_existing_lifecycle() {
             gents_store::config_client::NodePermission::CollectionTruncate,
         )
         .await
+        .unwrap();
+    gents_pack::pack::store::PackStore::new(home.path())
+        .import(&gents_pack::pack::archive::pack_dir(&directory).unwrap().0[..], None)
         .unwrap();
     config_call(&tools, &install).await.unwrap();
     admin

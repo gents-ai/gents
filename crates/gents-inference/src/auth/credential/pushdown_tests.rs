@@ -17,6 +17,10 @@ async fn oauth_account_scope_matches_lean() {
             .as_object_mut()
             .unwrap()
             .retain(|_, field| !field.is_null());
+        let object = value.as_object_mut().unwrap();
+        if let Some(variable) = object.remove("variable_name") {
+            object.insert("variable".into(), variable);
+        }
         let backend: BackendAuth = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(&backend).unwrap(), value);
         backend

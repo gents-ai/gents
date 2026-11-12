@@ -150,7 +150,7 @@ pub async fn run(
         ..budget
     };
     let mut worker = tokio::task::spawn_blocking(move || {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         let _live = live::Guard::new(runner.artifact_digest());
         let (input, manifold) = match bound {
             Some(bound) => runner.prepare_bound(&input, &bound)?,

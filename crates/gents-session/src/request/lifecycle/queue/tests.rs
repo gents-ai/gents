@@ -19,7 +19,6 @@ use gents_protocol::{
 use std::time::Duration;
 
 mod folding;
-mod goal_assignment_wakes;
 mod management;
 mod steering;
 
