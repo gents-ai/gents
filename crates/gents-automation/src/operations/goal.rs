@@ -8,7 +8,7 @@ use gents_protocol::goal_control::GoalRevision;
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::operations::goal::{
     GoalActor, GoalClaim, GoalExisting, GoalExpected, GoalFieldChange, GoalOperationError,
-    GoalSession, GoalSetDecision, GoalSetInput, GoalStartDecision, GoalStartInput, GoalTarget,
+    GoalReason, GoalSession, GoalSetDecision, GoalSetInput, GoalStartDecision, GoalStartInput, GoalTarget,
 };
 use gents_protocol::operations::inference::InferenceActor;
 use gents_protocol::request_admission::AgentRequestCreate;
@@ -69,12 +69,38 @@ fn editable(actor: GoalActor, status: GoalStatus) -> bool {
     status == GoalStatus::Active || actor == GoalActor::Person && status == GoalStatus::Paused
 }
 
+/// Lean `GoalAutomation.Operations.action`.
+fn action(actor: GoalActor, target: GoalTarget) -> Option<GoalAction> {
+    match target {
+        GoalTarget::Keep | GoalTarget::Activate => None,
+        GoalTarget::Pause => Some(GoalAction::Pause),
+        GoalTarget::Stop => Some(GoalAction::Stop),
+        GoalTarget::Complete => Some(GoalAction::Complete),
+        GoalTarget::Block if actor == GoalActor::Person => Some(GoalAction::OperatorBlock),
+        GoalTarget::Block => Some(GoalAction::BlockedAudit(GoalAuditObservation::NewCondition)),
+        GoalTarget::UsageLimited => Some(GoalAction::UsageLimit),
+        GoalTarget::BudgetLimited => Some(GoalAction::BudgetExhausted),
+    }
+}
+
+/// Lean `GoalAutomation.Operations.legal`.
+fn legal(actor: GoalActor, status: GoalStatus, target: GoalTarget) -> bool {
+    let observed = GoalState {
+        status,
+        blocked_audits: 0,
+        wrapup_requested: false,
+        wrapup_completed: false,
+    };
+    action(actor, target).is_none_or(|action| observed.step(action).is_some())
+}
+
 /// Lean `GoalAutomation.Operations.setDecision`.
 pub fn set_decision(
     actor: GoalActor,
     status: GoalStatus,
     target: GoalTarget,
     fields: GoalFieldChange,
+    reason: GoalReason,
     auto_resume: bool,
     obligations_met: bool,
 ) -> GoalSetDecision {
@@ -87,6 +113,10 @@ pub fn set_decision(
     let changes_status = !matches!(target, GoalTarget::Keep | GoalTarget::Activate);
     if actor == GoalActor::OtherAgent {
         D::Denied
+    } else if reason != GoalReason::Absent
+        && !matches!(target, GoalTarget::Complete | GoalTarget::Block)
+    {
+        D::ReasonNotAccepted
     } else if target == GoalTarget::Keep && fields == GoalFieldChange::None && !auto_resume {
         D::NothingToChange
     } else if working && (auto_resume || fields == GoalFieldChange::ClearBudget || !agent_target) {
@@ -97,6 +127,10 @@ pub fn set_decision(
         D::NotEditable
     } else if target == GoalTarget::Activate && status != GoalStatus::Active {
         D::ResumeRequired
+    } else if !legal(actor, status, target) {
+        D::Illegal
+    } else if working && target == GoalTarget::Block && reason != GoalReason::Given {
+        D::ReasonRequired
     } else if working && target == GoalTarget::Complete && !obligations_met {
         D::ObligationsUnmet
     } else {
@@ -421,24 +455,27 @@ fn plan_set(
         .as_deref()
         .map(str::trim)
         .filter(|reason| !reason.is_empty());
-    if input.reason.is_some() && !matches!(target, GoalTarget::Complete | GoalTarget::Block) {
-        return Err(GoalOperationError::ReasonNotAccepted);
-    }
     let pre = goal.state().ok_or(GoalOperationError::IllegalTransition {
         target: target_name(target),
         status: "unknown",
     })?;
     let status = pre.status.as_str();
+    let illegal = GoalOperationError::IllegalTransition {
+        target: target_name(target),
+        status,
+    };
     match set_decision(
         actor,
         pre.status,
         target,
         input.field_change(),
+        input.reason(),
         input.auto_resume.is_some(),
         obligations_unmet.is_none(),
     ) {
         GoalSetDecision::Apply => {}
         GoalSetDecision::Denied => return Err(GoalOperationError::Denied),
+        GoalSetDecision::ReasonNotAccepted => return Err(GoalOperationError::ReasonNotAccepted),
         GoalSetDecision::NothingToChange => return Err(GoalOperationError::NothingToChange),
         GoalSetDecision::PersonOnly => return Err(GoalOperationError::PersonOnly),
         GoalSetDecision::FieldsNeedKeep => return Err(GoalOperationError::FieldsNeedKeep),
@@ -446,6 +483,8 @@ fn plan_set(
         GoalSetDecision::ResumeRequired => {
             return Err(GoalOperationError::ResumeRequired(pre.status))
         }
+        GoalSetDecision::Illegal => return Err(illegal),
+        GoalSetDecision::ReasonRequired => return Err(GoalOperationError::ReasonRequired),
         GoalSetDecision::ObligationsUnmet => {
             return Err(GoalOperationError::ObligationsUnmet(
                 obligations_unmet.unwrap_or_default().to_owned(),
@@ -453,31 +492,21 @@ fn plan_set(
         }
     }
     let mut blocked = None;
-    let action = match target {
-        GoalTarget::Keep | GoalTarget::Activate => None,
-        GoalTarget::Pause => Some(GoalAction::Pause),
-        GoalTarget::Stop => Some(GoalAction::Stop),
-        GoalTarget::Complete => Some(GoalAction::Complete),
-        GoalTarget::UsageLimited => Some(GoalAction::UsageLimit),
-        GoalTarget::BudgetLimited => Some(GoalAction::BudgetExhausted),
-        GoalTarget::Block if actor == GoalActor::Person => Some(GoalAction::OperatorBlock),
-        GoalTarget::Block => {
-            let reason = reason.ok_or(GoalOperationError::ReasonRequired)?;
-            let request_id = request_id.ok_or(GoalOperationError::Denied)?;
+    let action = match (action(actor, target), reason, request_id) {
+        (Some(GoalAction::BlockedAudit(_)), Some(reason), Some(request_id)) => {
             blocked = Some((reason.to_owned(), request_id.to_owned()));
             Some(GoalAction::BlockedAudit(audit_observation(
                 goal, reason, request_id,
             )))
         }
+        (Some(GoalAction::BlockedAudit(_)), _, _) => return Err(GoalOperationError::Denied),
+        (action, _, _) => action,
     };
     let post = match action {
         None => pre,
         Some(action) => pre
             .step(action)
-            .ok_or(GoalOperationError::IllegalTransition {
-                target: target_name(target),
-                status,
-            })?,
+            .ok_or(illegal)?,
     };
     Ok(GoalSetPlan {
         goal: goal.clone(),
@@ -732,6 +761,7 @@ mod conformance {
                 i.status,
                 i.target,
                 i.fields,
+                i.reason,
                 i.auto_resume,
                 i.obligations_met,
             )

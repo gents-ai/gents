@@ -51,7 +51,6 @@ import Proofs.Automation.Triggers
 import Proofs.Automation.Goals
 import Proofs.Automation.GoalAutomation
 import Proofs.Automation.GoalAutomation.Edit
-import Proofs.Automation.GoalAutomation.UpdateGoal
 import Proofs.Automation.GoalAutomation.Operations
 import Proofs.Automation.GoalAutomation.OperatorResume
 import Proofs.Automation.GoalAutomation.ClaimedPublication

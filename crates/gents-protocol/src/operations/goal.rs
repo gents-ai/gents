@@ -102,17 +102,29 @@ pub enum GoalFieldChange {
     ClearBudget,
 }
 
+/// Lean `GoalAutomation.Operations.Reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalReason {
+    Absent,
+    Blank,
+    Given,
+}
+
 /// Lean `GoalAutomation.Operations.SetDecision`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalSetDecision {
     Apply,
     Denied,
+    ReasonNotAccepted,
     NothingToChange,
     PersonOnly,
     FieldsNeedKeep,
     NotEditable,
     ResumeRequired,
+    Illegal,
+    ReasonRequired,
     ObligationsUnmet,
 }
 
@@ -151,6 +163,14 @@ pub struct GoalSetInput {
 impl GoalSetInput {
     pub fn target(&self) -> GoalTarget {
         self.status.map(GoalTarget::of).unwrap_or(GoalTarget::Keep)
+    }
+
+    pub fn reason(&self) -> GoalReason {
+        match self.reason.as_deref().map(str::trim) {
+            None => GoalReason::Absent,
+            Some("") => GoalReason::Blank,
+            Some(_) => GoalReason::Given,
+        }
     }
 
     pub fn field_change(&self) -> GoalFieldChange {
