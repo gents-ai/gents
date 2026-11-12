@@ -565,14 +565,6 @@ structure R6BackgroundingCase where
   operation : Option String := none
   deriving Repr
 
-structure BackgroundTheoremWitness where
-  theoremName : String
-  witnessKind : String
-  scenario : String
-  numericBound : Nat
-  kindFields : List (String × String)
-  deriving Repr
-
 structure ComposedInvariantWitness where
   theoremName : String
   witnessKind : String
