@@ -97,7 +97,7 @@ impl ClientCore {
                 // The document projector refuses another version's rows with
                 // an untyped storage error while the store opens.
                 if let Err(refused) =
-                    gents::store::local::storage_backend::refuse_other_version_schema(
+                    gents_store::local::storage_backend::refuse_other_version_schema(
                         paths.node_data_dir(),
                         Some(&store_key),
                     )
@@ -150,7 +150,6 @@ impl ClientCore {
             sync_state.clear_ephemeral_pairing_readiness().await?;
             let records = sync_state.records();
             checkpoint("peer_directory");
-            gents_store::local::store_key::upgrade::finish(paths.node_data_dir())?;
             subscribe_all_collections(node.as_ref()).await?;
             checkpoint("collection_subscriptions");
 
@@ -505,7 +504,7 @@ pub(super) fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a 
 async fn open_or_create_client_store_key(
     paths: &DesktopPaths,
     options: &ClientCoreOptions,
-    progress: &mut (dyn FnMut(&'static str) + Send),
+    _progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<gents_store::local::store_key::StoreKey> {
     use gents_store::local::store_key::{upgrade, StoreEncryption};
     let choice = options.store_key_custody;
@@ -528,34 +527,17 @@ async fn open_or_create_client_store_key(
         );
     }
     if pending.is_some() || (record.is_none() && paths.node_data_dir().join("MANIFEST").exists()) {
-        let record = match pending {
-            Some(record) => record,
-            None => {
-                gents::store::local::storage_backend::refuse_other_version_schema(
-                    paths.node_data_dir(),
-                    None,
-                )
-                .await?;
-                let record = StoreEncryption::prepare(
-                    choice,
-                    paths.store_key_path(),
-                    &upgrade::staging_path(paths.node_data_dir()),
-                )?;
-                upgrade::begin(paths.node_data_dir(), &record)?;
-                record
-            }
-        };
-        let key = client_store_key(
-            options,
-            &record,
-            paths.store_key_path(),
-            &upgrade::key_store_path(paths.node_data_dir())?,
-        )
-        .await?;
-        upgrade::encrypt_existing_with_progress(paths.node_data_dir(), &record, &key, progress)
+        if pending.is_none() {
+            gents_store::local::storage_backend::refuse_other_version_schema(
+                paths.node_data_dir(),
+                None,
+            )
             .await?;
-        write_client_store_record(paths, &record)?;
-        return Ok(key);
+        }
+        return Err(gents_protocol::operations::install_repair::IncompatibleStore {
+            kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::UnencryptedStore,
+            data_path: paths.node_data_dir().to_path_buf(),
+        }.into());
     }
     let record = match record {
         Some(record) => record,
@@ -584,11 +566,14 @@ async fn open_or_create_client_store_key(
 
 /// Whether the client store has data but its key is gone. Never creates a key.
 pub async fn client_store_key_missing(paths: &DesktopPaths) -> Result<bool> {
-    use gents::store::local::storage_backend::IncompatibleStoreKind;
-    use gents::store::local::store_key::StoreKeyError;
+    use gents_protocol::operations::install_repair::IncompatibleStoreKind;
+    use gents_store::local::store_key::StoreKeyError;
     let Some(record) = read_client_store_record(paths).await? else {
         return Ok(false);
     };
+    if !tokio::fs::try_exists(paths.node_data_dir().join("MANIFEST")).await? {
+        return Ok(false);
+    }
     let key_file = paths.store_key_path().to_path_buf();
     let data_path = paths.node_data_dir().to_path_buf();
     match tokio::task::spawn_blocking(move || record.load(&key_file, &data_path)).await? {
@@ -606,28 +591,27 @@ pub async fn client_store_key_missing(paths: &DesktopPaths) -> Result<bool> {
 /// this build cannot take. A held store, a missing or unreadable key and an
 /// I/O failure are never reported as one: each keeps its own outcome.
 pub async fn client_store_from_other_version(paths: &DesktopPaths) -> Result<bool> {
-    use gents::store::local::storage_backend::{
-        incompatible_store_kind, refuse_other_version_schema, IncompatibleStoreKind,
+    use gents_protocol::operations::install_repair::IncompatibleStoreKind;
+    use gents_store::local::storage_backend::{
+        incompatible_store_kind, refuse_other_version_schema,
     };
-    use gents::store::local::store_key::StoreKeyError;
+    use gents_store::local::store_key::StoreKeyError;
     let data_path = paths.node_data_dir().to_path_buf();
     if !tokio::fs::try_exists(data_path.join("MANIFEST")).await?
         || incompatible_store_kind(&data_path)?.is_some()
     {
         return Ok(false);
     }
-    let _store_lock = match gents::store::local::home::lock_store(paths.root(), &data_path) {
+    let _store_lock = match gents_store::local::home::lock_store(paths.root(), &data_path) {
         Ok(lock) => lock,
         Err(error) if error.lock_held().is_some() => return Ok(false),
         Err(error) => return Err(error.into()),
     };
     let key = match read_client_store_record(paths).await? {
-        // The client start resumes an interrupted upgrade; its store may
-        // already be encrypted under a key no record names yet.
-        None if gents::store::local::store_key::upgrade::pending_record(&data_path)?.is_some() => {
-            return Ok(false)
+        None if gents_store::local::store_key::upgrade::pending_record(&data_path)?.is_some() => {
+            return Ok(true)
         }
-        None => None,
+        None => return Ok(true),
         Some(record) => {
             let key_file = paths.store_key_path().to_path_buf();
             let data = data_path.clone();
@@ -657,7 +641,7 @@ pub async fn client_store_from_other_version(paths: &DesktopPaths) -> Result<boo
 
 async fn read_client_store_record(
     paths: &DesktopPaths,
-) -> Result<Option<gents::store::local::store_key::StoreEncryption>> {
+) -> Result<Option<gents_store::local::store_key::StoreEncryption>> {
     let record_path = paths.store_encryption_path();
     match tokio::fs::read(record_path).await {
         Ok(bytes) => serde_json::from_slice(&bytes)
@@ -734,8 +718,8 @@ mod tests {
 
     async fn file_custody_fixture(
         paths: &DesktopPaths,
-    ) -> gents::store::local::store_key::StoreEncryption {
-        use gents::store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
+    ) -> gents_store::local::store_key::StoreEncryption {
+        use gents_store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
         paths.ensure_root_dirs().await.unwrap();
         let record = StoreEncryption::prepare(
             StoreKeyCustodyChoice::File,
@@ -1118,8 +1102,9 @@ mod tests {
     #[tokio::test]
     async fn another_versions_client_store_is_refused_by_type_before_any_upgrade_writes() {
         use crate::test_fixtures::write_other_version_client_store;
-        use gents::store::local::storage_backend::{incompatible_store, IncompatibleStoreKind};
-        use gents::store::local::store_key::upgrade;
+        use gents_protocol::operations::install_repair::IncompatibleStoreKind;
+        use gents_store::local::storage_backend::incompatible_store;
+        use gents_store::local::store_key::upgrade;
         // Plaintext stores are refused before the upgrade; an encrypted store
         // with an enrollment row fails its open and one without fails its
         // migrations, and both failures are typed the same.
@@ -1198,7 +1183,7 @@ mod tests {
         let paths = DesktopPaths::from_root(temp.path().join("client"));
         write_other_version_client_store(&paths, true, true).await;
         let held =
-            gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+            gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
         assert!(!client_store_from_other_version(&paths).await.unwrap());
         drop(held);
         assert!(client_store_from_other_version(&paths).await.unwrap());
@@ -1227,8 +1212,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_interrupted_upgrade_is_left_for_the_client_start_to_resume() {
-        use gents::store::local::store_key::upgrade;
+    async fn an_interrupted_upgrade_is_refused_without_changing_its_identity_or_record() {
+        use gents_store::local::store_key::upgrade;
         let temp = tempfile::tempdir().unwrap();
         let paths = DesktopPaths::from_root(temp.path().join("client"));
         paths.ensure_root_dirs().await.unwrap();
@@ -1242,7 +1227,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::store::schema::migration::ensure_all_runtime_migrations(Arc::clone(&plain))
+        gents_store::schema::migration::ensure_all_runtime_migrations(Arc::clone(&plain))
             .await
             .unwrap();
         plain.shutdown().await.unwrap();
@@ -1253,21 +1238,35 @@ mod tests {
             .is_some());
         assert!(!paths.store_encryption_path().exists());
 
-        assert!(
-            !client_store_from_other_version(&paths).await.unwrap(),
-            "a pending upgrade belongs to the client start"
-        );
-        let core = ClientCore::start_with_paths_and_options(
+        let key_before = std::fs::read(paths.identity_key_path()).unwrap();
+        let pending_before = upgrade::pending_record(paths.node_data_dir()).unwrap();
+        assert!(client_store_from_other_version(&paths).await.unwrap());
+        let error = match ClientCore::start_with_paths_and_options(
             paths.clone(),
             ClientCoreOptions::local_only(),
         )
         .await
-        .expect("the start resumes the upgrade");
-        assert_eq!(core.node_identity().did(), identity.did());
-        Arc::new(core).shutdown().await.unwrap();
-        assert!(paths.store_encryption_path().is_file());
-        assert!(upgrade::pending_record(paths.node_data_dir())
-            .unwrap()
-            .is_none());
+        {
+            Ok(_) => panic!("an existing upgrade must not resume"),
+            Err(error) => error,
+        };
+        let refused = gents_store::local::storage_backend::incompatible_store(
+            error.as_ref(),
+            paths.node_data_dir(),
+        )
+        .unwrap();
+        assert_eq!(
+            refused.kind,
+            gents_protocol::operations::install_repair::IncompatibleStoreKind::UnencryptedStore
+        );
+        assert_eq!(
+            std::fs::read(paths.identity_key_path()).unwrap(),
+            key_before
+        );
+        assert_eq!(
+            upgrade::pending_record(paths.node_data_dir()).unwrap(),
+            pending_before
+        );
+        assert!(!paths.store_encryption_path().exists());
     }
 }

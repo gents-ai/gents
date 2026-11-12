@@ -1,3 +1,4 @@
+use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -70,81 +71,6 @@ fn block_cache_size(mib: Option<&str>) -> usize {
         .unwrap_or(DEFAULT_BLOCK_CACHE_BYTES)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IncompatibleStoreKind {
-    LegacyRocksDb,
-    LegacyLark,
-    UnsupportedOrCorrupt,
-    /// A Regolith store whose schema lineage this build does not know: it was
-    /// written by an older (or foreign) Gents build. This release has no
-    /// migration from it, so it cannot be opened.
-    UnknownLineage,
-    /// A Regolith store that descends from this build's baseline but carries
-    /// schema versions another build (for example a newer one) added.
-    ForeignVersion,
-    /// An identity key an older build wrote with group/other access. The
-    /// identity owner refuses it rather than trusting a possibly exposed
-    /// key; the home it belongs to needs a fresh start.
-    InsecureKey,
-    /// A store with no recorded at-rest key: written unencrypted by an
-    /// earlier release (or left by an interrupted initialization). Encryption
-    /// cannot be turned on in place.
-    UnencryptedStore,
-    /// An encrypted store whose recorded key is definitely gone (its Keychain
-    /// item or key file no longer exists), so its data cannot be read.
-    MissingStoreKey,
-    /// A Regolith store another Gents version wrote with collection
-    /// branchability or identity policies this build does not declare.
-    /// DefraDB cannot change either in place, so no migration keeps it.
-    OtherVersionSchema,
-}
-
-impl IncompatibleStoreKind {
-    pub fn is_older(self) -> bool {
-        !matches!(self, Self::ForeignVersion)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{}", describe(*kind, data_path))]
-pub struct IncompatibleStore {
-    pub kind: IncompatibleStoreKind,
-    pub data_path: PathBuf,
-}
-
-fn describe(kind: IncompatibleStoreKind, data_path: &Path) -> String {
-    let path = data_path.display();
-    match kind {
-        IncompatibleStoreKind::LegacyRocksDb => format!(
-            "{path} contains a legacy RocksDB Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first"
-        ),
-        IncompatibleStoreKind::LegacyLark => format!(
-            "{path} contains a legacy Lark Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first"
-        ),
-        IncompatibleStoreKind::UnsupportedOrCorrupt => format!(
-            "{path} contains an unsupported or corrupt Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first"
-        ),
-        IncompatibleStoreKind::UnknownLineage => format!(
-            "{path} was created by an older Gents version. This release is a breaking release with no migration from it, so it cannot open that store. Back it up or delete it to start fresh, or use the release that created it to export any data you need first"
-        ),
-        IncompatibleStoreKind::InsecureKey => format!(
-            "This home's keys were created by an older Gents version with unsafe file permissions ({path} is readable by other users). This release does not load a key that may have been exposed. Back it up or delete it to start fresh with a new identity"
-        ),
-        IncompatibleStoreKind::ForeignVersion => format!(
-            "{path} was written by a different Gents version whose schema this release does not know, so it cannot open that store. Use the version that wrote it, or back it up to start fresh"
-        ),
-        IncompatibleStoreKind::UnencryptedStore => format!(
-            "{path} is not encrypted at rest: it was created by an older Gents version (or by an initialization that did not finish). This release opens only encrypted stores and cannot convert one, so re-initialize the home to start fresh (`gents init --dangerously-overwrite`), backing it up first if you need its data"
-        ),
-        IncompatibleStoreKind::MissingStoreKey => format!(
-            "{path} is encrypted, but the key this home recorded for it no longer exists (its Keychain item or key file was removed), so its data cannot be read. Re-initialize the home to start fresh (`gents init --dangerously-overwrite`)"
-        ),
-        IncompatibleStoreKind::OtherVersionSchema => format!(
-            "{path} was written by another Gents version whose storage layout this release cannot change in place, so it cannot open that store. Back it up or delete it to start fresh"
-        ),
-    }
-}
-
 /// Inspect the exact on-disk markers owned by the storage backend without
 /// opening or mutating the store.
 pub fn incompatible_store_kind(data_path: &Path) -> Result<Option<IncompatibleStoreKind>> {
@@ -198,7 +124,7 @@ pub fn require_existing_store(data_path: &Path) -> Result<()> {
 /// Any other failure is returned unclassified.
 pub async fn refuse_other_version_schema(
     data_path: &Path,
-    key: Option<&crate::store::local::store_key::StoreKey>,
+    key: Option<&crate::local::store_key::StoreKey>,
 ) -> Result<()> {
     require_existing_store(data_path)?;
     let opened = |source| StorageBackendError::InspectionOpen {
@@ -691,7 +617,7 @@ mod tests {
 
         let current = temp.path().join("current");
         let node = std::sync::Arc::new(plaintext_node(&current).await);
-        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
+        crate::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .unwrap();
         node.shutdown().await.unwrap();

@@ -29,9 +29,8 @@ use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 use k256::elliptic_curve::zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
 
-use crate::local::storage_backend::{
-    IncompatibleStore, IncompatibleStoreKind, StorageBackendError,
-};
+use crate::local::storage_backend::StorageBackendError;
+use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreKeyError {

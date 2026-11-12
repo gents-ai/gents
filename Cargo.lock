@@ -5293,6 +5293,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rig-core",
  "schemars 1.2.1",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5311,6 +5312,7 @@ name = "gents-service"
 version = "1.0.0-rc2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "gents",
@@ -5331,6 +5333,7 @@ dependencies = [
  "plist",
  "reqwest 0.12.28",
  "security-framework",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",

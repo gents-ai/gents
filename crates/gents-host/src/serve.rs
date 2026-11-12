@@ -507,7 +507,7 @@ async fn serve_foreground(
     let home_dir = resolve_home_dir(args.home.as_deref());
     if !tokio::fs::try_exists(&home_dir).await? {
         eprintln!("Error: {} does not exist", home_dir.display());
-        std::process::exit(crate::native_service::HOME_GONE_EXIT_CODE);
+        std::process::exit(gents_service::native_service::HOME_GONE_EXIT_CODE);
     }
     // A home whose identity can never own the node is refused from its
     // configuration alone, before any store is reserved or opened.
@@ -798,10 +798,13 @@ async fn serve_foreground(
             .await
             .context("reading client route collection versions after migrations")?;
         replicated_schema.set(schema).ok();
-        let enrollment_network =
-            gents_p2p::p2p_reconcile::ensure_enrollment_network(&node, identity.as_ref(), &node_name)
-                .await
-                .context("ensuring authenticated enrollment network")?;
+        let enrollment_network = gents_p2p::p2p_reconcile::ensure_enrollment_network(
+            &node,
+            identity.as_ref(),
+            &node_name,
+        )
+        .await
+        .context("ensuring authenticated enrollment network")?;
         *enrollment_decisions.write().await = Some(
             crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
         );
@@ -1637,7 +1640,7 @@ mod server_key_tests {
                 .expect("typed refusal");
         assert_eq!(
             store.kind,
-            gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey
+            gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey
         );
         assert_eq!(
             gents_service::native_service::incompatible_store_exit_code(store.kind),

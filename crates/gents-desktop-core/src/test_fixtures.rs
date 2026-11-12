@@ -779,7 +779,7 @@ pub async fn write_other_version_client_store(
     enrolled: bool,
     encrypted: bool,
 ) {
-    use gents::store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
+    use gents_store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
     paths.ensure_root_dirs().await.unwrap();
     let identity = crate::client::PrincipalIdentity::load_or_create(paths)
         .await
@@ -834,8 +834,8 @@ pub async fn write_other_version_client_store(
 /// upgrade promoted its stage. Returns the record that start would write.
 pub async fn encrypt_client_store_without_its_record(
     paths: &crate::client::DesktopPaths,
-) -> gents::store::local::store_key::StoreEncryption {
-    use gents::store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
+) -> gents_store::local::store_key::StoreEncryption {
+    use gents_store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
     let data = paths.node_data_dir();
     let record = StoreEncryption::prepare(
         StoreKeyCustodyChoice::File,

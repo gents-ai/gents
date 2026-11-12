@@ -71,7 +71,9 @@ pub enum UpgradeError {
 }
 
 impl UpgradeError {
-    pub fn incompatible(&self) -> Option<&crate::local::storage_backend::IncompatibleStore> {
+    pub fn incompatible(
+        &self,
+    ) -> Option<&gents_protocol::operations::install_repair::IncompatibleStore> {
         match self {
             Self::StorageBackend(error) => error.incompatible(),
             _ => None,

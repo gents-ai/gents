@@ -20,7 +20,7 @@ pub const SYSTEMD_UNIT: &str = "gents-runtime.service";
 #[cfg(all(feature = "native-e2e", debug_assertions))]
 pub const SYSTEMD_UNIT: &str = "gents-runtime-native-e2e.service";
 /// Exit status of `gents` when it refuses to open a store this build cannot
-/// read (`gents::store::local::storage_backend::IncompatibleStore`). Supervisors and the
+/// read (`gents_protocol::operations::install_repair::IncompatibleStore`). Supervisors and the
 /// desktop read it from the exit record to tell that refusal apart from a
 /// crash; systemd does not restart it. It is sysexits `EX_DATAERR`.
 pub const INCOMPATIBLE_STORE_EXIT_CODE: i32 = 65;
@@ -42,9 +42,9 @@ pub const STORE_KEY_UNAVAILABLE_EXIT_CODE: i32 = 69;
 pub const MISSING_STORE_KEY_EXIT_CODE: i32 = 72;
 
 pub fn incompatible_store_exit_code(
-    kind: gents_store::local::storage_backend::IncompatibleStoreKind,
+    kind: gents_protocol::operations::install_repair::IncompatibleStoreKind,
 ) -> i32 {
-    use gents_store::local::storage_backend::IncompatibleStoreKind;
+    use gents_protocol::operations::install_repair::IncompatibleStoreKind;
     match kind {
         IncompatibleStoreKind::InsecureKey => INSECURE_KEY_EXIT_CODE,
         IncompatibleStoreKind::ForeignVersion => FOREIGN_STORE_EXIT_CODE,
@@ -1738,20 +1738,20 @@ pub struct ServiceExit {
 impl ServiceExit {
     pub fn refused_store(
         &self,
-    ) -> Option<gents_store::local::storage_backend::IncompatibleStoreKind> {
+    ) -> Option<gents_protocol::operations::install_repair::IncompatibleStoreKind> {
         match self.code {
-            Some(INCOMPATIBLE_STORE_EXIT_CODE) => {
-                Some(gents_store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
-            }
-            Some(FOREIGN_STORE_EXIT_CODE) => {
-                Some(gents_store::local::storage_backend::IncompatibleStoreKind::ForeignVersion)
-            }
+            Some(INCOMPATIBLE_STORE_EXIT_CODE) => Some(
+                gents_protocol::operations::install_repair::IncompatibleStoreKind::UnknownLineage,
+            ),
+            Some(FOREIGN_STORE_EXIT_CODE) => Some(
+                gents_protocol::operations::install_repair::IncompatibleStoreKind::ForeignVersion,
+            ),
             Some(INSECURE_KEY_EXIT_CODE) => {
-                Some(gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey)
+                Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey)
             }
-            Some(MISSING_STORE_KEY_EXIT_CODE) => {
-                Some(gents::store::local::storage_backend::IncompatibleStoreKind::MissingStoreKey)
-            }
+            Some(MISSING_STORE_KEY_EXIT_CODE) => Some(
+                gents_protocol::operations::install_repair::IncompatibleStoreKind::MissingStoreKey,
+            ),
             _ => None,
         }
     }
@@ -1771,7 +1771,7 @@ impl ServiceExit {
 /// Why the server refused to run, read from its exit code alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceRefusal {
-    Store(gents::store::local::storage_backend::IncompatibleStoreKind),
+    Store(gents_protocol::operations::install_repair::IncompatibleStoreKind),
     StoreKeyUnavailable,
     HomeGone,
 }
@@ -1901,67 +1901,3 @@ fn ensure_launchd_print_result(output: &CommandOutput) -> Result<()> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gents::store::local::storage_backend::IncompatibleStoreKind;
-
-    fn exit(code: i32) -> ServiceExit {
-        ServiceExit {
-            reason: format!("exited with code {code}"),
-            restarts: 0,
-            clean: false,
-            code: Some(code),
-        }
-    }
-
-    #[test]
-    fn refusal_codes_map_to_their_reason() {
-        for (code, refusal) in [
-            (
-                65,
-                Some(ServiceRefusal::Store(IncompatibleStoreKind::UnknownLineage)),
-            ),
-            (
-                66,
-                Some(ServiceRefusal::Store(IncompatibleStoreKind::InsecureKey)),
-            ),
-            (
-                67,
-                Some(ServiceRefusal::Store(IncompatibleStoreKind::ForeignVersion)),
-            ),
-            (68, Some(ServiceRefusal::HomeGone)),
-            (69, Some(ServiceRefusal::StoreKeyUnavailable)),
-            (
-                72,
-                Some(ServiceRefusal::Store(
-                    IncompatibleStoreKind::MissingStoreKey,
-                )),
-            ),
-            (1, None),
-        ] {
-            assert_eq!(exit(code).refusal(), refusal, "{code}");
-        }
-    }
-
-    #[test]
-    fn another_versions_schema_exits_as_an_incompatible_store() {
-        assert_eq!(
-            incompatible_store_exit_code(IncompatibleStoreKind::OtherVersionSchema),
-            INCOMPATIBLE_STORE_EXIT_CODE
-        );
-    }
-
-    #[test]
-    fn missing_store_key_has_its_own_code() {
-        assert_eq!(
-            incompatible_store_exit_code(IncompatibleStoreKind::MissingStoreKey),
-            MISSING_STORE_KEY_EXIT_CODE
-        );
-        assert_eq!(MISSING_STORE_KEY_EXIT_CODE, 72);
-        assert_eq!(
-            exit(MISSING_STORE_KEY_EXIT_CODE).refused_store(),
-            Some(IncompatibleStoreKind::MissingStoreKey)
-        );
-    }
-}

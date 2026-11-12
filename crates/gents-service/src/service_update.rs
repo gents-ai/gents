@@ -139,10 +139,23 @@ async fn emit(value: &impl Serialize) -> Result<()> {
 }
 
 pub async fn submit(args: ServiceUpdateArgs) -> Result<()> {
+    submit_to(args, None, &mut tokio::io::stdout())
+        .await
+        .map(drop)
+}
+
+async fn submit_to<W>(
+    args: ServiceUpdateArgs,
+    helper: Option<PathBuf>,
+    writer: &mut W,
+) -> Result<Receipt>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
     let home = tokio::fs::canonicalize(resolve_home_dir(args.home.as_deref())).await?;
     let id = args.operation_id.unwrap_or_else(uuid::Uuid::new_v4);
     let (plan, mut receipt, _submission_lock) =
-        tokio::task::spawn_blocking(move || stage::prepare(home, id, args)).await??;
+        tokio::task::spawn_blocking(move || stage::prepare(home, id, args, helper)).await??;
     if receipt.phase == Phase::Staged {
         let registration = async {
             execute::validate_live(&plan).await?;
@@ -196,9 +209,15 @@ pub async fn submit(args: ServiceUpdateArgs) -> Result<()> {
         }
     }
     if receipt.phase == Phase::Registered {
-        return acknowledge(&mut receipt, &mut tokio::io::stdout()).await;
+        acknowledge(&mut receipt, writer).await?;
+        return Ok(receipt);
     }
-    emit(&receipt).await
+    use tokio::io::AsyncWriteExt as _;
+    let mut bytes = serde_json::to_vec(&receipt)?;
+    bytes.push(b'\n');
+    writer.write_all(&bytes).await?;
+    writer.flush().await?;
+    Ok(receipt)
 }
 
 async fn wait_for_helper(plan: &Plan, limit: Duration) -> Result<()> {
@@ -284,14 +303,17 @@ pub async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> {
 }
 
 pub use notices::watch_notices;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn executable_digest(path: &Path) -> Result<String> {
     files::digest(path)
 }
 
 pub async fn check(home: Option<PathBuf>) -> Result<()> {
+    emit(&check_metadata(home).await?).await
+}
+
+async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
     let Some(home) = home else {
-        return emit(&metadata(false)).await;
+        return Ok(metadata(false));
     };
     let _keychain = crate::process_resources::prevent_keychain_prompts(true)?;
     let (identity, state, settings) = tokio::task::spawn_blocking(move || -> Result<_> {
@@ -327,7 +349,7 @@ pub async fn check(home: Option<PathBuf>) -> Result<()> {
     }
     let mut metadata = metadata(true);
     metadata["non_canonical_lineages"] = serde_json::json!(lineage);
-    emit(&metadata).await
+    Ok(metadata)
 }
 
 fn metadata(schema_checked: bool) -> serde_json::Value {
@@ -413,4 +435,289 @@ async fn cleanup_helper(plan: &Plan) -> Result<()> {
         NativeServiceManager::new(config)?.unregister_updater(&directory, id)
     })
     .await?
+}
+
+#[derive(Clone)]
+pub(crate) struct RepairBackup {
+    pub(crate) directory: PathBuf,
+    config: NativeServiceConfig,
+    definition: Vec<u8>,
+    network: NetworkSettings,
+    enabled: bool,
+    running: bool,
+    prior_executable: Option<PathBuf>,
+}
+
+pub(crate) fn begin_repair_backup(manager: &NativeServiceManager) -> Result<Option<RepairBackup>> {
+    if !manager.home().is_dir()
+        || !gents_store::local::home::default_data_dir(manager.home()).is_dir()
+    {
+        return Ok(None);
+    }
+    let definition = manager.installed_definition()?;
+    let status = manager.status()?;
+    let config = manager.config().clone();
+    let network = NetworkSettings::read(&config.home)?;
+    let root = config
+        .home
+        .join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME);
+    files::private_dir(&root)?;
+    files::check_backup_capacity(&config.home, &root)?;
+    let directory = root.join(format!("repair-{}", uuid::Uuid::new_v4()));
+    files::private_dir(&directory)?;
+    files::backup_snapshot(
+        &config.home,
+        &definition,
+        &network,
+        &directory,
+        "before-stop",
+    )?;
+    let original = manager.definition_executable(&definition)?;
+    let prior_executable = if original.is_file() {
+        let saved = directory.join("prior-gents");
+        files::copy_executable(&original, &saved)?;
+        Some(saved)
+    } else {
+        None
+    };
+    Ok(Some(RepairBackup {
+        directory,
+        config,
+        definition,
+        network,
+        enabled: status.enabled,
+        running: status.running,
+        prior_executable,
+    }))
+}
+
+pub(crate) async fn finish_repair_backup(backup: Option<&RepairBackup>) -> Result<()> {
+    let Some(backup) = backup.cloned() else {
+        return Ok(());
+    };
+    tokio::task::spawn_blocking(move || {
+        let _store = gents_store::local::home::lock_home_store(&backup.config.home)?;
+        files::backup_snapshot(
+            &backup.config.home,
+            &backup.definition,
+            &backup.network,
+            &backup.directory,
+            "backup",
+        )
+    })
+    .await?
+}
+
+pub(crate) async fn restore_repair_service(
+    backup: &RepairBackup,
+    target: &NativeServiceConfig,
+) -> Result<()> {
+    let backup = backup.clone();
+    let target_to_stop = target.clone();
+    let before = backup.definition.clone();
+    let expected_running = backup.running;
+    let prior_config = backup.config.clone();
+    let stopped = tokio::task::spawn_blocking(move || -> Result<_> {
+        let manager = NativeServiceManager::new(target_to_stop.clone())?;
+        let path = target_to_stop
+            .definition_path(crate::native_service::NativeServicePlatform::current()?);
+        match std::fs::read(&path) {
+            Ok(current) if current != before => {
+                anyhow::ensure!(
+                    manager.definition_executable(&current)? == target_to_stop.executable,
+                    "service changed outside this repair; recovery refused"
+                );
+            }
+            Ok(_) => {
+                let previous = NativeServiceManager::new(prior_config.clone())?;
+                if previous.status()?.running == expected_running {
+                    return Ok(None);
+                }
+                if expected_running {
+                    previous.start(false)?;
+                    return Ok(None);
+                }
+                let pid = previous.job_pid()?;
+                previous.stop(false)?;
+                return Ok(Some((pid, prior_config)));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let pid = manager.job_pid()?;
+        manager.stop(false)?;
+        Ok(Some((pid, target_to_stop)))
+    })
+    .await??;
+    let Some((pid, cleanup)) = stopped else {
+        return Ok(());
+    };
+    if let Some(pid) = pid {
+        anyhow::ensure!(
+            crate::native_service::wait_for_process_exit(pid, Duration::from_secs(20)).await,
+            "replacement process did not stop; prior service was not overwritten"
+        );
+    }
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        gents_store::local::home::wait_for_store_release(
+            &backup.config.home,
+            &gents_store::local::home::default_data_dir(&backup.config.home),
+        ),
+    )
+    .await
+    .context("replacement still owns the store")??;
+    tokio::task::spawn_blocking(move || {
+        let cleanup = NativeServiceManager::new(cleanup)?;
+        let store = gents_store::local::home::lock_home_store(&backup.config.home)?;
+        cleanup.uninstall()?;
+        let replace = backup.prior_executable.is_some();
+        let mut config = backup.config;
+        if let Some(executable) = backup.prior_executable {
+            config.executable = executable;
+        }
+        let previous = NativeServiceManager::new(config)?;
+        previous.install_carrying(&backup.definition, replace, backup.enabled)?;
+        drop(store);
+        if backup.running {
+            previous.start(false)?;
+        }
+        Ok(())
+    })
+    .await?
+}
+
+pub(crate) async fn can_update_live(home: &Path) -> Result<bool> {
+    use gents_protocol::serve_lifecycle::control::{
+        RuntimeOperation, NATIVE_STARTUP_FENCE_CAPABILITY,
+    };
+    let selected_home = home.to_path_buf();
+    let (state, init) = tokio::task::spawn_blocking(move || -> Result<_> {
+        Ok((
+            read_runtime_state(&selected_home)?,
+            read_init_config(&selected_home)?,
+        ))
+    })
+    .await??;
+    let (Some(state), Some(init)) = (state, init) else {
+        return Ok(false);
+    };
+    let url = reqwest::Url::parse(&state.graphql)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    let observed = match crate::runtime_control::control(
+        &client,
+        &url,
+        &init.node_did,
+        RuntimeOperation::Observe,
+        None,
+    )
+    .await
+    {
+        Ok(Some(observed)) => observed,
+        Ok(None) => return Ok(false),
+        Err(error) => {
+            let unsupported = gents_protocol::error_chain::find_map_source(error.as_ref(), |source| {
+                source.downcast_ref::<crate::runtime_control::PreparationFailure>()
+                    .map(|failure| failure.reason == gents_protocol::serve_lifecycle::preparation::RuntimePreparationRefusal::Unsupported)
+            }).unwrap_or(false);
+            if unsupported {
+                return Ok(false);
+            }
+            return Err(error);
+        }
+    };
+    if observed.capabilities.get(NATIVE_STARTUP_FENCE_CAPABILITY) != Some(&1) {
+        return Ok(false);
+    }
+    let config = NativeServiceConfig::new(home.to_path_buf(), std::env::current_exe()?)?;
+    let installed = tokio::task::spawn_blocking(move || {
+        let manager = NativeServiceManager::new(config)?;
+        let definition = manager.installed_definition()?;
+        files::digest(&manager.definition_executable(&definition)?)
+    })
+    .await??;
+    if observed.build != installed {
+        return Ok(false);
+    }
+    match check_metadata(Some(home.to_path_buf())).await {
+        Ok(_) => Ok(true),
+        Err(error)
+            if gents_store::local::storage_backend::incompatible_store(
+                error.as_ref(),
+                &gents_store::local::home::default_data_dir(home),
+            )
+            .is_some() =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) async fn replace_for_repair(home: &Path, executable: &Path) -> Result<PathBuf> {
+    let candidate = executable.to_path_buf();
+    let digest = tokio::task::spawn_blocking(move || files::digest(&candidate)).await??;
+    let args = ServiceUpdateArgs {
+        home: Some(home.to_path_buf()),
+        executable: Some(executable.to_path_buf()),
+        sha256: Some(digest),
+        operation_id: None,
+        network: Default::default(),
+        environment_file: None,
+        drain_timeout_secs: 300,
+    };
+    let receipt = submit_to(args, Some(executable.to_path_buf()), &mut tokio::io::sink()).await?;
+    let path = receipt.directory.clone();
+    let completed = async {
+        let mut changes = files::Changes::watch(&path).await?;
+        loop {
+            let receipt: Receipt = files::read_json_async(&path.join("receipt.json")).await?;
+            match receipt.phase {
+                Phase::Healthy => return Ok(path.join("backup")),
+                Phase::Failed => anyhow::bail!(
+                    "managed update failed: {}; inspect operation {}",
+                    receipt.message,
+                    receipt.operation_id
+                ),
+                _ => changes.changed().await?,
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(420), completed)
+        .await
+        .context("managed update is still in progress; inspect service update-status")?
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("could not stage the repair executable: {0}")]
+pub struct ExecutableStageError(#[source] anyhow::Error);
+
+pub fn stage_repair_executable(
+    source: &Path,
+    desktop_root: &Path,
+) -> std::result::Result<PathBuf, ExecutableStageError> {
+    (|| -> Result<PathBuf> {
+        let digest = files::digest(source)?;
+        let root = desktop_root.join("runtime");
+        std::fs::create_dir_all(&root)?;
+        let directory = root.join(format!("repair-{digest}"));
+        std::fs::create_dir_all(&directory)?;
+        let target = directory.join("gents");
+        if target.exists() && files::digest(&target)? == digest {
+            return Ok(target);
+        }
+        let staged = tempfile::NamedTempFile::new_in(&directory)?;
+        files::copy_executable(source, staged.path())?;
+        anyhow::ensure!(
+            files::digest(staged.path())? == digest,
+            "repair source changed while staging"
+        );
+        files::validate_native_executable(staged.path())?;
+        staged.persist(&target)?;
+        std::fs::File::open(&directory)?.sync_all()?;
+        Ok(target)
+    })()
+    .map_err(ExecutableStageError)
 }

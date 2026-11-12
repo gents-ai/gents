@@ -448,7 +448,7 @@ pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
 /// The node bootstrap marker stays at the path across retirement, so a retired
 /// home cannot become a fresh bootstrap attempt; the CLI writes it outside this
 /// owner. The one exception is the onboarding repair's set-aside
-/// (`gents_server::repair::home::set_aside_home`): it moves the whole folder,
+/// (`gents_service::repair::home::set_aside_home`): it moves the whole folder,
 /// identity keys and data included, so the next setup at that path provisions
 /// a new node and confers nothing from the old one.
 pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] =

@@ -81,16 +81,32 @@ pub(super) fn copy_executable(source: &Path, target: &Path) -> Result<()> {
 /// homes; key permissions remain unchanged. Runtime locks and updater receipts
 /// are excluded by the existing home inventory owner.
 pub(super) fn cold_backup(plan: &Plan, directory: &Path) -> Result<()> {
-    if directory.join("backup").is_dir() {
+    backup_snapshot(
+        &plan.home,
+        &plan.prior_definition,
+        &plan.prior_network,
+        directory,
+        "backup",
+    )
+}
+
+pub(super) fn backup_snapshot(
+    home: &Path,
+    definition: &[u8],
+    network: &NetworkSettings,
+    directory: &Path,
+    slot: &str,
+) -> Result<()> {
+    if directory.join(slot).is_dir() {
         return Ok(());
     }
     let temp = tempfile::Builder::new()
         .prefix("backup-")
         .tempdir_in(directory)?;
-    for path in backup_inventory(&plan.home)? {
+    for path in backup_inventory(home)? {
         // The claimed store may live on another volume via a data-directory
         // symlink. Back up its bytes, not only the pointer to the live store.
-        let source = if path == gents_store::local::home::default_data_dir(&plan.home) {
+        let source = if path == gents_store::local::home::default_data_dir(home) {
             fs::canonicalize(&path)?
         } else {
             path.clone()
@@ -100,18 +116,13 @@ pub(super) fn cold_backup(plan: &Plan, directory: &Path) -> Result<()> {
             &temp
                 .path()
                 .join(path.file_name().context("owned filename")?),
-            path == plan
-                .home
-                .join(gents_store::local::home::PLUGIN_SERVICES_DIR_NAME),
+            path == home.join(gents_store::local::home::PLUGIN_SERVICES_DIR_NAME),
         )?;
     }
-    fs::write(
-        temp.path().join("service-definition"),
-        &plan.prior_definition,
-    )?;
-    write_json(&temp.path().join("network.json"), &plan.prior_network)?;
+    fs::write(temp.path().join("service-definition"), definition)?;
+    write_json(&temp.path().join("network.json"), network)?;
     File::open(temp.path())?.sync_all()?;
-    fs::rename(temp.keep(), directory.join("backup"))?;
+    fs::rename(temp.keep(), directory.join(slot))?;
     File::open(directory)?.sync_all()?;
     Ok(())
 }

@@ -125,28 +125,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_rearm_does_not_create_service_updates_in_a_replacement_home() {
-        let home = crate::shared::test_support::ClientHome::new().await;
-        let binding = home.agent("fixture").await;
-        home.mark_backend_healthy(&binding).await;
-        let runtime = gents::Gents::builder()
-            .node(home.node().clone())
-            .backend_admission(home.home.backend_admission())
-            .identity(home.home.identity.clone())
-            .tool_ceiling(gents::ToolCeiling::meta_only())
-            .agent("fixture")
-            .identity_binding(binding.clone())
-            .backend_id(format!("{}:backend", binding.agent_did))
-            .model_name("test-model")
-            .done()
-            .build()
-            .await
-            .unwrap();
         let replacement = tempfile::tempdir().unwrap();
-        let rearm = tokio::time::timeout(
-            Duration::from_secs(2),
-            observe(&runtime, replacement.path()),
-        )
-        .await;
+        let root = replacement
+            .path()
+            .join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME);
+        let rearm =
+            tokio::time::timeout(Duration::from_secs(2), files::Changes::operations(&root)).await;
         assert!(
             matches!(rearm, Ok(Err(_))),
             "a re-arm without its root fails"
