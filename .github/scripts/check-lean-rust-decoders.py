@@ -33,7 +33,6 @@ GROUPS = {
     "title_admission_join_cases": "LeanTitleAdmissionJoinCase",
     "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
     "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
-    "repaired_projection_admission_cases": "LeanRepairedProjectionCase",
     "protected_replay_compaction_cases": "LeanProtectedReplayCompactionCase",
     "request_execution_lease_cases": "LeanRequestExecutionLeaseCase",
     "request_execution_lease_trace_cases": "LeanRequestExecutionLeaseTraceCase",
