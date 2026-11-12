@@ -1260,8 +1260,8 @@ def caseCoverage : List CoverageEntry :=
       "QueueDeadlineConformanceCases")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "interrupt_queue_cases"
-      "InterruptQueueCases"
+      "family"
+      "interrupt_queue_contracts_sequential"
       "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1385,8 +1385,8 @@ def caseCoverage : List CoverageEntry :=
       "FoldTurnInputCases")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "interrupt_queue_cases"
-      "InterruptQueueHttpOverlapCases"
+      "family"
+      "interrupt_queue_contracts_overlap"
       "Two observed-identity overlap scripts bind real HTTP transactions against embedded completion publication, including permitted pre-latch phantom survival and post-latch replay. These schedules do not prove arbitrary distributed serialization; exact native queue ordering remains unbound.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage

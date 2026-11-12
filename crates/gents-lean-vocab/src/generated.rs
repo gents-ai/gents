@@ -253,10 +253,6 @@ pub fn lean_interrupt_disposition_cases() -> &'static [LeanInterruptDispositionC
     &lean_contract_snapshot().interrupt_disposition_cases
 }
 
-pub fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] {
-    &lean_contract_snapshot().interrupt_queue_cases
-}
-
 pub fn lean_lifecycle_hook_admit_cases() -> &'static [LeanLifecycleHookAdmitCase] {
     &lean_contract_snapshot().lifecycle_hook_admit_cases
 }
@@ -3151,7 +3147,6 @@ pub struct LeanContractSnapshot {
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
-    pub interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
     pub session_control_cases: Vec<serde_json::Value>,
     pub fold_queue_cases: Vec<LeanFoldQueueCase>,
     pub fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
@@ -6508,47 +6503,6 @@ pub struct LeanInterruptDispositionCase {
     pub disposition: String,
     pub post_state: String,
     pub post_await_mode: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInterruptQueueCase {
-    pub name: String,
-    pub node_id: u64,
-    pub requester_id: Option<u64>,
-    pub session_id: u64,
-    pub active_request_id: Option<u64>,
-    pub inputs: Vec<LeanInterruptQueueInput>,
-    pub expected: LeanInterruptQueueObservation,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInterruptQueueEntry {
-    pub request_id: u64,
-    pub created_at: u64,
-    pub execution_origin: String,
-    pub source: String,
-    pub policy: String,
-    pub queue_key: Option<u64>,
-    pub queued_after: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanInterruptQueueInput {
-    Interrupt,
-    CaptureInterrupt,
-    CommitInterrupt,
-    Enqueue { entry: LeanInterruptQueueEntry },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInterruptQueueObservation {
-    pub pending: Vec<u64>,
-    pub terminal: Vec<u64>,
-    pub latched: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

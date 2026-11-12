@@ -184,7 +184,7 @@
       { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/InterruptCases.lean", "symbol": "SessionQueue.InterruptCases.cases" }
     ],
     "constructors": ["SessionQueue.Action.drainObservedAutomated"],
-    "generated_groups": ["interrupt_queue_cases"],
+    "generated_groups": ["families"],
     "fixture_status": "concrete_inputs",
     "native_owner_paths": ["crates/gents-session/src/request/interrupt.rs", "crates/gents-session/src/request/lifecycle/queue/draining.rs"],
     "consumer_paths": ["crates/gents-lean-vocab/src/lib.rs", "crates/gents-session/src/request/interrupt/queue_tests.rs"],

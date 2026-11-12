@@ -522,8 +522,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
-    ++ "\"interrupt_queue_cases\":"
-      ++ Conformance.InterruptQueueContracts.casesJson ++ ","
     ++ "\"session_control_cases\":"
       ++ Conformance.SessionControlContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
