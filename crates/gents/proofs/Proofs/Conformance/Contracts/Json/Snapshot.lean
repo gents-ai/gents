@@ -1104,8 +1104,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
     ++ "\"file_inventory_reader_cases\":"
       ++ Conformance.FileInventoryContracts.readerCasesJson ++ ","
-    ++ "\"file_inventory_order_comparison_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingComparisonCasesJson ++ ","
     ++ "\"file_review_route_cases\":"
       ++ Conformance.FileReviewRouteContracts.routeCasesJson ++ ","
     ++ "\"file_review_subscription_cases\":"

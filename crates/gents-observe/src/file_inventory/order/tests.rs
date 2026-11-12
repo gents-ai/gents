@@ -54,10 +54,18 @@ fn tool(value: &Value) -> Admission {
     }
 }
 
-fn ids(value: &Value) -> Option<Vec<String>> {
-    value
-        .as_array()
-        .map(|values| values.iter().map(document).collect())
+fn without_nulls(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .filter(|(_, field)| !field.is_null())
+                .map(|(name, field)| (name, without_nulls(field)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(without_nulls).collect()),
+        other => other,
+    }
 }
 
 fn session(value: &Value, selected: &Value) -> String {
@@ -371,13 +379,10 @@ fn captured_entries(snapshot: &Value) -> Vec<FileInventoryEntry> {
 }
 
 #[test]
-fn generated_orders_use_canonical_publication_observations() {
-    let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    for case in contracts["file_inventory_order_comparison_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let selected = selection(case);
+fn order_comparison_follows_the_lean_model() {
+    gents_lean_vocab::families::file_inventory_contracts_order_comparison::replay(|input| {
+        let case = without_nulls(serde_json::to_value(input).unwrap());
+        let selected = selection(&case);
         let expected = admission(&case["snapshot"]["admission"]);
         let actual = admission(&case["closure"]["request"]);
         let tools = case["snapshot"]["tools"]
@@ -396,37 +401,28 @@ fn generated_orders_use_canonical_publication_observations() {
         let matching = projected
             .iter()
             .filter(|entry| {
-                entry.scope.node_did == case["node"].as_str().unwrap()
-                    && entry.change.root == case["root"].as_str().unwrap()
-                    && entry.change.path == case["path"].as_str().unwrap()
+                entry.scope.node_did == input.node
+                    && entry.change.root == input.root
+                    && entry.change.path == input.path
             })
             .collect::<Vec<_>>();
-        let observed = if matching.is_empty() {
-            None
-        } else {
-            matching
-                .iter()
-                .map(|entry| {
-                    entry
-                        .order
-                        .as_ref()
-                        .map(|order| (order.index, entry.tool_call_doc_id.clone()))
-                })
-                .collect::<Option<Vec<_>>>()
-                .map(|mut values| {
-                    values.sort_by_key(|value| value.0);
-                    values.into_iter().map(|value| value.1).collect::<Vec<_>>()
-                })
-        };
-        assert_eq!(observed, ids(&case["expected"]), "{}", case["name"]);
-    }
-    assert_eq!(
-        contracts["file_inventory_order_comparison_cases"]
-            .as_array()
-            .unwrap()
-            .len(),
-        13
-    );
+        if matching.is_empty() {
+            return None;
+        }
+        matching
+            .iter()
+            .map(|entry| {
+                entry
+                    .order
+                    .as_ref()
+                    .map(|order| (order.index, document_number(&entry.tool_call_doc_id)))
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|mut values| {
+                values.sort_by_key(|value| value.0);
+                values.into_iter().map(|value| value.1).collect::<Vec<_>>()
+            })
+    });
 }
 
 #[test]
@@ -522,7 +518,7 @@ fn order_entry_coherence_follows_the_lean_model() {
 #[test]
 fn order_window_follows_the_lean_model() {
     gents_lean_vocab::families::file_inventory_contracts_order_window::replay(|input| {
-        let case = serde_json::to_value(input).unwrap();
+        let case = without_nulls(serde_json::to_value(input).unwrap());
         let selected = selection(&case);
         let expected = admission(&case["snapshot"]["admission"]);
         let actual = admission(&case["closure"]["request"]);

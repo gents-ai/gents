@@ -301,17 +301,6 @@ def orderResolution : Family OrderResolutionInput (Option (List Nat)) where
   inputs := Order.Examples.resolutionCases.map fun (name, windows) => { name, windows }
   model := fun i => Order.resolve i.windows
 
-def orderingComparisonCasesJson : String := jsonArray (Order.Examples.comparisonCases.map
-  fun (name, selected, closure, node, root, path) => object
-    [("name", jsonString name), ("snapshot", snapshotJson selected),
-     ("closure", closureJson closure), ("node", jsonString node),
-     ("root", jsonString root), ("path", jsonString path),
-     ("expected", optional (fun ids => jsonArray (ids.map toString))
-       (Order.comparison selected closure node root path)),
-     ("request_coverage", jsonArray (selected.tools.map fun fact => object
-       [("tool", toString fact.tool.id),
-        ("coverage", coverageJson (selected.requestCoverage fact.tool.scope fact.tool.request))]))])
-
 deriving instance Lean.ToJson for FileImages.Scope
 deriving instance Lean.ToJson for Coverage
 
@@ -766,6 +755,96 @@ def pluginEffectWindowCases : List (String × Snapshot × FileInventory.ClosureI
 def orderWindowPluginEffect : Family OrderWindowInput Bool where
   inputs := pluginEffectWindowCases.map OrderWindowInput.ofCase
   model := fun i => (orderWindowOf i.name).isSome
+
+structure OrderComparisonInput where
+  name : String
+  snapshot : SnapshotWire
+  closure : ClosureWire
+  node : String
+  root : String
+  path : String
+  deriving Lean.ToJson
+
+def OrderComparisonInput.ofCase :
+    String × Snapshot × FileInventory.ClosureInput × String × String × String → OrderComparisonInput
+  | (name, selected, closure, node, root, path) =>
+    { name, snapshot := .ofModel selected, closure := .ofModel closure, node, root, path }
+
+def comparisonSnapshotOf (name : String) : Option Snapshot :=
+  (Order.Examples.comparisonCases.find? (·.1 == name)).map (·.2.1)
+
+def orderComparisonOf (name : String) : Option (List Nat) :=
+  (Order.Examples.comparisonCases.find? (·.1 == name)).bind
+    fun (_, selected, closure, node, root, path) => Order.comparison selected closure node root path
+
+def comparisonInputs (names : List String) : List OrderComparisonInput :=
+  (Order.Examples.comparisonCases.filter (·.1 ∈ names)).map OrderComparisonInput.ofCase
+
+/-- The wire carries each case to the native adapter; the model evaluates the
+case its unique name selects. -/
+@[conformance_family]
+def orderComparison : Family OrderComparisonInput (Option (List Nat)) where
+  inputs := Order.Examples.comparisonCases.map OrderComparisonInput.ofCase
+  model := fun i => orderComparisonOf i.name
+
+structure ToolCoverage where
+  tool : Nat
+  coverage : Coverage
+  deriving Lean.ToJson
+
+/-- The coverage of every selected tool's own scope and request. -/
+@[conformance_family]
+def requestCoverage : Family OrderComparisonInput (List ToolCoverage) where
+  inputs := Order.Examples.comparisonCases.map OrderComparisonInput.ofCase
+  model := fun i => ((comparisonSnapshotOf i.name).map fun selected =>
+    selected.tools.map fun fact =>
+      (⟨fact.tool.id, selected.requestCoverage fact.tool.scope fact.tool.request⟩ : ToolCoverage)).getD []
+
+/-- The served-node fork scenario orders one resource in its parent, in a fork
+cut before later parent work, and in a fork of both edits; these are the
+comparison cases it builds. -/
+@[conformance_family]
+def forkResourceOrder : Family OrderComparisonInput (Option (List Nat)) where
+  inputs := comparisonInputs
+    ["sequential_resource", "forked_prefix_resource", "forked_repeated_resource"]
+  model := fun i => orderComparisonOf i.name
+
+structure EntryCoverage where
+  tool : Nat
+  coverage : Option Coverage
+  deriving Lean.ToJson
+
+/-- The served-node fork scenario adds one uncaptured tool on another request
+of its parent session, so it builds the unknown-other-request case. -/
+@[conformance_family]
+def unknownRequestEntryCoverage : Family OrderComparisonInput (List EntryCoverage) where
+  inputs := comparisonInputs ["unknown_other_request"]
+  model := fun i => ((comparisonSnapshotOf i.name).map fun selected =>
+    selected.entries.map fun entry => (⟨entry.tool, entry.requestCoverage⟩ : EntryCoverage)).getD []
+
+/-- A served node restarts after a queued or a retried turn published two
+sequential edits of one resource, so its turn scenario builds the sequential
+case. -/
+@[conformance_family]
+def turnChronology : Family OrderComparisonInput (Option (List Nat)) where
+  inputs := comparisonInputs ["sequential_resource"]
+  model := fun i => orderComparisonOf i.name
+
+structure ChronologyObservation where
+  entries : Nat
+  expected : Option (List Nat)
+  deriving Lean.ToJson
+
+/-- A served node publishes two sequential terminal edits of one resource, as a
+foreground pair, behind a background receipt, or with a completion
+notification; these are the three comparison cases it can build. -/
+@[conformance_family]
+def terminalChronology : Family OrderComparisonInput ChronologyObservation where
+  inputs := comparisonInputs
+    ["sequential_resource", "background_receipt_resource", "background_completion_reference"]
+  model := fun i =>
+    { entries := ((comparisonSnapshotOf i.name).map (·.entries.length)).getD 0
+      expected := orderComparisonOf i.name }
 
 /-- IDs, DIDs and image hashes are the existing models' abstract names. Native
 adapters bind them to actual Defra-created physical IDs, authenticated key
