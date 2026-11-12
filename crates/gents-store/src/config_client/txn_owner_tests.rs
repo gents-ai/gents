@@ -1304,7 +1304,7 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
         })
         .await
         .is_ok();
-        case.check(family::Output {
+        case.check(family::HandoffOutput {
             gate_held_after_owner_handoff,
             gate_held: !released,
         });
