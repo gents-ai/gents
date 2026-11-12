@@ -150,7 +150,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let quickstart_cases =
         &gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_selection_cases;
     for case in quickstart_cases {
-        let actor = match case["actor"].as_str().unwrap() {
+        let actor = match case.actor.as_str() {
             "user" => &operator,
             "creator" => &access,
             "other" => &outsider_access,
@@ -160,7 +160,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .as_array()
             .unwrap()
             .is_empty();
-        assert_eq!(visible, case["before"].as_bool().unwrap(), "{case}");
+        assert_eq!(visible, case.before, "{case:?}");
     }
     let modeled = gents_lean_vocab::lean_workspace_cases()
         .iter()
@@ -324,7 +324,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         .await
         .unwrap();
     for case in quickstart_cases {
-        let actor = match case["actor"].as_str().unwrap() {
+        let actor = match case.actor.as_str() {
             "user" => &operator,
             "creator" => &access,
             "other" => &outsider_access,
@@ -334,11 +334,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .as_array()
             .unwrap()
             .is_empty();
-        assert_eq!(
-            visible,
-            case["after_revocation"].as_bool().unwrap(),
-            "{case}"
-        );
+        assert_eq!(visible, case.after_revocation, "{case:?}");
     }
     operator
         .delete_actor_relationship(
