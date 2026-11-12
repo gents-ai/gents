@@ -1155,7 +1155,6 @@ def snapshotFileCasesJson : String :=
       promptAssemblyResponsesStorageCasesJson ++ ","
     ++ "\"prompt_assembly_responses_effort_cases\":" ++
       promptAssemblyResponsesEffortCasesJson ++ ","
-    ++ "\"retry_entry_cases\":" ++ retryEntryCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
     ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"

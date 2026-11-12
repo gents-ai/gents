@@ -156,13 +156,13 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
 
 #[tokio::test]
 async fn retry_entry_does_not_publish_recorded_prompt_again() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().retry_entry_cases {
+    for case in gents_lean_vocab::families::contracts_retry_entry_publish::cases() {
         let model = ScriptedModel::new(vec![
             RawStreamingChoice::Message("continued".into()),
             RawStreamingChoice::FinalResponse(()),
         ]);
         let mut loop_config = config(1);
-        loop_config.resume_from_history = case.resume;
+        loop_config.resume_from_history = case.input.resume;
         let context = gents_inference::rendered_request::RenderedRequestContext {
             request_doc_id: "retry-input-doc".into(),
             request_commit_cid: "bafy-retry".into(),
@@ -212,7 +212,15 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             authored
         })
         .await;
-        assert_eq!(authored, usize::from(case.publish), "{case:?}");
+        case.check(
+            gents_lean_vocab::families::contracts_retry_entry_publish::RetryEntryPublication {
+                publish: match authored {
+                    0 => false,
+                    1 => true,
+                    more => panic!("{:?}: authored input announced {more} times", case.input),
+                },
+            },
+        );
     }
 }
 

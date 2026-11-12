@@ -46,17 +46,59 @@ def retryFrontierAdmission : Family RetryFrontierInput (Option Bool) where
     PromptAssembly.CurrentInput.admitResume i.scopedTerminal i.sameSession i.sameRequester
       (PromptAssembly.CurrentInput.settledForResume i.running i.background) i.published
 
-def retryEntryCasesJson : String := jsonArray (
+structure RetryEntryInput where
+  resume : Bool
+  history : List Nat
+  context : Option Nat
+  authored : Nat
+  deriving Lean.ToJson
+
+def retryEntryInputs : List RetryEntryInput :=
   [ (false, ([] : List Nat), (none : Option Nat)), (false, [1, 2, 3], none),
     (true, [1], none), (true, [1, 2, 3], none), (true, [1, 2, 3, 4], none),
     (true, [1, 2, 3], some 11), (false, [1], some 11) ].map fun (resume, history, context) =>
-    "{\"resume\":" ++ toString resume ++
-    ",\"history\":" ++ jsonArray (history.map toString) ++
-    ",\"context\":" ++ (match context with | some n => toString n | none => "null") ++
-    ",\"authored\":9,\"expected\":" ++
-      jsonArray ((PromptAssembly.CurrentInput.entryWithContext resume history 9 10 context
-        (history.getLast? == some 4)).map toString) ++
-    ",\"publish\":" ++ toString (PromptAssembly.CurrentInput.publishesAuthoredInput resume) ++ "}")
+    { resume, history, context, authored := 9 }
+
+/-- The retry continuation prompt is message `10`; message `4` is an assistant
+turn, so a history ending in it has an assistant tail. -/
+def retryEntryMessages (i : RetryEntryInput) : List Nat :=
+  PromptAssembly.CurrentInput.entryWithContext i.resume i.history i.authored 10 i.context
+    (i.history.getLast? == some 4)
+
+/-- The provider entry a request starts from: production `request_entry`. -/
+@[conformance_family]
+def retryEntryFrontier : Family RetryEntryInput (List Nat) where
+  inputs := retryEntryInputs
+  model := retryEntryMessages
+
+structure RetryEntryPublication where
+  publish : Bool
+  deriving Lean.ToJson
+
+/-- Whether the owned loop announces the authored prompt for publication:
+production `run_loop_stream` with `resume_from_history`. -/
+@[conformance_family]
+def retryEntryPublish : Family RetryEntryInput RetryEntryPublication where
+  inputs := retryEntryInputs
+  model := fun i => { publish := PromptAssembly.CurrentInput.publishesAuthoredInput i.resume }
+
+structure RetryEntryCaptureOutput where
+  promptCopies : Nat
+  toolResults : Nat
+  publish : Bool
+  deriving Lean.ToJson
+
+/-- A served runtime retries a failed parent whose recorded frontier is the
+prompt (`1`), a tool call (`2`) and its result (`3`); the provider request it
+renders is captured. Only that retry is built end to end: the other entries
+need frontiers a served runtime does not leave behind on failure. -/
+@[conformance_family]
+def retryEntryCapture : Family RetryEntryInput RetryEntryCaptureOutput where
+  inputs := retryEntryInputs.filter fun i => i.resume && i.history == [1, 2, 3] && i.context.isNone
+  model := fun i =>
+    { promptCopies := (retryEntryMessages i).count 1
+      toolResults := (retryEntryMessages i).count 3
+      publish := PromptAssembly.CurrentInput.publishesAuthoredInput i.resume }
 
 def currentInputCaseJson (witness : CurrentInputCase) : String :=
   "{\"name\":" ++ jsonString witness.name ++

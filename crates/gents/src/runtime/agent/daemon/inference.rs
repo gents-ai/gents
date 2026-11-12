@@ -1014,7 +1014,7 @@ pub(super) mod tests {
 
     #[test]
     fn retry_entry_matches_lean_frontier() {
-        for case in &gents_lean_vocab::lean_contract_snapshot().retry_entry_cases {
+        gents_lean_vocab::families::contracts_retry_entry_frontier::replay(|case| {
             let message = |value: &u64| {
                 use gents_inference::llm::message::{
                     AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
@@ -1062,9 +1062,24 @@ pub(super) mod tests {
             )
             .unwrap();
             actual.push(prompt);
-            let expected: Vec<_> = case.expected.iter().map(message).collect();
-            assert_eq!(actual, expected, "{case:?}");
-        }
+            let candidates = case
+                .history
+                .iter()
+                .copied()
+                .chain([case.authored, 10])
+                .chain(case.context)
+                .collect::<Vec<_>>();
+            actual
+                .iter()
+                .map(|row| {
+                    candidates
+                        .iter()
+                        .copied()
+                        .find(|value| message(value) == *row)
+                        .unwrap_or_else(|| panic!("{case:?}: unmodeled entry row {row:?}"))
+                })
+                .collect::<Vec<u64>>()
+        });
     }
 
     #[tokio::test]
