@@ -122,3 +122,6 @@ pub enum TaskHookPhase {
     /// cleanup failures are recorded without erasing the primary outcome.
     Finally,
 }
+
+#[cfg(test)]
+mod pushdown_tests;
