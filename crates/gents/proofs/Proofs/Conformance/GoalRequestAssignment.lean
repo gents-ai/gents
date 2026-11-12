@@ -83,25 +83,11 @@ def inputCasesJson : String := (toJson (inputCases.map inputCaseJson)).compress
 
 example : inputCases.length = 12 := by decide
 
-def resubmissionInputJson (input : ResubmissionInput) : Json :=
-  let creation := match input.creation with
-    | none => Json.null
-    | some .agentNew => toJson "agent_new"
-    | some .pluginJob => toJson "plugin_job"
-  Json.mkObj [("creation", creation), ("reference", input.reference.map referenceJson |>.getD Json.null),
-    ("queued", toJson input.queued), ("continuation", toJson input.continuation),
-    ("authored", toJson input.authored)]
-
 def freshSessionCases : List ResubmissionInput :=
   [none, some .agentNew, some .pluginJob].flatMap fun creation =>
     [none, some ⟨1, none⟩, some ⟨1, some 100⟩].flatMap fun reference =>
       [false, true].flatMap fun queued =>
         [false, true].map fun continuation => ⟨creation, reference, queued, continuation, 42⟩
-
-def freshSessionCasesJson : String :=
-  (toJson (freshSessionCases.map fun input => Json.mkObj [
-    ("input", resubmissionInputJson input),
-    ("expected", resubmissionInputJson (freshSessionInput input))])).compress
 
 example : freshSessionCases.length = 36 := by decide
 
@@ -285,5 +271,20 @@ def persistedHistory : Family HistoryCase PersistedObservation where
 example : historyCases.length = 21 := by decide
 example : (historyCases.map fun c => observeHistory c.versions c.entry).take 2 =
     [.assigned 1 100 .stopped, .assigned 1 100 .stopped] := by native_decide
+
+deriving instance ToJson for CreationIntent, ResubmissionInput
+
+structure FreshSessionCase where
+  input : ResubmissionInput
+  deriving ToJson
+
+structure FreshSessionResult where
+  expected : ResubmissionInput
+  deriving ToJson
+
+@[conformance_family]
+def freshSession : Family FreshSessionCase FreshSessionResult where
+  inputs := freshSessionCases.map fun input => { input }
+  model := fun c => { expected := freshSessionInput c.input }
 
 end Conformance.GoalRequestAssignmentContracts
