@@ -2039,8 +2039,10 @@ fn background_registry_reservations_follow_the_lean_registry_model() {
                 .iter()
                 .map(|step| {
                     let refused = match step.kind.as_str() {
+                        // One call id for every reservation: the registry keys
+                        // by document, so a later document replaces nothing.
                         "reserve" => match registry.reserve(
-                            format!("call-{}", step.doc),
+                            "same".to_owned(),
                             step.doc.clone(),
                             CancellationToken::new(),
                         ) {
