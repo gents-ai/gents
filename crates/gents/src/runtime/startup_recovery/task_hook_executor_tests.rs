@@ -2,26 +2,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gents_documents::TaskHookPhase;
-use gents_lean_vocab::{
-    lean_task_hook_run_cases, LeanCommandResult, LeanHookAttempt, LeanHookInvocation,
-    LeanTaskHookRunCase, LeanTaskOutcome, LeanTaskPrimaryError,
-};
 use gents_toolcalls::call::task_hooks::{
-    effective_timeout_secs, run_task_hooks, HookAttempt, HookPrimaryError, ManagedTaskHookExec,
-    TaskAgentResult, TaskHookCancellation, TaskHookExec, TaskHookOutcome,
+    effective_timeout_secs, run_task_hooks, HookAttempt, HookCommandResult, HookPrimaryError,
+    ManagedTaskHookExec, TaskAgentResult, TaskHookCancellation, TaskHookExec, TaskHookOutcome,
 };
-
-fn outcome(generated: &LeanTaskOutcome) -> TaskHookOutcome {
-    match generated {
-        LeanTaskOutcome::Success => TaskHookOutcome::Success,
-        LeanTaskOutcome::Failure { error } => TaskHookOutcome::Failure(match error {
-            LeanTaskPrimaryError::Hook { hook_id } => HookPrimaryError::Hook(hook_id.clone()),
-            LeanTaskPrimaryError::Agent => HookPrimaryError::Agent,
-        }),
-        LeanTaskOutcome::Interrupted => TaskHookOutcome::Interrupted,
-        LeanTaskOutcome::Parked => TaskHookOutcome::Parked,
-    }
-}
 
 fn agent_result(name: &str) -> TaskAgentResult {
     match name {
@@ -34,38 +18,45 @@ fn agent_result(name: &str) -> TaskAgentResult {
     }
 }
 
-fn scripted(case: &LeanTaskHookRunCase, hook_id: &str) -> LeanCommandResult {
-    case.script
+fn scripted(
+    input: &gents_lean_vocab::families::task_hooks_contracts_run_trace::RunInput<
+        String,
+        String,
+        TaskHookPhase,
+    >,
+    hook_id: &str,
+) -> (String, Option<i64>) {
+    input
+        .script
         .iter()
         .find(|entry| entry.hook_id == hook_id)
-        .map(|entry| entry.result.clone())
-        .unwrap_or(LeanCommandResult::Exited { code: 0 })
-}
-
-fn log_line(invocation: &LeanHookInvocation) -> String {
-    match invocation {
-        LeanHookInvocation::Hook { hook_id } => format!("hook:{hook_id}"),
-        LeanHookInvocation::Work => "work".to_string(),
-    }
+        .map(|entry| (entry.result.kind.clone(), entry.result.code))
+        .unwrap_or(("exited".to_owned(), Some(0)))
 }
 
 fn started_marker(dir: &Path, hook_id: &str) -> PathBuf {
     dir.join(format!("started-{hook_id}"))
 }
 
-fn real_command(dir: &Path, log: &Path, hook_id: &str, result: &LeanCommandResult) -> Vec<String> {
+fn real_command(
+    dir: &Path,
+    log: &Path,
+    hook_id: &str,
+    kind: &str,
+    code: Option<i64>,
+) -> Vec<String> {
     let record = format!(
         "printf 'hook:%s\\n' {hook_id} >> {log}",
         log = log.display()
     );
-    let script = match result {
-        LeanCommandResult::Exited { code } => format!("{record}; exit {code}"),
-        LeanCommandResult::TimedOut => format!("{record}; exec sleep 30"),
-        LeanCommandResult::Interrupted => format!(
+    let script = match kind {
+        "exited" => format!("{record}; exit {}", code.expect("an exit code")),
+        "timed_out" => format!("{record}; exec sleep 30"),
+        "interrupted" => format!(
             "{record}; : > {marker}; exec sleep 30",
             marker = started_marker(dir, hook_id).display()
         ),
-        LeanCommandResult::LaunchFailed => {
+        "launch_failed" => {
             return vec![dir
                 .join("missing")
                 .join(hook_id)
@@ -73,6 +64,7 @@ fn real_command(dir: &Path, log: &Path, hook_id: &str, result: &LeanCommandResul
                 .expect("utf-8 hook path")
                 .to_string()]
         }
+        other => panic!("unknown scripted command result {other:?}"),
     };
     vec!["sh".to_string(), "-c".to_string(), script]
 }
@@ -93,30 +85,85 @@ async fn cancel_held_commands(
     }
 }
 
-fn assert_attempts(case: &str, phase: &str, actual: &[HookAttempt], expected: &[LeanHookAttempt]) {
-    assert_eq!(
-        actual
-            .iter()
-            .map(|attempt| (attempt.hook_id.as_str(), attempt.result.clone()))
-            .collect::<Vec<_>>(),
-        expected
-            .iter()
-            .map(|attempt| (
-                attempt.hook_id.as_str(),
-                gents_toolcalls::call::task_hooks::test_support::native_command_result(
-                    &attempt.result
-                )
-            ))
-            .collect::<Vec<_>>(),
-        "{case}: {phase} attempts disagree with the model's trace"
-    );
-    for (actual, expected) in actual.iter().zip(expected) {
-        assert_eq!(
-            actual.result.succeeded(),
-            expected.succeeded,
-            "{case}: {phase} attempt {:?} disagrees on success",
-            expected.hook_id
-        );
+fn command_wire(
+    result: &HookCommandResult,
+) -> gents_lean_vocab::families::task_hooks_contracts_run_trace::CommandWire<String> {
+    let (kind, code) = match result {
+        HookCommandResult::Exited { code } => ("exited", *code),
+        HookCommandResult::LaunchFailed => ("launch_failed", None),
+        HookCommandResult::TimedOut => ("timed_out", None),
+        HookCommandResult::Interrupted => ("interrupted", None),
+    };
+    gents_lean_vocab::families::task_hooks_contracts_run_trace::CommandWire {
+        kind: kind.to_owned(),
+        code,
+    }
+}
+
+fn attempts(
+    actual: &[HookAttempt],
+) -> Vec<gents_lean_vocab::families::task_hooks_contracts_run_trace::AttemptWire<String>> {
+    actual
+        .iter()
+        .map(
+            |attempt| gents_lean_vocab::families::task_hooks_contracts_run_trace::AttemptWire {
+                hook_id: attempt.hook_id.clone(),
+                result: command_wire(&attempt.result),
+                succeeded: attempt.result.succeeded(),
+            },
+        )
+        .collect()
+}
+
+fn outcome_wire(
+    outcome: &TaskHookOutcome,
+) -> gents_lean_vocab::families::task_hooks_contracts_run_trace::OutcomeWire<String, String> {
+    let (kind, error) = match outcome {
+        TaskHookOutcome::Success => ("success", None),
+        TaskHookOutcome::Failure(HookPrimaryError::Hook(hook_id)) => (
+            "failure",
+            Some(
+                gents_lean_vocab::families::task_hooks_contracts_run_trace::ErrorWire {
+                    kind: "hook".to_owned(),
+                    hook_id: Some(hook_id.clone()),
+                },
+            ),
+        ),
+        TaskHookOutcome::Failure(HookPrimaryError::Agent) => (
+            "failure",
+            Some(
+                gents_lean_vocab::families::task_hooks_contracts_run_trace::ErrorWire {
+                    kind: "agent".to_owned(),
+                    hook_id: None,
+                },
+            ),
+        ),
+        TaskHookOutcome::Interrupted => ("interrupted", None),
+        TaskHookOutcome::Parked => ("parked", None),
+    };
+    gents_lean_vocab::families::task_hooks_contracts_run_trace::OutcomeWire {
+        kind: kind.to_owned(),
+        error,
+    }
+}
+
+fn invocation(
+    line: &str,
+) -> gents_lean_vocab::families::task_hooks_contracts_run_trace::InvocationWire<String> {
+    match line.strip_prefix("hook:") {
+        Some(hook_id) => {
+            gents_lean_vocab::families::task_hooks_contracts_run_trace::InvocationWire {
+                kind: "hook".to_owned(),
+                hook_id: Some(hook_id.to_owned()),
+            }
+        }
+        None => {
+            assert_eq!(line, "work", "unknown invocation log line");
+            gents_lean_vocab::families::task_hooks_contracts_run_trace::InvocationWire {
+                kind: "work".to_owned(),
+                hook_id: None,
+            }
+        }
     }
 }
 
@@ -153,38 +200,41 @@ impl TaskHookExec for RevokingExec<'_> {
 #[tokio::test]
 async fn generated_task_hook_run_cases_drive_real_host_commands() {
     let fixture = super::task_hook_recovery_tests::Fixture::new().await;
-    let cases = lean_task_hook_run_cases();
-    assert!(!cases.is_empty(), "task hook run cases must not be empty");
-    for case in cases {
+    for case in gents_lean_vocab::families::task_hooks_contracts_run_trace::cases::<
+        String,
+        String,
+        String,
+        TaskHookPhase,
+        String,
+        String,
+    >() {
+        let input = &case.input;
         let dir = tempfile::tempdir().expect("hook case directory");
         let log = dir.path().join("invocations.log");
         let mut hooks = Vec::new();
         let mut held = Vec::new();
-        let mut unlaunchable = case.refused_before_launch.clone();
-        for generated in &case.hooks {
-            let mut configured =
-                gents_toolcalls::call::task_hooks::test_support::native_task_hook(generated);
-            assert_eq!(
-                effective_timeout_secs(&configured),
-                generated.effective_timeout_secs,
-                "{}: production timeout resolution disagrees with the model for {:?}",
-                case.name,
-                generated.hook_id
-            );
-            let result = scripted(case, &generated.hook_id);
-            match result {
-                LeanCommandResult::TimedOut => assert!(
-                    generated.effective_timeout_secs <= 5,
-                    "{}: the model must bound its timed-out occurrence",
-                    case.name
+        let mut effective_timeout = Vec::new();
+        for generated in &input.hooks {
+            let mut configured = gents_documents::TaskHook {
+                hook_id: generated.hook_id.clone(),
+                phase: generated.phase,
+                command: generated.command.clone(),
+                timeout_secs: generated.timeout_secs,
+                skip_exit_codes: generated.skip_exit_codes.clone(),
+            };
+            let timeout = effective_timeout_secs(&configured);
+            effective_timeout.push(timeout);
+            let (kind, code) = scripted(input, &generated.hook_id);
+            match kind.as_str() {
+                "timed_out" => assert!(
+                    timeout <= 5,
+                    "{}: a timed-out occurrence needs a bounded timeout",
+                    input.name
                 ),
-                LeanCommandResult::Interrupted => {
-                    held.push((generated.hook_id.clone(), configured.phase))
-                }
-                LeanCommandResult::LaunchFailed => unlaunchable.push(generated.hook_id.clone()),
-                LeanCommandResult::Exited { .. } => {}
+                "interrupted" => held.push((generated.hook_id.clone(), configured.phase)),
+                _ => {}
             }
-            configured.command = real_command(dir.path(), &log, &generated.hook_id, &result);
+            configured.command = real_command(dir.path(), &log, &generated.hook_id, &kind, code);
             hooks.push(configured);
         }
 
@@ -207,9 +257,9 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
                 ),
             access: fixture.agent_access(),
             request_doc_id: &lifecycle.request().doc_id,
-            revoked: &case.revoked,
+            revoked: &input.revoked,
         };
-        let agent = agent_result(&case.agent);
+        let agent = agent_result(&input.agent);
         let work_log = log.clone();
         let run = tokio::time::timeout(
             Duration::from_secs(60),
@@ -225,7 +275,7 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
             }),
         )
         .await
-        .unwrap_or_else(|_| panic!("{}: hook execution did not finish", case.name));
+        .unwrap_or_else(|_| panic!("{}: hook execution did not finish", input.name));
         canceller.abort();
 
         let observed = std::fs::read_to_string(&log)
@@ -233,74 +283,68 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
             .lines()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        let expected = case
-            .invocation_trace
+        let launched = observed
             .iter()
-            .filter(|invocation| {
-                !matches!(invocation, LeanHookInvocation::Hook { hook_id } if unlaunchable.contains(hook_id))
-            })
-            .map(log_line)
+            .map(|line| invocation(line))
             .collect::<Vec<_>>();
-        assert_eq!(
-            observed, expected,
-            "{}: host commands and the owned work ran in a different sequence than the model's trace",
-            case.name
-        );
-        assert_eq!(
-            run.agent_result.is_some(),
-            case.expected_agent_ran,
-            "{}",
-            case.name
-        );
-        assert_attempts(
-            &case.name,
-            "before",
+        let phases = [
             &run.before_attempted,
-            &case.before_attempted,
-        );
-        assert_attempts(
-            &case.name,
-            "after_success",
             &run.after_success_attempted,
-            &case.after_success_attempted,
-        );
-        assert_attempts(
-            &case.name,
-            "after_failure",
             &run.after_failure_attempted,
-            &case.after_failure_attempted,
-        );
-        assert_attempts(
-            &case.name,
-            "finally",
             &run.finally_attempted,
-            &case.finally_attempted,
-        );
-        assert_eq!(run.cleanup_errors(), case.cleanup_errors, "{}", case.name);
-        assert_eq!(
-            run.outcome,
-            outcome(&case.expected_outcome),
-            "{}",
-            case.name
-        );
+        ];
+        let refused_before_launch = phases
+            .iter()
+            .flat_map(|attempts| attempts.iter())
+            .filter(|attempt| {
+                attempt.result != HookCommandResult::LaunchFailed
+                    && !observed.contains(&format!("hook:{}", attempt.hook_id))
+            })
+            .map(|attempt| attempt.hook_id.clone())
+            .collect::<Vec<_>>();
+        let hook = |attempt: &HookAttempt| {
+            gents_lean_vocab::families::task_hooks_contracts_run_trace::InvocationWire {
+                kind: "hook".to_owned(),
+                hook_id: Some(attempt.hook_id.clone()),
+            }
+        };
+        let invocation_trace = run
+            .before_attempted
+            .iter()
+            .map(hook)
+            .chain(run.agent_result.iter().map(|_| {
+                gents_lean_vocab::families::task_hooks_contracts_run_trace::InvocationWire {
+                    kind: "work".to_owned(),
+                    hook_id: None,
+                }
+            }))
+            .chain(run.after_success_attempted.iter().map(hook))
+            .chain(run.after_failure_attempted.iter().map(hook))
+            .chain(run.finally_attempted.iter().map(hook))
+            .collect();
         let final_outcome = run.final_outcome();
-        assert_eq!(
-            final_outcome,
-            outcome(&case.expected_final_outcome),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            final_outcome
-                .terminal_outcome()
-                .map(|outcome| outcome.request_lifecycle_state())
-                .unwrap_or(
-                    gents_protocol::request_lifecycle::RequestLifecycleState::WaitingForBackend
-                )
-                .as_str(),
-            case.expected_request_state,
-            "{}: the terminal owner would write a different request state",
-            case.name
+        let request_state = final_outcome
+            .terminal_outcome()
+            .map(|outcome| outcome.request_lifecycle_state())
+            .unwrap_or(gents_protocol::request_lifecycle::RequestLifecycleState::WaitingForBackend)
+            .as_str()
+            .to_owned();
+        case.check(
+            gents_lean_vocab::families::task_hooks_contracts_run_trace::RunOutput {
+                effective_timeout_secs: effective_timeout,
+                refused_before_launch,
+                agent_ran: run.agent_result.is_some(),
+                before_attempted: attempts(&run.before_attempted),
+                after_success_attempted: attempts(&run.after_success_attempted),
+                after_failure_attempted: attempts(&run.after_failure_attempted),
+                finally_attempted: attempts(&run.finally_attempted),
+                invocation_trace,
+                launched_trace: launched,
+                cleanup_errors: run.cleanup_errors(),
+                outcome: outcome_wire(&run.outcome),
+                final_outcome: outcome_wire(&final_outcome),
+                request_state,
+            },
         );
     }
 }

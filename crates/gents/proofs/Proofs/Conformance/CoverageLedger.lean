@@ -814,15 +814,18 @@ def caseCoverage : List CoverageEntry :=
       "task_hook_admission_cases"
       "TaskHookAdmissionCases")
       "task-hooks" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "task_hook_run_cases"
-      "TaskHookRunCases"
-      "The consumer binds the emitted phase vocabulary to the production TaskHookPhase encoding and replays admission over every trace; the executor consumer below drives the traces.")
+  , tagged (consumerCoverage
+      "family"
+      "task_hooks_contracts_run_admitted")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "task_hook_run_cases"
-      "TaskHookRunCases"
-      "Every generated trace runs through the production orchestration and managed host execution with real commands: each scripted result is produced by a real process (an exit status, a nonexistent executable, a command outliving its model-resolved timeout, or a held command cancelled through the interrupt or shutdown source its phase uses). The processes' own invocation log, with the owned work's entry, is compared against the emitted invocationTrace, excluding only occurrences that could not launch; attempts, outcomes and the terminal request state are compared too. The daemon placement of the before gate at claim and the after phases ahead of terminalization is fenced by daemon tests, not these traces.")
+      "family"
+      "task_hooks_contracts_run_trace"
+      "Every generated trace runs through the production orchestration and managed host execution with real commands: each scripted result is produced by a real process (an exit status, a nonexistent executable, a command outliving its model-resolved timeout, or a held command cancelled through the interrupt or shutdown source its phase uses). The processes' own invocation log, with the owned work's entry, is compared against the emitted launchedTrace; attempts, outcomes and the terminal request state are compared too. The daemon placement of the before gate at claim and the after phases ahead of terminalization is fenced by daemon tests, not these traces.")
+      "task-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "task_hooks_contracts_daemon_revocation")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "task_hook_recovery_cases"
@@ -2044,14 +2047,9 @@ def caseCoverage : List CoverageEntry :=
       "BackgroundBudgetBoundedTheoremWitness")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "r4c_background_work_cases"
-      "R4cBackgroundWorkCases")
+      "family"
+      "contracts_tool_output_canonical_source")
       "background-tools" [Surface.operatorUi]
-  , tagged (followUpCoverage
-      "r4c_background_work_cases"
-      "R4cBackgroundWorkCases"
-      "#1571: replace the retired state/registry dispatch consumer with canonical_source_reconstruction over physical tool segments; migrate the generated witness schema. Generic paging coverage below is unchanged.")
-      "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "tool_output_paging_cases"
       "ToolOutputPagingCases")

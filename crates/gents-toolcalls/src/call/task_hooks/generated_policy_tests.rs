@@ -1,9 +1,7 @@
 use crate::call::task_hooks::effective_timeout_secs;
 use crate::call::task_hooks::test_support::lean_hook_phase;
 use gents_documents::{Task, TaskHook};
-use gents_lean_vocab::{
-    lean_task_hook_admission_cases, lean_task_hook_recovery_cases, lean_task_hook_run_cases,
-};
+use gents_lean_vocab::{lean_task_hook_admission_cases, lean_task_hook_recovery_cases};
 
 fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
     Task {
@@ -63,22 +61,42 @@ fn generated_task_hook_admission_cases_fence_production_validation() {
 }
 
 #[test]
+fn generated_task_hook_run_traces_are_admitted_by_production_validation() {
+    gents_lean_vocab::families::task_hooks_contracts_run_admitted::replay::<
+        String,
+        String,
+        gents_documents::TaskHookPhase,
+    >(|i| {
+        let task = task_with_hooks(
+            &i.name,
+            i.hooks
+                .iter()
+                .map(|hook| TaskHook {
+                    hook_id: hook.hook_id.clone(),
+                    phase: hook.phase,
+                    command: hook.command.clone(),
+                    timeout_secs: hook.timeout_secs,
+                    skip_exit_codes: hook.skip_exit_codes.clone(),
+                })
+                .collect(),
+        );
+        gents_lean_vocab::families::task_hooks_contracts_run_admitted::AdmittedOutput {
+            admitted: task.validate().is_ok(),
+        }
+    });
+}
+
+#[test]
 fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
-    let run_cases = lean_task_hook_run_cases();
     let recovery_cases = lean_task_hook_recovery_cases();
-    assert!(
-        !run_cases.is_empty(),
-        "task hook run cases must not be empty"
-    );
     assert!(
         !recovery_cases.is_empty(),
         "task hook recovery cases must not be empty"
     );
 
-    let emitted: std::collections::BTreeSet<&str> = run_cases
+    let emitted: std::collections::BTreeSet<&str> = recovery_cases
         .iter()
         .flat_map(|case| case.hooks.iter())
-        .chain(recovery_cases.iter().flat_map(|case| case.hooks.iter()))
         .map(|generated| generated.phase.as_str())
         .collect();
     assert_eq!(
@@ -92,21 +110,18 @@ fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
         assert_eq!(encoded, format!("\"{name}\""));
     }
 
-    for (name, hooks) in run_cases
-        .iter()
-        .map(|case| (&case.name, &case.hooks))
-        .chain(recovery_cases.iter().map(|case| (&case.name, &case.hooks)))
-    {
+    for case in recovery_cases {
         let task = task_with_hooks(
-            name,
-            hooks
+            &case.name,
+            case.hooks
                 .iter()
                 .map(|hook| crate::call::task_hooks::test_support::native_task_hook(hook))
                 .collect(),
         );
         assert!(
             task.validate().is_ok(),
-            "{name}: generated trace uses hooks production validation rejects: {:?}",
+            "{}: generated trace uses hooks production validation rejects: {:?}",
+            case.name,
             task.validate().err(),
         );
     }

@@ -324,8 +324,6 @@ def snapshotCaptureTailJson : String :=
     ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
-    ++ "\"task_hook_run_cases\":"
-      ++ Conformance.TaskHooksContracts.runCasesJson ++ ","
     ++ "\"task_hook_recovery_cases\":"
       ++ Conformance.TaskHooksContracts.recoveryCasesJson ++ ","
     ++ "\"compaction_reducer_cases\":"
@@ -965,8 +963,6 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"restart_disposition_cases\":"
       ++ jsonArray
         (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
-    ++ "\"r4c_background_work_cases\":"
-      ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
     ++ "\"tool_output_paging_cases\":"
       ++ jsonArray
         (toolOutputPagingCases.map toolOutputPagingCaseJson) ++ ","

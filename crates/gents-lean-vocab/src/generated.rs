@@ -525,10 +525,6 @@ pub fn lean_queued_steering_trace_cases() -> &'static [LeanQueuedSteeringTraceCa
     &lean_contract_snapshot().queued_steering_trace_cases
 }
 
-pub fn lean_r4c_background_work_cases() -> &'static [LeanR4cBackgroundWorkCase] {
-    &lean_contract_snapshot().r4c_background_work_cases
-}
-
 pub fn lean_r6_background_theorem_witnesses() -> &'static [LeanBackgroundTheoremWitness] {
     &lean_contract_snapshot().r6_background_theorem_witnesses
 }
@@ -659,10 +655,6 @@ pub fn lean_task_hook_admission_cases() -> &'static [LeanTaskHookAdmissionCase] 
 
 pub fn lean_task_hook_recovery_cases() -> &'static [LeanTaskHookRecoveryCase] {
     &lean_contract_snapshot().task_hook_recovery_cases
-}
-
-pub fn lean_task_hook_run_cases() -> &'static [LeanTaskHookRunCase] {
-    &lean_contract_snapshot().task_hook_run_cases
 }
 
 pub fn lean_terminal_diagnostic_presentation_cases() -> &'static [LeanTerminalDiagnosticPresentationCase] {
@@ -3230,7 +3222,6 @@ pub struct LeanContractSnapshot {
     pub session_message_kill_cases: Vec<LeanKillCase>,
     pub session_message_kill_observation_cases: Vec<LeanKillObservationCase>,
     pub restart_disposition_cases: Vec<LeanRestartDispositionCase>,
-    pub r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
     pub interrupt_disposition_cases: Vec<LeanInterruptDispositionCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
@@ -3319,7 +3310,6 @@ pub struct LeanContractSnapshot {
     pub native_claim_lifetime_cases: Vec<LeanNativeClaimLifetimeCase>,
     pub families: BTreeMap<String, LeanFamily>,
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
-    pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
     pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
     pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
@@ -5888,13 +5878,6 @@ pub struct LeanHookAttempt {
     pub hook_id: String,
     pub result: LeanCommandResult,
     pub succeeded: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanHookInvocation {
-    Hook { hook_id: String },
-    Work,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -9599,17 +9582,6 @@ pub struct LeanQueuedSteeringTraceCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "witness", deny_unknown_fields)]
-pub enum LeanR4cBackgroundWorkCase {
-    #[serde(rename = "r4c.read_tool_output.canonical_source_reconstruction")]
-    ReadToolOutputCanonicalSourceReconstruction {
-        tool_call_id: String,
-        canonical_source: String,
-        cases: Vec<LeanToolOutputProjectionCase>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanR6BackgroundingCase {
     pub name: String,
     pub group: String,
@@ -11165,43 +11137,6 @@ pub struct LeanTaskHookRecoveryCase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanTaskHookRunCase {
-    pub name: String,
-    pub hooks: Vec<LeanTaskHook>,
-    pub script: Vec<LeanScriptedHookResult>,
-    pub revoked: Vec<String>,
-    pub refused_before_launch: Vec<String>,
-    pub agent: String,
-    pub expected_agent_ran: bool,
-    pub before_attempted: Vec<LeanHookAttempt>,
-    pub after_success_attempted: Vec<LeanHookAttempt>,
-    pub after_failure_attempted: Vec<LeanHookAttempt>,
-    pub finally_attempted: Vec<LeanHookAttempt>,
-    pub invocation_trace: Vec<LeanHookInvocation>,
-    pub cleanup_errors: Vec<String>,
-    pub expected_outcome: LeanTaskOutcome,
-    pub expected_final_outcome: LeanTaskOutcome,
-    pub expected_request_state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanTaskOutcome {
-    Parked,
-    Success,
-    Failure { error: LeanTaskPrimaryError },
-    Interrupted,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanTaskPrimaryError {
-    Hook { hook_id: String },
-    Agent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanTerminalDiagnosticPresentationCase {
     pub name: String,
     pub raw: Vec<u8>,
@@ -11641,16 +11576,6 @@ pub struct LeanToolOutputPagingCase {
     pub has_more: bool,
     #[allow(dead_code)]
     pub theorem: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolOutputProjectionCase {
-    pub name: String,
-    pub document: u64,
-    pub segments: Vec<LeanCanonicalSegment>,
-    pub expected_state: Option<String>,
-    pub expected_payload: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

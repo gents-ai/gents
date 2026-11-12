@@ -281,14 +281,6 @@ pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
 }
 
-pub fn lean_r4c_background_work_case(witness: &str) -> &'static LeanR4cBackgroundWorkCase {
-    lean_contract_snapshot()
-        .r4c_background_work_cases
-        .iter()
-        .find(|case| case.witness() == witness)
-        .unwrap_or_else(|| panic!("Lean R4c background-work witness {witness:?} was not emitted"))
-}
-
 pub fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {
     lean_contract_snapshot()
         .r6_backgrounding_cases
