@@ -16,20 +16,17 @@ fn configuration_admission_and_deferral_match_lean() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().runtime_configuration_admission_cases;
     assert_eq!(cases.len(), 4);
     for case in cases {
-        let name = case["name"].as_str().unwrap();
-        let admission = match configuration_admission(case["visible"].as_bool().unwrap()) {
+        let name = case.name.as_str();
+        let admission = match configuration_admission(case.visible) {
             ConfigurationAdmission::Claim => "claim",
             ConfigurationAdmission::AwaitNewerGeneration => "await_newer_generation",
         };
-        assert_eq!(admission, case["expected"].as_str().unwrap(), "{name}");
+        assert_eq!(admission, case.expected.as_str(), "{name}");
         let mut deferred = DeferredRequests::default();
-        deferred.defer(
-            case["deferred_at"].as_u64().unwrap(),
-            request(Some("did:key:agent"), name),
-        );
+        deferred.defer(case.deferred_at, request(Some("did:key:agent"), name));
         assert_eq!(
-            deferred.release(case["active"].as_u64().unwrap()).is_some(),
-            case["retries"].as_bool().unwrap(),
+            deferred.release(case.active).is_some(),
+            case.retries,
             "{name}"
         );
     }
