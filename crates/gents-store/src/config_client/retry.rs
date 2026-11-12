@@ -485,7 +485,8 @@ mod storage_failure_tests {
     }
 
     #[tokio::test]
-    async fn storage_full_http_transactions_stop_without_replaying_or_discarding_consumed_handles() {
+    async fn storage_full_http_transactions_stop_without_replaying_or_discarding_consumed_handles()
+    {
         let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
         let cases = contract["storage_failure_cases"].as_array().unwrap();
         let full_cases: Vec<_> = cases.iter().filter(|case| case["full"] == true).collect();

@@ -63,9 +63,8 @@ fn created_id(response: &QueryResponse) -> Result<Option<String>> {
     if response.has_errors() {
         return Ok(None);
     }
-    let row =
-        crate::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
-            .context("successful create omitted its row")?;
+    let row = crate::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
+        .context("successful create omitted its row")?;
     Ok(Some(
         row.get("_docID")
             .and_then(serde_json::Value::as_str)
@@ -98,10 +97,8 @@ async fn rows(node: &EmbeddedNode) -> Result<Vec<(String, OutputSegment)>> {
 async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_create() -> Result<()>
 {
     let directory = tempfile::tempdir()?;
-    let identity = crate::identity::KeyIdentity::load_or_create(
-        directory.path().join("node.key"),
-        None,
-    )?;
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
