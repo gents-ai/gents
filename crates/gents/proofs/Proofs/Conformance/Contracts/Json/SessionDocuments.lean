@@ -1,18 +1,16 @@
 import Proofs.Conformance.TaskLineage
-import Proofs.Clients.ClientShell.Timeline
 import Proofs.Conformance.QuestionReply
+import Proofs.Conformance.RuntimeInput
+import Proofs.Clients.ClientShell.Timeline
 import Proofs.Session.SessionQueue.Archive
 import Proofs.Conformance.ContractCases.SessionDocuments
 import Proofs.Conformance.ContractCases.Types
 import Lean
-import Proofs.Conformance.RuntimeInput
 import Proofs.Conformance.Family
 import Proofs.Conformance.Functions.Session
 
 namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
-
-deriving instance ToJson for AgentSession.Scope
 
 def pluginJobOpeningCasesJson : String :=
   let good : AgentSession.PluginJobOpening := ⟨true, true, true, true, true⟩
@@ -50,126 +48,6 @@ def documentJson (d : AgentSession.Document) : Json := Json.mkObj
          [("doc_id", toJson r.docId), ("request_id", toJson r.requestId),
           ("state", toJson r.state.toDefraDB)]) |>.getD Json.null)]) |>.getD Json.null)]
 
-private def admissionReceiptJson (receipt : AgentSession.CreationReceipt) : Json := Json.mkObj
-  [("scope", scopeJson receipt.scope), ("session_doc", toJson receipt.sessionDoc),
-   ("agent", toJson receipt.agent), ("opening_request_doc", toJson receipt.openingRequestDoc),
-   ("causal_kind", toJson receipt.causalKind), ("cause_binding", toJson receipt.causeBinding),
-   ("starter", receipt.starter.map (fun starter => Json.mkObj
-      [("source", scopeJson starter.source), ("parent_request_doc", toJson starter.parentRequestDoc)])
-      |>.getD Json.null)]
-
-private def admissionStateJson (state : AgentSession.AdmissionState) : Json := Json.mkObj
-  [("session", state.session.map documentJson |>.getD Json.null),
-   ("session_owner", toJson state.sessionOwner), ("session_doc", toJson state.sessionDoc),
-   ("session_parent", toJson state.sessionParent), ("session_worker", toJson state.sessionWorker),
-   ("receipt", state.receipt.map admissionReceiptJson |>.getD Json.null),
-   ("request_doc", toJson state.requestDoc), ("request_owner", toJson state.requestOwner),
-   ("request_parent", toJson state.requestParent), ("request_worker", toJson state.requestWorker)]
-
-private def admissionJson (name : String) (before : AgentSession.AdmissionState)
-    (input : AgentSession.AdmissionInput) : Json := Json.mkObj
-  [("name", toJson name), ("operation", toJson "atomic_admission"),
-   ("before", admissionStateJson before), ("requested", documentJson input.requested),
-   ("actor", toJson input.actor), ("session_doc", toJson input.sessionDoc),
-   ("agent_doc", toJson input.agentDoc), ("request_doc", toJson input.requestDoc),
-   ("receipt", input.receipt.map admissionReceiptJson |>.getD Json.null),
-   ("authorized", toJson input.authorized), ("commit", toJson input.commit),
-   ("after", admissionStateJson (AgentSession.admitRequest before input))]
-
-private def advanceJson (name : String) (r : AgentSession.RequestFact)
-    (before : AgentSession.Document := indexed)
-    (rows : List AgentSession.RequestFact := [old, newerRequest]) : Json := Json.mkObj
-  [("name", toJson name), ("operation", toJson "advance"), ("before", documentJson before),
-   ("rows", toJson (rows.map requestJson)), ("request", requestJson r),
-   ("normalized_preview", toJson "candidate"), ("now", toJson (4 : Nat)),
-   ("after", documentJson (AgentSession.advance before rows r "candidate" 4))]
-private def refreshJson (name : String) (event : AgentSession.RequestFact)
-    (rows : List AgentSession.RequestFact := [old, event]) : Json := Json.mkObj
-  [("name", toJson name), ("operation", toJson "refresh"), ("before", documentJson indexed),
-   ("event", requestJson event), ("rows", toJson (rows.map requestJson)), ("now", toJson (4 : Nat)),
-   ("after", documentJson (AgentSession.refresh indexed rows event.observed 4))]
-private def toolActivityJson (name : String) (now : Nat) (published : Bool)
-    (stale : Bool := false) : Json :=
-  let r := { processingEvent with scope := { scope with requester := none } }
-  let before := AgentSession.advance { session with scope := r.scope } [r] r "new" 3
-  let event := if stale then { r.observed with docId := 999 } else r.observed
-  let rows := [{ r with observed := event }]
-  let after := AgentSession.toolActivity before rows event now published
-  Json.mkObj [("name", toJson name), ("operation", toJson "tool_activity"),
-    ("before", documentJson before), ("rows", toJson (rows.map requestJson)),
-    ("event", requestJson { r with observed := event }), ("now", toJson now),
-    ("published", toJson published),
-    ("steps", toJson [
-      Json.mkObj [("now", toJson now), ("after", documentJson after)],
-      Json.mkObj [("now", toJson (now + 1)),
-        ("after", documentJson (AgentSession.toolActivity after rows event (now + 1) published))]])]
-private def tipCoverageJson (complete known materialized : Bool) (observed : Nat := 1) : Json :=
-  let coverage : ClientShell.Timeline.ReadCoverage := ⟨complete, known⟩
-  Json.mkObj [("operation", toJson "tip_coverage"),
-    ("complete", toJson complete), ("known", toJson known),
-    ("materialized", toJson materialized), ("observed_request", toJson observed),
-    ("pending", toJson (ClientShell.Timeline.pendingRequestOwnerAbsent coverage 1 observed materialized))]
-private def timelineSlotJson : ClientShell.Timeline.Slot → Json
-  | .message key seq role => Json.mkObj [("kind", toJson "message"),
-      ("key", toJson key), ("sequence", toJson seq),
-      ("role", toJson (match role with | .user => "user" | .assistant => "assistant"))]
-  | .toolGroup seq => Json.mkObj [("kind", toJson "tool_group"), ("sequence", toJson seq)]
-  | .pending key => Json.mkObj [("kind", toJson "pending"), ("key", toJson key)]
-  | .overlay => Json.mkObj [("kind", toJson "overlay")]
-
-private def pendingTimelineJson (name : String) (msgs : List ClientShell.Timeline.Msg)
-    (pending : List ClientShell.Timeline.PendingInput)
-    (groups : List Int := []) (overlay : Option ClientShell.Timeline.Overlay := none) : Json :=
-  Json.mkObj [("name", toJson name), ("operation", toJson "pending_timeline"),
-    ("messages", toJson (msgs.map (fun m => Json.mkObj [
-      ("key", toJson m.key), ("sequence", toJson m.seq),
-      ("role", toJson (match m.role with | .user => "user" | .assistant => "assistant")),
-      ("emits_item", toJson m.emitsItem), ("token", toJson m.token)]))),
-    ("pending", toJson (pending.map (fun p => Json.mkObj [
-      ("key", toJson p.key), ("before_sequence", toJson (match p.placement with
-        | .tail => (none : Option Int) | .beforeMessage seq => some seq))]))),
-    ("groups", toJson groups),
-    ("overlay", overlay.map (fun o => Json.mkObj [
-      ("has_durable_owner", toJson o.hasDurableOwner),
-      ("before_sequence", toJson (match o.placement with
-        | .tail => (none : Option Int) | .beforeOrphan seq => some seq))]) |>.getD Json.null),
-    ("slots", toJson ((ClientShell.Timeline.buildOrder groups msgs pending overlay).map timelineSlotJson))]
-
-private def pendingTimelineCases : List Json :=
-  let msgs : List ClientShell.Timeline.Msg := [⟨10, 2, .user, true, none⟩,
-    ⟨11, 3, .assistant, true, none⟩]
-  [pendingTimelineJson "empty_pending_preserves_durable_body" msgs [],
-   pendingTimelineJson "interrupted_before_next_durable_request" msgs
-     [⟨1, .beforeMessage 2⟩],
-   pendingTimelineJson "equal_anchor_keeps_distinct_request_identities" msgs
-     [⟨1, .beforeMessage 2⟩, ⟨2, .beforeMessage 2⟩, ⟨3, .tail⟩],
-   pendingTimelineJson "first_physical_identity_wins" msgs
-     [⟨1, .tail⟩, ⟨1, .beforeMessage 2⟩, ⟨2, .tail⟩],
-   pendingTimelineJson "missing_anchor_falls_back_before_orphans" msgs
-     [⟨1, .beforeMessage 99⟩, ⟨2, .tail⟩] [8],
-   pendingTimelineJson "tool_first_replica_retains_pending_order"
-     [⟨10, 2, .assistant, false, none⟩]
-     [⟨1, .beforeMessage 2⟩, ⟨2, .beforeMessage 2⟩] [2, 8],
-   pendingTimelineJson "nonemitting_anchor_without_group_is_not_visible"
-     [⟨10, 2, .assistant, false, none⟩, ⟨11, 3, .assistant, true, none⟩]
-     [⟨1, .beforeMessage 2⟩, ⟨2, .tail⟩],
-   pendingTimelineJson "pending_tail_keeps_overlay_orphan_placement" msgs
-     [⟨1, .tail⟩, ⟨2, .tail⟩] [7, 8] (some ⟨false, .beforeOrphan 8⟩),
-   pendingTimelineJson "durable_owner_suppresses_overlay_only" msgs
-     [⟨1, .tail⟩, ⟨2, .tail⟩] [8] (some ⟨true, .tail⟩)] ++ Conformance.QuestionReply.cases
-
-private def renameBefore : AgentSession.Document :=
-  { indexed with title := some ⟨"task title", .task⟩ }
-private def renameJson : Json := Json.mkObj
-  [("name", toJson "user_rename_preserves_latest"), ("operation", toJson "rename"),
-   ("before", documentJson renameBefore), ("now", toJson (1 : Nat)),
-   ("title", Json.mkObj [("text", toJson "renamed"), ("source", toJson "user")]),
-   ("after", documentJson (AgentSession.rename renameBefore (some ⟨"renamed", .user⟩) 1))]
-private def clearTitleJson : Json := Json.mkObj
-  [("name", toJson "user_clear_preserves_latest"), ("operation", toJson "rename"),
-   ("before", documentJson renameBefore), ("now", toJson (4 : Nat)),
-   ("title", Json.null),
-   ("after", documentJson (AgentSession.rename renameBefore none 4))]
 private def retryStateJson (s : SessionState) : Json := Json.mkObj
   [("session_id", toJson s.sessionId), ("agent", toJson s.agentDid),
    ("latest", toJson s.latest), ("requests", toJson ([1, 3].filter
@@ -370,26 +248,6 @@ def archiveReceipts : Family ArchiveTrace (List ArchiveReceipt) where
                             archived := after.archivedAt.isSome }]))
       ({ indexed with archivedAt := none, archiveRevision := 0 }, [])).2
 
-private def taskOpeningCases : List Json :=
-  let fire : AgentSession.TaskFireEvidence := ⟨1, 10, 20, 4, true⟩
-  [ ("valid", [fire]), ("missing", []), ("ambiguous", [fire, fire]),
-    ("invalid_identity", [{ fire with valid := false }]),
-    ("other_node", [{ fire with node := 2 }]),
-    ("other_session", [{ fire with session := 11 }]),
-    ("other_request", [{ fire with request := 21 }]) ].map fun (name, fires) =>
-      Json.mkObj [("name", toJson name), ("operation", toJson "task_opening"),
-        ("fires", toJson (fires.map fun f => Json.mkObj [("node", toJson f.node),
-          ("session", toJson f.session), ("request", toJson f.request),
-          ("task", toJson f.task), ("valid", toJson f.valid)])),
-        ("task", toJson (AgentSession.taskForOpening 1 10 20 fires))]
-
-private def forkAuthorityCases : List Json :=
-  [("same_agent", "did:example:one", "did:example:one"),
-   ("other_agent", "did:example:one", "did:example:two")].map fun (name, source, target) =>
-    Json.mkObj [("name", toJson name), ("operation", toJson "fork_reference_authority"),
-      ("source_agent", toJson source), ("target_agent", toJson target),
-      ("allowed", toJson (SessionFork.mayReuseSourceFragments source target))]
-
 structure StarterIndex where
   node : Nat
   session : Nat
@@ -437,37 +295,6 @@ def sessionDocumentRetryCasesJson : String :=
       retryJson "newer_authoritative_row" [old, newerRequest] 101,
       retryJson "wrong_physical_parent" [old] 999,
       retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]).compress
-
-def sessionDocumentProjectionCasesJson : String :=
-  (toJson (Conformance.TaskLineage.cases ++ taskOpeningCases ++ forkAuthorityCases ++ pendingTimelineCases ++
-      (admissionCases.map fun (name, before, input) => admissionJson name before input) ++ [renameJson, clearTitleJson,
-      tipCoverageJson false true false 2,
-      tipCoverageJson false false false,
-      tipCoverageJson false true false,
-      tipCoverageJson false true true,
-      tipCoverageJson true true false,
-      tipCoverageJson true true true,
-      toolActivityJson "processing_tool_completion" 4 true,
-      toolActivityJson "processing_tool_clock_regression" 2 true,
-      toolActivityJson "stale_tool_completion" 4 true true,
-      toolActivityJson "unpublished_tool_completion" 4 false,
-      advanceJson "stale_admission" old,
-      advanceJson "current_admission" newerRequest,
-      advanceJson "title_does_not_advance_public_observation" titleRequest session
-        [old, newerRequest, titleRequest],
-      advanceJson "foreign_requester_does_not_freeze_own_index" scopedSuccessor indexed
-        [old, newerRequest, scopedSuccessor, foreignRequester],
-      advanceJson "present_requester_does_not_freeze_absent_scope" absentScopeRequest absentScopeSession
-        [absentScopeRequest, foreignRequester],
-      refreshJson "stale_completion" old,
-      refreshJson "wrong_physical_completion"
-        { newerRequest with observed := { newerRequest.observed with docId := 999 } },
-      refreshJson "current_completion" completedRequest,
-      refreshJson "stale_event_uses_current_completed_row" processingEvent [completedRequest],
-      refreshJson "missing_current_row_noop" newerRequest [],
-      refreshJson "foreign_scope_current_row_noop" newerRequest
-        [{ completedRequest with scope := { completedRequest.scope with requester := some 99 } }],
-      refreshJson "wrong_agent_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }]] ++ Conformance.RuntimeInput.cases)).compress
 
 structure RequestWire where
   purpose : String
@@ -782,5 +609,386 @@ def forkPublicationUnreached : Family ForkInput ForkPublication where
   model := fun i =>
     { published := ((forkCaseOf i).bind ForkCase.published).map HistoryWire.ofModel
       readers := ((forkCaseOf i).map ForkCase.readers).getD [] }
+
+deriving instance ToJson for AgentSession.TaskFireEvidence, AgentSession.StarterEvidence,
+  AgentSession.CreationReceipt
+
+structure TaskOpeningInput where
+  name : String
+  operation : String
+  fires : List AgentSession.TaskFireEvidence
+  deriving ToJson
+
+structure TaskOpeningOutput where
+  task : Option Nat
+  deriving ToJson
+
+@[conformance_family]
+def taskOpening : Family TaskOpeningInput TaskOpeningOutput where
+  inputs :=
+    let fire : AgentSession.TaskFireEvidence := ⟨1, 10, 20, 4, true⟩
+    ([ ("valid", [fire]), ("missing", []), ("ambiguous", [fire, fire]),
+      ("invalid_identity", [{ fire with valid := false }]),
+      ("other_node", [{ fire with node := 2 }]),
+      ("other_session", [{ fire with session := 11 }]),
+      ("other_request", [{ fire with request := 21 }]) ] :
+        List (String × List AgentSession.TaskFireEvidence)).map fun (name, fires) =>
+      { name, operation := "task_opening", fires }
+  model := fun i => { task := AgentSession.taskForOpening 1 10 20 i.fires }
+
+structure ForkAuthorityInput where
+  name : String
+  operation : String
+  sourceAgent : String
+  targetAgent : String
+  deriving ToJson
+
+structure ForkAuthorityOutput where
+  allowed : Bool
+  deriving ToJson
+
+@[conformance_family]
+def forkReferenceAuthority : Family ForkAuthorityInput ForkAuthorityOutput where
+  inputs :=
+    [("same_agent", "did:example:one", "did:example:one"),
+     ("other_agent", "did:example:one", "did:example:two")].map fun (name, source, target) =>
+      { name, operation := "fork_reference_authority", sourceAgent := source, targetAgent := target }
+  model := fun i => { allowed := SessionFork.mayReuseSourceFragments i.sourceAgent i.targetAgent }
+
+structure TipCoverageInput where
+  operation : String
+  complete : Bool
+  known : Bool
+  materialized : Bool
+  observedRequest : Nat
+  deriving ToJson
+
+structure TipCoverageOutput where
+  pending : Bool
+  deriving ToJson
+
+@[conformance_family]
+def tipCoverage : Family TipCoverageInput TipCoverageOutput where
+  inputs :=
+    [(false, true, false, 2), (false, false, false, 1), (false, true, false, 1),
+     (false, true, true, 1), (true, true, false, 1), (true, true, true, 1)].map
+      fun (complete, known, materialized, observedRequest) =>
+        { operation := "tip_coverage", complete, known, materialized, observedRequest }
+  model := fun i =>
+    { pending := ClientShell.Timeline.pendingRequestOwnerAbsent ⟨i.complete, i.known⟩ 1
+        i.observedRequest i.materialized }
+
+structure TimelineMessage where
+  key : Nat
+  sequence : Int
+  role : String
+  emitsItem : Bool
+  token : Option Nat
+  deriving ToJson
+
+structure TimelinePending where
+  key : Nat
+  beforeSequence : Option Int
+  deriving ToJson
+
+structure TimelineOverlay where
+  hasDurableOwner : Bool
+  beforeSequence : Option Int
+  deriving ToJson
+
+structure TimelineInput where
+  name : String
+  operation : String
+  messages : List TimelineMessage
+  pending : List TimelinePending
+  groups : List Int
+  overlay : Option TimelineOverlay
+  deriving ToJson
+
+structure TimelineSlot where
+  kind : String
+  key : Option Nat
+  sequence : Option Int
+  role : Option String
+  deriving ToJson
+
+structure TimelineOutput where
+  slots : List TimelineSlot
+  deriving ToJson
+
+def timelineRoleName : ClientShell.Timeline.Role → String
+  | .user => "user"
+  | .assistant => "assistant"
+
+def timelineRole : String → ClientShell.Timeline.Role
+  | "user" => .user
+  | _ => .assistant
+
+def TimelineSlot.ofModel : ClientShell.Timeline.Slot → TimelineSlot
+  | .message key seq role => ⟨"message", some key, some seq, some (timelineRoleName role)⟩
+  | .toolGroup seq => ⟨"tool_group", none, some seq, none⟩
+  | .pending key => ⟨"pending", some key, none, none⟩
+  | .overlay => ⟨"overlay", none, none, none⟩
+
+def timelineInput (name : String) (msgs : List ClientShell.Timeline.Msg)
+    (pending : List ClientShell.Timeline.PendingInput)
+    (groups : List Int := []) (overlay : Option ClientShell.Timeline.Overlay := none) :
+    TimelineInput :=
+  { name, operation := "pending_timeline"
+    messages := msgs.map fun m =>
+      { key := m.key, sequence := m.seq, role := timelineRoleName m.role, emitsItem := m.emitsItem
+        token := m.token }
+    pending := pending.map fun p =>
+      { key := p.key, beforeSequence := match p.placement with
+          | .tail => none | .beforeMessage seq => some seq }
+    groups
+    overlay := overlay.map fun o =>
+      { hasDurableOwner := o.hasDurableOwner, beforeSequence := match o.placement with
+          | .tail => none | .beforeOrphan seq => some seq } }
+
+@[conformance_family]
+def pendingTimeline : Family TimelineInput TimelineOutput where
+  inputs :=
+    let msgs : List ClientShell.Timeline.Msg := [⟨10, 2, .user, true, none⟩,
+      ⟨11, 3, .assistant, true, none⟩]
+    [timelineInput "empty_pending_preserves_durable_body" msgs [],
+     timelineInput "interrupted_before_next_durable_request" msgs
+       [⟨1, .beforeMessage 2⟩],
+     timelineInput "equal_anchor_keeps_distinct_request_identities" msgs
+       [⟨1, .beforeMessage 2⟩, ⟨2, .beforeMessage 2⟩, ⟨3, .tail⟩],
+     timelineInput "first_physical_identity_wins" msgs
+       [⟨1, .tail⟩, ⟨1, .beforeMessage 2⟩, ⟨2, .tail⟩],
+     timelineInput "missing_anchor_falls_back_before_orphans" msgs
+       [⟨1, .beforeMessage 99⟩, ⟨2, .tail⟩] [8],
+     timelineInput "tool_first_replica_retains_pending_order"
+       [⟨10, 2, .assistant, false, none⟩]
+       [⟨1, .beforeMessage 2⟩, ⟨2, .beforeMessage 2⟩] [2, 8],
+     timelineInput "nonemitting_anchor_without_group_is_not_visible"
+       [⟨10, 2, .assistant, false, none⟩, ⟨11, 3, .assistant, true, none⟩]
+       [⟨1, .beforeMessage 2⟩, ⟨2, .tail⟩],
+     timelineInput "pending_tail_keeps_overlay_orphan_placement" msgs
+       [⟨1, .tail⟩, ⟨2, .tail⟩] [7, 8] (some ⟨false, .beforeOrphan 8⟩),
+     timelineInput "durable_owner_suppresses_overlay_only" msgs
+       [⟨1, .tail⟩, ⟨2, .tail⟩] [8] (some ⟨true, .tail⟩)]
+  model := fun i =>
+    { slots := (ClientShell.Timeline.buildOrder i.groups
+        (i.messages.map fun m => ⟨m.key, m.sequence, timelineRole m.role, m.emitsItem, m.token⟩)
+        (i.pending.map fun p => ⟨p.key, match p.beforeSequence with
+          | none => .tail | some seq => .beforeMessage seq⟩)
+        (i.overlay.map fun o => ⟨o.hasDurableOwner, match o.beforeSequence with
+          | none => .tail | some seq => .beforeOrphan seq⟩)).map TimelineSlot.ofModel }
+
+structure RenameInput where
+  name : String
+  operation : String
+  before : DocumentWire
+  now : Nat
+  title : Option TitleWire
+  deriving ToJson
+
+structure DocumentAfter where
+  after : DocumentWire
+  deriving ToJson
+
+def renameBefore : AgentSession.Document :=
+  { indexed with title := some ⟨"task title", .task⟩ }
+
+@[conformance_family]
+def sessionRename : Family RenameInput DocumentAfter where
+  inputs :=
+    ([("user_rename_preserves_latest", 1, some ⟨"renamed", .user⟩),
+      ("user_clear_preserves_latest", 4, none)] : List (String × Nat × Option AgentSession.Title)).map
+      fun (name, now, title) =>
+        { name, operation := "rename", before := DocumentWire.ofModel renameBefore, now
+          title := title.map fun t => { text := t.text, source := t.source.toWireName } }
+  model := fun i =>
+    { after := DocumentWire.ofModel (AgentSession.rename i.before.toModel
+        (i.title.map fun t => ⟨t.text, titleSourceOfWire t.source⟩) i.now) }
+
+structure ToolActivityInput where
+  name : String
+  operation : String
+  before : DocumentWire
+  rows : List RequestWire
+  event : RequestWire
+  now : Nat
+  published : Bool
+  deriving ToJson
+
+structure ToolActivityStep where
+  now : Nat
+  after : DocumentWire
+  deriving ToJson
+
+structure ToolActivityOutput where
+  steps : List ToolActivityStep
+  deriving ToJson
+
+def toolActivityInput (name : String) (now : Nat) (published : Bool) (stale : Bool := false) :
+    ToolActivityInput :=
+  let r := { processingEvent with scope := { scope with requester := none } }
+  let before := AgentSession.advance { session with scope := r.scope } [r] r "new" 3
+  let event := if stale then { r.observed with docId := 999 } else r.observed
+  { name, operation := "tool_activity", before := DocumentWire.ofModel before
+    rows := [RequestWire.ofModel { r with observed := event }]
+    event := RequestWire.ofModel { r with observed := event }, now, published }
+
+@[conformance_family]
+def toolActivity : Family ToolActivityInput ToolActivityOutput where
+  inputs :=
+    [ toolActivityInput "processing_tool_completion" 4 true,
+      toolActivityInput "processing_tool_clock_regression" 2 true,
+      toolActivityInput "stale_tool_completion" 4 true true,
+      toolActivityInput "unpublished_tool_completion" 4 false ]
+  model := fun i =>
+    let rows := i.rows.map RequestWire.toModel
+    let event := i.event.toModel.observed
+    let after := AgentSession.toolActivity i.before.toModel rows event i.now i.published
+    { steps :=
+        [ { now := i.now, after := DocumentWire.ofModel after },
+          { now := i.now + 1
+            after := DocumentWire.ofModel
+              (AgentSession.toolActivity after rows event (i.now + 1) i.published) } ] }
+
+structure AdvanceInput where
+  name : String
+  operation : String
+  before : DocumentWire
+  rows : List RequestWire
+  request : RequestWire
+  normalizedPreview : String
+  now : Nat
+  deriving ToJson
+
+def advanceInput (name : String) (r : AgentSession.RequestFact)
+    (before : AgentSession.Document := indexed)
+    (rows : List AgentSession.RequestFact := [old, newerRequest]) : AdvanceInput :=
+  { name, operation := "advance", before := DocumentWire.ofModel before
+    rows := rows.map RequestWire.ofModel, request := RequestWire.ofModel r
+    normalizedPreview := "candidate", now := 4 }
+
+/-- model-production-gap: the session observation owner advances the public
+head inside served request admission transactions; no production function
+takes a modeled document and request rows, and no scenario builds these
+request histories. -/
+@[conformance_family]
+def sessionAdvanceUnreached : Family AdvanceInput DocumentAfter where
+  inputs :=
+    [ advanceInput "stale_admission" old,
+      advanceInput "current_admission" newerRequest,
+      advanceInput "title_does_not_advance_public_observation" titleRequest session
+        [old, newerRequest, titleRequest],
+      advanceInput "foreign_requester_does_not_freeze_own_index" scopedSuccessor indexed
+        [old, newerRequest, scopedSuccessor, foreignRequester],
+      advanceInput "present_requester_does_not_freeze_absent_scope" absentScopeRequest
+        absentScopeSession [absentScopeRequest, foreignRequester] ]
+  model := fun i =>
+    { after := DocumentWire.ofModel (AgentSession.advance i.before.toModel
+        (i.rows.map RequestWire.toModel) i.request.toModel i.normalizedPreview i.now) }
+
+structure RefreshInput where
+  name : String
+  operation : String
+  before : DocumentWire
+  event : RequestWire
+  rows : List RequestWire
+  now : Nat
+  deriving ToJson
+
+def refreshInput (name : String) (event : AgentSession.RequestFact)
+    (rows : List AgentSession.RequestFact := [old, event]) : RefreshInput :=
+  { name, operation := "refresh", before := DocumentWire.ofModel indexed
+    event := RequestWire.ofModel event, rows := rows.map RequestWire.ofModel, now := 4 }
+
+/-- model-production-gap: the session observation owner refreshes the public
+head inside served request transactions; no production function takes a
+modeled document and request rows, and no scenario builds these request
+histories. -/
+@[conformance_family]
+def sessionRefreshUnreached : Family RefreshInput DocumentAfter where
+  inputs :=
+    [ refreshInput "stale_completion" old,
+      refreshInput "wrong_physical_completion"
+        { newerRequest with observed := { newerRequest.observed with docId := 999 } },
+      refreshInput "current_completion" completedRequest,
+      refreshInput "stale_event_uses_current_completed_row" processingEvent [completedRequest],
+      refreshInput "missing_current_row_noop" newerRequest [],
+      refreshInput "foreign_scope_current_row_noop" newerRequest
+        [{ completedRequest with scope := { completedRequest.scope with requester := some 99 } }],
+      refreshInput "wrong_agent_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }] ]
+  model := fun i =>
+    { after := DocumentWire.ofModel (AgentSession.refresh i.before.toModel
+        (i.rows.map RequestWire.toModel) i.event.toModel.observed i.now) }
+
+structure AdmissionStateWire where
+  session : Option DocumentWire
+  sessionOwner : Option Nat
+  sessionDoc : Option Nat
+  sessionParent : Option Nat
+  sessionWorker : Option Nat
+  receipt : Option AgentSession.CreationReceipt
+  requestDoc : Option Nat
+  requestOwner : Option Nat
+  requestParent : Option Nat
+  requestWorker : Option Nat
+  deriving ToJson
+
+def AdmissionStateWire.ofModel (s : AgentSession.AdmissionState) : AdmissionStateWire :=
+  { session := s.session.map DocumentWire.ofModel, sessionOwner := s.sessionOwner
+    sessionDoc := s.sessionDoc, sessionParent := s.sessionParent, sessionWorker := s.sessionWorker
+    receipt := s.receipt, requestDoc := s.requestDoc, requestOwner := s.requestOwner
+    requestParent := s.requestParent, requestWorker := s.requestWorker }
+
+/-- The wire projection of a modeled atomic admission case. The model reads
+the case's own state and input by name. -/
+structure AdmissionCaseInput where
+  name : String
+  operation : String
+  before : AdmissionStateWire
+  requested : DocumentWire
+  actor : Nat
+  sessionDoc : Nat
+  agentDoc : Nat
+  requestDoc : Nat
+  receipt : Option AgentSession.CreationReceipt
+  authorized : Bool
+  commit : Bool
+  deriving ToJson
+
+def admissionInputs : List AdmissionCaseInput :=
+  admissionCases.map fun (name, before, input) =>
+    { name, operation := "atomic_admission", before := AdmissionStateWire.ofModel before
+      requested := DocumentWire.ofModel input.requested, actor := input.actor
+      sessionDoc := input.sessionDoc, agentDoc := input.agentDoc, requestDoc := input.requestDoc
+      receipt := input.receipt, authorized := input.authorized, commit := input.commit }
+
+def admissionAfter (i : AdmissionCaseInput) : AgentSession.AdmissionState :=
+  ((admissionCases.find? (·.1 == i.name)).map fun (_, before, input) =>
+    AgentSession.admitRequest before input).getD {}
+
+structure AdmissionTitle where
+  title : Option TitleWire
+  deriving ToJson
+
+/-- The task delivery scenario admits an unattended Agent-created session on a
+served node and reads the created session's title. -/
+@[conformance_family]
+def atomicAdmissionUnattended : Family AdmissionCaseInput AdmissionTitle where
+  inputs := admissionInputs.filter fun i => i.name ∈ ["agent_unattended_creation"]
+  model := fun i => { title := ((admissionAfter i).session.bind (·.title)).map fun t =>
+    { text := t.text, source := t.source.toWireName } }
+
+structure AdmissionAfter where
+  after : AdmissionStateWire
+  deriving ToJson
+
+/-- model-production-gap: atomic admission runs inside the served request
+admission transaction with DefraDB identities and ACP relationships; no
+production function returns the modeled admission state, and only the
+unattended creation's session title is observed by a scenario. -/
+@[conformance_family]
+def atomicAdmissionUnreached : Family AdmissionCaseInput AdmissionAfter where
+  inputs := admissionInputs
+  model := fun i => { after := AdmissionStateWire.ofModel (admissionAfter i) }
 
 end Conformance.Contracts

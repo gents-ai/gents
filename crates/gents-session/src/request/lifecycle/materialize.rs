@@ -1494,24 +1494,17 @@ mod session_provenance_tests {
 
     #[test]
     fn task_provenance_matches_generated_opening_cases() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_projection_cases;
-        let cases: Vec<_> = cases
-            .iter()
-            .filter(|case| case["operation"] == "task_opening")
-            .collect();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let values: Vec<_> = case["fires"]
-                .as_array()
-                .unwrap()
+        gents_lean_vocab::families::contracts_task_opening::replay(|i| {
+            let values: Vec<_> = i
+                .fires
                 .iter()
                 .map(|fire| {
                     (
-                        fire["node"].as_u64().unwrap().to_string(),
-                        fire["session"].as_u64().unwrap().to_string(),
-                        fire["request"].as_u64().unwrap().to_string(),
-                        fire["task"].as_u64().unwrap().to_string(),
-                        fire["valid"].as_bool().unwrap(),
+                        fire.node.to_string(),
+                        fire.session.to_string(),
+                        fire.request.to_string(),
+                        fire.task.to_string(),
+                        fire.valid,
                     )
                 })
                 .collect();
@@ -1525,10 +1518,11 @@ mod session_provenance_tests {
                     valid: *valid,
                 })
                 .collect();
-            let actual =
-                task_for_opening("1", "10", "20", &fires).map(|task| task.parse::<u64>().unwrap());
-            assert_eq!(actual, case["task"].as_u64(), "{}", case["name"]);
-        }
+            gents_lean_vocab::families::contracts_task_opening::TaskOpeningOutput {
+                task: task_for_opening("1", "10", "20", &fires)
+                    .map(|task| task.parse::<u64>().unwrap()),
+            }
+        });
     }
 }
 

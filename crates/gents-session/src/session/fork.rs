@@ -1117,23 +1117,11 @@ mod tests {
 
     #[test]
     fn generated_fork_reference_authority_matches_native_decision() {
-        let cases = gents_lean_vocab::lean_contract_snapshot()
-            .session_document_projection_cases
-            .iter()
-            .filter(|case| case["operation"] == "fork_reference_authority")
-            .collect::<Vec<_>>();
-        assert!(!cases.is_empty());
-        for case in cases {
-            assert_eq!(
-                may_reuse_source_fragments(
-                    case["source_agent"].as_str().unwrap(),
-                    case["target_agent"].as_str().unwrap(),
-                ),
-                case["allowed"].as_bool().unwrap(),
-                "{}",
-                case["name"]
-            );
-        }
+        gents_lean_vocab::families::contracts_fork_reference_authority::replay(|i| {
+            gents_lean_vocab::families::contracts_fork_reference_authority::ForkAuthorityOutput {
+                allowed: may_reuse_source_fragments(&i.source_agent, &i.target_agent),
+            }
+        });
     }
 
     fn modeled_message(row: &Value) -> TranscriptMessage {

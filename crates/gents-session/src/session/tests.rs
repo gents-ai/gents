@@ -1893,18 +1893,24 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 
 #[tokio::test]
 async fn unsigned_starter_cannot_populate_the_index() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_projection_cases
-        .iter()
-        .find(|case| case["operation"] == "rename")
-        .unwrap();
     use gents_store::identity::NodeIdentity;
     let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
         "unsigned-starter",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let mut session = super::model_test_support::model_session(&case["before"]);
+    let mut session = super::model_test_support::model_session(&serde_json::json!({
+        "scope": {"node": 1, "session": 10, "requester": 2},
+        "agent": 3, "created_at": 1, "closed_at": null, "stopped_at": null,
+        "archived_at": null, "archive_revision": 0,
+        "provenance": {"task_id": 4, "parent_request_doc_id": 6,
+            "started_by": {"node": 5, "session": 6, "requester": 7},
+            "opening_request_doc_id": null,
+            "fork": {"source_session_id": 7, "at_user_turn": 2}},
+        "tags": ["review", "session-test"],
+        "title": {"text": "task title", "source": "task"},
+        "observation": null,
+    }));
     session.node_did = db.node_identity.did().to_owned();
     session.requester_did = Some(user.did().to_owned());
     session.agent_did = binding.agent_did.clone();

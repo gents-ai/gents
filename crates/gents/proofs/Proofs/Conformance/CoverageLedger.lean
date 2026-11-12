@@ -2518,9 +2518,38 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_reply_preview_cases" "SessionReplyPreviewCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp "session_document_projection_cases" "SessionDocumentCases"
+  , tagged (consumerCoverage "family" "task_lineage_originating")
+      "client-shell" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "task_lineage_scoped_task")
+      "client-shell" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "question_reply_source")
+      "client-shell" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "runtime_input_output_obligation")
+      "client-shell" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp "family" "contracts_pending_timeline"
       "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")
       "client-shell" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_task_opening")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_fork_reference_authority")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_tip_coverage")
+      "client-shell" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_session_rename")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_tool_activity")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_atomic_admission_unattended")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "contracts_atomic_admission_unreached"
+      "model-production-gap: atomic admission runs inside the served request admission transaction with DefraDB identities and ACP relationships; no production function returns the modeled admission state, and a scenario observes only the unattended creation title.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "contracts_session_advance_unreached"
+      "model-production-gap: the session observation owner advances the public head inside served request admission transactions; no production function takes a modeled document and request rows, and no scenario builds these request histories.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "contracts_session_refresh_unreached"
+      "model-production-gap: the session observation owner refreshes the public head inside served request transactions; no production function takes a modeled document and request rows, and no scenario builds these request histories.")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "contracts_edit_anchor_fork_unreached"
       "model-production-gap: the served fork fixture publishes user-text turns only; edit anchors in histories with assistant, tool-result or empty user messages, duplicate keys or absent anchors are not built by a production scenario.")
       "request-lifecycle" [Surface.runtimeInternal]

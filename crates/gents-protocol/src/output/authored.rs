@@ -19,3 +19,23 @@ pub fn is_output_obligation(role: MessageRole, request_doc_id: Option<&str>, key
         .parse::<u32>()
         .is_ok_and(|value| value.to_string() == index)
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn generated_output_obligation_cases_match_runtime_input_classification() {
+        gents_lean_vocab::families::runtime_input_output_obligation::replay(|i| {
+            let role = if i.user {
+                MessageRole::User
+            } else {
+                MessageRole::Assistant
+            };
+            gents_lean_vocab::families::runtime_input_output_obligation::ObligationOutput {
+                control: is_output_obligation(role, i.request.as_deref(), &i.key),
+            }
+        });
+        assert_eq!(output_obligation_key(12), "output-obligation:12");
+    }
+}
