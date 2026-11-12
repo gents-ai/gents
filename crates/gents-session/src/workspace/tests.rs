@@ -1442,14 +1442,22 @@ fn integrate_and_cleanup_plans_omit_host_path() {
     .is_err());
 }
 
+fn workspace_path_capability(
+    capability: &gents_lean_vocab::LeanWorkspacePathCapabilityCaseBeforeCapability,
+) -> WorkspacePathCapability {
+    let mut encoded = serde_json::Map::new();
+    encoded.insert("mode".into(), capability.mode.clone().into());
+    if let Some(paths) = &capability.paths {
+        encoded.insert("paths".into(), serde_json::Value::from(paths.clone()));
+    }
+    serde_json::from_value(encoded.into()).unwrap()
+}
+
 fn generated_workspace_path_capability_seal_cases_drive_real_git_executor() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["workspace_path_capability_cases"]
-        .as_array()
-        .unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_path_capability_cases;
     let mut exercised = BTreeSet::new();
-    for case in cases.iter().filter(|case| case["operation"] == "seal") {
-        let name = case["name"].as_str().unwrap();
+    for case in cases.iter().filter(|case| case.operation == "seal") {
+        let name = case.name.as_str();
         if name == "noncanonical_delta_rejected" {
             continue;
         }
@@ -1459,8 +1467,7 @@ fn generated_workspace_path_capability_seal_cases_drive_real_git_executor() {
         fx.commit("src/main.rs", "base\n");
         let mut docs = MemoryWorkspaceDocuments::default();
         let mut action = fx.action("ws-cap", "unit-cap", "topic-cap");
-        action.path_capability =
-            serde_json::from_value(case["before"]["capability"].clone()).unwrap();
+        action.path_capability = workspace_path_capability(&case.before.capability);
         let created = execute_create_workspace_plan(
             &emit_create_workspace_plan(action),
             &mut Vec::new(),
@@ -1468,7 +1475,7 @@ fn generated_workspace_path_capability_seal_cases_drive_real_git_executor() {
         )
         .unwrap();
         let dest = PathBuf::from(&created.placement.host_path);
-        if case["before"]["state"] == "sealed" {
+        if case.before.state == "sealed" {
             fs::write(dest.join("src/main.rs"), "authorized\n").unwrap();
             seal_writer(&fx, &mut docs, "ws-cap", "req-writer");
         }
@@ -1538,10 +1545,10 @@ fn generated_workspace_path_capability_seal_cases_drive_real_git_executor() {
         );
         assert_eq!(
             result.is_ok(),
-            case["disposition"] == "accepted",
+            case.disposition == "accepted",
             "{name}: {result:?}"
         );
-        if case["disposition"] == "denied" {
+        if case.disposition == "denied" {
             assert_eq!(
                 docs.workspaces["ws-cap"], old_workspace,
                 "{name}: workspace changed"
@@ -1638,19 +1645,13 @@ fn exact_owned_executable_bit_change_seals_and_integrates() {
 }
 
 fn generated_workspace_receipt_cases_recover_without_checkout_or_reapplying() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["workspace_path_capability_cases"]
-        .as_array()
-        .unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_path_capability_cases;
     let mut exercised = 0;
     for case in cases.iter().filter(|case| {
-        matches!(
-            case["operation"].as_str(),
-            Some("replay_seal" | "replay_integrate")
-        )
+        matches!(case.operation.as_str(), "replay_seal" | "replay_integrate")
     }) {
         exercised += 1;
-        let name = case["name"].as_str().unwrap();
+        let name = case.name.as_str();
         let fx = Fixture::new();
         let mut docs = MemoryWorkspaceDocuments::default();
         let created = execute_create_workspace_plan(
@@ -1662,7 +1663,7 @@ fn generated_workspace_receipt_cases_recover_without_checkout_or_reapplying() {
         let dest = PathBuf::from(&created.placement.host_path);
         fs::write(dest.join("patch.rs"), "owned\n").unwrap();
         let sealed = seal_writer(&fx, &mut docs, "ws-replay-cap", "req-writer");
-        if case["operation"] == "replay_integrate" {
+        if case.operation == "replay_integrate" {
             bind_integrate(
                 &mut docs,
                 "ws-replay-cap",
@@ -1685,7 +1686,7 @@ fn generated_workspace_receipt_cases_recover_without_checkout_or_reapplying() {
             0,
             ActionJournalState::ResultDocsWritten,
         )];
-        let succeeded = if case["operation"] == "replay_seal" {
+        let succeeded = if case.operation == "replay_seal" {
             execute_seal_workspace_plan(
                 &emit_seal_workspace_plan(SealWorkspaceAction {
                     workspace_id: "ws-replay-cap".into(),
@@ -1715,7 +1716,7 @@ fn generated_workspace_receipt_cases_recover_without_checkout_or_reapplying() {
             })
             .is_ok()
         };
-        assert_eq!(succeeded, case["disposition"] == "recovered", "{name}");
+        assert_eq!(succeeded, case.disposition == "recovered", "{name}");
         assert!(
             !dest.exists(),
             "receipt replay must not recreate a checkout"
@@ -1755,21 +1756,17 @@ fn workspace_create_retry_cannot_change_admitted_capability() {
 }
 
 fn generated_workspace_integration_cases_apply_only_authorized_snapshot() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["workspace_path_capability_cases"]
-        .as_array()
-        .unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_path_capability_cases;
     let mut exercised = 0;
-    for case in cases.iter().filter(|case| case["operation"] == "integrate") {
+    for case in cases.iter().filter(|case| case.operation == "integrate") {
         exercised += 1;
-        let name = case["name"].as_str().unwrap();
+        let name = case.name.as_str();
         let mut fx = Fixture::new();
         fs::create_dir(fx.repo.join("src")).unwrap();
         fx.commit("src/main.rs", "base\n");
         let mut docs = MemoryWorkspaceDocuments::default();
         let mut action = fx.action("ws-cap-integrate", "unit", "topic-cap-integrate");
-        action.path_capability =
-            serde_json::from_value(case["before"]["capability"].clone()).unwrap();
+        action.path_capability = workspace_path_capability(&case.before.capability);
         let created = execute_create_workspace_plan(
             &emit_create_workspace_plan(action),
             &mut Vec::new(),
@@ -1818,7 +1815,7 @@ fn generated_workspace_integration_cases_apply_only_authorized_snapshot() {
         );
         assert_eq!(
             result.is_ok(),
-            case["disposition"] == "accepted",
+            case.disposition == "accepted",
             "{name}: {result:?}"
         );
         if let Ok(integrated) = result {
@@ -1832,7 +1829,7 @@ fn generated_workspace_integration_cases_apply_only_authorized_snapshot() {
                 .unwrap();
             assert_eq!(
                 after_count - before_count,
-                case["expected"]["trunk_effects"].as_u64().unwrap() as usize
+                case.expected.trunk_effects as usize
             );
             assert_eq!(
                 docs.receipts
@@ -1863,22 +1860,18 @@ fn generated_workspace_integration_cases_apply_only_authorized_snapshot() {
 }
 
 fn generated_workspace_fresh_admission_requires_exact_canonical_capability() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["workspace_path_capability_cases"]
-        .as_array()
-        .unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_path_capability_cases;
     let names = [
         "fresh_exact_provisions",
         "fresh_legacy_cannot_provision",
         "malformed_manifest_denied",
     ];
     for name in names {
-        let case = cases.iter().find(|case| case["name"] == name).unwrap();
+        let case = cases.iter().find(|case| case.name == name).unwrap();
         let fx = Fixture::new();
         let mut docs = MemoryWorkspaceDocuments::default();
         let mut action = fx.action("ws-fresh-cap", "unit", "topic-fresh-cap");
-        action.path_capability =
-            serde_json::from_value(case["before"]["capability"].clone()).unwrap();
+        action.path_capability = workspace_path_capability(&case.before.capability);
         if name == "malformed_manifest_denied" {
             action.path_capability = WorkspacePathCapability::ExactPaths {
                 paths: vec!["../escape".into()],
@@ -1891,7 +1884,7 @@ fn generated_workspace_fresh_admission_requires_exact_canonical_capability() {
         );
         assert_eq!(
             result.is_ok(),
-            case["disposition"] == "accepted",
+            case.disposition == "accepted",
             "{name}: {result:?}"
         );
         if let Ok(created) = result {
@@ -1908,16 +1901,14 @@ fn generated_workspace_fresh_admission_requires_exact_canonical_capability() {
 }
 
 fn generated_legacy_workspace_cases_recover_identity_without_fresh_provision() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
     for name in [
         "existing_identical_legacy_recovers",
         "legacy_recovery_missing_checkout_cannot_reprovision",
     ] {
-        let case = snapshot["workspace_path_capability_cases"]
-            .as_array()
-            .unwrap()
+        let case = gents_lean_vocab::lean_contract_snapshot()
+            .workspace_path_capability_cases
             .iter()
-            .find(|case| case["name"] == name)
+            .find(|case| case.name == name)
             .unwrap();
         let fx = Fixture::new();
         let mut docs = MemoryWorkspaceDocuments::default();
@@ -1940,7 +1931,7 @@ fn generated_legacy_workspace_cases_recover_identity_without_fresh_provision() {
             serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
         old.as_object_mut().unwrap().remove("path_capability");
         fs::write(&marker, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
-        let present = case["evidence"]["checkout_present"].as_bool().unwrap();
+        let present = case.evidence.checkout_present;
         if !present {
             fs::remove_dir_all(&dest).unwrap();
         }
@@ -1952,7 +1943,7 @@ fn generated_legacy_workspace_cases_recover_identity_without_fresh_provision() {
         );
         assert_eq!(
             result.is_ok(),
-            case["disposition"] == "recovered",
+            case.disposition == "recovered",
             "{name}: {result:?}"
         );
         assert_eq!(
@@ -1971,16 +1962,13 @@ fn generated_legacy_workspace_cases_recover_identity_without_fresh_provision() {
 fn generated_noncanonical_git_delta_is_rejected_without_filesystem_traversal() {
     use std::io::Write;
     use std::process::Stdio;
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let case = snapshot["workspace_path_capability_cases"]
-        .as_array()
-        .unwrap()
+    let case = gents_lean_vocab::lean_contract_snapshot()
+        .workspace_path_capability_cases
         .iter()
-        .find(|case| case["name"] == "noncanonical_delta_rejected")
+        .find(|case| case.name == "noncanonical_delta_rejected")
         .unwrap();
     let fx = Fixture::new();
-    let cap: WorkspacePathCapability =
-        serde_json::from_value(case["before"]["capability"].clone()).unwrap();
+    let cap = workspace_path_capability(&case.before.capability);
     let blob = git(&fx.repo, &["rev-parse", "HEAD:README.md"]);
     let mut tree = b"100644 ../outside\0".to_vec();
     for byte in blob.as_bytes().as_chunks::<2>().0 {
@@ -2016,11 +2004,9 @@ mod capability_regressions;
 
 #[test]
 fn generated_workspace_path_capability_cases_drive_real_git_executor() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
     assert_eq!(
-        snapshot["workspace_path_capability_cases"]
-            .as_array()
-            .unwrap()
+        gents_lean_vocab::lean_contract_snapshot()
+            .workspace_path_capability_cases
             .len(),
         24,
         "review and wire every new generated operation case"
