@@ -364,9 +364,15 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         access,
         "ChangeUnitResult",
         WORK_UNIT,
-        "result_id work_unit_id handoff_id reply_session_id attempt closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary",
+        "result_id work_unit_id handoff_id reply_session_id attempt closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary failed_request_id failure_stage failure_reason",
         &cycle.agents(&[RECORDER, REJECTER]),
-        |rows| rows.iter().any(|row| row["status"] == "integrated"),
+        |rows| {
+            assert!(
+                rows.iter().all(|row| row["status"] != "failed"),
+                "integration recorder reported failure: {rows:#?}"
+            );
+            rows.iter().any(|row| row["status"] == "integrated")
+        },
     )
     .await;
     let result = result_rows
@@ -1105,7 +1111,7 @@ async fn cycle_failure_diagnostics(
     let requests = access
         .execute(
             &format!(
-                r#"{{ AgentRequest(filter: {{ caused_by_correlation: {{ _eq: "{work_unit_id}" }} }}) {{ _docID request_id node_did requester_did session_id lifecycle_state failure_reason caused_by_trigger_id }} }}"#
+                r#"{{ AgentRequest(filter: {{ caused_by_correlation: {{ _eq: "{work_unit_id}" }} }}) {{ _docID request_id node_did agent_did requester_did session_id lifecycle_state failure_reason caused_by_trigger_id }} }}"#
             ),
         )
         .await
