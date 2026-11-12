@@ -81,12 +81,14 @@ const listView = createStore<{
   query: string;
   /** the publisher (namespace) the registry list is narrowed to */
   author: string | null;
+  authors: readonly string[];
   registry: RegistryPage | null;
   scroll: Record<PacksView, number>;
 }>(() => ({
   view: "installed",
   query: "",
   author: null,
+  authors: [],
   registry: null,
   scroll: { installed: 0, registry: 0 },
 }));
@@ -104,7 +106,14 @@ export const rememberPacksQuery = (query: string) => listView.setState({ query }
 export const rememberPacksAuthor = (author: string | null) =>
   listView.setState({ author });
 export const keepRegistryPage = (registry: RegistryPage) =>
-  listView.setState({ registry });
+  listView.setState((s) => {
+    const named = new Set(s.authors);
+    for (const p of registry.found) named.add(p.namespace);
+    return named.size === s.authors.length
+      ? { registry }
+      : { registry, authors: [...named].sort((a, b) => a.localeCompare(b)) };
+  });
+export const usePacksAuthors = () => useStore(listView, (s) => s.authors);
 export const rememberPacksScroll = (view: PacksView, top: number) =>
   listView.setState((s) => ({ scroll: { ...s.scroll, [view]: top } }));
 /** the registry's packs from one publisher, on the Packs page */
