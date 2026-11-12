@@ -1097,13 +1097,8 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
     use gents_automation::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
     use rapidhash::{RapidHashMap, RapidHashSet};
 
-    fn ids(value: &Value) -> Vec<String> {
-        value
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|id| id.as_u64().unwrap().to_string())
-            .collect()
+    fn ids(value: &[u64]) -> Vec<String> {
+        value.iter().map(|id| id.to_string()).collect()
     }
 
     let endpoint = MockModelEndpoint::start("default").unwrap();
@@ -1134,12 +1129,12 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
     let template = baseline.agents.values().next().unwrap();
     let template_tools = baseline.tool_configs.values().next().unwrap();
     let surface = baseline.tool_surfaces.values().next().unwrap();
-    let cases = gents_lean_vocab::lean_snapshot_demotion_cases();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().snapshot_demotion_cases;
     assert_eq!(cases.len(), 6);
     for case in cases {
-        let runnable = ids(&case["runnable"]);
+        let runnable = ids(&case.runnable);
         let mut snapshot = ResolvedRuntimeSnapshot::from_parts(
-            case["default_agent"].as_u64().unwrap().to_string(),
+            case.default_agent.to_string(),
             runnable
                 .iter()
                 .map(|id| {
@@ -1155,7 +1150,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
                 .iter()
                 .map(|id| (id.clone(), surface.clone()))
                 .collect(),
-            ids(&case["unavailable"])
+            ids(&case.unavailable)
                 .into_iter()
                 .map(|id| {
                     (
@@ -1169,7 +1164,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
                 .collect::<RapidHashMap<_, _>>(),
         );
         snapshot.validate_node_readiness_source().unwrap();
-        for id in ids(&case["demotions"]) {
+        for id in ids(&case.demotions) {
             snapshot.demote_agent(
                 &id,
                 UnavailableAgent::new(
@@ -1180,8 +1175,8 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
         }
         assert_eq!(
             snapshot.agents.keys().cloned().collect::<RapidHashSet<_>>(),
-            ids(&case["post_runnable"]).into_iter().collect(),
-            "{case}"
+            ids(&case.post_runnable).into_iter().collect(),
+            "{case:?}"
         );
         assert_eq!(
             snapshot
@@ -1189,8 +1184,8 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
                 .keys()
                 .cloned()
                 .collect::<RapidHashSet<_>>(),
-            ids(&case["post_runnable"]).into_iter().collect(),
-            "{case}"
+            ids(&case.post_runnable).into_iter().collect(),
+            "{case:?}"
         );
         assert_eq!(
             snapshot
@@ -1198,18 +1193,18 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
                 .keys()
                 .cloned()
                 .collect::<RapidHashSet<_>>(),
-            ids(&case["post_unavailable"]).into_iter().collect(),
-            "{case}"
+            ids(&case.post_unavailable).into_iter().collect(),
+            "{case:?}"
         );
         assert_eq!(
             snapshot.default_agent_did,
-            case["post_default_agent"].as_u64().unwrap().to_string(),
-            "{case}"
+            case.post_default_agent.to_string(),
+            "{case:?}"
         );
         assert_eq!(
             snapshot.validate_node_readiness_source().is_ok(),
-            case["well_formed"].as_bool().unwrap(),
-            "{case}"
+            case.well_formed,
+            "{case:?}"
         );
     }
     node.shutdown().await.expect("node shutdown");
