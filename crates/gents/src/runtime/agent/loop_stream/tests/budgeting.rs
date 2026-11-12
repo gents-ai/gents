@@ -1186,8 +1186,8 @@ fn generated_compaction_trigger_cases_drive_the_production_trigger() {
         );
         if let Some(anchor) = &case.anchor {
             calibration.anchor_accepted(ContextAnchor {
-                input_tokens: native(anchor.input_tokens),
-                output_tokens: native(anchor.output_tokens),
+                input_tokens: anchor.input_tokens,
+                output_tokens: anchor.output_tokens,
                 estimated_input_tokens: native(anchor.estimated_input_tokens),
             });
         }
