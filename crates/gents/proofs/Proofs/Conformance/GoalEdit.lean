@@ -98,13 +98,13 @@ structure WhitespaceRun where
   last : Nat
   deriving ToJson
 
-/-- The code space split at every boundary of
-`TextNormalization.objectiveWhitespaceRanges`: each run is wholly whitespace or
-wholly content. -/
+/-- The code space split into each whitespace scalar value on its own and the
+content runs between them. -/
 def whitespaceRuns : List WhitespaceRun :=
-  let (runs, next) := TextNormalization.objectiveWhitespaceRanges.foldl
-    (fun (runs, next) (first, last) =>
-      (runs ++ (if next < first then [⟨next, first - 1⟩] else []) ++ [⟨first, last⟩], last + 1))
+  let (runs, next) := TextNormalization.objectiveWhitespaceCodepoints.foldl
+    (fun (runs, next) codepoint =>
+      (runs ++ (if next < codepoint then [⟨next, codepoint - 1⟩] else []) ++
+        [⟨codepoint, codepoint⟩], codepoint + 1))
     ([], 0)
   runs ++ (if next ≤ lastCodepoint then [⟨next, lastCodepoint⟩] else [])
 
