@@ -137,22 +137,20 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
             &repository_placement_upsert_mutation(&repository, "2026-11-05T00:00:00Z")?,
         )
         .await?;
-    let selected_docs =
-        super::super::runtime::load_docs_with_access(&selected_access, "workspace", runtime.did())
-            .await?;
-    let other_docs =
-        super::super::runtime::load_docs_with_access(&other_access, "workspace", runtime.did())
-            .await?;
-    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_completion_access_cases {
-        let docs = match case.actor.as_str() {
-            "agent" => &selected_docs,
-            "other" => &other_docs,
+    let cases = gents_lean_vocab::families::workspace_completion_access::cases();
+    for case in &cases {
+        let access = match case.input.actor.as_str() {
+            "agent" => &selected_access,
+            "other" => &other_access,
             actor => panic!("unknown modeled actor {actor}"),
         };
-        assert_eq!(
-            docs.load_isolated_workspace("workspace")?.is_some(),
-            case.read,
-            "{case:?}"
+        let docs =
+            super::super::runtime::load_docs_with_access(access, "workspace", runtime.did())
+                .await?;
+        case.check(
+            gents_lean_vocab::families::workspace_completion_access::CompletionAccessOutput {
+                read: docs.load_isolated_workspace("workspace")?.is_some(),
+            },
         );
     }
     assert!(super::super::runtime::load_repository_with_access(

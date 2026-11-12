@@ -1489,8 +1489,8 @@ def caseCoverage : List CoverageEntry :=
       "Covers user-signed repository publication, Agent visibility, outsider isolation and revocation; host provisioning follows reservation.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "workspace_completion_access_cases"
-      "WorkspaceCompletionAccessCases"
+      "family"
+      "workspace_completion_access"
       "Exercises selected-Agent reads using a test-only native binding; product workspace relationships and remaining readers require separate coverage.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
