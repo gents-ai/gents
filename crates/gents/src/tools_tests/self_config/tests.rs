@@ -105,40 +105,6 @@ pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
     }
 }
 
-/// Grants `subject` the direct sets Lean `Identity.GrantSets.directSets` gives
-/// `recipient`, as the runtime owner does at init. The fixture Agent is its
-/// Node's default Agent, so it holds the modeled default-Agent sets.
-pub(super) async fn grant_modeled_direct_sets(
-    db: &crate::support::TestDb,
-    recipient: &str,
-    subject: &str,
-) {
-    use gents_store::identity::GrantSet;
-    let wanted = recipient.to_owned();
-    let case = tokio::task::spawn_blocking(move || {
-        gents_lean_vocab::lean_contract_snapshot()
-            .identity_grant_recipient_cases
-            .iter()
-            .find(|case| case.recipient == wanted)
-            .cloned()
-    })
-    .await
-    .unwrap()
-    .unwrap_or_else(|| panic!("Lean recipient {recipient:?}"));
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(db.node_identity.did()).unwrap(),
-    );
-    let subject = identity::Did::new(subject).unwrap();
-    for name in &case.direct {
-        let set = GrantSet::ALL
-            .into_iter()
-            .find(|set| set.name() == name)
-            .unwrap_or_else(|| panic!("Lean grant set {name:?} has no Rust owner"));
-        set.grant(&admin, &subject).await.unwrap();
-    }
-}
-
 /// Grants `subject` the node permissions the init Engineer holds through the
 /// tool sources of its preset Tools: every self-config category plus pack
 /// installation, and a datastore query surface (Lean
@@ -211,7 +177,13 @@ impl SelfConfigFixture {
             enabled: true,
             default_agent_did: Some(binding.agent_did.clone()),
         };
-        grant_modeled_direct_sets(&db, "default-agent", &binding.agent_did).await;
+        gents_toolcalls::test_support::grant_modeled_direct_sets(
+            &db.node,
+            db.node_identity.did(),
+            "default-agent",
+            &binding.agent_did,
+        )
+        .await;
         Self {
             db,
             user_access,
