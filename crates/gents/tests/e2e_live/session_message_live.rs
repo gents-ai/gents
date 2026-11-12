@@ -20,6 +20,7 @@ use gents_store::graphql::escape_graphql_string;
 use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::support::fixtures::{agent_target, configure_agent_tools};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
@@ -224,17 +225,13 @@ async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
         .await
         .expect("create temporary workspace task")
         .expect("backgrounding live workspace");
-    let child_release = workspace.path().join("release-child");
-    let tool_release = workspace.path().join("release-tool");
-    let managed_child_release = workspace.path().join("release-managed-child");
-    let managed_tool_release = workspace.path().join("release-managed-tool");
-    let blocked_command = |started: &str, release: &Path, done: &str| {
+    let child_release = ProcessGate::new(workspace.path()).await;
+    let tool_release = ProcessGate::new(workspace.path()).await;
+    let managed_child_release = ProcessGate::new(workspace.path()).await;
+    let managed_tool_release = ProcessGate::new(workspace.path()).await;
+    let blocked_command = |started: &str, release: &ProcessGate, done: &str| {
         serde_json::json!({
-            "command": format!(
-                "printf {started}; printf {started} > '{}'; while [ ! -f '{}' ]; do sleep 0.2; done; printf {done}",
-                started_path(release).display(),
-                release.display()
-            ),
+            "command": release.command(started, done),
             "args": [],
             "timeout_secs": 180
         })
@@ -390,9 +387,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     assert_eq!(receipt["status"], "running");
     assert_eq!(receipt["session_id"], caused.session_id.as_str());
 
-    tokio::fs::write(&child_release, b"release")
-        .await
-        .expect("release started session");
+    child_release.release();
     let caused_terminal =
         wait_for_request_terminal(&live, &caused.request_id, Duration::from_secs(180)).await;
     assert_eq!(caused_terminal, "completed");
@@ -459,9 +454,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "parent blocked on the native background tool"
     );
 
-    tokio::fs::write(&tool_release, b"release")
-        .await
-        .expect("release native background tool");
+    tool_release.release();
     let completed_tool = wait_for_tool_call_state(
         &live,
         tool_request_id,
@@ -480,7 +473,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     wait_for_completion_notification(&live, &background_tool.doc_id, Duration::from_secs(60)).await;
     assert_wake_observed(&live, tool_session_id, tool_request_id).await;
 
-    assert_not_started(&managed_child_release).await;
+    assert!(!managed_child_release.is_released());
     let managed_agent_session_id = "session-live-managed-background-agent";
     let managed_create_request_id = "req-live-managed-background-agent-create";
     create_runtime_request(
@@ -610,9 +603,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "running"
     );
 
-    tokio::fs::write(&managed_child_release, b"release")
-        .await
-        .expect("release managed session");
+    managed_child_release.release();
     assert_eq!(
         wait_for_request_terminal(&live, &managed_caused.request_id, Duration::from_secs(240))
             .await,
@@ -774,9 +765,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "running",
         "read_process must observe output before the native process exits"
     );
-    tokio::fs::write(&managed_tool_release, b"release")
-        .await
-        .expect("release managed native background tool");
+    managed_tool_release.release();
 
     let managed_tool_wait_state = wait_for_request_terminal(
         &live,
@@ -1138,7 +1127,7 @@ async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
         .await
         .expect("create temporary workspace task")
         .expect("interrupt live workspace");
-    let release = workspace.path().join("release-blocker");
+    let release = ProcessGate::new(workspace.path()).await;
     let blocked_args = blocked_bash_args("BLOCKER_STARTED", &release, "BLOCKER_DONE");
 
     let db = test_db("session-message-live-interrupt").await;
@@ -1194,7 +1183,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     .await;
     let agent = boot_workspace_agent(&db, identity, workspace.path()).await?;
 
-    assert_not_started(&release).await;
+    assert!(!release.is_released());
     let spawner_session = "session-live-interrupt-spawner";
     let start_request_id = "req-live-interrupt-start";
     create_runtime_request(
@@ -1297,14 +1286,10 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
         wait_for_request_terminal(&live, &worker.request_id, Duration::from_secs(120)).await;
     assert_eq!(worker_terminal, "interrupted");
     assert!(
-        !tokio::fs::try_exists(&release)
-            .await
-            .expect("inspect release file"),
+        !release.is_released(),
         "the worker must have been interrupted while still blocked"
     );
-    tokio::fs::write(&release, b"release")
-        .await
-        .expect("release worker");
+    release.release();
     let settled = wait_for_tool_call_settled(
         &live,
         start_request_id,
@@ -1615,8 +1600,8 @@ async fn live_interrupt_does_not_cascade() -> Result<()> {
         .await
         .expect("create temporary workspace task")
         .expect("no-cascade workspace");
-    let middle_release = workspace.path().join("release-middle");
-    let leaf_release = workspace.path().join("release-leaf");
+    let middle_release = ProcessGate::new(workspace.path()).await;
+    let leaf_release = ProcessGate::new(workspace.path()).await;
     let leaf_code = code_word("LEAF");
     let middle_args = blocked_bash_args("MIDDLE_STARTED", &middle_release, "MIDDLE_DONE");
     let leaf_args = blocked_bash_args("LEAF_STARTED", &leaf_release, "LEAF_DONE");
@@ -1675,8 +1660,8 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     .await;
     let agent = fx.boot(workspace.path()).await?;
 
-    assert_not_started(&middle_release).await;
-    assert_not_started(&leaf_release).await;
+    assert!(!middle_release.is_released());
+    assert!(!leaf_release.is_released());
     let root_session = "session-live-no-cascade-root";
     let start_request_id = "req-live-no-cascade-start";
     fx.request(
@@ -1775,14 +1760,10 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     )
     .await;
     assert!(
-        !tokio::fs::try_exists(&middle_release)
-            .await
-            .expect("inspect release file"),
+        !middle_release.is_released(),
         "middle must have been interrupted while still blocked"
     );
-    tokio::fs::write(&middle_release, b"release")
-        .await
-        .expect("release middle");
+    middle_release.release();
 
     let leaf_state = fetch_request_lifecycle(&fx.live, &leaf.request_id)
         .await
@@ -1804,9 +1785,7 @@ sentence that repeats, verbatim, every code word reported in the notifications."
         "running"
     );
 
-    tokio::fs::write(&leaf_release, b"release")
-        .await
-        .expect("release leaf");
+    leaf_release.release();
     assert_eq!(
         wait_for_request_terminal(&fx.live, &leaf.request_id, Duration::from_secs(240)).await,
         "completed"
@@ -1873,7 +1852,7 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
         .await
         .expect("create temporary workspace task")
         .expect("steer workspace");
-    let release = workspace.path().join("release-steered");
+    let release = ProcessGate::new(workspace.path()).await;
     let steer_code = code_word("STEER");
     let args = blocked_bash_args("STEERED_STARTED", &release, "STEERED_DONE");
     let fx = LiveNode::new(
@@ -1907,7 +1886,7 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
     .await;
     let agent = fx.boot(workspace.path()).await?;
 
-    assert_not_started(&release).await;
+    assert!(!release.is_released());
     let root_session = "session-live-steer-root";
     let start_request_id = "req-live-steer-start";
     fx.request(
@@ -1987,14 +1966,10 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
         "interrupted"
     );
     assert!(
-        !tokio::fs::try_exists(&release)
-            .await
-            .expect("inspect release file"),
+        !release.is_released(),
         "the worker must have been interrupted while still blocked"
     );
-    tokio::fs::write(&release, b"release")
-        .await
-        .expect("release worker");
+    release.release();
     assert_eq!(
         wait_for_request_terminal(&fx.live, &steer.request_id, Duration::from_secs(240)).await,
         "completed"
@@ -2058,7 +2033,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
         .await
         .expect("create temporary workspace task")
         .expect("goal workspace");
-    let release = workspace.path().join("release-goal-worker");
+    let release = ProcessGate::new(workspace.path()).await;
     let worker_code = code_word("GOALWORKER");
     let args = blocked_bash_args("GOAL_WORKER_STARTED", &release, "GOAL_WORKER_DONE");
     let fx = LiveNode::new(
@@ -2105,7 +2080,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
         None,
     )
     .await?;
-    assert_not_started(&release).await;
+    assert!(!release.is_released());
     let start_request_id = "req-live-goal-start";
     fx.request(
         start_request_id,
@@ -2152,9 +2127,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
         "test premise: the worker must still be blocked during the Goal continuation; it is {worker_state}"
     );
 
-    tokio::fs::write(&release, b"release")
-        .await
-        .expect("release goal worker");
+    release.release();
     assert_eq!(
         wait_for_request_terminal(&fx.live, &worker.request_id, Duration::from_secs(240)).await,
         "completed"
@@ -2409,9 +2382,10 @@ async fn live_randomized_soak() -> Result<()> {
         .await
         .expect("create temporary workspace task")
         .expect("soak workspace");
-    let gates = (0..SOAK_GATES)
-        .map(|gate| workspace.path().join(format!("gate-{gate}")))
-        .collect::<Vec<_>>();
+    let mut gates = Vec::new();
+    for _ in 0..SOAK_GATES {
+        gates.push(ProcessGate::new(workspace.path()).await);
+    }
     let fx = LiveNode::new(
         "session-message-live-soak",
         &target,
@@ -2563,9 +2537,7 @@ async fn live_randomized_soak() -> Result<()> {
             )
         } else {
             let gate = rng.random_range(0..SOAK_GATES);
-            tokio::fs::write(&gates[gate], b"release")
-                .await
-                .expect("release soak gate");
+            gates[gate].release();
             tracing::info!(seed, step, gate, "[live-soak] released gate");
             continue;
         };
@@ -2574,7 +2546,10 @@ async fn live_randomized_soak() -> Result<()> {
         fx.request(&request_id, root, &prompt).await;
         let state =
             wait_for_request_terminal(&fx.live, &request_id, Duration::from_secs(300)).await;
-        assert_eq!(state, "completed", "soak seed={seed} operation {step} failed");
+        assert_eq!(
+            state, "completed",
+            "soak seed={seed} operation {step} failed"
+        );
         tracing::info!(seed, step, %state, "[live-soak] op settled");
         for caused in fetch_caused_requests(&fx.live, &request_id).await {
             if started
@@ -2597,9 +2572,7 @@ async fn live_randomized_soak() -> Result<()> {
         }
     }
     for gate in &gates {
-        tokio::fs::write(gate, b"release")
-            .await
-            .expect("release soak gate");
+        gate.release();
     }
     wait_for_node_quiescent(&fx.live, &fx.did, Duration::from_secs(900)).await;
 
@@ -2731,17 +2704,9 @@ async fn boot_workspace_agent(
 
 const BLOCKED_COMMAND_TIMEOUT_SECS: u64 = 600;
 
-fn blocked_bash_args(started: &str, release: &Path, done: &str) -> serde_json::Value {
-    let workspace = release
-        .parent()
-        .expect("a release file lives in its run's workspace");
+fn blocked_bash_args(started: &str, release: &ProcessGate, done: &str) -> serde_json::Value {
     serde_json::json!({
-        "command": format!(
-            "printf {started}; printf {started} > '{}'; while [ ! -f '{}' ] && [ -d '{}' ]; do sleep 0.2; done; printf {done}",
-            started_path(release).display(),
-            release.display(),
-            workspace.display(),
-        ),
+        "command": release.command(started, done),
         "args": [],
         "timeout_secs": BLOCKED_COMMAND_TIMEOUT_SECS
     })
@@ -3027,17 +2992,73 @@ async fn wait_for_caused_request(
     }
 }
 
-fn started_path(release: &Path) -> std::path::PathBuf {
-    release.with_extension("started")
+struct ProcessGate {
+    socket: std::path::PathBuf,
+    released: tokio::sync::watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
 }
 
-async fn assert_not_started(release: &Path) {
-    assert!(
-        !tokio::fs::try_exists(started_path(release))
-            .await
-            .expect("inspect process sentinel"),
-        "started sentinel exists before its command was launched"
-    );
+impl ProcessGate {
+    async fn new(workspace: &Path) -> Self {
+        let socket = workspace.join(format!(
+            "{}.sock",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind process gate");
+        let (released, receiver) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(async move {
+            while let Ok((mut connection, _)) = listener.accept().await {
+                let mut receiver = receiver.clone();
+                tokio::spawn(async move {
+                    let mut request = [0; 1024];
+                    if !matches!(
+                        tokio::time::timeout(
+                            Duration::from_secs(BLOCKED_COMMAND_TIMEOUT_SECS),
+                            connection.read(&mut request)
+                        )
+                        .await,
+                        Ok(Ok(_))
+                    ) {
+                        return;
+                    }
+                    if tokio::time::timeout(
+                        Duration::from_secs(BLOCKED_COMMAND_TIMEOUT_SECS),
+                        receiver.wait_for(|released| *released),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+                    let _ = connection.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                    let _ = connection.shutdown().await;
+                });
+            }
+        });
+        Self {
+            socket,
+            released,
+            task,
+        }
+    }
+
+    fn command(&self, started: &str, done: &str) -> String {
+        format!("printf {started}; curl --silent --show-error --fail --unix-socket '{}' http://localhost/ && printf {done}", self.socket.display())
+    }
+
+    fn release(&self) {
+        self.released.send_replace(true);
+    }
+
+    fn is_released(&self) -> bool {
+        *self.released.borrow()
+    }
+}
+
+impl Drop for ProcessGate {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 async fn wait_for_started_marker(node: &LiveUser, marker: &str, timeout: Duration) {
