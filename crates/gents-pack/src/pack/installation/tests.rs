@@ -533,63 +533,6 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
     .is_err());
 }
 
-async fn installation_explicit(access: &ConfigAccess) -> bool {
-    access
-        .execute("{ PackInstallation { explicit } }")
-        .await
-        .unwrap()["data"]["PackInstallation"][0]["explicit"]
-        .as_bool()
-        .unwrap()
-}
-
-#[tokio::test]
-async fn a_non_explicit_documents_install_becomes_explicit_when_installed_explicitly() {
-    let access = access().await;
-    let config = config(&[("alpha", "Alpha")]);
-    let dependency = PackIdentity {
-        explicit: false,
-        ..identity("1")
-    };
-    super::super::install_pack_documents(
-        &access,
-        OWNER,
-        &dependency,
-        &config,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    assert!(!installation_explicit(&access).await);
-
-    super::super::install_pack_documents(
-        &access,
-        OWNER,
-        &identity("1"),
-        &config,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    assert!(installation_explicit(&access).await);
-
-    super::super::install_pack_documents(
-        &access,
-        OWNER,
-        &dependency,
-        &config,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    assert!(
-        installation_explicit(&access).await,
-        "an explicit install is sticky"
-    );
-}
-
 #[tokio::test]
 async fn an_edited_document_stops_an_upgrade_by_name() {
     let access = access().await;
@@ -1293,6 +1236,117 @@ async fn install_dependee(
     .unwrap();
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ClaimAction {
+    Install,
+    Remove,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ClaimOutcome {
+    Done,
+    Refused,
+}
+
+#[tokio::test]
+async fn dependency_claims_conform_to_the_model() {
+    use gents_lean_vocab::families::pack_dependency_claims as family;
+
+    let coordinate = |pack: &str| format!("acme/{pack}");
+    let named = |coordinate: &str| {
+        coordinate
+            .strip_prefix("acme/")
+            .expect("a modelled pack")
+            .to_owned()
+    };
+    for case in family::cases::<ClaimAction, ClaimOutcome>() {
+        let (_directory, runtime, _node, access) =
+            super::super::agent_bindings::tests::fixture().await;
+        let owner = gents_store::identity::NodeIdentity::did(&runtime);
+        let mut outcomes = Vec::new();
+        for step in &case.input.steps {
+            let done = match step.action {
+                ClaimAction::Install => {
+                    let pack = PackIdentity {
+                        installation_doc_id: None,
+                        agent_bindings: BTreeMap::new(),
+                        coordinate: coordinate(&step.pack),
+                        version: "1".into(),
+                        digest: format!("sha256:{}", "d".repeat(64)),
+                        plugins: vec![],
+                        dependencies: step
+                            .dependencies
+                            .iter()
+                            .map(|pack| coordinate(pack))
+                            .collect(),
+                        explicit: step.explicit,
+                    };
+                    let config: PackConfig = serde_json::from_value(json!({
+                        "node": {"node_did": owner},
+                        "tools": [{
+                            "tools_id": step.pack, "display_name": step.pack, "node_did": owner,
+                            "tags": [format!("gents:pack:{}", pack.coordinate)]
+                        }],
+                    }))
+                    .unwrap();
+                    super::super::install_pack_documents(
+                        &access,
+                        owner,
+                        &pack,
+                        &config,
+                        DriftPolicy::Refuse,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .is_ok()
+                }
+                ClaimAction::Remove => remove_pack(
+                    &access,
+                    owner,
+                    &coordinate(&step.pack),
+                    DriftPolicy::Refuse,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .is_ok(),
+            };
+            outcomes.push(if done {
+                ClaimOutcome::Done
+            } else {
+                ClaimOutcome::Refused
+            });
+        }
+        let rows = access
+            .execute("{ PackInstallation { coordinate explicit required_by } }")
+            .await
+            .unwrap();
+        let mut installations: Vec<family::Installation> = rows["data"]["PackInstallation"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| family::Installation {
+                coordinate: named(row["coordinate"].as_str().unwrap()),
+                explicit: row["explicit"].as_bool().unwrap(),
+                required_by: row["required_by"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|dependent| named(dependent.as_str().unwrap()))
+                    .collect(),
+            })
+            .collect();
+        installations.sort_by(|a, b| a.coordinate.cmp(&b.coordinate));
+        case.check(family::ClaimResult {
+            outcomes,
+            documents: tools_ids(&access).await,
+            installations,
+        });
+    }
+}
+
 fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
     PackIdentity {
         installation_doc_id: None,
@@ -1304,166 +1358,6 @@ fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
         dependencies,
         explicit: true,
     }
-}
-
-#[tokio::test]
-async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
-    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
-    let owner = gents_store::identity::NodeIdentity::did(&runtime);
-    install_dependee(&access, &node, &runtime, false).await;
-
-    super::super::install_pack_documents(
-        &access,
-        owner,
-        &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config_owned(owner, &[("alpha", "Alpha")]),
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-
-    let error = remove_pack(
-        &access,
-        owner,
-        "fixture/dependee_fixture",
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap_err();
-    assert!(format!("{error:#}").contains("acme/demo"), "{error:#}");
-
-    let report = remove_pack(
-        &access,
-        owner,
-        "acme/demo",
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.dependencies.len(), 1);
-    assert_eq!(report.dependencies[0].pack, "fixture/dependee_fixture");
-    assert!(report.dependencies[0]
-        .documents
-        .removed
-        .iter()
-        .any(|name| name.starts_with("Agent/")));
-
-    let remaining = access
-        .execute("{ PackInstallation { coordinate } }")
-        .await
-        .unwrap();
-    assert_eq!(remaining["data"]["PackInstallation"], json!([]));
-}
-
-#[tokio::test]
-async fn an_explicit_dependency_survives_its_dependent() {
-    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
-    let owner = gents_store::identity::NodeIdentity::did(&runtime);
-    install_dependee(&access, &node, &runtime, true).await;
-
-    super::super::install_pack_documents(
-        &access,
-        owner,
-        &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config_owned(owner, &[("alpha", "Alpha")]),
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-
-    let report = remove_pack(
-        &access,
-        owner,
-        "acme/demo",
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    assert!(
-        report.dependencies.is_empty(),
-        "an explicit install is never auto-released"
-    );
-
-    let remaining = access
-        .execute("{ PackInstallation { coordinate required_by } }")
-        .await
-        .unwrap();
-    let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["coordinate"], "fixture/dependee_fixture");
-    assert_eq!(
-        rows[0]["required_by"],
-        Value::Null,
-        "an explicit install is never auto-released"
-    );
-
-    remove_pack(
-        &access,
-        owner,
-        "fixture/dependee_fixture",
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-}
-
-#[tokio::test]
-async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
-    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
-    let owner = gents_store::identity::NodeIdentity::did(&runtime);
-    install_dependee(&access, &node, &runtime, false).await;
-
-    super::super::install_pack_documents(
-        &access,
-        owner,
-        &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config_owned(owner, &[("alpha", "Alpha")]),
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    let after_first = access
-        .execute("{ PackInstallation { coordinate required_by } }")
-        .await
-        .unwrap();
-    let rows = after_first["data"]["PackInstallation"].as_array().unwrap();
-    let dependee = rows
-        .iter()
-        .find(|row| row["coordinate"] == "fixture/dependee_fixture")
-        .unwrap();
-    assert_eq!(dependee["required_by"], json!(["acme/demo"]));
-
-    super::super::install_pack_documents(
-        &access,
-        owner,
-        &demo_identity(vec![]),
-        &config_owned(owner, &[("alpha", "Alpha 2")]),
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-
-    let after_upgrade = access
-        .execute("{ PackInstallation { coordinate required_by } }")
-        .await
-        .unwrap();
-    let rows = after_upgrade["data"]["PackInstallation"]
-        .as_array()
-        .unwrap();
-    assert!(
-        !rows
-            .iter()
-            .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
-        "the dropped, non-explicit dependency is released outright: {rows:?}"
-    );
 }
 
 #[tokio::test]

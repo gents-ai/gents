@@ -1,4 +1,5 @@
 import Proofs.Pack.AllowedFolders
+import Proofs.Pack.DependencyClaims
 import Proofs.Pack.PluginOwnership
 import Proofs.Pack.PluginWiring
 import Proofs.Pack.Resolve
@@ -32,6 +33,12 @@ namespace Pack.AllowedFolders
 deriving instance ToJson for Access, World, Entry, Action, Outcome, Step
 
 end Pack.AllowedFolders
+
+namespace Pack.DependencyClaims
+
+deriving instance ToJson for Installation
+
+end Pack.DependencyClaims
 
 namespace Pack.Resolve
 
@@ -520,6 +527,93 @@ def allowedScope : Family AllowedScopeInput AllowedScopeResult where
       reachable := input.targets.map (reachable input.world) }
 
 end Allowed
+
+/-! ## Dependency claims -/
+
+section Claims
+
+open DependencyClaims
+
+inductive ClaimAction | install | remove
+  deriving DecidableEq, Repr, ToJson
+
+structure ClaimStep where
+  action : ClaimAction
+  pack : String
+  explicit : Bool
+  dependencies : List String
+  deriving ToJson
+
+structure ClaimScript where
+  name : String
+  steps : List ClaimStep
+  deriving ToJson
+
+inductive ClaimOutcome | done | refused
+  deriving DecidableEq, Repr, ToJson
+
+structure ClaimResult where
+  outcomes : List ClaimOutcome
+  /-- The packs whose documents are on the node: a released pack's go with it. -/
+  documents : List String
+  installations : List Installation
+  deriving ToJson
+
+def runClaims (state : DependencyClaims.State) :
+    List ClaimStep → DependencyClaims.State × List ClaimOutcome
+  | [] => (state, [])
+  | step :: rest =>
+    let next := match step.action with
+      | .install => DependencyClaims.install state step.pack step.explicit step.dependencies
+      | .remove => DependencyClaims.remove state step.pack
+    let ran := runClaims (next.getD state) rest
+    (ran.1, (if next.isSome then .done else .refused) :: ran.2)
+
+private def onPurpose (pack : String) (dependencies : List String := []) : ClaimStep :=
+  { action := .install, pack, explicit := true, dependencies }
+
+private def asDependency (pack : String) : ClaimStep :=
+  { action := .install, pack, explicit := false, dependencies := [] }
+
+private def removal (pack : String) : ClaimStep :=
+  { action := .remove, pack, explicit := false, dependencies := [] }
+
+@[conformance_family]
+def dependencyClaims : Family ClaimScript ClaimResult where
+  inputs :=
+    [ ⟨"a dependency is released with its last dependent",
+        [asDependency "lib", onPurpose "app" ["lib"], removal "lib", removal "app"]⟩
+    , ⟨"a dependency installed on purpose survives its dependent",
+        [onPurpose "lib", onPurpose "app" ["lib"], removal "app", removal "lib"]⟩
+    , ⟨"a dependency stays while another pack requires it",
+        [ asDependency "lib", onPurpose "app" ["lib"], onPurpose "tool" ["lib"], removal "app"
+        , removal "lib", removal "tool" ]⟩
+    , ⟨"an upgrade that drops a dependency releases it",
+        [asDependency "lib", onPurpose "app" ["lib"], onPurpose "app"]⟩
+    , ⟨"an upgrade that drops a dependency installed on purpose keeps it",
+        [onPurpose "lib", onPurpose "app" ["lib"], onPurpose "app"]⟩
+    , ⟨"an upgrade that swaps dependencies releases the old and claims the new",
+        [ asDependency "lib", asDependency "other", onPurpose "app" ["lib"]
+        , onPurpose "app" ["other"] ]⟩
+    , ⟨"installing on purpose is sticky",
+        [asDependency "lib", onPurpose "lib", asDependency "lib"]⟩
+    , ⟨"a dependency later installed on purpose survives its dependent",
+        [asDependency "lib", onPurpose "app" ["lib"], onPurpose "lib", removal "app"]⟩
+    , ⟨"installing again does not claim twice",
+        [asDependency "lib", onPurpose "app" ["lib"], onPurpose "app" ["lib"], removal "app"]⟩
+    , ⟨"a pack with a dependency that is not installed is refused and nothing is recorded",
+        [onPurpose "app" ["lib"]]⟩
+    , ⟨"a refused upgrade keeps the claims it had",
+        [asDependency "lib", onPurpose "app" ["lib"], onPurpose "app" ["lib", "missing"]]⟩
+    , ⟨"a pack that is not installed cannot be removed", [onPurpose "app", removal "lib"]⟩
+    , ⟨"a dependency nobody requires yet stays until it is removed",
+        [asDependency "lib", onPurpose "app", removal "lib"]⟩ ]
+  model := fun script =>
+    let ran := runClaims [] script.steps
+    let installations := ran.1.mergeSort fun a b => a.coordinate ≤ b.coordinate
+    { outcomes := ran.2, documents := installations.map (·.coordinate), installations }
+
+end Claims
 
 /-! ## Plugin artifact bytes -/
 
