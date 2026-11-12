@@ -1,6 +1,7 @@
 import Proofs.Automation.Triggers.Durable
 import Proofs.Automation.EventDelivery.Durable
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 import Proofs.Automation.Triggers.SessionKey
 import Proofs.Automation.Triggers.FireBudget
 import Proofs.Conformance.Family
@@ -510,13 +511,20 @@ def assignmentRootCases : List String :=
     ("assigned", jsonOptionalString assigned), ("observed", jsonOptionalString observed),
     ("allowed", toString (Goals.assignmentAllows assigned observed))]
 
-def selfCases : List String :=
-  [("owner", "first", "owner", "first"),
-   ("owner", "first", "owner", "second"),
-   ("owner", "first", "foreign", "first")].map fun (co, cs, lo, ls) => object [
-    ("caller_owner", jsonString co), ("caller_session", jsonString cs),
-    ("listed_owner", jsonString lo), ("listed_session", jsonString ls),
-    ("current", toString (isCurrent co cs lo ls))]
+structure SelfSessionInput where
+  callerOwner : String
+  callerSession : String
+  listedOwner : String
+  listedSession : String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def selfSession : Family SelfSessionInput Bool where
+  inputs :=
+    [("owner", "first", "owner", "first"), ("owner", "first", "owner", "second"),
+     ("owner", "first", "foreign", "first")].map fun (callerOwner, callerSession, listedOwner, listedSession) =>
+      { callerOwner, callerSession, listedOwner, listedSession }
+  model := fun i => isCurrent i.callerOwner i.callerSession i.listedOwner i.listedSession
 
 def deliveryOptionCases : List String := do
   let kind ← [.manual, .schedule, .event]
@@ -596,9 +604,6 @@ def triggerDeliveryOptionCasesJson : String :=
 
 def triggerDeliveryLatestAdmissionCasesJson : String :=
   jsonArray latestAdmissionCases
-
-def triggerDeliverySelfSessionCasesJson : String :=
-  jsonArray selfCases
 
 example : (admit (admit {} (fire "a")) (fire "a")).requests.length = 1 := by native_decide
 example : outcomeDue {} { fire := { fire "a" with goalBacked := true }, terminal := false } = false := by

@@ -210,20 +210,6 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             case["name"]
         );
     }
-    for case in cases["trigger_delivery_self_session_cases"]
-        .as_array()
-        .unwrap()
-    {
-        assert_eq!(
-            gents_tools::native::session_history::is_current_session(
-                case["caller_owner"].as_str().unwrap(),
-                case["caller_session"].as_str().unwrap(),
-                case["listed_owner"].as_str().unwrap(),
-                case["listed_session"].as_str().unwrap()
-            ),
-            case["current"].as_bool().unwrap()
-        );
-    }
 }
 
 #[tokio::test]
