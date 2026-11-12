@@ -1,3 +1,4 @@
+import Proofs.Conformance.Identity.ReceiverGrant
 import Proofs.Conformance.Identity.WorkspaceRoot
 import Proofs.Conformance.Identity.WorkspaceAndFileRequests
 import Proofs.Conformance.Identity.MailboxAccess
@@ -716,8 +717,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OperationsConformance.pairingPartitionCasesJson ++ ","
     ++ "\"identity_desired_publisher_cases\":"
       ++ Identity.OperationsConformance.desiredPublisherCasesJson ++ ","
-    ++ "\"identity_receiver_grant_cases\":"
-      ++ Identity.OperationsConformance.receiverGrantCasesJson ++ ","
     ++ "\"identity_pairing_reader_cases\":"
       ++ Identity.OperationsConformance.pairingReaderCasesJson ++ ","
     ++ "\"identity_pairing_reader_policy_cases\":"

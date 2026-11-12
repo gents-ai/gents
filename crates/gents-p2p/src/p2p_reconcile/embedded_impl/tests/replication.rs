@@ -10,12 +10,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
 {
     use anyhow::Context;
     use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
-    let model = &gents_lean_vocab::lean_contract_snapshot().identity_receiver_grant_cases;
-    let expected = model
-        .iter()
-        .find(|case| case.sender_granted && !case.delivered)
-        .unwrap()
-        .receiver_granted;
+    let receiver_cases = gents_lean_vocab::families::identity_receiver_grant::cases();
     let directory = tempfile::tempdir()?;
     let candidate_path = directory.path().join("candidate");
     let admin_path = directory.path().join("admin");
@@ -216,19 +211,18 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         1,
         "candidate-owned genesis must arrive and be visible to its actual author"
     );
-    assert_eq!(
-        count(&http(admin_address, &admin)?.execute(&query).await?) != 0,
-        expected,
-        "source reader tuple must not be assumed on receiver"
-    );
+    let granted_undelivered = {
+        let http_sees = count(&http(admin_address, &admin)?.execute(&query).await?) != 0;
+        let embedded_sees = count(&admin_local.execute(&query).await?) != 0;
+        assert_eq!(
+            http_sees, embedded_sees,
+            "receiver surfaces must agree: source reader tuple must not be assumed"
+        );
+        http_sees
+    };
     assert_eq!(
         count(&http(admin_address, &outsider)?.execute(&query).await?),
         0
-    );
-    assert_eq!(
-        count(&admin_local.execute(&query).await?) != 0,
-        expected,
-        "embedded receiver runtime must not inherit the origin's reader tuple"
     );
     let receiver_author =
         ConfigAccess::local_as(admin_node.clone(), identity::Did::new(candidate.did())?);
@@ -237,6 +231,61 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         1,
         "signed genesis must retain its actual creator on the receiver"
     );
+    let offer_b = issuer.mint().await?;
+    let request_b = crate::p2p_reconcile::enrollment_candidate::sign_enrollment_request(
+        &candidate,
+        &offer_b.offer,
+        &offer_b.token,
+        candidate_peer.clone(),
+        candidate_ticket.clone(),
+    )
+    .await?;
+    let input_b = crate::p2p_reconcile::enrollment_candidate::enrollment_request_input(&request_b);
+    let mutation_b =
+        format!("mutation {{ create_NetworkEnrollmentRequest(input: {input_b}) {{_docID}} }}");
+    let doc_b = candidate_local
+        .transact_write("test.enrollment_native.create_ungranted", |txn| {
+            let mutation_b = &mutation_b;
+            Box::pin(async move {
+                let response = txn.execute(mutation_b).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "NetworkEnrollmentRequest",
+                )?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await?;
+    let query_b = format!(
+        r#"{{ NetworkEnrollmentRequest(filter: {{_docID: {{_eq:"{}"}}}}) {{_docID offer_token}} }}"#,
+        escape_graphql_string(&doc_b)
+    );
+    push_documents_to_peer(
+        candidate_node,
+        &peer,
+        vec![P2pDocumentRequest {
+            collection: "NetworkEnrollmentRequest".into(),
+            doc_id: doc_b.clone(),
+        }],
+    )
+    .await?;
+    tokio::time::timeout(Duration::from_secs(20), arrivals.recv())
+        .await?
+        .context("replicated ungranted enrollment notification closed")?;
+    assert_eq!(
+        count(&http(admin_address, &candidate)?.execute(&query_b).await?),
+        1,
+        "ungranted genesis must arrive and be visible to its actual author"
+    );
+    let ungranted_undelivered = {
+        let http_sees = count(&http(admin_address, &admin)?.execute(&query_b).await?) != 0;
+        let embedded_sees = count(&admin_local.execute(&query_b).await?) != 0;
+        assert_eq!(
+            http_sees, embedded_sees,
+            "receiver surfaces must agree without a sender grant"
+        );
+        http_sees
+    };
     {
         let txn = admin_node.database().new_txn(false).await?;
         let view = txn.datastore()?;
@@ -250,6 +299,26 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         .await?;
         drop(view);
         txn.commit().await?;
+    }
+    let granted_delivered = {
+        let http_sees = count(&http(admin_address, &admin)?.execute(&query).await?) != 0;
+        let embedded_sees = count(&admin_local.execute(&query).await?) != 0;
+        assert_eq!(
+            http_sees, embedded_sees,
+            "receiver surfaces must agree once the relationship is delivered"
+        );
+        http_sees
+    };
+    for receiver_case in &receiver_cases {
+        let observed = match (receiver_case.input.sender_granted, receiver_case.input.delivered) {
+            (false, false) => ungranted_undelivered,
+            (true, false) => granted_undelivered,
+            (true, true) => granted_delivered,
+            (false, true) => {
+                panic!("receiver grant family delivered a relationship the sender never granted")
+            }
+        };
+        receiver_case.check(observed);
     }
     assert_eq!(
         count(&admin_local.execute(&query).await?) != 0,

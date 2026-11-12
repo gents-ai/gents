@@ -109,11 +109,6 @@ def desiredPublisherCasesJson : String := (toJson
         ("local", toJson localNode), ("target", toJson targetNode), ("held", toJson held),
         ("allowed", toJson (desiredRoutePublisher actor localNode targetNode held))])).compress
 
-def receiverGrantCasesJson : String := (toJson
-  ([(false, false), (true, false), (true, true)].map fun (senderGranted, delivered) =>
-    Json.mkObj [("sender_granted", toJson senderGranted), ("delivered", toJson delivered),
-      ("receiver_granted", toJson (receiverHasGrant senderGranted delivered))])).compress
-
 def validObservation : ReadinessObservation :=
   ⟨"runtime", "runtime", 1, 1, some "node", some "user", some "runtime", some "node", true, true⟩
 
