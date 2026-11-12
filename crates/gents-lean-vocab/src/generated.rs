@@ -617,9 +617,6 @@ pub fn lean_request_progress_cases() -> &'static [LeanRequestProgressCase] {
     &lean_contract_snapshot().request_progress_cases
 }
 
-pub fn lean_request_terminal_selection_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().request_terminal_selection_cases
-}
 
 pub fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
     &lean_contract_snapshot().request_transition_cases
@@ -3282,7 +3279,6 @@ pub struct LeanContractSnapshot {
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
-    pub request_terminal_selection_cases: Vec<serde_json::Value>,
     pub canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
     pub reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,

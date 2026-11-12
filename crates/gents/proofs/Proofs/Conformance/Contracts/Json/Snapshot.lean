@@ -1059,7 +1059,6 @@ def snapshotFileCasesJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
-    ++ "\"request_terminal_selection_cases\":" ++ TerminalSelection.casesJson ++ ","
     ++ "\"canonical_output_projection_cases\":"
       ++ jsonArray
         (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","
