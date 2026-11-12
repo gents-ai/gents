@@ -2150,28 +2150,6 @@ pub struct LeanClientAgentReadinessCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientChatReadinessCase {
-    pub refusal: Option<String>,
-    pub route: Option<LeanClientChatReadinessCaseRoute>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientChatReadinessCaseRoute {
-    pub managed: bool,
-    pub operator_endpoint: bool,
-    pub source: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientChatReadinessCausesItem {
-    pub cause: String,
-    pub next_action: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientDataPublicationCases {
     pub notice_delivery: LeanClientDataPublicationCasesNoticeDelivery,
     pub publication: Vec<LeanClientDataPublicationCasesPublicationItem>,
@@ -2479,37 +2457,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -2607,14 +2554,6 @@ pub struct LeanClientRequestPatchPublicationCasesReuseItem {
     pub name: String,
     pub rows_current: bool,
     pub same_signature: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientRoutePairingLegsItem {
-    pub combined: Option<bool>,
-    pub inbound: String,
-    pub outbound: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -3035,7 +2974,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3173,9 +3111,6 @@ pub struct LeanContractSnapshot {
     pub enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
     pub enrollment_pending_request_cases: Vec<LeanEnrollmentPendingRequestCase>,
     pub enrollment_absent_peer_cases: Vec<LeanEnrollmentAbsentPeerCase>,
-    pub client_chat_readiness_cases: Vec<LeanClientChatReadinessCase>,
-    pub client_route_pairing_legs: Vec<LeanClientRoutePairingLegsItem>,
-    pub client_chat_readiness_causes: Vec<LeanClientChatReadinessCausesItem>,
     pub client_sync_health_cases: Vec<LeanClientSyncHealthCase>,
     pub enrollment_route_readiness_cases: Vec<LeanEnrollmentRouteReadinessCase>,
     pub enrollment_startup_cases: Vec<LeanEnrollmentStartupCase>,
