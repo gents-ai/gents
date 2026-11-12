@@ -66,3 +66,6 @@ mod steering_delivery_live;
 mod rendered_request_capture_live;
 #[path = "e2e_live/runtime_entry_live.rs"]
 mod runtime_entry_live;
+
+#[path = "e2e_live/plugin_surface_live.rs"]
+mod plugin_surface_live;

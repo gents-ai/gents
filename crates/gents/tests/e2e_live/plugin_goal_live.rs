@@ -21,7 +21,7 @@ use crate::support::live_inference::{
 };
 use crate::support::{test_db, ManagedAgentFixture};
 
-async fn submit_with_cwd(
+pub(super) async fn submit_with_cwd(
     access: &ConfigAccess,
     fixture: &ManagedAgentFixture,
     node_did: &str,
@@ -156,13 +156,25 @@ async fn tool_result(
     .unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn live_plugin_job_adopts_a_child_and_completes() {
+pub(super) struct LiveJobHarness {
+    pub db: crate::support::TestDb,
+    pub actors: super::plugin_job_support::JobActors,
+    pub runtime: crate::support::interrupt::BootedAgent,
+    pub live: LiveUser,
+    pub session_id: String,
+    pub request_id: String,
+    pub parent_doc_id: String,
+    pub row: Value,
+    pub plugin_home: tempfile::TempDir,
+    pub cwd: std::path::PathBuf,
+}
+
+pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarness {
     use super::plugin_job_support::{
         effects, guest_pin, install_job_fixture, job_settings, result, spawn, PlanEntry,
     };
     let target = live_target().await;
-    let db = test_db("live-plugin-job").await;
+    let db = test_db(name).await;
     let plugin_home = tokio::task::spawn_blocking(tempfile::tempdir)
         .await
         .unwrap()
@@ -219,7 +231,7 @@ async fn live_plugin_job_adopts_a_child_and_completes() {
     )
     .await
     .unwrap();
-    let plan = tokio::task::spawn_blocking(|| {
+    let plan = tokio::task::spawn_blocking(move || {
         vec![
             PlanEntry {
                 when: json!({"step":0}),
@@ -234,7 +246,7 @@ async fn live_plugin_job_adopts_a_child_and_completes() {
             },
             PlanEntry {
                 when: json!({"children":{"child":"completed"}}),
-                output: result(json!({"status":"done"})),
+                output: result(value),
                 control: None,
             },
             PlanEntry {
@@ -259,13 +271,14 @@ async fn live_plugin_job_adopts_a_child_and_completes() {
     )
     .await
     .unwrap();
-    const SESSION: &str = "live-plugin-job-session";
-    const REQUEST: &str = "live-plugin-job-parent";
-    submit_with_cwd(&live.access, &actors.fixture, &live.node_did, SESSION, REQUEST,
+    let session_id = format!("{name}-session");
+    let request_id = format!("{name}-parent");
+    let parent_doc_id = submit_with_cwd(&live.access, &actors.fixture, &live.node_did, &session_id, &request_id,
         format!("Call job_fixture once with exactly these arguments: {}. It will run in the background. Acknowledge after the receipt and acknowledge its eventual completion without starting another job.", json!({"args":{"plan":plan}})), &cwd,
     ).await;
     let query = format!(
-        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{REQUEST}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID tool_call_id lifecycle_state plugin_execution_receipt}} }}"#
+        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID tool_call_id lifecycle_state plugin_execution_receipt}} }}"#,
+        escape_graphql_string(&request_id),
     );
     let rows = wait_for_rows(
         &live.access,
@@ -284,14 +297,36 @@ async fn live_plugin_job_adopts_a_child_and_completes() {
         .unwrap()
         .iter()
         .find(|row| row["lifecycle_state"] == "completed")
-        .unwrap();
-    assert!(!row["plugin_execution_receipt"].is_null());
+        .unwrap()
+        .clone();
+    assert_eq!(
+        wait_for_request_terminal(&live.access, &request_id, Duration::from_secs(120)).await,
+        "completed"
+    );
+    LiveJobHarness {
+        db,
+        actors,
+        runtime,
+        live,
+        session_id,
+        request_id,
+        parent_doc_id,
+        row,
+        plugin_home,
+        cwd,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_plugin_job_adopts_a_child_and_completes() {
+    let h = completed_live_job("live-plugin-job", json!({"status":"done"})).await;
+    assert!(!h.row["plugin_execution_receipt"].is_null());
     let view = load_job_view(
-        &live.access,
+        &h.live.access,
         None,
         JobKey::Address {
-            session_id: SESSION.into(),
-            tool_call_id: row["tool_call_id"].as_str().unwrap().into(),
+            session_id: h.session_id.clone(),
+            tool_call_id: h.row["tool_call_id"].as_str().unwrap().into(),
         },
     )
     .await
@@ -304,14 +339,11 @@ async fn live_plugin_job_adopts_a_child_and_completes() {
         .expect("the job adopted its requested child");
     assert_eq!(child.state, JobChildState::Completed);
     assert_eq!(
-        wait_for_request_terminal(&live.access, &child.request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&h.live.access, &child.request_id, Duration::from_secs(120))
+            .await,
         "completed"
     );
-    assert_eq!(
-        wait_for_request_terminal(&live.access, REQUEST, Duration::from_secs(120)).await,
-        "completed"
-    );
-    runtime.shutdown().await;
+    h.runtime.shutdown().await;
 }
 
 #[cfg(unix)]
