@@ -76,11 +76,6 @@ impl FaultRelay {
         &self.endpoint
     }
 
-    pub fn arm(&self) {
-        self.state.injected.send_replace(false);
-        self.state.armed.store(true, Ordering::Release);
-    }
-
     pub async fn wait_injected(&self, deadline: Duration) -> Result<()> {
         let mut injected = self.state.injected.subscribe();
         tokio::time::timeout(deadline, injected.wait_for(|injected| *injected))
@@ -110,11 +105,11 @@ async fn forward(
                 messages.iter().any(|message| {
                     message["role"] == "user"
                         && match &message["content"] {
-                            Value::String(text) => text.contains(&state.matching_input),
+                            Value::String(text) => text == &state.matching_input,
                             Value::Array(parts) => parts.iter().any(|part| {
                                 part["text"]
                                     .as_str()
-                                    .is_some_and(|text| text.contains(&state.matching_input))
+                                    .is_some_and(|text| text == &state.matching_input)
                             }),
                             _ => false,
                         }

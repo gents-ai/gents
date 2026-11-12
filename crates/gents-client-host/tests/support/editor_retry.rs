@@ -42,13 +42,13 @@ pub async fn verify(
     client: &mut Attachment,
     id: &mut u32,
     access: &ConfigAccess,
-    _provider: &fake_llm::FakeLlm,
     root: &Path,
     node: &str,
     session: &str,
     author: &str,
 ) -> Result<Value> {
-    let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-retry-ui.json"))?)?;
+    let ui: Value =
+        serde_json::from_slice(&tokio::fs::read(root.join("editor-retry-ui.json")).await?)?;
     let before = requests(access, node, session).await?;
     ensure!(
         before.len() == 3,

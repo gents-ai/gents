@@ -759,6 +759,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         return live_runtime::exercise_editor(root, "live-undo").await;
     }
     #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorRetry) {
+        return live_runtime::exercise_editor(root, "retry").await;
+    }
+    #[cfg(feature = "editor-e2e")]
     if matches!(journey, Journey::EditorHistory)
         && !editor_history::Options::from_env()?.profile
         && std::env::var_os("GENTS_PREVIOUS_CLIENT_HOST").is_none()
@@ -2625,7 +2629,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut client,
             &mut id,
             &access,
-            &provider,
             root,
             node_did,
             session,

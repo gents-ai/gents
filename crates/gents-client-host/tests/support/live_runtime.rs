@@ -17,6 +17,8 @@ use support::Attachment;
 
 #[path = "live_delivery.rs"]
 mod live_delivery;
+#[path = "live_faults.rs"]
+mod live_faults;
 #[path = "live_file_actions.rs"]
 mod live_file_actions;
 #[path = "live_gate.rs"]
@@ -47,6 +49,13 @@ pub async fn exercise_editor(root: &Path, scenario: &str) -> Result<()> {
 
 async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
     let target = live_target().await;
+    let fault = if editor == Some("retry") {
+        Some(live_faults::FaultRelay::start(&target, super::editor_retry::PROMPT.to_owned(),
+            axum::http::StatusCode::BAD_REQUEST,
+            json!({"error":{"message":"Retry fixture provider refusal","type":"invalid_request_error"}})).await?)
+    } else {
+        None
+    };
     let mut gates = live_goals::gates(root, editor).await?;
     let steering = matches!(editor, Some("live-steering" | "live-goal-steering"));
     let goal_steering = editor == Some("live-goal-steering");
@@ -213,7 +222,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         let agent = deployment["client"]["deployments"].as_array().unwrap().iter()
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
-        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref(), undo.as_ref()).await?;
+        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref(), undo.as_ref(), fault.as_ref()).await?;
         let opening = if steering { gates[0].prompt() } else if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools.".to_owned() } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.".to_owned() };
         let receipt = if goal_steering {
             client.try_call(id, "desktop_goal_control", json!({"request":{"nodeDid":node,"agentDid":agent,"action":{"kind":"create","objective":opening,"tokenBudget":"16000"}}})).await?
@@ -285,6 +294,9 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         }
         if let Some(scenario) = editor.filter(|_| !steering) {
             live_goals::prepare(root, scenario, &gates).await?;
+            if scenario == "retry" {
+                tokio::fs::write(root.join("editor-retry-fixture.json"), serde_json::to_vec(&json!({"prompt":super::editor_retry::PROMPT,"captured":super::editor_retry::CAPTURED}))?).await?;
+            }
             if let Some(inventory) = &inventory {
                 for prompt in &inventory.seed_prompts {
                     let sent = client.try_call(id, "desktop_chat_send", json!({"request":{"nodeDid":node,"agentDid":agent,"sessionId":session,"content":prompt,"delivery":"queue"}})).await?;
@@ -310,7 +322,12 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
                 tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
             }
             super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), scenario).await?;
-            if let Some(undo) = &undo {
+            if let Some(fault) = &fault {
+                fault.wait_injected(WAIT).await?;
+                let evidence = super::editor_retry::verify(&mut client, &mut id, &access, root, node, session, &client_did).await?;
+                tokio::fs::write(root.join("editor-retry-canonical.json"), serde_json::to_vec(&evidence)?).await?;
+                projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
+            } else if let Some(undo) = &undo {
                 let evidence = undo.verify(&mut client, &mut id, &access, node, &client_did).await?;
                 tokio::fs::write(root.join("editor-undo-canonical.json"), serde_json::to_vec(&evidence)?).await?;
             } else if let Some(inventory) = &inventory {
@@ -429,6 +446,7 @@ async fn configure(
     related_work: Option<&live_related_work::RelatedWork>,
     inventory: Option<&live_inventory::Inventory>,
     undo: Option<&live_undo::Undo>,
+    fault: Option<&live_faults::FaultRelay>,
 ) -> Result<()> {
     let setup = client
         .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
@@ -444,7 +462,11 @@ async fn configure(
     }
     let profile = target.profile(node);
     selected["inference_profile_id"] = json!(profile.profile_id);
-    let mut document = json!({"node":{"node_did":node},"agents":[selected],"inference_backends":[target.backend(node)],"inference_profiles":[profile]});
+    let mut backend = target.backend(node);
+    if let Some(fault) = fault {
+        backend.endpoint = fault.endpoint().to_owned();
+    }
+    let mut document = json!({"node":{"node_did":node},"agents":[selected],"inference_backends":[backend],"inference_profiles":[profile]});
     if goal {
         document["contexts"] = json!([{"node_did":node,"context_id":"native-live-goal-context","tools_id":"native-live-goal-tools","system_prompt":"Answer ordinary requests briefly. When the Goal is resumed, fulfill its objective and call update_goal with status complete. Do not create another Goal."}]);
         document["tools"] = json!([{"node_did":node,"tools_id":"native-live-goal-tools","built_ins":{"enable_goal_tools":true}}]);
