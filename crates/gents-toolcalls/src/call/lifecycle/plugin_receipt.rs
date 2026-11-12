@@ -74,6 +74,8 @@ mod tests {
     fn observed(receipt: &PluginExecutionReceipt) -> Receipt<String> {
         assert_eq!(receipt.coordinate, "team/plugin");
         assert_eq!(receipt.artifact_digest, "sha256:artifact");
+        assert_eq!(receipt.authority, None);
+        assert_eq!(receipt.limits, None);
         Receipt {
             evidence: receipt.input_digest.clone(),
             output: receipt.output_digest.clone(),

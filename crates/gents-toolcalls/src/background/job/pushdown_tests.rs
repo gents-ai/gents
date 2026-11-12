@@ -517,12 +517,6 @@ pub(super) fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPlugin
     (action, after)
 }
 
-/// Lean `pluginJobRecoverySweep` ticks (`pluginJobStale`, then
-/// `pluginJobRecover ∘ pluginJobRecover`) through the owner's first-application
-/// decision `plugin_job::recovery::tick_action`, which
-/// `redrive_running_jobs` applies to each running job row: a stale row is
-/// killed or re-driven one step, and a row that is not stale is untouched.
-/// Lean's measures stay with its own `recovery_regressions`.
 fn observed_row(
     row: &LeanPluginJobRecoveryRow,
 ) -> gents_lean_vocab::families::plugin_job_recoveries::PluginJobRow {
@@ -540,6 +534,12 @@ fn observed_row(
     }
 }
 
+/// Lean `pluginJobRecoverySweep` ticks (`pluginJobStale`, then
+/// `pluginJobRecover ∘ pluginJobRecover`) through the owner's first-application
+/// decision `plugin_job::recovery::tick_action`, which
+/// `redrive_running_jobs` applies to each running job row: a stale row is
+/// killed or re-driven one step, and a row that is not stale is untouched.
+/// Lean's measures stay with its own `recovery_regressions`.
 #[tokio::test]
 async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
     let mut names = Vec::new();
