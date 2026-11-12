@@ -708,8 +708,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
     ++ "\"identity_private_journal_policy\":"
       ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
-    ++ "\"client_optimistic_send_cases\":"
-      ++ ClientOptimisticSend.casesJson ++ ","
     ++ "\"client_publication_protected_collection\":"
       ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
     ++ "\"identity_bootstrap_cases\":"

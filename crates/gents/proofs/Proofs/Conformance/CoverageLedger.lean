@@ -1133,10 +1133,10 @@ def caseCoverage : List CoverageEntry :=
       "inference_visibility_cases"
       "InferenceVisibilityCases")
       "client-shell" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "client_optimistic_send_cases"
+  , tagged (consumerWithFollowUp
+      "Proofs.Conformance.ClientOptimisticSend"
       "ClientOptimisticSendCases"
-      "The desktop chat-send replay was removed when desktop sends moved onto the shared request handler; the replay must be rebuilt against that handler.")
+      "The desktop optimistic-send test replays the views and traces from Proofs/Conformance/ClientOptimisticSend.lean except the runtime turn count; the native idempotent-send replay must be rebuilt against the shared request handler.")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_telemetry_cases"
