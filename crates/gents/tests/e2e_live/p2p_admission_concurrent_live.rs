@@ -8,17 +8,13 @@ use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_request_terminal,
 };
-use crate::support::p2p_waits::wait_for_listen_addr;
 use crate::support::{test_p2p_db_with_admission, TestDb, TestP2pAdmission};
 
 const CONCURRENT_WAVES: usize = 4;
 
-fn live_enabled() -> bool {
-    std::env::var("GENTS_LIVE_P2P_ADMISSION").as_deref() == Ok("1")
-}
-
 async fn wait_for_connected_peer(node: &EmbeddedNode) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut changes = node.subscribe(&[gents::defra_node::EventName::PeerConnection]);
     loop {
         let peers = gents_store::identity::node_p2p(node)
             .expect("p2p enabled")
@@ -28,17 +24,29 @@ async fn wait_for_connected_peer(node: &EmbeddedNode) {
         if !peers.is_empty() {
             return;
         }
-        if Instant::now() >= deadline {
-            panic!("no connected peer; last={peers:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("no connected peer before the connection deadline")
+            .expect("peer connection subscription closed");
     }
+}
+
+async fn listen_address(node: &EmbeddedNode) -> String {
+    let p2p = gents_store::identity::node_p2p(node).expect("p2p enabled");
+    let addresses = tokio::time::timeout(Duration::from_secs(10), p2p.listen_addresses())
+        .await
+        .expect("P2P listen-address request timed out")
+        .expect("P2P listen addresses");
+    addresses
+        .into_iter()
+        .find(|address| address.starts_with("127.0.0.1:") || address.starts_with("[::1]:"))
+        .expect("the loopback P2P endpoint must be bound when the node is created")
 }
 
 /// P2P carries only discovery and enrollment: the owner dials each peer, and
 /// no document collection replicates over the connection.
 async fn connect_discovery_peer(owner: &EmbeddedNode, peer: &EmbeddedNode) {
-    let peer_addr = wait_for_listen_addr(peer).await;
+    let peer_addr = listen_address(peer).await;
     // Transport administration runs as the Node's own identity.
     gents_store::identity::node_p2p(owner)
         .expect("owner p2p")
@@ -127,20 +135,13 @@ impl Drop for LiveTopologyGuard {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored"]
 async fn concurrent_multiwave_single_push_worker_converges_with_live_inference() -> Result<()> {
-    assert!(
-        live_enabled(),
-        "set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored to run the concurrent multi-wave live e2e"
-    );
-
     let target = live_target().await;
-    eprintln!(
+    tracing::info!(
         "[p2p-admission-live] target={} model={} waves={CONCURRENT_WAVES} push_workers=1 peers=2",
         target.name,
         target.model()
     );
-    target.assert_reachable().await;
 
     let admission = TestP2pAdmission::single_push_worker();
     let owner = test_p2p_db_with_admission("p2p-adm-live-owner", admission.clone()).await;
@@ -156,7 +157,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
     let node_did = actors.node_did().to_owned();
     let agent = boot_live_agent(topo.owner(), topo.owner().node_identity.clone()).await?;
     topo.set_agent(agent);
-    eprintln!("[p2p-admission-live] owner ready did={node_did}");
+    tracing::info!("[p2p-admission-live] owner ready did={node_did}");
 
     let wave_ids: Vec<String> = (0..CONCURRENT_WAVES)
         .map(|i| format!("p2p-adm-live-wave-{i}"))
@@ -172,11 +173,11 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
             request_id,
             &session_ids[i],
             "interactive",
-            &format!("Reply with exactly one word: wave{i}"),
+            &format!("Briefly acknowledge request wave {i}."),
         )
         .await;
     }
-    eprintln!(
+    tracing::info!(
         "[p2p-admission-live] submitted {CONCURRENT_WAVES} concurrent requests in {:?}",
         submit_start.elapsed()
     );
@@ -190,7 +191,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
             "owner wave {request_id} must complete against target {}, got {state}",
             target.name
         );
-        eprintln!("[p2p-admission-live] owner terminal {request_id}={state}");
+        tracing::info!("[p2p-admission-live] owner terminal {request_id}={state}");
     }
 
     for db in [topo.peer_a(), topo.peer_b()] {
@@ -206,6 +207,6 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
     }
 
     topo.shutdown().await;
-    eprintln!("[p2p-admission-live] PASS concurrent multi-wave under single push worker with discovery peers");
+    tracing::info!("[p2p-admission-live] PASS concurrent multi-wave under single push worker with discovery peers");
     Ok(())
 }
