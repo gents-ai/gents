@@ -113,7 +113,7 @@ async fn outcome_rows(access: &ConfigAccess) -> Vec<Value> {
 #[tokio::test]
 async fn retained_task_outcomes_follow_modeled_assignment_history() {
     let contract = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
-    let cases = contract["trigger_delivery"]["retained_outcomes"]
+    let cases = contract["trigger_delivery_retained_outcome_cases"]
         .as_array()
         .unwrap();
     assert_eq!(cases.len(), 15);

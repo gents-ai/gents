@@ -579,39 +579,39 @@ def caseCoverage : List CoverageEntry :=
       "ProcessTransitions")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_admission_cases"
       "Triggers.Durable")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_session_cases"
       "Triggers.SessionKey")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_fire_budget_cases"
       "Triggers.FireBudget")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_queue_cases"
       "Triggers.Queue")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_option_cases"
       "Triggers.Types")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_observed_claim_cases"
       "Triggers.Durable")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_cursor_cases"
       "EventDelivery.Durable")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_callback_cursor_cases"
       "EventDelivery.Durable")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_outcome_cases"
       "Triggers.Durable.Outcomes")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
