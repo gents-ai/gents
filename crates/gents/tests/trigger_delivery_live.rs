@@ -303,7 +303,7 @@ async fn configure(
             (Collection::InferenceProfile, serde_json::to_value(profile)?),
             (Collection::Task, json!({
                 "task_id":format!("delivery-worker-{lane}"), "agent_did":&agents.workers[lane],
-                "emit_outcome":true,
+                "emit_outcome":true, "outcome_readers":[{"agent_did":&agents.lead}],
                 "prompt_template":"Acknowledge work {{ doc.handoff_id }} briefly. Do not call tools."
             })),
             (Collection::EventSource, json!({
