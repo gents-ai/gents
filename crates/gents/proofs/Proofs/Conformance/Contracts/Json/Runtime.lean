@@ -58,6 +58,7 @@ def clientAgentReadinessCaseJson (witness : ClientAgentReadinessCase) : String :
     ++ "\"unavailable\":" ++ boolString witness.unavailable ++ ","
     ++ "\"startup_demoted\":" ++ boolString witness.startupDemoted ++ ","
     ++ "\"runtime_unavailable_reason\":" ++ jsonString witness.runtimeUnavailableReason ++ ","
+    ++ "\"storage_unavailable\":" ++ boolString witness.storageUnavailable ++ ","
     ++ "\"expected_state\":" ++ jsonString witness.expectedState ++ ","
     ++ "\"expected_reason\":" ++ jsonOptionalString witness.expectedReason ++ ","
     ++ "\"expected_runtime_admissible\":" ++ boolString witness.expectedRuntimeAdmissible

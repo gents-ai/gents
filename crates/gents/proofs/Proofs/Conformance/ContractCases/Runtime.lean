@@ -197,7 +197,8 @@ def clientAgentReadinessCase
     (process : ProcessState)
     (activeGeneration routerGeneration : Generation)
     (runnable unavailable startupDemoted : Bool)
-    (runtimeUnavailableReason : RuntimeState.AgentUnavailableReason := .backendTemporarilyUnavailable) :
+    (runtimeUnavailableReason : RuntimeState.AgentUnavailableReason := .backendTemporarilyUnavailable)
+    (storageUnavailable : Bool := false) :
     ClientAgentReadinessCase :=
   let runnableSet : Finset AgentDid := if runnable then {20} else ∅
   let unavailableSet : Finset AgentDid := if unavailable then {20} else ∅
@@ -216,12 +217,13 @@ def clientAgentReadinessCase
     , readyGenerations := {activeGeneration, routerGeneration}
     , liveGenerations := {activeGeneration, routerGeneration}
     , sessionAgent := Function.update runtimeBoot.sessionAgent 100 (some 20) }
-  let observation := match observationKind with
+  let rowObservation := match observationKind with
     | "observed" =>
         RuntimeState.ClientAgentReadiness.ClientNodeObservation.observed process state
     | "malformed" => .malformed
     | "unsupported_version" => .unsupportedVersion
     | _ => .missing
+  let observation := rowObservation.joinStorageFault storageUnavailable
   let projected := RuntimeState.ClientAgentReadiness.project
     observation 20 runtimeUnavailableReason
   { name
@@ -234,6 +236,7 @@ def clientAgentReadinessCase
   , unavailable
   , startupDemoted
   , runtimeUnavailableReason := runtimeUnavailableReason.code
+  , storageUnavailable
   , expectedState := projected.stateString
   , expectedReason := projected.reasonCode
   , expectedRuntimeAdmissible :=
@@ -265,6 +268,10 @@ def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   , clientAgentReadinessCase "invalid_inference_profile_is_unavailable" "observed" .ready 4 4 false true false .inferenceProfileInvalid
   , clientAgentReadinessCase "invalid_tool_configuration_is_unavailable" "observed" .ready 4 4 false true false .toolConfigurationInvalid
   , clientAgentReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
+  , clientAgentReadinessCase "storage_fault_closes_a_ready_row" "observed" .ready 4 4 true false false
+      (storageUnavailable := true)
+  , clientAgentReadinessCase "storage_fault_closes_a_missing_row" "missing" .ready 4 4 true false false
+      (storageUnavailable := true)
   ]
 
 def sessionSelectionCasesJson : String :=

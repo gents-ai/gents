@@ -89,6 +89,7 @@ pub(crate) struct LeanClientAgentReadinessCase {
     pub(crate) unavailable: bool,
     pub(crate) startup_demoted: bool,
     pub(crate) runtime_unavailable_reason: String,
+    pub(crate) storage_unavailable: bool,
     pub(crate) expected_state: String,
     pub(crate) expected_reason: Option<String>,
     pub(crate) expected_runtime_admissible: bool,
