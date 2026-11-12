@@ -165,6 +165,7 @@ import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.PromptAssemblyBudget
 import Proofs.Conformance.PromptAssemblyRepair
 import Proofs.Conformance.ProviderToolIdentity
+import Proofs.Conformance.ReasoningDeltas
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
@@ -1145,8 +1146,6 @@ def snapshotFileCasesJson : String :=
       (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
     ++ "\"reasoning_signature_cases\":" ++ jsonArray
       (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
-    ++ "\"reasoning_delta_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningDeltas.cases.map reasoningDeltaCaseJson) ++ ","
     ++ "\"auxiliary_output_cases\":" ++ jsonArray
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
     ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","

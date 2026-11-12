@@ -557,10 +557,6 @@ pub fn lean_reasoning_audit_cases() -> &'static [LeanReasoningAuditCase] {
     &lean_contract_snapshot().reasoning_audit_cases
 }
 
-pub fn lean_reasoning_delta_cases() -> &'static [LeanReasoningDeltaCase] {
-    &lean_contract_snapshot().reasoning_delta_cases
-}
-
 pub fn lean_reasoning_signature_cases() -> &'static [LeanReasoningSignatureCase] {
     &lean_contract_snapshot().reasoning_signature_cases
 }
@@ -3283,7 +3279,6 @@ pub struct LeanContractSnapshot {
     pub canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
     pub reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,
-    pub reasoning_delta_cases: Vec<LeanReasoningDeltaCase>,
     pub auxiliary_output_cases: Vec<LeanAuxiliaryOutputCase>,
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
@@ -9898,23 +9893,6 @@ pub enum LeanReasoningAuditResult {
     Loading,
     Conflicted,
     Invalid,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanReasoningDeltaCase {
-    pub name: String,
-    pub before: Vec<LeanReasoningDeltaPart>,
-    pub id: Option<usize>,
-    pub fragment: Vec<u8>,
-    pub expected: Vec<LeanReasoningDeltaPart>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanReasoningDeltaPart {
-    Reasoning { id: Option<usize>, signature: Option<usize>, bytes: Vec<u8> },
-    Text { bytes: Vec<u8> },
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
