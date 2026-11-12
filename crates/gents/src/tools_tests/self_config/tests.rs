@@ -99,10 +99,10 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
     let user = tokio::task::spawn_blocking(|| node_identity("ordinary-user"))
         .await
         .unwrap();
-    let mut tampered =
-        gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    let mut tampered = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     tampered.agent_did = user.did().to_owned();
-    let invalid_binding = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &tampered);
+    let invalid_binding =
+        gents_store::identity::resolve_agent_identity(runtime.as_ref(), &tampered);
     assert!(invalid_binding.is_err());
     let claimed_root =
         gents_store::identity::RegisteredIdentity::from_registered_did(runtime.did(), None)
@@ -167,9 +167,7 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
                 None,
             ),
             "ordinary-default-node" => (fixture.node_did().to_owned(), String::new(), None),
-            "unconfigured-explicit-actor" => {
-                (String::new(), fixture.agent_did().to_owned(), None)
-            }
+            "unconfigured-explicit-actor" => (String::new(), fixture.agent_did().to_owned(), None),
             "ordinary-user-key-is-not-adopted" => (
                 fixture.node_did().to_owned(),
                 user.did().to_owned(),

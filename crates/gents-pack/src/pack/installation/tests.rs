@@ -4366,7 +4366,9 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
     tokio::time::resume();
     let error = write.await.unwrap_err();
     let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::families::contracts_pack_installation_finality_staged_plugin::cases::<String>()
+        gents_lean_vocab::families::contracts_pack_installation_finality_staged_plugin::cases::<
+            String,
+        >()
     })
     .await
     .unwrap();

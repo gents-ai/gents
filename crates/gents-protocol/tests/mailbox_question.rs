@@ -1,11 +1,11 @@
-use gents_protocol::mailbox_question::{
-    question_requires_reply_receipt, MailboxQuestion, MailboxQuestionAnswer,
-};
 use gents_lean_vocab::families::mailbox_question_contracts_presentations::PresentationOutput;
 use gents_lean_vocab::families::mailbox_question_contracts_questions::QuestionOutput;
 use gents_lean_vocab::families::mailbox_question_contracts_receipt_versions::ReceiptOutput;
 use gents_lean_vocab::families::mailbox_question_contracts_runtimes::RuntimeOutput;
 use gents_lean_vocab::families::mailbox_question_contracts_waits::WaitOutput;
+use gents_protocol::mailbox_question::{
+    question_requires_reply_receipt, MailboxQuestion, MailboxQuestionAnswer,
+};
 use serde_json::json;
 
 #[test]
@@ -150,7 +150,12 @@ fn question_payload(version: u64, optional: bool, option_count: u64, free_text: 
 #[test]
 fn question_policy_follows_the_executable_model() {
     gents_lean_vocab::families::mailbox_question_contracts_questions::replay(|case| {
-        let payload = question_payload(case.version, case.optional, case.option_count, case.free_text);
+        let payload = question_payload(
+            case.version,
+            case.optional,
+            case.option_count,
+            case.free_text,
+        );
         let question = MailboxQuestion::from_payload(&payload);
         let valid = question.is_ok();
         let answer = serde_json::from_value::<MailboxQuestionAnswer>(json!({
@@ -177,22 +182,23 @@ fn awaiting_answer_follows_the_executable_model() {
             case.policy.optional,
             case.policy.option_count,
             case.policy.free_text,
-        )).is_ok_and(
-            |question| question.awaiting_answer(case.is_open, case.same_parent, case.completed),
-        ),
+        ))
+        .is_ok_and(|question| {
+            question.awaiting_answer(case.is_open, case.same_parent, case.completed)
+        }),
     });
 }
 
 #[test]
 fn question_presentation_follows_the_executable_model() {
     gents_lean_vocab::families::mailbox_question_contracts_presentations::replay(|case| {
-        let mut value: serde_json::Value =
-            serde_json::from_str(&question_payload(
+        let mut value: serde_json::Value = serde_json::from_str(&question_payload(
             case.policy.version,
             case.policy.optional,
             case.policy.option_count,
             case.policy.free_text,
-        )).unwrap();
+        ))
+        .unwrap();
         value["multi_select"] = json!(case.multi_select);
         if case.has_prompt {
             value["options"][0]["prompt"] = json!(if case.nonempty_prompt {

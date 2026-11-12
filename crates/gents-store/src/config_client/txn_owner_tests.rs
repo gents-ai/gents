@@ -34,11 +34,14 @@ fn transaction_id(txn: &ConfigApplyTxn<'_>) -> String {
 
 #[tokio::test]
 async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt() {
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::families::contracts_pack_installation_finality_transaction::cases::<String>()
-    })
-    .await
-    .unwrap();
+    let cases =
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::families::contracts_pack_installation_finality_transaction::cases::<
+                String,
+            >()
+        })
+        .await
+        .unwrap();
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     let access = ConfigAccess::local(node.clone());
     for case in cases {

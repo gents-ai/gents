@@ -489,7 +489,8 @@ mod storage_failure_tests {
     #[tokio::test]
     async fn storage_full_http_transactions_stop_without_replaying_or_discarding_consumed_handles()
     {
-        for case in gents_lean_vocab::families::storage_failure_contracts_full_transaction::cases() {
+        for case in gents_lean_vocab::families::storage_failure_contracts_full_transaction::cases()
+        {
             let mut observed = Vec::new();
             for fail_begin in [false, true] {
                 let counts = Arc::new(Counts::default());

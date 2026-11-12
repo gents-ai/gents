@@ -277,7 +277,10 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
     };
     use gents_lean_vocab::families::client_agent_readiness_projection::ReadinessOutput;
 
-    gents_lean_vocab::families::client_agent_readiness_projection::replay::<AgentReadinessUnavailableReason, NodeReadinessProcessState>(|case| {
+    gents_lean_vocab::families::client_agent_readiness_projection::replay::<
+        AgentReadinessUnavailableReason,
+        NodeReadinessProcessState,
+    >(|case| {
         let selected_assigned = case.runnable || case.unavailable || case.startup_demoted;
         let default_agent_did = if selected_assigned { "20" } else { "10" };
         let sources = vec![AgentReadinessSourceEntry {
@@ -308,14 +311,9 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
             updated_at: "2026-08-28T00:00:00Z".to_string(),
         };
         let runtime_admissible = matches!(
-            project_node_readiness(
-                Some(&intact),
-                "did:test:lean-readiness",
-                ["20"],
-                Some("20"),
-            )
-            .agents
-            .get("20"),
+            project_node_readiness(Some(&intact), "did:test:lean-readiness", ["20"], Some("20"),)
+                .agents
+                .get("20"),
             Some(ProjectedAgentReadiness::Ready)
         );
         if case.observation_kind == "unsupported_version" {

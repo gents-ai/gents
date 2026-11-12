@@ -72,7 +72,10 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
         );
         assert_eq!(actual.cwd, input.cwd, "{modeled:?}");
         assert_eq!(actual.initial_title, input.initial_title, "{modeled:?}");
-        assert_eq!(actual.captured_context, input.captured_context, "{modeled:?}");
+        assert_eq!(
+            actual.captured_context, input.captured_context,
+            "{modeled:?}"
+        );
         assert_eq!(actual.for_fresh_session(), actual, "{modeled:?}");
         FreshSessionResult {
             expected: ResubmissionInput {
