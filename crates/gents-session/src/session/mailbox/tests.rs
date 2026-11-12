@@ -90,14 +90,31 @@ pub(super) async fn list_as_creator(
     requester: &str,
     status: Option<MailboxStatus>,
 ) -> Result<Vec<MailboxItem>> {
-    list_mailbox_items_on(&agent_access(node), &fixture_recipient(requester), status).await
+    use gents_protocol::operations::mailbox::{MailboxListInput, MailboxListScope};
+    let scope = match status {
+        Some(MailboxStatus::Open) => MailboxListScope::Waiting,
+        _ => MailboxListScope::All,
+    };
+    let items = crate::operations::mailbox::list(
+        &agent_access(node),
+        &MailboxListInput {
+            scope,
+            requester_did: Some(fixture_recipient(requester)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(items
+        .into_iter()
+        .filter(|item| status.is_none_or(|status| item.parsed_status() == Some(status)))
+        .collect())
 }
 
 pub(super) async fn dismiss_as_creator(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,
 ) -> Result<MailboxItem> {
-    dismiss_mailbox_item_on(&agent_access(node), doc_id).await
+    Ok(crate::operations::mailbox::dismiss(&agent_access(node), doc_id).await?)
 }
 
 pub(super) async fn stamp_create(
@@ -252,7 +269,7 @@ async fn stamping_is_owner_scoped_idempotent_and_never_reopens() {
         node.clone(),
         identity::Did::new(fixture_recipient("did:test:bob")).unwrap(),
     );
-    assert!(dismiss_mailbox_item_on(&foreign, &first.doc_id)
+    assert!(crate::operations::mailbox::dismiss(&foreign, &first.doc_id)
         .await
         .is_err());
     dismiss_as_creator(&node, &first.doc_id).await.unwrap();
@@ -1029,7 +1046,7 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
         signer_as_actor(&node, actor.did(), initial_cid).await?,
         actor.did()
     );
-    let dismissed = dismiss_mailbox_item_on(&access, doc_id).await?;
+    let dismissed = crate::operations::mailbox::dismiss(&access, doc_id).await?;
     assert_eq!(dismissed.status, "dismissed");
     let query = format!(
         r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _version {{ cid }} }} }}"#,
@@ -1042,7 +1059,7 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
     assert_ne!(cid, initial_cid);
     assert_eq!(signer_as_actor(&node, actor.did(), cid).await?, actor.did());
     assert_eq!(
-        dismiss_mailbox_item_on(&access, doc_id).await?.status,
+        crate::operations::mailbox::dismiss(&access, doc_id).await?.status,
         "dismissed"
     );
     let replay = access.execute(&query).await?;
@@ -1065,7 +1082,7 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
     let question_id = created["data"]["add_MailboxItem"][0]["_docID"]
         .as_str()
         .unwrap();
-    let error = dismiss_mailbox_item_on(&access, question_id)
+    let error = crate::operations::mailbox::dismiss(&access, question_id)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("original item"));

@@ -76,42 +76,6 @@ pub async fn submit_goal_backed_request(
     Ok(result)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn submit_task_request(
-    store: &ClientStore,
-    access: &ConfigAccess,
-    fire: &gents_protocol::trigger_delivery::TriggerFire,
-    requester_did: &str,
-    signer: &dyn gents_store::identity::NodeIdentity,
-    admission: AgentRequestAdmissionRecord,
-    content: &str,
-    agent_did: Option<&str>,
-    mut options: SubmitRequestOptions,
-) -> Result<SubmittedRequest> {
-    options.retry_key = Some(fire.fire_key.clone());
-    let (result, create) = prepare_request_submission(
-        access,
-        store,
-        &fire.session_id,
-        &fire.identity.owner_did,
-        requester_did,
-        signer,
-        admission,
-        content,
-        agent_did,
-        options,
-        Some(&fire.request_id),
-    )
-    .await?;
-    let admitted =
-        gents_automation::triggers::write_task_delivery(access, fire, false, &create).await?;
-    Ok(SubmittedRequest {
-        request_id: admitted.request.request_id,
-        session_id: admitted.request.session_id,
-        ..result
-    })
-}
-
 #[cfg(test)]
 mod tests;
 

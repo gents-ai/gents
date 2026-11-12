@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents_session::session::mailbox::MailboxStatus;
 use gents_store::identity::NodeIdentity;
 
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
@@ -42,10 +41,12 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     .await
     .unwrap();
     assert_eq!(state, "completed");
-    let items = gents_session::session::mailbox::list_mailbox_items_on(
+    let items = gents_session::operations::mailbox::list(
         &turn.client,
-        turn.user.did(),
-        Some(MailboxStatus::Open),
+        &gents_protocol::operations::mailbox::MailboxListInput {
+            requester_did: Some(turn.user.did().to_owned()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();
@@ -224,10 +225,12 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         .unwrap(),
         "completed"
     );
-    let items = gents_session::session::mailbox::list_mailbox_items_on(
+    let items = gents_session::operations::mailbox::list(
         &turn.client,
-        turn.user.did(),
-        Some(MailboxStatus::Open),
+        &gents_protocol::operations::mailbox::MailboxListInput {
+            requester_did: Some(turn.user.did().to_owned()),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();
@@ -277,9 +280,8 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         "completed"
     );
     let answered =
-        gents_session::session::mailbox::load_mailbox_item_with_access(&turn.client, &item.doc_id)
+        gents_session::operations::mailbox::get(&turn.client, &item.doc_id)
             .await
-            .unwrap()
             .unwrap();
     assert_eq!(answered.status, "acted");
     assert_eq!(
@@ -366,10 +368,12 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let item = loop {
-        let open = gents_session::session::mailbox::list_mailbox_items_on(
+        let open = gents_session::operations::mailbox::list(
             &turn.client,
-            turn.user.did(),
-            Some(MailboxStatus::Open),
+            &gents_protocol::operations::mailbox::MailboxListInput {
+                requester_did: Some(turn.user.did().to_owned()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -467,9 +471,8 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     assert_eq!(asking_final, "completed");
     assert_eq!(reply_final, "completed");
     let answered =
-        gents_session::session::mailbox::load_mailbox_item_with_access(&turn.client, &item.doc_id)
+        gents_session::operations::mailbox::get(&turn.client, &item.doc_id)
             .await
-            .unwrap()
             .unwrap();
     assert_eq!(answered.status, "acted");
     assert_eq!(

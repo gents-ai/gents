@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use anyhow::Context;
 use chrono::{DateTime, Local, Utc};
 use gents_desktop_core::client::canonical_output::CanonicalLiveText;
 use gents_desktop_core::client::{
@@ -311,9 +310,9 @@ async fn read_work(work: Work, subscribe: bool, sessions: Vec<String>) -> Read {
 
 async fn read_mailbox(work: Work, subscribe: bool) -> Asked {
     let changes = watch(&work, MAILBOX_WATCHED, subscribe).await;
-    let items = mailbox::served_items(&work.access(), false)
+    let items = gents_session::operations::mailbox::list(&work.access(), &Default::default())
         .await
-        .map_err(|error| format!("{error:#}"));
+        .map_err(|error| format!("{:#}", mailbox::failure(error)));
     Asked { changes, items }
 }
 
@@ -1702,10 +1701,9 @@ impl Source {
         let Ok(work) = &self.work else {
             return;
         };
-        let dismissed =
-            gents_session::session::mailbox::dismiss_mailbox_item_on(&work.access(), item).await;
+        let dismissed = gents_session::operations::mailbox::dismiss(&work.access(), item).await;
         if let Err(error) = dismissed {
-            self.tell(Update::Notice(format!("{error:#}")));
+            self.tell(Update::Notice(format!("{:#}", mailbox::failure(error))));
         }
         self.reread_prompts();
     }
@@ -1716,11 +1714,21 @@ impl Source {
             return;
         };
         let replied = async {
-            let item = mailbox::load_item(&work.access(), item)
-                .await?
-                .context("MailboxItem not found")?;
-            let reply = work::reply_from_text(text, &item).map_err(anyhow::Error::msg)?;
-            mailbox::reply_to(&work.access(), &item, reply).await
+            use gents_protocol::operations::mailbox::MailboxReply;
+            use gents_session::operations::mailbox as operations;
+            let item = operations::get(&work.access(), item)
+                .await
+                .map_err(mailbox::failure)?;
+            let reply = match work::reply_from_text(text, &item).map_err(anyhow::Error::msg)? {
+                MailboxReply::Answer(answer) => MailboxReply::Answer(
+                    operations::answer_observing((&item).into(), answer)
+                        .map_err(mailbox::failure)?,
+                ),
+                text => text,
+            };
+            let prepared = operations::prepare_reply((&item).into(), reply, &Default::default())
+                .map_err(mailbox::failure)?;
+            mailbox::send_reply(&work.access(), prepared).await
         };
         if let Err(error) = replied.await {
             self.tell(Update::Notice(format!("{error:#}")));

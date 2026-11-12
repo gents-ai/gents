@@ -5,6 +5,7 @@
 pub mod agent;
 pub mod document;
 pub mod inference;
+pub mod mailbox;
 pub mod mcp_service;
 pub mod p2p;
 pub mod pack;
@@ -14,6 +15,7 @@ pub mod schema;
 pub mod service;
 pub mod session;
 pub mod skill;
+pub mod task;
 pub mod tools;
 pub mod workspace_root;
 

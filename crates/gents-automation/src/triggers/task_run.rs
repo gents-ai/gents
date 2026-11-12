@@ -1,9 +1,10 @@
 //! Firing one Task on demand: render its prompt and goal, sign the request as
-//! the actor `access` acts for, admit it through the Task delivery owner. The
-//! CLI's `gents automation task run` and the Engineer's `config task run` both come here.
+//! the actor `access` acts for, admit it through the Task delivery owner.
+//! Every client reaches it through `crate::operations::task`.
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
+use gents_protocol::operations::task::TaskTitleKind;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
@@ -13,47 +14,10 @@ use gents_documents::task_goal_declaration::validate_task_goal_declaration;
 use gents_documents::template::{
     render_manual_template, render_template, task_node_ctx, TemplateScope,
 };
-use gents_documents::{read_desired_state_record_in_txn, Agent, Task};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 use gents_tools::task_run::{RunnableTask, TaskRunOptions, TaskRunOutput, TaskRunService};
-
-/// Loads an enabled Task whose agent is enabled, or fails naming which is not.
-pub async fn read_runnable_task(
-    access: &ConfigAccess,
-    node_did: &str,
-    task_id: &str,
-) -> Result<RunnableTask> {
-    let (doc_id, task) = access
-        .transact_write("task_run.read", |txn| {
-            Box::pin(async move {
-                let (task_doc_id, value) = read_desired_state_record_in_txn(
-                    txn,
-                    gents_store::collection::Collection::Task,
-                    node_did,
-                    task_id,
-                )
-                .await?
-                .context("task not found under the selected node")?;
-                let task: Task = serde_json::from_value(value)?;
-                anyhow::ensure!(task.enabled, "Task {} is disabled", task.task_id);
-                let (_, value) = read_desired_state_record_in_txn(
-                    txn,
-                    gents_store::collection::Collection::Agent,
-                    node_did,
-                    &task.agent_did,
-                )
-                .await?
-                .context("task agent not found under the selected node")?;
-                let agent: Agent = serde_json::from_value(value)?;
-                anyhow::ensure!(agent.enabled, "Agent {} is disabled", agent.agent_did);
-                Ok((task_doc_id, task))
-            })
-        })
-        .await?;
-    Ok(RunnableTask { task, doc_id })
-}
 
 /// Fires `task` once, now: renders its prompt and goal with `options.args`,
 /// signs the request as `signer`, which must be the actor `access` acts for,
@@ -79,6 +43,13 @@ pub async fn enqueue_task_run(
     } = runnable;
     let task_id = task.task_id.clone();
     let emit_outcome = task.emit_outcome;
+    let task_label = task
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .unwrap_or(&task_id)
+        .to_owned();
     let agent_did = task.agent_did;
     let prompt_template = task.prompt_template;
     let goal_objective_template = task.goal_objective_template;
@@ -167,8 +138,25 @@ pub async fn enqueue_task_run(
         anyhow::bail!("Task {} rendered an empty goal objective", task_id);
     }
 
-    let (content, input) =
+    let (content, mut input) =
         gents_documents::skills::content_and_input_with_prompt_selected_skill_ids(None, &content);
+    input.initial_title = match crate::operations::task::session_title_kind(
+        options.continue_session.is_some(),
+        rendered_goal_objective.is_some(),
+    ) {
+        TaskTitleKind::Unchanged => None,
+        TaskTitleKind::Run => Some(gents_session::request::lifecycle::task_session_title(
+            &task_label,
+        )),
+        TaskTitleKind::Goal => Some(gents_session::request::lifecycle::task_goal_session_title(
+            &task_label,
+            &fire_key,
+        )),
+    }
+    .map(|text| gents_protocol::session::SessionTitle {
+        text,
+        source: gents_protocol::session::SessionTitleSource::Task,
+    });
     let input = prepare_task_run_input(
         access,
         signer,
@@ -413,7 +401,7 @@ impl TaskRunService for TaskRuns {
         node_did: &str,
         task_id: &str,
     ) -> Result<RunnableTask> {
-        read_runnable_task(access, node_did, task_id).await
+        Ok(crate::operations::task::runnable(access, node_did, task_id).await?)
     }
 
     async fn enqueue_task_run(
@@ -424,6 +412,6 @@ impl TaskRunService for TaskRuns {
         runnable: RunnableTask,
         options: &TaskRunOptions,
     ) -> Result<TaskRunOutput> {
-        enqueue_task_run(access, node_did, signer, runnable, options).await
+        Ok(crate::operations::task::fire(access, node_did, signer, runnable, options).await?)
     }
 }
