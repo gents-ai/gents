@@ -1347,28 +1347,6 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
 }
 
 #[test]
-fn observed_claim_cohorts_match_lean() {
-    let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    for case in contract["trigger_delivery_observed_claim_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let candidate: gents_session::request::lifecycle::arrival_order::ClaimObservation =
-            serde_json::from_value(case["candidate"].clone()).unwrap();
-        let rows: Vec<gents_session::request::lifecycle::arrival_order::ClaimObservation> =
-            serde_json::from_value(case["rows"].clone()).unwrap();
-        assert_eq!(
-            gents_session::request::lifecycle::arrival_order::observed_claim_allowed(
-                &candidate, &rows
-            ),
-            case["allowed"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
-}
-
-#[test]
 fn task_goal_assignment_root_matches_lean() {
     let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
     for case in contract["trigger_delivery_assignment_root_cases"]
