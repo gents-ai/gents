@@ -219,3 +219,119 @@ fn seeded_observations_share_the_window_with_new_ones() {
         "copies do not share the window"
     );
 }
+
+#[test]
+fn generated_retention_cases_drive_production_compaction_target() {
+    let cases = gents_lean_vocab::lean_prompt_assembly_retention_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no PromptAssembly retention cases"
+    );
+
+    for case in cases {
+        assert_eq!(
+            case.effective_input_budget.saturating_sub(case.fixed_input),
+            case.available_input,
+            "{}: available input drifted from Lean natural subtraction",
+            case.name
+        );
+        let actual = crate::provider_input::budget::compaction_retention_target(
+            case.configured_keep_recent,
+            case.effective_input_budget,
+            case.fixed_input,
+            case.effective_summary_output,
+        );
+        assert_eq!(
+            actual, case.retention_target,
+            "{}: production retention target drifted from Lean",
+            case.name
+        );
+        assert!(actual <= case.configured_keep_recent, "{}", case.name);
+        assert!(actual <= case.available_input, "{}", case.name);
+        let band =
+            crate::provider_input::budget::recovery_band_budget(case.effective_input_budget);
+        let reserved = case.fixed_input + case.effective_summary_output;
+        if reserved <= band {
+            assert!(
+                reserved + actual <= band,
+                "{}: the post-compaction request left the recovery band",
+                case.name
+            );
+        } else {
+            assert_eq!(actual, 0, "{}: no band left for a tail", case.name);
+        }
+        assert_eq!(
+            crate::provider_input::budget::summary_output_ceiling(
+                case.summary_max_output,
+                case.effective_input_budget,
+            ),
+            case.effective_summary_output,
+            "{}: bounded summary output ceiling drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            crate::provider_input::budget::rolling_summary_input_budget(
+                case.effective_input_budget,
+                case.effective_summary_output,
+            ),
+            case.rolling_summary_input_budget,
+            "{}: rolling summary input budget drifted from Lean",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
+    let third = usize::MAX / 3;
+    for value in [0, 1, third, third.saturating_add(1), usize::MAX] {
+        let retained = crate::provider_input::budget::compaction_retention_target(
+            usize::MAX,
+            value,
+            0,
+            0,
+        );
+        assert_eq!(retained.checked_add(value.div_ceil(5)), Some(value));
+        assert_eq!(
+            crate::provider_input::budget::compaction_retention_target(
+                usize::MAX,
+                value,
+                value,
+                value
+            ),
+            0,
+            "reserves past the band floor the tail at zero"
+        );
+    }
+
+    let threshold_29 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.29);
+    let threshold_57 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.57);
+    let threshold_69 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.69);
+    assert!(threshold_29 < threshold_57 && threshold_57 < threshold_69);
+    assert!(threshold_29 < usize::MAX / 2);
+    assert!(threshold_57 > usize::MAX / 2);
+    assert_eq!(
+        crate::provider_input::budget::threshold_budget(usize::MAX, 1.0),
+        usize::MAX
+    );
+
+    assert!(crate::provider_input::budget::can_dispatch(
+        usize::MAX - 1,
+        usize::MAX,
+        usize::MAX,
+    ));
+    assert!(!crate::provider_input::budget::can_dispatch(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+    ));
+    assert!(!crate::provider_input::budget::can_dispatch(
+        usize::MAX,
+        usize::MAX,
+        0
+    ));
+    assert_eq!(
+        crate::provider_input::budget::configured_output_ceiling(Some(u64::MAX)),
+        usize::try_from(u64::MAX).unwrap_or(usize::MAX)
+    );
+}

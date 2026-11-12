@@ -737,3 +737,6 @@ pub fn estimate_json(value: &Value) -> Result<usize> {
         .len()
         / 4)
 }
+
+#[cfg(test)]
+mod pushdown_tests;
