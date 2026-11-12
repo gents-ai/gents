@@ -1,4 +1,58 @@
 use super::*;
+use crate::Task;
+
+fn task_with_template(template: &str) -> Task {
+    serde_json::from_value(serde_json::json!({
+        "node_did": "did:key:zNODE",
+        "task_id": "fence-task",
+        "agent_did": "fence",
+        "prompt_template": template
+    }))
+    .expect("compact canonical task document")
+}
+
+fn fire_scope(agent_did: &str, now: &str, args: serde_json::Value) -> TemplateScope {
+    let (node, ctx) = task_node_ctx("did:key:zNODE", agent_did, now);
+    TemplateScope {
+        session: None,
+        request: None,
+        event: serde_json::json!({}),
+        doc: None,
+        args: Some(args),
+        group: None,
+        node,
+        ctx,
+    }
+}
+
+#[test]
+fn task_template_renders_per_invocation() {
+    let task =
+        task_with_template("Review {{ args.target }} at {{ ctx.now }} on {{ node.agent_did }}.");
+
+    let first = render_template(
+        &task.prompt_template,
+        &fire_scope("fence", "T1", serde_json::json!({"target": "a"})),
+    )
+    .expect("per-request variables are legal in the task slot");
+    let second = render_template(
+        &task.prompt_template,
+        &fire_scope("fence", "T2", serde_json::json!({"target": "b"})),
+    )
+    .expect("per-request variables are legal in the task slot");
+
+    assert_eq!(first, "Review a at T1 on fence.");
+    assert_eq!(second, "Review b at T2 on fence.");
+    assert_ne!(first, second, "the task slot must vary with its binding");
+
+    let replay = render_template(
+        &task.prompt_template,
+        &fire_scope("fence", "T1", serde_json::json!({"target": "a"})),
+    )
+    .expect("re-rendering is deterministic");
+    assert_eq!(replay, first);
+}
+
 
 #[test]
 fn authoring_rejects_invalid_rendering_syntax_without_invocation_values() {
@@ -524,4 +578,77 @@ fn a_manual_render_failure_names_what_the_run_does_not_define() {
         render_manual_template("t", "Hello {{ args.queue }}", &scope).unwrap(),
         "Hello billing"
     );
+}
+
+#[test]
+fn task_render_depends_only_on_read_variables() {
+    let task = task_with_template("Work {{ args.task }}");
+
+    let (node, ctx_a) = task_node_ctx("did:key:zNODE", "fence", "T1");
+    let a = TemplateScope {
+        session: None,
+        request: None,
+        event: serde_json::json!({}),
+        doc: None,
+        args: Some(serde_json::json!({"task": "triage"})),
+        group: None,
+        node,
+        ctx: ctx_a,
+    };
+    let (node_b, ctx_b) = task_node_ctx("did:key:zNODE", "fence", "T2");
+    let b = TemplateScope {
+        session: None,
+        request: None,
+        event: serde_json::json!({"unrelated": 1}),
+        doc: Some(serde_json::json!({"also": "unrelated"})),
+        args: Some(serde_json::json!({"task": "triage"})),
+        group: Some(serde_json::json!({"untracked": true})),
+        node: node_b,
+        ctx: ctx_b,
+    };
+
+    assert_eq!(
+        render_template(&task.prompt_template, &a).expect("renders"),
+        render_template(&task.prompt_template, &b).expect("renders"),
+        "renders must agree whenever every read variable agrees"
+    );
+}
+
+#[test]
+fn task_render_keeps_event_and_argument_namespaces_separate() {
+    let task = task_with_template("{{ event.trigger_kind }}:{{ args.trigger_kind }}");
+    let mut scope = fire_scope(
+        "fence",
+        "T0",
+        serde_json::json!({"trigger_kind": "argument"}),
+    );
+    scope.event = serde_json::json!({"trigger_kind": "event"});
+
+    assert_eq!(
+        render_template(&task.prompt_template, &scope).expect("both scope slots render"),
+        "event:argument"
+    );
+}
+
+#[test]
+fn task_render_fails_closed_on_unbound_variables() {
+    let task = task_with_template("Ship {{ ctx.bogus_missing }}");
+
+    let err = render_template(
+        &task.prompt_template,
+        &fire_scope("fence", "T1", serde_json::json!({})),
+    )
+    .expect_err("an unbound variable must fail the render");
+    assert!(
+        matches!(err, TemplateError::Render(_)),
+        "expected a render-time failure, got: {err:?}"
+    );
+
+    let task = task_with_template("Run {{ args.name }}");
+    let mut scope = fire_scope("fence", "T1", serde_json::json!({}));
+    scope.args = None;
+    assert!(matches!(
+        render_template(&task.prompt_template, &scope),
+        Err(TemplateError::Render(_))
+    ));
 }

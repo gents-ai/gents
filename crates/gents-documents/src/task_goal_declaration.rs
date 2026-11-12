@@ -23,3 +23,6 @@ pub fn validate_task_goal_declaration(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod pushdown_tests;

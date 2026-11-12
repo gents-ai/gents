@@ -189,3 +189,6 @@ impl InferenceRetryPolicy {
         }
     }
 }
+
+#[cfg(test)]
+mod pushdown_tests;
