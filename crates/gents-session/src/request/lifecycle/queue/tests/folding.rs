@@ -287,7 +287,7 @@ async fn generated_fold_queue_cases_bind_to_native_claims() {
     }
 }
 
-fn modeled_entry<T>(entry: &T) -> LeanFoldQueueEntry
+pub(super) fn modeled_entry<T>(entry: &T) -> LeanFoldQueueEntry
 where
     T: serde::Serialize,
 {
@@ -1079,82 +1079,126 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
 
 #[tokio::test]
 async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
-    use gents_lean_vocab::LeanQueueManagementOperation;
-    let case = gents_lean_vocab::lean_queue_management_cases()
-        .iter()
-        .find(|case| case.name == "expired_steering_is_barrier")
-        .unwrap();
-    for (variant, ttl) in ["2000-01-01T00:00:00Z", "not-a-timestamp"]
-        .into_iter()
-        .enumerate()
-    {
-        let name = &format!("{}-{variant}", case.name);
-        let LeanQueueManagementOperation::Intake { active: head, .. } = &case.operation else {
-            panic!("expected intake case");
-        };
-        let db = test_db(name).await;
-        let session_id = name;
-        let head_doc = enqueue_signed(&db, session_id, head, 0).await;
-        let mut bound = RapidHashMap::from_iter([(head.request_id, head_doc)]);
-        let mut active = claim_head(&db, &bound, head.request_id, &[]).await;
-        let writer = DefraStreamWriter::new_managed(
-            db.node.clone(),
-            db.agent_identity.as_ref(),
-            Duration::ZERO,
-        )
-        .unwrap();
-        active.begin(&writer).await;
-        for (index, entry) in case.before.pending.iter().enumerate() {
-            let doc = if entry.fresh {
-                enqueue_signed(&db, session_id, entry, index + 1).await
-            } else {
-                enqueue_with_ttl(&db, session_id, entry, index + 1, Some(ttl)).await
-            };
-            bound.insert(entry.request_id, doc);
-        }
-        let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-            db.node.clone(),
-            db.identity.clone(),
-            authority,
-        );
-        let snapshot = super::super::intake::steering_snapshot(
-            &db.node,
-            active.lifecycle.request(),
-            &verifier,
-            None,
-        )
-        .await
-        .unwrap();
-        let expected = case.expected.as_ref().unwrap();
-        assert_eq!(snapshot.inputs.len(), expected.folding.len(), "{name}");
-        assert!(snapshot.inputs.is_empty(), "{name}");
-        let blocked = &case.before.pending[0];
-        let error = writer
-            .publish_authored_message(
-                &active.lifecycle,
-                &folded_input_key(&bound[&blocked.request_id]),
-                &gents_protocol::message::Message::user(format!("message {}", blocked.request_id)),
+    for case in gents_lean_vocab::families::fold_queue_contracts_management_expired_intake::cases::<
+        String,
+        String,
+        String,
+        String,
+        String,
+    >() {
+        let input = &case.input;
+        assert_eq!(input.operation.kind, "intake", "{}", input.name);
+        let head = modeled_entry(input.operation.active.as_ref().unwrap());
+        let pending = input
+            .before
+            .pending
+            .iter()
+            .map(modeled_entry)
+            .collect::<Vec<_>>();
+        let mut observed = Vec::new();
+        for (variant, ttl) in ["2000-01-01T00:00:00Z", "not-a-timestamp"]
+            .into_iter()
+            .enumerate()
+        {
+            let name = &format!("{}-{variant}", input.name);
+            let db = test_db(name).await;
+            let session_id = name;
+            let head_doc = enqueue_signed(&db, session_id, &head, 0).await;
+            let mut bound = RapidHashMap::from_iter([(head.request_id, head_doc)]);
+            let mut active = claim_head(&db, &bound, head.request_id, &[]).await;
+            let writer = DefraStreamWriter::new_managed(
+                db.node.clone(),
+                db.agent_identity.as_ref(),
+                Duration::ZERO,
+            )
+            .unwrap();
+            active.begin(&writer).await;
+            for (index, entry) in pending.iter().enumerate() {
+                let doc = if entry.fresh {
+                    enqueue_signed(&db, session_id, entry, index + 1).await
+                } else {
+                    enqueue_with_ttl(&db, session_id, entry, index + 1, Some(ttl)).await
+                };
+                bound.insert(entry.request_id, doc);
+            }
+            let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+            let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+                db.node.clone(),
+                db.identity.clone(),
+                authority,
+            );
+            let snapshot = super::super::intake::steering_snapshot(
+                &db.node,
+                active.lifecycle.request(),
+                &verifier,
+                None,
             )
             .await
-            .unwrap_err();
-        assert!(
-            error.is::<super::super::PendingInputChanged>(),
-            "{name}: {error:#}"
-        );
-        let rows = fold_rows(&db, session_id).await;
-        for entry in &expected.pending {
-            let row = rows
+            .unwrap();
+            let folding = snapshot
+                .inputs
                 .iter()
-                .find(|row| row.request_id == entry.request_id.to_string())
-                .unwrap();
-            assert_eq!(
-                row.lifecycle_state,
-                RequestLifecycleState::Pending,
-                "{name}"
+                .map(|input| {
+                    *bound
+                        .iter()
+                        .find(|(_, doc)| folded_input_key(doc) == input.key)
+                        .unwrap()
+                        .0
+                })
+                .collect::<Vec<_>>();
+            let blocked = &pending[0];
+            let error = writer
+                .publish_authored_message(
+                    &active.lifecycle,
+                    &folded_input_key(&bound[&blocked.request_id]),
+                    &gents_protocol::message::Message::user(format!(
+                        "message {}",
+                        blocked.request_id
+                    )),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                error.is::<super::super::PendingInputChanged>(),
+                "{name}: {error:#}"
             );
-            assert!(row.superseded_by_request_doc_id.is_none(), "{name}");
+            let rows = fold_rows(&db, session_id).await;
+            let state = |id: u64| {
+                rows.iter()
+                    .find(|row| row.request_id == id.to_string())
+                    .unwrap()
+            };
+            let ids = std::iter::once(head.request_id)
+                .chain(pending.iter().map(|entry| entry.request_id));
+            observed.push(serde_json::to_value(Some(
+                gents_lean_vocab::families::fold_queue_contracts_management_expired_intake::QueueImageWire {
+                    active: ids
+                        .clone()
+                        .find(|id| {
+                            matches!(
+                                state(*id).lifecycle_state,
+                                RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+                            )
+                        }),
+                    pending: pending
+                        .iter()
+                        .map(|entry| entry.request_id)
+                        .filter(|id| {
+                            state(*id).lifecycle_state == RequestLifecycleState::Pending
+                                && state(*id).superseded_by_request_doc_id.is_none()
+                                && !folding.contains(id)
+                        })
+                        .collect(),
+                    folding,
+                    terminal: ids
+                        .filter(|id| state(*id).lifecycle_state.is_terminal())
+                        .collect(),
+                },
+            ))
+            .unwrap());
         }
+        assert_eq!(observed[0], observed[1], "{}: TTL variants", input.name);
+        case.check(serde_json::from_value(observed.pop().unwrap()).unwrap());
     }
 }
 

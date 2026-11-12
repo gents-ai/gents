@@ -1363,13 +1363,18 @@ def caseCoverage : List CoverageEntry :=
       "SessionInputEditClientObservationCases")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "queue_management_cases"
-      "QueueManagementCases"
-      "Fifteen representable replacement cases exercise signed native replacement, rejection, immutable originals and physical slot order. Reused request IDs and caller-chosen slot mutations remain executable model cases: the replacement API generates both internally, so these cases are not claimed as native management coverage. Intake cases are modeled here and bound through the composed steering publication and loop consumers.")
+      "family"
+      "fold_queue_contracts_management_replace"
+      "Fifteen representable replacement cases exercise signed native replacement, rejection, immutable originals and physical slot order, each with an expired and a malformed TTL variant.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "queue_management_cases"
-      "QueueExpiryBarrierCases")
+      "family"
+      "fold_queue_contracts_management_expired_intake")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "fold_queue_contracts_management_unreached"
+      "model-production-gap: the replacement API generates replacement request IDs and slots internally, and the remaining intake decisions (unsafe stream boundary, stale head observation, unadmitted, queued, foreign or agent-authored rows) have no served fixture; steering publication and the owned loop replay the composed intake.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"

@@ -513,10 +513,6 @@ pub fn lean_queue_deadline_cases() -> &'static [LeanQueueDeadlineConformanceCase
     &lean_contract_snapshot().queue_deadline_conformance_cases
 }
 
-pub fn lean_queue_management_cases() -> &'static [LeanQueueManagementCase] {
-    &lean_contract_snapshot().queue_management_cases
-}
-
 pub fn lean_queued_steering_guard_cases() -> &'static [LeanQueuedSteeringGuardCase] {
     &lean_contract_snapshot().queued_steering_guard_cases
 }
@@ -3249,7 +3245,6 @@ pub struct LeanContractSnapshot {
     pub interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
     pub session_control_cases: Vec<serde_json::Value>,
     pub fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
-    pub queue_management_cases: Vec<LeanQueueManagementCase>,
     pub session_input_edit_cases: Vec<LeanSessionInputEditCase>,
     pub session_input_edit_client_observation_cases: Vec<
         LeanSessionInputEditClientObservationCase,
@@ -9533,28 +9528,6 @@ pub struct LeanQueueDeadlineConformanceCase {
     pub synthesized_claim_deadline: Option<usize>,
     pub post_deadline: Option<usize>,
     pub explicit_deadline_preserved: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanQueueManagementCase {
-    pub name: String,
-    pub before: LeanQueueManagementState,
-    pub operation: LeanQueueManagementOperation,
-    pub expected: Option<LeanQueueManagementState>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanQueueManagementOperation {
-    Intake { active: LeanFoldQueueEntry, admitted: Vec<u64>, safe_boundary: bool },
-    Replace {
-        caller: Option<u64>,
-        expected: Vec<u64>,
-        offset: usize,
-        count: usize,
-        replacements: Vec<LeanFoldQueueEntry>,
-    },
 }
 
 #[derive(Debug, Deserialize)]

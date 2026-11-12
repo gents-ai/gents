@@ -531,7 +531,6 @@ def snapshotRequestCasesJson : String :=
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
     ++ "\"session_input_edit_client_observation_cases\":"
       ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
-    ++ "\"queue_management_cases\":" ++ FoldQueueContracts.managementCasesJson ++ ","
     ++ "\"fold_turn_input_cases\":"
       ++ Conformance.FoldQueueContracts.turnInputCasesJson ++ ","
     ++ "\"retry_selection_cases\":"

@@ -59,26 +59,6 @@ def managementStateJson (state : SessionQueueState) : String :=
   ",\"folding\":" ++ jsonArray (state.folding.map entryJson) ++
   ",\"terminal\":" ++ jsonArray ((state.terminal.sort (· ≤ ·)).map toString) ++ "}"
 
-def managementOperationJson : SessionQueue.ManagementCases.Operation → String
-  | .intake active admitted safe =>
-      "{\"kind\":\"intake\",\"active\":" ++ entryJson active ++
-      ",\"admitted\":" ++ jsonArray (admitted.map toString) ++
-      ",\"safe_boundary\":" ++ jsonOptionalBool (some safe) ++ "}"
-  | .replace caller expected offset count replacements =>
-      "{\"kind\":\"replace\",\"caller\":" ++ jsonOptionalNat caller ++
-      ",\"expected\":" ++ jsonArray (expected.map toString) ++
-      ",\"offset\":" ++ toString offset ++ ",\"count\":" ++ toString count ++
-      ",\"replacements\":" ++ jsonArray (replacements.map entryJson) ++ "}"
-
-def managementCasesJson : String :=
-  jsonArray (SessionQueue.ManagementCases.cases.map fun value =>
-    "{\"name\":" ++ jsonString value.name ++
-    ",\"before\":" ++ managementStateJson value.before ++
-    ",\"operation\":" ++ managementOperationJson value.operation ++
-    ",\"expected\":" ++ (match value.after with
-      | none => "null"
-      | some state => managementStateJson state) ++ "}")
-
 def editReceiptJson (r : SessionQueue.InputEdit.Receipt) : String :=
   "{\"command_id\":" ++ toString r.commandId ++
   ",\"digest\":" ++ toString r.digest ++ ",\"outcome\":" ++
@@ -148,7 +128,43 @@ structure GoalAssignmentWire where
   opening : String
   deriving ToJson
 
+/-- Every modeled queue entry is issued at its request ID; the round-trip
+examples below check that for each case list. -/
 structure EntryWire where
+  requestId : Nat
+  orderKey : Nat
+  executionOrigin : ExecutionOrigin
+  delivery : QueueDelivery
+  source : QueueSource
+  policy : QueuePolicy
+  queueKey : Option Nat
+  queuedAfter : Option Nat
+  requesterId : Option Nat
+  turnContext : Nat
+  executionDirectory : Option Nat
+  goalAssignment : Option GoalAssignmentWire
+  fresh : Bool
+  deriving ToJson
+
+def EntryWire.ofModel (entry : QueueEntry) : EntryWire :=
+  { requestId := entry.requestId, orderKey := entry.orderKey
+    executionOrigin := entry.origin, delivery := entry.delivery, source := entry.source
+    policy := entry.policy, queueKey := entry.queueKey, queuedAfter := entry.queuedAfter
+    requesterId := entry.requester, turnContext := entry.turnContext
+    executionDirectory := entry.executionDirectory
+    goalAssignment := entry.goalAssignment.map fun (goal, opening) => { goal, opening }
+    fresh := entry.fresh }
+
+def EntryWire.toModel (entry : EntryWire) : QueueEntry :=
+  { requestId := entry.requestId, createdAt := entry.requestId, orderKey := entry.orderKey
+    origin := entry.executionOrigin, delivery := entry.delivery, source := entry.source
+    policy := entry.policy, queueKey := entry.queueKey, queuedAfter := entry.queuedAfter
+    requester := entry.requesterId, turnContext := entry.turnContext
+    executionDirectory := entry.executionDirectory
+    goalAssignment := entry.goalAssignment.map fun g => (g.goal, g.opening)
+    fresh := entry.fresh }
+
+structure IssuedEntryWire where
   requestId : Nat
   createdAt : Nat
   orderKey : Nat
@@ -165,23 +181,24 @@ structure EntryWire where
   fresh : Bool
   deriving ToJson
 
-def EntryWire.ofModel (entry : QueueEntry) : EntryWire :=
-  { requestId := entry.requestId, createdAt := entry.createdAt, orderKey := entry.orderKey
-    executionOrigin := entry.origin, delivery := entry.delivery, source := entry.source
-    policy := entry.policy, queueKey := entry.queueKey, queuedAfter := entry.queuedAfter
-    requesterId := entry.requester, turnContext := entry.turnContext
-    executionDirectory := entry.executionDirectory
-    goalAssignment := entry.goalAssignment.map fun (goal, opening) => { goal, opening }
-    fresh := entry.fresh }
+def IssuedEntryWire.ofModel (entry : QueueEntry) : IssuedEntryWire :=
+  let wire := EntryWire.ofModel entry
+  { requestId := wire.requestId, createdAt := entry.createdAt, orderKey := wire.orderKey
+    executionOrigin := wire.executionOrigin, delivery := wire.delivery, source := wire.source
+    policy := wire.policy, queueKey := wire.queueKey, queuedAfter := wire.queuedAfter
+    requesterId := wire.requesterId, turnContext := wire.turnContext
+    executionDirectory := wire.executionDirectory, goalAssignment := wire.goalAssignment
+    fresh := wire.fresh }
 
-def EntryWire.toModel (entry : EntryWire) : QueueEntry :=
-  { requestId := entry.requestId, createdAt := entry.createdAt, orderKey := entry.orderKey
-    origin := entry.executionOrigin, delivery := entry.delivery, source := entry.source
-    policy := entry.policy, queueKey := entry.queueKey, queuedAfter := entry.queuedAfter
-    requester := entry.requesterId, turnContext := entry.turnContext
-    executionDirectory := entry.executionDirectory
-    goalAssignment := entry.goalAssignment.map fun g => (g.goal, g.opening)
-    fresh := entry.fresh }
+def IssuedEntryWire.toModel (entry : IssuedEntryWire) : QueueEntry :=
+  { (EntryWire.toModel
+      { requestId := entry.requestId, orderKey := entry.orderKey
+        executionOrigin := entry.executionOrigin, delivery := entry.delivery
+        source := entry.source, policy := entry.policy, queueKey := entry.queueKey
+        queuedAfter := entry.queuedAfter, requesterId := entry.requesterId
+        turnContext := entry.turnContext, executionDirectory := entry.executionDirectory
+        goalAssignment := entry.goalAssignment, fresh := entry.fresh })
+    with createdAt := entry.createdAt }
 
 inductive EventKind where
   | enqueue | claim | consume | finish
@@ -240,7 +257,7 @@ def foldScript : Family FoldInput (Option FoldObservation) where
 
 structure HandoverInput where
   name : String
-  pending : List EntryWire
+  pending : List IssuedEntryWire
   admitted : List Nat
   deriving ToJson
 
@@ -254,10 +271,10 @@ open CanonicalOutput.Execution.Handover.Cases in
 @[conformance_family]
 def handoverClaim : Family HandoverInput (Option HandoverQueue) where
   inputs := foldClaimCases.map fun value =>
-    { name := value.name, pending := value.pending.map EntryWire.ofModel, admitted := value.admitted }
+    { name := value.name, pending := value.pending.map IssuedEntryWire.ofModel, admitted := value.admitted }
   model := fun i => do
     let claimed ← foldClaim
-      { name := i.name, pending := i.pending.map EntryWire.toModel, admitted := i.admitted }
+      { name := i.name, pending := i.pending.map IssuedEntryWire.toModel, admitted := i.admitted }
     pure { active := claimed.active, folding := claimed.folding.map (·.requestId)
            pending := claimed.pending.map (·.requestId) }
 
@@ -419,6 +436,138 @@ example : (steeringCases.find? (·.1 == "natural_completion_intakes_late_input_b
   native_decide
 
 end Publication
+
+section Management
+
+open SessionQueue.ManagementCases (Operation)
+
+structure StateWire where
+  active : Option Nat
+  pending : List EntryWire
+  folding : List EntryWire
+  terminal : List Nat
+  deriving ToJson
+
+def StateWire.ofModel (state : SessionQueueState) : StateWire :=
+  { active := state.active, pending := state.pending.map EntryWire.ofModel
+    folding := state.folding.map EntryWire.ofModel, terminal := state.terminal.sort (· ≤ ·) }
+
+def StateWire.toModel (state : StateWire) : SessionQueueState :=
+  { scope := queue.scope, active := state.active, pending := state.pending.map EntryWire.toModel
+    terminal := state.terminal.toFinset, folding := state.folding.map EntryWire.toModel }
+
+inductive OperationKind where
+  | intake | replace
+  deriving ToJson
+
+structure OperationWire where
+  kind : OperationKind
+  active : Option EntryWire
+  admitted : List Nat
+  safeBoundary : Option Bool
+  caller : Option Nat
+  expected : List Nat
+  offset : Option Nat
+  count : Option Nat
+  replacements : List EntryWire
+  deriving ToJson
+
+def OperationWire.ofModel : Operation → OperationWire
+  | .intake active admitted safe =>
+      { kind := .intake, active := some (EntryWire.ofModel active), admitted
+        safeBoundary := some safe, caller := none, expected := [], offset := none
+        count := none, replacements := [] }
+  | .replace caller expected offset count replacements =>
+      { kind := .replace, active := none, admitted := [], safeBoundary := none, caller
+        expected, offset := some offset, count := some count
+        replacements := replacements.map EntryWire.ofModel }
+
+def OperationWire.toModel (operation : OperationWire) : Option Operation :=
+  match operation.kind with
+  | .intake => do
+      pure (.intake (← operation.active).toModel operation.admitted (← operation.safeBoundary))
+  | .replace => do
+      pure (.replace operation.caller operation.expected (← operation.offset) (← operation.count)
+        (operation.replacements.map EntryWire.toModel))
+
+structure ManagementInput where
+  name : String
+  before : StateWire
+  operation : OperationWire
+  deriving ToJson
+
+structure QueueImageWire where
+  active : Option Nat
+  pending : List Nat
+  folding : List Nat
+  terminal : List Nat
+  deriving ToJson
+
+def managementAfter (i : ManagementInput) : Option QueueImageWire := do
+  let operation ← i.operation.toModel
+  let after ← SessionQueue.ManagementCases.execute i.before.toModel operation
+  pure { active := after.active, pending := after.pending.map (·.requestId)
+         folding := after.folding.map (·.requestId), terminal := after.terminal.sort (· ≤ ·) }
+
+def ManagementInput.ofCase (c : SessionQueue.ManagementCases.Case) : ManagementInput :=
+  { name := c.name, before := StateWire.ofModel c.before
+    operation := OperationWire.ofModel c.operation }
+
+/-- The signed replacement owner issues each replacement as a fresh request in
+the slot it replaces, so a replacement that reuses an original request ID or
+names another slot is not something it can be asked to write. -/
+def signedReplacement (c : SessionQueue.ManagementCases.Case) : Bool :=
+  match c.operation with
+  | .replace _ _ offset count replacements =>
+      let originals := c.before.folding ++ c.before.pending
+      let selected := (originals.drop offset).take count
+      !(replacements.any fun r => originals.any (·.requestId == r.requestId)) &&
+        (replacements.zip selected).all fun (r, o) => r.orderKey == o.orderKey
+  | .intake .. => false
+
+/-- The served expiry fixture claims the head, then enqueues one expired or
+malformed steering row ahead of a fresh one; the other intake decisions need
+a provider-stream boundary, a stale head observation or an unadmitted row,
+which that fixture does not build. -/
+def servedIntakeNames : List String := ["expired_steering_is_barrier"]
+
+@[conformance_family]
+def managementReplace : Family ManagementInput (Option QueueImageWire) where
+  inputs := (SessionQueue.ManagementCases.cases.filter signedReplacement).map ManagementInput.ofCase
+  model := managementAfter
+
+@[conformance_family]
+def managementExpiredIntake : Family ManagementInput (Option QueueImageWire) where
+  inputs := (SessionQueue.ManagementCases.cases.filter (servedIntakeNames.contains ·.name)).map
+    ManagementInput.ofCase
+  model := managementAfter
+
+/-- model-production-gap: the signed replacement owner generates replacement
+request IDs and slots itself, and intake at an unsafe stream boundary, from a
+stale head observation, behind an unadmitted, queued, foreign or agent-authored
+row has no served fixture; steering publication and the owned loop replay the
+composed intake. -/
+@[conformance_family]
+def managementUnreached : Family ManagementInput (Option QueueImageWire) where
+  inputs := (SessionQueue.ManagementCases.cases.filter fun c =>
+    !signedReplacement c && !servedIntakeNames.contains c.name).map ManagementInput.ofCase
+  model := managementAfter
+
+def roundTrips (entries : List QueueEntry) : Bool :=
+  entries.all fun entry => (EntryWire.ofModel entry).toModel == entry
+
+example : roundTrips (cases.flatMap fun (_, events) => events.filterMap fun event =>
+    match event with
+    | .enqueue entry => some entry
+    | _ => none) := by native_decide
+
+example : roundTrips (SessionQueue.ManagementCases.cases.flatMap fun c =>
+    c.before.pending ++ c.before.folding ++ match c.operation with
+      | .intake active _ _ => [active]
+      | .replace _ _ _ _ replacements => replacements) := by
+  native_decide
+
+end Management
 
 end Families
 
