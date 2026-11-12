@@ -63,6 +63,8 @@ mod fake_llm;
 mod goal_delivery;
 #[path = "support/initialization.rs"]
 mod initialization;
+#[path = "support/live_runtime.rs"]
+mod live_runtime;
 #[path = "support/passive_settings.rs"]
 mod passive_settings;
 #[allow(dead_code)]
@@ -682,6 +684,12 @@ async fn installed_editor_refreshes_models_and_reconnects_without_the_runtime_ke
 }
 
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
+    if matches!(journey, Journey::Conversation) {
+        return live_runtime::exercise(root, false).await;
+    }
+    if matches!(journey, Journey::Goal) {
+        return live_runtime::exercise(root, true).await;
+    }
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
         .transpose()?;
