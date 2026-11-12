@@ -735,21 +735,41 @@ structure MustCommitOutput where
   owed : List String
   deriving ToJson
 
+def MustCommitCase.input (c : MustCommitCase) : MustCommitInput :=
+  { name := c.name, world := WorldWire.ofModel c.world
+  , plugins := c.plugins.map (ScriptWire.ofModel ValueWire.ofText)
+  , transition := c.transition, transitionRefused := c.transitionRefused
+  , readFailed := c.readFailed }
+
+def mustCommitModel (i : MustCommitInput) : MustCommitOutput :=
+  let c : MustCommitCase :=
+    { name := i.name, world := i.world.toModel
+    , plugins := i.plugins.map (ScriptWire.toModel ValueWire.toText)
+    , transition := i.transition, transitionRefused := i.transitionRefused
+    , readFailed := i.readFailed }
+  { committed := c.result.map fun result => ⟨StateWire.ofModel result.1, result.2⟩
+    owed := c.owedNames }
+
+/-- Production stages a must-commit point only after core's transition
+committed in the same transaction (`points::request_terminal` runs after the
+terminal compare-and-set), so only cases whose transition commits reach
+`stage_dropping`. -/
 @[conformance_family]
 def mustCommitStaging : Family MustCommitInput MustCommitOutput where
-  inputs := mustCommitCases.map fun c =>
-    { name := c.name, world := WorldWire.ofModel c.world
-    , plugins := c.plugins.map (ScriptWire.ofModel ValueWire.ofText)
-    , transition := c.transition, transitionRefused := c.transitionRefused
-    , readFailed := c.readFailed }
-  model := fun i =>
-    let c : MustCommitCase :=
-      { name := i.name, world := i.world.toModel
-      , plugins := i.plugins.map (ScriptWire.toModel ValueWire.toText)
-      , transition := i.transition, transitionRefused := i.transitionRefused
-      , readFailed := i.readFailed }
-    { committed := c.result.map fun result => ⟨StateWire.ofModel result.1, result.2⟩
-      owed := c.owedNames }
+  inputs := (mustCommitCases.filter fun c => !c.transitionRefused).map MustCommitCase.input
+  model := mustCommitModel
+
+/-- model-production-gap: a refused core transition never reaches production
+staging (the terminal compare-and-set fails before `stage_dropping` runs), so
+these cases are checked only in the model. -/
+@[conformance_family]
+def mustCommitStagingUnreached : Family MustCommitInput MustCommitOutput where
+  inputs := (mustCommitCases.filter (·.transitionRefused)).map MustCommitCase.input
+  model := mustCommitModel
+
+example : (mustCommitCases.filter (·.transitionRefused)).all
+    (fun c => c.result.isNone && c.owedNames.isEmpty) = true := by
+  native_decide
 
 /-! Re-run requests through owner wrappers: `Hooks.rerunSurvives`. -/
 

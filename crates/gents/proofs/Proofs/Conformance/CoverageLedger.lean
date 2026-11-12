@@ -1291,6 +1291,11 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "hooks_contracts_must_commit_staging")
       "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "hooks_contracts_must_commit_staging_unreached"
+      "model-production-gap: production stages a must-commit point only after core's transition committed, so a refused transition never reaches stage_dropping; the model finds that such a case commits nothing and owes nothing.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "lifecycle_hook_rerun_cases"
       "LifecycleHookRerunCases"

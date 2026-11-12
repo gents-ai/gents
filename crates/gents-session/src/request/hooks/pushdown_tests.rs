@@ -203,7 +203,6 @@ impl StoreDouble {
             reason,
         }
     }
-
 }
 
 #[async_trait::async_trait]
@@ -311,12 +310,17 @@ where
 fn effect_of(wire: &effect_commit::EffectWire) -> Effect {
     let doc = || {
         DocRef::new(
-            wire.collection.as_deref().expect("a write names its collection"),
+            wire.collection
+                .as_deref()
+                .expect("a write names its collection"),
             wire.doc.as_deref().expect("a write names its document"),
         )
     };
     let value = || Value::String(wire.value.clone().expect("the write carries its value"));
-    let expected = || wire.expected.expect("the write names the revision it was shown");
+    let expected = || {
+        wire.expected
+            .expect("the write names the revision it was shown")
+    };
     match wire.kind.as_str() {
         "create" => Effect::Write(Write::Create {
             doc: doc(),
@@ -335,7 +339,9 @@ fn effect_of(wire: &effect_commit::EffectWire) -> Effect {
             conflict: None,
         }),
         "core" => Effect::Core(CoreOp::new(
-            wire.op.as_deref().expect("a core effect names its operation"),
+            wire.op
+                .as_deref()
+                .expect("a core effect names its operation"),
             Value::Null,
         )),
         other => panic!("the model has no effect {other}"),
@@ -440,7 +446,11 @@ fn create_grant_validation_follows_the_lean_model() {
                         relation: grant.relation.clone(),
                         subject: match grant.subject.kind.as_str() {
                             "actor" => Subject::Actor(
-                                grant.subject.did.clone().expect("an actor grant names its DID"),
+                                grant
+                                    .subject
+                                    .did
+                                    .clone()
+                                    .expect("an actor grant names its DID"),
                             ),
                             "document" => Subject::Document(DocRef::new(
                                 grant
@@ -487,22 +497,20 @@ fn create_grant_validation_follows_the_lean_model() {
                                     relation: leak(&declared.relation),
                                     subject: match declared.subject.kind.as_str() {
                                         "actor" => SubjectKind::Actor,
-                                        "document" => SubjectKind::Document {
-                                            resource: leak(
-                                                declared
-                                                    .subject
-                                                    .resource
-                                                    .as_deref()
-                                                    .expect("a document grant names its resource"),
-                                            ),
-                                            collection: leak(
-                                                declared
-                                                    .subject
-                                                    .collection
-                                                    .as_deref()
-                                                    .expect("a document grant names its collection"),
-                                            ),
-                                        },
+                                        "document" => {
+                                            SubjectKind::Document {
+                                                resource: leak(
+                                                    declared.subject.resource.as_deref().expect(
+                                                        "a document grant names its resource",
+                                                    ),
+                                                ),
+                                                collection: leak(
+                                                    declared.subject.collection.as_deref().expect(
+                                                        "a document grant names its collection",
+                                                    ),
+                                                ),
+                                            }
+                                        }
                                         other => panic!("the model has no subject kind {other}"),
                                     },
                                 })
@@ -541,13 +549,20 @@ where
 {
     let decision = &script.decision;
     let choice = |choice: &Option<staging::ChoiceWire>| {
-        let choice = choice.as_ref().expect("a shown-count decision has both choices");
+        let choice = choice
+            .as_ref()
+            .expect("a shown-count decision has both choices");
         (value(&choice.value), effects_of(&choice.effects))
     };
     let decision = match decision.kind.as_str() {
         "refuse" => Scripted::Refuse(decision.reason.clone().expect("a refusal has a reason")),
         "proceed" => Scripted::Proceed(
-            value(decision.value.as_ref().expect("a proceed carries its value")),
+            value(
+                decision
+                    .value
+                    .as_ref()
+                    .expect("a proceed carries its value"),
+            ),
             effects_of(&decision.effects),
         ),
         "by_shown" => Scripted::ByShown {
@@ -626,13 +641,15 @@ async fn refusable_staging_follows_the_lean_model() {
     }
 }
 
-/// Production stages a must-commit point only after core's transition
-/// committed in the same transaction (`points::request_terminal` runs after
-/// the terminal compare-and-set), so a refused transition stages nothing.
 #[tokio::test]
 async fn must_commit_staging_follows_the_lean_model() {
     for case in gents_lean_vocab::families::hooks_contracts_must_commit_staging::cases() {
         let input = &case.input;
+        assert!(
+            !input.transition_refused,
+            "{}: a refused transition never reaches staging",
+            input.name
+        );
         for name in &input.read_failed {
             let script = input
                 .plugins
@@ -647,27 +664,19 @@ async fn must_commit_staging_follows_the_lean_model() {
         }
         let scripts: Vec<staging::ScriptWire> = gents_lean_vocab::family::recode(&input.plugins);
         let plugins = text_plugins(&scripts);
-        let output = if input.transition_refused {
-            must_commit::MustCommitOutput {
-                committed: None,
-                owed: Vec::new(),
-            }
-        } else {
-            let mut core = input.world.core.clone();
-            core.push(input.transition.clone());
-            let host = host_of(&input.world, Some(core), &input.read_failed);
-            let staged = stage_dropping(&host, &plugins, &(), &[])
-                .await
-                .unwrap_or_else(|error| panic!("{}: {error:?}", input.name));
-            must_commit::MustCommitOutput {
-                committed: Some(must_commit::CommittedWire {
-                    state: state_of(&host.snapshot()),
-                    dropped: staged.iter().map(Staged::is_owed).collect(),
-                }),
-                owed: owed(&staged).into_iter().map(str::to_owned).collect(),
-            }
-        };
-        case.check(output);
+        let mut core = input.world.core.clone();
+        core.push(input.transition.clone());
+        let host = host_of(&input.world, Some(core), &input.read_failed);
+        let staged = stage_dropping(&host, &plugins, &(), &[])
+            .await
+            .unwrap_or_else(|error| panic!("{}: {error:?}", input.name));
+        case.check(must_commit::MustCommitOutput {
+            committed: Some(must_commit::CommittedWire {
+                state: state_of(&host.snapshot()),
+                dropped: staged.iter().map(Staged::is_owed).collect(),
+            }),
+            owed: owed(&staged).into_iter().map(str::to_owned).collect(),
+        });
     }
 }
 
@@ -717,11 +726,11 @@ fn verdict_wire(verdict: &ClaimVerdict) -> combination::VerdictWire {
 
 #[test]
 fn verdict_combination_follows_the_lean_model() {
-    gents_lean_vocab::families::hooks_contracts_verdict_combination::replay(|input: &combination::CombinationInput| {
-        combination::CombinationOutput {
+    gents_lean_vocab::families::hooks_contracts_verdict_combination::replay(
+        |input: &combination::CombinationInput| combination::CombinationOutput {
             combined: verdict_wire(&combine(input.verdicts.iter().map(claim_verdict))),
-        }
-    });
+        },
+    );
 }
 
 fn gate_verdict(verdict: &ClaimVerdict) -> claim_gate::VerdictWire {
@@ -898,30 +907,35 @@ fn record_of(wire: &delivery_step::RecordWire) -> DeliveryRecord<String, String>
 
 #[test]
 fn delivery_steps_follow_the_lean_model() {
-    gents_lean_vocab::families::hooks_contracts_delivery_step::replay(|input: &delivery_step::DeliveryStepInput| {
-        let mut record = record_of(&input.before);
-        let step = &input.step;
-        match step.kind.as_str() {
-            "publish" => record.publish(
-                step.outcome.clone().expect("a publication names its outcome"),
-                step.keys.iter().cloned(),
-                step.commit.expect("a publication says whether it committed"),
-            ),
-            "deliver" => record.deliver(
-                step.key.as_ref().expect("a delivery names its key"),
-                step.applied.expect("a delivery says whether it applied"),
-            ),
-            other => panic!("the model has no delivery step {other}"),
-        }
-        delivery_step::DeliveryStepOutput {
-            pending: record.pending(),
-            state: delivery_step::RecordWire {
-                terminal: record.terminal,
-                owed: record.owed,
-                delivered: record.delivered,
-            },
-        }
-    });
+    gents_lean_vocab::families::hooks_contracts_delivery_step::replay(
+        |input: &delivery_step::DeliveryStepInput| {
+            let mut record = record_of(&input.before);
+            let step = &input.step;
+            match step.kind.as_str() {
+                "publish" => record.publish(
+                    step.outcome
+                        .clone()
+                        .expect("a publication names its outcome"),
+                    step.keys.iter().cloned(),
+                    step.commit
+                        .expect("a publication says whether it committed"),
+                ),
+                "deliver" => record.deliver(
+                    step.key.as_ref().expect("a delivery names its key"),
+                    step.applied.expect("a delivery says whether it applied"),
+                ),
+                other => panic!("the model has no delivery step {other}"),
+            }
+            delivery_step::DeliveryStepOutput {
+                pending: record.pending(),
+                state: delivery_step::RecordWire {
+                    terminal: record.terminal,
+                    owed: record.owed,
+                    delivered: record.delivered,
+                },
+            }
+        },
+    );
 }
 
 fn owed_key_of(wire: &owed_trace::OwedKeyWire) -> owed::Key {
@@ -989,99 +1003,107 @@ fn owed_record_wire(record: &owed::Record) -> owed_trace::OwedRecordWire {
 /// the production record the periodic sweep settles (`owed::redrive_pending`).
 #[test]
 fn owed_delivery_traces_follow_the_lean_model() {
-    gents_lean_vocab::families::hooks_contracts_owed_trace::replay(|input: &owed_trace::OwedTraceInput| {
-        let mut records: Vec<owed::Record> = Vec::new();
-        let mut observed = Vec::new();
-        for step in &input.steps {
-            let (runner, performed) = match step.kind.as_str() {
-                "owe" => {
-                    let point = step.point.as_deref().expect("an owe names its point");
-                    let kind = owed::Kind::of_point(point);
-                    let actor = step.actor.as_deref();
-                    let runner = owed::owe_runner(kind, actor, step.owner.as_deref(), |did| {
-                        step.signable.iter().any(|signable| signable == did)
-                    });
-                    if let Some(runner) = &runner {
-                        owed::publish(
-                            &mut records,
-                            |key| owed::Record::fresh(kind, actor, runner, key),
-                            step.keys.iter().map(owed_key_of),
-                            step.commit.expect("an owe says whether it committed"),
-                        );
-                    }
-                    (runner, false)
-                }
-                "redrive" => {
-                    let key = owed_key_of(step.key.as_ref().expect("a redrive names its key"));
-                    let observation = owed::Observation {
-                        authorized: step.authorized.expect("a redrive observes authorization"),
-                        current: step.current.expect("a redrive observes currency"),
-                    };
-                    let attempt = step.attempt.as_ref().expect("a redrive attempts");
-                    let attempt = match attempt.kind.as_str() {
-                        "applied" => {
-                            owed::Attempt::Applied(attempt.writes.iter().map(owed_write_of).collect())
+    gents_lean_vocab::families::hooks_contracts_owed_trace::replay(
+        |input: &owed_trace::OwedTraceInput| {
+            let mut records: Vec<owed::Record> = Vec::new();
+            let mut observed = Vec::new();
+            for step in &input.steps {
+                let (runner, performed) = match step.kind.as_str() {
+                    "owe" => {
+                        let point = step.point.as_deref().expect("an owe names its point");
+                        let kind = owed::Kind::of_point(point);
+                        let actor = step.actor.as_deref();
+                        let runner = owed::owe_runner(kind, actor, step.owner.as_deref(), |did| {
+                            step.signable.iter().any(|signable| signable == did)
+                        });
+                        if let Some(runner) = &runner {
+                            owed::publish(
+                                &mut records,
+                                |key| owed::Record::fresh(kind, actor, runner, key),
+                                step.keys.iter().map(owed_key_of),
+                                step.commit.expect("an owe says whether it committed"),
+                            );
                         }
-                        "failed" => owed::Attempt::Failed(
-                            attempt.error.clone().expect("a failed attempt carries its error"),
-                        ),
-                        other => panic!("the model has no attempt {other}"),
-                    };
-                    let refused: Vec<owed::Write> = step.refused.iter().map(owed_write_of).collect();
-                    let may_write = |write: &owed::Write| !refused.contains(write);
-                    let mut performed = false;
-                    for record in records.iter_mut().filter(|record| record.key == key) {
-                        performed |= record.performs(observation, &attempt, may_write);
-                        *record = record.redrive(observation, &attempt, may_write);
+                        (runner, false)
                     }
-                    (None, performed)
-                }
-                other => panic!("the model has no owed step {other}"),
-            };
-            observed.push(owed_trace::OwedObservation {
-                runner,
-                records: records.iter().map(owed_record_wire).collect(),
-                performed,
-            });
-        }
-        owed_trace::OwedTraceOutput { trace: observed }
-    });
+                    "redrive" => {
+                        let key = owed_key_of(step.key.as_ref().expect("a redrive names its key"));
+                        let observation = owed::Observation {
+                            authorized: step.authorized.expect("a redrive observes authorization"),
+                            current: step.current.expect("a redrive observes currency"),
+                        };
+                        let attempt = step.attempt.as_ref().expect("a redrive attempts");
+                        let attempt = match attempt.kind.as_str() {
+                            "applied" => owed::Attempt::Applied(
+                                attempt.writes.iter().map(owed_write_of).collect(),
+                            ),
+                            "failed" => owed::Attempt::Failed(
+                                attempt
+                                    .error
+                                    .clone()
+                                    .expect("a failed attempt carries its error"),
+                            ),
+                            other => panic!("the model has no attempt {other}"),
+                        };
+                        let refused: Vec<owed::Write> =
+                            step.refused.iter().map(owed_write_of).collect();
+                        let may_write = |write: &owed::Write| !refused.contains(write);
+                        let mut performed = false;
+                        for record in records.iter_mut().filter(|record| record.key == key) {
+                            performed |= record.performs(observation, &attempt, may_write);
+                            *record = record.redrive(observation, &attempt, may_write);
+                        }
+                        (None, performed)
+                    }
+                    other => panic!("the model has no owed step {other}"),
+                };
+                observed.push(owed_trace::OwedObservation {
+                    runner,
+                    records: records.iter().map(owed_record_wire).collect(),
+                    performed,
+                });
+            }
+            owed_trace::OwedTraceOutput { trace: observed }
+        },
+    );
 }
 
 /// Lean `Hooks.OwedDelivery.deriveHalts` drives the sweep's derivation.
 #[test]
 fn owed_halt_derivation_follows_the_lean_model() {
-    gents_lean_vocab::families::hooks_contracts_owed_derive::replay(|input: &owed_derive::OwedDeriveInput| {
-        let sessions: Vec<owed::HaltedSession> = input
-            .sessions
-            .iter()
-            .map(|session| owed::HaltedSession {
-                session: session.session.clone(),
-                owner: session.owner.clone(),
-                latched_at: session.latched_at.clone(),
-                current: session.current,
-            })
-            .collect();
-        let bound = usize::try_from(input.bound).expect("the bound fits");
-        owed_derive::OwedDeriveOutput {
-            derived: owed::derive_halts(bound, &sessions)
-                .into_iter()
-                .map(|halt| owed_derive::DerivedHaltWire {
-                    session: halt.session,
-                    halted_at: halt.at,
-                    owner: halt.owner,
+    gents_lean_vocab::families::hooks_contracts_owed_derive::replay(
+        |input: &owed_derive::OwedDeriveInput| {
+            let sessions: Vec<owed::HaltedSession> = input
+                .sessions
+                .iter()
+                .map(|session| owed::HaltedSession {
+                    session: session.session.clone(),
+                    owner: session.owner.clone(),
+                    latched_at: session.latched_at.clone(),
+                    current: session.current,
                 })
-                .collect(),
-        }
-    });
+                .collect();
+            let bound = usize::try_from(input.bound).expect("the bound fits");
+            owed_derive::OwedDeriveOutput {
+                derived: owed::derive_halts(bound, &sessions)
+                    .into_iter()
+                    .map(|halt| owed_derive::DerivedHaltWire {
+                        session: halt.session,
+                        halted_at: halt.at,
+                        owner: halt.owner,
+                    })
+                    .collect(),
+            }
+        },
+    );
 }
 
 /// Lean `Hooks.OwedDelivery.prune` keeps the records production `prunable`
 /// does not delete.
 #[test]
 fn owed_pruning_follows_the_lean_model() {
-    gents_lean_vocab::families::hooks_contracts_owed_prune::replay(|input: &owed_prune::OwedPruneInput| {
-        owed_prune::OwedPruneOutput {
+    gents_lean_vocab::families::hooks_contracts_owed_prune::replay(
+        |input: &owed_prune::OwedPruneInput| owed_prune::OwedPruneOutput {
             kept: input
                 .records
                 .iter()
@@ -1091,8 +1113,8 @@ fn owed_pruning_follows_the_lean_model() {
                 })
                 .cloned()
                 .collect(),
-        }
-    });
+        },
+    );
 }
 
 fn binding_of(wire: &admission::BindingWire) -> Binding<String> {
@@ -1154,34 +1176,34 @@ fn stale_wire(stale: &Stale) -> admission::StaleWire {
 
 #[test]
 fn prepared_admission_follows_the_lean_model() {
-    gents_lean_vocab::families::hooks_contracts_prepared_admission::replay(|input: &admission::AdmissionInput| {
-        let decision = input.captured.as_ref().map(|captured| {
-            let verdict = prepared_verdict_of(&captured.verdict);
-            prepare(binding_of(&captured.binding), |_: &()| verdict, &())
-        });
-        let prepared = decision
-            .as_ref()
-            .map(|decision| admission::PreparedWire {
+    gents_lean_vocab::families::hooks_contracts_prepared_admission::replay(
+        |input: &admission::AdmissionInput| {
+            let decision = input.captured.as_ref().map(|captured| {
+                let verdict = prepared_verdict_of(&captured.verdict);
+                prepare(binding_of(&captured.binding), |_: &()| verdict, &())
+            });
+            let prepared = decision.as_ref().map(|decision| admission::PreparedWire {
                 binding: binding_wire(&decision.binding),
                 verdict: prepared_verdict_wire(&decision.verdict),
             });
-        let result = match admit(
-            input.authorized,
-            input.cancelled,
-            &binding_of(&input.current),
-            decision,
-        ) {
-            Ok(payload) => admission::AdmitResultWire {
-                kind: "ok".to_owned(),
-                payload: Some(payload),
-                stale: None,
-            },
-            Err(stale) => admission::AdmitResultWire {
-                kind: "error".to_owned(),
-                payload: None,
-                stale: Some(stale_wire(&stale)),
-            },
-        };
-        admission::AdmissionOutput { prepared, result }
-    });
+            let result = match admit(
+                input.authorized,
+                input.cancelled,
+                &binding_of(&input.current),
+                decision,
+            ) {
+                Ok(payload) => admission::AdmitResultWire {
+                    kind: "ok".to_owned(),
+                    payload: Some(payload),
+                    stale: None,
+                },
+                Err(stale) => admission::AdmitResultWire {
+                    kind: "error".to_owned(),
+                    payload: None,
+                    stale: Some(stale_wire(&stale)),
+                },
+            };
+            admission::AdmissionOutput { prepared, result }
+        },
+    );
 }
