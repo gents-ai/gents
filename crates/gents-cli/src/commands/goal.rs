@@ -1,14 +1,15 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents_automation::goal::{set_goal_from_access, GoalDocument};
+use gents_automation::goal::GoalDocument;
 use gents_protocol::goal::GOAL_FIELDS;
 use gents_protocol::goal_status::GoalStatus;
+use gents_protocol::operations::goal::{GoalOperationError, GoalSetInput, GoalStartInput};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 
 use crate::cli::args::{
     GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
-    GoalStatusArg,
+    GoalStartArgs, GoalStatusArg,
 };
 use crate::cli::output_format::OutputFormat;
 use crate::{print_json, resolve_config_access};
@@ -17,6 +18,7 @@ use gents_service::home_state::resolve_node_did;
 pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
     match command {
         GoalCommand::Show(args) => goal_show(args).await,
+        GoalCommand::Start(args) => goal_start(args).await,
         GoalCommand::Set(args) => goal_set(args).await,
         GoalCommand::ResumeRequest(args) => goal_resume(args).await,
         GoalCommand::ResumeOn(args) => goal_resume_on(args).await,
@@ -66,26 +68,85 @@ async fn goal_set_value(
     node_did: &str,
     args: &GoalSetArgs,
 ) -> Result<serde_json::Value> {
-    let status = args.status.map(GoalStatus::from);
-    let budget = if args.clear_token_budget {
-        Some(None)
-    } else {
-        args.token_budget.map(Some)
+    let input = GoalSetInput {
+        objective: args.objective.clone(),
+        token_budget: if args.clear_token_budget {
+            Some(None)
+        } else {
+            args.token_budget.map(Some)
+        },
+        status: args.status.map(GoalStatus::from),
+        auto_resume: args.auto_resume,
+        ..Default::default()
     };
-    let goal = set_goal_from_access(
-        access,
-        node_did,
-        &args.scope.session,
-        args.objective.as_deref(),
-        status,
-        budget,
-        args.auto_resume,
-    )
-    .await?;
+    let goal =
+        gents_automation::operations::goal::set(access, node_did, &args.scope.session, &input)
+            .await
+            .map_err(|error| failure(error, &args.scope.session))?;
     Ok(serde_json::to_value(gents_automation::goal::snapshot(
         &goal,
         Utc::now(),
     ))?)
+}
+
+async fn goal_start(args: GoalStartArgs) -> Result<()> {
+    args.output
+        .ensure_supported("automation goal start", &[OutputFormat::Json])?;
+    let (access, node_did) = access_and_did(&args.scope).await?;
+    let session_id = args.scope.session.as_str();
+    let agent = access
+        .transact_readonly("goal.start.session", |txn| {
+            let node_did = node_did.as_str();
+            Box::pin(async move {
+                gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn, node_did, session_id,
+                )
+                .await
+            })
+        })
+        .await?
+        .map(|session| session.session.agent_did)
+        .ok_or_else(|| {
+            failure(
+                GoalOperationError::SessionMissing(session_id.to_owned()),
+                session_id,
+            )
+        })?;
+    let request = crate::request_helpers::goal_request(
+        &access,
+        &node_did,
+        session_id,
+        &agent,
+        &args.objective,
+    )
+    .await?;
+    let input = GoalStartInput {
+        session_id: session_id.to_owned(),
+        objective: args.objective.clone(),
+        token_budget: args.token_budget,
+    };
+    let disposition =
+        gents_automation::operations::goal::start(&access, &node_did, &input, &request)
+            .await
+            .map_err(|error| failure(error, session_id))?;
+    let goal = load_goal(&access, &node_did, session_id)
+        .await?
+        .with_context(|| format!("no durable goal for session {session_id}"))?;
+    let mut value = serde_json::to_value(gents_automation::goal::snapshot(&goal, Utc::now()))?;
+    value["request_id"] = request.request_id.clone().into();
+    value["disposition"] = match disposition {
+        gents_automation::goal::GoalBackedRequestDisposition::Created => "created",
+        gents_automation::goal::GoalBackedRequestDisposition::Idempotent => "idempotent",
+    }
+    .into();
+    print_json(&value)
+}
+
+/// A refused Goal operation, shown with the command that corrects it.
+fn failure(error: GoalOperationError, session_id: &str) -> anyhow::Error {
+    let next = crate::next_call::command(error.recovery(), Some(session_id));
+    let message = format!("{error}\nNext: {next}");
+    anyhow::Error::new(error).context(message)
 }
 
 async fn goal_resume(args: GoalResumeArgs) -> Result<()> {

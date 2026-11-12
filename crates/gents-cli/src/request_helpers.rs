@@ -329,3 +329,49 @@ pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTim
 
 #[cfg(test)]
 pub(crate) mod goal_input_tests;
+
+/// The signed first request of a Goal a person starts; its content is the
+/// objective.
+pub(crate) async fn goal_request(
+    access: &ConfigAccess,
+    node: &str,
+    session: &str,
+    agent: &str,
+    objective: &str,
+) -> anyhow::Result<gents_protocol::request_admission::AgentRequestCreate> {
+    use gents_session::request::lifecycle::{
+        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
+        RetryLink, DEFAULT_REQUEST_MAX_RETRIES,
+    };
+    let signer = client_signer(access)?;
+    let actor = gents_store::identity::NodeIdentity::did(&signer).to_owned();
+    let requester =
+        gents_session::session::client_requester_scope(access, node, session, &actor).await?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let spec = RequestSpec {
+        retry_key: Some(format!("goal-request:{request_id}")),
+        retry: Some(RetryLink {
+            parent_request_id: None,
+            parent_request_doc_id: None,
+            root_request_id: request_id.clone(),
+            retry_count: 0,
+            max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+        }),
+        ..RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            RequestIdentity {
+                request_id,
+                node_did: node.to_owned(),
+                requester_did: Some(requester),
+                agent_did: agent.to_owned(),
+                session_id: session.to_owned(),
+                content: objective.to_owned(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at,
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor),
+        )
+    };
+    build_signed_client_request(access, spec, RequestSigner::Identity(&signer)).await
+}

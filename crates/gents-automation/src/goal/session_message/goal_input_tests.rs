@@ -94,7 +94,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 .await
                 .unwrap();
             let doc = gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-            let goal = crate::goal::set_goal_from_access(
+            let goal = crate::goal::seed_goal_from_access(
                 &agent_access,
                 f.identity.did(),
                 &session_id,

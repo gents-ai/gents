@@ -16,7 +16,6 @@ pub mod continuation;
 mod controller;
 mod creation;
 mod document;
-mod edit;
 mod first_request_binding;
 mod history;
 pub mod lifecycle_hooks;
@@ -49,9 +48,6 @@ pub use client_submission::{
     load_applied_opening_goal_provenance, prepare_session_goal_control,
     recover_session_goal_control, submit_prepared_session_goal_control, OpeningGoalProvenance,
 };
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use edit::edit_active_goal;
-pub use edit::{edit_active_goal_from_access, GoalEdit};
 pub use first_request_binding::bind_goal_first_request_in_txn;
 pub use first_request_binding::task_assignment_goal_id;
 pub(crate) use first_request_binding::validate_task_goal_identity_in_txn;
@@ -85,25 +81,24 @@ pub use request_assignment::{load_request_assignment, load_request_assignment_sc
 pub(crate) use request_head::assignment_allows;
 pub use request_head::authenticated_goal_request_members;
 pub(crate) use request_head::{
-    assignment_request_id_in_txn, goal_session_is_idle, latest_goal_request,
+    assignment_request_id_in_txn, goal_session_is_idle, latest_goal_request, load_session_requests,
     request_selection_fields, verify_goal_continuation_edge,
 };
 pub use reset_resume::resume_at_reset;
 mod question_wait;
 pub(crate) use backed_request::fingerprint::GoalBackedRequestFingerprint;
+pub(crate) use backed_request::submit_goal_backed_request;
 pub use backed_request::submit_goal_backed_request_with_identity;
+pub use backed_request::GoalBackedRequestDisposition;
 pub(crate) use backed_request::{
     stage_goal_backed_request_in_txn, stage_goal_backed_request_with_identity_in_txn,
-};
-pub use backed_request::{
-    submit_goal_backed_request, GoalBackedRequestDisposition,
 };
 pub use controller::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
     update_goal_fields_if_status_from_access,
 };
 pub use creation::create_goal_for_request_from_access;
-pub(crate) use creation::load_goal_creation_claim_fingerprint_in_txn;
+pub(crate) use creation::load_goal_creation_claim_for_key_in_txn;
 use creation::stage_goal_and_claim;
 pub use creation::{
     create_goal_for_session_from_access, replacement_goal_identity, CreateGoalForSessionError,
@@ -124,7 +119,7 @@ pub use task_fire::{
     TaskGoalFireRecoveryDecision, TaskGoalFireRecoveryDisposition, TaskGoalRequestBinding,
 };
 pub use tool_context::load_goal_tool_context;
-use tool_context::same_goal_assignment;
+pub(crate) use tool_context::same_goal_assignment;
 pub use transition::{
     decide_model_goal_create, goal_continuation_materialization_step, goal_creation_fingerprint,
     goal_submission_step, GoalContinuationAction, GoalContinuationPhase, GoalCreateDisposition,
@@ -134,11 +129,9 @@ pub use transition::{
 pub(crate) use usage::session_token_usage_breakdown_in_txn;
 use usage::session_token_usage_in_txn;
 pub use usage::{refresh_goal_usage_from_access, session_token_usage};
-use write::set_goal_in_txn;
-pub use write::{
-    delete_goal_from_access, delete_goals_for_session_from_access, set_goal,
-    set_goal_auto_resume_from_access, set_goal_from_access,
-};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use write::seed_goal_from_access;
+pub use write::{delete_goal_from_access, delete_goals_for_session_from_access};
 
 pub const BLOCKED_AUDIT_THRESHOLD: i64 = 3;
 pub const MAX_INFRASTRUCTURE_RETRIES: i64 = 2;

@@ -183,7 +183,7 @@ impl Fixture {
             agent.as_ref(),
         )
         .unwrap();
-        let goal = set_goal_from_access(
+        let goal = seed_goal_from_access(
             if user_owned_goal {
                 &user_access
             } else {

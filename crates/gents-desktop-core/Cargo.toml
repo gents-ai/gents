@@ -58,6 +58,7 @@ typescript = ["gents/typescript"]
 test-fixtures = []
 
 [dev-dependencies]
+gents-automation = { workspace = true, features = ["test-fixtures"] }
 # Enables the served-runtime fixture for this crate's integration tests.
 gents-desktop-core = { path = ".", features = ["test-fixtures"] }
 gents = { path = "../gents", features = ["test-home-guard"] }

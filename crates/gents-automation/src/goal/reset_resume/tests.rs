@@ -31,7 +31,7 @@ impl Reset {
     }
 
     async fn opt_in(&self, on: bool) {
-        set_goal_from_access(
+        seed_goal_from_access(
             &self.accounts.access,
             self.f.identity.did(),
             SESSION,

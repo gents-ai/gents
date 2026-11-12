@@ -352,7 +352,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 selected.as_ref(),
             )
             .unwrap();
-            let existing = set_goal_from_access(
+            let existing = seed_goal_from_access(
                 &agent_access,
                 identity.did(),
                 SESSION,
@@ -993,7 +993,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             .await
             .unwrap();
         let old = if replacement {
-            let goal = crate::goal::set_goal_from_access(
+            let goal = crate::goal::seed_goal_from_access(
                 &agent_access,
                 runtime.did(),
                 SESSION,

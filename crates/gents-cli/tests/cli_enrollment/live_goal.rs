@@ -1,5 +1,5 @@
 use super::*;
-use gents_automation::goal::{resume_goal_request, set_goal_from_access};
+use gents_automation::goal::{resume_goal_request, seed_goal_from_access};
 use gents_documents::apply_desired_state_plan;
 use gents_documents::Tools;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
@@ -146,7 +146,7 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
                 &access, &predecessor.request_id, &session, Duration::from_secs(240),
             ).await?;
             anyhow::ensure!(!predecessor_reply.text.trim().is_empty(), "predecessor produced no response");
-            let goal = set_goal_from_access(&access, &node_did, &session,
+            let goal = seed_goal_from_access(&access, &node_did, &session,
                 Some("Give one short completion sentence for the resumed task."),
                 Some(GoalStatus::Paused), Some(Some(16000)), None,
             ).await?;
@@ -204,7 +204,8 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
                 && claimed["caused_by_parent_request_id"] == predecessor.request_id
                 && claimed["caused_by_parent_request_doc_id"] == parent_doc,
                 "claimed continuation lost its signed physical provenance: {claimed}");
-            let paused = set_goal_from_access(&access, &node_did, &session, None, Some(GoalStatus::Paused), None, None).await?;
+            let paused = gents_automation::operations::goal::set(&access, &node_did, &session,
+                &gents_protocol::operations::goal::GoalSetInput { status: Some(GoalStatus::Paused), ..Default::default() }).await?;
             anyhow::ensure!(paused.status == "paused" && paused.assignment_root_request_doc_id.as_deref() == Some(resumed.doc_id.as_str()), "User pause lost its Goal assignment: {paused:?}");
 
             let reply = wait_for_complete_agent_response_with_access(&access, &resumed.request_id, &session, Duration::from_secs(240)).await?;

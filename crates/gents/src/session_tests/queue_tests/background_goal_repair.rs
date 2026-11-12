@@ -76,7 +76,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             db.agent_identity.as_ref(),
         )
         .unwrap();
-        let goal = gents_automation::goal::set_goal_from_access(
+        let goal = gents_automation::goal::seed_goal_from_access(
             &access,
             db.node_did(),
             &parent.session_id,

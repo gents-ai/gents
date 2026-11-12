@@ -718,7 +718,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
         })
         .await
         .unwrap();
-    let mut goal = set_goal_from_access(
+    let mut goal = seed_goal_from_access(
         &access,
         identity.did(),
         "bound-session",

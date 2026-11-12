@@ -483,7 +483,7 @@ async fn queued_task_goal_changes_only_when_its_request_claims() {
             ensure_agent_session(&node, session, &test_node_did(), None)
                 .await
                 .unwrap();
-            let original = gents_automation::goal::set_goal_from_access(
+            let original = gents_automation::goal::seed_goal_from_access(
                 &agent_access(&node),
                 &test_node_did(),
                 session,
@@ -584,7 +584,7 @@ async fn queued_task_goal_changes_only_when_its_request_claims() {
                 .await
                 .unwrap();
             if stopped {
-                gents_automation::goal::set_goal_from_access(
+                gents_automation::goal::seed_goal_from_access(
                     &agent_access(&node),
                     &test_node_did(),
                     session,

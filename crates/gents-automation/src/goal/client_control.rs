@@ -43,12 +43,7 @@ pub(crate) enum PreparedGoalControl {
         replacement: Option<(GoalDocument, GoalCreationIdentity)>,
         client_graphs: Option<GoalClientGraphs>,
     },
-    Edit {
-        goal: GoalDocument,
-        fields: GoalEdit,
-    },
-    Pause(GoalDocument),
-    Stop(GoalDocument),
+    Set(Box<crate::operations::goal::GoalSetPlan>),
     ResumeCurrent(GoalDocument),
     ResumeIdle {
         goal: GoalDocument,
@@ -198,35 +193,35 @@ pub(crate) async fn prepare_goal_control(
     } else {
         Vec::new()
     };
-    let idle = goal_session_is_idle(&requests);
+    let actor = crate::operations::goal::acting_as_signer(
+        txn,
+        &command.node_did,
+        &session.session.agent_did,
+        &command.requester_did,
+    )
+    .await?;
     if let GoalOperation::Create {
         objective,
         token_budget,
     } = &command.operation
     {
-        let replacement = match (goal, command.expected.as_ref()) {
-            (None, None) => None,
-            (Some(goal), Some(expected)) => {
-                if !matches!(
-                    goal.parsed_status(),
-                    Some(GoalStatus::Complete | GoalStatus::Stopped)
-                ) {
-                    return Ok(Err(
-                        "only a completed or removed goal can be replaced".into()
-                    ));
-                }
-                let current = gents_store::graphql::newest_document_composite_commit_in_txn(
-                    txn,
-                    &goal.doc_id,
-                    "goal.replace_preflight",
-                )
-                .await?
-                .context("goal has no unambiguous composite revision")?;
-                if expected.document != goal.doc_id || expected.composite != current.cid {
-                    return Ok(Err(
-                        "goal changed; refresh before starting another goal".into()
-                    ));
-                }
+        let admission = match crate::operations::goal::admit_start_in_txn(
+            txn,
+            actor,
+            &command.node_did,
+            &command.session_id,
+            objective,
+            *token_budget,
+            command.expected.as_ref(),
+            None,
+        )
+        .await?
+        {
+            Ok(admission) => admission,
+            Err(refusal) => return Ok(Err(refusal.to_string())),
+        };
+        let replacement = match (admission.decision, admission.existing) {
+            (gents_protocol::operations::goal::GoalStartDecision::Replace, Some(goal)) => {
                 let identity = replacement_goal_identity(
                     &command.node_did,
                     &command.session_id,
@@ -246,40 +241,8 @@ pub(crate) async fn prepare_goal_control(
                 }
                 Some((goal, identity))
             }
-            _ => {
-                return Ok(Err(
-                    "this chat's goal changed; refresh before starting another goal".into(),
-                ))
-            }
+            _ => None,
         };
-        if !idle {
-            return Ok(Err(
-                "wait for this session to finish before starting a goal".into(),
-            ));
-        }
-        let claim = if replacement.is_some() {
-            None
-        } else {
-            load_goal_creation_claim_fingerprint_in_txn(txn, &command.node_did, &command.session_id)
-                .await?
-        };
-        let creation = GoalCreateRequest {
-            caller: command.node_did.clone(),
-            current_session: command.session_id.clone(),
-            requested_owner: command.node_did.clone(),
-            requested_session: command.session_id.clone(),
-            objective: objective.clone(),
-            objective_nonempty: !objective.is_empty(),
-            token_budget: token_budget.map(i128::from),
-            goal_tools: true,
-            goal_create: true,
-        };
-        if !matches!(
-            decide_model_goal_create(&creation, claim.as_ref()),
-            GoalCreateDisposition::Fresh | GoalCreateDisposition::Idempotent
-        ) {
-            return Ok(Err("goal creation conflicts with this session's creation claim or has an invalid objective or budget; use a new session for a different goal".into()));
-        }
         let Some(request) = &command.initial_request else {
             return Ok(Err("goal creation lacks its signed first request".into()));
         };
@@ -350,57 +313,52 @@ pub(crate) async fn prepare_goal_control(
     let Some(expected) = command.expected.as_ref() else {
         return Ok(Err("goal control lacks its observed revision".into()));
     };
-    let current = gents_store::graphql::newest_document_composite_commit_in_txn(
-        txn,
-        &goal.doc_id,
-        "goal.control_preflight",
-    )
-    .await?
-    .context("goal has no unambiguous composite revision")?;
-    if expected.document != goal.doc_id || expected.composite != current.cid {
-        return Ok(Err(
-            "goal changed; refresh before applying this control".into()
-        ));
-    }
-    let Some(state) = goal.state() else {
-        return Ok(Err("goal has an unknown status".into()));
+    let input = |status: Option<GoalStatus>, objective: Option<String>, budget: Option<i64>| {
+        gents_protocol::operations::goal::GoalSetInput {
+            objective,
+            token_budget: budget.map(Some),
+            status,
+            expected: Some(gents_protocol::operations::goal::GoalExpected::Revision(
+                expected.clone(),
+            )),
+            ..Default::default()
+        }
     };
-    let prepared = match &command.operation {
+    let input = match &command.operation {
         GoalOperation::Edit {
             objective,
             token_budget,
-        } => {
-            let fields = GoalEdit {
-                objective: objective.clone(),
-                budget: *token_budget,
+        } => input(None, objective.clone(), *token_budget),
+        GoalOperation::Pause {} => input(Some(GoalStatus::Paused), None, None),
+        GoalOperation::Stop {} => input(Some(GoalStatus::Stopped), None, None),
+        GoalOperation::Resume {} => {
+            let current = gents_store::graphql::newest_document_composite_commit_in_txn(
+                txn,
+                &goal.doc_id,
+                "goal.control_preflight",
+            )
+            .await?
+            .context("goal has no unambiguous composite revision")?;
+            if expected.document != goal.doc_id || expected.composite != current.cid {
+                return Ok(Err(
+                    "goal changed; refresh before applying this control".into()
+                ));
+            }
+            let Some(state) = goal.state() else {
+                return Ok(Err("goal has an unknown status".into()));
             };
-            if let Err(error) = fields.validate() {
-                return Ok(Err(error.to_string()));
-            }
-            if !super::edit::GoalEditOrigin::Client.can_edit_status(state.status) {
-                return Ok(Err("only an active or paused goal can be edited".into()));
-            }
-            PreparedGoalControl::Edit { goal, fields }
+            return Ok(prepare_goal_resume(goal, state, &requests));
         }
-        GoalOperation::Pause {} => {
-            if state.step(GoalAction::Pause).is_none() {
-                return Ok(Err("goal status does not allow pause".into()));
-            }
-            PreparedGoalControl::Pause(goal)
-        }
-        GoalOperation::Stop {} => {
-            if state.step(GoalAction::Stop).is_none() {
-                return Ok(Err("goal status does not allow removal".into()));
-            }
-            PreparedGoalControl::Stop(goal)
-        }
-        GoalOperation::Resume {} => match prepare_goal_resume(goal, state, &requests) {
-            Ok(prepared) => prepared,
-            Err(error) => return Ok(Err(error)),
-        },
         GoalOperation::Create { .. } => unreachable!(),
     };
-    Ok(Ok(prepared))
+    Ok(
+        match crate::operations::goal::admit_set_in_txn(txn, actor, &goal, &input, None, None)
+            .await?
+        {
+            Ok(plan) => Ok(PreparedGoalControl::Set(Box::new(plan))),
+            Err(refusal) => Err(refusal.to_string()),
+        },
+    )
 }
 
 pub(crate) fn prepare_goal_resume(
@@ -508,33 +466,10 @@ pub(crate) async fn stage_goal_control(
             );
             (goal.goal_id, Some(submitted.request_id))
         }
-        PreparedGoalControl::Edit { goal, fields } => {
-            let updated = super::edit::stage_goal_edit(
-                txn,
-                &goal,
-                &fields,
-                super::edit::GoalEditOrigin::Client,
-            )
-            .await?
-            .context("goal changed while staging its edit")?;
-            (updated.goal_id, None)
-        }
-        operation @ (PreparedGoalControl::Pause(_) | PreparedGoalControl::Stop(_)) => {
-            let (goal, status) = match operation {
-                PreparedGoalControl::Pause(goal) => (goal, GoalStatus::Paused),
-                PreparedGoalControl::Stop(goal) => (goal, GoalStatus::Stopped),
-                _ => unreachable!(),
-            };
-            let updated = set_goal_in_txn(
-                txn,
-                &goal.node_did,
-                &goal.session_id,
-                None,
-                Some(status),
-                None,
-                None,
-            )
-            .await?;
+        PreparedGoalControl::Set(plan) => {
+            let updated = crate::operations::goal::apply_set_in_txn(txn, &plan)
+                .await?
+                .context("goal changed while staging its control")?;
             (updated.goal_id, None)
         }
         PreparedGoalControl::ResumeCurrent(goal) => {

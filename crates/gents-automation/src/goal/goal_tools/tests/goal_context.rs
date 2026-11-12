@@ -257,18 +257,29 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 else {
                     panic!("{name}: retained assignment unavailable");
                 };
+                let working_agent = gents_session::session::load_session_agent_did(
+                    &node,
+                    &observed.node_did,
+                    &observed.session_id,
+                )
+                .await
+                .unwrap();
                 assert!(
-                    crate::goal::edit_active_goal(
-                        &node,
+                    crate::operations::goal::set_as_working_agent(
+                        &gents_store::config_client::ConfigAccess::local_as(
+                            node.clone(),
+                            working_agent
+                        ),
                         &observed,
-                        &crate::goal::GoalEdit {
+                        &gents_protocol::operations::goal::GoalSetInput {
                             objective: Some("Stale edit".into()),
-                            budget: None
-                        }
+                            ..Default::default()
+                        },
+                        None,
+                        &request_id,
                     )
                     .await
-                    .unwrap()
-                    .is_none(),
+                    .is_err(),
                     "{name}: edit crossed physical root"
                 );
                 assert!(

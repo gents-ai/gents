@@ -1,54 +1,10 @@
 use super::*;
 
-/// Set the session's Goal as its working Agent, signed by that Agent's managed
-/// key. The session is resolved inside the Agent's own transaction, so a caller
-/// holding another Agent's key, or none, cannot select the session's Agent by
-/// an unauthenticated read; such a call fails rather than writing as anyone else.
-pub async fn set_goal(
-    node: &std::sync::Arc<EmbeddedNode>,
-    agent: &dyn gents_store::identity::NodeIdentity,
-    node_did: &str,
-    session_id: &str,
-    objective: Option<&str>,
-    status: Option<GoalStatus>,
-    token_budget: Option<Option<i64>>,
-) -> Result<GoalDocument> {
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent.did())?,
-        agent,
-    )?;
-    let goal = access
-        .transact_write("goal.set", move |txn| {
-            Box::pin(async move {
-                let session =
-                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-                        txn, node_did, session_id,
-                    )
-                    .await?
-                    .context("cannot set a Goal for a missing session")?;
-                anyhow::ensure!(
-                    Some(session.session.agent_did.as_str()) == txn.actor_did(),
-                    "only the session's working Agent may set its Goal through this owner"
-                );
-                set_goal_in_txn(
-                    txn,
-                    node_did,
-                    session_id,
-                    objective,
-                    status,
-                    token_budget,
-                    None,
-                )
-                .await
-            })
-        })
-        .await?;
-    super::creation::finish_goal_relationships(&access, node_did, session_id).await?;
-    Ok(goal)
-}
-
-pub async fn set_goal_from_access(
+/// Writes the session's Goal state directly, creating it when absent, so a
+/// test can arrange a Goal. Clients set a Goal through
+/// `crate::operations::goal`.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn seed_goal_from_access(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
@@ -80,33 +36,8 @@ pub async fn set_goal_from_access(
     Ok(goal)
 }
 
-/// An operator reset preference belongs to the observed Goal, including when
-/// another assignment replaces the session's Goal before the write arrives.
-pub async fn set_goal_auto_resume_from_access(
-    access: &gents_store::config_client::ConfigAccess,
-    node_did: &str,
-    session_id: &str,
-    expected_goal_id: &str,
-    enabled: bool,
-) -> Result<()> {
-    access
-        .transact_signed_conflict_rebuild("goal.set_auto_resume", |txn| {
-            Box::pin(async move {
-                let goal = load_canonical_goal_in_txn(txn, node_did, session_id)
-                    .await?
-                    .context("Goal no longer exists")?;
-                anyhow::ensure!(
-                    goal.goal_id == expected_goal_id,
-                    "Goal changed before its reset preference was saved"
-                );
-                set_goal_in_txn(txn, node_did, session_id, None, None, None, Some(enabled)).await?;
-                Ok(())
-            })
-        })
-        .await
-}
-
-pub(super) async fn set_goal_in_txn(
+#[cfg(any(test, feature = "test-fixtures"))]
+async fn set_goal_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,

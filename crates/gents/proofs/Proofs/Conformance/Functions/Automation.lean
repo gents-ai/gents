@@ -4,6 +4,7 @@ import Proofs.Automation.RuntimeReconcile.State
 import Proofs.Automation.Triggers.ManualRun
 import Proofs.Automation.GoalAutomation.ReadinessGate
 import Proofs.Automation.GoalAutomation.UpdateGoal
+import Proofs.Automation.GoalAutomation.Operations
 import Proofs.Conformance.Family
 
 namespace Mailbox
@@ -31,6 +32,11 @@ namespace GoalAutomation.UpdateGoal
 deriving instance Lean.ToJson for RequestedStatus, ReasonArgument, Route
 end GoalAutomation.UpdateGoal
 
+namespace GoalAutomation.Operations
+deriving instance Lean.ToJson for Actor, Session, Existing, Claim, StartDecision, Target,
+  FieldChange, SetDecision
+end GoalAutomation.Operations
+
 attribute [conformance_function]
   Mailbox.Status.terminal
   Mailbox.Operations.serves
@@ -42,3 +48,5 @@ attribute [conformance_function]
   Triggers.ManualRun.sessionTitle
   GoalAutomation.ReadinessGate.publishes
   GoalAutomation.UpdateGoal.route
+  GoalAutomation.Operations.startDecision
+  GoalAutomation.Operations.setDecision

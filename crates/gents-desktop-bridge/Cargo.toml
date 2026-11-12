@@ -85,6 +85,7 @@ libc = "0.2"
 tauri-plugin = { version = "2", features = ["build"], optional = true }
 
 [dev-dependencies]
+gents-automation = { workspace = true, features = ["test-fixtures"] }
 gents = { path = "../gents", features = ["test-home-guard"] }
 crypto.workspace = true
 identity.workspace = true

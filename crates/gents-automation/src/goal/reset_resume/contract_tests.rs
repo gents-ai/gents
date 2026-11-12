@@ -195,7 +195,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         .await;
         let did = f.identity.did();
         if facts.opted_in {
-            set_goal_from_access(&accounts.access, did, SESSION, None, None, None, Some(true))
+            seed_goal_from_access(&accounts.access, did, SESSION, None, None, None, Some(true))
                 .await
                 .unwrap();
         }

@@ -61,7 +61,9 @@ async fn acting_did(
     let response = txn
         .run(
             &Query::select(Selection::doc_id())
-                .filter(Filter::eq(agent::NODE_DID, node_did).and(Filter::eq(agent::AGENT_DID, actor)))
+                .filter(
+                    Filter::eq(agent::NODE_DID, node_did).and(Filter::eq(agent::AGENT_DID, actor)),
+                )
                 .limit(1)
                 .render(),
         )
@@ -119,6 +121,20 @@ pub async fn acting_on(access: &ConfigAccess, node_did: &str) -> anyhow::Result<
         actor.as_deref(),
     );
     acting_with(access, node_did, signer).await
+}
+
+/// The actor kind of `did` whose signature the caller verified itself, as a
+/// signed command's author: the client-held evidence the transaction cannot
+/// carry for it.
+pub async fn acting_signed_by(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    did: &str,
+) -> anyhow::Result<InferenceActor> {
+    Ok(actor_kind(
+        Signer::ClientHeld,
+        acting_did(txn, node_did, Some(did)).await?,
+    ))
 }
 
 /// The actor kind of an embedded access a runtime route opened for the

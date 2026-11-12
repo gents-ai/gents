@@ -405,7 +405,7 @@ mod tests {
         assert_eq!(input.goal_assignment, None, "verified absence");
         assert!(input.queue.is_some(), "verified absence queues");
 
-        let goal = gents_automation::goal::set_goal_from_access(
+        let goal = gents_automation::goal::seed_goal_from_access(
             &agent_access,
             &node_did,
             "chat",

@@ -79,7 +79,7 @@ pub async fn set_goal_as_session_owner(
     token_budget: Option<Option<i64>>,
 ) -> anyhow::Result<crate::goal::GoalDocument> {
     let access = ensure_runtime_session(node, owner, session_id).await?;
-    crate::goal::set_goal_from_access(
+    crate::goal::seed_goal_from_access(
         &access,
         owner.did(),
         session_id,

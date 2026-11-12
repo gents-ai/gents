@@ -122,7 +122,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     support::agent_requests::submit_user_request(&owner, &fixture, SESSION, INITIAL,
         "Write a numbered list with 150 entries, each saying 'still working'. Do not call tools and do not complete the Goal.",
         gents_protocol::request_input::QueueDelivery::Queue).await;
-    gents_automation::goal::set_goal_from_access(
+    gents_automation::goal::seed_goal_from_access(
         &access,
         &owner,
         SESSION,

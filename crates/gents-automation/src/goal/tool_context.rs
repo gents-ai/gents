@@ -22,7 +22,7 @@ impl GoalToolContext {
     }
 }
 
-pub(super) fn same_goal_assignment(left: &GoalDocument, right: &GoalDocument) -> bool {
+pub(crate) fn same_goal_assignment(left: &GoalDocument, right: &GoalDocument) -> bool {
     left.doc_id == right.doc_id
         && left.goal_id == right.goal_id
         && left.node_did == right.node_did

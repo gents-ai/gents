@@ -1,5 +1,12 @@
-use super::*;
+use crate::goal::{
+    create_goal_for_session_from_access, load_canonical_goal_in_txn, CreateGoalForSessionOutcome,
+    GoalDocument,
+};
+use gents_protocol::goal_status::GoalStatus;
+use gents_protocol::operations::goal::{GoalExpected, GoalOperationError, GoalSetInput};
+use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use serde::Deserialize;
 use serde_json::Value;
 
 #[derive(Deserialize)]
@@ -62,9 +69,10 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
                 expected.budget,
             )
         });
-        let fields = GoalEdit {
+        let input = GoalSetInput {
             objective: case.fields.objective.clone(),
-            budget: case.fields.budget,
+            token_budget: case.fields.budget.map(Some),
+            ..Default::default()
         };
         let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
             "goal-edit-contract",
@@ -148,30 +156,30 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             case.name
         );
         let before = durable_rows(&access).await;
-        let origin: GoalEditOrigin =
-            serde_json::from_value(Value::String(case.origin.clone())).unwrap();
-        let edit = match origin {
-            GoalEditOrigin::Agent => {
-                edit_active_goal_from_access(&agent_access, &observed, &fields).await
+        let edit = match case.origin.as_str() {
+            "agent" => {
+                super::set_as_working_agent(&agent_access, &observed, &input, None, "request").await
             }
-            GoalEditOrigin::Client => {
-                let observed = &observed;
-                let fields = &fields;
-                access
-                    .transact_write("test.goal_client_edit", |txn| {
-                        Box::pin(async move {
-                            stage_goal_edit(txn, observed, fields, GoalEditOrigin::Client).await
-                        })
-                    })
-                    .await
+            _ => {
+                let input = GoalSetInput {
+                    expected: Some(GoalExpected::Assignment {
+                        goal_doc_id: observed.doc_id.clone(),
+                        goal_id: observed.goal_id.clone(),
+                        assignment_root_request_doc_id: observed
+                            .assignment_root_request_doc_id
+                            .clone(),
+                        status: observed.parsed_status().unwrap(),
+                        continuation_sequence: observed.continuation_sequence(),
+                    }),
+                    ..input.clone()
+                };
+                super::set(&access, signer.did(), "session", &input).await
             }
         };
         let result = match edit {
-            Ok(result) => result,
-            Err(error) => {
-                assert!(fields.validate().is_err(), "{}: {error:#}", case.name);
-                None
-            }
+            Ok(result) => Some(result),
+            Err(GoalOperationError::Passthrough(error)) => panic!("{}: {error:#}", case.name),
+            Err(_) => None,
         };
         assert_eq!(result.as_ref().map(assignment), expected, "{}", case.name);
         if let (Some(updated), Some(expected)) = (&result, &expected) {
@@ -209,102 +217,4 @@ fn generated_goal_objective_whitespace_matches_native_character_classification()
         .map(u32::from)
         .collect();
     assert_eq!(native, contracts.goal_objective_whitespace_codepoints);
-}
-
-#[tokio::test]
-async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
-    let (node_db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
-        "edited-fields-match-operator-updates-wit",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let node = node_db.node.clone();
-    let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
-    let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    for session in ["model", "operator"] {
-        access
-            .transact_write("test.goal_edit.session", |txn| {
-                Box::pin(gents_session::session::ensure_session_in_txn(
-                    txn,
-                    session,
-                    root.did(),
-                    agent.did(),
-                    Some(agent.did()),
-                    None,
-                    None,
-                    "2026-11-04T00:00:00Z",
-                ))
-            })
-            .await
-            .unwrap();
-    }
-    let owner = root.did();
-    let initial = set_goal_from_access(
-        &access,
-        owner,
-        "model",
-        Some("ship"),
-        None,
-        Some(Some(100)),
-        None,
-    )
-    .await
-    .unwrap();
-    let fields = GoalEdit {
-        objective: Some("  verify \"release\"  ".into()),
-        budget: Some(200),
-    };
-    let edited = edit_active_goal_from_access(&access, &initial, &fields)
-        .await
-        .unwrap()
-        .unwrap();
-    set_goal_from_access(
-        &access,
-        owner,
-        "operator",
-        Some("ship"),
-        None,
-        Some(Some(100)),
-        None,
-    )
-    .await
-    .unwrap();
-    let operator = set_goal_from_access(
-        &access,
-        owner,
-        "operator",
-        fields.objective.as_deref(),
-        None,
-        Some(fields.budget),
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(assignment(&edited), assignment(&operator));
-    assert_eq!(edited.goal_id, initial.goal_id);
-    let mut foreign = initial.clone();
-    foreign.doc_id = "other-document".into();
-    assert!(edit_active_goal_from_access(&access, &foreign, &fields)
-        .await
-        .unwrap()
-        .is_none());
-    let mut foreign = initial;
-    foreign.goal_id = "other-goal".into();
-    assert!(edit_active_goal_from_access(&access, &foreign, &fields)
-        .await
-        .unwrap()
-        .is_none());
-    assert_eq!(edited.objective, "verify \"release\"");
-    assert!(
-        set_goal_from_access(&access, owner, "operator", Some("  "), None, None, None)
-            .await
-            .is_err()
-    );
-    node.shutdown().await.expect("node shutdown");
 }

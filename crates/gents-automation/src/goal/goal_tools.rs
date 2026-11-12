@@ -2,14 +2,14 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::goal::{
-    create_goal_for_request_from_access, edit_active_goal_from_access, load_goal_tool_context,
-    next_blocked_audit, refresh_goal_usage_from_access, update_goal_fields_if_status_from_access,
-    CreateGoalForSessionError, GoalAction, GoalEdit, GoalState, RequestAssignmentObservation,
+    create_goal_for_request_from_access, load_goal_tool_context, refresh_goal_usage_from_access,
+    CreateGoalForSessionError, GoalAction, GoalState, RequestAssignmentObservation,
     BLOCKED_AUDIT_THRESHOLD,
 };
+use crate::operations::goal::set_as_working_agent;
+use gents_protocol::operations::goal::{GoalOperationError, GoalSetInput};
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_protocol::goal_status::GoalStatus;
-use gents_store::graphql::escape_graphql_string;
 use gents_toolcalls::call::hook::persistence::goal_tools::{
     GoalTool, GoalToolCall, GoalToolReply, GoalTools,
 };
@@ -262,8 +262,6 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
         unreachable!("only a current assigned caller can update a Goal");
     };
 
-    let now = Utc::now();
-    let updated_at = escape_graphql_string(&now.to_rfc3339());
     let Some(pre) = goal.state() else {
         let result = json_string(
             json!({"error": format!("durable goal has unknown status {:?}", goal.status)}),
@@ -301,65 +299,44 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
             })
         }
         UpdateRoute::Edit => {
-            let fields = GoalEdit {
+            let input = GoalSetInput {
                 objective: parsed.objective,
-                budget: parsed.token_budget,
+                token_budget: parsed.token_budget.map(Some),
+                ..Default::default()
             };
-            if let Err(error) = fields.validate() {
-                json!({"accepted": false, "error": error.to_string()})
-            } else if let Some(updated) =
-                edit_active_goal_from_access(&call.access()?, &goal, &fields).await?
-            {
-                json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())})
-            } else {
-                json!({"accepted": false, "error": "goal is no longer active or its continuation changed; reload with get_goal"})
+            match write_through_handler(call, &goal, &input, None).await? {
+                Ok(updated) => {
+                    json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())})
+                }
+                Err(answer) => answer,
             }
         }
         UpdateRoute::FieldsOutsideActive => {
             json!({"accepted": false, "error": "objective and token_budget can only be edited while status is active"})
         }
-        UpdateRoute::Complete | UpdateRoute::CompleteIllegal => {
-            let Some(post) = pre.step(GoalAction::Complete) else {
-                let result = json_string(
-                    json!({"error": "complete is not legal from the goal's current status"}),
-                );
-                return Ok(GoalToolReply::Complete(result));
-            };
-            if let Some(gate) = call.output_obligation_gate() {
-                let unmet = gate.unmet().await?;
-                if !unmet.is_empty() {
-                    let result = json_string(json!({
-                        "accepted": false,
-                        "error": gents_loop::output_obligation::continuation_message(&unmet),
-                    }));
-                    return Ok(GoalToolReply::Complete(result));
+        UpdateRoute::CompleteIllegal => {
+            let result = json_string(
+                json!({"error": "complete is not legal from the goal's current status"}),
+            );
+            return Ok(GoalToolReply::Complete(result));
+        }
+        UpdateRoute::Complete => {
+            let unmet = match call.output_obligation_gate() {
+                Some(gate) => {
+                    let unmet = gate.unmet().await?;
+                    (!unmet.is_empty())
+                        .then(|| gents_loop::output_obligation::continuation_message(&unmet))
                 }
-            }
-            let active_time = goal.current_active_time_seconds(now);
-            let reason = parsed
-                .reason
-                .as_deref()
-                .map(str::trim)
-                .filter(|reason| !reason.is_empty())
-                .map(escape_graphql_string);
-            let evidence_field = reason
-                .as_deref()
-                .map(|reason| format!(r#"completion_evidence: "{reason}","#))
-                .unwrap_or_else(|| "completion_evidence: null,".to_string());
-            let applied = update_goal_fields_if_status_from_access(
-                    &call.access()?,
-                    &goal,
-                    pre.status,
-                    &format!(
-                        r#"status: "{}", active_time_seconds: {active_time}, active_started_at: null, wrapup_completed: {}, last_failure: null, {evidence_field} updated_at: "{updated_at}""#,
-                        post.status.as_str(), post.wrapup_completed
-                    ),
-                )
-                .await?;
-            if applied {
-                json!({"accepted": true, "status": GoalStatus::Complete.as_str()})
-            } else {
-                json!({"accepted": false, "error": "goal changed while applying completion; reload its durable state"})
+                None => None,
+            };
+            let input = GoalSetInput {
+                status: Some(GoalStatus::Complete),
+                reason: parsed.reason,
+                ..Default::default()
+            };
+            match write_through_handler(call, &goal, &input, unmet.as_deref()).await? {
+                Ok(_) => json!({"accepted": true, "status": GoalStatus::Complete.as_str()}),
+                Err(answer) => answer,
             }
         }
         UpdateRoute::BlockedNotActive => {
@@ -378,46 +355,19 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
             return Ok(GoalToolReply::Complete(result));
         }
         UpdateRoute::BlockedAudit => {
-            let reason = parsed.reason.as_deref().map(str::trim).unwrap_or_default();
-            let (audits, accepted) = next_blocked_audit(
-                goal.consecutive_blocked_audits.unwrap_or_default(),
-                goal.last_blocked_reason.as_deref(),
-                goal.last_blocked_request_id.as_deref(),
-                reason,
-                request_id,
-            );
-            let status = if accepted {
-                GoalStatus::Blocked
-            } else {
-                GoalStatus::Active
+            let input = GoalSetInput {
+                status: Some(GoalStatus::Blocked),
+                reason: parsed.reason,
+                ..Default::default()
             };
-            let active_time = goal.current_active_time_seconds(now);
-            let active_fields = if accepted {
-                format!("active_time_seconds: {active_time}, active_started_at: null,")
-            } else {
-                String::new()
-            };
-            let reason = escape_graphql_string(reason);
-            let request_id = escape_graphql_string(&request_id);
-            let applied = update_goal_fields_if_status_from_access(
-                    &call.access()?,
-                    &goal,
-                    pre.status,
-                    &format!(
-                        r#"status: "{}", consecutive_blocked_audits: {audits}, last_blocked_request_id: "{request_id}", last_blocked_reason: "{reason}", {active_fields} updated_at: "{updated_at}""#,
-                        status.as_str()
-                    ),
-                )
-                .await?;
-            if applied {
-                json!({
-                    "accepted": accepted,
-                    "status": status.as_str(),
-                    "consecutive_blocked_audits": audits,
+            match write_through_handler(call, &goal, &input, None).await? {
+                Ok(updated) => json!({
+                    "accepted": updated.parsed_status() == Some(GoalStatus::Blocked),
+                    "status": updated.status,
+                    "consecutive_blocked_audits": updated.consecutive_blocked_audits.unwrap_or_default(),
                     "required_blocked_audits": BLOCKED_AUDIT_THRESHOLD,
-                })
-            } else {
-                json!({"accepted": false, "error": "goal changed while applying blocked audit; reload its durable state"})
+                }),
+                Err(answer) => answer,
             }
         }
         UpdateRoute::Unsupported => json!({
@@ -432,6 +382,32 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
         &["goal", "error", "accepted", "disposition"],
     )?;
     Ok(GoalToolReply::Complete(result))
+}
+
+/// Writes an `update_goal` route through the Goal handler as the working
+/// Agent; a refusal becomes the tool's answer.
+async fn write_through_handler(
+    call: &GoalToolCall<'_>,
+    goal: &crate::goal::GoalDocument,
+    input: &GoalSetInput,
+    obligations_unmet: Option<&str>,
+) -> anyhow::Result<Result<crate::goal::GoalDocument, serde_json::Value>> {
+    match set_as_working_agent(
+        &call.access()?,
+        goal,
+        input,
+        obligations_unmet,
+        call.request_id(),
+    )
+    .await
+    {
+        Ok(updated) => Ok(Ok(updated)),
+        Err(GoalOperationError::Passthrough(error)) => Err(anyhow::anyhow!(error)),
+        Err(GoalOperationError::Stale) => Ok(Err(
+            json!({"accepted": false, "error": "goal changed since this request observed it; reload with get_goal"}),
+        )),
+        Err(refusal) => Ok(Err(json!({"accepted": false, "error": refusal.to_string()}))),
+    }
 }
 
 /// What `update_goal` does with a call from the Goal's current assigned

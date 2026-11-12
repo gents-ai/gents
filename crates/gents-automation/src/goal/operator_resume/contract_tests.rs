@@ -256,7 +256,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
         let f = Fixture::new(&before).await;
         assert_eq!(f.observe().await, before);
         let access = f.user_access();
-        let result = set_goal_from_access(
+        let result = seed_goal_from_access(
             &access,
             f.identity.did(),
             SESSION,

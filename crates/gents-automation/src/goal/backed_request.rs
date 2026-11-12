@@ -215,17 +215,49 @@ async fn stage_goal_backed_request(
     })
 }
 
-pub async fn submit_goal_backed_request(
+pub(crate) async fn submit_goal_backed_request(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<GoalBackedRequestDisposition> {
+) -> Result<
+    std::result::Result<
+        GoalBackedRequestDisposition,
+        gents_protocol::operations::goal::GoalOperationError,
+    >,
+> {
+    use crate::operations::goal::{acting_in_txn, admit_start_in_txn};
+    use gents_protocol::operations::goal::GoalOperationError;
     let result = access
         .transact_write("goal.submit_backed_request", move |txn| {
             Box::pin(async move {
+                let Some(session) =
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?
+                else {
+                    return Ok(Err(GoalOperationError::SessionMissing(
+                        session_id.to_owned(),
+                    )));
+                };
+                let actor = acting_in_txn(txn, node_did, &session.session.agent_did).await?;
+                if let Err(refusal) = admit_start_in_txn(
+                    txn,
+                    actor,
+                    node_did,
+                    session_id,
+                    objective,
+                    token_budget,
+                    None,
+                    None,
+                )
+                .await?
+                {
+                    return Ok(Err(refusal));
+                }
                 stage_goal_backed_request(
                     txn,
                     node_did,
@@ -239,13 +271,15 @@ pub async fn submit_goal_backed_request(
                 )
                 .await
                 .and_then(authorize_goal_submission_commit)
+                .map(Ok)
             })
         })
         .await;
     match result {
-        Ok(disposition) => {
+        Ok(Err(refusal)) => Ok(Err(refusal)),
+        Ok(Ok(disposition)) => {
             super::creation::finish_goal_relationships(access, node_did, session_id).await?;
-            Ok(disposition)
+            Ok(Ok(disposition))
         }
         Err(error) => {
             let recovery = load_goal_backed_request_by_retry_key_from_access(
@@ -259,7 +293,7 @@ pub async fn submit_goal_backed_request(
             .await;
             let disposition = resolve_ambiguous_goal_submission_commit(error, recovery)?;
             super::creation::finish_goal_relationships(access, node_did, session_id).await?;
-            Ok(disposition)
+            Ok(Ok(disposition))
         }
     }
 }

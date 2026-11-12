@@ -120,6 +120,16 @@ pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalCreationFingerprint>> {
+    load_goal_creation_claim_for_key_in_txn(txn, node_did, session_id, None).await
+}
+
+/// The claim under `creation_key`, or under the session's deterministic key.
+pub(crate) async fn load_goal_creation_claim_for_key_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    creation_key: Option<&str>,
+) -> Result<Option<GoalCreationFingerprint>> {
     let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn, node_did, session_id,
     )
@@ -129,16 +139,17 @@ pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
     // lost race over HTTP, where an embedded-only response is unavailable.
     let response = txn
         .execute(&goal_creation_claim_query(
-            node_did,
-            session_id,
+            creation_key
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| deterministic_goal_creation_key(node_did, session_id)),
             &session.doc_id,
         ))
         .await?;
     goal_creation_claim_fingerprint(&serde_json::from_value(response)?)
 }
 
-fn goal_creation_claim_query(node_did: &str, session_id: &str, session_doc_id: &str) -> String {
-    let key = escape_graphql_string(&deterministic_goal_creation_key(node_did, session_id));
+fn goal_creation_claim_query(creation_key: String, session_doc_id: &str) -> String {
+    let key = escape_graphql_string(&creation_key);
     let session_doc_id = escape_graphql_string(session_doc_id);
     format!(
         r#"{{ GoalCreationClaim(filter: {{ session_doc_id: {{ _eq: "{session_doc_id}" }}, creation_key: {{ _eq: "{key}" }} }}, limit: 2) {{
@@ -585,6 +596,22 @@ async fn create_goal_for_session_inner(
                         .filter(|value| !value.is_empty()).context("assigned Goal has no creation identity")?;
                     Some(GoalCreationIdentity { goal_id: goal.goal_id.clone(), creation_key: creation_key.to_string() })
                 } else { None };
+                let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                    .await?
+                    .context("goal creation requires a visible physical session")?;
+                let actor = crate::operations::goal::acting_in_txn(txn, node_did, &session.session.agent_did).await?;
+                if let Err(refusal) = crate::operations::goal::admit_start_in_txn(
+                    txn, actor, node_did, session_id, objective, token_budget, None,
+                    identity.as_ref().map(|identity| identity.creation_key.as_str()),
+                ).await? {
+                    use gents_protocol::operations::goal::GoalOperationError;
+                    return Err(anyhow::Error::new(match refusal {
+                        GoalOperationError::Conflict => CreateGoalForSessionError::Conflict,
+                        GoalOperationError::InvalidObjective => CreateGoalForSessionError::InvalidObjective,
+                        GoalOperationError::InvalidBudget => CreateGoalForSessionError::InvalidBudget,
+                        refusal => CreateGoalForSessionError::Storage(anyhow::Error::new(refusal)),
+                    }));
+                }
                 let mut staged = stage_goal_and_claim(
                     txn,
                     node_did,

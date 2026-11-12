@@ -28,7 +28,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
         Some(agent.did()),
     )
     .await;
-    let goal = crate::goal::set_goal_from_access(
+    let goal = crate::goal::seed_goal_from_access(
         &access,
         identity.did(),
         "resumed-event-session",

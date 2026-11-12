@@ -64,15 +64,12 @@ pub async fn submit_goal_backed_request(
         None,
     )
     .await?;
-    gents_automation::goal::submit_goal_backed_request(
-        access,
-        node_did,
-        session_id,
-        objective,
+    let input = gents_protocol::operations::goal::GoalStartInput {
+        session_id: session_id.to_owned(),
+        objective: objective.to_owned(),
         token_budget,
-        &create,
-    )
-    .await?;
+    };
+    gents_automation::operations::goal::start(access, node_did, &input, &create).await?;
     Ok(result)
 }
 
