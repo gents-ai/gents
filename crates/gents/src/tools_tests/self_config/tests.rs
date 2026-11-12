@@ -6638,15 +6638,14 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
         &gents_lean_vocab::lean_contract_snapshot().self_config_resource_read_exposure_cases;
     assert!(!cases.is_empty());
     for case in cases {
-        let categories = case["categories"]
-            .as_array()
-            .unwrap()
+        let categories = case
+            .categories
             .iter()
-            .map(|value| value.as_str().unwrap())
+            .map(String::as_str)
             .collect::<Vec<_>>();
-        let expected = case["exposed"].as_bool().unwrap();
+        let expected = case.exposed;
         let tools = fixture.tools(&categories);
-        let commands = match case["resource"].as_str().unwrap() {
+        let commands = match case.resource.as_str() {
             "backend" => vec![
                 vec!["backend".to_owned(), "list".to_owned()],
                 vec!["backend".to_owned(), "get".to_owned(), backend_id.clone()],
@@ -6678,8 +6677,12 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
         };
         for command in commands {
             let result = call_config_tool(&tools, command.clone()).await;
-            assert_eq!(result.is_ok(), expected, "{case}: {command:?}: {result:?}");
-            if expected && case["resource"] == "effective" {
+            assert_eq!(
+                result.is_ok(),
+                expected,
+                "{case:?}: {command:?}: {result:?}"
+            );
+            if expected && case.resource == "effective" {
                 let value: Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
                 assert_eq!(value["agent_did"], fixture.agent_did());
             }
