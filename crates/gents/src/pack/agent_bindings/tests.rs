@@ -337,8 +337,14 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
         &BTreeMap::from([("model".into(), "profile".into())]),
         &[&dependency],
         InstalledVia::Operator,
+        false,
         None,
-        &|_| None,
+        // A binding given to this install names a slot of the root pack: the
+        // dependency's same-named slot does not inherit it, so this DID,
+        // which is no Agent of the node, is never looked up.
+        &|name| {
+            (name == agent_binding_variable("worker")).then(|| "did:key:not-an-agent".to_owned())
+        },
         Some(&provisioner),
         &Default::default(),
     )
@@ -430,4 +436,29 @@ fn workspace_callback_agent_slots_bind_writer_integrator_and_readers() {
     );
     let mut invalid = json!({"unknown":"gents:agent-slot:writer"});
     assert!(rewrite_references(&mut invalid, &bindings).is_err());
+}
+
+/// An agent binding is an argument of one install: the process environment
+/// never supplies it, while it still supplies an ordinary install variable.
+#[test]
+fn an_agent_binding_is_never_read_from_the_process_environment() {
+    let variable = agent_binding_variable("ambient-worker");
+    assert_eq!(variable, "GENTS_PACK_BIND_AGENT_AMBIENT_WORKER");
+    let _binding = crate::test_support::EnvVarGuard::set(
+        "GENTS_PACK_BIND_AGENT_AMBIENT_WORKER",
+        "did:key:ambient",
+    );
+    let _plain = crate::test_support::EnvVarGuard::set("GENTS_FIXTURE_INSTALL_PLAIN", "plain");
+    let none = BTreeMap::new();
+    let ambient = install_variables(&none);
+    assert_eq!(ambient(&variable), None);
+    assert_eq!(
+        ambient("GENTS_FIXTURE_INSTALL_PLAIN").as_deref(),
+        Some("plain")
+    );
+    let given = BTreeMap::from([(variable.clone(), "did:key:given".to_owned())]);
+    assert_eq!(
+        install_variables(&given)(&variable).as_deref(),
+        Some("did:key:given")
+    );
 }

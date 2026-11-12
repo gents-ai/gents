@@ -104,11 +104,17 @@ pub(super) fn resolve_automation(
                 );
             }
         }
+        let create_session = trigger.create_session.unwrap_or(false);
+        let budget = trigger.effective_max_fires_per_hour();
         if let Some(schedule) = schedules.get_mut(&trigger_id) {
             schedule.session_id_template = trigger.session_id_template.clone();
+            schedule.create_session = create_session;
+            schedule.max_fires_per_hour = budget;
         }
         if let Some(event) = event_triggers.get_mut(&trigger_id) {
             event.session_id_template = trigger.session_id_template.clone();
+            event.create_session = create_session;
+            event.max_fires_per_hour = budget;
         }
     }
 
@@ -203,6 +209,8 @@ fn resolve_schedule_trigger(
         trigger_id.to_string(),
         ResolvedSchedule {
             session_id_template: None,
+            create_session: false,
+            max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: trigger_doc_id.to_string(),
             schedule_doc_id: schedule_record.doc_id.clone(),
             schedule_id: schedule.schedule_id.clone(),
@@ -286,6 +294,8 @@ fn resolve_event_trigger(
             event_source_doc_id: source_record.doc_id.clone(),
             task_doc_id: task_record.doc_id.clone(),
             session_id_template: None,
+            create_session: false,
+            max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: trigger_doc_id.to_string(),
             trigger_id: trigger_id.to_string(),
             task_id: task.task_id.clone(),

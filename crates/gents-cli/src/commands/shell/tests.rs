@@ -1043,16 +1043,169 @@ async fn only_the_ready_agents_are_listed_the_default_first() {
     shell.opened_as(&[&did("a"), &did("b")]).await;
 }
 
-/// With no ready agent there is nothing to talk to, so the shell is lost before it opens.
+fn no_agent(why: &str) -> Update {
+    Update::Connection(Connection::NoAgent(why.to_string()))
+}
+
+fn is_woken(update: &Update) -> bool {
+    matches!(update, Update::Notice(notice) if notice == "a is ready. Type a message.")
+}
+
+/// With no ready agent the shell opens on Setup and says why, its menus and the provider
+/// catalog read, and an agent that is ready after a menu action is listed without a restart.
 #[tokio::test]
-async fn a_runtime_with_no_ready_agent_is_lost() {
+async fn a_shell_with_no_ready_agent_opens_on_setup_and_wakes_after_an_action() {
     let node = ChatNode::with_agents(&["a"], &[]).await;
     let shell = open_shell(node.work());
+    let (mut app, intended) = connected_app();
 
-    let lost =
-        "no runtime: check `gents status`, then reopen the shell (no agent is ready on this node)";
-    let update = Update::Connection(Connection::Lost(lost.to_string()));
-    assert_eq!(shell.next().await, update);
+    let told = shell.next().await;
+    assert_eq!(told, no_agent("a cannot answer yet."));
+    app.apply(told);
+    let top = app.layers.last().map(|layer| layer.kind);
+    assert_eq!(top, Some(gents_shell::app::layers::LayerKind::Setup));
+    assert_eq!(intended.try_iter().collect::<Vec<_>>(), [Intent::ReadSetup]);
+    assert_eq!(app.no_agent(), Some("a cannot answer yet."));
+    assert!(app.picker_matches("").is_empty());
+
+    shell.intend(Intent::ReadSetup);
+    shell
+        .until(|update| matches!(update, Update::Setup(Ok(providers)) if !providers.is_empty()))
+        .await;
+    shell.intend(Intent::ReadMenu(MenuId::Agents));
+    let is_agents = |update: &Update| matches!(update, Update::Menu { menu: MenuId::Agents, rows: Ok(rows) } if !rows.is_empty());
+    shell.until(is_agents).await;
+    // A message has no agent to go to yet.
+    shell.intend(send(0, None, &did("a"), "hello"));
+    let refused = shell
+        .until(|update| matches!(update, Update::StartFailed { .. }))
+        .await;
+    assert!(matches!(
+        refused.last(),
+        Some(Update::StartFailed { tab: 0, .. })
+    ));
+
+    // A provider saved while no agent can run becomes the default agent's model, and the
+    // runtime, here the test, then publishes it ready.
+    shell.intend(Intent::SaveBackend {
+        connection: gents_shell::source::SetupConnection {
+            provider: "local".to_string(),
+            method: "optional_api_key".to_string(),
+            endpoint: "http://127.0.0.1:1/v1".to_string(),
+            key: None,
+            account: None,
+        },
+        model: "served".to_string(),
+        settings: Vec::new(),
+    });
+    let saved = shell
+        .until(|update| matches!(update, Update::Saved(_)))
+        .await;
+    let notice = "saved local: served, now a's model".to_string();
+    assert_eq!(saved.last(), Some(&Update::Saved(Ok(notice))));
+    let agent = format!(
+        r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ inference_profile_id }} }}"#,
+        did("a")
+    );
+    let bound = node.run(&agent).await;
+    assert_eq!(bound["Agent"][0]["inference_profile_id"], "profile-local");
+    publish_ready(&node.access(), &["a"]).await;
+    let act = MenuAct::SetDefaultAgent {
+        agent: did("a"),
+        name: "a".to_string(),
+    };
+    shell.intend(Intent::Act {
+        menu: MenuId::Agents,
+        act,
+    });
+    let applied = shell.apply_through(&mut app, is_woken).await;
+
+    let ready = Update::Connection(Connection::Ready);
+    let listed = applied
+        .iter()
+        .position(|update| matches!(update, Update::Agents(agents) if agents.len() == 1));
+    let readied = applied.iter().position(|update| *update == ready);
+    assert!(listed.is_some() && listed < readied, "{applied:?}");
+    assert_eq!(app.connection, Connection::Ready);
+    assert_eq!(app.picker_matches("").len(), 1);
+    assert_eq!(app.tabs[0].agent_id, did("a"));
+    assert_eq!(app.placeholder(), "Message a");
+
+    shell.intend(send(0, None, &did("a"), "hello"));
+    let started = shell
+        .until(|update| matches!(update, Update::Started { .. } | Update::StartFailed { .. }))
+        .await;
+    assert!(
+        matches!(started.last(), Some(Update::Started { tab: 0, .. })),
+        "{started:?}"
+    );
+}
+
+/// The runtime publishes its readiness a little after a provider is saved, so the shell
+/// watches it: an agent that becomes ready is listed with no action at all.
+#[tokio::test]
+async fn an_agent_that_becomes_ready_is_listed_as_its_readiness_is_published() {
+    let node = ChatNode::with_agents(&["a"], &[]).await;
+    let shell = open_shell(node.work());
+    assert_eq!(shell.next().await, no_agent("a cannot answer yet."));
+    shell
+        .until(|update| matches!(update, Update::Background { .. }))
+        .await;
+
+    publish_ready(&node.access(), &["a"]).await;
+
+    let told = shell.until(is_woken).await;
+    assert!(
+        told.contains(&Update::Connection(Connection::Ready)),
+        "{told:?}"
+    );
+}
+
+/// The line says what the runtime published about the default agent, and what clears it.
+#[test]
+fn the_reason_no_agent_can_run_is_the_default_agents() {
+    use gents_protocol::node_readiness::{
+        AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason as Reason,
+        NodeReadinessProcessState, NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
+    };
+    let views = [
+        super::testing::agent("engineer", "The Engineer", true, true),
+        super::testing::agent("other", "Other", true, false),
+    ];
+    let snapshot = |state, reason| NodeReadinessSnapshot {
+        format_version: NODE_READINESS_FORMAT_VERSION,
+        process_state: NodeReadinessProcessState::Ready,
+        active_generation: 1,
+        router_generation: 1,
+        default_agent_did: "engineer".to_string(),
+        agents: vec![AgentReadinessEntry {
+            agent_did: "engineer".to_string(),
+            state,
+            reason,
+        }],
+    };
+    let why = |reason| {
+        let snapshot = snapshot(AgentReadinessState::Unavailable, Some(reason));
+        source::unready(&views, Some(&snapshot)).expect("it cannot run")
+    };
+    let no_model =
+        "No model is connected yet, so The Engineer cannot answer. Add a provider to connect one.";
+    assert_eq!(why(Reason::BackendNotConfigured), no_model);
+    assert_eq!(why(Reason::CredentialsRequired), no_model);
+    assert_eq!(
+        why(Reason::BackendTemporarilyUnavailable),
+        "The Engineer's model cannot be reached, so it cannot answer. Start it, or add a provider."
+    );
+    assert_eq!(
+        why(Reason::AgentDisabled),
+        "The Engineer cannot answer yet: behavior is disabled."
+    );
+    assert_eq!(
+        source::unready(&views, None).as_deref(),
+        Some("The Engineer cannot answer yet.")
+    );
+    let ready = snapshot(AgentReadinessState::Ready, None);
+    assert_eq!(source::unready(&views, Some(&ready)), None);
 }
 
 /// `Begin` is told straight after `Agents`, before the first sweep, so a send the user makes

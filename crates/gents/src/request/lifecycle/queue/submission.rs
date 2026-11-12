@@ -32,12 +32,7 @@ pub async fn prepare_user_message_input(
             .filter(Filter::eq(fields::PURPOSE, "normal"))
             .filter(Filter::any_of(
                 fields::LIFECYCLE_STATE,
-                [
-                    RequestLifecycleState::Claimed,
-                    RequestLifecycleState::Processing,
-                ]
-                .into_iter()
-                .map(RequestLifecycleState::as_str),
+                RequestLifecycleState::unsettled_execution().map(RequestLifecycleState::as_str),
             ))
             .render();
         access.read(&query).await?

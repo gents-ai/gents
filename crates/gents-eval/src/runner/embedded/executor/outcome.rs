@@ -103,6 +103,7 @@ pub(super) async fn trigger_failure(
     let node_did = escape_graphql_string(node_did);
     let since = escape_graphql_string(since);
     let unacknowledged = gents::triggers::UNACKNOWLEDGED_STATUS;
+    let budget_exhausted = gents::documents::BUDGET_EXHAUSTED_STATUS;
     let source_filter = source_doc_id.map_or_else(String::new, |doc_id| {
         format!(
             r#", last_fired_source_doc_id: {{ _eq: "{}" }}"#,
@@ -110,7 +111,7 @@ pub(super) async fn trigger_failure(
         )
     });
     let query = format!(
-        r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{node_did}" }}, last_status: {{ _in: ["error", "{unacknowledged}"] }}, last_attempt_at: {{ _geq: "{since}" }}{source_filter} }}) {{ trigger_id last_attempt_at last_fired_source_doc_id last_status last_error }} }}"#
+        r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{node_did}" }}, last_status: {{ _in: ["error", "{unacknowledged}", "{budget_exhausted}"] }}, last_attempt_at: {{ _geq: "{since}" }}{source_filter} }}) {{ trigger_id last_attempt_at last_fired_source_doc_id last_status last_error }} }}"#
     );
     let failing = match graphql_with_transaction_retry(node, &query, "eval trial trigger status")
         .await
@@ -139,10 +140,9 @@ pub(super) async fn trigger_failure(
     if failing.is_empty() {
         return None;
     }
-    let kind = if failing
-        .iter()
-        .any(|trigger| trigger.last_status.as_deref() == Some("error"))
-    {
+    let kind = if failing.iter().any(|trigger| {
+        [Some("error"), Some(budget_exhausted)].contains(&trigger.last_status.as_deref())
+    }) {
         OutcomeKind::Runtime
     } else {
         OutcomeKind::Infrastructure

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::job::DataWrite;
@@ -153,54 +153,167 @@ impl ToolDyn for PluginTool {
 
     fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
         Box::pin(async move {
-            let mut input: serde_json::Value =
-                match crate::inference::llm::tool::parse_tool_args(&args) {
-                    Ok(input) => input,
-                    Err(error) => {
-                        return ToolDispatchResult {
-                            result: Err(error),
-                            plugin_receipt: None,
-                            deferred_writes: None,
-                        };
-                    }
-                };
-            if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
-                return ToolDispatchResult {
-                    result: Err(tool_error(format!("{error:#}"))),
-                    plugin_receipt: Some(super::executor::initial_receipt(&self.record, &input)),
-                    deferred_writes: None,
-                };
-            }
-            let (call, receipt) = self
-                .executor
-                .call_data_bound_with_receipt_as(
-                    &self.record,
-                    input,
-                    self.root.as_deref(),
-                    self.tool_calls,
-                    self.data_caller.clone(),
-                    self.model_actor.clone(),
-                )
-                .await;
-            let mut deferred_writes = None;
-            let result = call
-                .map_err(|error| tool_error(format!("{error:#}")))
-                .and_then(|mut call| match call.outcome.verdict {
-                    PluginVerdict::Success => {
-                        deferred_writes = self.defer_writes(&mut call.outcome.output)?;
-                        serde_json::to_string(&call.outcome.output).map_err(ToolError::JsonError)
-                    }
-                    _ => Err(tool_error(format!(
-                        "plugin {} did not return a result: {}",
-                        call.coordinate, call.outcome.diagnostics
-                    ))),
-                });
+            let input: serde_json::Value = match crate::inference::llm::tool::parse_tool_args(&args)
+            {
+                Ok(input) => input,
+                Err(error) => {
+                    return ToolDispatchResult {
+                        result: Err(error),
+                        plugin_receipt: None,
+                        deferred_writes: None,
+                    };
+                }
+            };
+            let invoked = self.invoke(input).await;
             ToolDispatchResult {
-                result,
-                plugin_receipt: Some(receipt),
-                deferred_writes,
+                result: invoked.result.and_then(|(output, _)| {
+                    serde_json::to_string(&output).map_err(ToolError::JsonError)
+                }),
+                plugin_receipt: Some(invoked.receipt),
+                deferred_writes: invoked.deferred_writes,
             }
         })
+    }
+}
+
+/// One invocation of the tool: the plugin's output and binding note, the
+/// receipt of the attempt, and the writes its terminal commits.
+struct Invoked {
+    result: Result<(serde_json::Value, Option<String>), ToolError>,
+    receipt: gents_protocol::plugin::PluginExecutionReceipt,
+    deferred_writes: Option<DeferredToolWrites>,
+}
+
+impl PluginTool {
+    async fn invoke(&self, mut input: serde_json::Value) -> Invoked {
+        if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
+            return Invoked {
+                result: Err(tool_error(format!("{error:#}"))),
+                receipt: super::executor::initial_receipt(&self.record, &input),
+                deferred_writes: None,
+            };
+        }
+        let (call, receipt) = self
+            .executor
+            .call_data_bound_with_receipt_as(
+                &self.record,
+                input,
+                self.root.as_deref(),
+                self.tool_calls,
+                self.data_caller.clone(),
+                self.model_actor.clone(),
+            )
+            .await;
+        let mut deferred_writes = None;
+        let result = call
+            .map_err(|error| tool_error(format!("{error:#}")))
+            .and_then(|mut call| match call.outcome.verdict {
+                PluginVerdict::Success => {
+                    deferred_writes = self.defer_writes(&mut call.outcome.output)?;
+                    Ok((call.outcome.output, call.binding_note))
+                }
+                _ => Err(tool_error(format!(
+                    "plugin {} did not return a result: {}",
+                    call.coordinate, call.outcome.diagnostics
+                ))),
+            });
+        Invoked {
+            result,
+            receipt,
+            deferred_writes,
+        }
+    }
+
+    /// The tool `config plugin run` calls: `coordinate` as the calling
+    /// agent's Tools select it, or unselected (no `tool_calls`) when they do
+    /// not. Trigger-filled inputs are the caller's to supply here.
+    pub(crate) fn for_run(
+        executor: Arc<PluginExecutor>,
+        coordinate: &str,
+        selected: &[PluginToolRef],
+    ) -> Result<Self> {
+        let selection = selected.iter().find(|plugin| plugin.plugin == coordinate);
+        Self::resolve(
+            executor,
+            &PluginToolRef {
+                plugin: coordinate.to_owned(),
+                digest: None,
+                tool_calls: selection.is_some_and(|plugin| plugin.tool_calls),
+                input_fields: Vec::new(),
+                job: None,
+            },
+            None,
+        )
+    }
+
+    /// One call through the rounds a tool call drives, inside the tool call
+    /// that asked for it: the plugin's `writes` commit with that call's row.
+    /// An output that is only a request the host did not serve is an error
+    /// naming the service and the call that serves it, never the plugin's
+    /// result; a result that carries a request-shaped field is returned with
+    /// a note saying that field was not served.
+    pub(crate) async fn run_once(
+        &self,
+        input: serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
+        let invoked = self.invoke(input).await;
+        let (output, binding_note) = invoked.result.map_err(|error| match error {
+            ToolError::ToolCallError(error) => anyhow::anyhow!("{error}"),
+            other => anyhow::anyhow!("{other}"),
+        })?;
+        let carried = match super::rounds::unserved_request(&output) {
+            Some(super::rounds::Unserved::Request(service)) => {
+                anyhow::bail!("{}", self.unserved(service).0)
+            }
+            Some(super::rounds::Unserved::Carried(service)) => {
+                let (_, why, next) = self.unserved(service);
+                Some(format!("output is the plugin's result. Its {service} field is shaped like a request and was not served ({why}); if the plugin meant it as a request: {next}"))
+            }
+            None => None,
+        };
+        if let Some(writes) = invoked.deferred_writes {
+            current_tool_runtime_context()
+                .and_then(|context| context.live_output)
+                .context("plugin writes commit with a persisted tool call")?
+                .record_deferred_writes(writes)
+                .await
+                .map_err(|error| anyhow::anyhow!("plugin writes rejected: {error}"))?;
+        }
+        Ok((output, carried, binding_note))
+    }
+
+    /// The refusal for an unserved `service` request, with its reason and
+    /// next call on their own.
+    fn unserved(&self, service: &str) -> (String, String, String) {
+        let coordinate = format!("{}/{}", self.record.namespace, self.record.name);
+        let name = &self.definition.name;
+        let (why, next) = match service {
+            "data_calls" => (
+                "the plugin declares no data".to_owned(),
+                format!("declare data.collections and data.ops in its source, then rebuild it with [\"plugin\",\"build\",\"{name}\"]"),
+            ),
+            "tool_calls" => (
+                format!("your Tools do not select {coordinate} with tool_calls: true"),
+                format!("read [\"tools\",\"get\"], add {{\"plugin\":\"{coordinate}\",\"tool_calls\":true}} to integrations.plugins with [\"tools\",\"update\"], then run it again in a fresh request"),
+            ),
+            "job_calls" => (
+                "plugin run serves no job: a job's steps run from its own tool call".to_owned(),
+                format!("select {coordinate} with `job` in integrations.plugins through [\"tools\",\"update\"], then call the tool `{name}` in a fresh request"),
+            ),
+            "model_calls" => (
+                "the plugin has no usable model binding".to_owned(),
+                format!("read [\"plugin\",\"get\",\"{coordinate}\"] and reinstall its pack with options.inference-slot"),
+            ),
+            _ => (
+                "the plugin's granted authority allows no network host".to_owned(),
+                format!("read [\"plugin\",\"get\",\"{coordinate}\"] and reinstall its pack with the network authority granted"),
+            ),
+        };
+        (
+            format!("plugin {coordinate} asked for {service} and was not re-invoked: {why}. Its request was not served and is not a result. Next: {next}"),
+            why,
+            next,
+        )
     }
 }
 

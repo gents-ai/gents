@@ -124,6 +124,8 @@ pub struct ProvisionOptions {
     pub tool_ceiling: ManagedToolCeiling,
     pub tool_root: Option<PathBuf>,
     pub store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
+    /// Install the Engineer's default packs into a home this call creates.
+    pub default_packs: bool,
 }
 
 /// Provisioning drives `init`, whose node opening is not `Send`, on a blocking
@@ -177,10 +179,27 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         argv.extend(["--store-key-custody".to_string(), "file".to_string()]);
     }
     let cli = Cli::try_parse_from(argv).context("building standard Gents provision request")?;
-    let Some(Command::Init(args)) = cli.command else {
+    let Some(Command::Init(mut args)) = cli.command else {
         unreachable!("standard provision argv must parse as init")
     };
-    crate::commands::init::init(args).await
+    // No terminal is owned here, so init must not ask on one: a default pack
+    // whose plugins request permissions is left uninstalled and reported.
+    args.unattended = true;
+    args.no_default_packs = !options.default_packs;
+    let initialized = crate::commands::init::init_home(args).await?;
+    for pack in initialized["default_packs"]["not_installed"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        tracing::warn!(
+            pack = pack["pack"].as_str().unwrap_or_default(),
+            reason = pack["reason"].as_str().unwrap_or_default(),
+            install_with = pack["install_with"].as_str().unwrap_or_default(),
+            "an Engineer default pack was not installed"
+        );
+    }
+    Ok(())
 }
 
 /// Grant the verified pending desktop request through the CLI User that owns

@@ -40,8 +40,8 @@ pub struct PackPlugin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<PluginDataDeclaration>,
     /// The host functions the artifact imports under the `gents` module;
-    /// absent means it imports none and runs on WASI alone. Only a job plugin
-    /// whose input names `script` may ask for `run_script`.
+    /// absent means it imports none and runs on WASI alone. `run_script` is
+    /// restricted to job plugins; `host_call` delegates to the caller's tools.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_imports: Vec<HostImport>,
 }
@@ -53,6 +53,19 @@ pub enum HostImport {
     /// `run_script(ptr, len) -> i32` and `read_result(ptr, cap) -> i32`: the
     /// host evaluates the call's own `script` on the JSON the guest hands it.
     RunScript,
+    /// `host_call(ptr, len) -> i32` and `read_result(ptr, cap) -> i32`:
+    /// suspend the guest for one caller-authorized tool call or bounded sleep.
+    HostCall,
+}
+
+impl PackPlugin {
+    pub fn imports_run_script(&self) -> bool {
+        self.host_imports.contains(&HostImport::RunScript)
+    }
+
+    pub fn imports_host_call(&self) -> bool {
+        self.host_imports.contains(&HostImport::HostCall)
+    }
 }
 
 /// For literals that set only the fields they need.

@@ -52,6 +52,7 @@ fn install_record(
             source_history: Vec::new(),
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux,
+            created_collections: Vec::new(),
         },
     )
     .unwrap();
@@ -268,4 +269,124 @@ fn lint_pack_dir_reports_per_plugin_and_skips_afb_produced_ones() {
     assert_eq!(findings.keys().collect::<Vec<_>>(), vec!["bad", "good"]);
     assert!(findings["good"].is_empty());
     assert_eq!(findings["bad"][0].rule, "dynamic code");
+}
+
+#[test]
+fn lint_pack_dir_reads_the_declared_stylesheet() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("ux/styled")).unwrap();
+    std::fs::write(dir.path().join("ux/styled/plugin.js"), "export default {}").unwrap();
+    std::fs::write(
+        dir.path().join("ux/styled/plugin.css"),
+        ".a { color: var(--background) }",
+    )
+    .unwrap();
+    let mut styled = ux("styled", Some("ux/styled/plugin.js"), None);
+    styled.css = Some("ux/styled/plugin.css".into());
+    let findings = lint_pack_dir(dir.path(), &[styled]).unwrap();
+    assert_eq!(findings["styled"][0].rule, "undefined css token");
+    assert!(findings["styled"][0].stylesheet);
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn plugin_files_under(dir: &Path, found: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            plugin_files_under(&path, found);
+        } else if path.file_name().is_some_and(|name| name == DEV_ENTRY) {
+            found.push(path);
+        }
+    }
+}
+
+/// Every plugin this repository ships, scaffold output aside (the scaffold
+/// tests run it through `pack check`), has to pass the lint it teaches.
+#[test]
+fn every_shipped_plugin_passes_the_lint() {
+    let root = repo_root();
+    let mut plugins = vec![
+        root.join("crates/gents/tests/fixtures/packs/ux_fixture/ux/badge/plugin.js"),
+        root.join("apps/gents-desktop/src/ui/ux-plugins/hello/plugin.js"),
+    ];
+    plugin_files_under(&root.join("examples/ux-plugins"), &mut plugins);
+    assert!(
+        plugins
+            .iter()
+            .any(|p| p.ends_with("ux/dashboard/plugin.js")),
+        "the walk found the examples: {plugins:?}"
+    );
+    for plugin in plugins {
+        let source = std::fs::read_to_string(&plugin).unwrap();
+        let css = std::fs::read_to_string(plugin.with_file_name(DEV_CSS)).ok();
+        let findings = lint::lint_plugin(&source, css.as_deref());
+        assert!(
+            findings.is_empty(),
+            "{}:\n{}",
+            plugin.display(),
+            lint::describe(&findings)
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_dashboard_example_is_a_checked_pack() {
+    let dir = repo_root().join("examples/ux-plugins/board_dashboard");
+    let check = crate::pack::authoring::check_dir(&dir).await;
+    assert!(check.problems.is_empty(), "{:#?}", check.problems);
+}
+
+#[test]
+fn the_sdk_reference_carries_the_skeleton_and_every_token() {
+    assert!(reference::SDK_REFERENCE.contains("export default {"));
+    assert!(reference::SDK_REFERENCE.contains("ctx.registerMany"));
+    assert!(reference::SDK_REFERENCE.contains("useQuery(ctx, surface, tool, options?)"));
+    let tokens: Vec<&str> = reference::frame_tokens().collect();
+    assert!(tokens.contains(&"--bg"));
+    for token in tokens {
+        assert!(reference::SDK_REFERENCE.contains(token), "{token}");
+    }
+}
+
+/// The index is what every page author reads; a section is what one block
+/// costs. Ceilings sit a little above the generated sizes.
+#[test]
+fn the_sdk_reference_is_an_index_and_one_section_per_export() {
+    let index = reference::sdk_index();
+    assert!(index.contains("export default {") && index.contains("ctx.registerMany"));
+    assert!(
+        index.contains("`gents config pack ux lint` refuses raw hex"),
+        "{index}"
+    );
+    assert!(
+        !index.contains("<!--") && !index.contains("\n### "),
+        "{index}"
+    );
+    assert!(index.len() <= 4_800, "the index is {} chars", index.len());
+    let sections: Vec<_> = reference::sdk_sections().collect();
+    assert!(sections.len() > 50, "{}", sections.len());
+    for (name, section) in &sections {
+        assert_eq!(reference::sdk_section(name), Some(*section));
+        assert!(
+            !section.is_empty() && !section.contains("### "),
+            "{section}"
+        );
+        if *name == "tokens" {
+            assert!(section.len() <= 2_800, "tokens is {} chars", section.len());
+            continue;
+        }
+        assert!(
+            index.contains(&format!("`{name}`")) || index.contains(&format!("`{name}(")),
+            "{name} is missing from the index"
+        );
+        assert!(section.len() <= 600, "{name} is {} chars", section.len());
+    }
+    assert!(
+        reference::sdk_section("table").is_some(),
+        "names ignore case"
+    );
+    assert!(reference::sdk_section("Chart").is_none());
 }

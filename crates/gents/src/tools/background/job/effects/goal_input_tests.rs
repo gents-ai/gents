@@ -163,8 +163,10 @@ async fn deliver(
     let prepared = crate::triggers::engine::durable::PreparedFire {
         receipt: fire,
         target_existing: case["existing"] == true,
+        create_session: false,
         replace_prior: false,
         event_source_generation: None,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
     };
     let admitted = crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
         &f.node,
@@ -205,6 +207,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             assert!(crate::triggers::engine::durable::resolve_session_id(
                 &identity,
                 Some(&session),
+                false,
                 false
             )
             .is_none());

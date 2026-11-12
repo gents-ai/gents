@@ -64,6 +64,7 @@ async fn recover_active_requests(
             Query::select(
                 Selection::doc_id()
                     .field(fields::REQUEST_ID)
+                    .field(fields::LIFECYCLE_STATE)
                     .field(fields::NODE_DID)
                     .field(fields::REQUESTER_DID)
                     .field(fields::AGENT_DID)
@@ -79,6 +80,7 @@ async fn recover_active_requests(
                 [
                     RequestLifecycleState::Claimed,
                     RequestLifecycleState::Processing,
+                    RequestLifecycleState::ResumingBackend,
                 ]
                 .into_iter()
                 .map(RequestLifecycleState::as_str),
@@ -187,6 +189,25 @@ async fn recover_active_requests(
         let access = accesses
             .get(agent_did)
             .context("request agent signer unavailable")?;
+        if row.lifecycle_state == Some(RequestLifecycleState::ResumingBackend) {
+            match super::backend_wait::repark_expired_resume(
+                access,
+                request_doc_id,
+                expected_generation,
+                expected_expiry,
+            )
+            .await
+            {
+                Ok(true) => report.requests.repaired += 1,
+                Ok(false) => report.requests.awaiting_outcome += 1,
+                Err(error) => {
+                    report.requests.failed += 1;
+                    tracing::warn!(request_doc_id, %error, "could not return expired resumed request to backend wait");
+                }
+            }
+            continue;
+        }
+
         match canonical_recovery::recover_expired_generation(
             access,
             row,

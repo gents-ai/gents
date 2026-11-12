@@ -78,5 +78,24 @@ export {
 } from "@gents/ui/components/tooltip";
 export { cn } from "@gents/ui/lib/utils";
 
+/* blocks a dashboard is assembled from without writing CSS */
+export { Grid, Page } from "./blocks/layout";
+export type { GridProps, PageProps } from "./blocks/layout";
+export { EmptyState, ErrorState, LastUpdated, LoadingState } from "./blocks/states";
+export type {
+  EmptyStateProps,
+  ErrorStateProps,
+  LastUpdatedProps,
+  LoadingStateProps,
+} from "./blocks/states";
+export { Stat } from "./blocks/stat";
+export type { StatProps, StatTone } from "./blocks/stat";
+export { Table } from "./blocks/table";
+export type { TableColumn, TableProps, TableRowData } from "./blocks/table";
+export { Select, Tabs } from "./blocks/controls";
+export type { SelectOption, SelectProps, TabItem, TabsProps } from "./blocks/controls";
+export { BarChart, DonutChart, LineChart } from "./blocks/charts";
+export type { BarChartProps, DonutChartProps, LineChartProps } from "./blocks/charts";
+
 /* the shell's toaster, reached over the port: a frame has no toaster of its own */
 export { toast } from "./toast";

@@ -8,7 +8,7 @@
 import { useSyncExternalStore } from "react";
 import type { UxNotificationKind } from "@/sandbox/contract";
 
-export type UxPluginDoor = "bundled" | "dev" | "pack";
+export type UxPluginDoor = "bundled" | "dev" | "pack" | "document";
 export type UxPluginProducer = "file" | "afb";
 export type UxPluginStatus = "disabled" | "error" | "loaded";
 
@@ -28,6 +28,15 @@ export interface UxPluginRecord {
   declared?: UxDeclaredContributions;
   /** the kinds of notification its module declared, once it has loaded */
   notifications?: readonly UxNotificationKind[];
+  /** what its choice and its storage are kept under when its id does not
+      name it alone: a page document's node and listing, since two nodes
+      (or a node and a pack) may each hold a page of one id */
+  scope?: string;
+}
+
+/** the key a plugin's enable choice is kept under */
+export function uxDecisionKey(record: Pick<UxPluginRecord, "id" | "scope">): string {
+  return record.scope ?? record.id;
 }
 
 export interface UxDeclaredContributions {
@@ -107,10 +116,11 @@ export function useUxDecisions(): Readonly<Record<string, boolean>> {
   return useSyncExternalStore(subscribe, uxDecisions, uxDecisions);
 }
 
-/** whether a plugin registers: the explicit choice, else its own default */
-export function uxPluginActive(id: string, defaultEnabled = true): boolean {
-  return Object.prototype.hasOwnProperty.call(decisions, id)
-    ? decisions[id]!
+/** whether a plugin registers: the explicit choice kept under its decision
+    key, else its own default */
+export function uxPluginActive(key: string, defaultEnabled = true): boolean {
+  return Object.prototype.hasOwnProperty.call(decisions, key)
+    ? decisions[key]!
     : defaultEnabled;
 }
 
@@ -157,9 +167,13 @@ export function followOtherWindowsDecisions(): () => void {
       /* unreadable: no choices */
     }
     decisions = next;
-    for (const [id, enabled] of Object.entries(next)) {
+    for (const record of Object.values(records)) {
+      const id = record.id;
+      const key = uxDecisionKey(record);
+      if (!Object.prototype.hasOwnProperty.call(next, key)) continue;
+      const enabled = next[key]!;
       const handle = handles.get(id);
-      const loaded = records[id]?.status === "loaded";
+      const loaded = record.status === "loaded";
       if (!handle || enabled === loaded) continue;
       if (enabled) void handle.activate();
       else {
@@ -175,7 +189,7 @@ export function followOtherWindowsDecisions(): () => void {
 
 /** live toggle: deactivate and remember, or remember and reactivate */
 export async function setUxPluginEnabled(id: string, enabled: boolean): Promise<void> {
-  saveDecisions({ ...decisions, [id]: enabled });
+  saveDecisions({ ...decisions, [uxDecisionKey(records[id] ?? { id })]: enabled });
   const handle = handles.get(id);
   if (!handle) return;
   if (enabled) await handle.activate();

@@ -79,6 +79,8 @@ impl ConfigCommandTool {
                 | "event-source"
                 | "execution"
                 | "agent-target"
+                | "page"
+                | "plugin-source"
         );
         let handled = match verb {
             "list" | "update" => true,
@@ -208,9 +210,13 @@ impl ConfigCommandTool {
             }
         }
         let mut request = match target {
-            SelfConfigTarget::Tools => {
-                refuse_silent_tools_drops(tools_request(&core, patch), allow_drop)
-            }
+            SelfConfigTarget::Tools => refuse_uninstalled_plugins(
+                refuse_silent_tools_drops(tools_request(&core, patch), allow_drop),
+                {
+                    let plugins = self.plugins.clone();
+                    move |plugin: &str| plugins.installed_record(plugin).map(|_| ())
+                },
+            ),
             SelfConfigTarget::InferenceBackend if create => {
                 let mut request = local_backend_create_request(
                     self.node_did.clone(),

@@ -15,7 +15,9 @@ use gents_desktop_core::client::{
     ClientStore, TranscriptWindow,
 };
 use gents_desktop_core::inference::{load_inference_setup_state, AgentView};
-use gents_protocol::node_readiness::AgentReadinessState;
+use gents_protocol::node_readiness::{
+    AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
+};
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::session::SessionScope;
@@ -87,26 +89,25 @@ pub(super) async fn run(
         Ok(work) => work,
         Err(off) => return source.lost(no_runtime(&off)),
     };
-    let (views, agents) = match runnable(&work.access(), &source.principal).await {
+    let AgentsRead { changes, read } = read_agents(work.clone(), &source.principal, true).await;
+    let read = match read {
         Ok(read) => read,
         Err(error) => return source.lost(no_runtime(&error)),
     };
-    if agents.is_empty() {
-        return source.lost(no_runtime("no agent is ready on this node"));
-    }
-    source.agents = views;
-    source.shown_agents = agents.iter().map(|agent| agent.id.clone()).collect();
-    source.tell(Update::Agents(agents));
+    source.readiness_watched(changes);
     // `Begin` or `Continue` must reach the shell before a send the user makes once the agents
     // are known. Both go through one queue, so it is told before the sweep awaits anything.
-    match session {
-        Some(session) => source.tell(Update::Continue { session, agent }),
-        None if agent.is_some() || prompt.is_some() => {
-            source.tell(Update::Begin { agent, prompt });
-        }
-        None => {}
+    source.begin = match session {
+        Some(session) => Some(Update::Continue { session, agent }),
+        None if agent.is_some() || prompt.is_some() => Some(Update::Begin { agent, prompt }),
+        None => None,
+    };
+    // A tab that opens on another agent than the default says why, unless one was asked for.
+    let elsewhere = read.unready.clone().filter(|_| source.begin.is_none());
+    source.take_agents(read);
+    if let Some(why) = elsewhere.filter(|_| !source.shown_agents.is_empty()) {
+        source.tell(Update::Notice(why));
     }
-    source.tell(Update::Connection(Connection::Ready));
     // Read beside startup, never ahead of it: git may hang for its timeout. Once only, so a
     // checkout during the session shows at the next start.
     if let Some(cwd) = cwd {
@@ -151,19 +152,79 @@ pub(super) async fn run(
 
 /// The node's enabled agents, and those of them its readiness says are ready, as the shell
 /// lists them.
-async fn runnable(
-    access: &ConfigAccess,
-    node: &str,
-) -> Result<(Vec<AgentView>, Vec<gents_shell::source::Agent>), String> {
+struct Runnable {
+    views: Vec<AgentView>,
+    agents: Vec<gents_shell::source::Agent>,
+    /// Why the node's default agent cannot run, while it cannot.
+    unready: Option<String>,
+}
+
+async fn runnable(access: &ConfigAccess, node: &str) -> Result<Runnable, String> {
     let setup = load_inference_setup_state(access, node).await;
     let views = setup.map_err(|error| format!("{error:#}"))?.agents;
     let readiness = crate::commands::start::node_readiness(access, node).await;
     let readiness = readiness.map_err(|error| format!("{error:#}"))?;
+    let unready = unready(&views, readiness.as_ref());
     let ready = readiness.into_iter().flat_map(|snapshot| snapshot.agents);
     let ready = ready.filter(|entry| entry.state == AgentReadinessState::Ready);
     let ready: Vec<_> = ready.map(|entry| entry.agent_did).collect();
     let agents = items::agents(&views, &ready);
-    Ok((views, agents))
+    Ok(Runnable {
+        views,
+        agents,
+        unready,
+    })
+}
+
+/// Why the node's default agent cannot run, in one line, from the reason its runtime
+/// published; nothing once it can. The Setup layer and the Accounts menu connect a model.
+pub(super) fn unready(
+    views: &[AgentView],
+    readiness: Option<&NodeReadinessSnapshot>,
+) -> Option<String> {
+    use AgentReadinessUnavailableReason::BackendTemporarilyUnavailable as Unreachable;
+    let default = match readiness {
+        Some(snapshot) => views
+            .iter()
+            .find(|view| view.agent_did == snapshot.default_agent_did),
+        None => views.iter().find(|view| view.is_default),
+    };
+    let published = readiness.zip(default).and_then(|(snapshot, default)| {
+        let entries = snapshot.agents.iter();
+        entries
+            .into_iter()
+            .find(|entry| entry.agent_did == default.agent_did)
+    });
+    if published.is_some_and(|entry| entry.state == AgentReadinessState::Ready) {
+        return None;
+    }
+    let name = default.map_or_else(|| "The default agent".to_string(), items::agent_name);
+    Some(match published.and_then(|entry| entry.reason) {
+        Some(Unreachable) => format!(
+            "{name}'s model cannot be reached, so it cannot answer. Start it, or add a provider."
+        ),
+        Some(reason) if crate::commands::start::wants_a_model(reason) => format!(
+            "No model is connected yet, so {name} cannot answer. Add a provider to connect one."
+        ),
+        Some(reason) => format!("{name} cannot answer yet: {}.", reason.public_message()),
+        None => format!("{name} cannot answer yet."),
+    })
+}
+
+/// One read of the agents that can run, done off the chat loop.
+struct AgentsRead {
+    /// The readiness subscription it opened first, when the source was not live.
+    changes: Option<Result<Changes, String>>,
+    read: Result<Runnable, String>,
+}
+
+/// A runtime publishes which agents can run a little after their configuration changes, so
+/// its readiness is watched as the chat's documents are: each event is a hint to read again.
+async fn read_agents(work: Work, node: &str, subscribe: bool) -> AgentsRead {
+    let document = chat_document("NodeReadiness", node);
+    let changes = watch(&work, &document, subscribe).await;
+    let read = runnable(&work.access(), node).await;
+    AgentsRead { changes, read }
 }
 
 /// The status bar clips on the right, so the next step leads and the detail ends.
@@ -236,12 +297,13 @@ impl Stale {
 
 type Changes = GraphqlSubscription;
 
-/// What a subscription watches: the work views' tool calls, the mailbox, or one of the chat's
-/// collections.
+/// What a subscription watches: the work views' tool calls, the mailbox, the node's readiness,
+/// or one of the chat's collections.
 #[derive(Clone, Copy)]
 enum Feed {
     Work,
     Mailbox,
+    Readiness,
     Chat(&'static str),
 }
 
@@ -259,6 +321,9 @@ enum Watched {
     SignedIn(CancellationToken, Result<SavedAccount, String>),
     /// A pack change succeeded, so Packs is read again with the search shown by then.
     PackChanged,
+    /// A setup, menu or form action ended that may change which agents can run.
+    Configured,
+    Agents(Box<AgentsRead>),
 }
 
 /// One reread of the work views, done off the chat loop.
@@ -572,8 +637,21 @@ struct Source {
     chats: RapidHashMap<String, Chat>,
     /// This node's agents as setup lists them, which names subagents.
     agents: Vec<AgentView>,
-    /// The agents the shell lists, which a turn may go to.
+    /// Every agent the shell was ever told, which a turn may go to: its runtime answers a
+    /// turn it can no longer run with why.
     shown_agents: Vec<String>,
+    /// The agents the shell was last told, in order: its picker lists exactly these, so it
+    /// is told again whenever those that can run change, not only when one is new.
+    told_agents: Vec<String>,
+    /// Why no agent can run, as the shell was last told, while none is listed.
+    unready: Option<String>,
+    /// What `gents` was opened with, told once after the first agents.
+    begin: Option<Update>,
+    /// Whether the readiness subscription is open.
+    readiness_live: bool,
+    /// A read of the agents is out, and `agents_again` asks for one more when it lands.
+    reading_agents: bool,
+    agents_again: bool,
     /// The node's sessions and requests as last read, which the running turns are found in.
     store: Arc<ClientStore>,
     /// The sessions list last told.
@@ -646,6 +724,12 @@ impl Source {
             chats: RapidHashMap::new(),
             agents: Vec::new(),
             shown_agents: Vec::new(),
+            told_agents: Vec::new(),
+            unready: None,
+            begin: None,
+            readiness_live: false,
+            reading_agents: false,
+            agents_again: false,
             store: Arc::default(),
             listed: Vec::new(),
             chat_live: RapidHashSet::new(),
@@ -689,6 +773,88 @@ impl Source {
 
     fn lost(&self, why: String) {
         self.tell(Update::Connection(Connection::Lost(why)));
+    }
+
+    fn readiness_watched(&mut self, changes: Option<Result<Changes, String>>) {
+        // A subscription that failed is opened again by the next read.
+        if let Some(Ok(changes)) = changes {
+            self.readiness_live = true;
+            let watching = self.watching.clone();
+            self.runtime
+                .spawn(forward(changes, Feed::Readiness, watching));
+        }
+    }
+
+    /// With none that can run, the shell is told why, and again when the reason changes. With
+    /// some, it is told them whenever they are not the ones it was last told; the first are
+    /// followed by what `gents` was opened with and `Ready`.
+    fn take_agents(&mut self, read: Runnable) {
+        let Runnable {
+            views,
+            agents,
+            unready,
+        } = read;
+        self.agents = views;
+        if agents.is_empty() {
+            let why = unready.unwrap_or_else(|| "No agent can run yet on this node.".to_string());
+            if self.shown_agents.is_empty() && self.unready.as_ref() != Some(&why) {
+                self.unready = Some(why.clone());
+                self.tell(Update::Connection(Connection::NoAgent(why)));
+            }
+            return;
+        }
+        let ids: Vec<String> = agents.iter().map(|agent| agent.id.clone()).collect();
+        if ids == self.told_agents {
+            return;
+        }
+        let first = self.shown_agents.is_empty();
+        for id in &ids {
+            if !self.shown_agents.contains(id) {
+                self.shown_agents.push(id.clone());
+            }
+        }
+        self.told_agents = ids;
+        let woke = self.unready.take().map(|_| agents[0].name.clone());
+        self.tell(Update::Agents(agents));
+        if first {
+            if let Some(begin) = self.begin.take() {
+                self.tell(begin);
+            }
+            self.tell(Update::Connection(Connection::Ready));
+        }
+        if let Some(name) = woke {
+            self.tell(Update::Notice(format!("{name} is ready. Type a message.")));
+        }
+    }
+
+    /// One read at a time, off the chat loop, as `reread_work` reads.
+    fn reread_agents(&mut self) {
+        let Ok(work) = self.work.clone() else {
+            return;
+        };
+        if self.reading_agents {
+            self.agents_again = true;
+            return;
+        }
+        self.reading_agents = true;
+        let (node, subscribe) = (self.principal.clone(), !self.readiness_live);
+        let done = self.watching.clone();
+        self.runtime.spawn(async move {
+            let read = read_agents(work, &node, subscribe).await;
+            let _ = done.send(Watched::Agents(Box::new(read)));
+        });
+    }
+
+    /// A read that failed keeps what the shell lists; the next change reads again.
+    fn agents_read(&mut self, read: AgentsRead) {
+        self.reading_agents = false;
+        self.readiness_watched(read.changes);
+        if let Ok(read) = read.read {
+            self.take_agents(read);
+        }
+        if std::mem::take(&mut self.agents_again) {
+            self.reread_agents();
+        }
     }
 
     async fn handle(&mut self, intent: Intent) {
@@ -771,9 +937,31 @@ impl Source {
                 connection,
                 model,
                 settings,
-            } => self.answer_setup(Update::Saved, |access, node| async move {
-                setup::save(&access, &node, &connection, &model, &settings).await
-            }),
+            } => {
+                // A save binds no agent, so while none can run the default agent takes the
+                // model it adds: nothing else would wake the shell.
+                let default = self.agents.iter().find(|view| view.is_default);
+                let waiting = default.filter(|_| self.shown_agents.is_empty());
+                let waiting = waiting.map(|view| (view.agent_did.clone(), items::agent_name(view)));
+                let (work, home) = (self.work.clone(), self.home.clone());
+                self.answer_change(Update::Saved, |access, node| async move {
+                    let saved = setup::save(&access, &node, &connection, &model, &settings).await?;
+                    let (Some((agent, name)), Ok(work)) = (waiting, work) else {
+                        return Ok(saved.notice);
+                    };
+                    let notice = saved.notice;
+                    let bind = MenuAct::SetAgentProfile {
+                        agent,
+                        name: name.clone(),
+                        profile: saved.profile,
+                        label: String::new(),
+                    };
+                    Ok(match menus::act(&work, &home, &node, &bind).await {
+                        Ok(_) => format!("{notice}, now {name}'s model"),
+                        Err(why) => format!("{notice}. Choose it for {name} under Agents ({why})"),
+                    })
+                });
+            }
             Intent::OpenForm {
                 form: FormRef::PackSearch,
                 opening,
@@ -836,7 +1024,7 @@ impl Source {
                     opening,
                     result: saved.unwrap_or_else(|off| Err(forms::refused(off))),
                 };
-                self.answer_setup(saved, |access, node| async move {
+                self.answer_change(saved, |access, node| async move {
                     Ok(forms::save(&access, &home, &node, &form, &values.0, &id).await)
                 });
             }
@@ -896,6 +1084,24 @@ impl Source {
         });
     }
 
+    /// As `answer_setup`, for a write that may change which agents can run: they are read
+    /// again once its answer is told.
+    fn answer_change<T, U, A, F>(&self, update: U, answer: A)
+    where
+        T: 'static,
+        U: FnOnce(Result<T, String>) -> Update + Send + 'static,
+        A: FnOnce(ConfigAccess, String) -> F + Send + 'static,
+        F: Future<Output = Result<T, String>> + Send + 'static,
+    {
+        let configured = self.watching.clone();
+        let told = move |answered| {
+            let update = update(answered);
+            let _ = configured.send(Watched::Configured);
+            update
+        };
+        self.answer_setup(told, answer);
+    }
+
     /// One sign-in waits at a time. Its URL is told from its run.
     fn sign_in(&mut self, provider: String, method: String, label: Option<String>) {
         if self.signing_in.is_some() {
@@ -945,6 +1151,7 @@ impl Source {
         };
         let (work, home) = (self.work.clone(), self.home.clone());
         let (principal, updates) = (self.principal.clone(), self.updates.clone());
+        let configured = self.watching.clone();
         self.runtime.spawn(async move {
             let done = match &work {
                 Ok(live) => menus::act(live, &home, &principal, &act).await,
@@ -952,6 +1159,7 @@ impl Source {
             };
             let (Ok(notice) | Err(notice)) = done;
             let _ = updates.send(Input::Runtime(Update::Notice(notice)));
+            let _ = configured.send(Watched::Configured);
             let rows = menus::read_menu(&work, &home, &principal, menu).await;
             let _ = updates.send(Input::Runtime(Update::Menu { menu, rows }));
         });
@@ -1232,6 +1440,14 @@ impl Source {
                 self.mailbox_live = false;
                 self.tell(Update::Notice(prompts_not_live(error.as_deref())));
             }
+            // The next action that may change the agents reads them and subscribes again.
+            Watched::Ended(Feed::Readiness, _) => self.readiness_live = false,
+            Watched::Renew(Feed::Readiness) => {
+                self.readiness_live = false;
+                self.reread_agents();
+            }
+            Watched::Changed(Feed::Readiness) | Watched::Configured => self.reread_agents(),
+            Watched::Agents(read) => self.agents_read(*read),
             // The loop ends the source on it: the shell has no chat without its feed.
             Watched::Ended(Feed::Chat(collection), _) => {
                 self.chat_live.remove(collection);
@@ -1266,7 +1482,10 @@ impl Source {
                     self.tell(Update::SignedIn(signed));
                 }
             }
-            Watched::PackChanged => self.read_menu(MenuId::Packs),
+            Watched::PackChanged => {
+                self.read_menu(MenuId::Packs);
+                self.reread_agents();
+            }
         }
     }
 
@@ -2029,6 +2248,42 @@ mod tests {
             _ => None,
         });
         told.collect()
+    }
+
+    /// The picker lists what it was last told, so an agent that stops being runnable and
+    /// recovers is told again, though it is not new.
+    #[tokio::test]
+    async fn an_agent_that_recovers_is_listed_again() {
+        let (mut source, told, _watched) = idle_source();
+        let runnable = |names: &[&str]| Runnable {
+            views: Vec::new(),
+            agents: names
+                .iter()
+                .map(|name| gents_shell::source::Agent {
+                    id: name.to_string(),
+                    name: name.to_string(),
+                    text: name.to_string(),
+                    tone: Tone::Plain,
+                })
+                .collect(),
+            unready: None,
+        };
+
+        source.take_agents(runnable(&["a"]));
+        source.take_agents(runnable(&["b"]));
+        source.take_agents(runnable(&["a", "b"]));
+        source.take_agents(runnable(&["a", "b"]));
+
+        let listed: Vec<Vec<String>> = told
+            .try_iter()
+            .filter_map(|input| match input {
+                Input::Runtime(Update::Agents(agents)) => {
+                    Some(agents.into_iter().map(|agent| agent.id).collect())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(listed, [vec!["a"], vec!["b"], vec!["a", "b"]]);
     }
 
     #[tokio::test]

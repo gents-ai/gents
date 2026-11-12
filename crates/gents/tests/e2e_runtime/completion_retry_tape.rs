@@ -355,7 +355,7 @@ async fn interactive_budget_is_quick() {
             vec![
                 StreamResponse::service_unavailable("HTTP status 503 first interactive failure"),
                 StreamResponse::service_unavailable("HTTP status 503 second interactive failure"),
-                StreamResponse::completes(marker, ["should not be reached"]),
+                StreamResponse::completes(marker, ["answered after the outage"]),
             ],
         )],
     )
@@ -384,25 +384,27 @@ async fn interactive_budget_is_quick() {
     .await;
     assert_eq!(
         terminal_state,
-        RequestLifecycleState::Failed,
-        "the interactive default should spend its one retry and fail, not complete"
+        RequestLifecycleState::Completed,
+        "an exhausted interactive retry parks the request for its backend, which then answers"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(6),
-        "interactive default should spend one short retry, not the scheduled ladder; elapsed={:?}",
+        started.elapsed() < Duration::from_secs(15),
+        "interactive default should spend one short retry before parking, not the scheduled ladder; elapsed={:?}",
         started.elapsed()
     );
     assert_eq!(
         backend.observed_requests(marker),
-        2,
-        "interactive default allows exactly one retry"
+        3,
+        "interactive default allows exactly one retry before parking, then one resumed attempt"
     );
 
     let calls = fetch_inference_calls(&actors, request_id).await;
-    assert_eq!(call_states(&calls), vec!["failed", "failed"]);
+    let mut states = call_states(&calls);
+    states.sort_unstable();
+    assert_eq!(states, vec!["completed", "failed", "failed"]);
     let timeline = build_timeline(&actors, request_id).await;
     assert_eq!(timeline.request.retry_summary.retry_count, 1);
-    assert!(!timeline.request.retry_summary.recovered);
+    assert!(timeline.request.retry_summary.recovered);
 
     agent.shutdown().await;
 }
@@ -574,7 +576,7 @@ async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
 }
 
 #[tokio::test]
-async fn repeated_provider_silence_fails_the_request_through_the_retry_owner() {
+async fn repeated_provider_silence_parks_the_request_until_the_provider_answers() {
     let marker = "stall-exhausts-retry";
     let (backend, _db, actors, agent, doc_id, started) = start_stall_tape(
         marker,
@@ -584,7 +586,7 @@ async fn repeated_provider_silence_fails_the_request_through_the_retry_owner() {
                 vec![StreamChunk::text("never released")],
             )),
             StreamResponse::Stream(StreamScript::paused(marker, ["partial before stall"])),
-            StreamResponse::completes(marker, ["should not be reached"]),
+            StreamResponse::completes(marker, ["answered after the stalls"]),
         ],
         "interactive",
     )
@@ -593,15 +595,15 @@ async fn repeated_provider_silence_fails_the_request_through_the_retry_owner() {
     let elapsed = started.elapsed();
     let request = fetch_terminal_request(&actors, &doc_id).await;
     let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
-    assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
-    assert!(
-        request.failure_reason.contains("retry budget exhausted"),
-        "failure_reason={:?}",
-        request.failure_reason
-    );
-    assert_eq!(backend.observed_requests(marker), 2);
-    assert_eq!(call_states(&calls), vec!["failed", "failed"]);
-    calls.iter().for_each(assert_stall_reason);
+    assert_eq!(request.lifecycle_state, RequestLifecycleState::Completed);
+    assert_eq!(backend.observed_requests(marker), 3);
+    let mut states = call_states(&calls);
+    states.sort_unstable();
+    assert_eq!(states, vec!["completed", "failed", "failed"]);
+    calls
+        .iter()
+        .filter(|call| call.call_state == "failed")
+        .for_each(assert_stall_reason);
     assert!(elapsed < Duration::from_secs(20), "elapsed={elapsed:?}");
     agent.shutdown().await;
 }

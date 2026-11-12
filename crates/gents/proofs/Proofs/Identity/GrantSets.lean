@@ -207,12 +207,12 @@ theorem only_init_user_is_admin :
       (fun r => (holderOf (receives r)).admin) = [true, false, false, false] := by decide
 
 def schemaPermissions : List String :=
-  ["get-collection", "patch-collection", "set-migration", "add-view"]
+  ["get-collection", "patch-collection", "truncate-collection", "set-migration", "add-view"]
 
 /-- An enrolled User may project any permission it holds and no schema
 authority; the household owner may project schema authority. -/
 theorem enrolled_user_cannot_grant_schema :
-    ["patch-collection", "set-migration", "add-view"].all (fun p =>
+    ["patch-collection", "truncate-collection", "set-migration", "add-view"].all (fun p =>
       admits (holderOf (receives .enrolledUser)) ⟨.permission p, false, true, false⟩) = false := by
   decide
 

@@ -148,8 +148,48 @@ pub struct PackInstallView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub inference_needs: Option<PackInferenceNeedsView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub host_tool_roots: Option<PackHostToolRootsView>,
     #[serde(flatten)]
     details: super::json::WireObject,
+}
+
+/// The folder of this node a pack's agents run their host tools in. A
+/// preview reports the one review of it; an install reports one step per
+/// agent, each granted or naming the command that grants it.
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(untagged)]
+pub enum PackHostToolRootsView {
+    Review(PackHostToolRootReviewView),
+    Steps(Vec<BTreeMap<String, Value>>),
+}
+
+/// What a preview shows before the install's consent: the agents that will
+/// run host tools under `root`, and the published folder the install grants
+/// them reader on when it is allowed.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct PackHostToolRootReviewView {
+    /// The Tools documents that take the installer's root, by id.
+    pub tools: Vec<String>,
+    /// The agents that select those Tools, by name.
+    #[serde(default)]
+    pub agents: Vec<String>,
+    /// The folder the agents' host tools run under.
+    pub root: String,
+    /// The published folder an allowed install grants the agents reader on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reader_on: Option<String>,
+    /// Set instead of `reader_on` when no published folder covers `root`:
+    /// nothing is granted, and the agents wait for a User to publish it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub unpublished_root: Option<String>,
+    /// The CLI flag that allows the grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub granted_with: Option<String>,
 }
 
 /// The inference a pack and its dependencies need, by slot name: one binding
@@ -198,6 +238,57 @@ pub struct PackReviewDocumentView {
 pub struct PackAuthorityAskView {
     pub plugin: String,
     pub asks: String,
+}
+
+/// The Engineer's default packs as the local node's home has them.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DefaultPacksView {
+    pub packs: Vec<DefaultPackView>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DefaultPackView {
+    pub pack: String,
+    /// What the pack is for.
+    pub purpose: String,
+    /// What the Engineer lacks while the pack is not installed.
+    pub without: String,
+    pub state: DefaultPackState,
+    pub version: Option<String>,
+    /// The archive an approval installs; the approval names it back.
+    pub digest: Option<String>,
+    pub requested: Vec<PackAuthorityAskView>,
+    /// What approving turns on beyond the requested permissions.
+    pub turns_on: Vec<String>,
+    /// Why an unavailable pack could not be resolved.
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultPackState {
+    Installed,
+    NeedsApproval,
+    Ready,
+    Unavailable,
+}
+
+/// What an approval left: every default pack's state after it, and the packs
+/// it could not install.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DefaultPacksApprovalView {
+    pub packs: Vec<DefaultPackView>,
+    pub failed: Vec<DefaultPackFailureView>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DefaultPackFailureView {
+    pub pack: String,
+    pub error: String,
+    /// The pack is installed, with its permissions granted, and a later
+    /// step failed: approving it again finishes it.
+    #[serde(default)]
+    pub installed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

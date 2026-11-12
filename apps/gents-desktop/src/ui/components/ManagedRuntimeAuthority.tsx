@@ -207,8 +207,7 @@ export function ManagedRuntimeAuthorityReview({
         <p className="text-sm">{authoritySummary(authority)}</p>
       </div>
       <p className="text-xs text-muted-foreground">
-        Setup remains a narrow configurator. An agent can reduce this ceiling but cannot
-        expand it.
+        An agent can reduce this ceiling but cannot expand it.
       </p>
     </div>
   );

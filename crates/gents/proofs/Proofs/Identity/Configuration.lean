@@ -54,10 +54,18 @@ theorem underived_agent_cannot_receive_tool_source (derive : String â†’ String â
   simp [managedToolIdentityAllowed, underived]
 
 /-- Schema commands expose collection/version reads, create/patch/activation
-and materialization, migration publication, and view creation. These names
-are the pinned DefraDB node-operation relations for those operations. -/
+and materialization, migration publication, view creation, and collection
+cleanup. These names are the pinned DefraDB node-operation relations for
+those operations.
+
+Cleanup (maintainer decision, 2026-11-09, gents#3572): an Agent that builds
+application collections may empty and remove them. External premise: the
+pinned DefraDB checks `truncate-collection` for a collection truncate and
+`patch-collection` for deleting a collection's versions, and consults no
+document policy for either, so the tool source is the whole authority and
+removing the schema tool withdraws it. -/
 def schemaToolPermissions : List String :=
-  ["get-collection", "patch-collection", "set-migration", "add-view"]
+  ["get-collection", "patch-collection", "truncate-collection", "set-migration", "add-view"]
 
 -- The category scope is owned by the configured tool surface.
 def selfConfigCategoryEnabled (scope : ToolPolicy.EndpointScope String Unit) (category : String) : Bool :=
@@ -449,7 +457,7 @@ client-signed update can name only mutable fields; immutable replacement values
 are checked and omitted by the caller. Native graph validation remains the
 premise for unsupported CRDTs, schema changes and generated inputs. -/
 def clientSignedCreateCollection (collection : String) : Bool :=
-  ["Node", "Agent", "AgentContext", "CompactionConfig", "Skill", "DatastoreToolSurface", "Tools", "AgentTarget", "InferenceBackendMetadata", "InferenceProfile", "InferenceSampling", "InferenceExecution", "InferenceRetryPolicy", "ToolServiceRegistry", "ProjectionAcpBinding", "Task", "Schedule", "EventSource", "Trigger", "Callback", "CallbackBinding", "CallbackModule", "RepositoryPlacement", "EvalDefinition"].contains collection
+  ["Node", "Agent", "AgentContext", "CompactionConfig", "Skill", "DatastoreToolSurface", "Tools", "AgentTarget", "InferenceBackendMetadata", "InferenceProfile", "InferenceSampling", "InferenceExecution", "InferenceRetryPolicy", "ToolServiceRegistry", "ProjectionAcpBinding", "Task", "Schedule", "EventSource", "Trigger", "Callback", "CallbackBinding", "CallbackModule", "RepositoryPlacement", "EvalDefinition", "Page", "PluginSource"].contains collection
 
 def clientSignedUpdateSupported (collection : String) : Bool :=
   clientSignedCreateCollection collection

@@ -42,6 +42,8 @@ def decodeControl (doc : Doc) : Option Control := do
         some (true, true, true)
     | some "{\"enable_self_config\":true,\"enable_pack_install\":true}" =>
         some (true, false, true)
+    | some "{\"enable_self_config\":true,\"enable_pack_authority\":true}" =>
+        some (true, false, true)
     | some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"enable_pack_install\":true}" =>
         some (true, true, true)
     | none => some (false, false, true)
@@ -81,6 +83,8 @@ def decodeGrants (doc : Doc) : Option Grants :=
       some { Grants.bot with packInstall := true }
   | some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"enable_pack_install\":true}" =>
       some { Grants.bot with packInstall := true }
+  | some "{\"enable_self_config\":true,\"enable_pack_authority\":true}" =>
+      some { Grants.bot with packAuthority := true }
   | _ => some Grants.bot
 
 def awsAuthText : String :=
@@ -202,6 +206,8 @@ def examples : List (Target × FieldKey × FieldValue) :=
   , (.agentTarget, "agent_did", "gatekeeper")
   , (.skill, "instructions", "Read the checklist before reviewing.")
   , (.datastoreToolSurface, "entries", "[{tool_name: submit_job, collection: Job}]")
+  , (.page, "module", "export default { id: 'board', register() {} }")
+  , (.pluginSource, "source", "module.exports = (input) => input;")
   , (.inferenceProfile, "model_name", "model-1")
   , (.inferenceSampling, "temperature", "0.2")
   , (.inferenceExecution, "max_turns", "40")
@@ -459,6 +465,18 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("self_config", "{\"enable_self_config\":true}")]
     , patch := [("self_config",
         some "{\"enable_self_config\":true,\"enable_pack_install\":true}")] }
+  , { name := "tools_pack_authority_self_raise_without_held_rejected"
+    , target := .tools, guarded := false, validates := true
+    , held := { Grants.bot with packInstall := true }
+    , doc := [("self_config", "{\"enable_self_config\":true}")]
+    , patch := [("self_config",
+        some "{\"enable_self_config\":true,\"enable_pack_authority\":true}")] }
+  , { name := "tools_pack_authority_raise_with_held_accepted"
+    , target := .tools, guarded := false, validates := true
+    , held := { Grants.bot with packAuthority := true }
+    , doc := [("self_config", "{\"enable_self_config\":true}")]
+    , patch := [("self_config",
+        some "{\"enable_self_config\":true,\"enable_pack_authority\":true}")] }
   , { name := "tools_grant_unrelated_edit_on_granted_tools_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]

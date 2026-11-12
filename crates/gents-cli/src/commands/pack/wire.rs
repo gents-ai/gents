@@ -7,16 +7,15 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::documents::apply_desired_state_plan;
-use gents::documents::{load_agent_context_and_tools_in_txn, unwire_plugin, wire_plugin, Tools};
-use gents::pack::home_install::recorded_provenance;
-use gents::pack::{installed_pack_documents, read_home_install, PackKind};
+use gents::documents::load_agent_context_and_tools_in_txn;
+use gents::pack::installed_pack_documents;
 use gents::plugin::authority::describe_plugin_authority;
 use gents::plugin::store::read_record;
 use gents::store::collection::Collection;
 use gents::store::config_client::{
-    read_desired_state_records_in_txn, ClientSigningCapability, ConfigAccess, ConfigApplyTxn,
-    DesiredStateApplyDocument, DesiredStateApplyPlan, PackApprovalError, PackApprovalScope,
-    PackEffectApprover, PackEvidence, PackMutation, PackRelationship, PackRelationshipEvidence,
+    ClientSigningCapability, ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan, PackApprovalError, PackApprovalScope, PackEffectApprover, PackEvidence,
+    PackMutation, PackRelationship, PackRelationshipEvidence,
 };
 use serde_json::{json, Value};
 
@@ -30,6 +29,14 @@ pub(crate) struct WireRequest {
     pub(crate) targets_from: Vec<String>,
     pub(crate) remove: bool,
     pub(crate) preview: bool,
+    /// The node owner approved dynamic scripts for this plugin (the init
+    /// approval of its pack): wiring raises its job block from `check` to
+    /// `run` (Lean `consentedDynamic`). The wire command never sets it.
+    pub(crate) dynamic_consent: bool,
+    /// The node owner approved this plugin calling the agent's own tools
+    /// (the init approval of its pack): its selection is wired with
+    /// `tool_calls: true`. The wire command never sets it.
+    pub(crate) tool_calls_consent: bool,
 }
 
 #[cfg(test)]
@@ -52,8 +59,20 @@ pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
         targets_from: args.targets_from,
         remove: args.remove,
         preview: args.preview,
+        dynamic_consent: false,
+        tool_calls_consent: false,
     };
     crate::print_json(&wire_in(&access, &owner, &home, &request).await?)
+}
+
+fn explain_tools_command(agent: &str) -> String {
+    format!("gents config tools explain --agent-did {agent}")
+}
+
+fn publish_root_command(node_did: &str, root: &str, agent: &str) -> String {
+    format!(
+        "gents config workspace-root set --graphql <url> --node-did {node_did} --path {root} --reader-agent {agent}"
+    )
 }
 
 /// Wires (or with `remove`, unwires) `request.plugin` over a held `access`.
@@ -107,44 +126,22 @@ async fn wire_in_owned(
         }
     }
 
-    let (mut tools_ids, mut skill_ids) = (Vec::new(), Vec::new());
-    if let Some(pack) = plugin.owner_pack_coordinate.as_deref() {
-        for (collection, id) in installed_pack_documents(access, owner, pack).await? {
-            match collection {
-                Collection::Tools => tools_ids.push(id),
-                Collection::Skill => skill_ids.push(id),
-                _ => {}
-            }
-        }
-    }
-
-    let mut targets_from = Vec::new();
-    for pack in &request.targets_from {
-        let target_ids: Vec<String> = installed_pack_documents(access, owner, pack)
-            .await?
-            .into_iter()
-            .filter(|(collection, _)| *collection == Collection::AgentTarget)
-            .map(|(_, id)| id)
-            .collect();
-        anyhow::ensure!(!target_ids.is_empty(), "{pack} ships no AgentTarget");
-        let record = read_home_install(home, pack)?;
-        let via = recorded_provenance(
-            record
-                .as_ref()
-                .map_or(PackKind::Documents, |record| record.kind.clone()),
-            record.map(|record| record.installed_via),
-        );
-        targets_from.push((pack.clone(), target_ids, via));
-    }
-
-    let plan = WirePlan {
+    let mut plan = gents::pack::wiring::PluginWiring::read(
+        access,
         owner,
-        plugin: &plugin,
-        request,
-        tools_ids: &tools_ids,
-        skill_ids: &skill_ids,
-        targets_from: &targets_from,
-    };
+        home,
+        &request.agent,
+        plugin.clone(),
+        &request.targets_from,
+    )
+    .await?;
+    plan.remove = request.remove;
+    plan.preview = request.preview;
+    plan.dynamic_consent = request
+        .dynamic_consent
+        .then_some(gents::tools::background::job::settings::consent_dynamic_run as _);
+    plan.tool_calls_consent = request.tool_calls_consent;
+    plan.next_step = explain_tools_command(&request.agent);
     let report = if request.preview {
         access
             .transact_readonly("cli.pack.wire.preview", |txn| {
@@ -201,60 +198,348 @@ async fn wire_in_owned(
     }))
 }
 
-struct WirePlan<'a> {
-    owner: &'a str,
-    plugin: &'a gents::plugin::store::InstalledPlugin,
-    request: &'a WireRequest,
-    tools_ids: &'a [String],
-    skill_ids: &'a [String],
-    targets_from: &'a [(String, Vec<String>, gents::pack::InstalledVia)],
+/// What the plugins of `manifest` and its `dependencies` ask for beyond a
+/// sealed sandbox, as `[{plugin, asks}]`: what an install grants only with
+/// the installer's consent.
+pub(crate) fn requested_authority(
+    manifest: &gents::pack::PackManifest,
+    dependencies: &[&gents::pack::PackManifest],
+) -> Result<Value> {
+    Ok(super::review::identity_and_authority(manifest, dependencies)?["authority"].take())
 }
 
-impl WirePlan<'_> {
-    async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<gents::documents::WireReport> {
-        let agent_did = &self.request.agent;
-        let missing =
-            |link: &str| format!("{link}. Next: gents config tools explain --agent {agent_did}");
-        let (context, tools) = load_agent_context_and_tools_in_txn(txn, self.owner, agent_did)
-            .await
-            .with_context(|| missing(&format!("cannot read the Tools of {agent_did}")))?;
-        let context =
-            context.with_context(|| missing(&format!("{agent_did} has no Context document")))?;
-        let tools =
-            tools.with_context(|| missing(&format!("{agent_did} has no Tools document")))?;
-        let (tools, context, report) = if self.request.remove {
-            unwire_plugin(
-                &tools,
-                &context,
-                self.plugin,
-                self.skill_ids,
-                self.targets_from,
-            )?
-        } else {
-            let job = reviewed_job(txn, self.owner, self.tools_ids, &self.request.plugin).await?;
-            wire_plugin(
-                &tools,
-                &context,
-                self.plugin,
-                job.as_ref(),
-                self.skill_ids,
-                self.targets_from,
-            )?
-        };
-        tools.validate()?;
-        if !self.request.preview {
-            let document = |collection, value: Value| DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            };
-            let plan = DesiredStateApplyPlan::new(vec![
-                document(Collection::Tools, serde_json::to_value(&tools)?),
-                document(Collection::AgentContext, serde_json::to_value(&context)?),
-            ])?;
-            apply_desired_state_plan(txn, &plan).await?;
+fn grant_reader_command(root: &str, agent: &str) -> String {
+    format!(
+        "gents config workspace-root grant-reader --graphql <url> --path {root} --agent-did {agent}"
+    )
+}
+
+/// The Tools one pack of an install ships that select host tools and name no
+/// root: the ones the install runs under its installer's own root, and whose
+/// agents an approved install grants reader there. This is what a review
+/// lists, and the grant is made from the same value, so the two cannot name
+/// different Tools.
+pub(crate) struct InstallerRootTools {
+    /// The pack, as `namespace/name`.
+    pub(crate) coordinate: String,
+    /// By `tools_id`, as the install writes them on this node.
+    pub(crate) tools: Vec<String>,
+    /// The agents whose Context selects one of them, by the name the pack
+    /// gives each: who a review says will read the folder.
+    pub(crate) agents: Vec<String>,
+    /// Why the pack's config did not load for the review, when it did not:
+    /// nothing of it is listed, so nothing of it is granted.
+    pub(crate) unread: Option<String>,
+}
+
+/// [`InstallerRootTools`] of `pack` on the node `node_did`. The config is
+/// rendered with that node's DID, as its install renders it, so a Tools id
+/// that depends on the node is the id the installed document has. A config
+/// that does not load is reported `unread`, never as shipping no such Tools.
+pub(crate) fn tools_taking_installer_root(
+    pack: &super::PackSource,
+    node_did: &str,
+) -> InstallerRootTools {
+    let coordinate = format!(
+        "{}/{}",
+        pack.manifest().metadata.namespace,
+        pack.manifest().name
+    );
+    let mut listed = InstallerRootTools {
+        coordinate,
+        tools: Vec::new(),
+        agents: Vec::new(),
+        unread: None,
+    };
+    if pack.manifest().config.is_none() {
+        return listed;
+    }
+    let loaded = gents::pack::load_pack_authoring_config(
+        pack.manifest(),
+        &gents::pack::PackInstallOptions {
+            node_did: node_did.to_owned(),
+        },
+        &|path| Ok(pack.asset(path)?.to_vec()),
+        &|name| std::env::var(name).ok(),
+    )
+    .and_then(|authored| {
+        let tools = gents::pack::tools_taking_installer_root(&authored.documents.tools)?;
+        // An authored agent names a slot, not a DID, so it is read as written.
+        let rows = |key: &str| authored.value[key].as_array().into_iter().flatten();
+        let agents = rows("agents")
+            .filter(|agent| {
+                rows("contexts").any(|context| {
+                    context["context_id"].is_string()
+                        && context["context_id"] == agent["context_id"]
+                        && context["tools_id"]
+                            .as_str()
+                            .is_some_and(|selected| tools.iter().any(|id| id == selected))
+                })
+            })
+            .filter_map(|agent| {
+                ["display_name", "agent_slot", "agent_did"]
+                    .iter()
+                    .find_map(|field| agent[*field].as_str())
+                    .map(ToOwned::to_owned)
+            })
+            .collect();
+        Ok((tools, agents))
+    });
+    match loaded {
+        Ok((tools, agents)) => {
+            listed.tools = tools;
+            listed.agents = agents;
         }
-        Ok(report)
+        Err(error) => {
+            listed.unread = Some(format!(
+                "{} did not load for its host tool review, so the folder its agents would read is unknown: {error:#}",
+                listed.coordinate
+            ));
+        }
+    }
+    listed
+}
+
+/// The root an install by `installer` (the node's User when `None`) supplies
+/// to the Tools `listed` (of the root pack and its dependencies), and the
+/// reader their agents need there: what a preview lists and an approval
+/// covers. `None` when no such Tools are listed, the installer has no root,
+/// or no reader is needed.
+pub(crate) async fn supplied_tool_root(
+    access: &ConfigAccess,
+    owner: &str,
+    installer: Option<&str>,
+    listed: &[InstallerRootTools],
+) -> Result<Option<Value>> {
+    use gents::tools::surface::ToolRootReader;
+    let tools: Vec<&String> = listed.iter().flat_map(|pack| &pack.tools).collect();
+    let agents: Vec<&String> = listed.iter().flat_map(|pack| &pack.agents).collect();
+    if tools.is_empty() {
+        return Ok(None);
+    }
+    let Some(root) = gents::pack::installer_tool_root(access, owner, installer).await? else {
+        return Ok(None);
+    };
+    Ok(
+        match gents::tools::surface::tool_root_reader(access, owner, &root).await? {
+            ToolRootReader::NotNeeded => None,
+            ToolRootReader::Published(published) => Some(
+                json!({"tools": tools, "agents": agents, "root": root, "reader_on": published}),
+            ),
+            ToolRootReader::Unpublished(_) => Some(
+                json!({"tools": tools, "agents": agents, "root": root, "unpublished_root": root}),
+            ),
+        },
+    )
+}
+
+/// The pack coordinate whose reader grants a test makes fail.
+#[cfg(test)]
+pub(crate) static FAIL_GRANTS_FOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Grants each agent the installed packs `listed` (a pack and its
+/// dependencies) ship with host tools reader on the published WorkspaceRoot
+/// covering its tool root, as the User holding `access`: a new agent lacks
+/// that grant, only a User makes it, and without it the runtime reports the
+/// agent unavailable. Every dependency is covered, installed by this install
+/// or before it, so repeating an install whose grant failed makes the grant
+/// its first attempt missed; granting a reader that is already held changes
+/// nothing.
+///
+/// The grant is the installer's consent to its own root and nothing else: it
+/// is made only when the install was `approved`, and only for an agent whose
+/// Tools document the review listed for the pack that installed it (the
+/// rootless Tools the install gave its root `supplied`,
+/// [`gents::pack::installer_tool_root`]). A listed id counts only as a
+/// Tools document of its own pack, so another pack's Tools with the same id
+/// are not it. Tools that name their own root are never granted here, even
+/// when that root renders equal to the installer's: the review did not list
+/// them. An agent under any other root, one an install variable set or a
+/// later edit wrote, is listed with the User command that grants it.
+/// Returns one entry per agent.
+pub(crate) async fn grant_pack_root_readers(
+    access: &ConfigAccess,
+    owner: &str,
+    listed: &[InstallerRootTools],
+    supplied: Option<&str>,
+    approved: bool,
+) -> Result<Vec<Value>> {
+    use gents::tools::surface::ToolRootReader;
+    let mut granted = Vec::new();
+    let mut agents = Vec::new();
+    // The Tools documents the review listed that their own pack installed.
+    let mut inherited = Vec::new();
+    // Each agent's pack, when that pack did not load for the review.
+    let mut unread = Vec::new();
+    for pack in listed {
+        for (collection, id) in installed_pack_documents(access, owner, &pack.coordinate).await? {
+            match collection {
+                Collection::Agent => {
+                    if pack.unread.is_some() {
+                        unread.push(id.clone());
+                    }
+                    agents.push(id);
+                }
+                Collection::Tools if pack.tools.contains(&id) => inherited.push(id),
+                _ => {}
+            }
+        }
+    }
+    #[cfg(test)]
+    let failing = FAIL_GRANTS_FOR
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|failing| listed.iter().any(|pack| pack.coordinate == *failing));
+    for (agent, tools, root, reader) in
+        gents::tools::surface::agents_tool_root_readers(access, owner, &agents).await?
+    {
+        let listed = supplied == Some(root.as_str()) && inherited.contains(&tools);
+        granted.push(match reader {
+            ToolRootReader::Published(published) if approved && listed => {
+                let grant =
+                    gents::tools::surface::grant_workspace_root_reader(access, &published, &agent)
+                        .await
+                        .map_err(anyhow::Error::from);
+                #[cfg(test)]
+                let grant = if failing {
+                    Err(anyhow::anyhow!("simulated reader grant failure"))
+                } else {
+                    grant
+                };
+                // One agent's failed grant does not hide the others': each is
+                // reported with the command that makes it.
+                match grant {
+                    Ok(()) => json!({"agent": agent, "root": root, "reader_on": published}),
+                    Err(error) => json!({
+                        "agent": agent,
+                        "root": root,
+                        "failed": format!("granting {agent} reader on {published}: {error:#}"),
+                        "next": grant_reader_command(&published, &agent),
+                    }),
+                }
+            }
+            ToolRootReader::Published(published) => {
+                let reason = if listed {
+                    "the install was not approved to grant it"
+                } else if unread.contains(&agent) {
+                    "its pack's configuration did not load for the install's review, so its Tools were not listed"
+                } else if supplied.is_none() {
+                    "this install supplied no tool root"
+                } else if supplied == Some(root.as_str()) {
+                    "its Tools name that root themselves, so the install's review did not list it"
+                } else {
+                    "its tool root is not the one this install supplied"
+                };
+                json!({
+                    "agent": agent,
+                    "root": root,
+                    "not_granted": format!("{agent} was not granted reader on {published}: {reason}. It is unavailable until a User grants it."),
+                    "next": grant_reader_command(&published, &agent),
+                })
+            }
+            ToolRootReader::Unpublished(root) => {
+                let next = publish_root_command(owner, &root, &agent);
+                json!({"agent": agent, "unpublished_root": root, "next": next})
+            }
+            ToolRootReader::NotNeeded => continue,
+        });
+    }
+    Ok(granted)
+}
+
+/// Attaches the Skill documents the installed pack `coordinate` (archive
+/// `digest`) ships to `agent`'s Context, through the transaction a wire
+/// writes with. Returns the skills the pack ships.
+pub(crate) async fn attach_pack_skills(
+    access: &ConfigAccess,
+    owner: &str,
+    agent: &str,
+    coordinate: &str,
+    digest: &str,
+) -> Result<Vec<String>> {
+    let skills: Vec<String> = installed_pack_documents(access, owner, coordinate)
+        .await?
+        .into_iter()
+        .filter(|(collection, _)| *collection == Collection::Skill)
+        .map(|(_, id)| id)
+        .collect();
+    if skills.is_empty() {
+        return Ok(skills);
+    }
+    let plan = SkillPlan {
+        owner,
+        agent,
+        skills: &skills,
+    };
+    if matches!(access, ConfigAccess::Local(_)) {
+        use gents::NodeIdentity as _;
+        let client = crate::home_state::load_client_identity().await?;
+        anyhow::ensure!(
+            access.actor_did().as_deref() == Some(client.did()),
+            "attaching pack skills requires the held User identity selected by the local transaction"
+        );
+        let scope = PackApprovalScope {
+            node_did: owner.to_owned(),
+            pack_digests: vec![digest.to_owned()],
+            nonce: uuid::Uuid::new_v4().to_string(),
+        };
+        let approver = Arc::new(LocalWireApprover {
+            actor: client.client_signing_capability()?,
+            scope: scope.clone(),
+        });
+        access
+            .transact_verified_pack_with_approver(
+                "cli.pack.attach_skills",
+                scope,
+                approver,
+                |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { plan.apply(txn.approved_interpreter()?).await })
+                },
+            )
+            .await
+            .map_err(|failure| failure.error)?;
+    } else {
+        access
+            .transact_write("cli.pack.attach_skills", |txn| {
+                let plan = &plan;
+                Box::pin(async move { plan.apply(txn).await })
+            })
+            .await?;
+    }
+    Ok(skills)
+}
+
+struct SkillPlan<'a> {
+    owner: &'a str,
+    agent: &'a str,
+    skills: &'a [String],
+}
+
+impl SkillPlan<'_> {
+    async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<()> {
+        let (context, _) = load_agent_context_and_tools_in_txn(txn, self.owner, self.agent).await?;
+        let mut context =
+            context.with_context(|| format!("{} has no Context document", self.agent))?;
+        let added: Vec<String> = self
+            .skills
+            .iter()
+            .filter(|id| !context.skill_ids.contains(id))
+            .cloned()
+            .collect();
+        if added.is_empty() {
+            return Ok(());
+        }
+        context.skill_ids.extend(added);
+        let value = serde_json::to_value(&context)?;
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::AgentContext,
+            add: value.clone(),
+            update: value,
+        }])?;
+        apply_desired_state_plan(txn, &plan).await?;
+        Ok(())
     }
 }
 
@@ -314,33 +599,22 @@ impl PackEffectApprover for LocalWireApprover {
     }
 }
 
-/// The `job` block of the first entry for `plugin` in the pack's own Tools
-/// documents that carries one: what the pack's author reviewed.
-async fn reviewed_job(
-    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
-    owner: &str,
-    tools_ids: &[String],
-    plugin: &str,
-) -> Result<Option<gents_protocol::job::PluginJobSettings>> {
-    let ids: Vec<&str> = tools_ids.iter().map(String::as_str).collect();
-    let mut documents =
-        read_desired_state_records_in_txn(txn, Collection::Tools, owner, &ids).await?;
-    for id in &ids {
-        let Some((_, value)) = documents.remove(*id) else {
-            continue;
-        };
-        let tools: Tools = serde_json::from_value(value)
-            .with_context(|| format!("decoding the pack's Tools document {id}"))?;
-        let job = tools
-            .integrations
-            .and_then(|integrations| integrations.plugins)
-            .into_iter()
-            .flatten()
-            .find(|entry| entry.plugin == plugin && entry.job.is_some())
-            .and_then(|entry| entry.job);
-        if job.is_some() {
-            return Ok(job);
+#[cfg(test)]
+mod next_command_tests {
+    use clap::Parser as _;
+
+    #[test]
+    fn the_commands_wiring_names_parse() {
+        for command in [
+            super::explain_tools_command("did:key:agent"),
+            super::publish_root_command("did:key:node", "/srv/root", "did:key:agent"),
+        ] {
+            let arguments = command.split(' ').map(|word| match word {
+                "<url>" => "http://127.0.0.1:9191/api/v1/graphql",
+                word => word,
+            });
+            crate::cli::Cli::try_parse_from(arguments)
+                .unwrap_or_else(|error| panic!("{command}: {error}"));
         }
     }
-    Ok(None)
 }
