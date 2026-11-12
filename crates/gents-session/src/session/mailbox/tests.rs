@@ -725,16 +725,10 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
         .mailbox_sweep_cases
         .first()
         .expect("Lean mailbox sweep case");
-    let node_did = case["node_did"].as_str().unwrap();
-    assert_eq!(
-        case["page_size"].as_u64(),
-        Some(MAILBOX_SWEEP_PAGE_SIZE as u64)
-    );
-    assert_eq!(
-        case["budget"].as_u64(),
-        Some(MAILBOX_SWEEP_PAGE_SIZE as u64)
-    );
-    let actions = case["actions"].as_array().unwrap();
+    let node_did = case.node_did.as_str();
+    assert_eq!(case.page_size, MAILBOX_SWEEP_PAGE_SIZE as u64);
+    assert_eq!(case.budget, MAILBOX_SWEEP_PAGE_SIZE as u64);
+    let actions = &case.actions;
     assert_eq!(actions.len(), 4);
     let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
     let mut modeled_doc_ids = BTreeMap::<u64, String>::new();
@@ -744,11 +738,11 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
     let mut modeled_due = BTreeMap::<u64, bool>::new();
     let mut created_local_ids = Vec::new();
     let mut foreign_doc_id = None;
-    for row in actions[0]["rows"].as_array().unwrap() {
-        let model_id = row["doc_id"].as_u64().unwrap();
-        let due = row["due"].as_bool().unwrap();
+    for row in &actions[0].rows {
+        let model_id = row.doc_id;
+        let due = row.due;
         modeled_due.insert(model_id, due);
-        let local = row["node_did"].as_str().unwrap() == node_did;
+        let local = row.node_did.as_str() == node_did;
         let row_context = context("did:test:owner");
         let mut row_args = args(
             MailboxAction::WriteDocument,
@@ -850,7 +844,7 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
             .doc_id
     }
     for (index, action) in actions.iter().enumerate() {
-        let input_cursor = action["cursor"].as_u64();
+        let input_cursor = action.cursor;
         assert_eq!(
             cursor
                 .as_deref()
@@ -905,16 +899,11 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
             assert_eq!(roots.len(), 1);
             let doc_fetches = metric(&roots[0], "docFetches").expect("docFetches metric");
             let index_fetches = metric(&roots[0], "indexFetches").expect("indexFetches metric");
-            let remaining_local_open_rows = action["rows"]
-                .as_array()
-                .unwrap()
+            let remaining_local_open_rows = action
+                .rows
                 .iter()
                 .filter(|row| {
-                    row["node_did"] == node_did
-                        && row["open"] == true
-                        && row["doc_id"]
-                            .as_u64()
-                            .is_some_and(|id| id > cursor_model_id)
+                    row.node_did.as_str() == node_did && row.open && row.doc_id > cursor_model_id
                 })
                 .count() as u64;
             assert!(
@@ -938,15 +927,15 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
         .await
         .unwrap();
         assert!(page.report.scanned <= MAILBOX_SWEEP_PAGE_SIZE);
-        let selected = action["selected"].as_array().unwrap();
+        let selected = &action.selected;
         assert_eq!(page.report.scanned, selected.len());
         let due_selected = selected
             .iter()
-            .filter(|model_id| modeled_due[&model_id.as_u64().unwrap()])
+            .filter(|model_id| modeled_due[*model_id])
             .count();
         assert_eq!(page.report.acted, due_selected);
         assert_eq!(page.report.expired, 0);
-        let expected_next = action["next_cursor"].as_u64();
+        let expected_next = action.next_cursor;
         if let Some(next) = expected_next {
             assert_eq!(
                 page.next_cursor
