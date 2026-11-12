@@ -61,7 +61,7 @@ pub fn terminal_failure_pending_for_test(tool_call_doc_id: &str) -> bool {
         .any(|id| id == tool_call_doc_id)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn take_terminal_failure_for_test(tool_call_doc_id: &str) -> bool {
     let mut pending = FAIL_NEXT_TERMINAL.lock().unwrap();
     if let Some(index) = pending.iter().position(|id| id == tool_call_doc_id) {
