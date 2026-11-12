@@ -76,6 +76,7 @@ help:
 	@echo "  make live-onboarding       Run bare gents against real launchd and a PTY (macOS)"
 	@echo "  make live-eval             Run live inference eval-driver tests"
 	@echo "  make live-agent            Run live inference runtime tests"
+	@echo "  make live-delivery         Run live delivery stress tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
 	@echo "Packs (published from gents-ai/packs):"
@@ -278,3 +279,7 @@ live-desktop-smoke:
 .PHONY: live-eval
 live-eval:
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-eval --features live-e2e --test eval_runner_canary $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+
+.PHONY: live-delivery
+live-delivery:
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} GENTS_DELIVERY_SOURCE_SHA=$${GENTS_DELIVERY_SOURCE_SHA:-$$(git rev-parse HEAD)} $(CARGO) test -p gents --features live-e2e --test trigger_delivery_live $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --skip process::delivery_crash_child --nocapture --test-threads=1
