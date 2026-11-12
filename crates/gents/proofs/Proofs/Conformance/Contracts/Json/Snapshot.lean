@@ -549,8 +549,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_spawned_target_rejection_cases\":"
       ++ Conformance.DispatchObservationContracts.spawnedTargetCasesJson ++ ","
-    ++ "\"canonical_worker_capacity_cases\":"
-      ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
     ++ "\"terminal_diagnostic_presentation_cases\":"

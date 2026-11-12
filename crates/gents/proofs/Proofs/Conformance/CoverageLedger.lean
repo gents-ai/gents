@@ -2053,9 +2053,9 @@ def caseCoverage : List CoverageEntry :=
       "IdentityContracts"
       "Route through the canonical DID registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "canonical_worker_capacity_cases"
-      "CanonicalWorkerCapacityCases"
+  , tagged (consumerWithFollowUp
+      "family"
+      "worker_capacity_contracts_transition"
       "Bind modeled acquire, full-capacity refusal and release to the slot-owned Rust capacity scheduler. No request parks a worker while waiting on another session.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

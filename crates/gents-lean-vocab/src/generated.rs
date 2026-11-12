@@ -73,10 +73,6 @@ pub fn lean_canonical_spawned_target_rejection_cases() -> &'static [LeanSpawnedT
     &lean_contract_snapshot().canonical_spawned_target_rejection_cases
 }
 
-pub fn lean_canonical_worker_capacity_cases() -> &'static [LeanWorkerCapacityCase] {
-    &lean_contract_snapshot().canonical_worker_capacity_cases
-}
-
 pub fn lean_capture_order_cases() -> &'static [LeanCaptureOrderCase] {
     &lean_contract_snapshot().capture_order_cases
 }
@@ -3289,7 +3285,6 @@ pub struct LeanContractSnapshot {
         LeanSessionInputEditClientObservationCase,
     >,
     pub retry_selection_cases: Vec<LeanRetrySelectionCase>,
-    pub canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub terminal_diagnostic_presentation_cases: Vec<
         LeanTerminalDiagnosticPresentationCase,
@@ -12149,29 +12144,6 @@ pub struct LeanWatcherActorCaseCandidatesItem {
     pub configured: bool,
     pub did: String,
     pub identity_resolved: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkerCapacityCase {
-    pub name: String,
-    pub pre: LeanWorkerCapacityState,
-    pub operation: LeanWorkerCapacityOperation,
-    pub expected: Option<LeanWorkerCapacityState>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanWorkerCapacityOperation {
-    Acquire { ticket: [u64; 2] },
-    Release { ticket: [u64; 2] },
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkerCapacityState {
-    pub active_limit: usize,
-    pub active: Vec<[u64; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
