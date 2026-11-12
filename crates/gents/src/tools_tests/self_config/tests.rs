@@ -1,21 +1,12 @@
-use super::agent_management::{model_agent_mutate, model_agent_preview};
-use super::command::agents::agent_params;
+use super::fixture::SelfConfigFixture;
 use super::*;
-use crate::tools_tests::self_config::fixture::{
-    call_config_tool, config, config_call, node_identity, take_agent_tool, SelfConfigFixture,
-};
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
-use gents_tools::builtin::self_config::ops::ApplyRequest;
-use gents_tools::builtin::self_config::test_support::{
-    agent_inspect, agent_request, anchored_request, backend_request, profile_create_request,
-    profile_request, profile_target_request, protect_working_agent, tools_request,
+use gents_toolcalls::test_support::self_config::{
+    call_config_tool, config, node_identity, take_agent_tool,
 };
-
-mod live_documents;
-
-mod pack_authoring;
-
-static PLUGIN_BUILDER_STUB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+use gents_tools::builtin::self_config::test_support::{
+    agent_inspect, agent_request, backend_request, protect_working_agent, tools_request,
+};
 
 #[derive(Clone)]
 struct RootReadModel {
@@ -90,7 +81,7 @@ impl rig::completion::CompletionModel for RootReadModel {
 
 #[tokio::test]
 async fn config_tool_access_follows_the_modeled_managed_route() {
-    let fixture = SelfConfigFixture::new("config-tool-route").await;
+    let fixture = gents_automation::test_support::self_config_fixture("config-tool-route").await;
     let runtime = fixture.db.node_identity.clone();
     let foreign = tokio::task::spawn_blocking(|| node_identity("foreign-runtime"))
         .await
@@ -162,49 +153,8 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
 }
 
 #[tokio::test]
-async fn effective_config_reports_inherited_workspace_network_as_disabled() {
-    let fixture = SelfConfigFixture::new("workspace-network-report").await;
-    fixture.grant_selected_configuration().await;
-    let root = tempfile::tempdir().unwrap();
-    fixture.publish_workspace_root(root.path()).await;
-    let core =
-        fixture
-            .core()
-            .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
-                file_mode: gents_documents::FileToolMode::ReadWrite,
-                bash_mode: gents_documents::BashMode::Unrestricted,
-                root: Some(root.path().into()),
-            });
-    core.apply(tools_request(
-        &core,
-        vec![(
-            "host".into(),
-            Some(json!({
-                "root": root.path().to_str().unwrap(),
-                "bash": {"mode": "Unrestricted", "execution_mode": "workspace_write"}
-            })),
-        )],
-    ))
-    .await
-    .unwrap();
-
-    let report = core
-        .read_effective_config(&BTreeSet::new(), false, false)
-        .await
-        .unwrap();
-    assert_eq!(
-        report["tool_grants"]["configured"]["network_mode"],
-        "inherit"
-    );
-    assert_eq!(
-        report["runtime_effective"]["effective"]["network_mode"],
-        "disabled"
-    );
-}
-
-#[tokio::test]
 async fn agent_create_commits_and_resolves_after_restart() {
-    let fixture = SelfConfigFixture::new("agent-create").await;
+    let fixture = gents_automation::test_support::self_config_fixture("agent-create").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
     fixture.grant_agent_catalog().await;
@@ -431,205 +381,9 @@ async fn agent_create_commits_and_resolves_after_restart() {
 }
 
 #[tokio::test]
-async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
-    let fixture = SelfConfigFixture::new("canonical-self-config").await;
-    fixture.grant_selected_configuration().await;
-    fixture.grant_engineer_tool_sources().await;
-    fixture.grant_node_reader().await;
-    let sibling = fixture.install_sibling("unconfigured").await;
-    let other = tokio::task::spawn_blocking(|| node_identity("other-self-config"))
-        .await
-        .unwrap();
-    let foreign = other.did().to_owned();
-    gents_documents::test_support::bootstrap_signed_test_node(fixture.user_access(), &foreign)
-        .await;
-    let tools_id = format!("{}:tools", fixture.agent_did());
-    let document = json!({"node_did": foreign, "tools_id": tools_id});
-    let plan = gents_documents::DesiredStateApplyPlan::new(vec![
-        gents_documents::DesiredStateApplyDocument {
-            collection: gents_store::collection::Collection::Tools,
-            add: document.clone(),
-            update: document,
-        },
-    ])
-    .unwrap();
-    fixture
-        .user_access()
-        .transact_write("test.foreign_tools", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-    let core = fixture.core();
-    let patch = vec![(
-        "self_config".into(),
-        Some(json!({"enable_self_config":true})),
-    )];
-    let preview = core
-        .preview(tools_request(&core, patch.clone()))
-        .await
-        .unwrap();
-    assert!(!preview.committed);
-    let read = core
-        .read_effective_config(&BTreeSet::new(), false, true)
-        .await
-        .unwrap();
-    assert!(read["documents"]["Tools"]["self_config"].is_null());
-    core.apply(tools_request(&core, patch)).await.unwrap();
-    let guarded = core.clone().with_no_lockout(true);
-    assert!(guarded
-        .apply(tools_request(&guarded, vec![("self_config".into(), None)],))
-        .await
-        .is_err());
-    assert!(guarded
-        .preview(agent_request(
-            &guarded,
-            vec![(
-                "context_id".into(),
-                Some(json!(format!("{sibling}:context")))
-            )]
-        ))
-        .await
-        .is_err());
-    assert!(core
-        .apply(anchored_request(
-            SelfConfigTarget::AgentContext,
-            "context_id",
-            vec![("tools_id".into(), Some(json!("missing")))]
-        ))
-        .await
-        .is_err());
-    assert!(core
-        .preview(tools_request(
-            &core,
-            vec![("host".into(), Some(json!({"unexpected":true})))],
-        ))
-        .await
-        .is_err());
-    let own = core
-        .read_effective_config(&BTreeSet::new(), true, true)
-        .await
-        .unwrap();
-    assert_eq!(own["context"]["tools_id"], tools_id);
-    assert_eq!(
-        own["documents"]["Tools"]["self_config"]["enable_self_config"],
-        true
-    );
-    let foreign_read = fixture.user_access()
-        .execute(&format!(r#"{{ Tools(filter: {{node_did: {{_eq: "{}"}}, tools_id: {{_eq: "{}"}}}}) {{ self_config }} }}"#,
-            escape_graphql_string(&foreign), escape_graphql_string(&tools_id)))
-        .await
-        .unwrap();
-    let foreign_tools = foreign_read["data"]["Tools"].as_array().unwrap();
-    assert_eq!(foreign_tools.len(), 1);
-    assert!(foreign_tools[0]["self_config"].is_null());
-}
-
-#[tokio::test]
-async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_root() {
-    let fixture = SelfConfigFixture::new("root-policy").await;
-    fixture.grant_selected_configuration().await;
-    let owner = fixture.node_did().to_owned();
-    let agent_did = fixture.agent_did().to_owned();
-    let access = fixture.user_access();
-    let ceiling = tempfile::tempdir().unwrap();
-    let selected = ceiling.path().join("selected");
-    let sibling = ceiling.path().join("sibling");
-    std::fs::create_dir_all(&selected).unwrap();
-    std::fs::create_dir_all(&sibling).unwrap();
-    let selected_text = selected.to_string_lossy();
-    gents_tools::surface::set_workspace_root_with_readers(
-        access,
-        &owner,
-        &selected_text,
-        None,
-        true,
-        std::slice::from_ref(&agent_did),
-    )
-    .await
-    .unwrap();
-    let core =
-        fixture
-            .core()
-            .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
-                file_mode: gents_documents::FileToolMode::ReadOnly,
-                bash_mode: gents_documents::BashMode::Off,
-                root: Some(ceiling.path().to_path_buf()),
-            });
-    let patch = |root: &std::path::Path| {
-        vec![(
-            "host".into(),
-            Some(json!({
-                "root": root.to_string_lossy(),
-                "files": {"mode": "ReadOnly"}
-            })),
-        )]
-    };
-
-    let authored_inside = selected.join("detour").join("..");
-    let preview = core
-        .preview(tools_request(&core, patch(&authored_inside)))
-        .await
-        .expect("preview admits a descendant and does not persist it");
-    assert!(!preview.committed);
-    assert!(core
-        .preview(tools_request(&core, patch(&sibling)))
-        .await
-        .is_err());
-    assert!(core
-        .apply(tools_request(&core, patch(&sibling)))
-        .await
-        .is_err());
-
-    core.apply(tools_request(&core, patch(&authored_inside)))
-        .await
-        .expect("apply admits the selected root");
-    let tools_id = format!("{agent_did}:tools");
-    let persisted: gents_documents::Tools = core
-        .access()
-        .unwrap()
-        .transact_write("test.self_config.read_tools", |txn| {
-            let owner = owner.clone();
-            let tools_id = tools_id.clone();
-            Box::pin(async move {
-                let value = gents_documents::read_desired_state_document_in_txn(
-                    txn,
-                    gents_store::collection::Collection::Tools,
-                    &owner,
-                    &tools_id,
-                )
-                .await?
-                .context("persisted Tools")?;
-                Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
-            })
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        persisted
-            .host
-            .as_ref()
-            .and_then(|host| host.root.as_deref()),
-        Some(
-            std::fs::canonicalize(&selected)
-                .unwrap()
-                .to_string_lossy()
-                .as_ref()
-        )
-    );
-}
-
-#[tokio::test]
 async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tools() {
-    let fixture = SelfConfigFixture::new("descendant-root-self-config").await;
+    let fixture =
+        gents_automation::test_support::self_config_fixture("descendant-root-self-config").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
     fixture.grant_agent_catalog().await;
@@ -933,7 +687,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
 #[tokio::test]
 async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
-    let fixture = SelfConfigFixture::new("self-config-secret").await;
+    let fixture = gents_automation::test_support::self_config_fixture("self-config-secret").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_selected_backend_writer().await;
     let core = fixture.core();
@@ -1038,131 +792,9 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
 }
 
 #[tokio::test]
-async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
-    const VARIABLE: &str = "GENTS_TEST_UNRELATED_PATCH_ENV_REFERENCE";
-    const SENTINEL: &str = "sentinel-env-secret-never-stored";
-    let fixture = SelfConfigFixture::new("self-config-env-reference").await;
-    fixture.grant_selected_configuration().await;
-    fixture.grant_selected_backend_writer().await;
-    let core = fixture.core();
-    let reference = json!({"kind":"environment","variable":VARIABLE});
-    core.apply(backend_request(vec![(
-        "auth".into(),
-        Some(reference.clone()),
-    )]))
-    .await
-    .unwrap();
-    let _variable = gents_store::test_support::EnvVarGuard::set(VARIABLE, SENTINEL);
-
-    for patch in [
-        vec![("name".into(), Some(json!("Renamed inference")))],
-        vec![("connect_timeout_secs".into(), Some(json!(17)))],
-    ] {
-        let preview = core.preview(backend_request(patch.clone())).await.unwrap();
-        let applied = core.apply(backend_request(patch)).await.unwrap();
-        for outcome in [&preview, &applied] {
-            let rendered = serde_json::to_string(outcome).unwrap();
-            assert!(!rendered.contains(SENTINEL), "{rendered}");
-            assert!(
-                !rendered.contains("\"auth\""),
-                "an unrelated patch must not report an auth delta: {rendered}"
-            );
-        }
-    }
-
-    let backend_id = escape_graphql_string(&format!("{}:backend", fixture.agent_did()));
-    let response = fixture.user_access().execute(&format!(
-        r#"{{ InferenceBackendMetadata(filter: {{backend_id: {{_eq: "{backend_id}"}}}}) {{ name connect_timeout_secs auth_kind environment_variable }} }}"#
-    )).await.unwrap();
-    let stored = &response["data"]["InferenceBackendMetadata"][0];
-    assert_eq!(stored["name"], "Renamed inference");
-    assert_eq!(stored["connect_timeout_secs"], 17);
-    assert_eq!(stored["auth_kind"], "environment");
-    assert_eq!(stored["environment_variable"], VARIABLE);
-    assert!(!stored.to_string().contains(SENTINEL));
-    let read = core
-        .read_effective_config(&BTreeSet::new(), false, true)
-        .await
-        .unwrap();
-    assert!(!read.to_string().contains(SENTINEL));
-    assert!(read.to_string().contains(VARIABLE));
-}
-
-#[tokio::test]
-async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
-    let fixture = SelfConfigFixture::new("self-config-account").await;
-    fixture.grant_selected_configuration().await;
-    fixture.grant_selected_backend_writer().await;
-    let owner = fixture.node_did();
-    let backend_id = format!("{}:backend", fixture.agent_did());
-    let core = fixture.core();
-    let access = fixture.user_access();
-    let store = |kind: &str, auth: Value| {
-        let backend: gents_documents::InferenceBackend = serde_json::from_value(json!({
-            "node_did": owner, "backend_id": backend_id, "name": "Test inference",
-            "provider_kind": kind, "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
-        }))
-        .unwrap();
-        async move {
-            gents_documents::write_inference_backend_document(
-                access,
-                &backend,
-                &gents_inference::resolved::ProviderProfilePolicy,
-            )
-            .await
-            .unwrap();
-        }
-    };
-    let to_oauth = |auth: Value| {
-        vec![
-            ("provider_kind".into(), Some(json!("ChatGptCodex"))),
-            ("auth".into(), Some(auth)),
-        ]
-    };
-    let refused = |patch: SelfConfigPatch| {
-        let core = &core;
-        async move {
-            let preview = core.preview(backend_request(patch.clone())).await;
-            let apply = core.apply(backend_request(patch)).await;
-            for result in [preview, apply] {
-                let error = result.expect_err("account reference change must be refused");
-                assert!(
-                    format!("{error:#}").contains("OAuth account references are operator-managed"),
-                    "{error:#}"
-                );
-            }
-        }
-    };
-
-    store(
-        "OpenAiCompatible",
-        json!({"kind":"environment","variable":"KEY"}),
-    )
-    .await;
-    refused(to_oauth(json!({"kind":"node_oauth","account_ref":"a1"}))).await;
-    let original = to_oauth(json!({"kind":"node_oauth"}));
-    core.preview(backend_request(original.clone()))
-        .await
-        .unwrap();
-    core.apply(backend_request(original)).await.unwrap();
-
-    store(
-        "ChatGptCodex",
-        json!({"kind":"node_oauth","account_ref":"a1"}),
-    )
-    .await;
-    refused(to_oauth(json!({"kind":"node_oauth","account_ref":"a2"}))).await;
-    refused(to_oauth(json!({"kind":"node_oauth"}))).await;
-    let endpoint = vec![("endpoint".into(), Some(json!("http://127.0.0.1:2/v1")))];
-    core.preview(backend_request(endpoint.clone()))
-        .await
-        .unwrap();
-    core.apply(backend_request(endpoint)).await.unwrap();
-}
-
-#[tokio::test]
 async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
-    let fixture = SelfConfigFixture::new("account-default-choice").await;
+    let fixture =
+        gents_automation::test_support::self_config_fixture("account-default-choice").await;
     fixture.grant_node_reader().await;
     let owner = fixture.node_did();
     let credential = gents_inference::auth::credential::OAuthCredential {
@@ -1255,178 +887,6 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
     }
 }
 
-async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) {
-    let fixture = SelfConfigFixture::new(name).await;
-    fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
-    fixture.grant_user_relation_delete().await;
-    fixture.grant_agent_relation_delete().await;
-    let owner = fixture.node_did().to_owned();
-    let agent = fixture.agent_did().to_owned();
-    let access = fixture.user_access();
-    for (id, kind, auth) in [
-        (
-            "chat-original",
-            "ChatGptCodex",
-            json!({"kind":"node_oauth"}),
-        ),
-        (
-            "chat-b",
-            "ChatGptCodex",
-            json!({"kind":"node_oauth","account_ref":"acct-b"}),
-        ),
-        (
-            "grok-original",
-            "XaiGrokOAuth",
-            json!({"kind":"node_oauth"}),
-        ),
-    ] {
-        let backend: gents_documents::InferenceBackend = serde_json::from_value(json!({
-            "node_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
-            "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
-        }))
-        .unwrap();
-        gents_documents::write_inference_backend_document(
-            access,
-            &backend,
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
-        .await
-        .unwrap();
-    }
-    for (id, backend) in [
-        (format!("{agent}:inference"), "chat-original"),
-        ("p-original".into(), "chat-original"),
-        ("p-chat-b".into(), "chat-b"),
-        ("p-grok".into(), "grok-original"),
-    ] {
-        let profile: gents_documents::InferenceProfile = serde_json::from_value(json!({
-            "node_did": owner, "profile_id": id, "backend_id": backend,
-            "model_name": "test-model",
-        }))
-        .unwrap();
-        gents_documents::write_inference_profile_document(
-            access,
-            &profile,
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
-        .await
-        .unwrap();
-    }
-    let compaction = format!("{agent}:compaction");
-    let plan = gents_documents::DesiredStateApplyPlan::new(
-        [
-            (
-                gents_store::collection::Collection::Compaction,
-                json!({"node_did": owner, "compaction_id": compaction}),
-            ),
-            (
-                gents_store::collection::Collection::AgentContext,
-                json!({"node_did": owner, "context_id": format!("{agent}:context"),
-                    "tools_id": format!("{agent}:tools"), "compaction_id": compaction}),
-            ),
-        ]
-        .into_iter()
-        .chain(["original", "chat-b"].into_iter().flat_map(|account| {
-            let compaction = format!("c-{account}");
-            [
-                (
-                    gents_store::collection::Collection::Compaction,
-                    json!({"node_did": owner, "compaction_id": compaction,
-                        "inference_profile_id": format!("p-{account}")}),
-                ),
-                (
-                    gents_store::collection::Collection::AgentContext,
-                    json!({"node_did": owner, "context_id": format!("ctx-{account}"),
-                        "compaction_id": compaction}),
-                ),
-            ]
-        }))
-        .map(
-            |(collection, value)| gents_documents::DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            },
-        )
-        .collect(),
-    )
-    .unwrap();
-    access
-        .transact_write("test.compaction", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-    fixture.grant_selected_configuration().await;
-    let mut selections = vec![(
-        gents_store::collection::Collection::Compaction,
-        compaction,
-        true,
-    )];
-    selections.push((
-        gents_store::collection::Collection::AgentContext,
-        format!("{agent}:context"),
-        false,
-    ));
-    selections.extend(["p-original", "p-chat-b", "p-grok"].into_iter().map(|id| {
-        (
-            gents_store::collection::Collection::InferenceProfile,
-            id.to_owned(),
-            false,
-        )
-    }));
-    selections.extend(["c-original", "c-chat-b"].into_iter().map(|id| {
-        (
-            gents_store::collection::Collection::Compaction,
-            id.to_owned(),
-            false,
-        )
-    }));
-    selections.extend(["ctx-original", "ctx-chat-b"].into_iter().map(|id| {
-        (
-            gents_store::collection::Collection::AgentContext,
-            id.to_owned(),
-            false,
-        )
-    }));
-    selections.extend(
-        ["chat-original", "chat-b", "grok-original"]
-            .into_iter()
-            .map(|id| {
-                (
-                    gents_store::collection::Collection::InferenceBackend,
-                    id.to_owned(),
-                    false,
-                )
-            }),
-    );
-    fixture.grant_account_fixture_selections(&selections).await;
-    let core = fixture.core();
-    (fixture, core)
-}
-
-async fn assert_account_choice_refused(
-    core: &SelfConfigCore,
-    request: impl Fn() -> ApplyRequest<'static>,
-) {
-    for result in [core.preview(request()).await, core.apply(request()).await] {
-        let error = result.expect_err("switching to another account must be refused");
-        assert!(
-            format!("{error:#}").contains("selects another"),
-            "{error:#}"
-        );
-    }
-}
-
 /// Lean `InferenceOperations.profileWriteDecision`: the account choice of a
 /// profile edit is decided alike through the Agent that selects the profile
 /// and by the profile's own ID. The cases are the ones this fixture's
@@ -1477,511 +937,293 @@ async fn a_profile_edit_is_fenced_alike_through_its_agent_and_by_its_exact_id() 
 }
 
 #[tokio::test]
-async fn profile_self_config_cannot_pick_another_account() {
-    let (_fixture, core) = account_choice_core("pick").await;
-    let owner = core.node_did().to_owned();
-    let to = |backend: &str| vec![("backend_id".into(), Some(json!(backend)))];
-    assert_account_choice_refused(&core, || profile_request(to("chat-b"))).await;
-    core.preview(profile_request(to("grok-original")))
-        .await
-        .unwrap();
-    core.apply(profile_request(to("grok-original")))
-        .await
-        .unwrap();
-    assert_account_choice_refused(&core, || {
-        let mut patch = to("chat-b");
-        patch.push(("model_name".into(), Some(json!("test-model"))));
-        profile_create_request(owner.clone(), "p-new".into(), patch)
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn agent_profile_pick_cannot_switch_account() {
-    let (_fixture, core) = account_choice_core("agent-pick").await;
-    let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
-    assert_account_choice_refused(&core, || agent_request(&core, to("p-chat-b"))).await;
-    core.apply(agent_request(&core, to("p-original")))
-        .await
-        .unwrap();
-    core.preview(agent_request(&core, to("p-grok")))
-        .await
-        .unwrap();
-    core.apply(agent_request(&core, to("p-grok")))
-        .await
-        .unwrap();
-}
-
-async fn grok_accounts_core(
-    agent: &str,
-    original: bool,
-    g2: bool,
-) -> (SelfConfigFixture, SelfConfigCore) {
-    let (fixture, core) = account_choice_core(agent).await;
-    let owner = core.node_did().to_owned();
-    let access = fixture.user_access();
-    let backend: gents_documents::InferenceBackend = serde_json::from_value(json!({
-        "node_did": owner, "backend_id": "grok-g2", "name": "grok-g2",
-        "provider_kind": "XaiGrokOAuth", "endpoint": "http://127.0.0.1:1/v1",
-        "auth": {"kind":"node_oauth","account_ref":"g2"},
-    }))
-    .unwrap();
-    gents_documents::write_inference_backend_document(
-        access,
-        &backend,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    let profile: gents_documents::InferenceProfile = serde_json::from_value(json!({
-        "node_did": owner, "profile_id": "p-grok-g2", "backend_id": "grok-g2",
-        "model_name": "test-model",
-    }))
-    .unwrap();
-    gents_documents::write_inference_profile_document(
-        access,
-        &profile,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    fixture
-        .grant_account_fixture_selections(&[
-            (
-                gents_store::collection::Collection::InferenceBackend,
-                "grok-g2".into(),
-                false,
-            ),
-            (
-                gents_store::collection::Collection::InferenceProfile,
-                "p-grok-g2".into(),
-                false,
-            ),
-        ])
-        .await;
-    let provider = gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
-    for (account_ref, enabled) in [(None, original), (Some("g2"), g2)] {
-        let original_id = gents_inference::auth::credential::oauth_credential_id(&owner, provider);
-        let credential = gents_inference::auth::credential::OAuthCredential {
-            doc_id: None,
-            credential_id: match account_ref {
-                Some(account_ref) => format!("{original_id}:{account_ref}"),
-                None => original_id,
-            },
-            node_did: owner.clone(),
-            provider: provider.to_string(),
-            access_token: "access-TEST".into(),
-            refresh_token: "refresh-TEST".into(),
-            id_token: None,
-            account_id: None,
-            chatgpt_plan_type: None,
-            is_fedramp: false,
-            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
-            last_refresh: None,
-            enabled,
-            account_ref: account_ref.map(str::to_string),
-            connected_at: account_ref.map(|_| chrono::Utc::now()),
-            provider_account_key: None,
-            label: None,
-        };
-        gents_inference::auth::credential::upsert_oauth_credential_on(access, &credential)
-            .await
-            .unwrap();
-    }
-    (fixture, core)
-}
-
-#[tokio::test]
-async fn default_account_follows_the_resolver() {
-    let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
-    let accepted = |core: SelfConfigCore, profile: &'static str| async move {
-        core.preview(agent_request(&core, to(profile)))
-            .await
-            .unwrap();
-        core.apply(agent_request(&core, to(profile))).await.unwrap();
-    };
-
-    let (_fixture, core) = grok_accounts_core("default-g2", false, true).await;
-    assert_account_choice_refused(&core, || agent_request(&core, to("p-grok"))).await;
-    accepted(core, "p-grok-g2").await;
-
-    let (_fixture, core) = grok_accounts_core("default-original", true, true).await;
-    assert_account_choice_refused(&core, || agent_request(&core, to("p-grok-g2"))).await;
-    accepted(core, "p-grok").await;
-
-    let (_fixture, core) = grok_accounts_core("default-none", false, false).await;
-    accepted(core, "p-grok").await;
-}
-
-#[tokio::test]
-async fn compaction_profile_pick_cannot_switch_account() {
-    let (_fixture, core) = account_choice_core("compaction-pick").await;
-    let to = |profile: &str| {
-        profile_target_request(
-            Some("compaction"),
-            vec![("inference_profile_id".into(), Some(json!(profile)))],
-        )
-        .unwrap()
-    };
-    assert_account_choice_refused(&core, || to("p-chat-b")).await;
-    core.apply(to("p-original")).await.unwrap();
-    core.preview(to("p-grok")).await.unwrap();
-    core.apply(to("p-grok")).await.unwrap();
-}
-
-#[tokio::test]
-async fn compaction_reference_pick_cannot_switch_account() {
-    let (_fixture, core) = account_choice_core("compaction-ref-pick").await;
-    let context = |compaction: &str| {
-        protect_working_agent(
-            anchored_request(
-                SelfConfigTarget::AgentContext,
-                "context_id",
-                vec![("compaction_id".into(), Some(json!(compaction)))],
-            ),
-            false,
-            true,
-        )
-    };
-    let agent = |context: &str| {
-        protect_working_agent(
-            agent_request(&core, vec![("context_id".into(), Some(json!(context)))]),
-            false,
-            true,
-        )
-    };
-    assert_account_choice_refused(&core, || context("c-chat-b")).await;
-    assert_account_choice_refused(&core, || agent("ctx-chat-b")).await;
-    core.preview(context("c-original")).await.unwrap();
-    core.apply(context("c-original")).await.unwrap();
-    core.preview(agent("ctx-original")).await.unwrap();
-    core.apply(agent("ctx-original")).await.unwrap();
-}
-
-#[tokio::test]
-async fn agent_management_profile_pick_cannot_switch_account() {
-    let (fixture, core) = account_choice_core("agent-pick").await;
-    let root = fixture.admitted_workspace_root().await;
-    let node = &fixture.db.node;
-    let owner = core.node_did().to_owned();
-    let params = |action: &str, argv: &[&str]| {
-        agent_params(
-            action,
-            None,
-            &argv.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
-        )
-        .unwrap()
-    };
-    let create = |profile: &str| {
-        params(
-            "create",
-            &[
-                "--display-name",
-                "Picker",
-                "--description",
-                "Picks",
-                "--system-prompt",
-                "Pick.",
-                "--preset",
-                "write",
-                "--root",
-                root.as_str(),
-                "--profile",
-                profile,
-            ],
-        )
-    };
-    let clone = |profile: &str| {
-        params(
-            "clone",
-            &[
-                "--from",
-                fixture.agent_did(),
-                "--display-name",
-                "Picker clone",
-                "--profile",
-                profile,
-            ],
-        )
-    };
-    let edit = params(
-        "edit",
-        &["--id", fixture.agent_did(), "--profile", "p-chat-b"],
-    );
-    for refused in [create("p-chat-b"), clone("p-chat-b"), edit] {
-        let error = model_agent_mutate(&core, fixture.agent.as_ref(), &refused)
-            .await
-            .expect_err("switching to another account must be refused");
-        assert!(
-            format!("{error:#}").contains("selects another"),
-            "{error:#}"
-        );
-    }
-    assert_eq!(
-        gents_documents::list_agents(node, &owner)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    for accepted in [
-        create("p-grok"),
-        clone("p-grok"),
-        params(
-            "edit",
-            &["--id", fixture.agent_did(), "--profile", "p-original"],
-        ),
-        params(
-            "edit",
-            &["--id", fixture.agent_did(), "--profile", "p-grok"],
-        ),
-    ] {
-        model_agent_mutate(&core, fixture.agent.as_ref(), &accepted)
-            .await
-            .unwrap();
-    }
-}
-
-#[tokio::test]
-async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
-    let (fixture, core) = account_choice_core("created-root-access").await;
-    let root = fixture.admitted_workspace_root().await;
-    let create = |argv: &[&str]| {
-        agent_params(
-            "create",
-            None,
-            &argv.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
-        )
-        .unwrap()
-    };
-    let hosted: Value = serde_json::from_str(
-        &model_agent_mutate(
-            &core,
-            fixture.agent.as_ref(),
-            &create(&[
-                "--display-name",
-                "Scout",
-                "--system-prompt",
-                "Find.",
-                "--preset",
-                "readonly",
-                "--root",
-                root.as_str(),
-                "--profile",
-                "p-grok",
-            ]),
-        )
-        .await
-        .unwrap(),
-    )
-    .unwrap();
-    let created = hosted["agent_did"].as_str().unwrap();
-    let access = &hosted["host_root_access"];
-    assert_eq!(access["state"], "waiting_for_user", "{hosted}");
-    assert_eq!(access["published_root"], root.as_str(), "{hosted}");
-    assert_eq!(
-        access["user_command"],
-        format!("gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {root} --agent-did {created}"),
-        "{hosted}"
-    );
-    assert!(
-        !access["how_to_proceed"]
-            .as_str()
-            .unwrap()
-            .contains("policy grant"),
-        "{hosted}"
-    );
-    let ceiled =
-        core.clone()
-            .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
-                file_mode: gents_documents::FileToolMode::ReadOnly,
-                bash_mode: gents_documents::BashMode::ReadOnly,
-                root: Some(std::path::PathBuf::from(&root)),
-            });
-    let inspected: Value =
-        serde_json::from_str(&agent_inspect(&ceiled, created).await.unwrap()).unwrap();
-    let observed = &inspected["effective_config"]["runtime_effective"]["root_access"];
-    assert_eq!(observed["state"], "requires_user_grant", "{inspected}");
-    assert_eq!(
-        observed["user_command"], access["user_command"],
-        "{inspected}"
-    );
-    let own: Value =
-        serde_json::from_str(&agent_inspect(&ceiled, fixture.agent_did()).await.unwrap()).unwrap();
-    assert!(
-        own["effective_config"]["runtime_effective"]
-            .get("root_access")
-            .is_none(),
-        "{own}"
-    );
-    let conversational: Value = serde_json::from_str(
-        &model_agent_mutate(
-            &core,
-            fixture.agent.as_ref(),
-            &create(&[
-                "--display-name",
-                "Planner",
-                "--system-prompt",
-                "Plan.",
-                "--profile",
-                "p-grok",
-            ]),
-        )
-        .await
-        .unwrap(),
-    )
-    .unwrap();
-    assert!(
-        conversational.get("host_root_access").is_none(),
-        "{conversational}"
-    );
-}
-
-#[tokio::test]
-async fn agent_preview_agrees_with_the_account_choice_fence() {
-    let (fixture, core) = account_choice_core("preview-pick").await;
-    let root = fixture.admitted_workspace_root().await;
-    let create = [
-        "--display-name",
-        "Picker",
-        "--description",
-        "Picks",
-        "--system-prompt",
-        "Pick.",
-        "--preset",
-        "write",
-        "--root",
-        root.as_str(),
-    ];
-    let clone = [
-        "--from",
-        fixture.agent_did(),
-        "--display-name",
-        "Picker clone",
-    ];
-    let edit = ["--id", fixture.agent_did()];
-    for (operation, argv, profile, admitted) in [
-        ("create", &create[..], "p-chat-b", false),
-        ("clone", &clone[..], "p-chat-b", false),
-        ("edit", &edit[..], "p-chat-b", false),
-        ("create", &create[..], "p-grok", true),
-        ("clone", &clone[..], "p-grok", true),
-        ("edit", &edit[..], "p-original", true),
-    ] {
-        let argv: Vec<String> = argv
-            .iter()
-            .chain(&["--profile", profile])
-            .map(|arg| (*arg).to_owned())
-            .collect();
-        let params = agent_params("preview", Some(operation.into()), &argv).unwrap();
-        let preview = model_agent_preview(&core, &params).await;
-        if admitted {
-            let preview: Value = serde_json::from_str(&preview.unwrap()).unwrap();
-            assert_eq!(
-                preview["admitted"], true,
-                "{operation} {profile}: {preview}"
-            );
-        } else {
-            let error = preview.expect_err("an account switch is not an admission refusal");
-            assert!(
-                format!("{error:#}").contains("selects another"),
-                "{operation} {profile}: {error:#}"
-            );
+async fn modeled_job_policy_updates_follow_native_tools_authorization() {
+    let cases = &gents_lean_vocab::lean_self_config_selection_cases().job_guard_cases;
+    let native_cases: Vec<_> = cases
+        .iter()
+        .filter(|case| case.name.starts_with("native_agent_update_"))
+        .collect();
+    assert!(native_cases
+        .iter()
+        .any(|case| case.native_authorized && case.native_source_authorized));
+    assert!(native_cases.iter().any(|case| !case.native_authorized));
+    assert!(native_cases.iter().any(|case| {
+        case.native_authorized && !case.native_source_authorized && case.add_schema_tool
+    }));
+    for case in native_cases {
+        let fixture = gents_automation::test_support::self_config_fixture(&case.name).await;
+        let tools_id = format!("{}:tools", fixture.agent_did());
+        let node_did = fixture.node_did().to_owned();
+        fixture
+            .update_signed_configuration(
+                gents_store::collection::Collection::Tools,
+                &tools_id,
+                json!({"integrations": case.stored_integrations}),
+            )
+            .await;
+        if case.native_authorized {
+            fixture.grant_selected_configuration().await;
         }
-    }
-}
-
-#[tokio::test]
-async fn agent_clone_inherited_compaction_cannot_switch_account() {
-    let (fixture, core) = account_choice_core("clone-pick").await;
-    let node = &fixture.db.node;
-    let owner = core.node_did().to_owned();
-    let original = fixture.install_sibling("src-original").await;
-    let chat_b = fixture.install_sibling("src-chat-b").await;
-    fixture
-        .user_access()
-        .transact_write("test.sources", |txn| {
-            let sources = [(&original, "ctx-original"), (&chat_b, "ctx-chat-b")];
-            let owner = &owner;
-            Box::pin(async move {
-                let mut documents = Vec::new();
-                for (id, context) in sources {
-                    let (_, mut value) = gents_documents::read_desired_state_record_in_txn(
+        let (doc_id, before) = fixture
+            .user_access()
+            .transact_readonly("test.job_policy.tools_before", |txn| {
+                let tools_id = &tools_id;
+                let node_did = &node_did;
+                Box::pin(async move {
+                    gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents_store::collection::Collection::Agent,
-                        owner,
-                        id,
+                        gents_store::collection::Collection::Tools,
+                        node_did,
+                        tools_id,
                     )
-                    .await?
-                    .expect("source Agent exists");
-                    value["context_id"] = json!(context);
-                    value["inference_profile_id"] = json!("p-original");
-                    documents.push(gents_documents::DesiredStateApplyDocument {
-                        collection: gents_store::collection::Collection::Agent,
-                        add: value.clone(),
-                        update: value,
-                    });
-                }
-                let plan = gents_documents::DesiredStateApplyPlan::new(documents)?;
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    &plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .expect("selected Tools exists");
+        let actor = identity::Did::new(fixture.agent_did()).unwrap();
+        let decisions = gents_store::config_client::ConfigAccess::local_as(
+            fixture.db.node.clone(),
+            identity::Did::new(&node_did).unwrap(),
+        )
+        .transact_readonly("test.job_policy.native_update", |txn| {
+            let actor = actor.clone();
+            let doc_id = doc_id.clone();
+            Box::pin(async move {
+                txn.observe_document_access(
+                    &actor,
+                    "Tools",
+                    &[doc_id],
+                    defra_node::DocumentAccessMode::Named {
+                        permission: "update".into(),
+                        node_permission: gents_store::config_client::NodePermission::DocumentUpdate,
+                    },
                 )
                 .await
             })
         })
         .await
         .unwrap();
-    let before = gents_documents::list_agents(node, &owner).await.unwrap();
-    let clone = |action: &str, source: &str, profile: &str| {
-        let name = format!("{source} on {profile}");
-        let argv = [
-            "--from",
-            source,
-            "--display-name",
-            &name,
-            "--profile",
-            profile,
-        ];
-        let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
-        let operation = (action == "preview").then(|| "clone".to_owned());
-        agent_params(action, operation, &argv).unwrap()
-    };
-    for (source, profile) in [(chat_b.as_str(), "p-original"), (chat_b.as_str(), "p-grok")] {
-        let preview = model_agent_preview(&core, &clone("preview", source, profile))
-            .await
-            .expect_err("an inherited account switch is not an admission refusal");
-        assert!(
-            format!("{preview:#}").contains("selects another"),
-            "{source} {profile}: {preview:#}"
+        assert_eq!(
+            decisions == [defra_node::DocumentAccessDecision::Allowed],
+            case.native_authorized,
+            "{}: native Tools update",
+            case.name
         );
-        let error = model_agent_mutate(
-            &core,
-            fixture.agent.as_ref(),
-            &clone("clone", source, profile),
-        )
+        assert!(!fixture
+            .db
+            .node
+            .nac_manager()
+            .is_admin(&actor)
+            .await
+            .unwrap());
+        let mut patch = vec![(
+            "integrations".into(),
+            Some(case.candidate_integrations.clone()),
+        )];
+        if case.add_schema_tool {
+            let mut built_ins = before
+                .get("built_ins")
+                .filter(|value| value.is_object())
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            assert_ne!(built_ins["enable_schema_tool"], true);
+            built_ins["enable_schema_tool"] = json!(true);
+            patch.push(("built_ins".into(), Some(built_ins)));
+        }
+        let core = fixture.core();
+        let result = core.apply(tools_request(&core, patch)).await;
+        assert_eq!(result.is_ok(), case.accepted, "{}: {result:?}", case.name);
+        if let Err(error) = result {
+            if !case.native_authorized {
+                let denied = gents_protocol::error_chain::find_map_source(&error, |cause| {
+                    cause
+                    .downcast_ref::<gents_store::config_client::ConfigClientError>()
+                    .map(|error| {
+                        error.is_permission_denied()
+                            || error.is_missing_or_denied_write()
+                            || matches!(error, gents_store::config_client::ConfigClientError::ConfigurationMutationNotApplied { .. })
+                    })
+                });
+                assert_eq!(denied, Some(true), "{}: {error:#}", case.name);
+            }
+        }
+        let (_, after) = fixture
+            .user_access()
+            .transact_readonly("test.job_policy.tools_after", |txn| {
+                let tools_id = &tools_id;
+                let node_did = &node_did;
+                Box::pin(async move {
+                    gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        gents_store::collection::Collection::Tools,
+                        node_did,
+                        tools_id,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .expect("selected Tools remains visible");
+        let expected = if case.accepted {
+            &case.candidate_integrations["plugins"][0]["job"]["policy"]["dynamic"]
+        } else {
+            &before["integrations"]["plugins"][0]["job"]["policy"]["dynamic"]
+        };
+        assert_eq!(
+            &after["integrations"]["plugins"][0]["job"]["policy"]["dynamic"], expected,
+            "{}",
+            case.name
+        );
+        if case.add_schema_tool {
+            assert_eq!(after["built_ins"], before["built_ins"], "{}", case.name);
+            assert!(!fixture
+                .db
+                .node
+                .nac_manager()
+                .check_permission(
+                    &actor,
+                    gents_store::config_client::NodePermission::CollectionPatch,
+                )
+                .await
+                .unwrap());
+        }
+        fixture.db.node.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
+    let fixture =
+        gents_automation::test_support::self_config_fixture("reselection-grant-bound").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_agent_relation_delete().await;
+    fixture.grant_node_reader().await;
+    let sibling = fixture.install_sibling("sibling").await;
+    let granted = fixture.install_sibling("granted").await;
+    fixture.grant_sibling_configuration(&sibling).await;
+    fixture.grant_pack_install_to(&granted).await;
+    // Selecting the granted sibling's Context needs its selection management
+    // and re-keys its pack-installation source, which the Engineer holds.
+    fixture.grant_sibling_configuration(&granted).await;
+    fixture.grant_engineer_tool_sources().await;
+    let context = format!("{granted}:context");
+    let core = SelfConfigCore::new(
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        sibling.clone(),
+    )
+    .unwrap()
+    .with_lockout_agent_did(fixture.agent_did().to_owned())
+    .with_agent_signer(fixture.agent.managed_agent_signer())
+    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
+    .with_node_binding(Some(fixture.node_binding.clone()));
+    for preview in [true, false] {
+        let request = protect_working_agent(
+            agent_request(&core, vec![("context_id".into(), Some(json!(context)))]),
+            false,
+            true,
+        );
+        let result = if preview {
+            core.preview(request).await
+        } else {
+            core.apply(request).await
+        };
+        assert!(format!("{:#}", result.unwrap_err()).contains("cannot be self-granted"));
+    }
+    fixture.grant_pack_install().await;
+    let holder = core.with_held_grants(ops::OperatorGrants {
+        pack_install: true,
+        policy: false,
+        pack_authority: false,
+    });
+    holder
+        .apply(protect_working_agent(
+            agent_request(&holder, vec![("context_id".into(), Some(json!(context)))]),
+            false,
+            true,
+        ))
         .await
-        .expect_err("inheriting another account's compaction must be refused");
+        .unwrap();
+    fixture
+        .user_access
+        .transact_write("test.grant_sibling_self_config", |txn| {
+            let owner = fixture.node_did();
+            let sibling = &sibling;
+            Box::pin(async move {
+                gents_documents::grant_selected_self_configuration(txn, owner, sibling).await
+            })
+        })
+        .await
+        .unwrap();
+    let sibling_doc = gents_documents::load_agent(&fixture.db.node, fixture.node_did(), &sibling)
+        .await
+        .unwrap()
+        .unwrap();
+    let sibling_signer = gents_store::identity::resolve_agent_identity(
+        fixture.db.node_identity.as_ref(),
+        &sibling_doc.identity_binding(),
+    )
+    .unwrap();
+    let no_grant = SelfConfigCore::new(
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        sibling,
+    )
+    .unwrap()
+    .with_agent_signer(sibling_signer.managed_agent_signer())
+    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
+    .with_node_binding(Some(fixture.node_binding.clone()));
+    // The own-only grant leaves the sibling with the Agent baseline and no NAC
+    // relation operation, so the held-bounded rule refuses each new tool
+    // source; an edit that projects no new source needs no relation authority.
+    let household = &gents_lean_vocab::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration model");
+    let own_edit = household
+        .own_tool_edit_cases
+        .iter()
+        .find(|case| case["name"] == "own-only-goal")
+        .expect("own-only goal edit model")["accepted"]
+        .as_bool()
+        .unwrap();
+    let no_source_change = household
+        .tool_source_change_cases
+        .iter()
+        .find(|case| case["name"] == "present-noop")
+        .expect("source no-op model")["allowed"]
+        .as_bool()
+        .unwrap();
+    let goal = no_grant
+        .apply(tools_request(
+            &no_grant,
+            vec![("built_ins".into(), Some(json!({"enable_goal_tools":true})))],
+        ))
+        .await;
+    assert_eq!(goal.is_ok(), own_edit, "{goal:?}");
+    if let Err(error) = goal {
         assert!(
-            format!("{error:#}").contains("selects another"),
+            format!("{error:#}").contains("source projection requires an authorized actor"),
             "{error:#}"
         );
     }
-    assert_eq!(
-        gents_documents::list_agents(node, &owner).await.unwrap(),
-        before
-    );
-    for profile in ["p-original", "p-grok"] {
-        model_agent_mutate(
-            &core,
-            fixture.agent.as_ref(),
-            &clone("clone", &original, profile),
-        )
-        .await
-        .unwrap();
-    }
+    // Self-config and pack install are already selected; preview adds no source.
+    let preview = no_grant
+        .apply(tools_request(
+            &no_grant,
+            vec![(
+                "self_config".into(),
+                Some(json!({"enable_self_config":true,"enable_pack_install":true,"self_config_preview":true})),
+            )],
+        ))
+        .await;
+    assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
 }
+
+use gents_automation::test_support::self_config::*;
 
 #[tokio::test]
 async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifiers() {
@@ -2170,7 +1412,9 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     assert_eq!(preview["committed"], false);
     assert_eq!(preview["agent"]["enabled"], false);
     assert_eq!(
-        gents_documents::load_agent(node, owner, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target)
+            .await
+            .unwrap(),
         Some(stored.clone())
     );
     args.action = "edit".into();
@@ -2181,7 +1425,9 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
         .unwrap_err();
     assert!(error.to_string().contains("does not accept clone_from"));
     assert_eq!(
-        gents_documents::load_agent(node, owner, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target)
+            .await
+            .unwrap(),
         Some(stored.clone())
     );
     args.clone_from = None;
@@ -2190,7 +1436,9 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
         .unwrap();
     stored.display_name = Some("Edited while disabled".into());
     assert_eq!(
-        gents_documents::load_agent(node, owner, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target)
+            .await
+            .unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Set("missing-profile".into());
@@ -2198,7 +1446,9 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
         .await
         .is_err());
     assert_eq!(
-        gents_documents::load_agent(node, owner, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target)
+            .await
+            .unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Omitted;
@@ -2207,7 +1457,9 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
         .await
         .is_err());
     assert_eq!(
-        gents_documents::load_agent(node, owner, &target).await.unwrap(),
+        gents_documents::load_agent(node, owner, &target)
+            .await
+            .unwrap(),
         Some(stored)
     );
 }
@@ -2297,1017 +1549,4 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
         .unwrap();
     changed["system_prompt"] = json!("Private replacement instructions");
     assert_eq!(after["data"]["AgentContext"], expected_contexts);
-}
-
-#[tokio::test]
-async fn modeled_job_policy_updates_follow_native_tools_authorization() {
-    let cases = &gents_lean_vocab::lean_self_config_selection_cases().job_guard_cases;
-    let native_cases: Vec<_> = cases
-        .iter()
-        .filter(|case| case.name.starts_with("native_agent_update_"))
-        .collect();
-    assert!(native_cases
-        .iter()
-        .any(|case| case.native_authorized && case.native_source_authorized));
-    assert!(native_cases.iter().any(|case| !case.native_authorized));
-    assert!(native_cases.iter().any(|case| {
-        case.native_authorized && !case.native_source_authorized && case.add_schema_tool
-    }));
-    for case in native_cases {
-        let fixture = SelfConfigFixture::new(&case.name).await;
-        let tools_id = format!("{}:tools", fixture.agent_did());
-        let node_did = fixture.node_did().to_owned();
-        fixture
-            .update_signed_configuration(
-                gents_store::collection::Collection::Tools,
-                &tools_id,
-                json!({"integrations": case.stored_integrations}),
-            )
-            .await;
-        if case.native_authorized {
-            fixture.grant_selected_configuration().await;
-        }
-        let (doc_id, before) = fixture
-            .user_access()
-            .transact_readonly("test.job_policy.tools_before", |txn| {
-                let tools_id = &tools_id;
-                let node_did = &node_did;
-                Box::pin(async move {
-                    gents_documents::read_desired_state_record_in_txn(
-                        txn,
-                        gents_store::collection::Collection::Tools,
-                        node_did,
-                        tools_id,
-                    )
-                    .await
-                })
-            })
-            .await
-            .unwrap()
-            .expect("selected Tools exists");
-        let actor = identity::Did::new(fixture.agent_did()).unwrap();
-        let decisions = gents_store::config_client::ConfigAccess::local_as(
-            fixture.db.node.clone(),
-            identity::Did::new(&node_did).unwrap(),
-        )
-        .transact_readonly("test.job_policy.native_update", |txn| {
-            let actor = actor.clone();
-            let doc_id = doc_id.clone();
-            Box::pin(async move {
-                txn.observe_document_access(
-                    &actor,
-                    "Tools",
-                    &[doc_id],
-                    defra_node::DocumentAccessMode::Named {
-                        permission: "update".into(),
-                        node_permission: gents_store::config_client::NodePermission::DocumentUpdate,
-                    },
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            decisions == [defra_node::DocumentAccessDecision::Allowed],
-            case.native_authorized,
-            "{}: native Tools update",
-            case.name
-        );
-        assert!(!fixture
-            .db
-            .node
-            .nac_manager()
-            .is_admin(&actor)
-            .await
-            .unwrap());
-        let mut patch = vec![(
-            "integrations".into(),
-            Some(case.candidate_integrations.clone()),
-        )];
-        if case.add_schema_tool {
-            let mut built_ins = before
-                .get("built_ins")
-                .filter(|value| value.is_object())
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            assert_ne!(built_ins["enable_schema_tool"], true);
-            built_ins["enable_schema_tool"] = json!(true);
-            patch.push(("built_ins".into(), Some(built_ins)));
-        }
-        let core = fixture.core();
-        let result = core.apply(tools_request(&core, patch)).await;
-        assert_eq!(result.is_ok(), case.accepted, "{}: {result:?}", case.name);
-        if let Err(error) = result {
-            if !case.native_authorized {
-                let denied = gents_protocol::error_chain::find_map_source(&error, |cause| {
-                    cause
-                    .downcast_ref::<gents_store::config_client::ConfigClientError>()
-                    .map(|error| {
-                        error.is_permission_denied()
-                            || error.is_missing_or_denied_write()
-                            || matches!(error, gents_store::config_client::ConfigClientError::ConfigurationMutationNotApplied { .. })
-                    })
-                });
-                assert_eq!(denied, Some(true), "{}: {error:#}", case.name);
-            }
-        }
-        let (_, after) = fixture
-            .user_access()
-            .transact_readonly("test.job_policy.tools_after", |txn| {
-                let tools_id = &tools_id;
-                let node_did = &node_did;
-                Box::pin(async move {
-                    gents_documents::read_desired_state_record_in_txn(
-                        txn,
-                        gents_store::collection::Collection::Tools,
-                        node_did,
-                        tools_id,
-                    )
-                    .await
-                })
-            })
-            .await
-            .unwrap()
-            .expect("selected Tools remains visible");
-        let expected = if case.accepted {
-            &case.candidate_integrations["plugins"][0]["job"]["policy"]["dynamic"]
-        } else {
-            &before["integrations"]["plugins"][0]["job"]["policy"]["dynamic"]
-        };
-        assert_eq!(
-            &after["integrations"]["plugins"][0]["job"]["policy"]["dynamic"], expected,
-            "{}",
-            case.name
-        );
-        if case.add_schema_tool {
-            assert_eq!(after["built_ins"], before["built_ins"], "{}", case.name);
-            assert!(!fixture
-                .db
-                .node
-                .nac_manager()
-                .check_permission(
-                    &actor,
-                    gents_store::config_client::NodePermission::CollectionPatch,
-                )
-                .await
-                .unwrap());
-        }
-        fixture.db.node.shutdown().await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
-    let fixture = SelfConfigFixture::new("reselection-grant-bound").await;
-    fixture.grant_selected_configuration().await;
-    fixture.grant_agent_relation_delete().await;
-    fixture.grant_node_reader().await;
-    let sibling = fixture.install_sibling("sibling").await;
-    let granted = fixture.install_sibling("granted").await;
-    fixture.grant_sibling_configuration(&sibling).await;
-    fixture.grant_pack_install_to(&granted).await;
-    // Selecting the granted sibling's Context needs its selection management
-    // and re-keys its pack-installation source, which the Engineer holds.
-    fixture.grant_sibling_configuration(&granted).await;
-    fixture.grant_engineer_tool_sources().await;
-    let context = format!("{granted}:context");
-    let core = SelfConfigCore::new(
-        fixture.db.node.clone(),
-        fixture.node_did().to_owned(),
-        sibling.clone(),
-    )
-    .unwrap()
-    .with_lockout_agent_did(fixture.agent_did().to_owned())
-    .with_agent_signer(fixture.agent.managed_agent_signer())
-    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
-    .with_node_binding(Some(fixture.node_binding.clone()));
-    for preview in [true, false] {
-        let request = protect_working_agent(
-            agent_request(&core, vec![("context_id".into(), Some(json!(context)))]),
-            false,
-            true,
-        );
-        let result = if preview {
-            core.preview(request).await
-        } else {
-            core.apply(request).await
-        };
-        assert!(format!("{:#}", result.unwrap_err()).contains("cannot be self-granted"));
-    }
-    fixture.grant_pack_install().await;
-    let holder = core.with_held_grants(ops::OperatorGrants {
-        pack_install: true,
-        policy: false,
-        pack_authority: false,
-    });
-    holder
-        .apply(protect_working_agent(
-            agent_request(&holder, vec![("context_id".into(), Some(json!(context)))]),
-            false,
-            true,
-        ))
-        .await
-        .unwrap();
-    fixture
-        .user_access
-        .transact_write("test.grant_sibling_self_config", |txn| {
-            let owner = fixture.node_did();
-            let sibling = &sibling;
-            Box::pin(async move {
-                gents_documents::grant_selected_self_configuration(txn, owner, sibling).await
-            })
-        })
-        .await
-        .unwrap();
-    let sibling_doc = gents_documents::load_agent(&fixture.db.node, fixture.node_did(), &sibling)
-        .await
-        .unwrap()
-        .unwrap();
-    let sibling_signer = gents_store::identity::resolve_agent_identity(
-        fixture.db.node_identity.as_ref(),
-        &sibling_doc.identity_binding(),
-    )
-    .unwrap();
-    let no_grant = SelfConfigCore::new(
-        fixture.db.node.clone(),
-        fixture.node_did().to_owned(),
-        sibling,
-    )
-    .unwrap()
-    .with_agent_signer(sibling_signer.managed_agent_signer())
-    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
-    .with_node_binding(Some(fixture.node_binding.clone()));
-    // The own-only grant leaves the sibling with the Agent baseline and no NAC
-    // relation operation, so the held-bounded rule refuses each new tool
-    // source; an edit that projects no new source needs no relation authority.
-    let household = &gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
-    let own_edit = household
-        .own_tool_edit_cases
-        .iter()
-        .find(|case| case["name"] == "own-only-goal")
-        .expect("own-only goal edit model")["accepted"]
-        .as_bool()
-        .unwrap();
-    let no_source_change = household
-        .tool_source_change_cases
-        .iter()
-        .find(|case| case["name"] == "present-noop")
-        .expect("source no-op model")["allowed"]
-        .as_bool()
-        .unwrap();
-    let goal = no_grant
-        .apply(tools_request(
-            &no_grant,
-            vec![("built_ins".into(), Some(json!({"enable_goal_tools":true})))],
-        ))
-        .await;
-    assert_eq!(goal.is_ok(), own_edit, "{goal:?}");
-    if let Err(error) = goal {
-        assert!(
-            format!("{error:#}").contains("source projection requires an authorized actor"),
-            "{error:#}"
-        );
-    }
-    // Self-config and pack install are already selected; preview adds no source.
-    let preview = no_grant
-        .apply(tools_request(
-            &no_grant,
-            vec![(
-                "self_config".into(),
-                Some(json!({"enable_self_config":true,"enable_pack_install":true,"self_config_preview":true})),
-            )],
-        ))
-        .await;
-    assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
-}
-
-/// Lean `SelfConfig.yoloGroup` and `Identity.GrantSets.yoloRecipient`: an
-/// Agent the User grants its own self-configuration edits its own Tools
-/// through the self-config tool, writes no other Agent's configuration, and
-/// holds no node permission beyond the agent baseline. Granting again changes
-/// nothing.
-#[tokio::test]
-async fn an_agent_granted_its_own_self_configuration_edits_itself_and_nothing_else() {
-    use gents_store::config_client::ConfigAccess;
-    let fixture = SelfConfigFixture::new("own-self-config").await;
-    let engineer = fixture.agent_did.clone();
-    let node_did = fixture.node_did().to_owned();
-    let tools_of = |agent: String| {
-        let access = fixture.user_access.clone();
-        let node_did = node_did.clone();
-        async move {
-            access
-                .transact_readonly("test.own_self_config.tools", |txn| {
-                    let (node_did, agent) = (&node_did, &agent);
-                    Box::pin(async move {
-                        gents_documents::load_agent_tools_in_txn(txn, node_did, agent).await
-                    })
-                })
-                .await
-                .unwrap()
-                .expect("the Agent selects Tools")
-        }
-    };
-    let mut engineer_tools = tools_of(engineer.clone()).await;
-    engineer_tools.self_config = Some(engineer_self_config());
-    gents_documents::write_tools_document(
-        &fixture.user_access,
-        &engineer_tools,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    let yolo = fixture.install_sibling("Yolo").await;
-    for _ in 0..2 {
-        grant_own_self_configuration(&fixture.user_access, &node_did, &yolo, &engineer)
-            .await
-            .unwrap();
-    }
-    let yolo_tools = tools_of(yolo.clone()).await;
-    assert_eq!(
-        serde_json::to_value(&yolo_tools.self_config).unwrap(),
-        serde_json::to_value(&engineer_tools.self_config).unwrap()
-    );
-
-    let yolo_doc = gents_documents::load_agent(&fixture.db.node, fixture.node_did(), &yolo)
-        .await
-        .unwrap()
-        .unwrap();
-    let yolo_signer = gents_store::identity::resolve_agent_identity(
-        fixture.db.node_identity.as_ref(),
-        &yolo_doc.identity_binding(),
-    )
-    .unwrap();
-    let core = SelfConfigCore::new(fixture.db.node.clone(), node_did.clone(), yolo.clone())
-        .unwrap()
-        .with_agent_signer(yolo_signer.managed_agent_signer())
-        .with_runtime_identity(Some(fixture.db.node_identity.clone()))
-        .with_node_binding(Some(fixture.node_binding.clone()));
-    core.apply(tools_request(
-        &core,
-        vec![("display_name".into(), Some(json!("Yolo's own tools")))],
-    ))
-    .await
-    .expect("the agent edits its own Tools through the self-config tool");
-    assert_eq!(
-        tools_of(yolo.clone()).await.display_name.as_deref(),
-        Some("Yolo's own tools")
-    );
-
-    let as_yolo = ConfigAccess::local_with_optional_agent_signer(
-        fixture.db.node.clone(),
-        identity::Did::new(yolo.clone()).unwrap(),
-        yolo_signer.managed_agent_signer(),
-    )
-    .unwrap();
-    let mut foreign = tools_of(engineer.clone()).await;
-    foreign.display_name = Some("written by the yolo agent".into());
-    assert!(
-        gents_documents::write_tools_document(
-            &as_yolo,
-            &foreign,
-            &gents_inference::resolved::ProviderProfilePolicy
-        )
-        .await
-        .is_err(),
-        "the agent writes no other Agent's configuration"
-    );
-    assert_ne!(
-        tools_of(engineer).await.display_name.as_deref(),
-        Some("written by the yolo agent")
-    );
-
-    // Its self-config Tools project `delete-dac-relation` as a tool-sourced
-    // node operation (Lean `Configuration.toolOperationSources`), as the
-    // Engineer's do; it manages no NAC relation and reads no NAC status.
-    let member = identity::Did::new(yolo).unwrap();
-    for permission in gents_store::identity::GrantSet::PolicyDelegate.permissions() {
-        if gents_store::identity::GrantSet::AgentBaseline
-            .permissions()
-            .contains(permission)
-            || permission.as_str() == "delete-dac-relation"
-        {
-            continue;
-        }
-        assert!(
-            !fixture
-                .db
-                .node
-                .nac_manager()
-                .check_permission(&member, *permission)
-                .await
-                .unwrap(),
-            "the agent holds no policy-delegate permission {}",
-            permission.as_str()
-        );
-    }
-}
-
-#[tokio::test]
-async fn pack_install_uses_current_node_and_inference_chain() {
-    let (home, plugins) =
-        gents_toolcalls::test_support::home_with_fixture_pack("plugin_documents_fixture");
-    let (fixture, tools) = signed_pack_tool("pack-install", plugins).await;
-    let node_did = fixture.node_did();
-    let coordinator = fixture.install_sibling("coordinator").await;
-    let worker = fixture.install_sibling("worker").await;
-    let verifier = fixture.install_sibling("verifier").await;
-    fixture.grant_node_reader().await;
-    // Binding a slot selects that sibling's profile, which native document
-    // ACP admits only for a manager of the selection.
-    for sibling in [&coordinator, &worker, &verifier] {
-        fixture.grant_sibling_configuration(sibling).await;
-    }
-    let coordinator_profile = format!("{coordinator}:inference");
-    let worker_profile = format!("{worker}:inference");
-    let verifier_profile = format!("{verifier}:inference");
-    let coordinator_slot = format!("coordinator={coordinator_profile}");
-    let worker_slot = format!("worker={worker_profile}");
-    let verifier_slot = format!("verifier={verifier_profile}");
-    let tool = tools
-        .iter()
-        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
-        .expect("config registered");
-    let discovery: Value = serde_json::from_str(
-        &tool
-            .call(
-                json!({"argv": ["pack", "preview", "install", "fixture/plugin_documents_fixture"]})
-                    .to_string(),
-            )
-            .await
-            .expect("incomplete preview remains readable"),
-    )
-    .unwrap();
-    assert_eq!(discovery["committed"], false);
-    assert_eq!(discovery["ready"], false);
-    assert_eq!(
-        discovery["missing_inference_slots"],
-        json!(["coordinator", "verifier", "worker"])
-    );
-    assert_eq!(
-        discovery["inference"][0]["profiles"]
-            .as_array()
-            .unwrap()
-            .len(),
-        4
-    );
-    let slot_argv = [
-        "--inference-slot",
-        coordinator_slot.as_str(),
-        "--inference-slot",
-        worker_slot.as_str(),
-        "--inference-slot",
-        verifier_slot.as_str(),
-    ];
-    let mut preview_argv = vec![
-        "pack",
-        "preview",
-        "install",
-        "fixture/plugin_documents_fixture",
-    ];
-    preview_argv.extend(slot_argv);
-    let preview: Value = serde_json::from_str(
-        &tool
-            .call(json!({"argv": preview_argv}).to_string())
-            .await
-            .expect("complete preview succeeds"),
-    )
-    .unwrap();
-    assert_eq!(preview["ready"], true);
-    let digest = preview["artifact_digest"].as_str().unwrap();
-    let mut install_argv = vec![
-        "pack",
-        "install",
-        "fixture/plugin_documents_fixture",
-        "--digest",
-        digest,
-    ];
-    install_argv.extend(slot_argv);
-    let output = tool
-        .call(json!({"argv": install_argv}).to_string())
-        .await
-        .expect("a stored pack installs");
-    let output: serde_json::Value = serde_json::from_str(&output).expect("JSON receipt");
-    assert_eq!(
-        output["effective"]["coordinate"],
-        "fixture/plugin_documents_fixture"
-    );
-    assert_eq!(output["artifact_digest"], preview["artifact_digest"]);
-    let record = gents_pack::plugin::store::read_record(home.path(), "fixture", "echo_fixture")
-        .expect("the pack's plugin is in the home's plugin store");
-    assert_eq!(
-        record.owner_pack_coordinate.as_deref(),
-        Some("fixture/plugin_documents_fixture")
-    );
-    assert!(record.granted.is_none(), "a sealed plugin holds no grant");
-    assert_eq!(
-        output["inference"]["bindings"],
-        json!({
-            "coordinator": coordinator_profile,
-            "worker": worker_profile,
-            "verifier": verifier_profile,
-        })
-    );
-    let inspected: Value = serde_json::from_str(
-        &tool
-            .call(json!({"argv": ["pack", "get", "fixture/plugin_documents_fixture"]}).to_string())
-            .await
-            .expect("installed pack is inspectable"),
-    )
-    .unwrap();
-    assert_eq!(
-        inspected["installed"]["digest"],
-        output["effective"]["digest"]
-    );
-
-    let (_staged_root, staged) =
-        gents_pack::test_support::fixture_pack_copy("plugin_documents_fixture", &json!({}));
-    let manifest_path = staged.join("manifest.json");
-    let mut manifest: Value =
-        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
-    manifest["version"] = "1.1.0".into();
-    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = gents_pack::pack::archive::pack_dir(&staged).unwrap();
-    let staged_artifact = gents_pack::pack::store::PackStore::new(home.path())
-        .import(&bytes[..], None)
-        .unwrap();
-    let mut staged_preview = vec![
-        "pack",
-        "preview",
-        "update",
-        staged_artifact.header.digest.as_str(),
-    ];
-    staged_preview.extend(slot_argv);
-    let preview: Value = serde_json::from_str(
-        &tool
-            .call(json!({"argv": staged_preview}).to_string())
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(preview["committed"], false);
-    let listed: Value = serde_json::from_str(
-        &tool
-            .call(json!({"argv": ["pack", "list"]}).to_string())
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    let entry = listed["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["name"] == "fixture/plugin_documents_fixture")
-        .unwrap();
-    assert_eq!(entry["version"], output["effective"]["version"]);
-    assert_eq!(entry["installed_digest"], output["effective"]["digest"]);
-    assert_eq!(entry["available_version"], "1.1.0");
-    assert_eq!(entry["other_stored_versions"][0]["version"], "1.1.0");
-
-    let bad_digest = format!("sha256:{}", "0".repeat(64));
-    let rejected = tool
-        .call(
-            json!({"argv": [
-                "pack", "update", "fixture/plugin_documents_fixture@1.0.0", "--digest", bad_digest,
-                "--inference-slot", coordinator_slot.as_str(),
-                "--inference-slot", worker_slot.as_str(),
-                "--inference-slot", verifier_slot.as_str()
-            ]})
-            .to_string(),
-        )
-        .await
-        .expect_err("a digest not returned by preview is rejected");
-    assert!(rejected.to_string().contains("preview again"));
-
-    let rows = fixture
-        .user_access
-        .execute(
-            r#"{ Agent(filter: {display_name: {_eq: "Fixture worker"}}) { _docID agent_did } }"#,
-        )
-        .await
-        .unwrap();
-    let pack_worker = rows["data"]["Agent"][0]["_docID"].as_str().unwrap();
-    let doc = gents_store::graphql::escape_graphql_string(pack_worker);
-    fixture.user_access.transact_write("test.pack.tag_worker", |txn| {
-        let doc = &doc;
-        Box::pin(async move {
-            txn.execute_client_signed_update(
-                &format!(r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{doc}", input: $input) {{ _docID }} }}"#),
-                &json!({"input": {"tags": ["gents:pack:fixture/plugin_documents_fixture", "user:favorite"]}}),
-                gents_protocol::schemas::AGENT,
-            ).await
-        })
-    }).await.unwrap();
-    let update_preview: Value = serde_json::from_str(
-        &tool
-            .call(
-                json!({"argv": [
-                    "pack", "preview", "update", "fixture/plugin_documents_fixture@1.0.0",
-                    "--inference-slot", coordinator_slot.as_str(),
-                    "--inference-slot", worker_slot.as_str(),
-                    "--inference-slot", verifier_slot.as_str()
-                ]})
-                .to_string(),
-            )
-            .await
-            .expect("installed pack update previews"),
-    )
-    .unwrap();
-    assert_eq!(update_preview["ready"], true);
-    let update_digest = update_preview["artifact_digest"].as_str().unwrap();
-    let updated: Value = serde_json::from_str(
-        &tool
-            .call(
-                json!({"argv": [
-                    "pack", "update", "fixture/plugin_documents_fixture@1.0.0", "--digest", update_digest,
-                    "--inference-slot", coordinator_slot.as_str(),
-                    "--inference-slot", worker_slot.as_str(),
-                    "--inference-slot", verifier_slot.as_str()
-                ]})
-                .to_string(),
-            )
-            .await
-            .expect("same distribution update is idempotent"),
-    )
-    .unwrap();
-    assert_eq!(
-        updated["effective"]["digest"],
-        output["effective"]["digest"]
-    );
-    let tags = fixture
-        .user_access
-        .execute(&format!(
-            r#"{{ Agent(docID: "{}") {{ tags }} }}"#,
-            gents_store::graphql::escape_graphql_string(pack_worker),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(
-        tags["data"]["Agent"][0]["tags"],
-        json!([
-            "gents:pack:fixture/plugin_documents_fixture",
-            "user:favorite"
-        ])
-    );
-    let store = gents_pack::pack::store::PackStore::new(home.path());
-    let installed_path = store
-        .path(output["effective"]["digest"].as_str().unwrap())
-        .unwrap();
-    let installed_bytes = std::fs::read(&installed_path).unwrap();
-    std::fs::remove_file(&installed_path).unwrap();
-    std::fs::remove_dir_all(home.path().join("packs").join("unpacked")).unwrap();
-    let listed: Value = serde_json::from_str(
-        &tool
-            .call(json!({"argv": ["pack", "list"]}).to_string())
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    let entry = listed["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["name"] == "fixture/plugin_documents_fixture")
-        .unwrap();
-    assert_eq!(entry["installed_digest"], output["effective"]["digest"]);
-    assert_eq!(entry["installable"], false);
-    assert!(entry["error"]
-        .as_str()
-        .unwrap()
-        .contains("could not be opened"));
-    std::fs::write(installed_path, installed_bytes).unwrap();
-    // Nothing that survives the removal selects the pack's plugin, so the
-    // pack is removed and its plugin retired (`ensure_plugins_unreferenced`).
-    tool.call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
-        .await
-        .expect("an unselected plugin retires with its pack");
-    let response = fixture
-        .user_access
-        .execute(&format!(
-            r#"{{ PackInstallation(filter: {{node_did: {{_eq: "{}"}}}}) {{_docID}} }}"#,
-            gents_store::graphql::escape_graphql_string(node_did),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(
-        response["data"]["PackInstallation"]
-            .as_array()
-            .unwrap()
-            .len(),
-        0
-    );
-}
-
-async fn signed_pack_tool(
-    label: &str,
-    plugins: Arc<gents_toolcalls::plugin::executor::PluginExecutor>,
-) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
-    let fixture = SelfConfigFixture::new(label).await;
-    fixture.grant_selected_configuration().await;
-    fixture.grant_pack_install().await;
-    fixture.grant_agent_schema().await;
-    let mut tool_config = config(&[]);
-    tool_config.agent_did = fixture.agent_did().to_owned();
-    tool_config.enable_pack_install = true;
-    let tools = fixture.tools_with_plugins(&tool_config, plugins);
-    (fixture, tools)
-}
-
-#[tokio::test]
-async fn pack_documents_install_and_release_documents_dependencies() {
-    let (home, plugins) =
-        gents_toolcalls::test_support::home_with_fixture_pack("dependent_fixture");
-    let (_fixture, directory) =
-        gents_pack::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
-    let (bytes, _) = gents_pack::pack::archive::pack_dir(&directory).unwrap();
-    gents_pack::pack::store::PackStore::new(home.path())
-        .import(&bytes[..], None)
-        .unwrap();
-    let (fixture, tools) = signed_pack_tool("documents-dependencies", plugins).await;
-    let did = fixture.db.node_identity.did();
-    let slot = format!("worker={}:inference", fixture.agent_did());
-    let slots = ["--inference-slot", slot.as_str()];
-    let mut args = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
-    args.extend(slots);
-    let preview: Value = serde_json::from_str(&config_call(&tools, &args).await.unwrap()).unwrap();
-    assert_eq!(preview["ready"], true, "{preview}");
-    assert_eq!(
-        preview["dependencies"][0]["coordinate"],
-        "fixture/dependee_fixture"
-    );
-    let digest = preview["artifact_digest"].as_str().unwrap();
-    let mut args = vec![
-        "pack",
-        "install",
-        "fixture/dependent_fixture",
-        "--digest",
-        digest,
-    ];
-    args.extend(slots);
-    config_call(&tools, &args).await.unwrap();
-    let access = &fixture.user_access;
-    let rows = access
-        .execute(
-            r#"{ PackInstallation(filter: {coordinate: {_eq: "fixture/dependee_fixture"}}) { explicit required_by } }"#,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        rows["data"]["PackInstallation"],
-        json!([{"explicit": false, "required_by": ["fixture/dependent_fixture"]}])
-    );
-    config_call(&tools, &["pack", "remove", "fixture/dependent_fixture"])
-        .await
-        .unwrap();
-    assert!(
-        gents_pack::pack::read_installed_pack(access, did, "fixture/dependee_fixture")
-            .await
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn pack_document_installation_uses_existing_lifecycle() {
-    let (_fixture, directory) =
-        gents_pack::test_support::fixture_pack_copy("documents_fixture", &json!({}));
-    let manifest_path = directory.join("manifest.json");
-    let mut manifest: Value =
-        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
-    manifest.as_object_mut().unwrap().remove("schemas");
-    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (home, plugins) = gents_toolcalls::test_support::home_with_pack_dir(&directory);
-    let (fixture, tools) = signed_pack_tool("inspect-documents-pack", plugins).await;
-    let did = fixture.db.node_identity.did();
-    let slot = format!("worker={}:inference", fixture.agent_did());
-    let result: Value = serde_json::from_str(
-        &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(result["installable"], true);
-    let missing: Value = serde_json::from_str(
-        &config_call(
-            &tools,
-            &["pack", "preview", "install", "fixture/documents_fixture"],
-        )
-        .await
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(missing["ready"], false);
-    assert_eq!(missing["missing_inference_slots"], json!(["worker"]));
-    let preview: Value = serde_json::from_str(
-        &config_call(
-            &tools,
-            &[
-                "pack",
-                "preview",
-                "install",
-                "fixture/documents_fixture",
-                "--inference-slot",
-                &slot,
-            ],
-        )
-        .await
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(preview["ready"], true, "{preview}");
-    let digest = preview["artifact_digest"].as_str().unwrap();
-    let access = &fixture.user_access;
-    assert!(
-        gents_pack::pack::read_installed_pack(access, did, "fixture/documents_fixture")
-            .await
-            .unwrap()
-            .is_none(),
-        "preview must not install documents"
-    );
-    let rejected = config_call(
-        &tools,
-        &[
-            "pack",
-            "install",
-            "fixture/documents_fixture",
-            "--digest",
-            "sha256:wrong",
-            "--inference-slot",
-            &slot,
-        ],
-    )
-    .await
-    .unwrap_err();
-    assert!(rejected.to_string().contains("digest"), "{rejected}");
-    assert!(
-        gents_pack::pack::read_installed_pack(access, did, "fixture/documents_fixture")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    let installed: Value = serde_json::from_str(
-        &config_call(
-            &tools,
-            &[
-                "pack",
-                "install",
-                "fixture/documents_fixture",
-                "--digest",
-                digest,
-                "--inference-slot",
-                &slot,
-            ],
-        )
-        .await
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(installed["effective"]["digest"], digest);
-    assert!(
-        fixture
-            .db
-            .node
-            .get_collection("FixtureJob")
-            .unwrap()
-            .is_some(),
-        "custom schema asset must be published"
-    );
-
-    assert!(
-        gents_pack::pack::read_installed_pack(access, did, "fixture/documents_fixture")
-            .await
-            .unwrap()
-            .is_some()
-    );
-    let updated: Value = serde_json::from_str(
-        &config_call(
-            &tools,
-            &[
-                "pack",
-                "update",
-                "fixture/documents_fixture@1.0.0",
-                "--digest",
-                digest,
-                "--inference-slot",
-                &slot,
-            ],
-        )
-        .await
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(updated["effective"]["digest"], digest);
-    config_call(&tools, &["pack", "remove", "fixture/documents_fixture"])
-        .await
-        .unwrap();
-    assert!(
-        gents_pack::pack::read_installed_pack(access, did, "fixture/documents_fixture")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    let collection = || fixture.db.node.get_collection("FixtureJob").unwrap();
-    assert!(
-        collection().is_some(),
-        "remove keeps collections by default"
-    );
-
-    let install = [
-        "pack",
-        "install",
-        "fixture/documents_fixture",
-        "--digest",
-        digest,
-        "--inference-slot",
-        &slot,
-    ];
-    let with_collections = [
-        "pack",
-        "remove",
-        "fixture/documents_fixture",
-        "--with-collections",
-    ];
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        fixture.db.node.clone(),
-        identity::Did::new(did).unwrap(),
-    );
-    // A reinstall finds the collection the first install left behind. It did
-    // not create it, so removing the pack with its collections keeps it.
-    gents_pack::pack::store::PackStore::new(home.path())
-        .import(&gents_pack::pack::archive::pack_dir(&directory).unwrap().0[..], None)
-        .unwrap();
-    config_call(&tools, &install).await.unwrap();
-    let adopted: Value =
-        serde_json::from_str(&config_call(&tools, &with_collections).await.unwrap()).unwrap();
-    assert_eq!(adopted["collections"][0]["removed"], false, "{adopted}");
-    assert!(
-        adopted["collections"][0]["kept_for"][0]["user"]
-            .as_str()
-            .unwrap()
-            .contains("did not create it"),
-        "{adopted}"
-    );
-    assert!(collection().is_some());
-    let drop_collection = || async {
-        admin.truncate_collection("FixtureJob").await.unwrap();
-        admin
-            .remove_collections(&["FixtureJob".to_owned()])
-            .await
-            .unwrap();
-    };
-    drop_collection().await;
-
-    gents_pack::pack::store::PackStore::new(home.path())
-        .import(&gents_pack::pack::archive::pack_dir(&directory).unwrap().0[..], None)
-        .unwrap();
-    config_call(&tools, &install).await.unwrap();
-    admin
-        .write(
-            "pack_test.seed",
-            r#"mutation { create_FixtureJob(input:{job_id:"one"}) { _docID } }"#,
-        )
-        .await
-        .unwrap();
-    let denied = config_call(&tools, &with_collections).await.unwrap_err();
-    assert!(
-        denied
-            .to_string()
-            .contains("cleaning up its collections failed"),
-        "{denied}"
-    );
-    assert!(
-        collection().is_some(),
-        "the Agent's own DID lacks truncate-collection"
-    );
-    drop_collection().await;
-
-    admin
-        .grant_node_permission(
-            &identity::Did::new(fixture.agent_did()).unwrap(),
-            gents_store::config_client::NodePermission::CollectionTruncate,
-        )
-        .await
-        .unwrap();
-    gents_pack::pack::store::PackStore::new(home.path())
-        .import(&gents_pack::pack::archive::pack_dir(&directory).unwrap().0[..], None)
-        .unwrap();
-    config_call(&tools, &install).await.unwrap();
-    admin
-        .write(
-            "pack_test.seed",
-            r#"mutation { create_FixtureJob(input:{job_id:"one"}) { _docID } }"#,
-        )
-        .await
-        .unwrap();
-    let removed: Value =
-        serde_json::from_str(&config_call(&tools, &with_collections).await.unwrap()).unwrap();
-    assert_eq!(
-        removed["collections"],
-        json!([{"collection":"FixtureJob","removed":true,"documents_removed":1}])
-    );
-    assert!(collection().is_none());
 }

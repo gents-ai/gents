@@ -1,4 +1,6 @@
 use super::*;
+use gents_toolcalls::test_support::self_config::{config, SelfConfigFixture};
+use std::sync::Arc;
 
 /// A config tool for an agent with no shell and read-write file tools scoped
 /// to `root`: the surface the pack loop has to work on alone. `authority` is
@@ -10,7 +12,7 @@ async fn authoring_tool(
     categories: &[&str],
     authority: bool,
 ) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
-    let fixture = SelfConfigFixture::new(label).await;
+    let fixture = gents_automation::test_support::self_config_fixture(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
     fixture.grant_agent_schema().await;
@@ -125,7 +127,7 @@ async fn a_shell_less_agent_takes_a_data_pack_from_scaffold_to_installed() {
     )
     .await;
     assert_eq!(installed["artifact_digest"], digest.as_str(), "{installed}");
-    crate::tools_tests::self_config::text_tests::assert_sizes(&sizes);
+    gents_automation::test_support::self_config_text::assert_sizes(&sizes);
     let response = fixture
         .user_access()
         .execute("query { Note { run_id } }")
@@ -626,7 +628,7 @@ async fn page_help_discloses_detail_per_command_and_topic() {
     ] {
         assert!(pack.contains(fact), "{fact}: {pack}");
     }
-    crate::tools_tests::self_config::text_tests::assert_sizes(&[
+    gents_automation::test_support::self_config_text::assert_sizes(&[
         ("help page sdk".into(), sdk.len(), 4_800),
         ("help page sdk Table".into(), table.len(), 600),
         ("help page sdk tokens".into(), tokens.len(), 2_800),

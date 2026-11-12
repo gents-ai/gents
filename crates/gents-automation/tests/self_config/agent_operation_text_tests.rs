@@ -1,5 +1,4 @@
 use super::*;
-use crate::tools_tests::self_config::fixture::SelfConfigFixture;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 
 /// Everything the model reads for `agent create` and `agent clone`: verb
@@ -42,7 +41,7 @@ impl Transcript {
 
 #[tokio::test]
 async fn agent_create_and_clone_text_is_pinned() {
-    let fixture = SelfConfigFixture::new("agent-operation-text").await;
+    let fixture = gents_automation::test_support::self_config_fixture("agent-operation-text").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
     fixture.grant_agent_catalog().await;

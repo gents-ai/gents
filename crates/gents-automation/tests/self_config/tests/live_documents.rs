@@ -2,6 +2,8 @@
 //! an agent with no shell and no file tools.
 
 use super::*;
+use gents_toolcalls::test_support::self_config::{config, SelfConfigFixture};
+use std::{collections::BTreeMap, sync::Arc};
 
 /// A config tool whose agent has bash off, no file tools and no tool root.
 async fn fileless_tool(
@@ -28,7 +30,7 @@ async fn fileless_tool_under(
     no_lockout: bool,
     ceiling_plugins: Option<BTreeSet<String>>,
 ) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
-    let fixture = SelfConfigFixture::new(label).await;
+    let fixture = gents_automation::test_support::self_config_fixture(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
     let mut tool_config = config(&["tools"]);
@@ -336,7 +338,7 @@ async fn plugin_build_accepts_data_collections_that_live_on_the_node() {
     let outside = tempfile::tempdir().unwrap();
     let builder = outside.path().join("builder.sh");
     let artifact = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb");
+        .join("../gents/tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb");
     std::fs::write(
         &builder,
         format!(
