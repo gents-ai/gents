@@ -532,8 +532,8 @@ def caseCoverage : List CoverageEntry :=
       "RootAdmissionCases")
       "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "pairing_reconcile_cases"
-      "PairingReconcileCases"
+      "family"
+      "contracts_pairing_reconcile_projection"
       "The consumer exercises the production resource diff over emitted multi-resource snapshots. Connected flags are observations; actual transport dial/failure and applying operations to reach the post-state still require the transport reconciliation owner.")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1108,16 +1108,16 @@ def caseCoverage : List CoverageEntry :=
       "Drive each generated native-tool route through its actual managed process boundary. Names and processTree flags are not evidence of runtime routing.")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "pairing_reconcile_cases"
+      "pairing_reconcile_shutdown_boundary_cases"
       "PairingReconcileShutdownBoundaryCases")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pairing_reconcile_cases"
+      "pairing_reconcile_sweep_retry_boundary_cases"
       "PairingReconcileSweepRetryBoundaryCases")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pairing_reconcile_cases"
-      "PairingReconcileSweepSchedulingCases")
+      "family"
+      "pairing_sweep_scheduling_sweep")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

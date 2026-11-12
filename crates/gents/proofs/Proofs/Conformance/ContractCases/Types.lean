@@ -379,18 +379,6 @@ structure PairingReconcileSweepRetryBoundaryCase where
   convergenceRetried : Bool
   deriving Repr
 
-structure PairingReconcileSweepSchedulingCase where
-  name : String
-  supervisor : String
-  workClass : String
-  boundary : String
-  maxConcurrentPeerPreparations : Nat
-  peerPreparationBounded : Bool
-  topologyMutationSerialized : Bool
-  stalePeerBlocksReadyPeer : Bool
-  everyPeerResultAccounted : Bool
-  deriving Repr
-
 structure ManagedExecLivenessCase where
   name : String
   trigger : String

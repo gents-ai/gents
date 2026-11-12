@@ -6,6 +6,7 @@ import Proofs.Conformance.EnrollmentRenewalNotices
 import Proofs.Conformance.Scope
 import Proofs.Conformance.EnrollmentAutoRenewal
 import Proofs.Conformance.EnrollmentCore
+import Proofs.Conformance.PairingSweepScheduling
 import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.InferenceObservationRegistry
@@ -397,7 +398,6 @@ def snapshotGoalCasesJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
-    ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
     ++ "\"session_message_goal_input_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.messageInputCasesJson ++ ","
     ++ "\"goal_delivery_input_cases\":"
@@ -852,10 +852,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray
         (pairingReconcileSweepRetryBoundaryCases.map
           pairingReconcileSweepRetryBoundaryCaseJson) ++ ","
-    ++ "\"pairing_reconcile_sweep_scheduling_cases\":"
-      ++ jsonArray
-        (pairingReconcileSweepSchedulingCases.map
-          pairingReconcileSweepSchedulingCaseJson) ++ ","
     ++ "\"managed_exec_liveness_cases\":"
       ++ jsonArray
         (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","

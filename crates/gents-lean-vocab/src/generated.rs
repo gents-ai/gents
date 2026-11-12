@@ -341,20 +341,12 @@ pub fn lean_pack_eval_subject_cases() -> &'static [LeanPackEvalSubjectCase] {
     &lean_contract_snapshot().pack_eval_subject_cases
 }
 
-pub fn lean_pairing_reconcile_cases() -> &'static [LeanPairingReconcileCase] {
-    &lean_contract_snapshot().pairing_reconcile_cases
-}
-
 pub fn lean_pairing_reconcile_shutdown_boundary_cases() -> &'static [LeanPairingReconcileShutdownBoundaryCase] {
     &lean_contract_snapshot().pairing_reconcile_shutdown_boundary_cases
 }
 
 pub fn lean_pairing_reconcile_sweep_retry_boundary_cases() -> &'static [LeanPairingReconcileSweepRetryBoundaryCase] {
     &lean_contract_snapshot().pairing_reconcile_sweep_retry_boundary_cases
-}
-
-pub fn lean_pairing_reconcile_sweep_scheduling_cases() -> &'static [LeanPairingReconcileSweepSchedulingCase] {
-    &lean_contract_snapshot().pairing_reconcile_sweep_scheduling_cases
 }
 
 pub fn lean_pending_user_turn_cases() -> &'static [LeanPendingUserTurnCase] {
@@ -2884,7 +2876,6 @@ pub struct LeanContractSnapshot {
     pub root_admission_cases: Vec<LeanRootAdmissionCase>,
     pub vocabularies: Vec<LeanVocabularyContract>,
     pub state_machines: Vec<LeanStateMachineContract>,
-    pub pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
     pub goal_claimed_publication_cases: Vec<LeanGoalClaimedPublicationCase>,
     pub goal_claimed_identity_cases: Vec<LeanGoalClaimedIdentityCase>,
     pub goal_claimed_target_cases: Vec<LeanGoalClaimedTargetCase>,
@@ -3211,9 +3202,6 @@ pub struct LeanContractSnapshot {
     >,
     pub pairing_reconcile_sweep_retry_boundary_cases: Vec<
         LeanPairingReconcileSweepRetryBoundaryCase,
-    >,
-    pub pairing_reconcile_sweep_scheduling_cases: Vec<
-        LeanPairingReconcileSweepSchedulingCase,
     >,
     pub managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
@@ -7567,14 +7555,6 @@ pub struct LeanPackPlacementReaderCaseReadersItem {
     pub read: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanPairingReconcileCase {
-    pub name: String,
-    pub action: String,
-    pub before: LeanPairingReconcileSnapshot,
-    pub after: LeanPairingReconcileSnapshot,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct LeanPairingReconcileShutdownBoundaryCase {
     pub name: String,
@@ -7588,14 +7568,6 @@ pub struct LeanPairingReconcileShutdownBoundaryCase {
     pub shutdown_join_bounded: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanPairingReconcileSnapshot {
-    pub connected: bool,
-    pub desired_replicators: Vec<String>,
-    pub actual_replicators: Vec<String>,
-    pub converged: bool,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct LeanPairingReconcileSweepRetryBoundaryCase {
     pub name: String,
@@ -7607,19 +7579,6 @@ pub struct LeanPairingReconcileSweepRetryBoundaryCase {
     pub retry_trigger: String,
     pub cancellation_prioritized: bool,
     pub convergence_retried: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanPairingReconcileSweepSchedulingCase {
-    pub name: String,
-    pub supervisor: String,
-    pub work_class: String,
-    pub boundary: String,
-    pub max_concurrent_peer_preparations: usize,
-    pub peer_preparation_bounded: bool,
-    pub topology_mutation_serialized: bool,
-    pub stale_peer_blocks_ready_peer: bool,
-    pub every_peer_result_accounted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

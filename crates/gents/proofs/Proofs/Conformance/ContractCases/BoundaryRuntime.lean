@@ -305,18 +305,4 @@ def pairingReconcileSweepRetryBoundaryCases :
     }
   ]
 
-def pairingReconcileSweepSchedulingCases :
-    List PairingReconcileSweepSchedulingCase :=
-  [ { name := "stale_peer_dial_does_not_block_ready_peer"
-    , supervisor := "pairingReconciler"
-    , workClass := "p2pReconcileSweep"
-    , boundary := "pairingReconcilePeerPreparationBoundary"
-    , maxConcurrentPeerPreparations := 8
-    , peerPreparationBounded := true
-    , topologyMutationSerialized := true
-    , stalePeerBlocksReadyPeer := false
-    , everyPeerResultAccounted := true
-    }
-  ]
-
 end Conformance.ContractCases

@@ -31,33 +31,6 @@ end Sample
 }
 
 #[test]
-fn decodes_pairing_reconcile_samples_with_stable_desired_resources() {
-    let cases = lean_pairing_reconcile_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean pairing_reconcile_cases must include multi-resource samples"
-    );
-    let names: BTreeSet<&str> = cases.iter().map(|case| case.name.as_str()).collect();
-    assert_eq!(
-        names.len(),
-        cases.len(),
-        "pairing reconcile case names must be unique"
-    );
-    for case in cases {
-        assert_eq!(
-            case.before.desired_replicators, case.after.desired_replicators,
-            "pairing case {} must keep the desired resource set stable",
-            case.name
-        );
-        assert!(
-            !case.before.desired_replicators.is_empty(),
-            "pairing case {} must target at least one resource",
-            case.name
-        );
-    }
-}
-
-#[test]
 fn runtime_reconcile_state_machine_contract_is_complete() {
     assert_state_machine_contract_is_complete("RuntimeReconcile");
     assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");

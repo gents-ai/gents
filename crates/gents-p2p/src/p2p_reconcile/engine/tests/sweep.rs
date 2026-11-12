@@ -115,52 +115,67 @@ async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cle
 
 #[tokio::test]
 async fn stale_peer_dial_does_not_head_of_line_block_ready_peer() {
-    let desired_for = |address: &str| PairingDesired {
-        replicator_addresses: set(&[address]),
-        replicator_collections: set(&["AgentRequest"]),
-        template_ids: set(&["conversation"]),
-        ..Default::default()
-    };
-    let store = MultiPeerStore {
-        desired: BTreeMap::from([
-            ("peer-a-stale".into(), desired_for("stale-addr")),
-            ("peer-z-ready".into(), desired_for("ready-addr")),
-        ]),
-        applied: Mutex::new(BTreeMap::new()),
-    };
-    let stale_started = Arc::new(tokio::sync::Notify::new());
-    let stale_release = Arc::new(tokio::sync::Notify::new());
-    let replicator_installed = Arc::new(tokio::sync::Notify::new());
-    let admin = MockAdmin {
-        blocked_connect_address: Some("stale-addr".into()),
-        blocked_connect_started: Some(stale_started.clone()),
-        blocked_connect_release: Some(stale_release.clone()),
-        replicator_installed: Some(replicator_installed.clone()),
-        ..Default::default()
-    };
-    let mut replay_connections = BTreeMap::new();
-    let mut failing_peers = BTreeSet::new();
-    let sweep = sweep_pairings(&admin, &store, &mut replay_connections, &mut failing_peers);
-    tokio::pin!(sweep);
+    for case in gents_lean_vocab::families::pairing_sweep_scheduling_sweep::cases() {
+        assert_eq!(
+            (case.input.stalled_peers, case.input.ready_peers),
+            (1, 1),
+            "the mock admin stalls one dial beside one ready peer"
+        );
+        let desired_for = |address: &str| PairingDesired {
+            replicator_addresses: set(&[address]),
+            replicator_collections: set(&["AgentRequest"]),
+            template_ids: set(&["conversation"]),
+            ..Default::default()
+        };
+        let store = MultiPeerStore {
+            desired: BTreeMap::from([
+                ("peer-a-stale".into(), desired_for("stale-addr")),
+                ("peer-z-ready".into(), desired_for("ready-addr")),
+            ]),
+            applied: Mutex::new(BTreeMap::new()),
+        };
+        let stale_started = Arc::new(tokio::sync::Notify::new());
+        let stale_release = Arc::new(tokio::sync::Notify::new());
+        let replicator_installed = Arc::new(tokio::sync::Notify::new());
+        let admin = MockAdmin {
+            blocked_connect_address: Some("stale-addr".into()),
+            blocked_connect_started: Some(stale_started.clone()),
+            blocked_connect_release: Some(stale_release.clone()),
+            replicator_installed: Some(replicator_installed.clone()),
+            ..Default::default()
+        };
+        let mut replay_connections = BTreeMap::new();
+        let mut failing_peers = BTreeSet::new();
+        let sweep = sweep_pairings(&admin, &store, &mut replay_connections, &mut failing_peers);
+        tokio::pin!(sweep);
 
-    tokio::select! {
-        _ = stale_started.notified() => {}
-        result = &mut sweep => panic!("sweep returned before stale dial barrier: {result:?}"),
+        tokio::select! {
+            _ = stale_started.notified() => {}
+            result = &mut sweep => panic!("sweep returned before stale dial barrier: {result:?}"),
+        }
+        let ready_installed =
+            tokio::time::timeout(Duration::from_millis(500), replicator_installed.notified())
+                .await
+                .is_ok()
+                && admin.replicators.lock().unwrap().contains_key("ready-addr");
+
+        stale_release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), &mut sweep)
+            .await
+            .expect("sweep must finish after stale dial is released")
+            .expect("sweep result");
+        let reconciled = ["stale-addr", "ready-addr"]
+            .iter()
+            .filter(|address| admin.replicators.lock().unwrap().contains_key(**address))
+            .count();
+        case.check(
+            gents_lean_vocab::families::pairing_sweep_scheduling_sweep::SweepObservation {
+                max_concurrent_peer_preparations: MAX_CONCURRENT_PEER_PREPARATIONS as u64,
+                ready_peer_blocked: !ready_installed,
+                reconciled_peers: reconciled as u64,
+            },
+        );
     }
-    tokio::time::timeout(Duration::from_millis(500), replicator_installed.notified())
-        .await
-        .expect("ready peer must install while stale peer dial remains blocked");
-    assert!(
-        admin.replicators.lock().unwrap().contains_key("ready-addr"),
-        "ready peer topology must converge before stale dial is released"
-    );
-
-    stale_release.notify_one();
-    tokio::time::timeout(Duration::from_secs(1), &mut sweep)
-        .await
-        .expect("sweep must finish after stale dial is released")
-        .expect("sweep result");
-    assert!(admin.replicators.lock().unwrap().contains_key("stale-addr"));
 }
 
 #[tokio::test]
@@ -244,23 +259,4 @@ async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
     tokio::time::timeout(Duration::from_millis(100), &mut reconciler)
         .await
         .expect("cancellation must stop the reconciler");
-}
-
-#[test]
-fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {
-    let cases = gents_lean_vocab::lean_pairing_reconcile_sweep_scheduling_cases();
-    assert_eq!(cases.len(), 1);
-    let case = &cases[0];
-    assert_eq!(case.name, "stale_peer_dial_does_not_block_ready_peer");
-    assert_eq!(case.supervisor, "pairingReconciler");
-    assert_eq!(case.work_class, "p2pReconcileSweep");
-    assert_eq!(case.boundary, "pairingReconcilePeerPreparationBoundary");
-    assert_eq!(
-        case.max_concurrent_peer_preparations,
-        MAX_CONCURRENT_PEER_PREPARATIONS
-    );
-    assert!(case.peer_preparation_bounded);
-    assert!(case.topology_mutation_serialized);
-    assert!(!case.stale_peer_blocks_ready_peer);
-    assert!(case.every_peer_result_accounted);
 }
