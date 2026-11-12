@@ -1,3 +1,4 @@
+import Proofs.Conformance.BackgroundDiagnostics
 import Proofs.Conformance.QueueEditSkillContext
 import Proofs.Conformance.SessionStaleCompletion
 import Proofs.Conformance.WorkspaceDirtyTrunk
