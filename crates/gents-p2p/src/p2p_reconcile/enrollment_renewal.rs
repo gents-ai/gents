@@ -441,6 +441,47 @@ mod tests {
     }
 
     #[test]
+    fn renewal_notices_match_the_lean_model() {
+        let now = at("2026-11-25T00:00:00Z");
+        gents_lean_vocab::families::enrollment_renewal_notices_trace::replay::<String>(|trace| {
+            let mut notices = RenewalNotices::default();
+            trace
+                .steps
+                .iter()
+                .map(|step| {
+                    let expires = match step.state.as_str() {
+                        "invalid" => "soon".to_string(),
+                        state => {
+                            let days = match state {
+                                "current" => 30,
+                                "renewal_due" => 4,
+                                "expired" => -1,
+                                other => panic!("unknown lease state {other}"),
+                            };
+                            (now + chrono::Duration::days(days))
+                                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                        }
+                    };
+                    let active = if step.active {
+                        vec![active_enrollment(step.sequence, &expires)]
+                    } else {
+                        Vec::new()
+                    };
+                    let mut found = notices.observe(&projection(active), now);
+                    assert!(found.len() <= 1, "{found:?}");
+                    found.pop().map(|notice| {
+                        serde_json::to_value(notice.lease.state)
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .to_string()
+                    })
+                })
+                .collect()
+        });
+    }
+
+    #[test]
     fn a_generation_is_noticed_once_per_state_and_forgotten_when_superseded() {
         let expiring = active_enrollment(1, "2026-11-29T19:07:47Z");
         let mut notices = RenewalNotices::default();
