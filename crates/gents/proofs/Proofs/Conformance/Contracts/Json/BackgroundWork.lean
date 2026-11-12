@@ -5,6 +5,7 @@ import Proofs.Runtime.Background.ToolOutputCases
 import Proofs.Conformance.ContractCases.InterruptDisposition
 import Proofs.Conformance.Functions.ToolCalls
 import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Session
 import Proofs.ToolCalls.PluginJob.Admission
 
 namespace Conformance.Contracts
@@ -263,5 +264,120 @@ def backgroundReceiptContention : Family BackgroundBudget.Bound Bool where
   model := fun i =>
     Background.receiptCommits (List.replicate i.numericBound false ++ [true])
       Background.receiptContentionAttempts
+
+namespace Restart
+
+def kindName : Recovery.RowKind → String
+  | .native => "native"
+  | .sessionMessage => "sessionMessage"
+  | .pluginJob => "pluginJob"
+
+def kindOf : String → Recovery.RowKind
+  | "sessionMessage" => .sessionMessage
+  | "pluginJob" => .pluginJob
+  | _ => .native
+
+def parentOf : String → Recovery.ParentObservation
+  | "interrupted" => .interrupted
+  | "cleanlyCompleted" => .cleanlyCompleted
+  | "otherTerminal" => .otherTerminal
+  | "missing" => .missing
+  | _ => .live
+
+def processOf : String → ManagedExec.StopOutcome
+  | "alreadyExited" => .alreadyExited
+  | "stillRunning" => .stillRunning
+  | "notOwned" => .notOwned
+  | _ => .stopped
+
+structure Input where
+  name : String
+  awaitMode : ToolExecution.AwaitMode
+  kind : String
+  sessionMessage : Bool
+  parentObservation : String
+  deadlineExpired : Bool
+  processOutcome : ManagedExec.StopOutcome
+  deriving Lean.ToJson
+
+structure Output where
+  disposition : String
+  cause : Option String
+  terminalState : Option String
+  notificationReason : Option String
+  queueSource : Option String
+  queueKeyPrefix : Option String
+  deriving Lean.ToJson
+
+structure Classified where
+  cause : Option String
+  notificationReason : Option String
+  deriving Lean.ToJson
+
+def every : List Input :=
+  Recovery.restartDispositionCases.map fun c =>
+    { name := c.name
+      awaitMode := ((ToolExecution.AwaitMode.fromDefraDB? c.awaitMode).getD .foreground)
+      kind := kindName c.kind
+      sessionMessage := c.kind == .sessionMessage
+      parentObservation := c.parentObservation
+      deadlineExpired := c.deadlineExpired
+      processOutcome := processOf c.processOutcome }
+
+example : Recovery.restartDispositionCases.all (fun c =>
+    (ToolExecution.AwaitMode.fromDefraDB? c.awaitMode).isSome &&
+      (parentOf c.parentObservation).toContract == c.parentObservation &&
+      (processOf c.processOutcome).toContract == c.processOutcome &&
+      kindOf (kindName c.kind) == c.kind) := by native_decide
+
+def row (i : Input) : Recovery.RestartRow :=
+  { awaitMode := i.awaitMode, kind := kindOf i.kind, parent := parentOf i.parentObservation
+    deadlineExpired := i.deadlineExpired, process := i.processOutcome }
+
+def observe (i : Input) : Output :=
+  let disposition := Recovery.restartDisposition (row i)
+  let notification := (row i).notification
+  { disposition := disposition.toContract
+    cause := disposition.causeContract
+    terminalState := disposition.terminalStateContract
+    notificationReason := notification.map (·.notificationReason)
+    queueSource := notification.map (·.queueSource)
+    queueKeyPrefix := notification.map (·.queueKeyPrefix) }
+
+end Restart
+
+/-- The orphan classifier decides every native background row whose parent
+resolves, including the still-running verdict no test host can construct. -/
+@[conformance_family]
+def restartClassification : Family Restart.Input Restart.Classified where
+  inputs := Restart.every.filter fun i =>
+    i.awaitMode == .background && i.kind == "native" && i.parentObservation != "missing"
+  model := fun i =>
+    let observed := Restart.observe i
+    { cause := observed.cause, notificationReason := observed.notificationReason }
+
+/-- Startup recovery of an admitted native row whose parent resolves. A test
+host cannot hold a process that survives the stop request, so the
+still-running verdict is decided by `restartClassification` only. -/
+@[conformance_family]
+def restartNative : Family Restart.Input Restart.Output where
+  inputs := Restart.every.filter fun i =>
+    i.kind == "native" && i.parentObservation != "missing" && i.processOutcome != .stillRunning
+  model := Restart.observe
+
+@[conformance_family]
+def restartSessionMessage : Family Restart.Input Restart.Output where
+  inputs := Restart.every.filter fun i => i.sessionMessage && i.parentObservation != "missing"
+  model := Restart.observe
+
+@[conformance_family]
+def restartMissingParent : Family Restart.Input Restart.Output where
+  inputs := Restart.every.filter fun i => i.parentObservation == "missing"
+  model := Restart.observe
+
+@[conformance_family]
+def restartPluginJob : Family Restart.Input Restart.Output where
+  inputs := Restart.every.filter fun i => i.kind == "pluginJob"
+  model := Restart.observe
 
 end Conformance.Contracts

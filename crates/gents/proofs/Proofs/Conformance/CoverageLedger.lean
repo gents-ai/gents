@@ -1724,8 +1724,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobWakeCases")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "restart_disposition_cases"
-      "RestartDispositionCases")
+      "family"
+      "contracts_restart_plugin_job")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_backgrounding_cases"
@@ -1941,12 +1941,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalResetResumeCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "restart_disposition_cases"
-      "RestartDispositionCases")
+      "family"
+      "contracts_restart_native")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "restart_disposition_cases"
-      "RestartDispositionCases")
+      "family"
+      "contracts_restart_session_message")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "r6_backgrounding_cases"
@@ -1969,8 +1969,12 @@ def caseCoverage : List CoverageEntry :=
       "The generated caller-interrupt dispatch case supplies the accepted Running foreground wait's cancelled state and unchanged background state; the native test separately asserts exact canonical cancellation text. The observer case supplies the only structured alternative. This finite race check does not establish a deterministic winner or scheduler fairness.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "restart_disposition_cases"
-      "RestartDispositionCases")
+      "family"
+      "contracts_restart_missing_parent")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_restart_classification")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "recovery_sweep_cases"

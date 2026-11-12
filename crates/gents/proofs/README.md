@@ -1246,8 +1246,8 @@ Model → conformance → Rust bindings:
   `leave_running_iff_preserved_shapes`,
   `session_message_row_left_running`,
   `notification_iff_terminalized_native_background`,
-  `deadline_precedes_restart_interrupt`). `restart_disposition_cases` rows are
-  computed from the model.
+  `deadline_precedes_restart_interrupt`). The `contracts_restart_*` families
+  replay `restartDisposition` through the classifier and startup recovery.
 - **Foreground interrupt scope** — `Proofs/ToolCalls/Background/Interrupt.lean` cancels a
   pending intent or running foreground call and leaves background work,
   including every started session's row, untouched (`interruptTool_refines`,

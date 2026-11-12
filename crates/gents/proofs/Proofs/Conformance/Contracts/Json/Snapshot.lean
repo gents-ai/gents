@@ -958,9 +958,6 @@ def snapshotRecoveryCasesJson : String :=
           | some facts => "{\"terminal\":" ++ toString facts.terminal
               ++ ",\"this_runtime\":" ++ toString facts.thisRuntime ++ "}")
           ++ ",\"observation\":" ++ jsonString observation.toContract ++ "}") ++ ","
-    ++ "\"restart_disposition_cases\":"
-      ++ jsonArray
-        (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
     ++ "\"r4c_background_work_cases\":"
       ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"

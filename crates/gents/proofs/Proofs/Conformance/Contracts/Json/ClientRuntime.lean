@@ -548,33 +548,6 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
     ++ jsonString witness.deadlineAuditRef
     ++ "}"
 
-def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"rust_function\":" ++ jsonString witness.rustFunction ++ ","
-    ++ "\"await_mode\":" ++ jsonString witness.awaitMode ++ ","
-    ++ "\"session_message\":"
-      ++ boolString (witness.kind == .sessionMessage) ++ ","
-    ++ "\"kind\":"
-      ++ jsonString (match witness.kind with
-        | .native => "native"
-        | .sessionMessage => "sessionMessage"
-        | .pluginJob => "pluginJob") ++ ","
-    ++ "\"parent_observation\":"
-      ++ jsonString witness.parentObservation ++ ","
-    ++ "\"deadline_expired\":" ++ boolString witness.deadlineExpired ++ ","
-    ++ "\"process_outcome\":" ++ jsonString witness.processOutcome ++ ","
-    ++ "\"disposition\":" ++ jsonString witness.disposition ++ ","
-    ++ "\"cause\":" ++ jsonOptionalString witness.cause ++ ","
-    ++ "\"terminal_state\":" ++ jsonOptionalString witness.terminalState ++ ","
-    ++ "\"notification_reason\":"
-      ++ jsonOptionalString witness.notificationReason ++ ","
-    ++ "\"queue_source\":" ++ jsonOptionalString witness.queueSource ++ ","
-    ++ "\"queue_key_prefix\":"
-      ++ jsonOptionalString witness.queueKeyPrefix ++ ","
-    ++ "\"theorem\":" ++ jsonString witness.theoremName
-    ++ "}"
-
 deriving instance Lean.ToJson for QueuedSteering.AgentMessageOutcome
 deriving instance Lean.ToJson for QueuedSteering.FoldedBindingCase
 

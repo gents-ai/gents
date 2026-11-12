@@ -51,6 +51,71 @@ async fn teardown(admission: PublishedAdmission) {
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
+type RestartObservation = gents_lean_vocab::families::contracts_restart_native::Output;
+
+/// Reads a restart recovery back as the model's observation. Production
+/// records an interruption and a lost process the same way for both
+/// await modes; the row's await mode tells which recovery cause applied.
+pub(super) fn observed_restart(
+    recovered: usize,
+    row: &serde_json::Value,
+    messages: &[String],
+    wakes: &[serde_json::Value],
+    session_id: &str,
+) -> RestartObservation {
+    let state = row["lifecycle_state"].as_str().unwrap();
+    let background = row["await_mode"] == "background";
+    let (disposition, terminal_state) = match recovered {
+        0 => {
+            assert_eq!(state, "running");
+            ("leave_running", None)
+        }
+        1 => ("terminalize", Some(state.to_owned())),
+        other => panic!("one row recovered {other} times"),
+    };
+    let cause = match (
+        row["cancel_cause"].as_str(),
+        row["tool_failure_class"].as_str(),
+    ) {
+        (None, None) => None,
+        (Some("deadline"), Some("external")) => Some("deadlineExceeded"),
+        (Some("interrupted"), None) if background => Some("TerminalizeBackgroundedAsInterrupted"),
+        (Some("interrupted"), None) => Some("parentInterrupted"),
+        (None, Some("external")) if background => Some("processLost"),
+        (None, Some("external")) => Some("parentTerminal"),
+        other => panic!("unmodeled recovery record {other:?}"),
+    };
+    let (notification_reason, queue_source, queue_key_prefix) = match (messages, wakes) {
+        ([], []) => (None, None, None),
+        ([message], [wake]) => {
+            let reason = message
+                .split_once("<reason>")
+                .and_then(|(_, rest)| rest.split_once("</reason>"))
+                .map(|(reason, _)| reason.to_owned())
+                .expect("restart notification names its reason");
+            let key = wake["queue"]["key"].as_str().unwrap();
+            (
+                Some(reason),
+                wake["queue"]["source"].as_str().map(str::to_owned),
+                Some(
+                    key.strip_suffix(session_id)
+                        .expect("restart wake is keyed by its session")
+                        .to_owned(),
+                ),
+            )
+        }
+        other => panic!("unmodeled restart obligations {other:?}"),
+    };
+    RestartObservation {
+        disposition: disposition.to_owned(),
+        cause: cause.map(str::to_owned),
+        terminal_state,
+        notification_reason,
+        queue_source,
+        queue_key_prefix,
+    }
+}
+
 async fn restart_obligations(
     admission: &PublishedAdmission,
     session_id: &str,
@@ -102,30 +167,13 @@ async fn restart_obligations(
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
-    let cases = gents_lean_vocab::lean_restart_disposition_cases();
-    for name in [
-        "restart_native_background_live_parent_interrupted",
-        "restart_native_background_deadline_expired_times_out",
-        "restart_native_background_interrupted_parent_lost_on_restart",
-        "restart_native_background_terminal_parent_lost_on_restart",
-        "restart_native_background_unowned_process_lost",
-        "restart_native_background_exited_process_lost",
-        "restart_foreground_live_parent_left_running",
-        "restart_foreground_interrupted_parent_cancelled",
-    ] {
-        let case = cases.iter().find(|case| case.name == name).unwrap();
-        assert!(
-            !case.session_message,
-            "{name} must remain a native tool row"
-        );
+    for case in gents_lean_vocab::families::contracts_restart_native::cases::<String, String>() {
+        let input = &case.input;
+        let name = input.name.as_str();
         let admission = published_admission(PublishedAdmissionOptions {
             name: format!("restart-{name}"),
             real_identity: true,
-            await_mode: if case.await_mode == "background" {
-                AwaitMode::Background
-            } else {
-                AwaitMode::Foreground
-            },
+            await_mode: AwaitMode::from_persisted(&input.await_mode).expect("modeled await mode"),
             start_running: true,
             ..Default::default()
         })
@@ -133,7 +181,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         .unwrap();
         let tool_doc = admission.tool.doc_id().unwrap().to_owned();
         let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
-        if case.deadline_expired {
+        if input.deadline_expired {
             update(
                 &admission,
                 "AgentToolCall",
@@ -142,7 +190,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             )
             .await;
         }
-        match case.parent_observation.as_str() {
+        match input.parent_observation.as_str() {
             "live" => {}
             "interrupted" => {
                 update(
@@ -168,12 +216,12 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         let records = tempfile::tempdir().unwrap();
         let registry = crate::call::hook::BackgroundExecutionRegistry::default()
             .with_process_records(records.path().to_path_buf());
-        let process = if case.await_mode == "background" {
+        let process = if input.await_mode == "background" {
             crate::call::hook::tests::process_records::process_for_generated_outcome(
                 &registry,
                 admission.tool.tool_call_id(),
                 &tool_doc,
-                &case.process_outcome,
+                &input.process_outcome,
             )
             .await
         } else {
@@ -196,40 +244,6 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             process.finish().await;
         }
         let actual = row(&admission, &tool_doc).await;
-        match case.disposition.as_str() {
-            "leave_running" => {
-                assert_eq!(report.tool_calls_recovered, 0, "{name}");
-                assert_eq!(actual["lifecycle_state"], "running", "{name}");
-            }
-            "terminalize" => {
-                assert_eq!(report.tool_calls_recovered, 1, "{name}");
-                assert_eq!(
-                    actual["lifecycle_state"],
-                    case.terminal_state.as_deref().unwrap(),
-                    "{name}"
-                );
-            }
-            other => panic!("unsupported restart disposition {other}"),
-        }
-        match case.cause.as_deref() {
-            None => {
-                assert!(actual["cancel_cause"].is_null(), "{name}");
-                assert!(actual["tool_failure_class"].is_null(), "{name}");
-            }
-            Some("deadlineExceeded") => {
-                assert_eq!(actual["cancel_cause"], "deadline", "{name}");
-                assert_eq!(actual["tool_failure_class"], "external", "{name}");
-            }
-            Some("parentInterrupted" | "TerminalizeBackgroundedAsInterrupted") => {
-                assert_eq!(actual["cancel_cause"], "interrupted", "{name}");
-                assert!(actual["tool_failure_class"].is_null(), "{name}");
-            }
-            Some("parentTerminal" | "processLost") => {
-                assert!(actual["cancel_cause"].is_null(), "{name}");
-                assert_eq!(actual["tool_failure_class"], "external", "{name}");
-            }
-            other => panic!("unsupported native restart cause {other:?}"),
-        }
         let session_id = format!("session-restart-{name}");
         let (messages, wakes) = restart_obligations(
             &admission,
@@ -238,33 +252,16 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             admission.tool.requester_did(),
         )
         .await;
-        if let Some(reason) = case.notification_reason.as_deref() {
-            assert_eq!(
-                messages.len(),
-                1,
-                "{name}: report={report:?}, tool={actual:?}, wakes={wakes:?}"
-            );
-            assert!(messages[0].contains(&format!("<reason>{reason}</reason>")));
-            assert_eq!(wakes.len(), 1, "{name}");
-            assert_eq!(
-                wakes[0]["queue"]["source"],
-                case.queue_source.as_deref().unwrap(),
-                "{name}"
-            );
-            assert_eq!(
-                wakes[0]["queue"]["key"],
-                format!(
-                    "{}{}",
-                    case.queue_key_prefix.as_deref().unwrap(),
-                    session_id
-                ),
-                "{name}"
-            );
-        } else {
+        if messages.is_empty() {
             assert_eq!(report.notifications_repaired, 0, "{name}");
-            assert!(messages.is_empty(), "{name}");
-            assert!(wakes.is_empty(), "{name}");
         }
+        let observed = observed_restart(
+            report.tool_calls_recovered,
+            &actual,
+            &messages,
+            &wakes,
+            &session_id,
+        );
         let second = ToolCallLifecycle::recover_all_with_executions(
             &admission.node,
             &admission.node_did,
@@ -284,27 +281,23 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         assert_eq!(messages_after, messages, "{name}");
         assert_eq!(wakes_after, wakes, "{name}");
         teardown(admission).await;
+        case.check(observed);
     }
 }
 
 #[tokio::test]
 async fn generated_session_message_restart_dispositions_use_canonical_admission_owner() {
-    let cases = gents_lean_vocab::lean_restart_disposition_cases()
-        .iter()
-        .filter(|case| case.session_message && case.parent_observation != "missing")
-        .collect::<Vec<_>>();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no session-message restart rows"
-    );
-    for case in cases {
-        let name = case.name.as_str();
-        assert_eq!(case.await_mode, "background", "{name}");
+    for case in
+        gents_lean_vocab::families::contracts_restart_session_message::cases::<String, String>()
+    {
+        let input = &case.input;
+        let name = input.name.as_str();
         let admission = crate::call::lifecycle::admission_fixture::published_session_message(
             PublishedAdmissionOptions {
                 name: format!("restart-{name}"),
                 real_identity: true,
-                await_mode: AwaitMode::Background,
+                await_mode: AwaitMode::from_persisted(&input.await_mode)
+                    .expect("modeled await mode"),
                 ..Default::default()
             },
         )
@@ -313,7 +306,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
         .admission;
         let tool_doc = admission.tool.doc_id().unwrap().to_owned();
         let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
-        if case.deadline_expired {
+        if input.deadline_expired {
             update(
                 &admission,
                 "AgentToolCall",
@@ -322,7 +315,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
             )
             .await;
         }
-        let parent_state = match case.parent_observation.as_str() {
+        let parent_state = match input.parent_observation.as_str() {
             "live" => None,
             "interrupted" => Some("interrupted"),
             "cleanlyCompleted" => Some("completed"),
@@ -355,16 +348,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
         .await
         .unwrap();
         let actual = row(&admission, &tool_doc).await;
-        assert_eq!(actual["await_mode"], case.await_mode.as_str(), "{name}");
-        match case.disposition.as_str() {
-            "leave_running" => {
-                assert_eq!(report.tool_calls_recovered, 0, "{name}");
-                assert_eq!(actual["lifecycle_state"], "running", "{name}");
-                assert!(actual["cancel_cause"].is_null(), "{name}");
-                assert!(actual["tool_failure_class"].is_null(), "{name}");
-            }
-            other => panic!("unsupported session-message restart disposition {other}"),
-        }
+        assert_eq!(actual["await_mode"], input.await_mode.as_str(), "{name}");
         let session_id = format!("session-restart-{name}");
         let (messages, wakes) = restart_obligations(
             &admission,
@@ -373,15 +357,12 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
             admission.tool.requester_did(),
         )
         .await;
-        assert_eq!(
-            messages.len(),
-            usize::from(case.notification_reason.is_some()),
-            "{name}"
-        );
-        assert_eq!(
-            wakes.len(),
-            usize::from(case.queue_source.is_some()),
-            "{name}"
+        let observed = observed_restart(
+            report.tool_calls_recovered,
+            &actual,
+            &messages,
+            &wakes,
+            &session_id,
         );
         let second = ToolCallLifecycle::recover_all(
             &admission.node,
@@ -392,6 +373,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
         .unwrap();
         assert_eq!(second.tool_calls_recovered, 0, "{name}");
         teardown(admission).await;
+        case.check(gents_lean_vocab::family::recode(&observed));
     }
 }
 

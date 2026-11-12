@@ -605,10 +605,6 @@ pub fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase]
     &lean_contract_snapshot().request_transition_cases
 }
 
-pub fn lean_restart_disposition_cases() -> &'static [LeanRestartDispositionCase] {
-    &lean_contract_snapshot().restart_disposition_cases
-}
-
 pub fn lean_retry_selection_cases() -> &'static [LeanRetrySelectionCase] {
     &lean_contract_snapshot().retry_selection_cases
 }
@@ -3194,7 +3190,6 @@ pub struct LeanContractSnapshot {
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub session_message_kill_cases: Vec<LeanKillCase>,
     pub session_message_kill_observation_cases: Vec<LeanKillObservationCase>,
-    pub restart_disposition_cases: Vec<LeanRestartDispositionCase>,
     pub r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
@@ -10249,37 +10244,6 @@ pub enum LeanRequestPurpose {
     TitleAudit,
     #[serde(rename = "access-review")]
     AccessReview,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanRestartDispositionCase {
-    pub name: String,
-    pub rust_function: String,
-    pub await_mode: String,
-    pub session_message: bool,
-    pub kind: LeanRestartRowKind,
-    pub parent_observation: String,
-    pub deadline_expired: bool,
-    pub process_outcome: String,
-    pub disposition: String,
-    pub cause: Option<String>,
-    pub terminal_state: Option<String>,
-    pub notification_reason: Option<String>,
-    pub queue_source: Option<String>,
-    pub queue_key_prefix: Option<String>,
-    #[allow(dead_code)]
-    pub theorem: String,
-}
-
-/// `Recovery.RowKind`: which owner a running tool-call row belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub enum LeanRestartRowKind {
-    #[serde(rename = "native")]
-    Native,
-    #[serde(rename = "sessionMessage")]
-    SessionMessage,
-    #[serde(rename = "pluginJob")]
-    PluginJob,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
