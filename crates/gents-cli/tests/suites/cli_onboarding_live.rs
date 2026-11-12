@@ -312,8 +312,6 @@ mod no_model {
         terminal.quit_shell().await
     }
 
-    /// Bare `gents --home <home>` over a broken `home`: names the finding, sets the folder
-    /// aside, sets it up again and opens the shell.
     fn remember_home(live: &LiveBox, home: &Path) -> Result<()> {
         let remembered = live.remembered_home();
         fs::create_dir_all(remembered.parent().context("remembered home directory")?)?;

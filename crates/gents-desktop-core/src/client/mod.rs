@@ -16,8 +16,8 @@ pub(crate) use query::load_inference_configuration;
 pub use collection_resolver::CollectionResolver;
 pub use core::{
     client_store_from_other_version, client_store_key_missing, tool_file_changes_on,
-    ChatRouteRefusal, ClientCore, ClientCoreOptions, ClientPeerStatus,
-    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
+    ChatRouteRefusal, ClientCore, ClientCoreOptions, ClientPeerStatus, ClientRouteStatus,
+    ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
     EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
     InferenceTarget, LocalHomeAccessError, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
     RefreshedRequestProjection, RetainedGoalSubmission, StoreRefresh, STUCK_THRESHOLD_ATTEMPTS,

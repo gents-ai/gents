@@ -1,4 +1,3 @@
-use anyhow::Result;
 use gents_protocol::serve_lifecycle::{
     control::{
         RuntimeControlCommand, RuntimeControlReceipt, RuntimeOperation, RUNTIME_CONTROL_PATH,
@@ -11,25 +10,47 @@ use gents_store::config_client::GraphqlEndpoint;
 /// Bound the receipt read from a recorded runtime before decoding it.
 const MAX_CONTROL_RECEIPT: usize = 64 * 1024;
 
-#[derive(Debug)]
-pub struct PreparationFailure {
-    pub reason: RuntimePreparationRefusal,
-    pub message: String,
+#[derive(Debug, thiserror::Error)]
+pub enum ControlFailure {
+    #[error("{message}")]
+    Refused {
+        reason: RuntimePreparationRefusal,
+        message: String,
+    },
+    #[error(transparent)]
+    Authorization(Box<gents_store::config_client::ConfigClientError>),
+    #[error(transparent)]
+    Transport(#[from] reqwest::Error),
+    #[error(transparent)]
+    Decode(#[from] serde_json::Error),
+    #[error("runtime control receipt is too large")]
+    ReceiptTooLarge,
 }
 
-impl std::fmt::Display for PreparationFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
+impl ControlFailure {
+    pub fn reason(&self) -> Option<RuntimePreparationRefusal> {
+        match self {
+            Self::Refused { reason, .. } => Some(*reason),
+            _ => None,
+        }
+    }
+
+    pub fn is_unsupported(&self) -> bool {
+        matches!(
+            self,
+            Self::Refused {
+                reason: RuntimePreparationRefusal::Unsupported,
+                ..
+            }
+        )
     }
 }
 
-impl std::error::Error for PreparationFailure {}
-
-pub fn refusal(reason: RuntimePreparationRefusal, message: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::new(PreparationFailure {
+pub fn refusal(reason: RuntimePreparationRefusal, message: impl Into<String>) -> ControlFailure {
+    ControlFailure::Refused {
         reason,
         message: message.into(),
-    })
+    }
 }
 
 pub async fn control(
@@ -38,7 +59,7 @@ pub async fn control(
     node_did: &str,
     operation: RuntimeOperation,
     authorization: Option<&GraphqlEndpoint>,
-) -> Result<Option<RuntimeControlReceipt>> {
+) -> std::result::Result<Option<RuntimeControlReceipt>, ControlFailure> {
     let command = RuntimeControlCommand {
         version: RUNTIME_CONTROL_VERSION,
         node_did: node_did.to_owned(),
@@ -50,7 +71,9 @@ pub async fn control(
     url.set_path(RUNTIME_CONTROL_PATH);
     let mut request = client.post(url).json(&command);
     if let Some(authorization) = authorization {
-        request = authorization.authorize(request)?;
+        request = authorization
+            .authorize(request)
+            .map_err(|error| ControlFailure::Authorization(Box::new(error)))?;
     }
     let mut response = match request.send().await {
         Ok(response) => response,
@@ -94,10 +117,9 @@ pub async fn control(
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
-        anyhow::ensure!(
-            bytes.len() + chunk.len() <= MAX_CONTROL_RECEIPT,
-            "runtime control receipt is too large"
-        );
+        if bytes.len() + chunk.len() > MAX_CONTROL_RECEIPT {
+            return Err(ControlFailure::ReceiptTooLarge);
+        }
         bytes.extend_from_slice(&chunk);
     }
     let receipt = serde_json::from_slice(&bytes)?;

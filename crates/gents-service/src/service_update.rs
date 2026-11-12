@@ -700,16 +700,8 @@ pub(crate) async fn can_update_live(home: &Path) -> Result<bool> {
     {
         Ok(Some(observed)) => observed,
         Ok(None) => return Ok(false),
-        Err(error) => {
-            let unsupported = gents_protocol::error_chain::find_map_source(error.as_ref(), |source| {
-                source.downcast_ref::<crate::runtime_control::PreparationFailure>()
-                    .map(|failure| failure.reason == gents_protocol::serve_lifecycle::preparation::RuntimePreparationRefusal::Unsupported)
-            }).unwrap_or(false);
-            if unsupported {
-                return Ok(false);
-            }
-            return Err(error);
-        }
+        Err(error) if error.is_unsupported() => return Ok(false),
+        Err(error) => return Err(error.into()),
     };
     if observed.capabilities.get(NATIVE_STARTUP_FENCE_CAPABILITY) != Some(&1) {
         return Ok(false);
