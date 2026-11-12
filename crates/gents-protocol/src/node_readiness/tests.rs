@@ -257,23 +257,6 @@ fn unsupported_version_is_classified_before_current_payload_shape() {
     );
 }
 
-fn readiness_reason(code: &str) -> crate::row::AgentReadinessUnavailableReason {
-    use crate::row::AgentReadinessUnavailableReason as Reason;
-    match code {
-        "agent_disabled" => Reason::AgentDisabled,
-        "runtime_configuration_invalid" => Reason::RuntimeConfigurationInvalid,
-        "backend_not_configured" => Reason::BackendNotConfigured,
-        "backend_disabled" => Reason::BackendDisabled,
-        "backend_temporarily_unavailable" => Reason::BackendTemporarilyUnavailable,
-        "credentials_required" => Reason::CredentialsRequired,
-        "subscription_not_entitled" => Reason::SubscriptionNotEntitled,
-        "inference_profile_invalid" => Reason::InferenceProfileInvalid,
-        "tool_configuration_invalid" => Reason::ToolConfigurationInvalid,
-        "tool_surface_unavailable" => Reason::ToolSurfaceUnavailable,
-        other => panic!("unknown Lean readiness reason {other}"),
-    }
-}
-
 fn readiness_reason_code<T>(reason: T) -> String
 where
     T: serde::Serialize,
@@ -289,18 +272,12 @@ where
 fn generated_agent_readiness_cases_drive_the_production_projector() {
     use crate::row::{
         project_node_readiness, project_node_readiness_source, AgentReadinessSourceEntry,
-        NodeReadinessProcessState, NodeReadinessRow, ProjectedAgentReadiness,
-        NODE_READINESS_FORMAT_VERSION,
+        AgentReadinessUnavailableReason, NodeReadinessProcessState, NodeReadinessRow,
+        ProjectedAgentReadiness, NODE_READINESS_FORMAT_VERSION,
     };
+    use gents_lean_vocab::families::client_agent_readiness_projection::ReadinessOutput;
 
-    let cases = gents_lean_vocab::lean_client_agent_readiness_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let runtime_reason = readiness_reason(&case.runtime_unavailable_reason);
-        let process_state = serde_json::from_value::<NodeReadinessProcessState>(
-            serde_json::Value::String(case.process_state.clone()),
-        )
-        .unwrap_or_else(|error| panic!("{} invalid generated process state: {error}", case.name));
+    gents_lean_vocab::families::client_agent_readiness_projection::replay::<AgentReadinessUnavailableReason, NodeReadinessProcessState>(|case| {
         let selected_assigned = case.runnable || case.unavailable || case.startup_demoted;
         let default_agent_did = if selected_assigned { "20" } else { "10" };
         let sources = vec![AgentReadinessSourceEntry {
@@ -311,31 +288,46 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
                 true
             },
             unavailable_reason: if selected_assigned && case.unavailable {
-                Some(runtime_reason)
+                Some(case.runtime_unavailable_reason)
             } else {
                 None
             },
             startup_demoted: selected_assigned && case.startup_demoted,
         }];
         let mut snapshot = project_node_readiness_source(
-            process_state,
+            case.process_state,
             case.active_generation,
             case.router_generation,
             default_agent_did,
             sources,
         )
         .unwrap_or_else(|error| panic!("{} invalid generated source: {error}", case.name));
+        let intact = NodeReadinessRow {
+            node_did: "did:test:lean-readiness".to_string(),
+            snapshot_json: serde_json::to_string(&snapshot).unwrap(),
+            updated_at: "2026-08-28T00:00:00Z".to_string(),
+        };
+        let runtime_admissible = matches!(
+            project_node_readiness(
+                Some(&intact),
+                "did:test:lean-readiness",
+                ["20"],
+                Some("20"),
+            )
+            .agents
+            .get("20"),
+            Some(ProjectedAgentReadiness::Ready)
+        );
         if case.observation_kind == "unsupported_version" {
             snapshot.format_version = NODE_READINESS_FORMAT_VERSION + 1;
         }
         let row = NodeReadinessRow {
-            node_did: "did:test:lean-readiness".to_string(),
             snapshot_json: if case.observation_kind == "malformed" {
                 "not-json".to_string()
             } else {
                 serde_json::to_string(&snapshot).unwrap()
             },
-            updated_at: "2026-08-28T00:00:00Z".to_string(),
+            ..intact
         };
         let projection = project_node_readiness(
             case.observation_present.then_some(&row),
@@ -372,12 +364,10 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
                 ("unknown", Some(readiness_reason_code(*reason)))
             }
         };
-        assert_eq!(state, case.expected_state, "{} state", case.name);
-        assert_eq!(reason, case.expected_reason, "{} reason", case.name);
         if case.observation_kind == "observed" {
             assert_eq!(
                 state == "ready",
-                case.expected_runtime_admissible,
+                runtime_admissible,
                 "{} canonical observation/runtime admission parity",
                 case.name
             );
@@ -388,5 +378,10 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
                 case.name
             );
         }
-    }
+        ReadinessOutput {
+            state: state.to_string(),
+            reason,
+            runtime_admissible,
+        }
+    });
 }

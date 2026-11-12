@@ -56,6 +56,7 @@ import Proofs.Runtime.CanonicalOutput.Execution.AdmissionHandoffCases
 import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
+import Proofs.Conformance.ClientAgentReadiness
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
 import Proofs.Clients.ClientShell.OptimisticSend
@@ -812,8 +813,6 @@ def snapshotClientCasesJson : String :=
     ++ "\"runtime_configuration_admission_cases\":" ++ configurationAdmissionCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
-    ++ "\"client_agent_readiness_cases\":"
-      ++ jsonArray (clientAgentReadinessCases.map clientAgentReadinessCaseJson) ++ ","
     ++ "\"eval_outcome_cases\":"
       ++ Conformance.Eval.evalOutcomeCasesJson ++ ","
     ++ "\"eval_document_capture_cases\":"

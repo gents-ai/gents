@@ -1208,8 +1208,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientSessionQueueOrderCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
-      "client_agent_readiness_cases"
-      "ClientAgentReadinessCases"
+      "family"
+      "client_agent_readiness_projection"
       "Pending: L2 renames the consumer test and L3 the production projector it drives.")
       "runtime-reconcile" [Surface.operatorUi]
   , tagged (consumerCoverage
