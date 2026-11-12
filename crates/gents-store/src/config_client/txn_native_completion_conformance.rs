@@ -6,7 +6,6 @@ use crypto::keys::PrivateKey;
 use defra_core::signing::{RemoteSigner, SigningAuthorization, SigningConfig, SigningKeyType};
 use defra_node::Node as EmbeddedNode;
 use identity::{Identity as _, RawIdentity};
-use serde::Deserialize;
 use tokio::sync::Notify;
 
 use super::{
@@ -67,30 +66,6 @@ impl Drop for ReleaseSignerOnDrop {
     }
 }
 
-#[derive(Deserialize)]
-struct Initial {
-    cleanup_required: bool,
-    native_outstanding: usize,
-    gate_held: bool,
-}
-
-#[derive(Deserialize)]
-struct Observation {
-    gate_held: bool,
-    native_outstanding: usize,
-    registry_abandoned: bool,
-    rollback_returned: bool,
-    retry_started: bool,
-}
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    initial: Initial,
-    events: Vec<String>,
-    observations: Vec<Observation>,
-}
-
 async fn signed_node() -> (Arc<EmbeddedNode>, Arc<BlockingSigner>, ReleaseSignerOnDrop) {
     let identity = RawIdentity::from_secp256k1(crypto::generate_secp256k1().unwrap()).unwrap();
     let did = identity.did().unwrap().to_string();
@@ -129,16 +104,13 @@ async fn signed_node() -> (Arc<EmbeddedNode>, Arc<BlockingSigner>, ReleaseSigner
 
 #[tokio::test]
 async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
-    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .native_completion_cases
-                .clone()
-        })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .unwrap();
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::lean_contract_snapshot()
+            .native_completion_cases
+            .clone()
+    })
+    .await
+    .expect("Lean snapshot load");
     let mut exercised = 0;
     for case in cases.into_iter().filter(|case| {
         !case.initial.cleanup_required && case.events.iter().any(|event| event == "native_returned")
@@ -257,16 +229,13 @@ async fn wait_for_native_count(tracker: &NativeOperationTracker, expected: usize
 
 #[tokio::test]
 async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drains() {
-    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .native_completion_cases
-                .clone()
-        })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .unwrap();
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::lean_contract_snapshot()
+            .native_completion_cases
+            .clone()
+    })
+    .await
+    .expect("Lean snapshot load");
     let concurrent = cases
         .iter()
         .find(|case| case.name == "registry_abandonment_retains_gate_until_all_native_returns")
@@ -325,7 +294,7 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     assert!(!abandoned.rollback_returned);
     assert_eq!(
         tracker.state.lock().unwrap().in_flight,
-        abandoned.native_outstanding
+        usize::try_from(abandoned.native_outstanding).unwrap()
     );
     assert_eq!(
         gate_owns_operation(&gate, "test.begin_local"),
@@ -340,7 +309,11 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     assert_eq!(response.has_errors(), abandoned.registry_abandoned);
 
     release.notify_one();
-    wait_for_native_count(&tracker, expected.native_outstanding).await;
+    wait_for_native_count(
+        &tracker,
+        usize::try_from(expected.native_outstanding).unwrap(),
+    )
+    .await;
     assert_eq!(
         gate_owns_operation(&gate, "test.begin_local"),
         expected.gate_held
@@ -370,7 +343,7 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     let drained = concurrent.observations.last().unwrap();
     assert_eq!(
         tracker.state.lock().unwrap().in_flight,
-        drained.native_outstanding
+        usize::try_from(drained.native_outstanding).unwrap()
     );
     assert!(drained.registry_abandoned);
     assert!(!drained.rollback_returned);

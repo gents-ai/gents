@@ -332,41 +332,15 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
     assert!(row(&running.tool_call_doc_id)["tool_failure_class"].is_null());
 }
 
-#[derive(serde::Deserialize)]
-struct NativeCompletionRenewalCase {
-    name: String,
-    periodic_renewal: bool,
-    initial: NativeCompletionRenewalInitial,
-    events: Vec<String>,
-    observations: Vec<NativeCompletionRenewalObservation>,
-}
-
-#[derive(serde::Deserialize)]
-struct NativeCompletionRenewalInitial {
-    cleanup_required: bool,
-    native_outstanding: usize,
-    gate_held: bool,
-}
-
-#[derive(serde::Deserialize)]
-struct NativeCompletionRenewalObservation {
-    renewal_attempt_returned: bool,
-    next_renewal_started: bool,
-    gate_held: bool,
-}
-
 #[tokio::test]
 async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_attempt() {
-    let cases: Vec<NativeCompletionRenewalCase> = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .native_completion_cases
-                .clone()
-        })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .unwrap();
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::lean_contract_snapshot()
+            .native_completion_cases
+            .clone()
+    })
+    .await
+    .expect("Lean snapshot load");
     let cases: Vec<_> = cases
         .into_iter()
         .filter(|case| case.periodic_renewal)
