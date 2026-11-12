@@ -2581,11 +2581,9 @@ def followUpHookCoverage : List CoverageEntry :=
       "prompt-assembly" []
   ]
 
-def followUpHookIds : List String :=
-  followUpHookCoverage.map (fun entry => entry.domain)
-
-def followUpHooksJson : String :=
-  jsonArray (followUpHookIds.map jsonString)
+example : followUpHookCoverage.all (fun entry =>
+    ["RuntimeReconcile", "ToolExecution", "CommandPolicy"].all fun owner =>
+      (entry.domain.splitOn owner).length == 1) = true := by native_decide
 
 def coverageLedger : List CoverageEntry :=
   vocabularyCoverage ++ stateMachineCoverage ++ caseCoverage ++ followUpHookCoverage

@@ -364,25 +364,6 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_lean_transition_is_legal("InferenceCall", "queued", "running");
     assert_lean_transition_is_legal("InferenceCall", "running", "completed");
     assert_lean_transition_is_legal("InferenceCall", "running", "failed");
-    let follow_up_hooks = &lean_contract_snapshot().follow_up_hooks;
-    assert!(
-        !follow_up_hooks
-            .iter()
-            .any(|hook| hook.contains("RuntimeReconcile")),
-        "RuntimeReconcile should be emitted as generated contract output, not a follow-up hook"
-    );
-    assert!(
-        !follow_up_hooks
-            .iter()
-            .any(|hook| hook.contains("ToolExecution")),
-        "ToolExecution should be emitted as generated contract output, not a follow-up hook"
-    );
-    assert!(
-        !follow_up_hooks
-            .iter()
-            .any(|hook| hook.contains("CommandPolicy")),
-        "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
-    );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert!(!lean_contract_snapshot().root_admission_cases.is_empty());
     assert_eq!(

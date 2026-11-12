@@ -3384,7 +3384,6 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
     pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
     pub lifecycle_hook_history_cases: Vec<LeanLifecycleHookHistoryCase>,
-    pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
     pub feature_matrix: LeanFeatureMatrix,
