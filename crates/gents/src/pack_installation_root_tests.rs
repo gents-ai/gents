@@ -248,7 +248,7 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().pack_placement_reader_cases;
     assert_eq!(cases.len(), 3);
     for case in cases {
-        match case["state"].as_str().unwrap() {
+        match case.state.as_str() {
             "installed" => {}
             "reinstalled_after_revoke" => {
                 let (doc, _) = user_access
@@ -291,16 +291,16 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
             }
             state => panic!("unmodeled placement reader state {state}"),
         }
-        for expected in case["readers"].as_array().unwrap() {
+        for expected in &case.readers {
             let actor = *actors
                 .keys()
-                .find(|known| **known == expected["actor"].as_str().unwrap())
+                .find(|known| **known == expected.actor.as_str())
                 .unwrap();
             assert_eq!(
                 readable(actor, actors[actor].clone()).await,
-                expected["read"].as_bool().unwrap(),
+                expected.read,
                 "{} {actor}",
-                case["state"]
+                case.state
             );
         }
     }
