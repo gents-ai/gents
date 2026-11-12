@@ -722,6 +722,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
         name: "wake-agent-observation".into(),
         await_mode: AwaitMode::Background,
         start_running: false,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await

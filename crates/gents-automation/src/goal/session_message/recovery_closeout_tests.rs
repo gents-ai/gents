@@ -29,12 +29,12 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                 await_mode: AwaitMode::Background,
                 tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.to_owned()),
                 start_running: true,
+                composition: crate::lifecycle_hooks::composition(),
                 ..Default::default()
             })
             .await
             .expect("publish a running session-message row without a receipt");
             let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
-            crate::lifecycle_hooks::attach(&admission.node).unwrap();
             let session_id = admission.tool.session_id().to_owned();
             let settled = settle_with(&admission, &SessionGoals).await;
             assert_eq!(settled, case.measure_before - case.measure_after, "{name}");
@@ -85,13 +85,13 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             name: format!("recovery-closeout-{name}"),
             real_identity: true,
             await_mode: AwaitMode::Background,
+            composition: crate::lifecycle_hooks::composition(),
             ..Default::default()
         })
         .await
         .expect("publish accepted session message and materialize its request");
         let admission = &message.admission;
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
-        crate::lifecycle_hooks::attach(&admission.node).unwrap();
         let caused_state = match cause {
             "requestCompleted" => {
                 // Each Lean sessionMessageRecoveryCase handoff binds a real

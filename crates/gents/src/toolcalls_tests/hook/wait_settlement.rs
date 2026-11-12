@@ -1,6 +1,6 @@
 use super::*;
-use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use gents_store::config_client::ConfigApplyTxn;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use std::time::Duration;
 
 #[tokio::test]

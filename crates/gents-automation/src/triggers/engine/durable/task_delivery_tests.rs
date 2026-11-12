@@ -4,9 +4,9 @@ use gents_session::request::lifecycle::materialize::{
     pending_agent_request_spec,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
-use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use gents_session::request::lifecycle::{build_signed_request, ExecutionOrigin, TriggerLineage};
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use std::sync::Arc;
 
 async fn keyed_delivery(
@@ -83,7 +83,7 @@ async fn keyed_delivery(
 #[tokio::test]
 async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
     let (db, _user, _user_access, binding) =
-        gents_inference::test_support::signed_test_node("keyed-session-fires").await;
+        crate::test_support::signed_test_node("keyed-session-fires").await;
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let owner = db.node_identity.did().to_owned();

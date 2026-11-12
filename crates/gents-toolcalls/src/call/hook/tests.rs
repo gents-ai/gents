@@ -32,11 +32,6 @@ mod session_message_commit;
 #[cfg(all(test, unix))]
 pub(crate) mod process_records;
 
-
-
-
-
-
 #[tokio::test]
 async fn client_output_snapshot_reads_full_retained_window_without_widening_model_budget() {
     let dir = tempfile::tempdir().unwrap();
@@ -209,7 +204,6 @@ use gents_lean_vocab::{
 use gents_store::schema::ensure_runtime_schemas;
 use gents_store::test_support::first_content;
 
-
 fn hook_counters_for_test() -> HookCounters {
     HookCounters {
         failures: AtomicU64::new(0),
@@ -288,8 +282,6 @@ fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
         other => panic!("unknown Lean persistence failure policy {other:?}"),
     }
 }
-
-
 
 #[test]
 fn generated_persistence_failure_policy_cases_match_hook_decisions() {
@@ -400,26 +392,6 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[tokio::test]
 async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
     let node = Arc::new(
@@ -523,7 +495,6 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
     assert_eq!(presentation.result.as_deref(), Some("durable winner"));
 }
 
-
 #[tokio::test]
 async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let data_path =
@@ -575,10 +546,6 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
-
-
-
-
 
 #[tokio::test]
 async fn claimed_authored_input_persists_context_once_before_prompt() {
@@ -2339,7 +2306,6 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
-
 
 #[tokio::test]
 async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause() {

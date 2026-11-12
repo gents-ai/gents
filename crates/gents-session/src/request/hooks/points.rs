@@ -73,9 +73,11 @@ async fn stage_must_commit<E>(
         .collect::<Vec<_>>();
     match stage_dropping(host, plugins, event, &without).await {
         Ok(staged) => Ok(staged),
-        Err(error @ HookError::PartialStaging { plugin, .. }) => {
-            Err(ConfigClientError::rerun(rerun_note(point, plugin, subject), Box::new(error)).into())
-        }
+        Err(error @ HookError::PartialStaging { plugin, .. }) => Err(ConfigClientError::rerun(
+            rerun_note(point, plugin, subject),
+            Box::new(error),
+        )
+        .into()),
         Err(other) => Err(surface(other)),
     }
 }
@@ -97,7 +99,7 @@ pub async fn request_terminal(
         reason: reason.to_owned(),
         at: at.to_owned(),
     };
-    let registry = Registry::for_transaction(txn)?;
+    let registry = Registry::for_transaction(txn, "request.terminal.stage")?;
     let host = TxnHost::new(txn, &registry, OperationContext::default());
     let staged = stage_must_commit(
         txn,
@@ -143,7 +145,7 @@ pub async fn session_halt(
         session_id: session_id.to_owned(),
         at: chrono::Utc::now().to_rfc3339(),
     };
-    let registry = Registry::for_transaction(txn)?;
+    let registry = Registry::for_transaction(txn, "control.session.halt")?;
     let host = TxnHost::new(txn, &registry, OperationContext::default());
     let staged = stage_must_commit(
         txn,
@@ -201,7 +203,7 @@ pub async fn session_resume(
         session_id: session_id.to_owned(),
         at: chrono::Utc::now().to_rfc3339(),
     };
-    let registry = Registry::for_transaction(txn)?;
+    let registry = Registry::for_transaction(txn, "control.session.resume")?;
     let host = TxnHost::new(
         txn,
         &registry,
@@ -223,7 +225,7 @@ pub async fn request_created(
     context: OperationContext<'_>,
     event: &RequestCreated,
 ) -> anyhow::Result<()> {
-    let registry = Registry::for_transaction(txn)?;
+    let registry = Registry::for_transaction(txn, "request.created")?;
     let host = TxnHost::new(txn, &registry, context);
     stage(&host, &registry.request_created, event)
         .await
@@ -236,7 +238,7 @@ pub async fn claim_gate(
     txn: &ConfigApplyTxn<'_>,
     event: &ClaimCandidate,
 ) -> anyhow::Result<ClaimVerdict> {
-    let registry = Registry::for_transaction(txn)?;
+    let registry = Registry::for_transaction(txn, "request.claim.gate")?;
     let host = TxnHost::new(txn, &registry, OperationContext::default());
     Ok(combine(
         gate(&host, &registry.claim_gate, event)
@@ -255,7 +257,7 @@ pub async fn claim_applied(
     request: &gents_protocol::row::AgentRequest,
     claimed_at: &str,
 ) -> anyhow::Result<()> {
-    let registry = Registry::for_transaction(txn)?;
+    let registry = Registry::for_transaction(txn, "request.claim.applied")?;
     claim_applied_in(txn, &registry, request, claimed_at).await
 }
 
@@ -314,7 +316,8 @@ pub(crate) async fn request_admit_verify(
     request: &AgentRequestRow,
     agent: &str,
 ) -> AdmissionResult<()> {
-    let registry = Registry::for_node(node).map_err(AgentRequestAdmissionError::unavailable)?;
+    let registry = Registry::for_node(node, "request.admit.verify")
+        .map_err(AgentRequestAdmissionError::unavailable)?;
     let claimants = registry
         .request_admit_verify
         .iter()
@@ -384,7 +387,7 @@ pub async fn queue_scope(
         requests: std::sync::Arc::clone(&requests),
         asked,
     };
-    let registry = Registry::for_transaction(txn)?;
+    let registry = Registry::for_transaction(txn, "request.queue.scope")?;
     let host = TxnHost::new(txn, &registry, OperationContext::default());
     let answers = gate(&host, &registry.queue_scope, &event)
         .await

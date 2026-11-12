@@ -62,33 +62,19 @@ mod tests {
             "host":{"files":{"mode":"ReadOnly"}},
             "built_ins":{"enable_goal_tools":true}, "tags":["old"]
         }))?;
-        let first_id = write_tools_document(
-            &access,
-            &tools,
-            &crate::test_support::AdmitAllProfiles,
-        )
-        .await?;
+        let first_id =
+            write_tools_document(&access, &tools, &crate::test_support::AdmitAllProfiles).await?;
         let mut foreign = tools.clone();
         foreign.node_did = "did:key:other".into();
         assert_ne!(
-            write_tools_document(
-                &access,
-                &foreign,
-                &crate::test_support::AdmitAllProfiles
-            )
-            .await?,
+            write_tools_document(&access, &foreign, &crate::test_support::AdmitAllProfiles).await?,
             first_id
         );
         tools.host = None;
         tools.built_ins = None;
         tools.tags.clear();
         assert_eq!(
-            write_tools_document(
-                &access,
-                &tools,
-                &crate::test_support::AdmitAllProfiles
-            )
-            .await?,
+            write_tools_document(&access, &tools, &crate::test_support::AdmitAllProfiles).await?,
             first_id
         );
         access

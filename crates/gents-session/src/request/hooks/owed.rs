@@ -743,7 +743,7 @@ pub async fn redrive_pending(
     }
     let runtime = identity::Did::new(node_did).map_err(|_| RedriveError::RuntimeIdentity)?;
     let runtime_access = ConfigAccess::local_as(Arc::clone(node), runtime.clone());
-    let registry = Registry::for_node(node).map_err(anyhow::Error::from)?;
+    let registry = Registry::for_node(node, "owed.redrive").map_err(anyhow::Error::from)?;
     let settled = redrive_records(node, &runtime, &runtime_access, &registry, identities).await?;
     let derived_halts = derive_owed_halts(node, node_did, &registry, identities).await;
     let pruned = prune_settled(&runtime, &runtime_access).await?;

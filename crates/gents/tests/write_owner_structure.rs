@@ -2582,9 +2582,7 @@ const CLIENT_CRATES: &[&str] = &[
 ];
 
 fn crate_layer(name: &str) -> Option<usize> {
-    CRATE_LAYERS
-        .iter()
-        .position(|layer| layer.contains(&name))
+    CRATE_LAYERS.iter().position(|layer| layer.contains(&name))
 }
 
 /// Package names a manifest declares in the given dependency table kinds,
@@ -2607,10 +2605,15 @@ fn declared_dependencies(
         .collect()
 }
 
-fn crate_dependency_violations(manifests: &BTreeMap<String, toml::Table>, inherited: &toml::Table) -> Vec<String> {
+fn crate_dependency_violations(
+    manifests: &BTreeMap<String, toml::Table>,
+    inherited: &toml::Table,
+) -> Vec<String> {
     let mut violations = Vec::new();
     for (name, manifest) in manifests {
-        let Some(own) = crate_layer(name) else { continue };
+        let Some(own) = crate_layer(name) else {
+            continue;
+        };
         for kind in ["dependencies", "build-dependencies", "dev-dependencies"] {
             for dependency in declared_dependencies(manifest, inherited, kind) {
                 if dependency == *name {
@@ -2677,15 +2680,42 @@ fn crate_layer_fence_flags_upward_peer_and_client_references() {
         )
         .len()
     };
-    assert_eq!(check("gents-store", "[dependencies]\ngents-protocol = \"1\"\n"), 0);
-    assert_eq!(check("gents-store", "[dependencies]\ngents-documents = \"1\"\n"), 1);
-    assert_eq!(check("gents-inference", "[dependencies]\ngents-p2p = \"1\"\n"), 1);
-    assert_eq!(check("gents-tools", "[dev-dependencies]\ngents-toolcalls = \"1\"\n"), 1);
-    assert_eq!(check("gents-store", "[dev-dependencies]\ngents-lean-vocab = \"1\"\n"), 0);
-    assert_eq!(check("gents", "[dev-dependencies]\ngents = \"1\"\n"), 0);
-    assert_eq!(check("gents-observe", "[dependencies]\ngents-cli = \"1\"\n"), 1);
     assert_eq!(
-        check("gents-session", "[target.'cfg(unix)'.dependencies]\ngents-tools = \"1\"\n"),
+        check("gents-store", "[dependencies]\ngents-protocol = \"1\"\n"),
+        0
+    );
+    assert_eq!(
+        check("gents-store", "[dependencies]\ngents-documents = \"1\"\n"),
+        1
+    );
+    assert_eq!(
+        check("gents-inference", "[dependencies]\ngents-p2p = \"1\"\n"),
+        1
+    );
+    assert_eq!(
+        check(
+            "gents-tools",
+            "[dev-dependencies]\ngents-toolcalls = \"1\"\n"
+        ),
+        1
+    );
+    assert_eq!(
+        check(
+            "gents-store",
+            "[dev-dependencies]\ngents-lean-vocab = \"1\"\n"
+        ),
+        0
+    );
+    assert_eq!(check("gents", "[dev-dependencies]\ngents = \"1\"\n"), 0);
+    assert_eq!(
+        check("gents-observe", "[dependencies]\ngents-cli = \"1\"\n"),
+        1
+    );
+    assert_eq!(
+        check(
+            "gents-session",
+            "[target.'cfg(unix)'.dependencies]\ngents-tools = \"1\"\n"
+        ),
         1
     );
 }

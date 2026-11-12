@@ -22,13 +22,13 @@ async fn completed_turn_with_live_goal_hands_off_a_non_complete_reason() {
             name: "handoff-live-goal".into(),
             real_identity: true,
             await_mode: AwaitMode::Background,
+            composition: crate::lifecycle_hooks::composition(),
             ..Default::default()
         },
     )
     .await
     .expect("publish accepted session message");
     let node = &admission.node;
-    crate::lifecycle_hooks::attach(node).unwrap();
     let did = &admission.node_did;
     let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
     gents_inference::test_support::install_test_agent(node, did, "general").await;
@@ -128,13 +128,13 @@ async fn completed_turn_without_a_goal_hands_off_assignment_absent() {
             name: "handoff-no-goal".into(),
             real_identity: true,
             await_mode: AwaitMode::Background,
+            composition: crate::lifecycle_hooks::composition(),
             ..Default::default()
         },
     )
     .await
     .expect("publish accepted session message");
     let node = &admission.node;
-    crate::lifecycle_hooks::attach(node).unwrap();
     let did = &admission.node_did;
     let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
     gents_inference::test_support::install_test_agent(node, did, "general").await;
@@ -198,13 +198,13 @@ async fn completed_turn_with_complete_goal_is_the_reasonless_success_form() {
             name: "handoff-complete-goal".into(),
             real_identity: true,
             await_mode: AwaitMode::Background,
+            composition: crate::lifecycle_hooks::composition(),
             ..Default::default()
         },
     )
     .await
     .expect("publish accepted session message");
     let node = &admission.node;
-    crate::lifecycle_hooks::attach(node).unwrap();
     let did = &admission.node_did;
     let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
     gents_inference::test_support::install_test_agent(node, did, "general").await;
@@ -288,13 +288,13 @@ async fn crash_before_notice_redrive_renders_the_persisted_assignment_reason() {
             name: "handoff-redrive".into(),
             real_identity: true,
             await_mode: AwaitMode::Background,
+            composition: crate::lifecycle_hooks::composition(),
             ..Default::default()
         },
     )
     .await
     .expect("publish accepted session message");
     let node = &admission.node;
-    crate::lifecycle_hooks::attach(node).unwrap();
     let did = &admission.node_did;
     let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
     let session_id = admission.tool.session_id().to_owned();

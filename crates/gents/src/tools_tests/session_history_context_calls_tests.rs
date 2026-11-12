@@ -1,7 +1,6 @@
 use gents_loop::tool::Tool as _;
-use serde_json::json;
 use gents_tools::native::session_history::context_calls::*;
-
+use serde_json::json;
 
 async fn request(
     access: &gents_store::config_client::ConfigAccess,

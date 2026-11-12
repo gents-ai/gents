@@ -124,8 +124,8 @@ fn pending_call(
 /// late_usage_preserves_terminal_projection / late_usage_is_recorded.
 #[tokio::test]
 async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
-    use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_store::identity::NodeIdentity;
 
     let (db, user, access, binding) =
@@ -192,13 +192,14 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         claim_admission.is_some(),
         "fixture client request lacks native claim admission"
     );
-    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        parent,
-        120,
-        gents_loop::execution_origin::ExecutionOrigin::Interactive,
-        "recovery-cas-backend",
-    );
+    let mut lifecycle =
+        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            parent,
+            120,
+            gents_loop::execution_origin::ExecutionOrigin::Interactive,
+            "recovery-cas-backend",
+        );
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     lifecycle.set_client_claim_admission(claim_admission);
     lifecycle.set_configured_max_total_tokens(Some(100));
@@ -280,4 +281,3 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     .unwrap();
     assert_eq!(budget.snapshot().unwrap().remaining(), 74);
 }
-

@@ -1,9 +1,9 @@
-#[cfg(test)]
-#[path = "compaction/tests.rs"]
-mod tests;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[path = "compaction/test_fixtures.rs"]
 pub mod test_fixtures;
+#[cfg(test)]
+#[path = "compaction/tests.rs"]
+mod tests;
 
 use std::sync::Arc;
 

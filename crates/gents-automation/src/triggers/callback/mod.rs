@@ -203,9 +203,7 @@ pub fn test_agent_did() -> String {
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
-pub fn test_agent_access(
-    node: &Arc<defra_node::Node>,
-) -> gents_store::config_client::ConfigAccess {
+pub fn test_agent_access(node: &Arc<defra_node::Node>) -> gents_store::config_client::ConfigAccess {
     let agent = test_agent_identity();
     gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),

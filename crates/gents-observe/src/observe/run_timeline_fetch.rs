@@ -549,6 +549,7 @@ mod tests {
             tool_name: Some("workflow".into()),
             await_mode: AwaitMode::Background,
             job_pin: true,
+            composition: gents_automation::lifecycle_hooks::composition(),
             ..Default::default()
         })
         .await
@@ -700,6 +701,7 @@ mod tests {
         let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
             name: "timeline-account-labels".into(),
             start_running: false,
+            composition: gents_automation::lifecycle_hooks::composition(),
             ..Default::default()
         })
         .await

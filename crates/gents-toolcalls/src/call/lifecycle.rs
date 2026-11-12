@@ -42,12 +42,12 @@ pub use gents_session::tool_call::query::result::{
 };
 pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
-mod recovery;
-mod session_message_call;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 #[allow(dead_code)]
 pub mod admission_fixture;
+mod recovery;
+mod session_message_call;
 mod transition;
 
 use gents_loop::tool_call_lifecycle::FailureClass;
@@ -645,7 +645,9 @@ mod tests {
         node.shutdown().await.expect("shut down test node");
     }
 
-    use gents_lean_vocab::{assert_state_machine_contract_is_complete, lean_state_machine_contract};
+    use gents_lean_vocab::{
+        assert_state_machine_contract_is_complete, lean_state_machine_contract,
+    };
 
     #[test]
     fn tool_call_state_machine_contract_is_complete() {

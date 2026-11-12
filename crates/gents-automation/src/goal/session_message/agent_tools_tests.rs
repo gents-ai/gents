@@ -18,9 +18,11 @@ async fn started(
     gents_protocol::row::AgentRequest,
     gents_protocol::row::AgentRequest,
 ) {
-    let started = gents_toolcalls::call::lifecycle::admission_fixture::started(name).await;
-    crate::lifecycle_hooks::attach(&started.0.admission.node).unwrap();
-    started
+    gents_toolcalls::call::lifecycle::admission_fixture::started(
+        name,
+        crate::lifecycle_hooks::composition(),
+    )
+    .await
 }
 
 /// Goal rows carry document ACP, so their signed blocks are read as the
@@ -34,7 +36,6 @@ async fn signer_as_actor(node: &defra_node::Node, actor: &str, cid: &str) -> Str
     let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
     db::block::verify::verified_signature_signer_did(&block, &signature).unwrap()
 }
-
 
 /// Goal rows are Agent-owned, so the calling Agent reads the canonical goal.
 async fn canonical_goal(
@@ -53,9 +54,6 @@ async fn canonical_goal(
         .await
         .unwrap()
 }
-
-
-
 
 #[tokio::test]
 async fn interrupt_delivery_latches_only_the_prepublication_head() {
@@ -226,6 +224,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         await_mode: AwaitMode::Background,
         start_running: false,
         tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.into()),
+        composition: crate::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await

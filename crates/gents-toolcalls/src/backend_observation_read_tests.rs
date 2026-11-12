@@ -2,12 +2,12 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::sync::Notify;
 
-use gents_inference::backends::registry::lookup_backend_observation;
-use gents_tools::builtin::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
 use defra_node::Node as EmbeddedNode;
+use gents_inference::backends::registry::lookup_backend_observation;
 use gents_loop::tool::Tool;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
+use gents_tools::builtin::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
 
 #[tokio::test]
 async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {

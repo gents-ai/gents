@@ -252,11 +252,17 @@ async fn generated_goal_resume_cases_drive_the_resume_and_binding_listeners() {
             }
             (None, None, None) => {}
             (actual, expected, _) => {
-                panic!("{}: created {actual:?}, model binding {expected:?}", case.name)
+                panic!(
+                    "{}: created {actual:?}, model binding {expected:?}",
+                    case.name
+                )
             }
         }
         match &case.result {
-            LeanGoalResumeResult::Ok { goals, requests: after } => {
+            LeanGoalResumeResult::Ok {
+                goals,
+                requests: after,
+            } => {
                 assert_eq!(
                     vec![goal_of(&current.value)],
                     *goals,

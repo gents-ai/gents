@@ -805,9 +805,7 @@ mod tests {
         let docs = root.path().join("docs");
         std::fs::create_dir_all(&docs).unwrap();
         std::fs::write(docs.join("a.txt"), "hello").unwrap();
-        let digest = gents_pack::plugin::test_fixtures::installed_echo()
-            .1
-            .digest;
+        let digest = gents_pack::plugin::test_fixtures::installed_echo().1.digest;
         let file = docs.join("a.txt");
         let (node, _home) = run_binding(&digest, Some(&docs), true, file.to_str().unwrap()).await;
         assert_eq!(
@@ -836,9 +834,7 @@ mod tests {
         let outside = root.path().join("outside");
         std::fs::create_dir_all(&docs).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        let digest = gents_pack::plugin::test_fixtures::installed_echo()
-            .1
-            .digest;
+        let digest = gents_pack::plugin::test_fixtures::installed_echo().1.digest;
         let (node, _home) =
             run_binding(&digest, Some(&docs), true, outside.to_str().unwrap()).await;
         let invocation = only_invocation(&node).await;

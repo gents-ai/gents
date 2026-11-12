@@ -40,9 +40,9 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
     let (home, mut record) = installed_plugin(&wat, None);
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
-    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-        home.path().to_owned(),
-    )));
+    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(home.path().to_owned()),
+    ));
     let selected = gents_documents::PluginToolRef {
         plugin: "team/plugin".into(),
         digest: None,
@@ -50,7 +50,8 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
         input_fields: Vec::new(),
         job: None,
     };
-    let tool = gents_toolcalls::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
+    let tool =
+        gents_toolcalls::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
     let registry = BackgroundToolRegistry::from_tools(vec![Box::new(tool)], &["plugin".into()]);
     let fixture = super::background_budget::budget_hook_fixture(
         "script-background",
@@ -228,9 +229,9 @@ fn host_call_tool(wat: &str) -> (tempfile::TempDir, Box<dyn ToolDyn>, String) {
     let (home, mut record) = installed_plugin(wat, None);
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
-    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-        home.path().to_owned(),
-    )));
+    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(home.path().to_owned()),
+    ));
     let selected = gents_documents::PluginToolRef {
         plugin: "team/plugin".into(),
         digest: None,
@@ -238,7 +239,8 @@ fn host_call_tool(wat: &str) -> (tempfile::TempDir, Box<dyn ToolDyn>, String) {
         input_fields: Vec::new(),
         job: None,
     };
-    let tool = gents_toolcalls::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
+    let tool =
+        gents_toolcalls::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
     (home, Box::new(tool), record.digest)
 }
 

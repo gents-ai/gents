@@ -120,9 +120,7 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
             access
                 .transact_write("test.remove", |txn| {
                     let credential_id = credential_id.clone();
-                    Box::pin(
-                        async move { remove_account_in_txn(txn, did, &credential_id).await },
-                    )
+                    Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
                 })
                 .await
                 .unwrap()
@@ -165,14 +163,16 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
 
     let backends = access
         .transact_write("test.backends", |txn| {
-            Box::pin(
-                async move { gents_documents::list_inference_backends_in_txn(txn, did).await },
-            )
+            Box::pin(async move { gents_documents::list_inference_backends_in_txn(txn, did).await })
         })
         .await?;
     for backend in &backends {
-        gents_inference::backends::registry::record_discovered_catalog_on(&access, backend, Vec::new())
-            .await?;
+        gents_inference::backends::registry::record_discovered_catalog_on(
+            &access,
+            backend,
+            Vec::new(),
+        )
+        .await?;
     }
     assert_eq!(profiles().await, before, "catalog refresh");
     let ConfigAccess::Local(local) = &access else {

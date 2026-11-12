@@ -1,12 +1,11 @@
-use serde_json::{json, Value};
-use gents_tools::native::session_history::discovery::*;
-use gents_store::config_client::ConfigAccess;
-use gents_tools::native::session_history::SessionHistoryTool;
 use gents_loop::tool::Tool;
 use gents_session::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_tools::native::session_history::discovery::*;
+use gents_tools::native::session_history::SessionHistoryTool;
+use serde_json::{json, Value};
 use std::sync::Arc;
-
 
 async fn seed(
     node: &Arc<defra_node::Node>,
@@ -70,6 +69,7 @@ async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
     let fixture = published_admission(PublishedAdmissionOptions {
         name: "sessions-output-background".into(),
         real_identity: true,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -122,6 +122,7 @@ async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
     let fixture = published_admission(PublishedAdmissionOptions {
         name: "sessions-output".into(),
         real_identity: true,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await

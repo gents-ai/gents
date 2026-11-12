@@ -160,42 +160,32 @@ impl Registry {
         self.reads.iter().find(|read| read.name() == name)
     }
 
-    pub fn attach(
-        node: &Arc<defra_node::Node>,
-        registry: Arc<Registry>,
-    ) -> Result<(), gents_store::node_extension::ExtensionError> {
-        gents_store::node_extension::attach(node, registry)
-    }
-
     pub fn carried_by(
         endpoint: gents_store::config_client::GraphqlEndpoint,
         registry: Arc<Registry>,
-    ) -> Result<gents_store::config_client::GraphqlEndpoint, gents_store::node_extension::ExtensionError>
-    {
+    ) -> Result<
+        gents_store::config_client::GraphqlEndpoint,
+        gents_store::node_extension::ExtensionError,
+    > {
         endpoint.with_extension(registry)
     }
 
     pub(crate) fn for_transaction(
         txn: &ConfigApplyTxn<'_>,
+        point: &'static str,
     ) -> Result<Arc<Registry>, super::stage::HookError> {
         txn.extension::<Registry>().ok_or(if txn.has_local_node() {
-            super::stage::HookError::NotInstalled
+            super::stage::HookError::NotInstalled { point }
         } else {
-            super::stage::HookError::EndpointNotComposed
+            super::stage::HookError::EndpointNotComposed { point }
         })
     }
 
     pub(crate) fn for_node(
         node: &defra_node::Node,
+        point: &'static str,
     ) -> Result<Arc<Registry>, super::stage::HookError> {
         gents_store::node_extension::attached::<Registry>(node)
-            .ok_or(super::stage::HookError::NotInstalled)
+            .ok_or(super::stage::HookError::NotInstalled { point })
     }
-}
-
-#[cfg(any(test, feature = "test-fixtures"))]
-pub fn attach_no_lifecycle_plugins_for_tests(
-    node: &Arc<defra_node::Node>,
-) -> Result<(), gents_store::node_extension::ExtensionError> {
-    Registry::attach(node, Arc::new(Registry::default()))
 }

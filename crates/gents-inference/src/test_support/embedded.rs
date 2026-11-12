@@ -1,7 +1,8 @@
-//! An embedded node with a served GraphQL endpoint, for inference tests that
-//! need a real store. It starts the node through the store owner's protected
-//! start with no installed plugins and a policy that projects no tools, which
-//! is all the inference owner reads from a node.
+//! An embedded node with a served GraphQL endpoint. It starts the node through
+//! the store owner's protected start with no installed plugins and a policy
+//! that projects no tools, composed with what the calling layer names: the
+//! bundled lifecycle plugins where they can be named, an explicitly empty set
+//! below them, or nothing.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -42,6 +43,7 @@ pub struct TestDb {
     pub node: Arc<EmbeddedNode>,
     pub node_identity: Arc<dyn NodeIdentity>,
     pub process_generation: u64,
+    composition: gents_store::node_extension::Extensions,
     endpoint: String,
     data_path: PathBuf,
     store_key: StoreKey,
@@ -69,7 +71,9 @@ impl TestDb {
             )
             .with_client_signing_capability(identity.client_signing_capability().unwrap())
             .unwrap()
-            .with_client_signed_agent_creates(),
+            .with_client_signed_agent_creates()
+            .with_extensions(&self.composition)
+            .unwrap(),
         )
     }
 
@@ -108,6 +112,7 @@ impl TestDb {
             self.store_lock.as_ref().context("store lock released")?,
             self.node_identity.clone(),
             None,
+            &self.composition,
         )
         .await?;
         self.node = node;
@@ -156,14 +161,14 @@ async fn start(
     lock: &gents_store::local::home::StoreLock,
     identity: Arc<dyn NodeIdentity>,
     p2p: Option<defra_node::P2PConfig>,
+    composition: &gents_store::node_extension::Extensions,
 ) -> Result<(Arc<EmbeddedNode>, String)> {
     let did = identity.did().to_string();
-    let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
-        data_path, key, lock,
-    )
-    .await?
-    .preflight(key, Some(&did))
-    .await?;
+    let protected =
+        gents_store::local::backend_protection::ProtectedBackendStore::open(data_path, key, lock)
+            .await?
+            .preflight(key, Some(&did))
+            .await?;
     let served: ServedNode = ServedNode::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
@@ -177,6 +182,7 @@ async fn start(
             p2p,
             Arc::new(NoToolSources),
             Vec::new(),
+            composition,
         )
         .await?;
     let _ = served.set((Arc::downgrade(&node), identity));
@@ -248,12 +254,14 @@ async fn store_key(path: &Path, data: &Path) -> Result<StoreKey> {
         .map_err(Into::into)
 }
 
-pub async fn test_db(name: &str) -> TestDb {
+pub async fn test_db(name: &str, composition: gents_store::node_extension::Extensions) -> TestDb {
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
-    let mut db = test_db_at(tempdir.path(), None).await.expect("test node");
+    let mut db = test_db_at(tempdir.path(), None, composition)
+        .await
+        .expect("test node");
     db.tempdir = Some(tempdir);
     db
 }
@@ -261,7 +269,11 @@ pub async fn test_db(name: &str) -> TestDb {
 /// Starts the node over the home at `path`, creating it when absent and
 /// reopening it when a previous `TestDb` left it there. The home is retained
 /// after the node stops.
-pub async fn test_db_at(path: &Path, p2p: Option<defra_node::P2PConfig>) -> Result<TestDb> {
+pub async fn test_db_at(
+    path: &Path,
+    p2p: Option<defra_node::P2PConfig>,
+    composition: gents_store::node_extension::Extensions,
+) -> Result<TestDb> {
     let path = path.to_path_buf();
     let identity_path = path.join("node.key");
     let identity: Arc<dyn NodeIdentity> = Arc::new(
@@ -295,12 +307,21 @@ pub async fn test_db_at(path: &Path, p2p: Option<defra_node::P2PConfig>) -> Resu
         fresh.initialize(&key, Some(&did)).await?;
         key
     };
-    let (node, endpoint) = start(&data_path, &key, &store_lock, identity.clone(), p2p).await?;
+    let (node, endpoint) = start(
+        &data_path,
+        &key,
+        &store_lock,
+        identity.clone(),
+        p2p,
+        &composition,
+    )
+    .await?;
     gents_store::schema::ensure_runtime_schemas(&node).await?;
     Ok(TestDb {
         node,
         node_identity: identity,
         process_generation: 0,
+        composition,
         endpoint,
         data_path,
         store_key: key,
@@ -311,35 +332,46 @@ pub async fn test_db_at(path: &Path, p2p: Option<defra_node::P2PConfig>) -> Resu
 
 pub async fn signed_test_node(
     name: &str,
+    composition: gents_store::node_extension::Extensions,
 ) -> (
     TestDb,
     KeyIdentity,
     gents_store::config_client::ConfigAccess,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let db = test_db(name).await;
+    let db = test_db(name, composition).await;
     signed_test_node_from_db(db, name).await
 }
 
 pub async fn signed_test_node_without_agent(
     name: &str,
-) -> (TestDb, KeyIdentity, gents_store::config_client::ConfigAccess) {
-    let db = test_db(name).await;
+    composition: gents_store::node_extension::Extensions,
+) -> (
+    TestDb,
+    KeyIdentity,
+    gents_store::config_client::ConfigAccess,
+) {
+    let db = test_db(name, composition).await;
     signed_test_node_without_agent_from_db(db, name).await
 }
 
 pub async fn signed_test_node_without_agent_from_db(
     db: TestDb,
     name: &str,
-) -> (TestDb, KeyIdentity, gents_store::config_client::ConfigAccess) {
+) -> (
+    TestDb,
+    KeyIdentity,
+    gents_store::config_client::ConfigAccess,
+) {
     use gents_store::config_client::ConfigAccess;
     use gents_store::identity::GrantSet;
 
     let fixture_name = name.to_owned();
-    let user =
-        tokio::task::spawn_blocking(move || gents_store::test_support::test_identity(&fixture_name))
-            .await
-            .unwrap();
+    let user = tokio::task::spawn_blocking(move || {
+        gents_store::test_support::test_identity(&fixture_name)
+    })
+    .await
+    .unwrap();
     let runtime = db.node_identity.as_ref();
     assert_ne!(runtime.did(), user.did());
     let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());

@@ -68,9 +68,7 @@ pub enum BackendClient {
 }
 
 impl BackendClient {
-    pub fn replay_issuer(
-        &self,
-    ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
+    pub fn replay_issuer(&self) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
         let request = match self {
             Self::OpenAiChatCompletions(client) => client.post("/chat/completions")?,
             Self::OpenAiResponses(client) => client.post("/responses")?,
@@ -538,10 +536,8 @@ mod tests {
         kind: BackendProviderKind,
         wire_api: gents_loop::openai_wire::OpenAiWireApi,
     ) -> ResolvedAgent {
-        let mut agent = crate::test_support::resolved_agent(
-            db.node_identity.clone(),
-            Some(binding.clone()),
-        );
+        let mut agent =
+            crate::test_support::resolved_agent(db.node_identity.clone(), Some(binding.clone()));
         agent.backend_provider_kind = kind;
         agent.openai_wire_api = wire_api;
         agent.backend_endpoint = "http://127.0.0.1:1/v1".to_owned();
@@ -747,8 +743,11 @@ mod tests {
 
     #[tokio::test]
     async fn backend_account_reference_builds_with_its_own_account() {
-        let (db, _user, _access, binding) =
-            crate::test_support::signed_test_node("backend-client").await;
+        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+            "backend-client",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
         let node = db.node.clone();
         for (kind, wire, provider) in [
             (
@@ -815,8 +814,11 @@ mod tests {
 
     #[tokio::test]
     async fn two_profiles_on_two_accounts_are_served_by_their_own() {
-        let (db, _user, _access, binding) =
-            crate::test_support::signed_test_node("backend-client").await;
+        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+            "backend-client",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
         let node = db.node.clone();
         for (kind, wire, provider) in [
             (
@@ -866,8 +868,11 @@ mod tests {
 
     #[tokio::test]
     async fn backend_account_reference_never_falls_back_to_the_original_account() {
-        let (db, _user, _access, binding) =
-            crate::test_support::signed_test_node("backend-client").await;
+        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+            "backend-client",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
         let node = db.node.clone();
         let mut codex = held_test_agent(
             &db,
@@ -904,8 +909,11 @@ mod tests {
 
     #[tokio::test]
     async fn each_oauth_provider_kind_yields_the_expected_client_variant() {
-        let (db, _user, _access, binding) =
-            crate::test_support::signed_test_node("backend-client").await;
+        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+            "backend-client",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
         let node = db.node.clone();
 
         let codex = held_test_agent(
@@ -1022,8 +1030,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_signed_in_gateway_builds_from_its_stored_account() {
-        let (db, _user, _access, binding) =
-            crate::test_support::signed_test_node("backend-client").await;
+        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+            "backend-client",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
         let node = db.node.clone();
         let mut gateway = held_test_agent(
             &db,

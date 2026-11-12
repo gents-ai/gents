@@ -45,13 +45,9 @@ pub async fn publish(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>
         .transact_write("test.cursor.publish", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &super::AdmitAllProfiles,
-                )
-                .await
-                .map(|_| ())
+                apply_desired_state_plan(txn, plan, &super::AdmitAllProfiles)
+                    .await
+                    .map(|_| ())
             })
         })
         .await

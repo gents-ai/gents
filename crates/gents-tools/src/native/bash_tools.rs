@@ -74,11 +74,7 @@ pub(super) struct ReadOnlyBashTool {
 
 impl ReadOnlyBashTool {
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub fn new(
-        context: ToolContext,
-        default_timeout: Duration,
-        allowlist: Vec<String>,
-    ) -> Self {
+    pub fn new(context: ToolContext, default_timeout: Duration, allowlist: Vec<String>) -> Self {
         Self {
             context,
             default_timeout,

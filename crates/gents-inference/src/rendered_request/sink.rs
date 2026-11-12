@@ -902,4 +902,3 @@ fn capture_factory(sink: DefraRenderedRequestSink) -> RenderedRequestCaptureFact
         sink
     })
 }
-

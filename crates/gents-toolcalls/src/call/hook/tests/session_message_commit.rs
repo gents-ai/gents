@@ -1,7 +1,7 @@
 use super::*;
+use crate::test_support::enable_agents_tools_with_access;
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::identity::NodeIdentity;
-use crate::test_support::enable_agents_tools_with_access;
 
 async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &str) {
     let owner = node.node_identity_did().unwrap();
@@ -9,7 +9,6 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &st
         gents_store::config_client::ConfigAccess::local_as(node.clone(), owner.parse().unwrap());
     enable_agents_tools_with_access(&access, did, agent_did).await;
 }
-
 
 async fn rows(
     access: &gents_store::config_client::ConfigAccess,

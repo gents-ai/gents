@@ -1,9 +1,8 @@
-use std::sync::Arc;
-use gents_loop::tool::Tool;
-use serde_json::{json, Value};
-use gents_tools::builtin::p2p::*;
 use crate::support::enrollment::{signed_enrollment_offer, wait_for_peer_identity};
-
+use gents_loop::tool::Tool;
+use gents_tools::builtin::p2p::*;
+use serde_json::{json, Value};
+use std::sync::Arc;
 
 async fn call(tool: &P2pTool, value: Value) -> Value {
     let output = Tool::call(tool, serde_json::from_value(value).unwrap())

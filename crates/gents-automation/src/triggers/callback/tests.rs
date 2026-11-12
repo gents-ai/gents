@@ -1502,11 +1502,7 @@ fn update_invocation_mutation_renders_absent_fields_as_null_not_empty_string() {
 #[tokio::test]
 async fn callback_results_are_selectable_by_their_binding() {
     let node = test_node().await;
-    super::seed_test_agent(
-        &node,
-        gents_store::test_support::PIN_FIXED_DID,
-    )
-    .await;
+    super::seed_test_agent(&node, gents_store::test_support::PIN_FIXED_DID).await;
     for (invocation_id, binding_id) in [
         ("inv-a", "maintenance-execute-workspace"),
         ("inv-b", "other"),
@@ -1519,8 +1515,7 @@ async fn callback_results_are_selectable_by_their_binding() {
                 invocation_id: invocation_id.to_owned(),
                 binding_id: Some(binding_id.to_owned()),
                 agent_did: crate::triggers::callback::test_agent_did(),
-                owner_node_did: gents_store::test_support::PIN_FIXED_DID
-                    .to_owned(),
+                owner_node_did: gents_store::test_support::PIN_FIXED_DID.to_owned(),
                 workspace_id: None,
                 work_unit_id: None,
                 caused_by_correlation: None,
@@ -1550,11 +1545,7 @@ async fn callback_result_is_agent_owned_and_parent_link_grants_user_read() {
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let outsider = KeyIdentity::load_or_create(home.path().join("outsider.key"), None).unwrap();
     let node = test_node().await;
-    super::seed_test_agent(
-        &node,
-        gents_store::test_support::PIN_FIXED_DID,
-    )
-    .await;
+    super::seed_test_agent(&node, gents_store::test_support::PIN_FIXED_DID).await;
     super::grant_test_node_administrator(&node, user.did()).await;
     super::grant_test_node_read(&node, outsider.did()).await;
     let agent = super::test_agent_did();
@@ -1803,9 +1794,7 @@ impl Backlog {
         use gents_store::collection::Collection;
         use gents_store::config_client::ConfigAccess;
         let home = tempfile::tempdir().unwrap();
-        let identity = gents_store::test_support::pin_fixed_signing_identity(
-            home.path(),
-        );
+        let identity = gents_store::test_support::pin_fixed_signing_identity(home.path());
         let node = test_node().await;
         super::seed_test_agent(&node, BACKLOG_OWNER).await;
         let access =

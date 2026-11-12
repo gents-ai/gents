@@ -1,17 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::support::{test_db, TestDb};
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::Node as EmbeddedNode;
-use gents_automation::triggers::engine::goal_source::*;
-use gents_automation::triggers::engine::{FireIntent, FireResult, TriggerSource};
-use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_automation::goal::readiness_gate::GoalClaimedDecision;
 use gents_automation::goal::readiness_gate::GoalReconcileSettled;
-use gents_protocol::goal_status::GoalStatus;
-use gents_protocol::row::{AgentRequest, AgentRequestRow};
-use tokio::sync::watch;
-use tokio_util::sync::CancellationToken;
 use gents_automation::goal::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
     gate_claimed_goal_continuation, set_goal_from_access,
@@ -19,15 +14,20 @@ use gents_automation::goal::{
     update_goal_fields_if_status_from_access, GoalAgentObservation, GoalDocument,
     MAX_INFRASTRUCTURE_RETRIES,
 };
-use gents_automation::goal::readiness_gate::GoalClaimedDecision;
-use crate::support::{test_db, TestDb};
+use gents_automation::triggers::engine::goal_source::*;
+use gents_automation::triggers::engine::{FireIntent, FireResult, TriggerSource};
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::node_readiness::{
     AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
     NodeReadinessProcessState, NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
 };
+use gents_protocol::row::{AgentRequest, AgentRequestRow};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use serde_json::{json, Value};
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 const SESSION: &str = "claimed-readiness-session";
 const BEHAVIOR: &str = "claimed-readiness-behavior";
@@ -827,10 +827,9 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
             "await_readiness" => {
                 assert_eq!(current.parsed_status(), Some(GoalStatus::Active), "{name}");
                 assert!(
-                    current
-                        .last_failure
-                        .as_deref()
-                        .is_some_and(|v| v.starts_with(gents_automation::goal::GOAL_READINESS_WAIT_PREFIX)),
+                    current.last_failure.as_deref().is_some_and(
+                        |v| v.starts_with(gents_automation::goal::GOAL_READINESS_WAIT_PREFIX)
+                    ),
                     "{name}"
                 );
                 assert_eq!(

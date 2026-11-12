@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use gents_documents::apply_desired_state_plan;
 use crate::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
+use gents_documents::apply_desired_state_plan;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_store::collection::Collection;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};

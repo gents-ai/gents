@@ -1,17 +1,18 @@
-use super::provider_context_reduction::capture_source_boundary;
-use gents_protocol::message::Message;
-use gents_protocol::output::OutputSource;
-use gents_protocol::rendered_request::RenderedRequestSource;
 use super::output::replay_candidates::load_canonical_assistant_candidates;
 use super::output::replay_request::ReplayRequestReader;
 use super::output::CanonicalReplayScope;
-use gents_protocol::output::rows::{transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION};
-use gents_protocol::transcript::SourceBoundary;
+use super::provider_context_reduction::capture_source_boundary;
 use gents_loop::claude_messages_body::{
     replay_stage, select_replay, ReplayTag, ReplayWire, TaggedAssistantRow,
 };
 use gents_loop::provider_input::replay_frontier::flatten;
-
+use gents_protocol::message::Message;
+use gents_protocol::output::rows::{
+    transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
+};
+use gents_protocol::output::OutputSource;
+use gents_protocol::rendered_request::RenderedRequestSource;
+use gents_protocol::transcript::SourceBoundary;
 
 #[derive(Clone, Copy, Debug)]
 enum RequestFault {

@@ -3,17 +3,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use gents_inference::llm::message::{
-    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResultContent,
-    UserContent,
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResultContent, UserContent,
 };
 use gents_inference::llm::{HookAction, ToolCallHookAction};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::json;
 
+use defra_node::Node as EmbeddedNode;
 use gents_store::schema::ensure_runtime_schemas;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
-use defra_node::Node as EmbeddedNode;
 
 mod background_admission;
 mod background_budget;
@@ -204,28 +203,25 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
 
 #[tokio::test]
 async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
-    let identity_dir = tempfile::tempdir().unwrap();
-    let identity =
-        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
-    use gents_automation::goal::load_canonical_goal;
     use crate::runtime::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
+    use gents_automation::goal::load_canonical_goal;
     use gents_documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
     use gents_protocol::goal_status::GoalStatus;
 
     // The hook's session is signed by the runtime it runs as.
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    gents_automation::lifecycle_hooks::attach(&node).unwrap();
+    let db = gents_inference::test_support::test_db(
+        "goal-output-gate",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false)
-            .with_goal_tools(Arc::new(gents_automation::goal::goal_tools::GoalToolAnswers));
+            .with_goal_tools(Arc::new(
+                gents_automation::goal::goal_tools::GoalToolAnswers,
+            ));
     // The hook acts as the runtime that signs its session and requests.
     hook.actor = Some(identity::Did::new(identity.did()).unwrap());
     assert!(matches!(

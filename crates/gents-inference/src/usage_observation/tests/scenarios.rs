@@ -202,8 +202,11 @@ async fn generated_usage_reads_reach_the_modelled_outcomes() {
     futures::stream::iter(cases)
         .for_each_concurrent(4, |case| async move {
             let cache = UsageCache::default();
-            let (db, _user, user_access) =
-                crate::test_support::signed_test_node_without_agent("usage-scenarios").await;
+            let (db, _user, user_access) = crate::test_support::signed_test_node_without_agent(
+                "usage-scenarios",
+                gents_store::node_extension::Extensions::none(),
+            )
+            .await;
             let node = db.node.clone();
             let did = db.node_identity.did();
             let upstream = upstream().await;

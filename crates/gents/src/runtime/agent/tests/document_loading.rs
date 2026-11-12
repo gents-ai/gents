@@ -160,7 +160,10 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
         ),
         "the explicit execution setting must override the shorter default lease",
     );
-    assert_eq!(behavior.agent.stream_liveness_timeout, Duration::from_secs(45));
+    assert_eq!(
+        behavior.agent.stream_liveness_timeout,
+        Duration::from_secs(45)
+    );
     assert_eq!(behavior.agent.deadline_duration, Duration::from_secs(120));
 
     assert_eq!(behavior.agent.sampling.temperature, Some(0.2));
@@ -176,7 +179,8 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     );
 
     let params = behavior
-        .agent.sampling
+        .agent
+        .sampling
         .additional_params()
         .expect("pinned sampling knobs must produce provider body params");
     assert_eq!(params["top_p"], 0.95);

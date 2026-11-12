@@ -1,17 +1,16 @@
 use base64::Engine as _;
-use gents_tools::native::file_tools::change_capture::*;
-use gents_tools::native::args::WriteFileArgs;
-use gents_tools::native::file_tools::write_file::WriteFileTool;
-use gents_tools::native::shared::ToolContext;
-use gents_toolcalls::call::lifecycle::admission_fixture::{
-    published_admission_with_owner, PublishedAdmissionOptions,
-};
 use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_loop::tool::Tool;
 use gents_protocol::file_changes::FileImage;
 use gents_session::file_contents::content_hash;
 use gents_store::config_client::ConfigAccess;
-
+use gents_toolcalls::call::lifecycle::admission_fixture::{
+    published_admission_with_owner, PublishedAdmissionOptions,
+};
+use gents_tools::native::args::WriteFileArgs;
+use gents_tools::native::file_tools::change_capture::*;
+use gents_tools::native::file_tools::write_file::WriteFileTool;
+use gents_tools::native::shared::ToolContext;
 
 #[tokio::test]
 async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order() {
@@ -33,6 +32,7 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
         real_identity: true,
         paired_client: true,
         tool_name: Some("plugin".into()),
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -148,9 +148,10 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     )
     .await
     .unwrap();
-    let snapshot = gents_observe::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
-        .await
-        .unwrap();
+    let snapshot =
+        gents_observe::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
+            .await
+            .unwrap();
     assert_eq!(
         snapshot.entries().len(),
         2,
@@ -171,9 +172,10 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     let page = snapshot.page(None).unwrap();
     assert_eq!(page.entries, snapshot.entries());
     assert!(page.next.is_none());
-    let repeated = gents_observe::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
-        .await
-        .unwrap();
+    let repeated =
+        gents_observe::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
+            .await
+            .unwrap();
     assert_eq!(snapshot.binding(), repeated.binding());
     assert_eq!(snapshot.entries(), repeated.entries());
     assert_eq!(tokio::fs::read(&path).await.unwrap(), b"second effect\n");

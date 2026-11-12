@@ -570,7 +570,9 @@ fn snapshot_from_trigger_contract(
 }
 
 /// Pairs a fixture agent with the default tool surface configuration, as the snapshot carries them side by side.
-pub(super) fn with_default_tools(agent: Arc<ResolvedAgent>) -> gents_tools::surface::AgentWithTools {
+pub(super) fn with_default_tools(
+    agent: Arc<ResolvedAgent>,
+) -> gents_tools::surface::AgentWithTools {
     gents_tools::surface::AgentWithTools {
         agent,
         tools: Arc::new(AgentToolSurfaceConfig::default()),
@@ -648,7 +650,7 @@ pub(super) async fn signed_materializer_agent(
     gents_store::config_client::ConfigAccess,
     Arc<ResolvedAgent>,
 ) {
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(name).await;
+    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
     let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
         .await
         .expect("build test agent template");

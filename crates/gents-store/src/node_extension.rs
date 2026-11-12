@@ -10,24 +10,70 @@ pub enum ExtensionError {
     AlreadyAttached { type_name: &'static str },
 }
 
+#[derive(Clone)]
+struct Slot {
+    value: Arc<dyn Any + Send + Sync>,
+    type_name: &'static str,
+}
+
 /// At most one value per type, fixed once attached.
 #[derive(Clone, Default)]
-pub struct Extensions(RapidHashMap<TypeId, Arc<dyn Any + Send + Sync>>);
+pub struct Extensions(RapidHashMap<TypeId, Slot>);
 
 impl Extensions {
+    /// Nothing composed: every lifecycle point reached through it fails
+    /// closed.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn of<T>(value: Arc<T>) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        let mut extensions = Self::default();
+        extensions.0.insert(
+            TypeId::of::<T>(),
+            Slot {
+                value,
+                type_name: std::any::type_name::<T>(),
+            },
+        );
+        extensions
+    }
+
     pub fn attach<T>(&mut self, value: Arc<T>) -> Result<(), ExtensionError>
     where
         T: Any + Send + Sync,
     {
-        match self.0.get(&TypeId::of::<T>()) {
-            Some(existing) if !std::ptr::addr_eq(Arc::as_ptr(existing), Arc::as_ptr(&value)) => {
+        self.insert(
+            TypeId::of::<T>(),
+            Slot {
+                value,
+                type_name: std::any::type_name::<T>(),
+            },
+        )
+    }
+
+    pub fn attach_all(&mut self, other: &Extensions) -> Result<(), ExtensionError> {
+        other
+            .0
+            .iter()
+            .try_for_each(|(key, slot)| self.insert(*key, slot.clone()))
+    }
+
+    fn insert(&mut self, key: TypeId, slot: Slot) -> Result<(), ExtensionError> {
+        match self.0.get(&key) {
+            Some(existing)
+                if !std::ptr::addr_eq(Arc::as_ptr(&existing.value), Arc::as_ptr(&slot.value)) =>
+            {
                 Err(ExtensionError::AlreadyAttached {
-                    type_name: std::any::type_name::<T>(),
+                    type_name: slot.type_name,
                 })
             }
             Some(_) => Ok(()),
             None => {
-                self.0.insert(TypeId::of::<T>(), value);
+                self.0.insert(key, slot);
                 Ok(())
             }
         }
@@ -37,7 +83,7 @@ impl Extensions {
     where
         T: Any + Send + Sync,
     {
-        Arc::clone(self.0.get(&TypeId::of::<T>())?)
+        Arc::clone(&self.0.get(&TypeId::of::<T>())?.value)
             .downcast::<T>()
             .ok()
     }
@@ -53,10 +99,9 @@ impl PartialEq for Extensions {
     fn eq(&self, other: &Self) -> bool {
         self.0.len() == other.0.len()
             && self.0.iter().all(|(key, value)| {
-                other
-                    .0
-                    .get(key)
-                    .is_some_and(|theirs| std::ptr::addr_eq(Arc::as_ptr(value), Arc::as_ptr(theirs)))
+                other.0.get(key).is_some_and(|theirs| {
+                    std::ptr::addr_eq(Arc::as_ptr(&value.value), Arc::as_ptr(&theirs.value))
+                })
             })
     }
 }
@@ -83,18 +128,28 @@ fn key(node: &EmbeddedNode) -> usize {
     node as *const EmbeddedNode as usize
 }
 
-pub fn attach<T>(node: &Arc<EmbeddedNode>, value: Arc<T>) -> Result<(), ExtensionError>
+#[cfg(test)]
+fn attach<T>(node: &Arc<EmbeddedNode>, value: Arc<T>) -> Result<(), ExtensionError>
 where
     T: Any + Send + Sync,
 {
+    attach_all(node, &Extensions::of(value))
+}
+
+pub(crate) fn attach_all(
+    node: &Arc<EmbeddedNode>,
+    extensions: &Extensions,
+) -> Result<(), ExtensionError> {
     let (dead, attached) = {
-        let mut table = table().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut table = table()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dead = take_dead(&mut table);
         let slots = table.entry(key(node)).or_insert_with(|| Slots {
             node: Arc::downgrade(node),
             values: Extensions::default(),
         });
-        (dead, slots.values.attach(value))
+        (dead, slots.values.attach_all(extensions))
     };
     drop(dead);
     attached
@@ -104,7 +159,9 @@ pub fn attached<T>(node: &EmbeddedNode) -> Option<Arc<T>>
 where
     T: Any + Send + Sync,
 {
-    let table = table().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let table = table()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let slots = table.get(&key(node))?;
     if slots.node.strong_count() == 0 {
         return None;

@@ -9,8 +9,11 @@ use super::*;
 
 #[tokio::test]
 async fn failed_refresh_is_not_retried_during_the_cooldown() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-cooldown").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-cooldown",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -47,8 +50,11 @@ async fn failed_refresh_is_not_retried_during_the_cooldown() {
 
 #[tokio::test]
 async fn failed_refresh_keeps_the_bearer_forced_and_never_reserves_the_bad_token() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-cooldown").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-cooldown",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -144,8 +150,11 @@ async fn revoked_twice(bearer: &DbCredentialBearer) -> (String, String, String) 
 #[tokio::test]
 async fn a_revoked_refresh_names_the_account() {
     for (label, named) in [(Some("label-a"), "label-a"), (None, "Grok")] {
-        let (db, _user, _user_access, _binding) =
-            crate::test_support::signed_test_node("credential-cooldown").await;
+        let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+            "credential-cooldown",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
         let node = db.node.clone();
         let did = db.node_identity.did();
         let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -175,8 +184,11 @@ async fn a_revoked_refresh_names_the_account() {
 
 #[tokio::test]
 async fn a_revoked_refresh_never_uses_another_account() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-cooldown").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-cooldown",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -199,8 +211,11 @@ async fn a_revoked_refresh_never_uses_another_account() {
 
 #[tokio::test]
 async fn a_reused_slot_names_the_new_account() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-cooldown").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-cooldown",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -249,8 +264,11 @@ async fn a_reused_slot_names_the_new_account() {
 
 #[tokio::test]
 async fn a_disabled_or_removed_row_names_the_account() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-cooldown").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-cooldown",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -313,8 +331,11 @@ async fn a_disabled_or_removed_row_names_the_account() {
 #[tokio::test]
 async fn a_limit_like_label_is_not_a_limit() {
     for label in ["usage limit", "maximum context length"] {
-        let (db, _user, _user_access, _binding) =
-            crate::test_support::signed_test_node("credential-cooldown").await;
+        let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+            "credential-cooldown",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
         let node = db.node.clone();
         let did = db.node_identity.did();
         let access = super::rows::runtime_credential_access(&node, did).unwrap();
