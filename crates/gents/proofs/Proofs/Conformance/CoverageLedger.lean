@@ -1277,8 +1277,28 @@ def caseCoverage : List CoverageEntry :=
       "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_control_cases"
-      "SessionControlCases")
+      "family"
+      "session_control_contracts_interrupt_idle")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_stop_drains")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_resume_terminal_goal")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_resume_after_settlement")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_resume_waits_for_live_worker")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_resume_waits_for_process_record")
       "session-control" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "lifecycle_hook_effect_cases"

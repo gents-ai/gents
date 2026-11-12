@@ -633,10 +633,6 @@ pub fn lean_self_config_selection_cases() -> &'static LeanSelfConfigSelectionCas
     &lean_contract_snapshot().self_config_selection_cases
 }
 
-pub fn lean_session_control_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().session_control_cases
-}
-
 pub fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
     &lean_contract_snapshot().session_input_edit_cases
 }
@@ -3253,7 +3249,6 @@ pub struct LeanContractSnapshot {
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
     pub interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
-    pub session_control_cases: Vec<serde_json::Value>,
     pub fold_queue_cases: Vec<LeanFoldQueueCase>,
     pub fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
     pub handover_fold_cases: Vec<LeanHandoverFoldCase>,
