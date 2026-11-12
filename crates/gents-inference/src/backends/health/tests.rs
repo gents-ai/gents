@@ -15,17 +15,15 @@ use crate::auth::credential::test_support::{
     TOKEN_URL_ENV,
 };
 use gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH;
-use gents_lean_vocab::lean_backend_health_cases;
 
-fn state_from_lean(name: &str, state: &str) -> BackendHealthState {
-    match state {
-        "unknown" => BackendHealthState::Unknown,
-        "healthy" => BackendHealthState::Healthy,
-        "degraded" => BackendHealthState::Degraded,
-        "unhealthy" => BackendHealthState::Unhealthy,
-        "credentials_required" => BackendHealthState::CredentialsRequired,
-        "subscription_not_entitled" => BackendHealthState::SubscriptionNotEntitled,
-        other => panic!("Lean backend health case {name} produced unknown state {other:?}"),
+fn probe_event(event: &str) -> ProbeEvent {
+    match event {
+        "probeSuccess" => ProbeEvent::ProbeSuccess,
+        "probeFail" => ProbeEvent::ProbeFail,
+        "credentialsRejected" => ProbeEvent::CredentialsRejected,
+        "subscriptionNotEntitled" => ProbeEvent::SubscriptionNotEntitled,
+        "configurationChanged" => ProbeEvent::ConfigurationChanged,
+        other => panic!("unknown probe event {other:?}"),
     }
 }
 
@@ -47,61 +45,36 @@ async fn every_health_measurement_notifies_parked_request_watchers() {
 }
 
 #[test]
-fn generated_backend_health_cases_match_prober_transitions() {
-    let cases = lean_backend_health_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean must emit at least one backend health case"
-    );
-
+fn backend_health_transitions_follow_the_lean_model() {
+    let cases = gents_lean_vocab::families::contracts_backend_health_transition::cases::<
+        ProbeEvent,
+        BackendHealthState,
+    >();
+    assert!(cases.iter().any(|case| {
+        case.input.threshold_k == u64::from(BackendProberOptions::default().failure_threshold_k)
+    }));
     for case in cases {
-        let start = (
-            state_from_lean(&case.name, &case.start_state),
-            u32::try_from(case.start_count).unwrap(),
-        );
-        let event = match case.event.as_str() {
-            "probeSuccess" => ProbeEvent::ProbeSuccess,
-            "probeFail" => ProbeEvent::ProbeFail,
-            "credentialsRejected" => ProbeEvent::CredentialsRejected,
-            "subscriptionNotEntitled" => ProbeEvent::SubscriptionNotEntitled,
-            "configurationChanged" => ProbeEvent::ConfigurationChanged,
-            other => panic!(
-                "Lean backend health case {} produced unknown event {other:?}",
-                case.name
+        let (next_state, next_count) = step_backend(
+            (
+                case.input.start_state,
+                u32::try_from(case.input.start_count).unwrap(),
             ),
-        };
-
-        let (next_state, next_count) =
-            step_backend(start, event, u32::try_from(case.threshold_k).unwrap());
-
-        assert_eq!(
-            next_state,
-            state_from_lean(&case.name, &case.next_state),
-            "Lean backend health case {} must match next_state",
-            case.name
+            case.input.event,
+            u32::try_from(case.input.threshold_k).unwrap(),
         );
-        assert_eq!(
-            next_count as usize, case.next_count,
-            "Lean backend health case {} must match next_count",
-            case.name
-        );
-        assert_eq!(
-            next_state.blocks_routing(),
-            case.blocks_routing,
-            "Lean backend health case {} must match the blocksRouting projection",
-            case.name
-        );
-        assert_eq!(
-            next_state
-                .readiness_reason()
-                .map(|reason| serde_json::to_value(reason)
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_owned()),
-            case.readiness_reason,
-            "Lean backend health case {} must match the readiness reason",
-            case.name
+        case.check(
+            gents_lean_vocab::families::contracts_backend_health_transition::Output {
+                next_state,
+                next_count: u64::from(next_count),
+                blocks_routing: next_state.blocks_routing(),
+                readiness_reason: next_state.readiness_reason().map(|reason| {
+                    serde_json::to_value(reason)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            },
         );
     }
 }
@@ -346,33 +319,16 @@ fn assert_modeled_probe(
     current: &BackendHealthSnapshot,
     event: &str,
 ) {
-    let (mut state, mut count) = previous
+    let threshold_k = probe_options().failure_threshold_k;
+    let mut model = previous
         .map(|snapshot| (snapshot.state, snapshot.failure_count))
         .unwrap_or((BackendHealthState::Unknown, 0));
     if previous.is_some_and(|snapshot| {
         snapshot.configuration_fingerprint != current.configuration_fingerprint
     }) {
-        let reset = lean_backend_health_cases()
-            .iter()
-            .find(|case| {
-                case.start_state == state.as_str()
-                    && case.start_count == count as usize
-                    && case.event == "configurationChanged"
-                    && case.threshold_k == probe_options().failure_threshold_k as usize
-            })
-            .expect("the model emits this connection change");
-        state = state_from_lean(&reset.name, &reset.next_state);
-        count = reset.next_count.try_into().unwrap();
+        model = step_backend(model, ProbeEvent::ConfigurationChanged, threshold_k);
     }
-    let modeled = lean_backend_health_cases()
-        .iter()
-        .find(|case| {
-            case.start_state == state.as_str()
-                && case.start_count == count as usize
-                && case.event == event
-                && case.threshold_k == probe_options().failure_threshold_k as usize
-        })
-        .expect("the model emits this probe transition");
-    assert_eq!(current.state.as_str(), modeled.next_state);
-    assert_eq!(current.failure_count as usize, modeled.next_count);
+    let (state, count) = step_backend(model, probe_event(event), threshold_k);
+    assert_eq!(current.state, state);
+    assert_eq!(current.failure_count, count);
 }

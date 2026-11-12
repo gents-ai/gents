@@ -341,9 +341,6 @@ def snapshotCaptureTailJson : String :=
     ++ "\"mcp_health_cases\":"
       ++ jsonArray
         (Proofs.MCPHealth.transitionCases.map mcpHealthCaseJson) ++ ","
-    ++ "\"backend_health_cases\":"
-      ++ jsonArray
-        (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
     ++ "\"backend_probe_schedule_cases\":"
       ++ jsonArray
         (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","

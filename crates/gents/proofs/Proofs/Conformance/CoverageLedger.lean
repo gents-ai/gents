@@ -1058,17 +1058,17 @@ def caseCoverage : List CoverageEntry :=
       boundaryStorageObservationDaemonVisibleId)
       "storage-observation" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
-      "backend_health_cases"
+      "backend_health_admission_cases"
       "BackendHealthAdmissionCases"
       boundaryBackendHealthAdmissionFreshnessId)
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "backend_health_cases"
+      "backend_health_admission_cases"
       "BackendHealthAdmissionCases")
       "backend-health" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "backend_health_cases"
-      "BackendHealthTransitionCases")
+      "family"
+      "contracts_backend_health_transition")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_probe_schedule_cases"
@@ -1084,8 +1084,8 @@ def caseCoverage : List CoverageEntry :=
       "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports, duplicate-call accounting and goal charges that include reviews while excluding titles. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "backend_health_cases"
-      "BackendHealthTransitionCases")
+      "family"
+      "contracts_backend_health_transition")
       "backend-health" [Surface.operatorCli]
   , tagged (followUpCoverage
       "native_filesystem_boundary_cases"
