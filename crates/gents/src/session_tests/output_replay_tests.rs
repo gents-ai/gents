@@ -1,12 +1,12 @@
+use gents_loop::claude_messages_body::{select_replay, ReplayTag, ReplayWire, TaggedAssistantRow};
 use gents_protocol::message::Message;
+use gents_protocol::output::rows::{
+    transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
+};
 use gents_protocol::output::OutputSource;
 use gents_protocol::rendered_request::RenderedRequestSource;
 use gents_session::session::output::replay_candidates::load_canonical_assistant_candidates;
 use gents_session::session::output::CanonicalReplayScope;
-use gents_protocol::output::rows::{
-    transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
-};
-use gents_loop::claude_messages_body::{select_replay, ReplayTag, ReplayWire, TaggedAssistantRow};
 use gents_session::session::output_replay_fixture::{
     fixture_query, fixture_with_provider_payload_and_scope_and_tool, fixture_write, signed_fixture,
     ReplayFixture, SESSION_ID,

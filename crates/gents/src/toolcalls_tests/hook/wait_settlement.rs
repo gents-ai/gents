@@ -1,6 +1,6 @@
 use super::*;
-use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use gents_store::config_client::ConfigApplyTxn;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use std::time::Duration;
 
 #[tokio::test]
@@ -162,13 +162,12 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
 
 #[tokio::test]
 async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "wait-process-refuses-a-job-row-with-the-",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::FailClosed).await;
     hook.on_completion_call(&user_text_message("Wait on a job"), &[])
         .await;

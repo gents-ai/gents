@@ -40,7 +40,8 @@ impl ToolDyn for SchemaArgumentProbe {
 async fn generated_schema_argument_repair_cases_drive_owned_loop() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().schema_argument_repair_cases;
     assert!(!cases.is_empty());
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let calls = Arc::new(AtomicUsize::new(0));
     let mut tools: Vec<Box<dyn ToolDyn>> = Vec::new();
     let mut turn = Vec::new();
@@ -171,13 +172,10 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
 
 #[tokio::test]
 async fn config_container_repairs_preserve_native_validation_and_the_invalid_budget() {
-    let identity_dir = tempfile::tempdir().unwrap();
-    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
-        gents_store::identity::KeyIdentity::load_or_create(identity_dir.path().join("config-repair.key"), None)
-            .unwrap(),
-    );
+    let (db, hook, writer, mut lifecycle) = owned_test_hook_with_identity().await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let owner = identity.did().to_owned();
-    let (node, hook, writer, mut lifecycle) = owned_test_hook_with_identity(identity.clone()).await;
     let binding = gents_inference::test_support::install_test_agent(&node, &owner, "general").await;
     let agent_did = binding.agent_did.clone();
     let grants = gents_tools::surface::SelfConfigToolConfig {
@@ -188,7 +186,8 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
         no_lockout: false,
         ..Default::default()
     };
-    let tools = gents_tools::builtin::self_config::build_self_config_tools(std::sync::Arc::default(),
+    let tools = gents_tools::builtin::self_config::build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner,
         Some(identity),

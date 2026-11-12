@@ -27,7 +27,7 @@ use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGME
 use gents_store::config_client::ConfigAccess;
 
 struct TitleFixture {
-    _directory: tempfile::TempDir,
+    _db: gents_inference::test_support::TestDb,
     node: Arc<EmbeddedNode>,
     identity: gents_store::identity::KeyIdentity,
     agent: Arc<dyn gents_store::identity::NodeIdentity>,
@@ -41,20 +41,15 @@ async fn claimed_title_fixture() -> TitleFixture {
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
-    use gents_store::identity::{KeyIdentity, NodeIdentity};
+    use gents_store::identity::NodeIdentity;
 
-    let directory = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "claimed-title-fixture-node",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let root_did = gents_store::graphql::escape_graphql_string(identity.did());
     ConfigAccess::local(node.clone())
         .write("test.title.node", &format!(r#"mutation {{ create_Node(input: {{node_did: "{root_did}", display_name: "fixture", enabled: true}}) {{ _docID }} }}"#))
@@ -138,7 +133,7 @@ async fn claimed_title_fixture() -> TitleFixture {
         .await
         .unwrap();
     TitleFixture {
-        _directory: directory,
+        _db: db,
         node,
         identity,
         agent,
@@ -155,7 +150,7 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
     use gents_store::identity::NodeIdentity;
 
     let TitleFixture {
-        _directory,
+        _db,
         node,
         identity,
         agent,
@@ -290,7 +285,7 @@ async fn shutdown_close_replays_a_dropped_complete_title_closure() {
     use gents_store::config_client::ConfigApplyTxn;
 
     let TitleFixture {
-        _directory,
+        _db,
         node,
         agent_access,
         lifecycle,

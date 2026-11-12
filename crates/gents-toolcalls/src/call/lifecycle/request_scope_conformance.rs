@@ -3,8 +3,6 @@ use crate::call::lifecycle::admission_fixture::{
     claimed_signed_request, complete_child_managed_verified, materialize_session_message,
     publish_accepted_on_claimed_request,
 };
-use defra_node::Node as EmbeddedNode;
-use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
 
 /// The parent request's Agent owns the session's requests and tool rows;
@@ -67,23 +65,14 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
     assert_eq!(case.action, "appendNotification");
     assert!(case.legal);
     assert_eq!(case.pre_active_request_id, case.post_active_request_id);
-    let path = std::env::temp_dir().join(format!("queue-scope-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&path).unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(path.join("queue-agent.key"), None)
-            .unwrap();
-    let node_did = identity.did();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(&path)
-            .with_node_identity_did(node_did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "queue-scope",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+    let node_did = db.node_identity.did();
     gents_inference::test_support::install_test_agent(&node, node_did, "general").await;
     let parent_id = format!("queue-deadline-coalesce-parent-{}", uuid::Uuid::new_v4());
     let session_id = case.session_id.to_string();
@@ -150,13 +139,9 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
             caused_request_id,
             &format!("child {} complete", index + 1),
             &agent_signer,
-            Arc::new(
-                gents_store::identity::KeyIdentity::load_existing(
-                    path.join("queue-agent.key"),
-                    None,
-                )
-                .unwrap(),
-            ),
+            Arc::new(gents_store::test_support::held_runtime_identity(
+                db.node_identity.did(),
+            )),
         )
         .await;
     }
@@ -186,5 +171,4 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         case.name
     );
     node.shutdown().await.expect("shut down test node");
-    std::fs::remove_dir_all(path).unwrap();
 }

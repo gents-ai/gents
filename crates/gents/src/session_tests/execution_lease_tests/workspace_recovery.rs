@@ -1,5 +1,4 @@
 use super::*;
-use defra_node::Node as EmbeddedNode;
 use gents_automation::triggers::engine::goal_source::GoalSource;
 use gents_automation::triggers::engine::TriggerSource as _;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
@@ -15,22 +14,16 @@ use gents_store::identity::NodeIdentity;
 #[tokio::test]
 async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_workspace_changes() {
     let dir = tempfile::tempdir().unwrap();
-    let identity = Arc::new(
-        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
-            .unwrap(),
-    );
+    let db = gents_inference::test_support::test_db(
+        "workspace-recovery-successor",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = Arc::new(gents_store::test_support::held_runtime_identity(
+        db.node_identity.did(),
+    ));
     let did = identity.did();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(dir.path().join("db"))
-            .with_node_identity_did(did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     let binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
     let admin = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),

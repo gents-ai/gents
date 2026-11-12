@@ -746,7 +746,6 @@ fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
     refs.validate().unwrap();
 }
 
-
 #[test]
 fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
     let model = gents_lean_vocab::lean_identity_household_cases()

@@ -50,7 +50,8 @@ async fn enrolled_user_authors_held_tools_and_only_the_household_owner_adds_sche
         crate::test_support::root::signed_test_node("enrolled-tools-authoring").await;
     let node_did = db.node_identity.did().to_owned();
     let agent = identity::Did::new(&binding.agent_did)?;
-    let self_config = serde_json::to_value(gents_tools::builtin::self_config::engineer_self_config())?;
+    let self_config =
+        serde_json::to_value(gents_tools::builtin::self_config::engineer_self_config())?;
     let held = write_fixture_tools(
         &user_access,
         &node_did,

@@ -15,12 +15,11 @@ use crate::triggers::callback::documents::{load_callback, load_invocation, Callb
 use gents_documents::apply_desired_state_plan;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_pack::plugin::store;
+use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 use gents_store::config_client::ConfigAccess;
 use gents_store::subscription_source::UpdateSubscriptionSource;
 use gents_toolcalls::plugin::executor::PluginExecutor;
-use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 
-const OWNER: &str = gents_store::test_support::PIN_FIXED_DID;
 const CALLBACK: &str = "saturation";
 const WAIT: Duration = Duration::from_secs(10);
 const SCENARIO_LIMIT: Duration = Duration::from_secs(20);
@@ -189,11 +188,11 @@ async fn create_inputs(access: &ConfigAccess, items: impl Iterator<Item = usize>
         .unwrap();
 }
 
-async fn snapshot(node: &Arc<defra_node::Node>, row: &Value) -> CallbackInvocationDoc {
+async fn snapshot(node: &Arc<defra_node::Node>, row: &Value, owner: &str) -> CallbackInvocationDoc {
     load_invocation(
         node,
         row["invocation_id"].as_str().unwrap(),
-        OWNER,
+        owner,
         &crate::triggers::callback::test_agent_did(),
     )
     .await
@@ -258,8 +257,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         &asking_plugin_wat("http_calls", "http_results", &canned, false),
         None,
     );
-    let _identity =
-        gents_store::test_support::pin_fixed_signing_identity(home.path());
+    let _identity = gents_store::test_support::pin_fixed_signing_identity(home.path());
     plugin.declaration.manifold = Some(json!({
         "fs": "None", "net": {"OutboundHttp": [format!("http://{address}")]},
         "env": "None", "crypto": false, "child_process": false
@@ -272,16 +270,10 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         store::grant_on_install(home.path(), &plugin.namespace, &plugin.declaration, true).unwrap();
     store::write_record(home.path(), &plugin).unwrap();
     let plugins = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
-    let node = Arc::new(
-        crate::triggers::callback::test_node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    crate::triggers::callback::seed_test_agent(&node, OWNER).await;
+    let db = crate::triggers::callback::test_node_builder("callback-saturation").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
+    crate::triggers::callback::seed_test_agent(&node, owner).await;
     ConfigAccess::local(node.clone())
         .add_collection(
             "type SaturationInput { item: Int correlation: String }
@@ -316,7 +308,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     ]
     .into_iter()
     .map(|(collection, mut value)| {
-        value["node_did"] = json!(OWNER);
+        value["node_did"] = json!(owner);
         DesiredStateApplyDocument {
             collection,
             add: value.clone(),
@@ -325,7 +317,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     })
     .collect();
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
-    let config_access = ConfigAccess::local_as(node.clone(), identity::Did::new(OWNER).unwrap());
+    let config_access = ConfigAccess::local_as(node.clone(), identity::Did::new(owner).unwrap());
     config_access
         .transact_write("test.callback_saturation_config", |txn| {
             let plan = &plan;
@@ -347,7 +339,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     let _cancel_guard = cancel.clone().drop_guard();
     let mut engine = tokio::spawn(crate::triggers::callback::run_callback_engine(
         node.clone(),
-        OWNER.into(),
+        owner.into(),
         None,
         plugins.clone(),
         crate::triggers::callback::test_snapshot(),
@@ -370,7 +362,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             assert_phase(row, running, claim.post.attempts);
         }
         assert!(result_rows(&access).await.is_empty());
-        let stale_running = snapshot(&node, &initial[0]).await;
+        let stale_running = snapshot(&node, &initial[0], owner).await;
 
         let mut updates = node.subscribe_updates();
         let claimed_head = arrival_head(&access).await;
@@ -388,7 +380,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             .find(|row| row["input"]["item"] == PLUGIN_CALLBACK_CONCURRENCY)
             .unwrap();
         assert_phase(pending, &claim.pre, claim.pre.attempts);
-        let stale_pending = snapshot(&node, pending).await;
+        let stale_pending = snapshot(&node, pending, owner).await;
         wait_for_arrival_checkpoint(&access, &mut updates, &claimed_head).await;
         assert_ne!(
             arrival_head(&access).await,
@@ -396,7 +388,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             "the unclaimed arrival stays beyond the checkpoint"
         );
         assert_eq!(
-            snapshot(&node, pending).await.lifecycle_state,
+            snapshot(&node, pending, owner).await.lifecycle_state,
             claim.pre.state
         );
         assert_eq!(hits.load(Ordering::SeqCst), PLUGIN_CALLBACK_CONCURRENCY);
@@ -464,7 +456,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         let sources = rows(&access, "{ SaturationInput { _docID } }", "SaturationInput").await;
         assert_eq!(sources.len(), completed.len());
 
-        let callback = load_callback(&node, CALLBACK, OWNER)
+        let callback = load_callback(&node, CALLBACK, owner)
             .await
             .unwrap()
             .unwrap();

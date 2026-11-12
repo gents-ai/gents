@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -10,18 +8,14 @@ use gents_store::identity::{KeyIdentity, NodeIdentity};
 #[tokio::test]
 async fn generated_captures_use_signed_storage_and_fresh_admission() {
     let temp = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(temp.path().join("capture.key"), None).unwrap();
     let user = KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "generated-captures-use-signed-storage-an",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
     let owner = gents_store::graphql::escape_graphql_string(identity.did());
     let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
     let agent_identity =

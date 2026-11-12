@@ -84,7 +84,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
         case.name
     );
 
-    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let doc_id = lifecycle.request().doc_id.clone();
     let node_did = lifecycle.request().node_did.clone();
     let requester_did = lifecycle.request().requester_did.clone();
@@ -398,9 +398,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-paired".to_string(),
-                vec![gents_inference::llm::message::ToolResultContent::text(
-                    "ok",
-                )],
+                vec![gents_inference::llm::message::ToolResultContent::text("ok")],
             )],
         },
     ];
@@ -552,9 +550,11 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
         }
     }
 
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
 
-    let poison = serde_json::Value::String(gents_store::test_support::CORRUPT_TOOL_ARGS_589.to_string());
+    let poison =
+        serde_json::Value::String(gents_store::test_support::CORRUPT_TOOL_ARGS_589.to_string());
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
@@ -631,7 +631,7 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         }
     }
 
-    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     let model = ScriptedModel::new_turns(vec![
         vec![
@@ -671,7 +671,11 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         collected.error
     );
 
-    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }").await;
+    let resp = agent_response(
+        &lifecycle.access().unwrap(),
+        "query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }",
+    )
+    .await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
     let rows = resp
         .data
@@ -826,8 +830,8 @@ fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usiz
 
 #[tokio::test]
 async fn generated_layer_cases_pin_the_assembled_request_order() {
-    use gents_lean_vocab::lean_prompt_assembly_layer_cases;
     use crate::turn::prompt::{LayeredPromptBuilder, PromptBuilder};
+    use gents_lean_vocab::lean_prompt_assembly_layer_cases;
 
     let cases = lean_prompt_assembly_layer_cases();
     assert!(
@@ -1112,7 +1116,8 @@ async fn drive_generated_turn_input(
     case: &gents_lean_vocab::LeanFoldTurnInputCase,
     first_turn_compaction: bool,
 ) {
-    let (node, hook, writer, mut lifecycle, docs) = owned_test_hook_with_folded_case(case).await;
+    let (db, hook, writer, mut lifecycle, docs) = owned_test_hook_with_folded_case(case).await;
+    let node = db.node.clone();
     let head = lifecycle.request().clone();
     assert_eq!(
         lifecycle
@@ -1137,7 +1142,9 @@ async fn drive_generated_turn_input(
         .folded
         .iter()
         .map(|folded| crate::runtime::agent::loop_stream::FoldedPrompt {
-            key: gents_session::request::lifecycle::queue::folded_input_key(&docs[&folded.request_id]),
+            key: gents_session::request::lifecycle::queue::folded_input_key(
+                &docs[&folded.request_id],
+            ),
             message: Message::user(folded.content.clone()),
         })
         .collect();
@@ -1266,7 +1273,7 @@ async fn drive_generated_turn_input(
             case.name
         );
         let (_, native) = gents_session::session::load_canonical_message(
-                    &lifecycle.access().unwrap(),
+            &lifecycle.access().unwrap(),
             header["_docID"].as_str().unwrap(),
             &head.node_did,
             head.requester_did.as_deref(),

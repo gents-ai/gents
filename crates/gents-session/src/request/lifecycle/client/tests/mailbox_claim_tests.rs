@@ -9,30 +9,23 @@ use gents_documents::mailbox_write_decl::{
 };
 use gents_loop::tool::{bind_request_tools, ToolDyn};
 use gents_protocol::row::AgentRequest;
-use gents_store::config_client::{GraphqlEndpoint, NodePermission};
+use gents_store::config_client::NodePermission;
 
 #[tokio::test]
 async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;
-    let runtime: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(
-        home.path().join("runtime.key"),
-        None,
-    )?);
+    let db = gents_inference::test_support::test_db(
+        "delegated-http-claim-routes-mailbox-to",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let runtime: Arc<dyn NodeIdentity> = Arc::new(
+        gents_store::test_support::held_runtime_identity(db.node_identity.did()),
+    );
     let owner = KeyIdentity::load_or_create(home.path().join("owner.key"), None)?;
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None)?;
     let outsider = KeyIdentity::load_or_create(home.path().join("other.key"), None)?;
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let address = listener.local_addr()?;
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .enable_signing()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener)?)
-            .build()
-            .await?,
-    );
-    gents_store::schema::ensure_runtime_schemas(&node).await?;
     let binding = gents_store::identity::provision_agent_identity(runtime.as_ref())?;
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
@@ -49,13 +42,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
                 .await?;
         }
     }
-    let endpoint = format!("http://{address}/api/v0/graphql");
-    let client = |key: &KeyIdentity| -> anyhow::Result<ConfigAccess> {
-        Ok(ConfigAccess::Graphql(
-            GraphqlEndpoint::as_principal(&endpoint, key.did())
-                .with_client_signing_capability(key.client_signing_capability()?)?,
-        ))
-    };
+    let client = |key: &KeyIdentity| -> anyhow::Result<ConfigAccess> { Ok(db.client_access(key)) };
     let owner_access = client(&owner)?;
     let user_access = client(&user)?;
     let outsider_access = client(&outsider)?;
@@ -152,10 +139,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         .iter()
         .find(|case| case.present && case.committed)
         .unwrap();
-    assert_eq!(
-        context.admitted_client.is_some(),
-        after.signer.is_some()
-    );
+    assert_eq!(context.admitted_client.is_some(), after.signer.is_some());
     assert_eq!(
         context.admitted_client.as_ref().unwrap().signer_did,
         user.did()
@@ -211,11 +195,9 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
             "{role}"
         );
     }
-    assert!(
-        crate::operations::mailbox::dismiss(&outsider_access, doc)
-            .await
-            .is_err()
-    );
+    assert!(crate::operations::mailbox::dismiss(&outsider_access, doc)
+        .await
+        .is_err());
     agent_access
         .delete_actor_relationship("MailboxItem", doc, "recipient", &user.did().parse()?)
         .await?;

@@ -207,13 +207,12 @@ async fn reused_scan_observes_payload_segments_replicated_after_their_close() {
     use gents_protocol::output::rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    let node = gents_store::test_support::node_builder()
-        .build()
-        .await
-        .unwrap();
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let db = gents_inference::test_support::test_db(
+        "reused-scan-payload-segments",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
     let request = "doc-scan-gap";
     let create_segment = |segment: gents_protocol::output::OutputSegment| {
         let node = &node;

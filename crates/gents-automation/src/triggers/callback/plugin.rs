@@ -463,7 +463,9 @@ mod tests {
         assert!(validate_handler("team/lint", &digest, Some("run_id"), &twice).is_err());
     }
 
-    async fn run_echo_binding(digest: &str) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+    async fn run_echo_binding(
+        digest: &str,
+    ) -> (gents_inference::test_support::TestDb, tempfile::TempDir) {
         run_binding(digest, None, false, "").await
     }
 
@@ -472,7 +474,7 @@ mod tests {
         allowed: Option<&std::path::Path>,
         bind: bool,
         job_path: &str,
-    ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+    ) -> (gents_inference::test_support::TestDb, tempfile::TempDir) {
         let binding = bind.then(|| gents_pack::pack::PluginDirBinding {
             input_field: "path".into(),
             original_field: Some("origin".into()),
@@ -499,7 +501,7 @@ mod tests {
         binding: Option<gents_pack::pack::PluginDirBinding>,
         allowed: Option<(&std::path::Path, gents_pack::pack::BindAccess)>,
         job_path: &str,
-    ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+    ) -> (gents_inference::test_support::TestDb, tempfile::TempDir) {
         if binding.is_some() {
             record.declaration.input_schema = serde_json::json!({
                 "type": "object",
@@ -517,15 +519,8 @@ mod tests {
         if let Some((allowed, access)) = allowed {
             gents_pack::plugin::allowed::add(home.path(), allowed, access).unwrap();
         }
-        let node = std::sync::Arc::new(
-            crate::triggers::callback::test_node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(node.as_ref())
-            .await
-            .unwrap();
+        let db = crate::triggers::callback::test_node_builder("callback-plugin").await;
+        let node = db.node.clone();
         node.add_collection(
             "type Job { job_run: String text: String path: String origin: String }
              type Echoed { job_run: String text: String path: String origin: String run_ref: String data_calls: Boolean }
@@ -535,7 +530,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let owner = gents_store::test_support::PIN_FIXED_DID;
+        let owner = db.node_identity.did();
         let agent = crate::triggers::callback::test_agent_did();
         crate::triggers::callback::seed_test_agent(&node, owner).await;
         crate::triggers::callback::seed_test_configuration(&node, owner, vec![
@@ -564,7 +559,7 @@ mod tests {
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
         engine.deliver_arrivals(Some("Job")).await;
-        (node, home)
+        (db, home)
     }
 
     async fn rows(
@@ -582,7 +577,8 @@ mod tests {
     #[tokio::test]
     async fn a_created_document_runs_the_plugin_and_its_output_starts_the_next_stage() {
         let (_, record) = gents_pack::plugin::test_fixtures::installed_echo();
-        let (node, _home) = run_echo_binding(&record.digest).await;
+        let (db, _home) = run_echo_binding(&record.digest).await;
+        let node = db.node.clone();
 
         let echoed = rows(&node, "{ Echoed { job_run text path run_ref } }", "Echoed").await;
         assert_eq!(
@@ -611,7 +607,8 @@ mod tests {
 
     #[tokio::test]
     async fn another_artifact_under_the_same_name_is_denied_and_writes_nothing() {
-        let (node, _home) = run_echo_binding(&format!("sha256:{}", "0".repeat(64))).await;
+        let (db, _home) = run_echo_binding(&format!("sha256:{}", "0".repeat(64))).await;
+        let node = db.node.clone();
         assert!(rows(&node, "{ Echoed { run_ref } }", "Echoed")
             .await
             .is_empty());
@@ -707,7 +704,7 @@ mod tests {
     async fn run_data_plugin(
         service: &str,
         canned: Value,
-    ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+    ) -> (gents_inference::test_support::TestDb, tempfile::TempDir) {
         let installed = data_plugin(service, &canned);
         let digest = installed.1.digest.clone();
         run_plugin_binding(installed, &digest, None, None, "").await
@@ -715,7 +712,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_write_commits_atomically_with_its_callback_result() {
-        let (node, _home) = run_data_plugin(
+        let (db, _home) = run_data_plugin(
             "data_calls",
             echoed_with(
                 "offered",
@@ -723,6 +720,7 @@ mod tests {
             ),
         )
         .await;
+        let node = db.node.clone();
         assert_eq!(
             only_invocation(&node).await["lifecycle_state"],
             LIFECYCLE_SUCCEEDED
@@ -747,7 +745,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_job_only_stamp_refuses_and_commits_nothing() {
-        let (node, _home) = run_data_plugin(
+        let (db, _home) = run_data_plugin(
             "data_calls",
             echoed_with(
                 "offered",
@@ -755,6 +753,7 @@ mod tests {
             ),
         )
         .await;
+        let node = db.node.clone();
         let invocation = only_invocation(&node).await;
         assert_eq!(
             invocation["lifecycle_state"],
@@ -782,7 +781,8 @@ mod tests {
     #[tokio::test]
     async fn callback_is_offered_data_calls_but_never_job_calls() {
         let canned = echoed_with("offered", json!([]));
-        let (node, _home) = run_data_plugin("data_calls", canned.clone()).await;
+        let (db, _home) = run_data_plugin("data_calls", canned.clone()).await;
+        let node = db.node.clone();
         let echoed = rows(&node, "{ Echoed { text } }", "Echoed").await;
         assert_eq!(
             echoed,
@@ -790,7 +790,8 @@ mod tests {
             "data_calls offered"
         );
 
-        let (node, _home) = run_data_plugin("job_calls", canned).await;
+        let (db, _home) = run_data_plugin("job_calls", canned).await;
+        let node = db.node.clone();
         let echoed = rows(&node, "{ Echoed { text } }", "Echoed").await;
         assert_eq!(
             echoed,
@@ -805,11 +806,10 @@ mod tests {
         let docs = root.path().join("docs");
         std::fs::create_dir_all(&docs).unwrap();
         std::fs::write(docs.join("a.txt"), "hello").unwrap();
-        let digest = gents_pack::plugin::test_fixtures::installed_echo()
-            .1
-            .digest;
+        let digest = gents_pack::plugin::test_fixtures::installed_echo().1.digest;
         let file = docs.join("a.txt");
-        let (node, _home) = run_binding(&digest, Some(&docs), true, file.to_str().unwrap()).await;
+        let (db, _home) = run_binding(&digest, Some(&docs), true, file.to_str().unwrap()).await;
+        let node = db.node.clone();
         assert_eq!(
             only_invocation(&node).await["lifecycle_state"],
             LIFECYCLE_SUCCEEDED
@@ -836,11 +836,9 @@ mod tests {
         let outside = root.path().join("outside");
         std::fs::create_dir_all(&docs).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        let digest = gents_pack::plugin::test_fixtures::installed_echo()
-            .1
-            .digest;
-        let (node, _home) =
-            run_binding(&digest, Some(&docs), true, outside.to_str().unwrap()).await;
+        let digest = gents_pack::plugin::test_fixtures::installed_echo().1.digest;
+        let (db, _home) = run_binding(&digest, Some(&docs), true, outside.to_str().unwrap()).await;
+        let node = db.node.clone();
         let invocation = only_invocation(&node).await;
         assert_eq!(
             invocation["lifecycle_state"],
@@ -877,7 +875,7 @@ mod tests {
             let out = tempfile::tempdir().unwrap();
             let installed = writer();
             let digest = installed.1.digest.clone();
-            let (node, _home) = run_plugin_binding(
+            let (db, _home) = run_plugin_binding(
                 installed,
                 &digest,
                 Some(binding()),
@@ -885,6 +883,7 @@ mod tests {
                 out.path().to_str().unwrap(),
             )
             .await;
+            let node = db.node.clone();
             let invocation = only_invocation(&node).await;
             assert_eq!(out.path().join("out.json").exists(), writes, "{access:?}");
             if writes {

@@ -1280,6 +1280,7 @@ async fn an_agent_new_row_links_the_request_it_caused() {
         name: "timeline-caused-request".to_owned(),
         real_identity: true,
         await_mode: gents_protocol::tool_call::AwaitMode::Background,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await

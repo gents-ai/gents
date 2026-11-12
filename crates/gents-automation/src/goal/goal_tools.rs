@@ -4,7 +4,7 @@ use serde_json::json;
 use crate::goal::{
     create_goal_for_request_from_access, edit_active_goal_from_access, load_goal_tool_context,
     next_blocked_audit, refresh_goal_usage_from_access, update_goal_fields_if_status_from_access,
-    CreateGoalForSessionError, GoalAction, GoalEdit, RequestAssignmentObservation,
+    CreateGoalForSessionError, GoalAction, GoalEdit, GoalState, RequestAssignmentObservation,
     BLOCKED_AUDIT_THRESHOLD,
 };
 use gents_loop::tool_call_lifecycle::FailureClass;
@@ -270,39 +270,42 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
         );
         return Ok(GoalToolReply::Complete(result));
     };
-    let outcome = match parsed.status.as_deref().map(str::trim).unwrap_or("active") {
-        "active" => {
+    let route = update_route(
+        parsed.status.as_deref(),
+        parsed.objective.is_some() || parsed.token_budget.is_some(),
+        parsed.reason.as_deref(),
+        pre,
+    );
+    let outcome = match route {
+        UpdateRoute::ReasonOutsideCompletion => {
+            json!({"accepted": false, "error": "reason is only accepted with status complete or blocked"})
+        }
+        UpdateRoute::NotActiveResumable | UpdateRoute::NotActiveFinal => {
+            let hint = match (route, pre.status) {
+                (UpdateRoute::NotActiveResumable, _) => {
+                    "an operator resumes it with `gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)"
+                }
+                (_, GoalStatus::Complete) => "a complete goal is terminal and has no resume path",
+                (_, GoalStatus::BudgetLimited) => {
+                    "a budget_limited goal cannot be reactivated and has no resume path"
+                }
+                _ => "the goal was removed by its operator and cannot be resumed",
+            };
+            json!({
+                "accepted": false,
+                "error": format!(
+                    "update_goal edits require an active goal; the current goal status is {} and {}",
+                    pre.status.as_str(),
+                    hint
+                ),
+            })
+        }
+        UpdateRoute::Edit => {
             let fields = GoalEdit {
                 objective: parsed.objective,
                 budget: parsed.token_budget,
             };
-            if parsed.reason.is_some() {
-                json!({"accepted": false, "error": "reason is only accepted with status complete or blocked"})
-            } else if pre.status != GoalStatus::Active {
-                let hint = match pre.status {
-                        GoalStatus::Active => unreachable!("active goals use the edit path"),
-                        GoalStatus::Blocked | GoalStatus::Paused | GoalStatus::UsageLimited => {
-                            "an operator resumes it with `gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)"
-                        }
-                        GoalStatus::Complete => {
-                            "a complete goal is terminal and has no resume path"
-                        }
-                        GoalStatus::Stopped => {
-                            "the goal was removed by its operator and cannot be resumed"
-                        }
-                        GoalStatus::BudgetLimited => {
-                            "a budget_limited goal cannot be reactivated and has no resume path"
-                        }
-                    };
-                json!({
-                    "accepted": false,
-                    "error": format!(
-                        "update_goal edits require an active goal; the current goal status is {} and {}",
-                        pre.status.as_str(),
-                        hint
-                    ),
-                })
-            } else if let Err(error) = fields.validate() {
+            if let Err(error) = fields.validate() {
                 json!({"accepted": false, "error": error.to_string()})
             } else if let Some(updated) =
                 edit_active_goal_from_access(&call.access()?, &goal, &fields).await?
@@ -312,10 +315,10 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
                 json!({"accepted": false, "error": "goal is no longer active or its continuation changed; reload with get_goal"})
             }
         }
-        "complete" | "blocked" if parsed.objective.is_some() || parsed.token_budget.is_some() => {
+        UpdateRoute::FieldsOutsideActive => {
             json!({"accepted": false, "error": "objective and token_budget can only be edited while status is active"})
         }
-        "complete" => {
+        UpdateRoute::Complete | UpdateRoute::CompleteIllegal => {
             let Some(post) = pre.step(GoalAction::Complete) else {
                 let result = json_string(
                     json!({"error": "complete is not legal from the goal's current status"}),
@@ -359,27 +362,23 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
                 json!({"accepted": false, "error": "goal changed while applying completion; reload its durable state"})
             }
         }
-        "blocked" => {
-            if pre.status != GoalStatus::Active {
-                let result = json_string(json!({
-                    "error": format!(
-                        "blocked audit is legal only from active; current status is {}",
-                        pre.status.as_str()
-                    )
-                }));
-                return Ok(GoalToolReply::Complete(result));
-            }
-            let Some(reason) = parsed
-                .reason
-                .as_deref()
-                .map(str::trim)
-                .filter(|reason| !reason.is_empty())
-            else {
-                let result = json_string(
-                    json!({"error": "blocked requires a non-empty reason identifying the repeated condition"}),
-                );
-                return Ok(GoalToolReply::Complete(result));
-            };
+        UpdateRoute::BlockedNotActive => {
+            let result = json_string(json!({
+                "error": format!(
+                    "blocked audit is legal only from active; current status is {}",
+                    pre.status.as_str()
+                )
+            }));
+            return Ok(GoalToolReply::Complete(result));
+        }
+        UpdateRoute::BlockedNeedsReason => {
+            let result = json_string(
+                json!({"error": "blocked requires a non-empty reason identifying the repeated condition"}),
+            );
+            return Ok(GoalToolReply::Complete(result));
+        }
+        UpdateRoute::BlockedAudit => {
+            let reason = parsed.reason.as_deref().map(str::trim).unwrap_or_default();
             let (audits, accepted) = next_blocked_audit(
                 goal.consecutive_blocked_audits.unwrap_or_default(),
                 goal.last_blocked_reason.as_deref(),
@@ -421,8 +420,11 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
                 json!({"accepted": false, "error": "goal changed while applying blocked audit; reload its durable state"})
             }
         }
-        other => json!({
-            "error": format!("unsupported goal status {other:?}; expected active, complete or blocked")
+        UpdateRoute::Unsupported => json!({
+            "error": format!(
+                "unsupported goal status {:?}; expected active, complete or blocked",
+                parsed.status.as_deref().map(str::trim).unwrap_or_default()
+            )
         }),
     };
     let result = gents_session::session::output_render::render(
@@ -430,6 +432,75 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
         &["goal", "error", "accepted", "disposition"],
     )?;
     Ok(GoalToolReply::Complete(result))
+}
+
+/// What `update_goal` does with a call from the Goal's current assigned
+/// caller (Lean `GoalAutomation.UpdateGoal.route`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum UpdateRoute {
+    Edit,
+    ReasonOutsideCompletion,
+    NotActiveResumable,
+    NotActiveFinal,
+    FieldsOutsideActive,
+    Complete,
+    CompleteIllegal,
+    BlockedAudit,
+    BlockedNotActive,
+    BlockedNeedsReason,
+    Unsupported,
+}
+
+fn update_route(
+    requested: Option<&str>,
+    fields: bool,
+    reason: Option<&str>,
+    pre: GoalState,
+) -> UpdateRoute {
+    let reason_given = reason.map(str::trim).is_some_and(|reason| !reason.is_empty());
+    match requested.map(str::trim).unwrap_or("active") {
+        "active" if reason.is_some() => UpdateRoute::ReasonOutsideCompletion,
+        "active" if pre.status == GoalStatus::Active => UpdateRoute::Edit,
+        "active" if pre.step(GoalAction::Resume).is_some() => UpdateRoute::NotActiveResumable,
+        "active" => UpdateRoute::NotActiveFinal,
+        "complete" | "blocked" if fields => UpdateRoute::FieldsOutsideActive,
+        "complete" if pre.step(GoalAction::Complete).is_some() => UpdateRoute::Complete,
+        "complete" => UpdateRoute::CompleteIllegal,
+        "blocked" if pre.status != GoalStatus::Active => UpdateRoute::BlockedNotActive,
+        "blocked" if !reason_given => UpdateRoute::BlockedNeedsReason,
+        "blocked" => UpdateRoute::BlockedAudit,
+        _ => UpdateRoute::Unsupported,
+    }
+}
+
+#[cfg(test)]
+mod update_route_conformance {
+    use super::{update_route, GoalState, GoalStatus};
+    use gents_lean_vocab::families::goal_automation_update_goal_route as family;
+
+    #[test]
+    fn update_route_matches_lean() {
+        family::replay(|case: &family::Input<String, String, GoalStatus>| {
+            let requested = match case.requested.as_str() {
+                "omitted" => None,
+                "unsupported" => Some("paused"),
+                status => Some(status),
+            };
+            let reason = match case.reason.as_str() {
+                "absent" => None,
+                "blank" => Some("  "),
+                _ => Some("needs approval"),
+            };
+            let pre = GoalState {
+                status: case.status,
+                blocked_audits: 0,
+                wrapup_requested: false,
+                wrapup_completed: false,
+            };
+            update_route(requested, case.fields, reason, pre)
+        });
+    }
 }
 
 #[cfg(test)]

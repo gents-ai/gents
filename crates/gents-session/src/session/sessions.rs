@@ -1146,14 +1146,17 @@ mod relationship_publication_tests {
     use super::*;
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn authorized_noncreator_can_use_completed_but_cannot_publish_pending_session() {
-        let directory = tempfile::tempdir().unwrap();
+        let db = gents_inference::test_support::test_db(
+            "authorized-noncreator-session",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
         let node_identity =
-            gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)
-                .unwrap();
+            gents_store::test_support::held_runtime_identity(db.node_identity.did());
         // Sessions are published by Agents, so the creator and collaborator are
         // Agent identities with managed signers derived from the runtime root.
         let creator_binding =
@@ -1166,17 +1169,6 @@ mod relationship_publication_tests {
         let collaborator =
             gents_store::identity::resolve_agent_identity(&node_identity, &collaborator_binding)
                 .unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(node_identity.did())
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
         let admin = ConfigAccess::local_as(
             node.clone(),
             identity::Did::new(node_identity.did()).unwrap(),

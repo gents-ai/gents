@@ -29,12 +29,12 @@ impl NodeReadinessWriter for FailDemotionWriter {
 
 #[tokio::test]
 async fn aborted_staged_generation_does_not_release_active_startup_obligation() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "aborted-staged-generation-does-not-relea",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();
@@ -82,12 +82,12 @@ async fn aborted_staged_generation_does_not_release_active_startup_obligation() 
 
 #[tokio::test]
 async fn demotion_persistence_failure_closes_admission_and_cancels_runtime() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "demotion-persistence-failure-closes-admi",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();

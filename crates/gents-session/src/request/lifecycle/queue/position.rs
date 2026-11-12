@@ -134,17 +134,12 @@ mod tests {
         use defra_node::Node as EmbeddedNode;
         use gents_store::config_client::ConfigAccess;
 
-        let dir = tempfile::tempdir().unwrap();
-        let node = std::sync::Arc::new(
-            gents_store::test_support::node_builder()
-                .data_path(dir.path().join("node"))
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "effective-slot-batch-uses-only-found-phy",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
 
         async fn create_request(
             node: &std::sync::Arc<EmbeddedNode>,

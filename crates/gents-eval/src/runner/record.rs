@@ -104,47 +104,20 @@ mod tests {
     use futures::{stream, StreamExt, TryStreamExt};
     use gents_documents::EvalTier;
     use serde_json::json;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn thirty_two_trials_record_over_http_without_losing_completions_or_verdicts() {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = probe.local_addr().unwrap();
-        drop(probe);
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .with_http(gents::defra_node::HttpConfig::with_addr(address))
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                if tokio::net::TcpStream::connect(address).await.is_ok() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
-        use gents_store::identity::NodeIdentity;
+        let db = gents_inference::test_support::test_db(
+            "thirty-two-trials-record-over-http",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = db.node.clone();
         let keys = tempfile::tempdir().unwrap();
         let user =
             gents_store::identity::KeyIdentity::load_or_create(keys.path().join("user.key"), None)
                 .unwrap();
-        let access = ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(
-                format!("http://{address}/api/v0/graphql"),
-                user.did(),
-            )
-            .with_client_signing_capability(user.client_signing_capability().unwrap())
-            .unwrap()
-            .with_client_signed_agent_creates(),
-        );
+        let access = db.client_access(&user);
         let owner = node.node_identity_did().unwrap();
         let node_input = json!({"input": {"node_did": owner}});
         access.transact_write("test.recorder.node", |txn| {

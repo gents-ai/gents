@@ -21,11 +21,9 @@ pub fn bundled() -> Arc<Registry> {
     }))
 }
 
-/// Attaches the bundled plugins to `node`. The composition root calls this
-/// for every node it starts; a test calls it for a node it built directly
-/// when it asserts behaviour the plugins own.
-pub fn attach(
-    node: &Arc<defra_node::Node>,
-) -> Result<(), gents_store::node_extension::ExtensionError> {
-    Registry::attach(node, bundled())
+/// What the composition root attaches to every node it starts and every
+/// client endpoint it builds; tests at this layer and above start their nodes
+/// with it.
+pub fn composition() -> gents_store::node_extension::Extensions {
+    gents_store::node_extension::Extensions::of(bundled())
 }

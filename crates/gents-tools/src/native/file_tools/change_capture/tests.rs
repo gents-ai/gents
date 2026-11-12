@@ -9,8 +9,6 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
-
-
 fn decoded_image(value: &Value) -> Vec<u8> {
     assert_eq!(value["kind"], "file");
     let bytes = base64::engine::general_purpose::STANDARD

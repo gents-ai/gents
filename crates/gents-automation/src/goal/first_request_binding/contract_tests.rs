@@ -4,7 +4,6 @@ use gents_protocol::request_admission::{
 };
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use std::sync::Arc;
 
 async fn fixture_session(
     access: &ConfigAccess,
@@ -95,30 +94,18 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().goal_first_request_binding_cases;
     assert_eq!(cases.len(), 14);
     for case in cases {
+        let db = gents_inference::test_support::test_db(
+            "first-request-binding",
+            crate::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = db.node.clone();
+        let signer = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let temp = tempfile::tempdir().unwrap();
-        let signer = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
         let binding = gents_store::identity::provision_agent_identity(&signer).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&signer, &binding).unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(signer.did())
-                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        let access = ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
-                .with_client_signing_capability(user.client_signing_capability().unwrap())
-                .unwrap()
-                .with_client_signed_agent_creates(),
-        );
+        let access = db.client_access(&user);
         let agent_doc = access.transact_write("test.first_binding.agent", |txn| {
             Box::pin(async {
                 let created = txn.execute_client_signed_create(

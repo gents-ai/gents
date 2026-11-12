@@ -1,7 +1,10 @@
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::Duration;
 use defra_node::Node as EmbeddedNode;
+use gents_lean_vocab::{
+    lean_auxiliary_output_cases, LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure,
+    LeanCanonicalSource, LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication,
+    LeanMessageRole, LeanOutcome, LeanPayloadKind, LeanPresentation, LeanReasoningAuditResult,
+    LeanReasoningPart,
+};
 use gents_loop::provider_audit::{AuxiliaryOutputEvent, AuxiliaryOutputObservation};
 use gents_loop::provider_input::ProviderInputProfile;
 use gents_protocol::message::{AssistantContent, Message, Reasoning, ReasoningContent};
@@ -9,20 +12,17 @@ use gents_protocol::output::live::{
     project_live, reconstruct_dense_prefix, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
 };
 use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose, StreamPayload,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
-use gents_session::request::streaming::{auxiliary, canonical, native_encoding, DefraStreamWriter};
 use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use gents_lean_vocab::{
-    lean_auxiliary_output_cases, LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure,
-    LeanCanonicalSource, LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication,
-    LeanMessageRole, LeanOutcome, LeanPayloadKind, LeanPresentation, LeanReasoningAuditResult,
-    LeanReasoningPart,
-};
-use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+use gents_session::request::streaming::{auxiliary, canonical, native_encoding, DefraStreamWriter};
 use gents_store::config_client::ConfigAccess;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
     let LeanCanonicalSource::Auxiliary {
@@ -278,21 +278,11 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
     let cases = lean_auxiliary_output_cases();
     assert!(!cases.is_empty(), "generated auxiliary cases are empty");
     for case in cases {
-        let path = std::env::temp_dir().join(format!(
-            "auxiliary-owner-{}-{}",
-            case.name,
-            uuid::Uuid::new_v4()
-        ));
-        let node = Arc::new(
-            gents_automation::triggers::callback::test_node_builder()
-                .data_path(&path)
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let db = gents_automation::triggers::callback::test_node_builder(
+            "generated-auxiliary-cases-drive-owned-be",
+        )
+        .await;
+        let node = db.node.clone();
         gents_automation::triggers::callback::seed_test_agent(
             &node,
             gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
@@ -655,7 +645,6 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             case.name
         );
         node.shutdown().await.expect("shut down test node");
-        std::fs::remove_dir_all(path).unwrap();
     }
 }
 
@@ -679,21 +668,11 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             "{}",
             case.name
         );
-        let path = std::env::temp_dir().join(format!(
-            "auxiliary-sink-{}-{}",
-            case.name,
-            uuid::Uuid::new_v4()
-        ));
-        let node = Arc::new(
-            gents_automation::triggers::callback::test_node_builder()
-                .data_path(&path)
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let db = gents_automation::triggers::callback::test_node_builder(
+            "generated-auxiliary-cases-drive-non-clau",
+        )
+        .await;
+        let node = db.node.clone();
         gents_automation::triggers::callback::seed_test_agent(
             &node,
             gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
@@ -892,6 +871,5 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         });
         assert_eq!(view, LiveView::Absent, "{}", case.name);
         node.shutdown().await.expect("shut down test node");
-        std::fs::remove_dir_all(path).unwrap();
     }
 }

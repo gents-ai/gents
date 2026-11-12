@@ -93,6 +93,7 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
         let (fixture, _) = published_admission_with_owner(PublishedAdmissionOptions {
             name: format!("inventory-direct-{name}"),
             real_identity: true,
+            composition: gents_automation::lifecycle_hooks::composition(),
             ..Default::default()
         })
         .await

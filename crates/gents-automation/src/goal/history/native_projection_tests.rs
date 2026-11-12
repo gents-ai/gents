@@ -8,7 +8,7 @@ fn model(facts: &[ReuseFacts]) -> Vec<bool> {
     let input = serde_json::to_string(&serde_json::to_string(facts).unwrap()).unwrap();
     write!(source, "import Proofs.Automation.GoalAutomation.HistoryProjection\ndef main : IO Unit := do\n  let input ← IO.ofExcept (Lean.Json.parse {input})\n  let result ← IO.ofExcept (GoalAutomation.HistoryProjection.evaluate input)\n  IO.println result.compress\n").unwrap();
     let output = gents_lean_contract::run_prepared_generator(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs"),
+        &gents_lean_contract::proofs_dir().unwrap(),
         "Proofs.Automation.GoalAutomation.HistoryProjection:olean",
         source.path().to_str().unwrap(),
     )
@@ -88,7 +88,7 @@ impl ConfigRead for NativeReader<'_, '_> {
 #[tokio::test]
 async fn native_goal_projection_matches_full_history_with_fewer_reconstructions() {
     let (db, _user, _client, binding) =
-        gents_inference::test_support::signed_test_node("goal-history-projection").await;
+        crate::test_support::signed_test_node("goal-history-projection").await;
     let node = db.node.clone();
     let owner = db.node_identity.did();
     let agent =

@@ -11,10 +11,7 @@ use gents_protocol::enrollment::{
     EnrollmentDecisionRecord, EnrollmentRequestRecord, ENROLLMENT_PROTOCOL_VERSION,
 };
 
-use super::{
-    handle_authority_command, EnrollmentAuthorityOwner,
-    EnrollmentProjectionReader,
-};
+use super::{handle_authority_command, EnrollmentAuthorityOwner, EnrollmentProjectionReader};
 use crate::p2p_reconcile::enrollment_store::{
     ActiveEnrollment, EnrollmentProjection, RevokedEnrollment,
 };

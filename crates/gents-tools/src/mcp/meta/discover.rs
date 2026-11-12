@@ -162,7 +162,8 @@ mod tests {
 
     #[tokio::test]
     async fn discover_filters_out_disallowed_registry_services() {
-        let (node, _runtime) = super::super::tests::test_node().await;
+        let (db, _runtime) = super::super::tests::test_node().await;
+        let node = db.node.clone();
         super::super::tests::seed_registry_service(&node, "observability-mcp", "localhost", 1)
             .await;
         let mut context = test_context(node, McpPool::new(), ServiceHealthMap::new());
@@ -231,7 +232,8 @@ mod tests {
 
     #[tokio::test]
     async fn discover_stays_bounded_when_a_service_endpoint_blackholes() {
-        let (node, _runtime) = super::super::tests::test_node().await;
+        let (db, _runtime) = super::super::tests::test_node().await;
+        let node = db.node.clone();
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
         seed_registry_service(&node, "hf-data", "strangenas", 9200).await;
 
@@ -284,7 +286,8 @@ mod tests {
 
     #[tokio::test]
     async fn discover_contact_decisions_match_lean_preflight_health_gate() {
-        let (node, _runtime) = super::super::tests::test_node().await;
+        let (db, _runtime) = super::super::tests::test_node().await;
+        let node = db.node.clone();
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
 
         for case in lean_tool_preflight_cases()
@@ -347,7 +350,8 @@ mod tests {
     /// storage through DefraDB workers, so this runs on the real clock.
     #[tokio::test]
     async fn discover_fans_out_to_services_concurrently() {
-        let (node, _runtime) = super::super::tests::test_node().await;
+        let (db, _runtime) = super::super::tests::test_node().await;
+        let node = db.node.clone();
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
         seed_registry_service(&node, "web-research-mcp", "studio-2", 9213).await;
 

@@ -3,17 +3,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use gents_inference::llm::message::{
-    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResultContent,
-    UserContent,
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResultContent, UserContent,
 };
 use gents_inference::llm::{HookAction, ToolCallHookAction};
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
-use gents_store::schema::ensure_runtime_schemas;
+use defra_node::Node as EmbeddedNode;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
-use defra_node::Node as EmbeddedNode;
 
 mod background_admission;
 mod background_budget;
@@ -28,17 +26,12 @@ mod wait_settlement;
 
 #[tokio::test]
 async fn list_processes_skip_publishes_canonical_tool_result() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "list-processes-skip-publishes-canonical-",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("list processes"), &[])
         .await;
@@ -82,17 +75,12 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
 
 #[tokio::test]
 async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "wait-and-cancel-process-skip-publish-can",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("control processes"), &[])
         .await;
@@ -204,28 +192,25 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
 
 #[tokio::test]
 async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
-    let identity_dir = tempfile::tempdir().unwrap();
-    let identity =
-        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
-    use gents_automation::goal::load_canonical_goal;
     use crate::runtime::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
+    use gents_automation::goal::load_canonical_goal;
     use gents_documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
     use gents_protocol::goal_status::GoalStatus;
 
     // The hook's session is signed by the runtime it runs as.
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    gents_automation::lifecycle_hooks::attach(&node).unwrap();
+    let db = gents_inference::test_support::test_db(
+        "goal-output-gate",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false)
-            .with_goal_tools(Arc::new(gents_automation::goal::goal_tools::GoalToolAnswers));
+            .with_goal_tools(Arc::new(
+                gents_automation::goal::goal_tools::GoalToolAnswers,
+            ));
     // The hook acts as the runtime that signs its session and requests.
     hook.actor = Some(identity::Did::new(identity.did()).unwrap());
     assert!(matches!(
@@ -418,16 +403,14 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
         .filter(|case| case.inputs.iter().all(|input| input.policy_allows))
     {
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
-            let home = tempfile::tempdir().unwrap();
-            let root = KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
-            let node = Arc::new(
-                EmbeddedNode::builder()
-                    .with_node_identity_did(root.did())
-                    .build()
-                    .await
-                    .unwrap(),
-            );
-            ensure_runtime_schemas(&node).await.unwrap();
+            let node_db = gents_inference::test_support::test_db(
+                "dispatch-receipt-scripts-bind-call-hook-",
+                gents_automation::lifecycle_hooks::composition(),
+            )
+            .await;
+            let node = node_db.node.clone();
+            let root =
+                gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
             let mut hook = DefraSessionHook::with_identity(node.clone(), root.did(), policy);
             assert!(matches!(
                 hook.on_completion_call(&user_text_message("Run a tool"), &[])

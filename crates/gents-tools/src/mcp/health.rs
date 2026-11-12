@@ -1554,7 +1554,8 @@ mod tests {
             counts
         }
 
-        let (node, runtime) = crate::mcp::meta::tests::test_node().await;
+        let (db, runtime) = crate::mcp::meta::tests::test_node().await;
+        let node = db.node.clone();
         let map = ServiceHealthMap::new();
         let context = HealthPersistenceContext {
             node: &node,
@@ -1912,8 +1913,10 @@ mod tests {
 
     #[tokio::test]
     async fn persisted_health_rows_are_node_scoped_and_stale_rows_sweep_within_the_agent() {
-        let (node_a, _root_a) = crate::mcp::meta::tests::test_node().await;
-        let (node_b, _root_b) = crate::mcp::meta::tests::test_node().await;
+        let (db_a, _root_a) = crate::mcp::meta::tests::test_node().await;
+        let (db_b, _root_b) = crate::mcp::meta::tests::test_node().await;
+        let node_a = db_a.node.clone();
+        let node_b = db_b.node.clone();
         for node in [&node_a, &node_b] {
             crate::mcp::meta::tests::seed_registry_service(
                 node,
@@ -1998,7 +2001,8 @@ mod tests {
     #[tokio::test]
     async fn queued_health_probe_rechecks_service_visibility_and_route() {
         for revoke in [false, true] {
-            let (node, _runtime) = crate::mcp::meta::tests::test_node().await;
+            let (db, _runtime) = crate::mcp::meta::tests::test_node().await;
+            let node = db.node.clone();
             crate::mcp::meta::tests::seed_registry_service(&node, "a", "first", 9001).await;
             crate::mcp::meta::tests::seed_registry_service(&node, "b", "old", 9002).await;
             let did = node.node_identity_did().unwrap();
@@ -2144,7 +2148,8 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_collapses_twins_to_the_row_readers_select() {
-        let (node, runtime) = crate::mcp::meta::tests::test_node().await;
+        let (db, runtime) = crate::mcp::meta::tests::test_node().await;
+        let node = db.node.clone();
         let node_did = runtime.did();
         let mut created = std::collections::BTreeMap::<&str, Vec<String>>::new();
         for (service, updated_at, endpoint) in [

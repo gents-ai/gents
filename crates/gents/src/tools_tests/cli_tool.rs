@@ -1,9 +1,7 @@
-
 use gents_loop::tool::ToolDyn;
 use gents_tools::native::cli_tool::*;
 use gents_tools::native::CliToolConfig;
 use rapidhash::RapidHashMap;
-
 
 fn config(timeout_secs: u64) -> CliToolConfig {
     CliToolConfig {

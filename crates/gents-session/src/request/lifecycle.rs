@@ -947,26 +947,13 @@ mod tests {
 
     #[tokio::test]
     async fn error_response_terminalizes_an_existing_streaming_response() {
-        use gents_store::identity::NodeIdentity as _;
-        let tempdir = tempfile::tempdir().unwrap();
-        let root = Arc::new(
-            gents_store::identity::KeyIdentity::load_or_create(
-                tempdir.path().join("node.key"),
-                None,
-            )
-            .unwrap(),
-        );
-        let node = Arc::new(
-            gents_store::test_support::node_builder()
-                .data_path(tempdir.path())
-                .with_node_identity_did(root.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(node.as_ref())
-            .await
-            .unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "error-response-terminalizes-an-existing-",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let root = node_db.node_identity.clone();
         let root_did = escape_graphql_string(root.did());
         gents_store::config_client::ConfigAccess::local(node.clone()).write("test.lifecycle.node", &format!(r#"mutation {{ create_Node(input: {{node_did: "{root_did}", display_name: "fixture", enabled: true}}) {{ _docID }} }}"#)).await.unwrap();
         let binding = gents_store::identity::provision_agent_identity(root.as_ref()).unwrap();

@@ -1,5 +1,14 @@
 pub mod lineage_fixtures;
 
+/// An explicitly empty set of lifecycle plugins, for a test below the bundled
+/// plugins whose code reaches no lifecycle point. A test that reaches one
+/// runs core alone, which no production node does.
+pub fn no_lifecycle_plugins() -> gents_store::node_extension::Extensions {
+    gents_store::node_extension::Extensions::of(std::sync::Arc::new(
+        crate::request::hooks::registry::Registry::default(),
+    ))
+}
+
 use crate::request::watcher::DefraWatcher;
 
 pub struct ScopedWatcherFixture {
@@ -16,7 +25,11 @@ impl ScopedWatcherFixture {
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents_store::identity::NodeIdentity;
 
-        let db = gents_inference::test_support::test_db("scoped-watcher").await;
+        let db = gents_inference::test_support::test_db(
+            "scoped-watcher",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
         let (home, user, client_access) =
             gents_inference::test_support::signed_test_node_without_agent_from_db(
                 db,
@@ -228,10 +241,10 @@ impl ScopedWatcherFixture {
 use crate::session::{output, SequencedMessage};
 use gents_inference::llm::message::Message;
 
-use defra_node::Node as EmbeddedNode;
-use std::{sync::Arc, time::Duration};
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::request::streaming::DefraStreamWriter;
+use defra_node::Node as EmbeddedNode;
+use std::{sync::Arc, time::Duration};
 
 pub struct FixtureGuard {
     pub _db: gents_inference::test_support::TestDb,
@@ -261,7 +274,11 @@ pub async fn fixture_with_ids(
     DefraStreamWriter,
 ) {
     use gents_store::identity::NodeIdentity;
-    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(name).await;
+    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
+        name,
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node = db.node.clone();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
@@ -528,26 +545,15 @@ pub async fn seed_owned_agent(
         .unwrap();
 }
 
-/// Serves a fixture node over loopback HTTP. A user's configuration is
-/// published only through its client-signed endpoint; embedded access
-/// refuses non-runtime writes by design.
-pub async fn serve_client_node(runtime: &dyn NodeIdentity) -> (Arc<defra_node::Node>, String) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .enable_signing()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    (node, format!("http://{address}/api/v0/graphql"))
+/// A node served over HTTP through the protected start, with the runtime
+/// identity it runs as.
+pub async fn serve_client_node(
+    name: &str,
+    composition: gents_store::node_extension::Extensions,
+) -> (gents_inference::test_support::TestDb, KeyIdentity) {
+    let db = gents_inference::test_support::test_db(name, composition).await;
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+    (db, runtime)
 }
 
 /// Grants the user the `OperatorUser` set as the runtime admin, as
@@ -558,20 +564,11 @@ pub async fn grant_operator_user(
     runtime: &dyn NodeIdentity,
     user: &KeyIdentity,
 ) {
-    let admin =
-        ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
     gents_store::identity::GrantSet::OperatorUser
         .grant(&admin, &identity::Did::new(user.did()).unwrap())
         .await
         .unwrap();
-}
-
-pub fn client_access(endpoint: &str, identity: &KeyIdentity) -> ConfigAccess {
-    ConfigAccess::Graphql(
-        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
-            .with_client_signing_capability(identity.client_signing_capability().unwrap())
-            .unwrap(),
-    )
 }
 
 pub async fn sequenced_history_on(
@@ -655,8 +652,11 @@ pub async fn fork_reader_node(
 ) {
     use gents_store::config_client::NodePermission;
     use gents_store::identity::NodeIdentity;
-    let (db, user, client) =
-        gents_inference::test_support::signed_test_node_without_agent(name).await;
+    let (db, user, client) = gents_inference::test_support::signed_test_node_without_agent(
+        name,
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let runtime = db.node_identity.as_ref();
     let admin = gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),

@@ -79,28 +79,30 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::BackendNotConfigured,
                 "fixture",
             ).with_watcher_identity(f.agent.clone());
-            let snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-                generation: 1,
-                node: None,
-                local_did: f.identity.did().into(),
-                default_agent_did: f.agent.did().into(),
-                agents: Default::default(),
-                tool_surfaces: Default::default(),
-                tool_configs: Default::default(),
-                backend_admission_configs: Default::default(),
-                unavailable_agents: rapidhash::RapidHashMap::from_iter([(
-                    f.agent.did().to_owned(),
-                    unavailable,
-                )]),
-                active_schedules: Default::default(),
-                unavailable_schedules: Default::default(),
-                active_event_triggers: Default::default(),
-                unavailable_event_triggers: Default::default(),
-                active_tasks: Default::default(),
-                dispatchers: Default::default(),
-                agent_executor_capacities: Default::default(),
-                agent_executor_queue_capacities: Default::default(),
-            });
+            let snapshot = Arc::new(
+                gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+                    generation: 1,
+                    node: None,
+                    local_did: f.identity.did().into(),
+                    default_agent_did: f.agent.did().into(),
+                    agents: Default::default(),
+                    tool_surfaces: Default::default(),
+                    tool_configs: Default::default(),
+                    backend_admission_configs: Default::default(),
+                    unavailable_agents: rapidhash::RapidHashMap::from_iter([(
+                        f.agent.did().to_owned(),
+                        unavailable,
+                    )]),
+                    active_schedules: Default::default(),
+                    unavailable_schedules: Default::default(),
+                    active_event_triggers: Default::default(),
+                    unavailable_event_triggers: Default::default(),
+                    active_tasks: Default::default(),
+                    dispatchers: Default::default(),
+                    agent_executor_capacities: Default::default(),
+                    agent_executor_queue_capacities: Default::default(),
+                },
+            );
             let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot);
             let run =
                 crate::runtime::agent::session_commands::run_session_command_reconciler_observing(
@@ -209,4 +211,3 @@ async fn generated_goal_rescans_recover_lost_notifications() {
         }
     }
 }
-

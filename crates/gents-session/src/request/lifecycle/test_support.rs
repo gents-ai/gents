@@ -1,9 +1,9 @@
 use crate::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
-use std::{sync::Arc, time::Duration};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use std::{sync::Arc, time::Duration};
 
 pub use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
@@ -263,8 +263,11 @@ impl TestDb {
 }
 
 pub async fn test_db(name: &str) -> TestDb {
-    let (db, user, user_access, binding) =
-        gents_inference::test_support::signed_test_node(name).await;
+    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node(
+        name,
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let agent_identity = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding)
@@ -293,7 +296,11 @@ pub async fn test_node() -> (
     Arc<dyn gents_store::identity::NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let db = gents_inference::test_support::test_db("execution-lease-fixture").await;
+    let db = gents_inference::test_support::test_db(
+        "execution-lease-fixture",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let (db, _user, _access, agent) =
         gents_inference::test_support::signed_test_node_from_db(db, "execution-lease-owner").await;
     let node = db.node.clone();

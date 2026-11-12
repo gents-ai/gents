@@ -318,7 +318,11 @@ async fn usage_client(
     crate::usage_observation::UsageAccount,
     ProviderHttpClient,
 ) {
-    let db = crate::test_support::test_db("provider-http-usage").await;
+    let db = crate::test_support::test_db(
+        "provider-http-usage",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let account = usage_account(db.node_identity.did(), backend_id);
     let reporter = crate::usage_observation::UsageReporter::new(
         cache.clone(),

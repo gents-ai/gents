@@ -75,6 +75,7 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
             None,
             std::sync::Arc::new(crate::surface::ToolCeiling::meta_only()),
             Vec::new(),
+            &gents_session::test_support::no_lifecycle_plugins(),
         )
         .await?;
     gents_store::schema::ensure_runtime_schemas(&node).await?;
@@ -154,6 +155,7 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
                     None,
                     std::sync::Arc::new(crate::surface::ToolCeiling::meta_only()),
                     Vec::new(),
+                    &gents_session::test_support::no_lifecycle_plugins(),
                 )
                 .await
         }

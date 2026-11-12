@@ -2,7 +2,6 @@ use super::command::{agents::agent_params, contracts::help_patch_contracts};
 use super::*;
 use gents_protocol::tool_names::{CONFIG_TOOL_NAME, SELF_CONFIG_TOOL_NAMES};
 
-
 #[test]
 fn every_tool_name_is_reserved_builtin() {
     for name in SELF_CONFIG_TOOL_NAMES {

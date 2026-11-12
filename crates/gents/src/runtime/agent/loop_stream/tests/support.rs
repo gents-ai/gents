@@ -1,4 +1,5 @@
 use super::*;
+use gents_inference::test_support::TestDb;
 use tokio::sync::Notify;
 
 #[derive(Default)]
@@ -616,7 +617,7 @@ where
 }
 
 pub(super) async fn owned_test_hook() -> (
-    Arc<defra_node::Node>,
+    TestDb,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
@@ -627,32 +628,32 @@ pub(super) async fn owned_test_hook() -> (
 pub(super) async fn owned_test_hook_with_policy(
     policy: FailurePolicy,
 ) -> (
-    Arc<defra_node::Node>,
+    TestDb,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
 ) {
-    let (node, hook, writer, lifecycle, _) =
-        owned_test_hook_with_identity_policy(None, policy, None, RequestSignature::Valid).await;
-    (node, hook, writer, lifecycle)
+    let (db, hook, writer, lifecycle, _) =
+        owned_test_hook_with_identity_policy(false, policy, None, RequestSignature::Valid).await;
+    (db, hook, writer, lifecycle)
 }
 
 /// Claims a request whose stored content no longer matches its signature, so
 /// the claimed caller's attribution cannot be verified.
 pub(super) async fn owned_test_hook_with_unattributable_request() -> (
-    Arc<defra_node::Node>,
+    TestDb,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
 ) {
-    let (node, hook, writer, lifecycle, _) = owned_test_hook_with_identity_policy(
-        None,
+    let (db, hook, writer, lifecycle, _) = owned_test_hook_with_identity_policy(
+        false,
         FailurePolicy::default(),
         None,
         RequestSignature::AlteredAfterSigning,
     )
     .await;
-    (node, hook, writer, lifecycle)
+    (db, hook, writer, lifecycle)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -661,40 +662,35 @@ enum RequestSignature {
     AlteredAfterSigning,
 }
 
-pub(super) async fn owned_test_hook_with_identity(
-    identity: Arc<dyn gents_store::identity::NodeIdentity>,
-) -> (
-    Arc<defra_node::Node>,
+/// A fixture whose requests are attributed to the node's own identity, which
+/// the returned `TestDb` holds as `node_identity`.
+pub(super) async fn owned_test_hook_with_identity() -> (
+    TestDb,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
 ) {
-    let (node, hook, writer, lifecycle, _) = owned_test_hook_with_identity_policy(
-        Some(identity),
+    let (db, hook, writer, lifecycle, _) = owned_test_hook_with_identity_policy(
+        true,
         FailurePolicy::default(),
         None,
         RequestSignature::Valid,
     )
     .await;
-    (node, hook, writer, lifecycle)
+    (db, hook, writer, lifecycle)
 }
 
 pub(super) async fn owned_test_hook_with_folded_case(
     case: &gents_lean_vocab::LeanFoldTurnInputCase,
 ) -> (
-    Arc<defra_node::Node>,
+    TestDb,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
     rapidhash::RapidHashMap<u64, String>,
 ) {
-    let key_dir = tempfile::tempdir().unwrap();
-    let identity = Arc::new(
-        gents_store::identity::KeyIdentity::load_or_create(key_dir.path().join("folded.key"), None)
-            .unwrap(),
-    );
     owned_test_hook_with_identity_policy(
-        Some(identity),
+        true,
         FailurePolicy::default(),
         Some(case),
         RequestSignature::Valid,
@@ -739,38 +735,29 @@ async fn write_owned_request(
 }
 
 async fn owned_test_hook_with_identity_policy(
-    identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
+    attributed: bool,
     policy: FailurePolicy,
     folded_case: Option<&gents_lean_vocab::LeanFoldTurnInputCase>,
     signature: RequestSignature,
 ) -> (
-    Arc<defra_node::Node>,
+    TestDb,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
     rapidhash::RapidHashMap<u64, String>,
 ) {
-    // Every fixture runs under a held node root. An unsigned fixture gets a
-    // fresh root instead of the literal DID the identity crate rejects, so the
-    // Agent, its requests and its loop writes are all signed actors.
-    let unsigned_node_key_dir = tempfile::tempdir().unwrap();
-    let root: Arc<dyn gents_store::identity::NodeIdentity> = match identity.clone() {
-        Some(identity) => identity,
-        None => Arc::new(
-            gents_store::identity::KeyIdentity::load_or_create(
-                unsigned_node_key_dir.path().join("node.key"),
-                None,
-            )
-            .unwrap(),
-        ),
-    };
+    // Every fixture runs under the node's held root, so the Agent, its requests
+    // and its loop writes are all signed actors.
+    let db = gents_inference::test_support::test_db(
+        "owned-loop",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let root = db.node_identity.clone();
+    let node = db.node.clone();
     let node_did_owned = root.did().to_owned();
     let node_did = node_did_owned.as_str();
-    let requester_did = identity.as_ref().map(|_| node_did);
-    let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
-    let builder = defra_node::Node::builder().with_node_identity_did(node_did);
-    let node = Arc::new(builder.data_path(&data_path).build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
+    let requester_did = attributed.then_some(node_did);
     let binding = gents_store::identity::provision_agent_identity(root.as_ref()).unwrap();
     let agent_identity =
         gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
@@ -928,7 +915,7 @@ async fn owned_test_hook_with_identity_policy(
     )
     .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
-    (node, hook, writer, lifecycle, folded_docs)
+    (db, hook, writer, lifecycle, folded_docs)
 }
 
 /// The loop's rows are owned by the claimed Agent and invisible to the node

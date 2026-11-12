@@ -46,14 +46,9 @@ pub async fn bootstrap_signed_test_node(
     access
         .transact_write("test.signed_node", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &AdmitAllProfiles,
-                )
-                .await
-            })
+            Box::pin(
+                async move { crate::apply_desired_state_plan(txn, plan, &AdmitAllProfiles).await },
+            )
         })
         .await
         .unwrap();
@@ -75,14 +70,9 @@ pub async fn set_test_default_agent_as(
     access
         .transact_write("test.set_default_agent", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &AdmitAllProfiles,
-                )
-                .await
-            })
+            Box::pin(
+                async move { crate::apply_desired_state_plan(txn, plan, &AdmitAllProfiles).await },
+            )
         })
         .await
         .unwrap();
@@ -115,12 +105,7 @@ pub async fn set_test_node_field_as(
                         add: node.clone(),
                         update: node,
                     }])?;
-                crate::apply_desired_state_plan(
-                    txn,
-                    &plan,
-                    &AdmitAllProfiles,
-                )
-                .await
+                crate::apply_desired_state_plan(txn, &plan, &AdmitAllProfiles).await
             })
         })
         .await
@@ -190,7 +175,9 @@ pub mod desired_state_fixtures {
         fields: serde_json::Value,
     ) -> serde_json::Value {
         let mut document = match collection {
-            Collection::Agent => json!({"creation_nonce":"nonce", "inference_profile_id":"profile"}),
+            Collection::Agent => {
+                json!({"creation_nonce":"nonce", "inference_profile_id":"profile"})
+            }
             Collection::InferenceProfile => json!({"backend_id":"backend", "model_name":"model"}),
             Collection::Task => json!({"prompt_template":"work"}),
             _ => json!({}),

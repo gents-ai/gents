@@ -76,20 +76,13 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
         ] {
             let name = case.name.as_str();
-            let directory = tempfile::tempdir().unwrap();
-            let identity =
-                KeyIdentity::load_or_create(directory.path().join("owner.key"), None).unwrap();
-            let node = Arc::new(
-                EmbeddedNode::builder()
-                    .with_node_identity_did(identity.did())
-                    .build()
-                    .await
-                    .unwrap(),
-            );
-            gents_store::schema::ensure_runtime_schemas(&node)
-                .await
-                .unwrap();
-            crate::lifecycle_hooks::attach(&node).unwrap();
+            let db = gents_inference::test_support::test_db(
+                "goal-tool-context",
+                crate::lifecycle_hooks::composition(),
+            )
+            .await;
+            let node = db.node.clone();
+            let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
             let access = ConfigAccess::local(node.clone());
             let hook = DefraSessionHook::with_identity(
                 node.clone(),
@@ -150,14 +143,13 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             let caller = if let Some(doc) = roots.get(&entry_id) {
                 doc.clone()
             } else {
-                let reference =
-                    entry
-                        .reference
-                        .as_ref()
-                        .map(|reference| GoalAssignmentInput {
-                            goal_id: goal_id(identity.did(), &session, reference.goal),
-                            root_request_doc_id: Some(roots[&reference.root].clone()),
-                        });
+                let reference = entry
+                    .reference
+                    .as_ref()
+                    .map(|reference| GoalAssignmentInput {
+                        goal_id: goal_id(identity.did(), &session, reference.goal),
+                        root_request_doc_id: Some(roots[&reference.root].clone()),
+                    });
                 request(
                     &access,
                     &identity,
@@ -240,14 +232,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             access.write("test.goal_tool_terminal_roots", &format!(r#"mutation {{update_AgentRequest(filter: {{_docID: {{_neq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}}}"#,
                 gents_store::graphql::escape_graphql_string(&caller))).await.unwrap();
             let request_id = format!("goal-tool-{entry_id}");
-            claim_request_fixture(
-                &node,
-                &hook,
-                &request_id,
-                &session,
-                entry.signature_valid,
-            )
-            .await;
+            claim_request_fixture(&node, &hook, &request_id, &session, entry.signature_valid).await;
             let args = match tool {
                 gents_protocol::goal_names::GET_GOAL_TOOL_NAME => "{}",
                 gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME => {

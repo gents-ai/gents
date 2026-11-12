@@ -116,32 +116,21 @@ mod tests {
             "node_did":"did:key:owner","agent_did":"did:key:agent", "creation_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inference_profile_id":"inference",
             "context_id":"context","description":"old","tags":["old"]
         }))?;
-        let original_id = write_agent_document(
-            &access,
-            &behavior,
-            &crate::test_support::AdmitAllProfiles,
-        )
-        .await?;
+        let original_id =
+            write_agent_document(&access, &behavior, &crate::test_support::AdmitAllProfiles)
+                .await?;
         let mut foreign = behavior.clone();
         foreign.node_did = "did:key:other".to_owned();
         foreign.agent_did = "did:key:other-agent".to_owned();
-        let foreign_id = write_agent_document(
-            &access,
-            &foreign,
-            &crate::test_support::AdmitAllProfiles,
-        )
-        .await?;
+        let foreign_id =
+            write_agent_document(&access, &foreign, &crate::test_support::AdmitAllProfiles).await?;
         assert_ne!(original_id, foreign_id);
         behavior.context_id = None;
         behavior.description = None;
         behavior.tags.clear();
         assert_eq!(
-            write_agent_document(
-                &access,
-                &behavior,
-                &crate::test_support::AdmitAllProfiles
-            )
-            .await?,
+            write_agent_document(&access, &behavior, &crate::test_support::AdmitAllProfiles)
+                .await?,
             original_id
         );
         access
@@ -164,13 +153,11 @@ mod tests {
             .await?;
         let mut invalid = behavior.clone();
         invalid.context_id = Some("missing".to_owned());
-        assert!(write_agent_document(
-            &access,
-            &invalid,
-            &crate::test_support::AdmitAllProfiles
-        )
-        .await
-        .is_err());
+        assert!(
+            write_agent_document(&access, &invalid, &crate::test_support::AdmitAllProfiles)
+                .await
+                .is_err()
+        );
         access
             .transact_write("test.behavior.rollback", |txn| {
                 let behavior = &behavior;

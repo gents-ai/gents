@@ -66,34 +66,20 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             objective: case.fields.objective.clone(),
             budget: case.fields.budget,
         };
+        let db = gents_inference::test_support::test_db(
+            "goal-edit-contract",
+            crate::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = db.node.clone();
+        let signer = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let temp = tempfile::tempdir().unwrap();
-        let signer =
-            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
-                .unwrap();
         let user =
             gents_store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
                 .unwrap();
         let binding = gents_store::identity::provision_agent_identity(&signer).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&signer, &binding).unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-        let node = std::sync::Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(signer.did())
-                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        let access = gents_store::config_client::ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
-                .with_client_signing_capability(user.client_signing_capability().unwrap())
-                .unwrap()
-                .with_client_signed_agent_creates(),
-        );
+        let access = db.client_access(&user);
         let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
             node.clone(),
             identity::Did::new(agent.did()).unwrap(),
@@ -144,7 +130,12 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
         observed.continuation_sequence = Some(case.observed.sequence as i64);
         observed.objective = case.observed.objective.clone();
         observed.token_budget = Some(case.observed.budget as i64);
-        assert_eq!(assignment(&observed), observed_case, "{} observation", case.name);
+        assert_eq!(
+            assignment(&observed),
+            observed_case,
+            "{} observation",
+            case.name
+        );
         let current = access
             .transact_readonly("test.goal_edit.current", |txn| {
                 Box::pin(load_canonical_goal_in_txn(
@@ -228,22 +219,15 @@ fn generated_goal_objective_whitespace_matches_native_character_classification()
 
 #[tokio::test]
 async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
-    let directory = tempfile::tempdir().unwrap();
-    let root =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("root.key"), None)
-            .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "edited-fields-match-operator-updates-wit",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
     let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
-    let node = std::sync::Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(root.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(agent.did()).unwrap(),

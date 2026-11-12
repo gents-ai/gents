@@ -1,14 +1,14 @@
 use gents_documents::AgentToolConfig;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_protocol::session::SessionScope;
+use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::message::*;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity as _;
 use gents_toolcalls::call::lifecycle::admission_fixture::{
     materialize_session, materialize_session_at, owner, published_session_message, set_state,
     started, PublishedAdmissionOptions, PublishedSessionMessage,
 };
-use gents_session::session::message::*;
-use gents_protocol::tool_call::AwaitMode;
-use gents_store::identity::NodeIdentity as _;
 
 #[tokio::test]
 async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() {
@@ -24,6 +24,7 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
         await_mode: AwaitMode::Background,
         tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.into()),
         start_running: false,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -60,6 +61,7 @@ async fn session_list_names_the_starter_from_the_callers_own_receipt() {
         await_mode: AwaitMode::Background,
         start_running: false,
         tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.into()),
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -299,6 +301,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
                 name: "agent-session-discovery".to_owned(),
                 real_identity: true,
                 await_mode: AwaitMode::Background,
+                composition: gents_automation::lifecycle_hooks::composition(),
                 ..Default::default()
             },
         )
@@ -545,7 +548,6 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
-
 /// The calling Agent's DID, which signs the session-message interrupt checks.
 fn caller_agent_did(message: &PublishedSessionMessage) -> String {
     message.admission.tool.actor().to_string()
@@ -554,7 +556,11 @@ fn caller_agent_did(message: &PublishedSessionMessage) -> String {
 #[tokio::test]
 async fn steer_reachability_matches_lean() {
     use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
-    let (message, _, head) = started("steer-reachability-model").await;
+    let (message, _, head) = started(
+        "steer-reachability-model",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let cases = &gents_lean_vocab::lean_contract_snapshot().agent_steer_reachability_cases;
     for case in cases {
         let rows = case
@@ -624,10 +630,16 @@ async fn steer_reachability_matches_lean() {
 
 #[tokio::test]
 async fn steer_reaches_a_head_parked_for_its_backend() {
-    let (message, caller, caused) = started("agent-steer-parked-head").await;
+    let (message, caller, caused) = started(
+        "agent-steer-parked-head",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = message.admission.node.clone();
     set_state(&owner(&message), &caused.doc_id, "waitingForBackend").await;
-    let cause = gents_toolcalls::call::lifecycle::admission_fixture::cause(&message, caller.request_hop).await;
+    let cause =
+        gents_toolcalls::call::lifecycle::admission_fixture::cause(&message, caller.request_hop)
+            .await;
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
         agent_did: caused.agent_did.clone(),
@@ -679,11 +691,17 @@ async fn steer_reaches_a_head_parked_for_its_backend() {
 
 #[tokio::test]
 async fn explicit_steer_checks_the_physical_head_at_publication() {
-    let (message, caller, caused) = started("agent-steer-head-change").await;
+    let (message, caller, caused) = started(
+        "agent-steer-head-change",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = message.admission.node.clone();
     set_state(&owner(&message), &caused.doc_id, "processing").await;
     // Staging verifies the source edge, so the cause must name the accepted tool row.
-    let cause = gents_toolcalls::call::lifecycle::admission_fixture::cause(&message, caller.request_hop).await;
+    let cause =
+        gents_toolcalls::call::lifecycle::admission_fixture::cause(&message, caller.request_hop)
+            .await;
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
         agent_did: caused.agent_did.clone(),
@@ -785,8 +803,10 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
     let snapshot = owner(&message)
         .transact_readonly("test.steer.predecessor_order", move |txn| {
             Box::pin(async move {
-                gents_session::request::lifecycle::queue::pending_rows_in_txn(txn, node_did, session_id)
-                    .await
+                gents_session::request::lifecycle::queue::pending_rows_in_txn(
+                    txn, node_did, session_id,
+                )
+                .await
             })
         })
         .await
@@ -858,7 +878,11 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
 
 #[tokio::test]
 async fn only_the_starting_session_may_interrupt() {
-    let (message, caller, caused) = started("agent-interrupt-permission").await;
+    let (message, caller, caused) = started(
+        "agent-interrupt-permission",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = message.admission.node.clone();
     let caller = SessionScope::of_request(&caller);
     let target = SessionScope::of_request(&caused);
@@ -894,6 +918,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
         name: "delayed-agent-creation-evidence".to_owned(),
         real_identity: true,
         await_mode: AwaitMode::Background,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -986,7 +1011,11 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
 
 #[tokio::test]
 async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant_control() {
-    let (message, caller, caused) = started("agent-interrupt-receipt").await;
+    let (message, caller, caused) = started(
+        "agent-interrupt-receipt",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = message.admission.node.clone();
     let caller_scope = SessionScope::of_request(&caller);
     let target_scope = SessionScope::of_request(&caused);
@@ -1085,7 +1114,11 @@ async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant
 
 #[tokio::test]
 async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
-    let (message, caller, caused) = started("agent-interrupt-steer").await;
+    let (message, caller, caused) = started(
+        "agent-interrupt-steer",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = message.admission.node.clone();
     let scope = SessionScope::of_request(&caused);
     let target = SessionMessageTarget {
@@ -1173,7 +1206,11 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
 
 #[tokio::test]
 async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
-    let (message, caller, caused) = started("agent-stop-drains").await;
+    let (message, caller, caused) = started(
+        "agent-stop-drains",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = message.admission.node.clone();
     let receipt = gents_session::session::stop_session_with_access(
         &node,
@@ -1237,7 +1274,11 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
 
 #[tokio::test]
 async fn agent_lists_separate_targets_from_messageable_sessions() {
-    let (message, caller, caused) = started("agent-list").await;
+    let (message, caller, caused) = started(
+        "agent-list",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = message.admission.node.clone();
     let tools = AgentToolConfig {
         enabled: true,
@@ -1299,7 +1340,11 @@ async fn agent_lists_separate_targets_from_messageable_sessions() {
 
 #[tokio::test]
 async fn session_listing_pages_by_logical_labels_and_compares_timestamp_instants() {
-    let (message, caller, caused) = started("session-list-order-and-time").await;
+    let (message, caller, caused) = started(
+        "session-list-order-and-time",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = message.admission.node.clone();
     for label in ["a-worker", "z-worker", "m-worker"] {
         let mut candidate = caused.clone();
@@ -1373,7 +1418,11 @@ async fn session_listing_pages_by_logical_labels_and_compares_timestamp_instants
 /// keeps it when a later request reaches the session.
 #[tokio::test]
 async fn caused_session_records_its_opening_request() {
-    let (message, caller, caused) = started("opening-provenance").await;
+    let (message, caller, caused) = started(
+        "opening-provenance",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = message.admission.node.clone();
     let access = owner(&message);
     let signed = access
@@ -1447,7 +1496,8 @@ async fn caused_session_records_its_opening_request() {
     );
     without_call.caused_by_parent_request_doc_id = None;
     assert!(
-        gents_session::request::lifecycle::materialize::created_session_provenance(&without_call).is_none()
+        gents_session::request::lifecycle::materialize::created_session_provenance(&without_call)
+            .is_none()
     );
     without_call.caused_by_trigger_id = Some("task-trigger".to_owned());
     without_call.caused_by_trigger_kind = Some("event".to_owned());

@@ -1,12 +1,12 @@
+use gents_protocol::request_lifecycle::SessionMessageTarget;
+use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::message::plan::PlannedWrite;
+use gents_session::session::message::Delivery;
+use gents_session::session::message::*;
+use gents_store::graphql::escape_graphql_string;
 use gents_toolcalls::call::lifecycle::admission_fixture::{
     cause, published_session_message, signer, PublishedAdmissionOptions,
 };
-use gents_session::session::message::plan::PlannedWrite;
-use gents_session::session::message::*;
-use gents_protocol::tool_call::AwaitMode;
-use gents_protocol::request_lifecycle::SessionMessageTarget;
-use gents_session::session::message::Delivery;
-use gents_store::graphql::escape_graphql_string;
 
 #[tokio::test]
 async fn generated_session_message_writes_carry_the_calling_edge() {
@@ -14,6 +14,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
         name: "session-message-writes".to_owned(),
         real_identity: true,
         await_mode: AwaitMode::Background,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -118,6 +119,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         name: "session-message-staging".to_owned(),
         real_identity: true,
         await_mode: AwaitMode::Background,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -223,6 +225,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
         name: "session-message-stale-hop".to_owned(),
         real_identity: true,
         await_mode: AwaitMode::Background,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -328,6 +331,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
         name: "agent-new-directory".to_owned(),
         real_identity: true,
         await_mode: AwaitMode::Background,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await

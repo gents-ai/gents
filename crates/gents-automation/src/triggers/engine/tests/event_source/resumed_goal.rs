@@ -8,7 +8,8 @@ use gents_tools::builtin::defra_write::{BoundedWriteParams, BoundedWriteTool};
 
 #[tokio::test]
 async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
-    let node = configured_event_node().await;
+    let db = configured_event_node().await;
+    let node = db.node.clone();
     node.add_collection("type ResumedGoalOutput { run_id: String @index summary: String }")
         .await
         .unwrap();

@@ -120,21 +120,15 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let directory = tempfile::tempdir().unwrap();
-        let identity =
-            KeyIdentity::load_or_create(directory.path().join("owner.key"), None).unwrap();
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
-        let path = directory.path().join("store");
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(identity.did())
-                .data_path(&path)
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "retained-task-outcomes-follow-modeled-as",
+            crate::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let identity =
+            gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         // Task requests, receipts, Goals and outcomes belong to the Task's
         // Agent; it writes and recovers them with its managed signer.
         let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
@@ -317,14 +311,14 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         drop(access);
         node.shutdown().await.expect("node shutdown");
         drop(node);
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(identity.did())
-                .data_path(&path)
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node_db = gents_inference::test_support::test_db(
+            "retained-task-outcomes-follow-modeled-as",
+            crate::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let identity =
+            gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let access = agent_access(&node);
         let due = case["recover_reason"].as_str();
         assert_eq!(

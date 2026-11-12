@@ -13,7 +13,7 @@ use gents_pack::{
     pack::UxContributions,
 };
 use gents_store::collection::Collection;
-use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
+use gents_store::config_client::{ConfigAccess, NodePermission};
 
 mod page;
 
@@ -71,15 +71,18 @@ struct Fixture {
     client_did: identity::Did,
     node_did: String,
     other_node_did: String,
-    _identity: gents_store::identity::KeyIdentity,
+    _db: gents_inference::test_support::TestDb,
 }
 
 impl Fixture {
     async fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
-        let identity =
-            gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
-                .unwrap();
+        let db = gents_inference::test_support::test_db(
+            "ux-data",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
         let other =
             gents_store::identity::KeyIdentity::load_or_create(home.path().join("other.key"), None)
                 .unwrap();
@@ -89,22 +92,8 @@ impl Fixture {
         )
         .unwrap();
         use gents_store::identity::NodeIdentity as _;
-        let node_did = identity.did().to_owned();
+        let node_did = db.node_identity.did().to_owned();
         let other_node_did = other.did().to_owned();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
-                .with_node_acp_enabled()
-                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
         node.add_collection("type BoardTask { title: String lane: String }")
             .await
             .unwrap();
@@ -122,11 +111,7 @@ impl Fixture {
             .grant_node_permission(&client_did, NodePermission::CollectionGet)
             .await
             .unwrap();
-        let client_access = ConfigAccess::Graphql(
-            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), client.did())
-                .with_client_signing_capability(client.client_signing_capability().unwrap())
-                .unwrap(),
-        );
+        let client_access = db.client_access(&client);
         let nodes = [&node_did, &other_node_did]
             .into_iter()
             .map(|did| {
@@ -181,7 +166,7 @@ impl Fixture {
             client_did,
             node_did,
             other_node_did,
-            _identity: identity,
+            _db: db,
         };
         fixture
             .write_surface(board_surface(&fixture.node_did, "board", true))

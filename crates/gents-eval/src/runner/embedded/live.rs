@@ -300,6 +300,7 @@ mod tests {
         let fixture = gents_toolcalls::call::lifecycle::admission_fixture::published_admission(
             gents_toolcalls::call::lifecycle::admission_fixture::PublishedAdmissionOptions {
                 name: "eval-last-tool".to_owned(),
+                composition: gents_automation::lifecycle_hooks::composition(),
                 ..Default::default()
             },
         )

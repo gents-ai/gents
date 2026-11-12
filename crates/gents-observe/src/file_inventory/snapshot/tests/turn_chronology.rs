@@ -75,6 +75,7 @@ async fn check_turn_chronology(retry: bool) {
     let (fixture, mut first_request) = published_admission_with_owner(PublishedAdmissionOptions {
         name: name.into(),
         real_identity: true,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -258,9 +259,13 @@ async fn check_turn_chronology(retry: bool) {
     node.shutdown().await.expect("node shutdown");
     drop(node);
     drop(fixture.home);
-    let reopened = gents_inference::test_support::test_db_at(&fixture.path, None)
-        .await
-        .unwrap();
+    let reopened = gents_inference::test_support::test_db_at(
+        &fixture.path,
+        None,
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         gents_store::identity::NodeIdentity::did(reopened.node_identity.as_ref()),
         fixture.node_did

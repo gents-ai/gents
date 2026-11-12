@@ -1,7 +1,7 @@
-use gents_session::request::streaming::*;
 use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use std::{sync::Arc, time::Duration};
+use gents_session::request::streaming::*;
 use gents_session::test_support::{fixture, fixture_access, fixture_query};
+use std::{sync::Arc, time::Duration};
 
 #[tokio::test]
 async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_output() {
@@ -220,16 +220,17 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     assert_eq!(completed_tools.len(), 1);
     assert_eq!(completed_tools[0]["_docID"], a.tool_call_doc_id);
     assert_eq!(completed_tools[0]["lifecycle_state"], "completed");
-    let output = gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
-        &fixture_access(&node, &lifecycle),
-        &a.tool_call_doc_id,
-        &lifecycle.request().doc_id,
-        &lifecycle.request().session_id,
-        &lifecycle.request().node_did,
-        lifecycle.request().requester_did.as_deref(),
-    )
-    .await
-    .unwrap();
+    let output =
+        gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
+            &fixture_access(&node, &lifecycle),
+            &a.tool_call_doc_id,
+            &lifecycle.request().doc_id,
+            &lifecycle.request().session_id,
+            &lifecycle.request().node_did,
+            lifecycle.request().requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
     assert_eq!(output.into_text(), "one receipt-loss dispatch result");
     node.shutdown().await.expect("shut down test node");
     drop(path);

@@ -4,7 +4,6 @@ use gents_session::request::lifecycle::test_support::{pin_fixed_signing_identity
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::sync::Arc;
 
-
 async fn seed(
     node: &Arc<defra_node::Node>,
     agent: &str,

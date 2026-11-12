@@ -20,9 +20,9 @@ use gents_session::session;
 use gents_session::session::tool_call_state::CancelCause;
 use gents_tools::mcp::meta::selected_remote_identity;
 
-pub mod persistence;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;
+pub mod persistence;
 #[cfg(test)]
 pub(crate) mod tests;
 

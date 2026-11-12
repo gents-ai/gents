@@ -149,7 +149,7 @@ mod tests {
         static CASES: OnceLock<Vec<SpawnCase>> = OnceLock::new();
         CASES.get_or_init(|| {
             let stdout = gents_lean_contract::run_prepared_generator(
-                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs"),
+                &gents_lean_contract::proofs_dir().unwrap(),
                 "Proofs.Conformance.NativeSpawn:olean",
                 "Proofs/Conformance/NativeSpawn.lean",
             )

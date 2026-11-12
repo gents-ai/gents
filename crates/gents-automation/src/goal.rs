@@ -52,8 +52,8 @@ pub use client_submission::{
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use edit::edit_active_goal;
 pub use edit::{edit_active_goal_from_access, GoalEdit};
-pub use first_request_binding::task_assignment_goal_id;
 pub use first_request_binding::bind_goal_first_request_in_txn;
+pub use first_request_binding::task_assignment_goal_id;
 pub(crate) use first_request_binding::validate_task_goal_identity_in_txn;
 use first_request_binding::{continuation_assignment, continuation_reference_matches};
 pub use history::load_goal_versions_for_session;
@@ -78,8 +78,8 @@ pub use readiness_gate::{
     ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX,
 };
 pub use readiness_gate::{goal_reconcile_settled, GoalReconcileSettled};
-pub use request_assignment::RequestAssignmentObservation;
 pub(crate) use request_assignment::latest_assignment_goals;
+pub use request_assignment::RequestAssignmentObservation;
 pub use request_assignment::{load_request_assignment, load_request_assignment_scopes};
 #[cfg(test)]
 pub(crate) use request_head::assignment_allows;

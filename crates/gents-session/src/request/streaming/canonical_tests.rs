@@ -1,7 +1,7 @@
 use super::*;
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::test_support::{fixture, fixture_access, fixture_query, fixture_with_ids, FixtureGuard};
 use std::{sync::Arc, time::Duration};
-use crate::test_support::{FixtureGuard, fixture, fixture_access, fixture_query, fixture_with_ids};
 
 async fn fixture_insert_child(
     access: &gents_store::config_client::ConfigAccess,
@@ -35,8 +35,11 @@ async fn fixture_insert_child(
 async fn authored_publication_replays_and_reconstructs_exact_message() {
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, owner, binding) =
-        gents_inference::test_support::signed_test_node("canonical-authored").await;
+    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
+        "canonical-authored",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node = db.node.clone();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();

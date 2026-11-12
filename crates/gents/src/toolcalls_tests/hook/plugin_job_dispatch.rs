@@ -1,11 +1,5 @@
 use super::*;
-use gents_toolcalls::background::job::driver::{settle_plugin_job, JobDriver, JobRuntime, Settlement};
-use gents_toolcalls::test_support::live_settings;
-use gents_toolcalls::background::job::records::{read_pin, read_progress, read_step_state, write_pin_in_txn};
-use gents_toolcalls::background::job::JobBinding;
-use gents_toolcalls::call::lifecycle::admission_fixture::fixture_job_pin;
-use gents_toolcalls::plugin::executor::PluginExecutor;
-use gents_toolcalls::test_support::installed_plugin;
+use chrono::Utc;
 use gents_pack::pack::{write_home_install, HomePackInstall, InstalledVia, PackKind};
 use gents_pack::plugin::store;
 use gents_protocol::job::keys::{job_session_id, job_spawn_key};
@@ -14,8 +8,18 @@ use gents_protocol::job::{
     PluginJobSettings,
 };
 use gents_store::identity::NodeIdentity;
+use gents_toolcalls::background::job::driver::{
+    settle_plugin_job, JobDriver, JobRuntime, Settlement,
+};
+use gents_toolcalls::background::job::records::{
+    read_pin, read_progress, read_step_state, write_pin_in_txn,
+};
+use gents_toolcalls::background::job::JobBinding;
+use gents_toolcalls::call::lifecycle::admission_fixture::fixture_job_pin;
+use gents_toolcalls::plugin::executor::PluginExecutor;
+use gents_toolcalls::test_support::installed_plugin;
+use gents_toolcalls::test_support::live_settings;
 use serde_json::Value;
-use chrono::Utc;
 
 const TOOL: &str = "workflow";
 const PIN: &str =
@@ -391,14 +395,14 @@ async fn job_chain(
     gents_session::request::lifecycle::RequestLifecycle,
     Option<(gents_session::request::lifecycle::RequestLifecycle, String)>,
 ) {
-    use gents_toolcalls::call::lifecycle::admission_fixture::{
-        materialize_session_message, pending_client_fixture_request,
-        publish_accepted_on_claimed_request,
-    };
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
     use gents_session::request::lifecycle::ClaimOutcome;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        materialize_session_message, pending_client_fixture_request,
+        publish_accepted_on_claimed_request,
+    };
     let request_id = format!("step0-{}", uuid::Uuid::new_v4());
     let session_id = format!("session-{}", uuid::Uuid::new_v4());
     let create = AgentRequestCreate::base(
@@ -500,7 +504,10 @@ async fn job_chain(
     (current, parent)
 }
 
-async fn write_pin_for_tool(tool: &gents_toolcalls::call::lifecycle::ToolCallLifecycle, pin: &JobPin) {
+async fn write_pin_for_tool(
+    tool: &gents_toolcalls::call::lifecycle::ToolCallLifecycle,
+    pin: &JobPin,
+) {
     let access = tool.access().unwrap();
     let doc = tool.doc_id().unwrap();
     access
@@ -1757,7 +1764,10 @@ impl Step0 {
         }
     }
 
-    async fn run_later_step(&self, row: &str) -> gents_toolcalls::background::job::driver::StepOutcome {
+    async fn run_later_step(
+        &self,
+        row: &str,
+    ) -> gents_toolcalls::background::job::driver::StepOutcome {
         let driver = self.hook.job_driver.as_ref().unwrap();
         gents_toolcalls::background::job::driver::run_step(
             driver.runtime(),

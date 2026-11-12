@@ -14,7 +14,6 @@ use gents_session::workspace::{
     RepositoryPlacementRef, WorkspaceAdapterKind, WorkspaceDocuments, CAP_CLONE_ARTIFACTS,
     CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE,
 };
-use gents_store::schema::ensure_runtime_schemas;
 
 use super::claim::invocation_is_claimable;
 use super::planner::{
@@ -160,23 +159,13 @@ fn workspace_agent_selection_is_configured_and_frozen() {
 #[tokio::test]
 async fn workspace_agent_selection_binds_visible_physical_targets() -> anyhow::Result<()> {
     use gents_store::identity::NodeIdentity;
-    let directory = tempfile::tempdir()?;
-    let runtime = gents_store::identity::KeyIdentity::load_or_create(
-        directory.path().join("node.key"),
-        None,
-    )?;
+    let db = test_node("workspace-targets").await;
+    let node = db.node.clone();
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let creator_binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let writer_binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let integrator_binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let creator = gents_store::identity::resolve_agent_identity(&runtime, &creator_binding)?;
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .enable_signing()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_owner(runtime.did().to_owned())
-            .build()
-            .await?,
-    );
     let context =
         defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
     node.add_dac_policy_with_counter_as(
@@ -869,16 +858,15 @@ fn callback_result_only_after_workspace_docs_are_durable() {
     ));
 }
 
-async fn test_node() -> Arc<defra_node::Node> {
-    let node = Arc::new(super::test_node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node
+async fn test_node(name: &str) -> gents_inference::test_support::TestDb {
+    super::test_node_builder(name).await
 }
 
 #[tokio::test]
 async fn workspace_reads_keep_the_held_agent_actor() {
-    let node = test_node().await;
-    let node_did = gents_store::test_support::PIN_FIXED_DID;
+    let db = test_node("workspace-reads").await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did();
     super::seed_test_agent(&node, node_did).await;
     let agent_did = super::test_agent_did();
     let agent_access = super::test_agent_access(&node);
@@ -929,8 +917,9 @@ async fn workspace_reads_keep_the_held_agent_actor() {
 
 #[tokio::test]
 async fn first_seen_source_create_materializes_owner_invocation() {
-    let node = test_node().await;
-    let owner_node_did = gents_store::test_support::PIN_FIXED_DID.to_owned();
+    let db = test_node("first-seen-source").await;
+    let node = db.node.clone();
+    let owner_node_did = db.node_identity.did().to_owned();
     super::seed_test_agent(&node, &owner_node_did).await;
     node.add_collection(
         r#"
@@ -1501,12 +1490,10 @@ fn update_invocation_mutation_renders_absent_fields_as_null_not_empty_string() {
 /// `{ binding_id: { _eq: ... } }`, so the stored result must carry it.
 #[tokio::test]
 async fn callback_results_are_selectable_by_their_binding() {
-    let node = test_node().await;
-    super::seed_test_agent(
-        &node,
-        gents_store::test_support::PIN_FIXED_DID,
-    )
-    .await;
+    let db = test_node("callback-results").await;
+    let node = db.node.clone();
+    let owner_node_did = db.node_identity.did();
+    super::seed_test_agent(&node, owner_node_did).await;
     for (invocation_id, binding_id) in [
         ("inv-a", "maintenance-execute-workspace"),
         ("inv-b", "other"),
@@ -1519,8 +1506,7 @@ async fn callback_results_are_selectable_by_their_binding() {
                 invocation_id: invocation_id.to_owned(),
                 binding_id: Some(binding_id.to_owned()),
                 agent_did: crate::triggers::callback::test_agent_did(),
-                owner_node_did: gents_store::test_support::PIN_FIXED_DID
-                    .to_owned(),
+                owner_node_did: owner_node_did.to_owned(),
                 workspace_id: None,
                 work_unit_id: None,
                 caused_by_correlation: None,
@@ -1549,12 +1535,10 @@ async fn callback_result_is_agent_owned_and_parent_link_grants_user_read() {
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let outsider = KeyIdentity::load_or_create(home.path().join("outsider.key"), None).unwrap();
-    let node = test_node().await;
-    super::seed_test_agent(
-        &node,
-        gents_store::test_support::PIN_FIXED_DID,
-    )
-    .await;
+    let db = test_node("callback-result-owned").await;
+    let node = db.node.clone();
+    let owner_node_did = db.node_identity.did().to_owned();
+    super::seed_test_agent(&node, &owner_node_did).await;
     super::grant_test_node_administrator(&node, user.did()).await;
     super::grant_test_node_read(&node, outsider.did()).await;
     let agent = super::test_agent_did();
@@ -1570,7 +1554,7 @@ async fn callback_result_is_agent_owned_and_parent_link_grants_user_read() {
         result_id: "owned-result".into(),
         invocation_id: "owned-invocation".into(),
         binding_id: None,
-        owner_node_did: gents_store::test_support::PIN_FIXED_DID.into(),
+        owner_node_did: owner_node_did.clone(),
         agent_did: agent,
         workspace_id: None,
         work_unit_id: None,
@@ -1616,8 +1600,9 @@ async fn callback_result_visibility_and_repair_match_the_executable_cursor_contr
     let directory = tempfile::tempdir().unwrap();
     let outsider =
         KeyIdentity::load_or_create(directory.path().join("outsider.key"), None).unwrap();
-    let node = test_node().await;
-    let owner = gents_store::test_support::PIN_FIXED_DID;
+    let db = test_node("callback-visibility").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
     super::seed_test_agent(&node, owner).await;
     super::grant_test_node_read(&node, outsider.did()).await;
     let agent = super::test_agent_did();
@@ -1766,14 +1751,12 @@ fn every_invocation_origin_names_its_binding() {
 }
 
 struct Backlog {
-    _identity: gents_store::identity::KeyIdentity,
-    _home: TempDir,
+    _db: gents_inference::test_support::TestDb,
     node: Arc<defra_node::Node>,
+    owner: String,
     access: gents_store::config_client::ConfigAccess,
     history: String,
 }
-
-const BACKLOG_OWNER: &str = gents_store::test_support::PIN_FIXED_DID;
 
 impl Backlog {
     async fn config_ids(&self) -> super::documents::CallbackConfigDocIds {
@@ -1802,22 +1785,19 @@ impl Backlog {
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents_store::collection::Collection;
         use gents_store::config_client::ConfigAccess;
-        let home = tempfile::tempdir().unwrap();
-        let identity = gents_store::test_support::pin_fixed_signing_identity(
-            home.path(),
-        );
-        let node = test_node().await;
-        super::seed_test_agent(&node, BACKLOG_OWNER).await;
-        let access =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(BACKLOG_OWNER).unwrap());
+        let db = test_node("backlog").await;
+        let node = db.node.clone();
+        let owner = db.node_identity.did().to_owned();
+        super::seed_test_agent(&node, &owner).await;
+        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(&owner).unwrap());
         access
             .add_collection("type BacklogWork { label: String }")
             .await
             .unwrap();
         let mut backlog = Self {
-            _identity: identity,
-            _home: home,
+            _db: db,
             node,
+            owner,
             access,
             history: String::new(),
         };
@@ -1840,7 +1820,7 @@ impl Backlog {
         ]
         .into_iter()
         .map(|(collection, mut value)| {
-            value["node_did"] = json!(BACKLOG_OWNER);
+            value["node_did"] = json!(backlog.owner);
             DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
@@ -1872,7 +1852,7 @@ impl Backlog {
         use gents_documents::apply_desired_state_plan;
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let value = json!({"binding_id":binding_id,"agent_did":crate::triggers::callback::test_agent_did(),"event_source_id":"backlog","callback_id":"cb-backlog",
-            "input_fields":["label"],"enabled":true,"node_did":BACKLOG_OWNER});
+            "input_fields":["label"],"enabled":true,"node_did":self.owner});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: gents_store::collection::Collection::CallbackBinding,
             add: value.clone(),
@@ -1913,7 +1893,7 @@ impl Backlog {
     fn engine(&self) -> super::CallbackEngine {
         let mut engine = super::CallbackEngine::new(
             self.node.clone(),
-            BACKLOG_OWNER.into(),
+            self.owner.clone(),
             None,
             tokio_util::sync::CancellationToken::new(),
         );
@@ -1944,13 +1924,14 @@ impl Backlog {
     }
 
     async fn cursor(&self) -> String {
+        let owner = self.owner.as_str();
         self.access
             .transact_write("test.backlog_cursor", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
                         gents_documents::event_consumer::load_or_seed(
                             txn,
-                            BACKLOG_OWNER,
+                            owner,
                             &gents_protocol::event_delivery::EventConsumer::CallbackBinding {
                                 binding_id: "bind-backlog".into(),
                             },
@@ -1980,19 +1961,22 @@ async fn callback_claim_uses_modeled_selected_agent_grants() {
         .unwrap()
         .owner;
     let access = super::test_agent_access(&backlog.node);
-    let callback = super::documents::load_callback(&backlog.node, "cb-backlog", BACKLOG_OWNER)
+    let callback = super::documents::load_callback(&backlog.node, "cb-backlog", &backlog.owner)
         .await
         .unwrap()
         .unwrap();
-    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
         .await
         .unwrap()
         .unwrap();
-    let source =
-        super::documents::load_event_source(&backlog.node, &binding.event_source_id, BACKLOG_OWNER)
-            .await
-            .unwrap()
-            .unwrap();
+    let source = super::documents::load_event_source(
+        &backlog.node,
+        &binding.event_source_id,
+        &backlog.owner,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let ids = backlog.config_ids().await;
     let generation =
         super::documents::configuration_generation(&binding, &source, &callback, &ids).unwrap();
@@ -2019,7 +2003,7 @@ async fn callback_claim_uses_modeled_selected_agent_grants() {
         }
         let invocation = CallbackInvocationDoc {
             invocation_id: format!("modeled-{index}"),
-            owner_node_did: BACKLOG_OWNER.into(),
+            owner_node_did: backlog.owner.clone(),
             agent_did: super::test_agent_did(),
             callback_id: "cb-backlog".into(),
             configuration_generation: Some(generation.clone()),
@@ -2048,7 +2032,7 @@ async fn callback_claim_uses_modeled_selected_agent_grants() {
         let claim = super::claim::claim_invocation(
             &backlog.node,
             &access,
-            BACKLOG_OWNER,
+            &backlog.owner,
             &invocation,
             &callback,
             None,
@@ -2075,24 +2059,27 @@ async fn callback_claim_uses_modeled_selected_agent_grants() {
 async fn callback_claim_checks_enabled_and_invoke_only_before_admission() {
     let backlog = Backlog::registered().await;
     let access = super::test_agent_access(&backlog.node);
-    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
         .await
         .unwrap()
         .unwrap();
-    let source =
-        super::documents::load_event_source(&backlog.node, &binding.event_source_id, BACKLOG_OWNER)
-            .await
-            .unwrap()
-            .unwrap();
+    let source = super::documents::load_event_source(
+        &backlog.node,
+        &binding.event_source_id,
+        &backlog.owner,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let callback =
-        super::documents::load_callback(&backlog.node, &binding.callback_id, BACKLOG_OWNER)
+        super::documents::load_callback(&backlog.node, &binding.callback_id, &backlog.owner)
             .await
             .unwrap()
             .unwrap();
     let ids = backlog.config_ids().await;
     let pending = CallbackInvocationDoc {
         invocation_id: "invoke-check".into(),
-        owner_node_did: BACKLOG_OWNER.into(),
+        owner_node_did: backlog.owner.clone(),
         agent_did: super::test_agent_did(),
         callback_id: binding.callback_id.clone(),
         configuration_generation: Some(
@@ -2148,7 +2135,7 @@ async fn callback_claim_checks_enabled_and_invoke_only_before_admission() {
     let disabled = super::claim::claim_invocation(
         &backlog.node,
         &access,
-        BACKLOG_OWNER,
+        &backlog.owner,
         &pending,
         &callback,
         None,
@@ -2193,7 +2180,7 @@ async fn callback_claim_checks_enabled_and_invoke_only_before_admission() {
     let denied = super::claim::claim_invocation(
         &backlog.node,
         &access,
-        BACKLOG_OWNER,
+        &backlog.owner,
         &pending,
         &callback,
         None,
@@ -2217,7 +2204,7 @@ async fn callback_claim_checks_enabled_and_invoke_only_before_admission() {
     let claimed = super::claim::claim_invocation(
         &backlog.node,
         &access,
-        BACKLOG_OWNER,
+        &backlog.owner,
         &pending,
         &callback,
         None,
@@ -2251,7 +2238,7 @@ async fn callback_claim_checks_enabled_and_invoke_only_before_admission() {
     let recovered = super::claim::claim_invocation(
         &backlog.node,
         &access,
-        BACKLOG_OWNER,
+        &backlog.owner,
         &claimed,
         &callback,
         None,
@@ -2356,22 +2343,13 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
         .unwrap()["actor"]
         .as_str()
         .unwrap();
-    let directory = tempfile::tempdir()?;
-    let root = gents_store::identity::KeyIdentity::load_or_create(
-        directory.path().join("node.key"),
-        None,
-    )?;
+    let db = test_node("callback-placement").await;
+    let node = db.node.clone();
+    let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let binding = gents_store::identity::provision_agent_identity(&root)?;
     let other_binding = gents_store::identity::provision_agent_identity(&root)?;
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding)?;
     let other = gents_store::identity::resolve_agent_identity(&root, &other_binding)?;
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(root.did())
-            .with_node_acp_enabled()
-            .build()
-            .await?,
-    );
     let owner = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(root.did())?,
@@ -2490,8 +2468,9 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
         directory.path().join("user.key"),
         None,
     )?;
-    let node = test_node().await;
-    let owner = gents_store::test_support::PIN_FIXED_DID;
+    let db = test_node("callback-parent").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
     super::seed_test_agent(&node, owner).await;
     super::grant_test_node_administrator(&node, user.did()).await;
     let agent = super::test_agent_access(&node);
@@ -2646,17 +2625,20 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
 async fn callback_claim_rechecks_modeled_source_visibility_and_generation() {
     let backlog = Backlog::registered().await;
     let access = super::test_agent_access(&backlog.node);
-    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
         .await
         .unwrap()
         .unwrap();
-    let source =
-        super::documents::load_event_source(&backlog.node, &binding.event_source_id, BACKLOG_OWNER)
-            .await
-            .unwrap()
-            .unwrap();
+    let source = super::documents::load_event_source(
+        &backlog.node,
+        &binding.event_source_id,
+        &backlog.owner,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let callback =
-        super::documents::load_callback(&backlog.node, &binding.callback_id, BACKLOG_OWNER)
+        super::documents::load_callback(&backlog.node, &binding.callback_id, &backlog.owner)
             .await
             .unwrap()
             .unwrap();
@@ -2716,7 +2698,7 @@ async fn callback_claim_rechecks_modeled_source_visibility_and_generation() {
         });
         let invocation = CallbackInvocationDoc {
             invocation_id: format!("generation-{name}"),
-            owner_node_did: BACKLOG_OWNER.into(),
+            owner_node_did: backlog.owner.clone(),
             agent_did: super::test_agent_did(),
             callback_id: binding.callback_id.clone(),
             configuration_generation: generation,
@@ -2745,7 +2727,7 @@ async fn callback_claim_rechecks_modeled_source_visibility_and_generation() {
         let actual = super::claim::claim_invocation(
             &backlog.node,
             &access,
-            BACKLOG_OWNER,
+            &backlog.owner,
             &pending,
             &callback,
             None,
@@ -2779,11 +2761,11 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
     let plan = DesiredStateApplyPlan::new(vec![
         make(
             gents_store::collection::Collection::CallbackModule,
-            json!({"node_did":BACKLOG_OWNER,"module_id":"module"}),
+            json!({"node_did":backlog.owner,"module_id":"module"}),
         ),
         make(
             gents_store::collection::Collection::Callback,
-            json!({"node_did":BACKLOG_OWNER,"callback_id":"cb-backlog", "display_name":"admitted",
+            json!({"node_did":backlog.owner,"callback_id":"cb-backlog", "display_name":"admitted",
             "handler":{"kind":"module","module_id":"module"}}),
         ),
     ])
@@ -2804,21 +2786,24 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
         })
         .await
         .unwrap();
-    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
         .await
         .unwrap()
         .unwrap();
-    let source =
-        super::documents::load_event_source(&backlog.node, &binding.event_source_id, BACKLOG_OWNER)
-            .await
-            .unwrap()
-            .unwrap();
+    let source = super::documents::load_event_source(
+        &backlog.node,
+        &binding.event_source_id,
+        &backlog.owner,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let callback =
-        super::documents::load_callback(&backlog.node, &binding.callback_id, BACKLOG_OWNER)
+        super::documents::load_callback(&backlog.node, &binding.callback_id, &backlog.owner)
             .await
             .unwrap()
             .unwrap();
-    let module = super::documents::load_callback_module(&backlog.node, "module", BACKLOG_OWNER)
+    let module = super::documents::load_callback_module(&backlog.node, "module", &backlog.owner)
         .await
         .unwrap()
         .unwrap();
@@ -2851,7 +2836,7 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
         }
         let invocation = CallbackInvocationDoc {
             invocation_id: format!("module-{name}"),
-            owner_node_did: BACKLOG_OWNER.into(),
+            owner_node_did: backlog.owner.clone(),
             agent_did: super::test_agent_did(),
             callback_id: binding.callback_id.clone(),
             configuration_generation: Some(
@@ -2888,7 +2873,7 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
         let claim = super::claim::claim_invocation(
             &backlog.node,
             &access,
-            BACKLOG_OWNER,
+            &backlog.owner,
             &pending,
             &callback,
             Some((
@@ -2923,7 +2908,7 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
     let recovered = super::claim::claim_invocation(
         &backlog.node,
         &access,
-        BACKLOG_OWNER,
+        &backlog.owner,
         &admitted,
         &callback,
         None,
@@ -2972,13 +2957,17 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
 
 #[tokio::test]
 async fn callback_cursor_waits_for_a_successful_claim() {
-    async fn checkpoint(access: &gents_store::config_client::ConfigAccess, through: &str) -> bool {
+    async fn checkpoint(
+        access: &gents_store::config_client::ConfigAccess,
+        owner: &str,
+        through: &str,
+    ) -> bool {
         access
             .transact_write("test.callback_claim_checkpoint", |txn| {
                 Box::pin(async move {
                     gents_documents::event_consumer::checkpoint_prefix(
                         txn,
-                        BACKLOG_OWNER,
+                        owner,
                         &gents_protocol::event_delivery::EventConsumer::CallbackBinding {
                             binding_id: "bind-backlog".into(),
                         },
@@ -3020,17 +3009,20 @@ async fn callback_cursor_waits_for_a_successful_claim() {
     let through = arrival["data"]["_documentArrivals"]["head"]
         .as_str()
         .unwrap();
-    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
         .await
         .unwrap()
         .unwrap();
-    let source =
-        super::documents::load_event_source(&backlog.node, &binding.event_source_id, BACKLOG_OWNER)
-            .await
-            .unwrap()
-            .unwrap();
+    let source = super::documents::load_event_source(
+        &backlog.node,
+        &binding.event_source_id,
+        &backlog.owner,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let callback =
-        super::documents::load_callback(&backlog.node, &binding.callback_id, BACKLOG_OWNER)
+        super::documents::load_callback(&backlog.node, &binding.callback_id, &backlog.owner)
             .await
             .unwrap()
             .unwrap();
@@ -3043,7 +3035,7 @@ async fn callback_cursor_waits_for_a_successful_claim() {
     .unwrap();
     let invocation = CallbackInvocationDoc {
         invocation_id: uuid::Uuid::new_v4().to_string(),
-        owner_node_did: BACKLOG_OWNER.into(),
+        owner_node_did: backlog.owner.clone(),
         agent_did: super::test_agent_did(),
         callback_id: binding.callback_id.clone(),
         configuration_generation: Some(generation),
@@ -3073,12 +3065,15 @@ async fn callback_cursor_waits_for_a_successful_claim() {
         super::documents::create_pending_invocation(&backlog.node, &agent, &invocation)
             .await
             .unwrap();
-    assert_eq!(checkpoint(&agent, through).await, expected(false));
+    assert_eq!(
+        checkpoint(&agent, &backlog.owner, through).await,
+        expected(false)
+    );
     assert_eq!(backlog.cursor().await, seeded);
     assert!(super::claim::claim_invocation(
         &backlog.node,
         &agent,
-        BACKLOG_OWNER,
+        &backlog.owner,
         &invocation,
         &callback,
         None,
@@ -3087,7 +3082,10 @@ async fn callback_cursor_waits_for_a_successful_claim() {
     .await
     .unwrap()
     .is_some());
-    assert_eq!(checkpoint(&agent, through).await, expected(true));
+    assert_eq!(
+        checkpoint(&agent, &backlog.owner, through).await,
+        expected(true)
+    );
     assert_eq!(backlog.cursor().await, through);
     backlog.node.shutdown().await.unwrap();
 }
@@ -3124,7 +3122,7 @@ async fn edited_document_admitted_before_a_crash_is_not_readmitted() {
     let seeded = backlog.cursor().await;
     let mut crashed = backlog.engine();
     crashed.reconcile_bindings().await;
-    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
         .await
         .unwrap()
         .unwrap();
@@ -3163,7 +3161,7 @@ async fn edited_document_admitted_before_a_crash_is_not_readmitted() {
 async fn admission_refuses_a_binding_disabled_after_its_snapshot() {
     let backlog = Backlog::registered().await;
     let pending = backlog.create("pending").await;
-    let snapshot = super::documents::load_binding(&backlog.node, "bind-backlog", BACKLOG_OWNER)
+    let snapshot = super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
         .await
         .unwrap()
         .unwrap();
@@ -3211,7 +3209,7 @@ async fn retired_reserved_bindings_do_not_scan() {
     let reserved = format!("graph-trigger-{}-{}", "a".repeat(64), "b".repeat(16));
     backlog.add_binding(&reserved).await;
     backlog.add_binding("ordinary").await;
-    let ids: Vec<String> = super::documents::list_enabled_bindings(&backlog.node, BACKLOG_OWNER)
+    let ids: Vec<String> = super::documents::list_enabled_bindings(&backlog.node, &backlog.owner)
         .await
         .expect("bindings")
         .into_iter()
@@ -3223,7 +3221,8 @@ async fn retired_reserved_bindings_do_not_scan() {
 #[tokio::test]
 async fn callback_result_never_falls_back_when_agent_key_is_unavailable() {
     use identity::Identity as _;
-    let node = test_node().await;
+    let db = test_node("callback-agent-key").await;
+    let node = db.node.clone();
     let keypair = crypto::ed25519_key_from_seed(&[93_u8; 32][..]).unwrap();
     let unavailable =
         identity::RawIdentity::from_bytes(crypto::KeyType::Ed25519, keypair.as_slice()).unwrap();
@@ -3262,8 +3261,9 @@ async fn callback_parent_requires_the_selected_authenticated_agent() {
 
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-    let node = test_node().await;
-    let owner = gents_store::test_support::PIN_FIXED_DID;
+    let db = test_node("callback-parent").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
     super::seed_test_agent(&node, owner).await;
     super::grant_test_node_administrator(&node, user.did()).await;
     let agent = super::test_agent_did();
@@ -3341,8 +3341,9 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
     use gents_store::identity::{KeyIdentity, NodeIdentity};
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-    let node = test_node().await;
-    let owner = gents_store::test_support::PIN_FIXED_DID;
+    let db = test_node("callback-parent").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
     super::seed_test_agent(&node, owner).await;
     super::grant_test_node_administrator(&node, user.did()).await;
     let agent = super::test_agent_did();

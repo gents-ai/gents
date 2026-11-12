@@ -167,18 +167,13 @@ async fn seed_foreign_mailbox_row(
 
 pub(super) async fn test_node() -> Arc<EmbeddedNode> {
     let root = root_identity();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .enable_signing()
-            .with_node_identity_did(root.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(node.as_ref())
-        .await
-        .unwrap();
+    let db = gents_inference::test_support::test_db_as(
+        "mailbox",
+        root.did(),
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
     let root_access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(root.did()).unwrap(),
@@ -1048,7 +1043,9 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
     assert_ne!(cid, initial_cid);
     assert_eq!(signer_as_actor(&node, actor.did(), cid).await?, actor.did());
     assert_eq!(
-        crate::operations::mailbox::dismiss(&access, doc_id).await?.status,
+        crate::operations::mailbox::dismiss(&access, doc_id)
+            .await?
+            .status,
         "dismissed"
     );
     let replay = access.execute(&query).await?;

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use gents_loop::tool::Tool;
 use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
@@ -47,16 +45,13 @@ fn usage_duration_requires_valid_provider_intervals_and_excludes_queue_time() {
     );
 }
 
-async fn seeded_node() -> Arc<EmbeddedNode> {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(node.as_ref())
-        .await
-        .unwrap();
+async fn seeded_node() -> gents_inference::test_support::TestDb {
+    let db = gents_inference::test_support::test_db(
+        "session-history",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
     let identities = tempfile::tempdir().unwrap();
     let node_identity = pin_fixed_signing_identity(identities.path());
     let other_identity =
@@ -475,7 +470,7 @@ async fn seeded_node() -> Arc<EmbeddedNode> {
         response.errors
     );
 
-    node
+    db
 }
 
 mod accounting;

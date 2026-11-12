@@ -114,21 +114,21 @@ mod tests {
         write_manual_agent_request, write_manual_agent_request_with_conversation_title,
         ManualRequestTarget,
     };
-    use gents_store::identity::{KeyIdentity, NodeIdentity};
-    use gents_store::schema::ensure_runtime_schemas;
+    use gents_store::identity::NodeIdentity;
 
-    async fn test_node() -> (Arc<EmbeddedNode>, String, Arc<dyn NodeIdentity>) {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
+    async fn test_node() -> (
+        gents_inference::test_support::TestDb,
+        String,
+        Arc<dyn NodeIdentity>,
+    ) {
+        let db = gents_inference::test_support::test_db(
+            "manual-task-fixture-node",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
+        let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let did = identity.did().to_string();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let admin = gents_store::config_client::ConfigAccess::local_as(
             node.clone(),
             ::identity::Did::new(identity.did()).unwrap(),
@@ -143,7 +143,7 @@ mod tests {
         )
         .await;
         let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-        (node, did, agent)
+        (db, did, agent)
     }
 
     /// Reads through the agent's own signed access: ACP filters unsigned node reads.
@@ -161,7 +161,8 @@ mod tests {
 
     #[tokio::test]
     async fn writes_manual_request_with_rendered_template_and_manual_lineage() {
-        let (node, node_did, agent) = test_node().await;
+        let (db, node_did, agent) = test_node().await;
+        let node = db.node.clone();
         let actor = ::identity::Did::new(agent.did()).unwrap();
 
         let doc_id = write_manual_agent_request(
@@ -215,7 +216,8 @@ mod tests {
 
     #[tokio::test]
     async fn manual_task_template_gets_node_and_ctx_scope() {
-        let (node, node_did, agent) = test_node().await;
+        let (db, node_did, agent) = test_node().await;
+        let node = db.node.clone();
         let actor = ::identity::Did::new(agent.did()).unwrap();
         let doc_id = write_manual_agent_request(
             &node,
@@ -254,7 +256,8 @@ mod tests {
 
     #[tokio::test]
     async fn writes_manual_request_with_slash_selected_skill_input() {
-        let (node, node_did, agent) = test_node().await;
+        let (db, node_did, agent) = test_node().await;
+        let node = db.node.clone();
         let actor = ::identity::Did::new(agent.did()).unwrap();
 
         let doc_id = write_manual_agent_request(
@@ -292,7 +295,8 @@ mod tests {
 
     #[tokio::test]
     async fn writes_manual_request_with_deferred_conversation_title() {
-        let (node, node_did, agent) = test_node().await;
+        let (db, node_did, agent) = test_node().await;
+        let node = db.node.clone();
         let actor = ::identity::Did::new(agent.did()).unwrap();
 
         let doc_id = write_manual_agent_request_with_conversation_title(
@@ -358,7 +362,8 @@ mod tests {
 
     #[tokio::test]
     async fn surfaces_template_render_errors() {
-        let (node, node_did, agent) = test_node().await;
+        let (db, node_did, agent) = test_node().await;
+        let node = db.node.clone();
         let actor = ::identity::Did::new(agent.did()).unwrap();
         let err = write_manual_agent_request(
             &node,

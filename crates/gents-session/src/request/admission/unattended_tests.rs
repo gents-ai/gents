@@ -1,4 +1,3 @@
-use super::*;
 use gents_documents::observe_unattended_agent_in_txn;
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::identity::NodeIdentity;
@@ -28,21 +27,17 @@ async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> 
             .as_bool()
             .unwrap()
     };
-    let home = tempfile::tempdir()?;
-    let root =
-        gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)?;
+    let db = gents_inference::test_support::test_db(
+        "enabled-and-native-invoke-are-independen",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let owner_binding = gents_store::identity::provision_agent_identity(&root)?;
     let agent_binding = gents_store::identity::provision_agent_identity(&root)?;
     let owner = gents_store::identity::resolve_agent_identity(&root, &owner_binding)?;
     let selected = gents_store::identity::resolve_agent_identity(&root, &agent_binding)?;
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(root.did())
-            .with_node_acp_enabled()
-            .build()
-            .await?,
-    );
-    gents_store::schema::ensure_runtime_schemas(&node).await?;
     let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
     for did in [owner.did(), selected.did()] {
         for permission in [
@@ -165,18 +160,15 @@ async fn missing_native_node_authority_is_not_treated_as_invoke() -> anyhow::Res
         .iter()
         .find(|case| case["name"] == "unavailable")
         .unwrap();
-    let home = tempfile::tempdir()?;
-    let root =
-        gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)?;
+    let db = gents_inference::test_support::test_db(
+        "unattended-unavailable-without-native-in",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let binding = gents_store::identity::provision_agent_identity(&root)?;
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding)?;
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(root.did())
-            .build()
-            .await?,
-    );
-    gents_store::schema::ensure_runtime_schemas(&node).await?;
     let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
     let response = owner.write("test.unattended.no_nac", &format!(
         "mutation {{create_Agent(input:{{node_did:\"{}\",agent_did:\"{}\",creation_nonce:\"{}\",inference_profile_id:\"profile\",enabled:true}}){{_docID}}}}",

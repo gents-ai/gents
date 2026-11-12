@@ -163,6 +163,20 @@ pub struct TurnAssignmentHandoff {
 }
 
 impl TurnAssignmentHandoff {
+    pub(crate) fn new(
+        terminal: &crate::call::lifecycle::CausedRequestTerminal,
+        assignment: AssignmentObservation,
+    ) -> Self {
+        Self {
+            turn_completed: matches!(
+                terminal,
+                crate::call::lifecycle::CausedRequestTerminal::Completed { .. }
+            ),
+            assignment,
+            terminal_reason: terminal.completion_reason(),
+        }
+    }
+
     /// The `<reason>` vocabulary of the completion notification. Settlement
     /// persists this reason as the row's `completionPending:<reason>` suffix
     /// (Lean `Recovery.sessionMessageHandoffReason`) and the completion
@@ -204,7 +218,6 @@ pub async fn turn_assignment_handoff(
     caused: &AgentRequestRow,
     terminal: &crate::call::lifecycle::CausedRequestTerminal,
 ) -> TurnAssignmentHandoff {
-    let terminal_reason = terminal.completion_reason();
     let turn_completed = matches!(
         terminal,
         crate::call::lifecycle::CausedRequestTerminal::Completed { .. }
@@ -243,11 +256,7 @@ pub async fn turn_assignment_handoff(
             }
         }
     };
-    TurnAssignmentHandoff {
-        turn_completed,
-        assignment,
-        terminal_reason,
-    }
+    TurnAssignmentHandoff::new(terminal, assignment)
 }
 
 pub(crate) async fn settle_session_message_row(
@@ -339,8 +348,46 @@ pub(crate) async fn settle_session_message_row(
 mod tests;
 
 #[cfg(test)]
-mod folded_outcome_conformance {
+mod conformance {
+    use super::{AssignmentObservation, TurnAssignmentHandoff};
     use crate::call::lifecycle::CausedRequestTerminal as Terminal;
+
+    fn caused(name: &str) -> Terminal {
+        terminal(name).unwrap_or_else(|| panic!("{name} is not a caused terminal"))
+    }
+
+    fn observation(name: &str) -> AssignmentObservation {
+        match name {
+            "absent" => AssignmentObservation::None,
+            "unknown" => AssignmentObservation::Unknown,
+            status => AssignmentObservation::Assigned(
+                serde_json::from_value(serde_json::Value::from(status))
+                    .unwrap_or_else(|error| panic!("{status} is not a Goal status: {error}")),
+            ),
+        }
+    }
+
+    #[test]
+    fn settlement_reason_matches_lean() {
+        gents_lean_vocab::families::recovery_session_message_settlement_reason::replay(
+            |case: &gents_lean_vocab::families::recovery_session_message_settlement_reason::Input<
+                String,
+                String,
+            >| {
+                TurnAssignmentHandoff::new(&caused(&case.terminal), observation(&case.assignment))
+                    .reason()
+            },
+        );
+    }
+
+    #[test]
+    fn settled_state_matches_lean() {
+        gents_lean_vocab::families::recovery_caused_terminal_settled_state::replay(
+            |case: &gents_lean_vocab::families::recovery_caused_terminal_settled_state::Input<
+                String,
+            >| caused(&case.terminal).tool_state(),
+        );
+    }
 
     fn terminal(name: &str) -> Option<Terminal> {
         match name {
@@ -352,6 +399,8 @@ mod folded_outcome_conformance {
                 reason: String::new(),
             }),
             "superseded" => Some(Terminal::Superseded),
+            "dead" => Some(Terminal::Dead),
+            "interrupted" => Some(Terminal::Interrupted),
             _ => panic!("unknown modeled outcome {name}"),
         }
     }

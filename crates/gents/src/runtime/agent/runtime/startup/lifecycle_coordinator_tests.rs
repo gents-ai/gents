@@ -42,12 +42,12 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for FailFirst
 
 #[tokio::test]
 async fn admission_gate_waits_for_durable_ready_retry_ack() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "admission-gate-waits-for-durable-ready-r",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();
@@ -91,12 +91,12 @@ async fn admission_gate_waits_for_durable_ready_retry_ack() {
 
 #[tokio::test]
 async fn shutdown_wins_over_a_late_startup_barrier_release() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "shutdown-wins-over-a-late-startup-barrie",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();

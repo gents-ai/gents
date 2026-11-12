@@ -131,17 +131,12 @@ mod tests {
     use crate::call::lifecycle::admission_fixture::write_fixture_job_pin;
     use gents_store::config_client::ConfigAccess;
 
-    async fn open() -> Arc<EmbeddedNode> {
-        let node = Arc::new(
-            gents_store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        node
+    async fn open() -> gents_inference::test_support::TestDb {
+        gents_inference::test_support::test_db(
+            "plugin-job-ancestry",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await
     }
 
     async fn insert(node: &std::sync::Arc<EmbeddedNode>, collection: &str, value: Value) -> String {
@@ -230,6 +225,7 @@ mod tests {
     }
 
     struct Chain {
+        _db: gents_inference::test_support::TestDb,
         node: Arc<EmbeddedNode>,
         child: String,
         grand: String,
@@ -238,7 +234,8 @@ mod tests {
     }
 
     async fn chain() -> Chain {
-        let node = open().await;
+        let db = open().await;
+        let node = db.node.clone();
         let root = request(&node, "root", "root", None, None).await;
         let job = tool(&node, "job", "root", &root, true).await;
         let child = "child\"session".to_owned();
@@ -264,6 +261,7 @@ mod tests {
         )
         .await;
         Chain {
+            _db: db,
             node,
             child,
             grand,

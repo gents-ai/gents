@@ -94,7 +94,9 @@ impl ReplayFixture {
         }
     }
 
-    pub async fn candidates(&self) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
+    pub async fn candidates(
+        &self,
+    ) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
         load_canonical_assistant_candidates(&self.access, self.scope(), &self.boundary).await
     }
 
@@ -511,8 +513,11 @@ pub async fn fixture_with_provider_payload_options(
 ) -> ReplayFixture {
     use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    let (db, user, user_access, binding) =
-        gents_inference::test_support::signed_test_node("canonical-replay").await;
+    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node(
+        "canonical-replay",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let requester_did = user.did().to_owned();

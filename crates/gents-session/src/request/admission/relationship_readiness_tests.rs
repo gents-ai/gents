@@ -48,27 +48,18 @@ async fn exercise_readiness(same_agent: bool) {
         .unwrap();
     assert_eq!(partial["expected_target_read"], true);
     let home = tempfile::tempdir().unwrap();
-    let runtime: Arc<dyn NodeIdentity> =
-        Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
+    let db = gents_inference::test_support::test_db(
+        "exercise-readiness-relationship-sets",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let runtime: Arc<dyn NodeIdentity> = Arc::new(
+        gents_store::test_support::held_runtime_identity(db.node_identity.did()),
+    );
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     // The user's Node and Agent are client-signed over HTTP; embedded access
     // refuses non-runtime writes without a managed Agent signer by design.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .enable_signing()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    let endpoint = format!("http://{address}/api/v0/graphql");
     let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let selected_identity =
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
@@ -87,11 +78,7 @@ async fn exercise_readiness(same_agent: bool) {
             .await
             .unwrap();
     }
-    let user_access = ConfigAccess::Graphql(
-        gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
-            .with_client_signing_capability(user.client_signing_capability().unwrap())
-            .unwrap(),
-    );
+    let user_access = db.client_access(&user);
     let (node_doc, agent_doc) = user_access
         .transact_write("test.readiness.owner", |txn| {
             let (runtime_did, binding) = (runtime.did(), &binding);
@@ -158,11 +145,7 @@ async fn exercise_readiness(same_agent: bool) {
         )
         .unwrap()
     } else {
-        ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
-                .with_client_signing_capability(user.client_signing_capability().unwrap())
-                .unwrap(),
-        )
+        db.client_access(&user)
     };
     let create = build_signed_client_request(
         &author_access,

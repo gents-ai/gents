@@ -303,11 +303,7 @@ impl ResolvedRuntimeSnapshot {
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub fn activate(
-        self,
-        generation: u64,
-        dispatchers: DispatcherMap,
-    ) -> ActiveRuntimeSnapshot {
+    pub fn activate(self, generation: u64, dispatchers: DispatcherMap) -> ActiveRuntimeSnapshot {
         let agent_executor_capacities = dispatchers
             .keys()
             .map(|agent_did| (agent_did.clone(), 1))

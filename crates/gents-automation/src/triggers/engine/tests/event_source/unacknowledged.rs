@@ -3,6 +3,7 @@ use super::*;
 const RESCAN: Duration = Duration::from_millis(50);
 
 struct Delivery {
+    db: gents_inference::test_support::TestDb,
     node: Arc<defra_node::Node>,
     snapshot_tx: watch::Sender<Arc<ActiveRuntimeSnapshot>>,
     source: EventSource,
@@ -28,14 +29,16 @@ async fn ping_snapshot(
     generation: u64,
     emit_outcome: bool,
 ) -> Arc<ActiveRuntimeSnapshot> {
-    use gents_store::identity::NodeIdentity;
-    let root = crate::triggers::callback::test_root_identity();
+    let node_did = node
+        .node_identity_did()
+        .expect("test node runtime identity")
+        .to_owned();
     let mut agent = event_test_behavior().as_ref().clone();
     agent.agent_identity = crate::triggers::callback::test_agent_identity();
     agent.agent_did = agent.agent_identity.did().to_owned();
     let runtime_node = Arc::new(gents_store::identity::RuntimeNode {
-        node_did: root.did().to_owned(),
-        identity: Arc::new(root),
+        node_did: node_did.clone(),
+        identity: Arc::new(gents_store::test_support::held_runtime_identity(&node_did)),
         default_agent_did: agent.agent_did.clone(),
         display_name: None,
         enabled: true,
@@ -51,7 +54,7 @@ async fn ping_snapshot(
         RapidHashMap::new(),
     )
     .with_node(runtime_node)
-    .with_local_did(gents_store::test_support::PIN_FIXED_DID.into())
+    .with_local_did(node_did)
     .with_automation(gents_documents::automation::ResolvedAutomation {
         event_triggers: RapidHashMap::from_iter([("ping-trigger".to_string(), trigger)]),
         ..Default::default()
@@ -59,15 +62,10 @@ async fn ping_snapshot(
     Arc::new(resolved.activate(generation, RapidHashMap::new()))
 }
 
-async fn ping_node(schema: &str, emit_outcome: bool) -> Arc<defra_node::Node> {
-    let node = Arc::new(
-        crate::triggers::callback::test_node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    let owner = gents_store::test_support::PIN_FIXED_DID;
+async fn ping_node(schema: &str, emit_outcome: bool) -> gents_inference::test_support::TestDb {
+    let db = crate::triggers::callback::test_node_builder("ping-node").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
     crate::triggers::callback::seed_test_agent(&node, owner).await;
     node.add_collection(schema).await.unwrap();
     crate::triggers::callback::seed_test_configuration(
@@ -93,16 +91,17 @@ async fn ping_node(schema: &str, emit_outcome: bool) -> Arc<defra_node::Node> {
         ],
     )
     .await;
-    node
+    db
 }
 
 #[tokio::test]
 async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
-    let node = ping_node(
+    let db = ping_node(
         "type OutcomePing { message: String handoff_id: String }",
         false,
     )
     .await;
+    let node = db.node.clone();
     let snapshot = ping_snapshot(&node, 1, false).await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
@@ -139,7 +138,8 @@ async fn first_delivery(emit_outcome: bool) -> (Delivery, FireIntent) {
 }
 
 async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireIntent) {
-    let node = ping_node(schema, emit_outcome).await;
+    let db = ping_node(schema, emit_outcome).await;
+    let node = db.node.clone();
     let snapshot = ping_snapshot(&node, 1, emit_outcome).await;
     let (snapshot_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx.clone(), node.clone(), CancellationToken::new())
@@ -169,6 +169,7 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
     let engine = TriggerEngine::new(rx, SpyMaterializer::new());
     (
         Delivery {
+            db,
             node,
             snapshot_tx,
             source,
@@ -181,7 +182,7 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
 
 impl Delivery {
     async fn cursor(&self) -> String {
-        let owner = gents_store::test_support::PIN_FIXED_DID.to_owned();
+        let owner = self.db.node_identity.did().to_owned();
         crate::triggers::callback::test_agent_access(&self.node)
             .transact_write("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
@@ -247,7 +248,7 @@ impl Delivery {
         for _ in 0..100 {
             let trigger = observed_trigger(
                 self.node.as_ref(),
-                gents_store::test_support::PIN_FIXED_DID,
+                self.db.node_identity.did(),
                 "ping-trigger",
             )
             .await;
@@ -317,7 +318,7 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
     // The repair is a committed Task change; admission revalidates against it.
     crate::triggers::callback::seed_test_configuration(
         &delivery.node,
-        gents_store::test_support::PIN_FIXED_DID,
+        delivery.db.node_identity.did(),
         vec![(
             gents_store::collection::Collection::Task,
             serde_json::json!({"task_id":"ping-task",
@@ -339,12 +340,7 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
         intent.event_vars["source_doc_id"].as_str(),
         Some(delivery.doc_id.as_str())
     );
-    let result = admit_selected_event(
-        &node,
-        &intent,
-        gents_store::test_support::PIN_FIXED_DID,
-    )
-    .await;
+    let result = admit_selected_event(&node, &intent, delivery.db.node_identity.did()).await;
     (intent.on_result)(result);
     let repeats = delivery.drain(Duration::from_secs(1), |_| None).await;
     assert_eq!(repeats, 0, "an admitted arrival fired again");
@@ -452,7 +448,7 @@ async fn an_acknowledged_fire_records_no_unacknowledged_status() {
     tokio::time::sleep(Duration::from_millis(150)).await;
     let settled = observed_trigger(
         delivery.node.as_ref(),
-        gents_store::test_support::PIN_FIXED_DID,
+        delivery.db.node_identity.did(),
         "ping-trigger",
     )
     .await;
@@ -568,12 +564,7 @@ async fn repaired_document_is_delivered_once(drop_notification: bool) {
         .expect("the repaired document was not retried")
         .expect("source closed");
     assert_eq!(intent.doc_vars.as_ref().unwrap()["handoff_id"], "handoff-1");
-    let result = admit_selected_event(
-        &node,
-        &intent,
-        gents_store::test_support::PIN_FIXED_DID,
-    )
-    .await;
+    let result = admit_selected_event(&node, &intent, delivery.db.node_identity.did()).await;
     (intent.on_result)(result);
     assert_eq!(delivery.drain(Duration::from_secs(1), |_| None).await, 0);
     assert!(delivery.pending_documents().await.is_empty());

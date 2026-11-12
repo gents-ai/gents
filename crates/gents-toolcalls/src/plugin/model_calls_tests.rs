@@ -7,13 +7,13 @@ use serde_json::{json, Value};
 use super::*;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::rounds::{drive, HostCalls, Round, MAX_ROUNDS};
-use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 use futures::future::BoxFuture;
 use gents_documents::InferenceProfile;
 use gents_pack::plugin::model_binding::{
     endpoint_for, AccessModels, ModelBinding, ModelEndpoint, ModelResolver,
 };
 use gents_pack::plugin::store::{self, InstalledPlugin};
+use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 use gents_pack::plugin::{PluginBudget, PluginOutcome, PluginVerdict};
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
@@ -455,8 +455,11 @@ fn malformed_model_calls_are_named() {
 
 #[tokio::test]
 async fn a_profile_resolves_to_its_chat_completions_endpoint() {
-    let (db, user, _access, agent) =
-        gents_inference::test_support::signed_test_node("plugin-model-profile").await;
+    let (db, user, _access, agent) = gents_inference::test_support::signed_test_node(
+        "plugin-model-profile",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node = db.node.clone();
     let owner = db.node_identity.did();
     let models = AccessModels(ConfigAccess::local(node.clone()));
@@ -843,8 +846,11 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
             Box::pin(async move { Ok(self.fake.endpoint(1)) })
         }
     }
-    let (db, client, owner, binding) =
-        gents_inference::test_support::signed_test_node("plugin-model-selected-agent").await;
+    let (db, client, owner, binding) = gents_inference::test_support::signed_test_node(
+        "plugin-model-selected-agent",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let selected = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding)?;

@@ -1255,26 +1255,18 @@ mod tests {
     async fn reduction_fixture(
         requester: Option<&str>,
     ) -> (
-        Arc<EmbeddedNode>,
+        gents_inference::test_support::TestDb,
         String,
         gents_store::identity::ManagedAgentSigner,
     ) {
         use gents_store::identity::NodeIdentity;
-        let root = gents_store::identity::KeyIdentity::load_or_create(
-            std::env::temp_dir().join(format!("reduction-root-{}.key", uuid::Uuid::new_v4())),
-            None,
+        let db = gents_inference::test_support::test_db(
+            "provider-context-reduction",
+            crate::test_support::no_lifecycle_plugins(),
         )
-        .unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(root.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        .await;
+        let node = db.node.clone();
+        let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let signer = agent.managed_agent_signer().unwrap();
@@ -1306,7 +1298,7 @@ mod tests {
             })
             .await
             .unwrap();
-        (node, node_did, signer)
+        (db, node_did, signer)
     }
 
     /// Reads of Agent-owned reduction rows must be bound to the owning Agent:
@@ -1325,7 +1317,8 @@ mod tests {
 
     #[tokio::test]
     async fn durable_chain_is_idempotent_conflict_visible_and_restartable() {
-        let (node, node_did, signer) = reduction_fixture(Some("did:key:user")).await;
+        let (db, node_did, signer) = reduction_fixture(Some("did:key:user")).await;
+        let node = db.node.clone();
         let reader = agent_access(&node, &signer);
         let agent_did = signer.did().to_owned();
         let escaped_node_did = escape_graphql_string(&node_did);
@@ -1785,15 +1778,12 @@ mod tests {
 
     #[tokio::test]
     async fn source_boundary_pins_bounded_canonical_high_water() {
-        let node = Arc::new(
-            gents_store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "source-boundary-pins-bounded-canonical-h",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
         for sequence in [2, 1] {
             let mutation = format!(
                 r#"mutation {{ create_AgentMessage(input: {{
@@ -1850,7 +1840,8 @@ mod tests {
         use gents_store::config_client::ConfigApplyTxn;
         use gents_store::identity::NodeIdentity;
 
-        let (node, node_did, signer) = reduction_fixture(None).await;
+        let (db, node_did, signer) = reduction_fixture(None).await;
+        let node = db.node.clone();
         let agent_did = signer.did().to_owned();
         let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
             node.clone(),
@@ -2008,7 +1999,8 @@ mod tests {
 
     #[tokio::test]
     async fn shared_reduction_snapshots_reload_exactly_and_reuse_pinned_blocks() {
-        let (node, node_did, signer) = reduction_fixture(None).await;
+        let (db, node_did, signer) = reduction_fixture(None).await;
+        let node = db.node.clone();
         let agent_did = signer.did().to_owned();
         let reader = agent_access(&node, &signer);
         let prefix = vec![Message::user("prefix 🦀 ".repeat(2400))];
