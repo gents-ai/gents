@@ -575,17 +575,14 @@ fn surface_recovery(tool_name: &str, surface_id: Option<&str>) -> String {
 mod tests {
     #[test]
     fn workspace_datastore_create_tools_follow_the_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_datastore_write_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let collection = case.collection.as_str();
+        gents_lean_vocab::families::workspace_datastore_write_validation::replay(|case| {
             let declaration: super::WriteToolDecl = serde_json::from_value(serde_json::json!({
-                "tool_name":"create_fixture", "collection":collection,
+                "tool_name":"create_fixture", "collection":case.collection,
                 "fields":[{"name":"workspace_id"}]
             }))
             .unwrap();
-            assert_eq!(declaration.validate().is_ok(), case.allowed, "{case:?}");
-        }
+            declaration.validate().is_ok()
+        });
     }
 
     #[test]

@@ -1491,8 +1491,12 @@ def caseCoverage : List CoverageEntry :=
       "NativeRouteCases")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_datastore_write_cases"
-      "WorkspaceDatastoreWriteCases")
+      "family"
+      "workspace_datastore_write_validation")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_datastore_write_tool_call")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "workspace_root_access_cases"

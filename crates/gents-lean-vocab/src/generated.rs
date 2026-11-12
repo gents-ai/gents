@@ -2977,7 +2977,6 @@ pub struct LeanContractSnapshot {
     pub workspace_quickstart_selection_cases: Vec<LeanWorkspaceQuickstartSelectionCase>,
     pub pack_placement_reader_cases: Vec<LeanPackPlacementReaderCase>,
     pub native_route_cases: Vec<LeanNativeRouteCase>,
-    pub workspace_datastore_write_cases: Vec<LeanWorkspaceDatastoreWriteCase>,
     pub workspace_root_access_cases: Vec<LeanWorkspaceRootAccessCase>,
     pub workspace_child_revocation_cases: Vec<LeanWorkspaceChildRevocationCase>,
     pub workspace_admission_cases: Vec<LeanWorkspaceAdmissionCase>,
@@ -12121,13 +12120,6 @@ pub struct LeanWorkspaceCleanupCase {
     pub allowed: bool,
     pub begins: bool,
     pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspaceDatastoreWriteCase {
-    pub allowed: bool,
-    pub collection: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

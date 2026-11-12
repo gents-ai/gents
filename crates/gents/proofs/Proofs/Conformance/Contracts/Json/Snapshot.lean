@@ -86,6 +86,7 @@ import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
 import Proofs.Conformance.Identity.Delegation
 import Proofs.Conformance.Identity.AgentBlockSigning
+import Proofs.Conformance.Identity.WorkspaceDatastoreWrite
 import Proofs.ToolCalls.Identity.ClientAgentJournal
 import Proofs.Conformance.Identity.NodeFileRequests
 import Proofs.Conformance.Identity.RevokeFollowsGrant
@@ -705,7 +706,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
     ++ "\"native_route_cases\":" ++ Triggers.NativeRoute.casesJson ++ ","
-    ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
     ++ "\"workspace_child_revocation_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildRevocationCasesJson ++ ","
     ++ "\"workspace_admission_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAdmissionCasesJson ++ ","
