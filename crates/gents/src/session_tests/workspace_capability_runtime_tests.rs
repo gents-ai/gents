@@ -1,9 +1,11 @@
 use anyhow::Context;
-use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
-use crate::workspace::{
+use gents_session::request::lifecycle::{
+    RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage,
+};
+use gents_session::workspace::{
     bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture,
 };
-use crate::workspace::{
+use gents_session::workspace::{
     isolated_workspace_upsert_mutation, materialize_workspace_binding,
     workspace_binding_upsert_mutation, workspace_host_path, CreateWorkspaceAction, CreationPolicy,
     IsolatedWorkspaceDoc, MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceAdapterKind,
@@ -155,7 +157,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         let writer = writer.did().to_owned();
         let integrator = integrator.did().to_owned();
         tokio::task::spawn_blocking(move || {
-            crate::workspace::executor::create::prepare_workspace_reservation(
+            gents_session::workspace::executor::create::prepare_workspace_reservation(
                 &action,
                 &repository,
                 Some(&ceiling),
@@ -177,7 +179,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     )?;
     let mut denied_docs = MemoryWorkspaceDocuments::default();
     denied_docs.write_isolated_workspace(reservation)?;
-    assert!(crate::workspace::flush_workspace_docs(
+    assert!(gents_session::workspace::flush_workspace_docs(
         &creator_access,
         &denied_docs,
         creator.did(),
@@ -266,7 +268,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             .workspace_publication_cases
             .aborted_document_visible
     );
-    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+    gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
         .await?;
     let workspace_rows = writer_access
         .execute("{ IsolatedWorkspace { _docID } }")
@@ -283,7 +285,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &writer.did().parse()?,
         )
         .await?;
-    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+    gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
         .await?;
     let visible_after_retry = !writer_access
         .execute("{ IsolatedWorkspace { _docID } }")
@@ -314,7 +316,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &reader.did().parse()?,
         )
         .await?;
-    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+    gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
         .await?;
     let reader_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
@@ -374,7 +376,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     );
     let result = writer_access
         .execute(
-            &crate::workspace::overlay::workspace_bindings_for_parent_query(&workspace_doc),
+            &gents_session::workspace::overlay::workspace_bindings_for_parent_query(&workspace_doc),
         )
         .await?;
     let rows = result["data"]["WorkspaceBinding"].as_array().unwrap();
@@ -461,7 +463,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         } else {
             &writer_access
         };
-        let result = crate::workspace::runtime::claim_workspace_cleanup(
+        let result = gents_session::workspace::runtime::claim_workspace_cleanup(
             access,
             "workspace",
             user.did(),
@@ -476,7 +478,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         state["data"]["IsolatedWorkspace"][0]["lifecycle_state"],
         "cleaning"
     );
-    let stale = crate::workspace::flush_workspace_docs(
+    let stale = gents_session::workspace::flush_workspace_docs(
         &creator_access,
         &docs,
         creator.did(),
@@ -537,7 +539,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         integrator.as_ref(),
     )?;
     let query =
-        crate::workspace::overlay::workspace_bindings_for_parent_query(&workspace_doc);
+        gents_session::workspace::overlay::workspace_bindings_for_parent_query(&workspace_doc);
     let writer_rows = writer_access.execute(&query).await?;
     let integrator_rows = integrator_access.execute(&query).await?;
     assert!(writer_rows["data"]["WorkspaceBinding"]
@@ -624,7 +626,7 @@ async fn overlapping_native_workspace_fences_conflict(
     let context =
         defra_core::RequestContext::default().with_identity(Some(writer.did().to_owned()));
     let query =
-        crate::workspace::overlay::workspace_bindings_for_parent_query(workspace_doc);
+        gents_session::workspace::overlay::workspace_bindings_for_parent_query(workspace_doc);
     for handle in [&first, &second] {
         let response = node
             .execute_request_in_txn_with_signer(

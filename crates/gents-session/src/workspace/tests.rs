@@ -2032,5 +2032,3 @@ mod operator_base_freeze;
 
 #[path = "tests/integrate_writer_receipt.rs"]
 mod integrate_writer_receipt;
-
-mod pushdown_tests;

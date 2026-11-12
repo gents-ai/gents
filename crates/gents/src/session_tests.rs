@@ -12,3 +12,4 @@ mod query_result_tests;
 mod queue_tests;
 mod sessions_tests;
 mod terminal_tools_tests;
+mod workspace_capability_runtime_tests;
