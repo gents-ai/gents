@@ -7,6 +7,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use super::client::scope_call_with_token;
+use super::permit::{dropped_terminal, DroppedTerminal};
 use super::{
     scope_call, scope_call_with_join, scope_call_with_token_and_failure_reason, scope_request,
     set_terminal_failure_reason,
@@ -1307,6 +1308,20 @@ async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
         "StreamDroppedBeforeTerminalResponse"
     );
     assert_reconstructed_slot_count(&rows, "backend-a", 0);
+}
+
+#[test]
+fn dropped_permit_outcomes_match_lean_model() {
+    gents_lean_vocab::families::inference_dropped_permit_outcomes::replay::<String>(|input| {
+        let outcome = match dropped_terminal(input.cancelled, input.observed.clone()) {
+            DroppedTerminal::Cancelled => "cancelled",
+            DroppedTerminal::Observed(_) => "observed",
+            DroppedTerminal::StreamDropped => "stream_dropped",
+        };
+        gents_lean_vocab::families::inference_dropped_permit_outcomes::DropOutput {
+            outcome: outcome.to_string(),
+        }
+    });
 }
 
 async fn pending_call(

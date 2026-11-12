@@ -204,31 +204,29 @@ impl Drop for AdmissionPermit {
                     })
             });
         let terminal = self.terminal.clone().unwrap_or_else(|| {
-            if self
+            let cancelled = self
                 .cancel_observer
                 .as_ref()
-                .is_some_and(|t| t.is_cancelled())
-            {
-                PermitTerminal {
+                .is_some_and(|t| t.is_cancelled());
+            match dropped_terminal(cancelled, terminal_failure_reason) {
+                DroppedTerminal::Cancelled => PermitTerminal {
                     call_state: "cancelled",
                     failure_reason: Some("Cancelled".to_string()),
                     usage: None,
                     cached_input_tokens: CachedInputTokensObservation::NotAvailable,
-                }
-            } else if let Some(reason) = terminal_failure_reason {
-                PermitTerminal {
+                },
+                DroppedTerminal::Observed(reason) => PermitTerminal {
                     call_state: "failed",
                     failure_reason: Some(recorded_failure_reason(&reason)),
                     usage: None,
                     cached_input_tokens: CachedInputTokensObservation::NotAvailable,
-                }
-            } else {
-                PermitTerminal {
+                },
+                DroppedTerminal::StreamDropped => PermitTerminal {
                     call_state: "failed",
                     failure_reason: Some("StreamDroppedBeforeTerminalResponse".to_string()),
                     usage: None,
                     cached_input_tokens: CachedInputTokensObservation::NotAvailable,
-                }
+                },
             }
         });
         let node = self.node.clone();
@@ -264,6 +262,22 @@ impl Drop for AdmissionPermit {
                 }
             }
         });
+    }
+}
+
+pub(super) enum DroppedTerminal {
+    Cancelled,
+    Observed(String),
+    StreamDropped,
+}
+
+pub(super) fn dropped_terminal(cancelled: bool, observed: Option<String>) -> DroppedTerminal {
+    if cancelled {
+        DroppedTerminal::Cancelled
+    } else if let Some(reason) = observed {
+        DroppedTerminal::Observed(reason)
+    } else {
+        DroppedTerminal::StreamDropped
     }
 }
 

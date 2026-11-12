@@ -1,3 +1,4 @@
+import Proofs.Conformance.InferenceDroppedPermit
 import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.Identity.AgentTargetAccess
 import Proofs.Conformance.Identity.WorkspaceCompletion
