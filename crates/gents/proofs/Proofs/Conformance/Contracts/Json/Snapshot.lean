@@ -94,7 +94,7 @@ import Proofs.Store.Identity.MailboxAccess
 import Proofs.Store.Identity.WorkspaceAndFileRequests
 import Proofs.Store.Identity.PackPlacementReaders
 import Proofs.Store.Identity.AgentTargetAccess
-import Proofs.Automation.Triggers.NativeRoute
+import Proofs.Conformance.NativeRoute
 import Proofs.Session.Identity.SessionInputEdit
 import Proofs.Automation.EventDelivery.WatcherConformance
 import Proofs.Conformance.ClientInstallation
@@ -703,7 +703,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_child_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildCasesJson ++ ","
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
-    ++ "\"native_route_cases\":" ++ Triggers.NativeRoute.casesJson ++ ","
     ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
     ++ "\"workspace_child_revocation_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildRevocationCasesJson ++ ","

@@ -1451,8 +1451,8 @@ def caseCoverage : List CoverageEntry :=
       "agent_target_access_access")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
-      "native_route_cases"
-      "NativeRouteCases")
+      "family"
+      "native_route_delivery")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "workspace_datastore_write_cases"

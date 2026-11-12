@@ -2178,29 +2178,21 @@ mod native_route_tests {
         })
     }
 
-    /// Lean `Triggers.NativeRoute`: the producer stamps its invocation's
-    /// route on the native document it writes, and delivery derives the same
-    /// route from that observed document alone.
     #[test]
     fn native_documents_carry_the_modeled_route() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().native_route_cases;
-        assert_eq!(cases.len(), 6);
-        for case in cases {
-            let name = case.name.as_str();
+        use gents_lean_vocab::families::native_route_delivery as family;
+        let fields = |route: &HandoffRoute| family::Fields {
+            handoff_id: route.handoff_id.clone(),
+            reply_session_id: route.reply_session_id.clone(),
+            attempt: route.attempt,
+        };
+        family::replay(|case: &family::DeliveryInput| {
             let input = serde_json::json!({
                 "handoff_id": &case.input.handoff_id,
                 "reply_session_id": &case.input.reply_session_id,
                 "attempt": &case.input.attempt,
             });
             let stamped = HandoffRoute::from_fields(&input);
-            assert_eq!(
-                serde_json::from_value::<gents_lean_vocab::LeanNativeRouteCaseStamped>(
-                    route_json(&stamped)
-                )
-                .unwrap(),
-                case.stamped,
-                "{name}"
-            );
             let receipt = gents_session::workspace::WorkspaceReceiptDoc {
                 path_capability_digest: "digest".into(),
                 receipt_id: "receipt".into(),
@@ -2222,24 +2214,18 @@ mod native_route_tests {
             let mutation = gents_session::workspace::workspace_receipt_create_mutation(&receipt);
             assert!(
                 mutation.contains(&gents_session::workspace::handoff_route_fields(&stamped)),
-                "{name}: {mutation}"
+                "{}: {mutation}",
+                case.name
             );
             let observed = route_json(&stamped);
-            let delivered = HandoffRoute::from_fields(&observed);
-            assert_eq!(
-                serde_json::from_value::<gents_lean_vocab::LeanNativeRouteCaseDelivered>(
-                    route_json(&delivered)
-                )
-                .unwrap(),
-                case.delivered,
-                "{name}"
-            );
-            let emit = case.emit_outcome;
-            assert_eq!(
-                !emit || delivered.handoff_id.is_some(),
-                case.admitted,
-                "{name}"
-            );
-        }
+            family::DeliveryOutput {
+                stamped: fields(&stamped),
+                admitted: crate::triggers::engine::dispatch::outcome_fire_admitted(
+                    case.emit_outcome,
+                    Some(&observed),
+                ),
+                delivered: fields(&HandoffRoute::from_fields(&observed)),
+            }
+        });
     }
 }
