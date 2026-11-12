@@ -7,16 +7,24 @@ import Proofs.Conformance.PluginReceipt
 import Proofs.Tools.ToolPolicy.PluginCalls
 import Proofs.Tools.ToolPolicy.PluginData
 import Proofs.Conformance.PluginEffects
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.PluginResources
 open ToolPolicy Lean
 
-private def consentJson : Json := toJson <| [0, 1, 64, 1536, 4096, 4294967295].flatMap fun requested =>
-  [0, 1, 64, 1536, 4096].flatMap fun previous =>
-  [false, true].map fun consent => Json.mkObj [
-    ("requested", toJson requested), ("previous", toJson previous), ("consent", toJson consent),
-    ("expected", toJson (pluginResourceConsented requested previous consent))]
+structure LimitConsentInput where
+  requested : Nat
+  previous : Nat
+  consent : Bool
+  deriving ToJson
+
+@[conformance_family]
+def limitConsent : Family LimitConsentInput Bool where
+  inputs := [0, 1, 64, 1536, 4096, 4294967295].flatMap fun requested =>
+    [0, 1, 64, 1536, 4096].flatMap fun previous =>
+    [false, true].map fun consent => { requested, previous, consent }
+  model := fun i => pluginResourceConsented i.requested i.previous i.consent
 
 private def budgetsJson : Json := toJson <| [(64, 4096), (5, 900), (60, 900), (1, 4)].flatMap fun (baseline, ceiling) =>
   [0, 1, baseline, ceiling, ceiling + 1, 4294967295].map fun requested => Json.mkObj [
@@ -435,9 +443,6 @@ theorem route_regressions :
       [ false, false, false, true, false, false, false, true
       , false, false, false, true, false, false, false, true ] := by
   native_decide
-
-def pluginResourceConsentCasesJson : String :=
-  consentJson.compress
 
 def pluginResourceBudgetCasesJson : String :=
   budgetsJson.compress

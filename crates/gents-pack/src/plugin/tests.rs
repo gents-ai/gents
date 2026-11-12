@@ -717,41 +717,34 @@ fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
     assert!(crate::pack::tool_instructions("lint", &oversized).is_err());
 }
 
-#[test]
-fn generated_plugin_resource_cases_bind_budget_and_consent() {
-    let cases = gents_lean_vocab::lean_contract_snapshot();
-    for case in cases.plugin_resource_consent_cases.as_array().unwrap() {
-        let requested = case["requested"].as_u64().unwrap() as u32;
-        let previous = case["previous"].as_u64().unwrap() as u32;
-        let consent = case["consent"].as_bool().unwrap();
-        for axis in 0..3 {
-            let mut requested_limits = crate::pack::PluginLimits::default();
-            let mut previous_limits = crate::pack::PluginLimits::default();
-            match axis {
-                0 => {
-                    requested_limits.memory_mib = Some(requested);
-                    previous_limits.memory_mib = Some(previous);
-                }
-                1 => {
-                    requested_limits.wall_clock_secs = Some(requested);
-                    previous_limits.wall_clock_secs = Some(previous);
-                }
-                _ => {
-                    requested_limits.max_output_mib = Some(requested);
-                    previous_limits.max_output_mib = Some(previous);
-                }
-            }
-            assert_eq!(
-                authority::limits_consented(
-                    Some(&requested_limits),
-                    Some(&previous_limits),
-                    consent
-                ),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
+fn limit_axis(limits: &mut crate::pack::PluginLimits, axis: usize) -> &mut Option<u32> {
+    match axis {
+        0 => &mut limits.memory_mib,
+        1 => &mut limits.wall_clock_secs,
+        _ => &mut limits.max_output_mib,
     }
+}
+
+#[test]
+fn limit_consent_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_resources_limit_consent::replay(|i| {
+        let axes: Vec<bool> = (0..3)
+            .map(|axis| {
+                let mut requested = crate::pack::PluginLimits::default();
+                let mut previous = crate::pack::PluginLimits::default();
+                *limit_axis(&mut requested, axis) = Some(i.requested as u32);
+                *limit_axis(&mut previous, axis) = Some(i.previous as u32);
+                authority::limits_consented(Some(&requested), Some(&previous), i.consent)
+            })
+            .collect();
+        assert!(axes.iter().all(|consented| *consented == axes[0]), "{i:?}");
+        axes[0]
+    });
+}
+
+#[test]
+fn generated_plugin_resource_cases_bind_budget() {
+    let cases = gents_lean_vocab::lean_contract_snapshot();
     for case in cases.plugin_resource_budget_cases.as_array().unwrap() {
         let baseline = case["baseline"].as_u64().unwrap();
         let requested = case["requested"].as_u64().unwrap() as u32;
