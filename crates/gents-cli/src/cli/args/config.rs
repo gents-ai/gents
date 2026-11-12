@@ -275,9 +275,9 @@ pub(crate) struct SkillAddArgs {
     pub(crate) tool_refs: Vec<String>,
     #[arg(long)]
     pub(crate) display_name: Option<String>,
-    /// Enable or disable the skill. Omitted, a new skill starts enabled and
-    /// a stored one keeps its state.
-    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    /// Enable the skill, or disable it with `--enabled=false`. Omitted, a
+    /// new skill starts enabled and a stored one keeps its state.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
     pub(crate) enabled: Option<bool>,
     /// Clear a stored field (repeatable): name, description, instructions,
     /// display_name or tool_refs. A field no flag names keeps its value.

@@ -442,6 +442,7 @@ impl SelfConfigCore {
             self.guard_candidate_chain(txn, request.target, &merged)
                 .await?;
         }
+        (request.admit)(&stored_doc, &merged)?;
 
         let changed = safe_diff(request.target, &stored_doc, &merged);
         let shared =
@@ -662,6 +663,7 @@ impl SelfConfigCore {
             self.guard_candidate_chain(txn, request.target, &merged)
                 .await?;
         }
+        (request.admit)(&stored_doc, &merged)?;
         validate_desired_state_plan(
             txn,
             &replacement_plan(request.target, &merged)?,

@@ -9,11 +9,9 @@ use gents_store::config_client::ConfigAccess;
 use gents_tools::builtin::self_config::tools_operation::{finish, save_tools, ToolsActor};
 use gents_tools::builtin::self_config::OperatorGrants;
 
-pub use gents_tools::builtin::self_config::tools_operation::ToolsReceipt;
-
-/// Whether this node has a plugin installed, for a caller that can observe
-/// the node's plugin home.
-pub type InstalledPlugins<'a> = &'a (dyn Fn(&str) -> anyhow::Result<()> + Send + Sync);
+pub use gents_tools::builtin::self_config::tools_operation::{
+    document_patch, InstalledPlugins, ToolsReceipt,
+};
 
 async fn run(
     access: &ConfigAccess,
@@ -57,19 +55,6 @@ pub async fn preview_save(
     installed: Option<InstalledPlugins<'_>>,
 ) -> Result<ToolsReceipt, ToolsOperationError> {
     run(access, owner, input, installed, false).await
-}
-
-/// The top-level groups a whole Tools document sets and clears, for a client
-/// that saves one.
-pub fn document_patch(
-    document: &gents_documents::Tools,
-) -> anyhow::Result<gents_protocol::operations::document::DocumentPatch> {
-    let value = serde_json::to_value(document)?;
-    Ok(gents_documents::patch::SelfConfigTarget::Tools
-        .writable_fields()
-        .into_iter()
-        .map(|field| (field.to_owned(), value.get(field).cloned()))
-        .collect())
 }
 
 /// A person's delete: one call, scoped to `owner`.
