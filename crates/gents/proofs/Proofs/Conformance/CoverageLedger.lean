@@ -2516,7 +2516,7 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "request_input_cases" "RequestInputCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_reply_preview_cases" "SessionReplyPreviewCases")
+  , tagged (consumerCoverage "family" "session_reply_preview_observation")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "session_document_projection_cases" "SessionDocumentCases"
       "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")

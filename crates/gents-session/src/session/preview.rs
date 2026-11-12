@@ -115,9 +115,9 @@ mod tests {
 
     #[test]
     fn terminal_reply_projection_follows_the_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().session_reply_preview_cases;
-        assert_eq!(cases.len(), 96);
-        for case in cases {
+        gents_lean_vocab::families::session_reply_preview_observation::replay::<
+            gents_protocol::request_lifecycle::RequestLifecycleState,
+        >(|case| {
             let observation = SessionObservation {
                 last_activity_at: "2030-01-01T00:00:00Z".into(),
                 preview: Some("Question".into()),
@@ -132,17 +132,10 @@ mod tests {
             let current = SessionRequestObservation {
                 request_doc_id: case.doc.to_string(),
                 request_id: case.request.to_string(),
-                lifecycle_state: serde_json::from_value(serde_json::Value::String(
-                    case.state.clone(),
-                ))
-                .unwrap(),
+                lifecycle_state: case.state,
             };
-            assert_eq!(
-                observe_reply_preview(&observation, &current, case.reply.as_deref()),
-                case.preview,
-                "{case:?}"
-            );
-        }
+            observe_reply_preview(&observation, &current, case.reply.as_deref())
+        });
     }
 
     #[test]
