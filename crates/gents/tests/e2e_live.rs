@@ -53,3 +53,6 @@ mod queued_user_messages;
 
 #[path = "e2e_runtime/field_recovery_turn.rs"]
 mod field_recovery_turn;
+
+#[path = "e2e_live/steering_delivery_live.rs"]
+mod steering_delivery_live;
