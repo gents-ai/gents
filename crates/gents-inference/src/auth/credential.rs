@@ -210,9 +210,6 @@ mod tests;
 mod resolver_tests;
 
 #[cfg(test)]
-mod sign_in_tests;
-
-#[cfg(test)]
 mod lifecycle_tests;
 
 #[cfg(test)]

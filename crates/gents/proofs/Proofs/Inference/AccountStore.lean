@@ -225,11 +225,35 @@ def signIn (state : State) (signIn : SignIn) : State × StepResult :=
         next := state.next + 1 }
     , { outcome := .added, row := some state.next, identityMatched := false } )
 
+/-- The runtime's own write of a credential it holds addresses the provider's
+original slot by its id and stores the credential as given: tokens, key and
+account id are replaced, a key the credential lacks is cleared, and the label
+and slot stay. It does not reconcile identities; that is the sign-in. -/
+def upsertRow (row : Row) (signIn : SignIn) : Row :=
+  { row with
+    tokenKeys := signIn.tokenKeys
+    key := signIn.key
+    accountId := signIn.accountId
+    enabled := true
+    token := signIn.token }
+
+def upsert (state : State) (signIn : SignIn) : State × StepResult :=
+  match state.rows.find? fun row => row.provider == signIn.provider && row.original with
+  | some row =>
+    ( { state with rows := replaceRow state.rows (upsertRow row signIn) }
+    , { outcome := .refreshed, row := some row.id, identityMatched := false } )
+  | none =>
+    ( { state with
+        rows := state.rows ++ [{ addRow state.next [] signIn none with label := none }]
+        next := state.next + 1 }
+    , { outcome := .added, row := some state.next, identityMatched := false } )
+
 def account (state : State) (id : Nat) : Option Row :=
   state.rows.find? fun row => row.id == id && row.provider.account
 
 inductive Action where
   | signIn (signIn : SignIn)
+  | upsert (signIn : SignIn)
   | setLabel (row : Nat) (label : String)
   | setEnabled (row : Nat) (enabled : Bool)
   | remove (row : Nat)
@@ -255,6 +279,7 @@ def setLabel (state : State) (id : Nat) (raw : String) : State × StepResult :=
 stays until someone removes it. -/
 def step (state : State) : Action → State × StepResult
   | .signIn request => signIn state request
+  | .upsert request => upsert state request
   | .setLabel id label => setLabel state id label
   | .setEnabled id enabled =>
     match account state id with
@@ -362,6 +387,18 @@ theorem a_sign_in_leaves_other_rows (state : State) (request : SignIn) (other : 
     have differs := untouched tier row label decision
     simp only [replaceRow, List.mem_map]
     exact ⟨other, stored, by simp [refreshRow, differs]⟩
+
+theorem an_upsert_keeps_the_label_and_slot (row : Row) (request : SignIn) :
+    (upsertRow row request).label = row.label
+      ∧ (upsertRow row request).original = row.original
+      ∧ (upsertRow row request).id = row.id
+      ∧ (upsertRow row request).key = request.key :=
+  ⟨rfl, rfl, rfl, rfl⟩
+
+theorem an_upsert_never_touches_the_backends (state : State) (request : SignIn) :
+    (upsert state request).1.backends = state.backends := by
+  unfold upsert
+  split <;> rfl
 
 theorem a_valid_label_is_trimmed (raw label : String) (valid : validLabel raw = some label) :
     label = raw.trim := by

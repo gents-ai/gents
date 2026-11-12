@@ -9,6 +9,7 @@ deriving instance ToJson for Provider, Outcome, StepResult
 
 inductive StepKind where
   | signIn
+  | upsert
   | setLabel
   | setEnabled
   | remove
@@ -73,6 +74,9 @@ def Step.action (step : Step) : Action :=
   | .signIn => .signIn
       { provider := step.provider, tokenKeys := step.tokenKeys, key := step.key
         accountId := step.accountId, label := step.label, token := step.token }
+  | .upsert => .upsert
+      { provider := step.provider, tokenKeys := step.tokenKeys, key := step.key
+        accountId := step.accountId, label := none, token := step.token }
   | .setLabel => .setLabel step.row (step.label.getD "")
   | .setEnabled => .setEnabled step.row step.enabled
   | .remove => .remove step.row
@@ -120,6 +124,9 @@ def grok (principal token : String) : Step :=
 
 def chatGpt (keys : List String) (token : String) : Step :=
   signIn .chatGpt keys keys.head? (some "acct-ws") token
+
+def upsert (step : Step) : Step :=
+  { step with kind := .upsert }
 
 def setLabel (row : Nat) (label : String) : Step :=
   { blank .setLabel row with label := some label }
@@ -258,9 +265,37 @@ def credentials : List Input :=
       seeds := [seed .cloud [] none none]
       steps := products.map fun p => person p "a" "1" } ]
 
+def upserts : List Input :=
+  [ { name := "an upsert fills an empty key"
+      seeds := []
+      steps :=
+        [ upsert (signIn .chatGpt [] none (some "acct-ws") "1")
+        , upsert (person .chatGpt "a" "2") ] }
+  , { name := "an upsert of another account replaces tokens, key and account id"
+      seeds := []
+      steps :=
+        [ upsert (person .chatGpt "a" "1"), upsert (person .chatGpt "b" "2")
+        , upsert (person .claude "a" "1"), upsert (person .claude "b" "2") ] }
+  , { name := "a keyless upsert clears the stored key"
+      seeds := []
+      steps :=
+        [ upsert (person .grok "a" "1"), upsert (signIn .grok [] none none "2")
+        , upsert (person .chatGpt "a" "1")
+        , upsert (signIn .chatGpt [] none (some "acct-ws") "2") ] }
+  , { name := "an upsert keeps the label and enables the account"
+      seeds := []
+      steps :=
+        [ person .claude "a" "1" (some "Work"), setEnabled 0 false
+        , upsert (person .claude "b" "2") ] }
+  , { name := "an upsert takes the original slot beside an added account"
+      seeds := []
+      steps :=
+        [ person .grok "a" "1", person .grok "b" "1", blank .remove 0
+        , upsert (person .grok "c" "1"), upsert (person .grok "b" "2") ] } ]
+
 @[conformance_family]
 def scenarios : Conformance.Family Input Output where
-  inputs := perProduct ++ labels ++ identities ++ credentials
+  inputs := perProduct ++ labels ++ identities ++ credentials ++ upserts
   model := fun input =>
     let (state, results) := run (seeded input.seeds) (input.steps.map Step.action)
     { results, rows := state.rows.map (view state), backendCount := state.backends.length }
