@@ -39,11 +39,7 @@ def limitBudget : Family LimitBudgetInput Nat where
       { baseline, requested, ceiling }
   model := fun i => effectivePluginResource i.baseline i.requested i.ceiling
 
-private def modelSlotsJson : Json := toJson <| [false, true].flatMap fun declared =>
-  [false, true].flatMap fun optional =>
-  [false, true].map fun agentFree => Json.mkObj [
-    ("declared", toJson declared), ("optional", toJson optional), ("agent_free", toJson agentFree),
-    ("expected", toJson (pluginModelSlotAllowed declared optional agentFree))]
+attribute [conformance_function] ToolPolicy.pluginModelSlotAllowed
 
 section Network
 open ToolPolicy.PluginNetwork
@@ -472,9 +468,6 @@ def pluginResourceToolEffectTerminalCasesJson : String :=
 
 def pluginResourceToolEffectAccountingCasesJson : String :=
   PluginEffects.accountingCasesJson.compress
-
-def pluginResourceModelSlotCasesJson : String :=
-  modelSlotsJson.compress
 
 def pluginResourceNetworkCasesJson : String :=
   networkJson.compress

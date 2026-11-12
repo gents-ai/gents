@@ -1623,8 +1623,8 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigSelectionCases")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_model_slot_cases"
-      "PluginModelSlotCases")
+      "family"
+      "tool_policy_plugin_model_slot_allowed")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
