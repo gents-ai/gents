@@ -228,6 +228,10 @@ where
     }
 }
 
+/// An editor-store process already prohibits system interaction for its whole
+/// lifetime, which makes `prevent_prompts` redundant there; it is retained
+/// because this is also reached from callers that hold no process guard, and
+/// because fresh custody must be created with dialogs disabled whoever calls.
 async fn native_key(
     record: &StoreEncryption,
     key_file: &Path,

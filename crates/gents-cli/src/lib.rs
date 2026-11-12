@@ -375,6 +375,23 @@ pub fn without_keychain_prompts<T>(operation: impl FnOnce() -> Result<T>) -> Res
     operation()
 }
 
+/// The process-wide prohibition installed by [`prevent_keychain_prompts_guard`].
+/// macOS applies the policy to the process rather than to a Keychain item, so
+/// this value is the only thing that bounds its lifetime: while it is held no
+/// credential access in this process can raise a system authentication dialog,
+/// whatever the call site does. Dropping it restores only a prohibition this
+/// guard installed; an inherited one stays in force.
+pub struct KeychainPromptProhibition(#[allow(dead_code)] process_resources::KeychainPromptLock);
+
+/// Install the prohibition for a scope that outlives a single call, for hosts
+/// whose whole lifetime is an automatic startup. [`without_keychain_prompts`]
+/// remains the form for one bounded operation, and a host that only ever runs
+/// unattended should hold this instead of relying on every credential call site
+/// to apply its own guard.
+pub fn prevent_keychain_prompts_guard() -> Result<KeychainPromptProhibition> {
+    process_resources::prevent_keychain_prompts(true).map(KeychainPromptProhibition)
+}
+
 pub fn run_cli() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

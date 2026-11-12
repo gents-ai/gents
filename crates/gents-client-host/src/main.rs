@@ -16,6 +16,10 @@ struct Args {
     stdio: bool,
     #[arg(long, hide = true)]
     editor_store: bool,
+    /// The only lift of the prohibition an editor-store process otherwise
+    /// installs for its whole lifetime. The editor passes it solely for the
+    /// explicit local-history unlock, so every other startup is unable to
+    /// raise a system authentication dialog rather than merely avoiding one.
     #[arg(long, hide = true, requires = "editor_store")]
     allow_keychain_prompts: bool,
     #[arg(long, conflicts_with_all = ["home", "serve", "stdio"])]

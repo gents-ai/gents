@@ -1,12 +1,19 @@
 use anyhow::Result;
 
+/// Holding this value keeps the process-wide prohibition in force; dropping it
+/// restores only a policy this guard itself installed.
+#[cfg(target_os = "macos")]
+pub(crate) type KeychainPromptLock =
+    Option<security_framework::os::macos::keychain::KeychainUserInteractionLock>;
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) type KeychainPromptLock = Option<std::convert::Infallible>;
+
 /// macOS applies this setting to the process, not a Keychain item or its ACL.
 /// The CLI owns this guard from before credential loading until server exit;
 /// an inherited prohibition must remain in force when the guard is dropped.
 #[cfg(target_os = "macos")]
-pub(crate) fn prevent_keychain_prompts(
-    prevent: bool,
-) -> Result<Option<security_framework::os::macos::keychain::KeychainUserInteractionLock>> {
+pub(crate) fn prevent_keychain_prompts(prevent: bool) -> Result<KeychainPromptLock> {
     use anyhow::Context;
     use security_framework::os::macos::keychain::SecKeychain;
 
@@ -23,7 +30,7 @@ pub(crate) fn prevent_keychain_prompts(
 /// Other platforms have no process Keychain policy; the empty guard keeps every
 /// call site holding the same binding as on macOS.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn prevent_keychain_prompts(_prevent: bool) -> Result<Option<std::convert::Infallible>> {
+pub(crate) fn prevent_keychain_prompts(_prevent: bool) -> Result<KeychainPromptLock> {
     Ok(None)
 }
 
