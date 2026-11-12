@@ -308,8 +308,6 @@ def snapshotCaptureTailJson : String :=
       ++ compactionCanonicalProjectionCasesJson ++ ","
     ++ "\"repaired_projection_admission_cases\":"
       ++ repairedProjectionAdmissionCasesJson ++ ","
-    ++ "\"rendered_capture_key_cases\":"
-      ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"auxiliary_session_child_binding_cases\":"
       ++ Identity.SessionChild.childScopeCasesJson ++ ","
     ++ "\"goal_link_cases\":"

@@ -4,7 +4,7 @@ use crate::rendered_request::{
 };
 use serde_json::{json, Value};
 
-use gents_lean_vocab::{lean_rendered_capture_cases, lean_rendered_capture_key_cases};
+use gents_lean_vocab::lean_rendered_capture_cases;
 
 fn node_did(id: u64) -> String {
     format!("did:key:z6Mk-node-{id}")
@@ -110,70 +110,28 @@ fn capture_key(
 }
 
 #[test]
-fn generated_rendered_capture_key_cases_pin_the_capture_key_tuple() {
-    let cases = lean_rendered_capture_key_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no rendered-capture key cases"
-    );
-
-    for case in cases {
+fn rendered_capture_keys_follow_the_lean_model() {
+    gents_lean_vocab::families::contracts_rendered_capture_key::replay(|pair| {
         let left = rendered(
-            case.left_node_did,
-            case.left_session_id,
-            case.left_request_id,
-            case.left_turn_index,
-            case.left_attempt,
+            pair.left_node_did,
+            pair.left_session_id,
+            pair.left_request_id,
+            usize::try_from(pair.left_turn_index).unwrap(),
+            u32::try_from(pair.left_attempt).unwrap(),
             json!({"model": "test-model"}),
         );
         let right = rendered(
-            case.right_node_did,
-            case.right_session_id,
-            case.right_request_id,
-            case.right_turn_index,
-            case.right_attempt,
+            pair.right_node_did,
+            pair.right_session_id,
+            pair.right_request_id,
+            usize::try_from(pair.right_turn_index).unwrap(),
+            u32::try_from(pair.right_attempt).unwrap(),
             json!({"model": "test-model"}),
         );
-
-        assert_eq!(
-            capture_key(&left) == capture_key(&right),
-            case.same_fact,
-            "{}: the production capture-key projection disagrees with the Lean \
-             model about whether these two provider attempts are one fact",
-            case.name
-        );
-
-        assert_eq!(
-            left.capture_key == right.capture_key,
-            case.same_fact,
-            "{}: the derived capture_key column disagrees with componentwise \
-             tuple equality",
-            case.name
-        );
-
-        let varied = [
-            case.left_node_did != case.right_node_did,
-            case.left_session_id != case.right_session_id,
-            case.left_request_id != case.right_request_id,
-            case.left_turn_index != case.right_turn_index,
-            case.left_attempt != case.right_attempt,
-        ]
-        .into_iter()
-        .filter(|differs| *differs)
-        .count();
-        assert!(
-            varied <= 1,
-            "{}: key rows must vary at most one component so a dropped \
-             component is attributable",
-            case.name
-        );
-        assert_eq!(
-            varied == 0,
-            case.same_fact,
-            "{}: sameFact must be exactly componentwise equality",
-            case.name
-        );
-    }
+        let same_fact = left.capture_key == right.capture_key;
+        assert_eq!(capture_key(&left) == capture_key(&right), same_fact);
+        same_fact
+    });
 }
 
 #[test]

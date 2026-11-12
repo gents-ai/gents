@@ -577,10 +577,6 @@ pub fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
     &lean_contract_snapshot().rendered_capture_cases
 }
 
-pub fn lean_rendered_capture_key_cases() -> &'static [LeanRenderedCaptureKeyCase] {
-    &lean_contract_snapshot().rendered_capture_key_cases
-}
-
 pub fn lean_repaired_projection_admission_cases() -> &'static [LeanRepairedProjectionCase] {
     &lean_contract_snapshot().repaired_projection_admission_cases
 }
@@ -3344,7 +3340,6 @@ pub struct LeanContractSnapshot {
     pub compaction_projection_join_cases: Vec<LeanCompactionProjectionJoinCase>,
     pub compaction_canonical_projection_cases: Vec<LeanCanonicalCompactionCase>,
     pub repaired_projection_admission_cases: Vec<LeanRepairedProjectionCase>,
-    pub rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     pub auxiliary_session_child_binding_cases: Vec<LeanAuxiliarySessionChildBindingCase>,
     pub client_request_publication_cases: Vec<serde_json::Value>,
     pub capture_scope_cases: Vec<LeanCaptureScopeCase>,
@@ -10124,22 +10119,6 @@ pub struct LeanRenderedCaptureCase {
     pub provider_requests_observed: usize,
     pub durable_after: Option<u64>,
     pub final_stage: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanRenderedCaptureKeyCase {
-    pub name: String,
-    pub left_node_did: u64,
-    pub left_session_id: u64,
-    pub left_request_id: u64,
-    pub left_turn_index: usize,
-    pub left_attempt: u32,
-    pub right_node_did: u64,
-    pub right_session_id: u64,
-    pub right_request_id: u64,
-    pub right_turn_index: usize,
-    pub right_attempt: u32,
-    pub same_fact: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
