@@ -1,3 +1,5 @@
+import Proofs.Conformance.CallbackAdmission
+import Proofs.Conformance.GoalResetAccount
 import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.Views
 import Proofs.Conformance.AgentViews

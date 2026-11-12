@@ -3092,70 +3092,72 @@ async fn one_delivery_pass_drains_a_backlog_beyond_one_journal_page() {
 }
 
 #[tokio::test]
-async fn edited_document_admitted_before_a_crash_is_not_readmitted() {
-    let backlog = Backlog::registered().await;
-    let pending = backlog.create("pending").await;
-    let seeded = backlog.cursor().await;
-    let mut crashed = backlog.engine();
-    crashed.reconcile_bindings().await;
-    let binding = super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(crashed
-        .materialize_for_binding(&binding, "BacklogWork", &pending, false)
-        .await
-        .unwrap());
-    drop(crashed);
-    assert_eq!(
-        backlog.cursor().await,
-        seeded,
-        "the crash precedes the checkpoint"
-    );
-    backlog
-        .access
-        .write(
-            "test.backlog_edit",
-            &format!(
-                "mutation {{ update_BacklogWork(docID: \"{}\", input: {{label: \"edited\"}}) {{ _docID }} }}",
-                gents_store::graphql::escape_graphql_string(&pending)
-            ),
-        )
-        .await
-        .unwrap();
-    backlog.start_engine().await;
-    assert_eq!(backlog.invoked().await, vec![pending]);
-    assert_ne!(
-        backlog.cursor().await,
-        seeded,
-        "the recovered arrival is checkpointed"
-    );
-    backlog.node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn admission_refuses_a_binding_disabled_after_its_snapshot() {
-    let backlog = Backlog::registered().await;
-    let pending = backlog.create("pending").await;
-    let snapshot = super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
-        .await
-        .unwrap()
-        .unwrap();
-    backlog
-        .access
-        .write(
-            "test.backlog_disable",
-            r#"mutation { update_CallbackBinding(filter: {binding_id: {_eq: "bind-backlog"}}, input: {enabled: false}) { _docID } }"#,
-        )
-        .await
-        .unwrap();
-    let mut engine = backlog.engine();
-    assert!(!engine
-        .materialize_for_binding(&snapshot, "BacklogWork", &pending, false)
-        .await
-        .unwrap());
-    assert!(backlog.invoked().await.is_empty());
-    backlog.node.shutdown().await.expect("node shutdown");
+async fn callback_admission_traces_match_the_durable_model() {
+    use gents_lean_vocab::families::callback_admission_trace as trace;
+    for case in gents_lean_vocab::families::callback_admission_trace::cases::<String>() {
+        let backlog = Backlog::registered().await;
+        let pending = backlog.create("pending").await;
+        let seeded = backlog.cursor().await;
+        let snapshot =
+            super::documents::load_binding(&backlog.node, "bind-backlog", &backlog.owner)
+                .await
+                .unwrap()
+                .unwrap();
+        let mut observed = Vec::new();
+        for step in &case.input.steps {
+            let admitted = match step.as_str() {
+                "admit" => {
+                    let mut crashed = backlog.engine();
+                    crashed.reconcile_bindings().await;
+                    Some(
+                        crashed
+                            .materialize_for_binding(&snapshot, "BacklogWork", &pending, false)
+                            .await
+                            .unwrap(),
+                    )
+                }
+                "edit" => {
+                    backlog
+                        .access
+                        .write(
+                            "test.backlog_edit",
+                            &format!(
+                                "mutation {{ update_BacklogWork(docID: \"{}\", input: {{label: \"edited\"}}) {{ _docID }} }}",
+                                gents_store::graphql::escape_graphql_string(&pending)
+                            ),
+                        )
+                        .await
+                        .unwrap();
+                    None
+                }
+                "disable" => {
+                    backlog
+                        .access
+                        .write(
+                            "test.backlog_disable",
+                            r#"mutation { update_CallbackBinding(filter: {binding_id: {_eq: "bind-backlog"}}, input: {enabled: false}) { _docID } }"#,
+                        )
+                        .await
+                        .unwrap();
+                    None
+                }
+                "restart" => {
+                    backlog.start_engine().await;
+                    None
+                }
+                other => panic!("unknown callback step {other}"),
+            };
+            let invoked = backlog.invoked().await;
+            assert!(!invoked.contains(&backlog.history), "{:?}", case.input);
+            observed.push(trace::CallbackObservation {
+                admitted,
+                invocations: invoked.len() as u64,
+                checkpointed: backlog.cursor().await != seeded,
+            });
+        }
+        case.check(observed);
+        backlog.node.shutdown().await.expect("node shutdown");
+    }
 }
 
 #[test]
