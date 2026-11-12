@@ -158,13 +158,18 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         directory.path().join("runtime"),
         None,
     )?);
-    let signing_key =
-        gents_store::identity::load_file_identity(&directory.path().join("runtime"))?
-            .private_key_bytes();
-    let user = gents_store::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
-    let agent = gents_store::identity::KeyIdentity::load_or_create(directory.path().join("agent"), None)?;
-    let sibling = gents_store::identity::KeyIdentity::load_or_create(directory.path().join("sibling"), None)?;
-    let outsider = gents_store::identity::KeyIdentity::load_or_create(directory.path().join("outsider"), None)?;
+    let signing_key = gents_store::identity::load_file_identity(&directory.path().join("runtime"))?
+        .private_key_bytes();
+    let user =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+    let agent =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("agent"), None)?;
+    let sibling =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("sibling"), None)?;
+    let outsider = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("outsider"),
+        None,
+    )?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let node = Arc::new(
@@ -638,28 +643,54 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     assert!(!visible_to_agent(&agent_access.execute(&query).await?));
     reopened.shutdown().await?;
     for case in gents_lean_vocab::families::identity_operations_deferred_applied_linked::cases() {
-        let linked = linked
-            .remove(case.input.name.as_str())
-            .unwrap_or_else(|| panic!("the applied-pairing scenario never reached {}", case.input.name));
-        case.check(gents_lean_vocab::families::identity_operations_deferred_applied_linked::Linked { linked });
+        let linked = linked.remove(case.input.name.as_str()).unwrap_or_else(|| {
+            panic!(
+                "the applied-pairing scenario never reached {}",
+                case.input.name
+            )
+        });
+        case.check(
+            gents_lean_vocab::families::identity_operations_deferred_applied_linked::Linked {
+                linked,
+            },
+        );
     }
     for case in gents_lean_vocab::families::identity_operations_deferred_applied_granted::cases() {
-        let granted = granted
-            .remove(case.input.name.as_str())
-            .unwrap_or_else(|| panic!("the applied-pairing scenario never reached {}", case.input.name));
-        case.check(gents_lean_vocab::families::identity_operations_deferred_applied_granted::Granted { granted });
+        let granted = granted.remove(case.input.name.as_str()).unwrap_or_else(|| {
+            panic!(
+                "the applied-pairing scenario never reached {}",
+                case.input.name
+            )
+        });
+        case.check(
+            gents_lean_vocab::families::identity_operations_deferred_applied_granted::Granted {
+                granted,
+            },
+        );
     }
     for case in gents_lean_vocab::families::identity_operations_reader_policy_read::cases() {
-        let read = read
-            .remove(case.input.name.as_str())
-            .unwrap_or_else(|| panic!("the applied-pairing scenario never reached {}", case.input.name));
-        case.check(gents_lean_vocab::families::identity_operations_reader_policy_read::ReaderRead { read });
+        let read = read.remove(case.input.name.as_str()).unwrap_or_else(|| {
+            panic!(
+                "the applied-pairing scenario never reached {}",
+                case.input.name
+            )
+        });
+        case.check(
+            gents_lean_vocab::families::identity_operations_reader_policy_read::ReaderRead { read },
+        );
     }
     for case in gents_lean_vocab::families::identity_operations_reader_policy_manage::cases() {
-        let manage_reader = managed
-            .remove(case.input.name.as_str())
-            .unwrap_or_else(|| panic!("the applied-pairing scenario never reached {}", case.input.name));
-        case.check(gents_lean_vocab::families::identity_operations_reader_policy_manage::ManageReader { manage_reader });
+        let manage_reader = managed.remove(case.input.name.as_str()).unwrap_or_else(|| {
+            panic!(
+                "the applied-pairing scenario never reached {}",
+                case.input.name
+            )
+        });
+        case.check(
+            gents_lean_vocab::families::identity_operations_reader_policy_manage::ManageReader {
+                manage_reader,
+            },
+        );
     }
     assert!(
         linked.is_empty() && granted.is_empty() && read.is_empty() && managed.is_empty(),

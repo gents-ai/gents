@@ -266,8 +266,7 @@ mod tests {
             active.request.candidate_peer = current.peer.clone();
             active.request.owner_node_did = current.owner.clone();
             active.request.profile = current.profile.clone();
-            active.decision.decided_at =
-                timestamp(expires - current.lease_seconds as i64 * 86_400);
+            active.decision.decided_at = timestamp(expires - current.lease_seconds as i64 * 86_400);
             let mut request = active.request.clone();
             request.request_id = "renewal".into();
             request.network_id = proposed.network.clone();
@@ -305,12 +304,8 @@ mod tests {
                 offer_token: request.offer_token.clone(),
                 request,
             });
-            let actual = state.renewal_lease_for(
-                "renewal",
-                current.enabled,
-                limit.map(|n| n * 86_400),
-                now,
-            );
+            let actual =
+                state.renewal_lease_for("renewal", current.enabled, limit.map(|n| n * 86_400), now);
             gents_lean_vocab::families::enrollment_auto_renewal_approval::Approval {
                 projection_allowed: actual.is_ok(),
                 lease: actual.ok().map(|lease| {

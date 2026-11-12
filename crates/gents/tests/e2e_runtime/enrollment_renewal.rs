@@ -17,9 +17,7 @@ use gents_store::graphql::escape_graphql_string;
 use tokio_util::sync::CancellationToken;
 
 use crate::support::{self, TestDb};
-use gents_p2p::test_support::enrollment::{
-    authorize_enrollment_generation, EnrollmentGeneration,
-};
+use gents_p2p::test_support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
 
 struct Stop(CancellationToken);
 impl Drop for Stop {
@@ -236,7 +234,10 @@ async fn opted_in_members_renew_over_authenticated_routes() {
             .unwrap_or_else(|| panic!("the offer scenario never reached {}", case.input.name));
         case.check(gents_lean_vocab::families::enrollment_auto_renewal_offer::Offer { allowed });
     }
-    assert!(offered.is_empty(), "unmodeled offer observations: {offered:?}");
+    assert!(
+        offered.is_empty(),
+        "unmodeled offer observations: {offered:?}"
+    );
 }
 
 #[tokio::test]

@@ -287,11 +287,11 @@ mod tests {
 
     #[test]
     fn node_route_collections_match_executable_scope_model() {
-        gents_lean_vocab::families::scope_node_route_allowed::replay::<PairingDirection>(
-            |input| gents_lean_vocab::families::scope_node_route_allowed::NodeRouteAllowed {
+        gents_lean_vocab::families::scope_node_route_allowed::replay::<PairingDirection>(|input| {
+            gents_lean_vocab::families::scope_node_route_allowed::NodeRouteAllowed {
                 allowed: client_route_collections(input.direction).contains(&"Node"),
-            },
-        );
+            }
+        });
     }
 
     #[test]
@@ -315,8 +315,8 @@ mod tests {
         let mut modeled = BTreeSet::new();
         for case in gents_lean_vocab::families::scope_template::cases::<String>() {
             modeled.insert(case.input.id.clone());
-            case.check(
-                resolve_template(&case.input.id).map(|template| TemplateRoute {
+            case.check(resolve_template(&case.input.id).map(|template| {
+                TemplateRoute {
                     collections: template
                         .collections
                         .iter()
@@ -325,8 +325,8 @@ mod tests {
                     delivery: match template.delivery {
                         Delivery::Push => "push".to_owned(),
                     },
-                }),
-            );
+                }
+            }));
         }
         assert_eq!(
             builtin_templates()
@@ -360,15 +360,13 @@ mod tests {
                         clauses: conditions
                             .iter()
                             .flat_map(|(field, operators)| {
-                                operators
-                                    .as_object()
-                                    .expect("filter operators")
-                                    .iter()
-                                    .map(move |(operator, value)| Clause {
+                                operators.as_object().expect("filter operators").iter().map(
+                                    move |(operator, value)| Clause {
                                         field: field.clone(),
                                         operator: operator.clone(),
                                         value: value.as_str().expect("string filter").to_owned(),
-                                    })
+                                    },
+                                )
                             })
                             .collect(),
                     }

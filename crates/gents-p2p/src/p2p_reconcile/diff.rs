@@ -362,9 +362,17 @@ mod tests {
         gents_lean_vocab::families::contracts_pairing_reconcile_projection::replay(|sample| {
             let before_pending = pending_installs(&sample.before);
             let after_pending = pending_installs(&sample.after);
-            for (state, pending) in [(&sample.before, &before_pending), (&sample.after, &after_pending)] {
+            for (state, pending) in [
+                (&sample.before, &before_pending),
+                (&sample.after, &after_pending),
+            ] {
                 if state.connected {
-                    assert_eq!(pending.is_empty(), state.converged, "{}: resource completion", sample.name);
+                    assert_eq!(
+                        pending.is_empty(),
+                        state.converged,
+                        "{}: resource completion",
+                        sample.name
+                    );
                 }
             }
             Some(

@@ -240,7 +240,9 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         observe(
             &mut linked,
             "success",
-            row["parent_linked"].as_bool().context("parent_linked marker")?,
+            row["parent_linked"]
+                .as_bool()
+                .context("parent_linked marker")?,
         );
         assert_eq!(row["node_doc_id"], parent);
         let mutation = format!(
@@ -339,13 +341,21 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         let linked = linked
             .remove(case.input.name.as_str())
             .with_context(|| format!("the deferred scenario never reached {}", case.input.name))?;
-        case.check(gents_lean_vocab::families::identity_operations_deferred_runtime_linked::Linked { linked });
+        case.check(
+            gents_lean_vocab::families::identity_operations_deferred_runtime_linked::Linked {
+                linked,
+            },
+        );
     }
     for case in gents_lean_vocab::families::identity_operations_deferred_runtime_granted::cases() {
         let granted = granted
             .remove(case.input.name.as_str())
             .with_context(|| format!("the deferred scenario never reached {}", case.input.name))?;
-        case.check(gents_lean_vocab::families::identity_operations_deferred_runtime_granted::Granted { granted });
+        case.check(
+            gents_lean_vocab::families::identity_operations_deferred_runtime_granted::Granted {
+                granted,
+            },
+        );
     }
     assert!(
         linked.is_empty() && granted.is_empty(),
@@ -354,8 +364,15 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
     Ok(())
 }
 
-fn observe(observed: &mut std::collections::BTreeMap<&'static str, bool>, name: &'static str, value: bool) {
+fn observe(
+    observed: &mut std::collections::BTreeMap<&'static str, bool>,
+    name: &'static str,
+    value: bool,
+) {
     if let Some(previous) = observed.insert(name, value) {
-        assert_eq!(previous, value, "{name}: every observation of one case agrees");
+        assert_eq!(
+            previous, value,
+            "{name}: every observation of one case agrees"
+        );
     }
 }

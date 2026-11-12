@@ -269,7 +269,9 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
     assert_eq!(row["node_did"], remote.did());
     linked.insert(
         "before-node",
-        row["parent_linked"].as_bool().expect("parent_linked marker"),
+        row["parent_linked"]
+            .as_bool()
+            .expect("parent_linked marker"),
     );
     let owners = runtime_access(&node)
         .transact_readonly("test.desired.owner", |txn| {
@@ -312,16 +314,29 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
         let allowed = published
             .remove(case.input.name.as_str())
             .unwrap_or_else(|| panic!("the publisher scenario never reached {}", case.input.name));
-        case.check(gents_lean_vocab::families::identity_operations_desired_publisher::Allowed { allowed });
+        case.check(
+            gents_lean_vocab::families::identity_operations_desired_publisher::Allowed { allowed },
+        );
     }
-    assert!(published.is_empty(), "unmodeled publisher observations: {published:?}");
-    for case in gents_lean_vocab::families::identity_operations_deferred_materialize_linked::cases() {
+    assert!(
+        published.is_empty(),
+        "unmodeled publisher observations: {published:?}"
+    );
+    for case in gents_lean_vocab::families::identity_operations_deferred_materialize_linked::cases()
+    {
         let linked = linked
             .remove(case.input.name.as_str())
             .unwrap_or_else(|| panic!("the publisher scenario never reached {}", case.input.name));
-        case.check(gents_lean_vocab::families::identity_operations_deferred_materialize_linked::Linked { linked });
+        case.check(
+            gents_lean_vocab::families::identity_operations_deferred_materialize_linked::Linked {
+                linked,
+            },
+        );
     }
-    assert!(linked.is_empty(), "unmodeled deferred observations: {linked:?}");
+    assert!(
+        linked.is_empty(),
+        "unmodeled deferred observations: {linked:?}"
+    );
 }
 
 #[tokio::test]

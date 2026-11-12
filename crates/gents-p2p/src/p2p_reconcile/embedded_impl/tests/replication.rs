@@ -310,7 +310,10 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         http_sees
     };
     for receiver_case in &receiver_cases {
-        let observed = match (receiver_case.input.sender_granted, receiver_case.input.delivered) {
+        let observed = match (
+            receiver_case.input.sender_granted,
+            receiver_case.input.delivered,
+        ) {
             (false, false) => ungranted_undelivered,
             (true, false) => granted_undelivered,
             (true, true) => granted_delivered,
@@ -555,9 +558,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             &registry_mutation(&runtime_registry),
         )
         .await;
-    let user_wrote = user_write
-        .as_ref()
-        .is_ok_and(|value| gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok());
+    let user_wrote = user_write.as_ref().is_ok_and(|value| {
+        gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
+    });
     discovery.insert("local-user-write", user_wrote);
     writers.insert("runtime-owner", user_wrote.then(|| "user".to_owned()));
 
@@ -591,7 +594,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         "user-owner",
         runtime_write
             .as_ref()
-            .is_ok_and(|value| gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok())
+            .is_ok_and(|value| {
+                gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
+            })
             .then(|| "runtime".to_owned()),
     );
     let foreign_write = http(admin_address, &user)?
@@ -603,9 +608,10 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     writers.insert(
         "foreign-owner",
         foreign_write
-            .as_ref().is_ok_and(|value| {
-            gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
-        })
+            .as_ref()
+            .is_ok_and(|value| {
+                gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
+            })
             .then(|| "user".to_owned()),
     );
     let outsider_write = http(admin_address, &outsider)?
@@ -614,9 +620,12 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             &registry_mutation(&public_doc),
         )
         .await;
-    discovery.insert("outsider-write", outsider_write.as_ref().is_ok_and(|value| {
+    discovery.insert(
+        "outsider-write",
+        outsider_write.as_ref().is_ok_and(|value| {
             gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
-        }));
+        }),
+    );
     {
         let txn = admin_node.database().new_txn(false).await?;
         let view = txn.datastore()?;
@@ -650,9 +659,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             &registry_mutation(&runtime_registry),
         )
         .await;
-    let revoked_wrote = revoked_write
-        .as_ref()
-        .is_ok_and(|value| gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok());
+    let revoked_wrote = revoked_write.as_ref().is_ok_and(|value| {
+        gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
+    });
 
     candidate_local
         .delete_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", &reader)
@@ -740,14 +749,24 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             .unwrap_or_else(|| panic!("the registry scenario never reached {}", case.input.name));
         case.check(gents_lean_vocab::families::identity_operations_discovery::Allowed { allowed });
     }
-    assert!(discovery.is_empty(), "unmodeled discovery observations: {discovery:?}");
+    assert!(
+        discovery.is_empty(),
+        "unmodeled discovery observations: {discovery:?}"
+    );
     for case in gents_lean_vocab::families::identity_operations_registry_writer_scenario::cases() {
         let writer = writers
             .remove(case.input.name.as_str())
             .unwrap_or_else(|| panic!("the registry scenario never reached {}", case.input.name));
-        case.check(gents_lean_vocab::families::identity_operations_registry_writer_scenario::Writer { writer });
+        case.check(
+            gents_lean_vocab::families::identity_operations_registry_writer_scenario::Writer {
+                writer,
+            },
+        );
     }
-    assert!(writers.is_empty(), "unmodeled registry writer observations: {writers:?}");
+    assert!(
+        writers.is_empty(),
+        "unmodeled registry writer observations: {writers:?}"
+    );
     Ok(())
 }
 
