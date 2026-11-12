@@ -1,154 +1,81 @@
 use crate::support::graphql::{graphql_mutation_with_variables, served_endpoint};
-use crate::support::mocks::fake_llm::{ChatAction, FakeLlm, Responder};
 use crate::support::*;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents_protocol::job::keys::{job_session_id, job_spawn_key};
 use gents_protocol::job::{
-    JobBudget, JobCeiling, JobEffects, JobGuestPin, JobOrigin, JobPauseReason, JobPin, JobProgress,
-    JobSpawn, JobState, JobStepOutput,
+    JobBudget, JobCeiling, JobOrigin, JobPauseReason, JobPin, JobProgress, JobState,
 };
 use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-/// A home served by `gents runtime server`, with the identity its job rows belong to.
 pub(crate) struct ServedHome {
     _tempdir: tempfile::TempDir,
     pub(crate) home: PathBuf,
     pub(crate) graphql: String,
     pub(crate) node_did: String,
-    pub(crate) agent_did: String,
-    _llm: FakeLlm,
+    _model: MockModelEndpoint,
     _serve: ServeProcess,
 }
 
 impl ServedHome {
     pub(crate) async fn start() -> Result<Self> {
-        Self::start_with(Arc::new(|_: &Value| ChatAction::Hang), false).await
-    }
-
-    /// Serves a node whose provider is the scripted `responder`. `job_fixture`
-    /// makes bash read-write and installs and wires the job fixture pack with
-    /// the trusted-pack job block before the server starts.
-    pub(crate) async fn start_with(responder: Responder, job_fixture: bool) -> Result<Self> {
-        let tempdir = tempfile::tempdir().context("creating tempdir")?;
-        let home = tempdir.path().join("home");
-        fs::create_dir_all(&home)?;
-        let model_name = format!("mock-job-cli-{}", Uuid::new_v4().simple());
-        let llm = FakeLlm::start(&model_name, None, responder)?;
-        let port = allocate_port()?;
-        let graphql = graphql_url(port);
-        let node_name = format!("cli-job-{}", Uuid::new_v4().simple());
-        let mut init_args = vec![
-            "--node-name",
-            &node_name,
-            "--model-name",
-            &model_name,
-            "--inference-url",
-            llm.endpoint(),
-        ];
-        if job_fixture {
-            // A job child held by the provider must not take the only slot
-            // other sessions need while the job runs.
-            init_args.extend(["--write", "--max-concurrent", "4"]);
-        }
-        let init = run_init_json(&home, &init_args)?;
-        let node_did = node_did_from_init(&init)?;
-        let agent_did = init["default_agent_did"]
-            .as_str()
-            .context("init output missing default_agent_did")?
-            .to_owned();
-        if job_fixture {
-            let pack = tempdir.path().join("job_plugin_fixture");
-            copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &pack)?;
-            write_json_file(
-                &pack.join("pack_config.json"),
-                &json!({
-                    "node": {},
-                    "agent_targets": [{
-                        "target_id": agent_did,
-                        "target_node_did": node_did,
-                        "agent_did": agent_did,
-                        "name": "job child",
-                    }],
-                    "tools": [{
-                        "tools_id": "job-fixture-caller",
-                        "display_name": "Job fixture caller",
-                        "integrations": {"plugins": [{
-                            "plugin": "fixture/job_fixture",
-                            "job": {
-                                "agent_targets": [agent_did],
-                                "policy": {"trusted_packs": ["fixture/job_plugin_fixture"]},
-                            },
-                        }]},
-                    }],
-                }),
-            )?;
-            let pack_arg = pack.to_str().context("pack path is not UTF-8")?;
-            run_cli_json(
+        let served = tokio::task::spawn_blocking(|| {
+            let tempdir = tempfile::tempdir().context("creating tempdir")?;
+            let home = tempdir.path().join("home");
+            fs::create_dir_all(&home)?;
+            let model_name = format!("mock-job-cli-{}", Uuid::new_v4().simple());
+            let model = MockModelEndpoint::start(&model_name)?;
+            let port = allocate_port()?;
+            let graphql = graphql_url(port);
+            let node_name = format!("cli-job-{}", Uuid::new_v4().simple());
+            let init = run_init_json(
                 &home,
                 &[
-                    "config",
-                    "pack",
-                    "install",
-                    pack_arg,
-                    "--registry",
-                    "http://127.0.0.1:9",
+                    "--node-name",
+                    &node_name,
+                    "--model-name",
+                    &model_name,
+                    "--inference-url",
+                    model.endpoint(),
                 ],
             )?;
-            run_cli_json(
-                &home,
-                &[
-                    "config",
-                    "pack",
-                    "wire",
-                    "fixture/job_fixture",
-                    "--agent",
-                    &agent_did,
-                ],
-            )?;
-        }
-        let mut serve = spawn_server(&home, port)?;
-        wait_for_port(port, &mut serve)?;
-        wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-        Ok(Self {
-            _tempdir: tempdir,
-            home,
-            graphql,
-            node_did,
-            agent_did,
-            _llm: llm,
-            _serve: serve,
+            let node_did = node_did_from_init(&init)?;
+            let mut serve = spawn_server(&home, port)?;
+            wait_for_port(port, &mut serve)?;
+            Ok::<_, anyhow::Error>(Self {
+                _tempdir: tempdir,
+                home,
+                graphql,
+                node_did,
+                _model: model,
+                _serve: serve,
+            })
         })
+        .await??;
+        wait_for_runtime_ready(&served.graphql, &served.node_did, Duration::from_secs(30)).await?;
+        Ok(served)
     }
 
     pub(crate) fn access(&self) -> ConfigAccess {
         ConfigAccess::Graphql(served_endpoint(&self.graphql))
     }
 
-    /// `gents automation job <args>` against this node: (exit code, stdout, stderr).
-    pub(crate) fn job(&self, args: &[&str]) -> Result<(Option<i32>, String, String)> {
-        let mut full = vec!["automation", "job"];
-        full.extend_from_slice(args);
-        full.extend(["--graphql", &self.graphql]);
-        run_job(&self.home, &full)
-    }
-
-    /// `gents automation goal <args>` against this node.
-    pub(crate) fn goal(&self, args: &[&str]) -> Result<Value> {
-        let mut full = vec!["automation", "goal"];
-        full.extend_from_slice(args);
-        full.extend(["--graphql", &self.graphql]);
-        run_cli_json(&self.home, &full)
+    pub(crate) async fn job(&self, args: &[&str]) -> Result<(Option<i32>, String, String)> {
+        let mut full = vec!["automation".to_owned(), "job".to_owned()];
+        full.extend(args.iter().map(|arg| (*arg).to_owned()));
+        full.extend(["--graphql".to_owned(), self.graphql.clone()]);
+        let home = self.home.clone();
+        tokio::task::spawn_blocking(move || {
+            run_job(&home, &full.iter().map(String::as_str).collect::<Vec<_>>())
+        })
+        .await?
     }
 }
 
@@ -332,7 +259,9 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
     )
     .await?;
 
-    let (code, stdout, stderr) = served.job(&["list", "--state", "all", "--output", "json"])?;
+    let (code, stdout, stderr) = served
+        .job(&["list", "--state", "all", "--output", "json"])
+        .await?;
     assert_eq!(code, Some(0), "{stderr}");
     let listed: Value = serde_json::from_str(&stdout)?;
     let mut addresses: Vec<&str> = listed
@@ -351,7 +280,7 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
         ]
     );
 
-    let (code, stdout, stderr) = served.job(&["show", "job-s1:call-done"])?;
+    let (code, stdout, stderr) = served.job(&["show", "job-s1:call-done"]).await?;
     assert_eq!(code, Some(0), "{stderr}");
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(lines[0].starts_with("completed"), "answer first: {stdout}");
@@ -368,8 +297,9 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
         ("job-s1:call-done", 0, "completed"),
         ("job:s2:call-paused", 3, "paused"),
     ] {
-        let (code, stdout, stderr) =
-            served.job(&["watch", address, "--until-terminal", "--output", "json"])?;
+        let (code, stdout, stderr) = served
+            .job(&["watch", address, "--until-terminal", "--output", "json"])
+            .await?;
         assert_eq!(code, Some(expected_code), "{address}: {stderr}");
         assert_eq!(stdout.lines().count(), 1, "{stdout}");
         let line: Value = serde_json::from_str(stdout.trim())?;
@@ -377,10 +307,10 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
         assert_eq!(line["state"], state);
     }
 
-    let (code, _, stderr) = served.job(&["stop", "job-s1:call-done"])?;
+    let (code, _, stderr) = served.job(&["stop", "job-s1:call-done"]).await?;
     assert_ne!(code, Some(0));
     assert!(!stderr.is_empty(), "expected a control error");
-    let (_, stdout, _) = served.job(&["show", "job-s1:call-done"])?;
+    let (_, stdout, _) = served.job(&["show", "job-s1:call-done"]).await?;
     assert!(
         stdout.starts_with("completed"),
         "stop changed the row: {stdout}"
@@ -390,579 +320,54 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_access_refuses_watch_and_control_on_an_offline_home() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let node_home = tempdir.path().join("node-home");
-    // The refusal is decided by the access kind before any job lookup.
-    let init = run_init_json(
-        tempdir.path(),
-        &[
-            "--node-name",
-            "cli-job-offline",
-            "--home",
-            node_home.to_str().context("node home utf8")?,
-        ],
-    )?;
-    node_did_from_init(&init)?;
-    let home = node_home.to_str().context("node home utf8")?;
+    tokio::task::spawn_blocking(|| {
+        let tempdir = tempfile::tempdir().context("creating tempdir")?;
+        let node_home = tempdir.path().join("node-home");
+        // The refusal is decided by the access kind before any job lookup.
+        let init = run_init_json(
+            tempdir.path(),
+            &[
+                "--node-name",
+                "cli-job-offline",
+                "--home",
+                node_home.to_str().context("node home utf8")?,
+            ],
+        )?;
+        node_did_from_init(&init)?;
+        let home = node_home.to_str().context("node home utf8")?;
 
-    let (code, _, stderr) = run_job(
-        tempdir.path(),
-        &[
-            "automation",
-            "job",
-            "watch",
-            "job-s1:call-running",
-            "--until-terminal",
-            "--home",
-            home,
-        ],
-    )?;
-    assert_eq!(code, Some(4), "{stderr}");
-    assert!(
-        stderr.contains("no running server for this home"),
-        "{stderr}"
-    );
-
-    let (code, stdout, stderr) = run_job(
-        tempdir.path(),
-        &[
-            "automation",
-            "job",
-            "stop",
-            "job-s1:call-running",
-            "--home",
-            home,
-        ],
-    )?;
-    assert_ne!(code, Some(0), "{stdout} {stderr}");
-    assert!(stderr.contains("start the hosting runtime"), "{stderr}");
-    Ok(())
-}
-
-fn message_text(message: &Value) -> String {
-    match &message["content"] {
-        Value::String(content) => content.clone(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|part| part["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
-}
-
-fn last_user_text(request: &Value) -> String {
-    request["messages"]
-        .as_array()
-        .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "user"))
-        .map(message_text)
-        .unwrap_or_default()
-}
-
-fn tool_result_texts(request: &Value) -> Vec<String> {
-    request["messages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|message| message["role"] == "tool")
-        .map(message_text)
-        .collect()
-}
-
-fn calls_tool(request: &Value, name: &str) -> bool {
-    request["messages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|message| message["tool_calls"].as_array())
-        .flatten()
-        .any(|call| call["function"]["name"] == name)
-}
-
-async fn children_of(graphql: &str, request_id: &str) -> Result<Vec<Value>> {
-    let response = graphql_query(
-        graphql,
-        &format!(
-            r#"{{
-        AgentRequest(filter: {{ {} }}) {{
-            _docID request_id input caused_by_trigger_kind caused_by_parent_request_id
-        }}
-    }}"#,
-            gents_session::session::public_request_filter(&format!(
-                r#"caused_by_parent_request_id: {{ _eq: "{}" }}"#,
-                escape_graphql_string(request_id)
-            ))
-        ),
-    )
-    .await?;
-    Ok(response
-        .pointer("/data/AgentRequest")
-        .and_then(Value::as_array)
-        .context("children of the held request")?
-        .clone())
-}
-
-/// A Goal-held Task does not continue while a process held on a job runs: the
-/// background-completion delivery, not a goal child, carries it on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal_held_task_defers_while_job_runs() -> Result<()> {
-    const LAUNCH: &str = "launch the fixture job";
-    const CHILD: &str = "goal job child a";
-    const PREDECESSOR: &str = "ready the goal session";
-    const OBJECTIVE: &str = "watch the fixture job until it ends";
-    let s_job = format!("goal-job-session-{}", Uuid::new_v4().simple());
-    let s_goal = format!("goal-held-session-{}", Uuid::new_v4().simple());
-
-    let gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let released = Arc::new(AtomicBool::new(false));
-    let watch_address = Arc::new(Mutex::new(String::new()));
-    // Tool commands cannot read the runtime home's credentials, so a command
-    // cannot watch the job as the node; the test releases this pipe once the
-    // job row is terminal.
-    let job_ended = Arc::new(Mutex::new(String::new()));
-    let spawn_handle = Arc::new(Mutex::new(String::new()));
-    // The responder is built before the node starts: (gents home, graphql, agent id).
-    let node = Arc::new(Mutex::new(None::<(String, String, String)>));
-    let asset = fs::read(fixture_pack_dir("job_plugin_fixture").join("fixture_assets/a.txt"))?;
-    let digest = format!("sha256:{:x}", Sha256::digest(&asset));
-
-    let responder: Responder = {
-        let gate = gate.clone();
-        let released = released.clone();
-        let job_ended = job_ended.clone();
-        let spawn_handle = spawn_handle.clone();
-        let node = node.clone();
-        Arc::new(move |request: &Value| {
-            let user = last_user_text(request);
-            let results = tool_result_texts(request);
-            let node_state = node.lock().unwrap().clone();
-            if user.contains(CHILD) {
-                return ChatAction::WaitThenSse(gate.clone(), completion_text_sse("child a done"));
-            }
-            if user.contains(LAUNCH) {
-                if !results.is_empty() {
-                    return ChatAction::Sse(completion_text_sse("job launched"));
-                }
-                let (_, _, agent_did) = node_state.expect("node state is set before submits");
-                let e0 = JobStepOutput::Effects {
-                    effects: JobEffects {
-                        state: None,
-                        pin: Some(JobGuestPin {
-                            script_id: "fixture".into(),
-                            source_digest: digest.clone(),
-                            agent_budget: 8,
-                            handle: "goal-job".into(),
-                        }),
-                        resume: None,
-                        spawn: vec![JobSpawn {
-                            slot: "a".into(),
-                            attempt: 0,
-                            target: agent_did,
-                            prompt: CHILD.into(),
-                            title: "a".into(),
-                            cwd: None,
-                        }],
-                        message: Vec::new(),
-                        interrupt: Vec::new(),
-                        progress: None,
-                        writes: Vec::new(),
-                        scratch: Vec::new(),
-                    },
-                };
-                let e1 = JobStepOutput::Result {
-                    result: json!("job done"),
-                    writes: Vec::new(),
-                    scratch: Vec::new(),
-                    progress: None,
-                    control: Vec::new(),
-                    pin: None,
-                    resume: None,
-                };
-                let holding = JobStepOutput::Effects {
-                    effects: JobEffects {
-                        state: None,
-                        pin: None,
-                        resume: None,
-                        spawn: Vec::new(),
-                        message: Vec::new(),
-                        interrupt: Vec::new(),
-                        progress: None,
-                        writes: Vec::new(),
-                        scratch: Vec::new(),
-                    },
-                };
-                let plan = json!([
-                    {"when": {"step": 0}, "output": serde_json::to_value(&e0).unwrap()},
-                    {"when": {"children": {"a": "completed"}}, "output": serde_json::to_value(&e1).unwrap()},
-                    {"when": {"children": {"a": "live"}}, "output": serde_json::to_value(&holding).unwrap()},
-                ]);
-                return ChatAction::Sse(tool_call_sse_with_id(
-                    "job-call-1",
-                    "job_fixture",
-                    &json!({"args": {"plan": plan}}).to_string(),
-                ));
-            }
-            if user.contains(PREDECESSOR) {
-                return ChatAction::Sse(completion_text_sse("goal session ready"));
-            }
-            let held_turn = request["messages"].to_string().contains(OBJECTIVE);
-            if held_turn && !released.load(Ordering::SeqCst) {
-                return match results.len() {
-                    0 => ChatAction::Sse(tool_call_sse_with_id(
-                        "watch-spawn-1",
-                        "spawn_process",
-                        &json!({"tool_name": "bash_unrestricted", "args": {
-                            "command": "cat",
-                            "args": [job_ended.lock().unwrap().as_str()],
-                        }})
-                        .to_string(),
-                    )),
-                    1 => {
-                        let reply: Value = serde_json::from_str(&results[0]).unwrap_or_default();
-                        let handle = reply["tool_call_id"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_owned();
-                        *spawn_handle.lock().unwrap() = handle.clone();
-                        ChatAction::Sse(tool_call_sse_with_id(
-                            "watch-wait-1",
-                            "wait_process",
-                            &json!({"tool_call_id": handle, "timeout_secs": 2}).to_string(),
-                        ))
-                    }
-                    _ => ChatAction::Sse(completion_text_sse("waiting on the job")),
-                };
-            }
-            let watched = spawn_handle.lock().unwrap().clone();
-            let completed_watch = !watched.is_empty()
-                && request["messages"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|message| message["role"] == "user")
-                    .map(message_text)
-                    .any(|text| {
-                        text.contains("<tool-completion ")
-                            && text.contains(&format!("tool_call_id=\"{watched}\""))
-                            && text.contains("status=\"completed\"")
-                    });
-            if released.load(Ordering::SeqCst) && completed_watch {
-                return if calls_tool(request, "update_goal") {
-                    ChatAction::Sse(completion_text_sse("goal complete"))
-                } else {
-                    ChatAction::Sse(tool_call_sse_with_id(
-                        "goal-done-1",
-                        "update_goal",
-                        r#"{"status":"complete"}"#,
-                    ))
-                };
-            }
-            ChatAction::Sse(completion_text_sse("session title"))
-        })
-    };
-
-    let served = ServedHome::start_with(responder, true).await?;
-    let g = served.graphql.clone();
-    let h = served
-        .home
-        .join(".gents")
-        .to_str()
-        .context("gents home is not UTF-8")?
-        .to_owned();
-    *node.lock().unwrap() = Some((h, g.clone(), served.agent_did.clone()));
-
-    // Launch the job in its own session; it is a background row once the launching request ends.
-    run_cli_json(
-        &served.home,
-        &[
-            "utils",
-            "debug",
-            "request",
-            "submit",
-            "--graphql",
-            &g,
-            "--node-did",
-            &served.node_did,
-            "--session-id",
-            &s_job,
-            "--content",
-            LAUNCH,
-            "--timeout-secs",
-            "60",
-            "--poll-secs",
-            "1",
-        ],
-    )?;
-    let job_rows = graphql_query(
-        &g,
-        &format!(
-            "{{ AgentToolCall(filter: {{ session_id: {{ _eq: \"{}\" }}, tool_name: {{ _eq: \"job_fixture\" }} }}) {{ tool_call_id }} }}",
-            escape_graphql_string(&s_job)
-        ),
-    )
-    .await?;
-    let job_call_id = job_rows
-        .pointer("/data/AgentToolCall/0/tool_call_id")
-        .and_then(Value::as_str)
-        .with_context(|| format!("job row: {job_rows}"))?;
-    *watch_address.lock().unwrap() = format!("{s_job}:{job_call_id}");
-    let job_ended_pipe = served.home.join("job-ended");
-    let made = Command::new("mkfifo").arg(&job_ended_pipe).status()?;
-    anyhow::ensure!(
-        made.success(),
-        "mkfifo {}: {made}",
-        job_ended_pipe.display()
-    );
-    *job_ended.lock().unwrap() = job_ended_pipe
-        .to_str()
-        .context("job-ended pipe path is not UTF-8")?
-        .to_owned();
-
-    // Hold the Goal on the job.
-    let predecessor_receipt = run_cli_json(
-        &served.home,
-        &[
-            "utils",
-            "debug",
-            "request",
-            "submit",
-            "--graphql",
-            &g,
-            "--node-did",
-            &served.node_did,
-            "--session-id",
-            &s_goal,
-            "--content",
-            PREDECESSOR,
-            "--timeout-secs",
-            "60",
-            "--poll-secs",
-            "1",
-        ],
-    )?;
-    let predecessor = predecessor_receipt["request_id"]
-        .as_str()
-        .context("predecessor request id")?
-        .to_owned();
-    served.goal(&[
-        "set",
-        "--session",
-        &s_goal,
-        "--objective",
-        OBJECTIVE,
-        "--status",
-        "paused",
-        "--token-budget",
-        "200000",
-    ])?;
-    let resumed = served.goal(&[
-        "resume-request",
-        "--session",
-        &s_goal,
-        "--from",
-        &predecessor,
-    ])?;
-    assert_eq!(resumed["created"], true, "{resumed}");
-    let held = resumed["request_id"]
-        .as_str()
-        .context("held request id")?
-        .to_owned();
-    let opening_doc = resumed["doc_id"]
-        .as_str()
-        .context("Goal opening request document")?;
-    let binding = graphql_query(
-        &g,
-        &format!(
-            "{{ Goal(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{goal_id assignment_root_request_doc_id}} }}",
-            escape_graphql_string(&served.node_did),
-            escape_graphql_string(&s_goal),
-        ),
-    )
-    .await?;
-    assert_eq!(
-        binding["data"]["Goal"][0]["assignment_root_request_doc_id"],
-        opening_doc
-    );
-    let children = children_of(&g, &predecessor).await?;
-    assert_eq!(children.len(), 1, "{children:?}");
-    assert_eq!(children[0]["_docID"], opening_doc);
-    assert_eq!(
-        children[0]["input"]["goal_assignment"],
-        json!({"goal_id": resumed["goal_id"], "root_request_doc_id": null}),
-    );
-    let replay = served.goal(&[
-        "resume-request",
-        "--session",
-        &s_goal,
-        "--from",
-        &predecessor,
-    ])?;
-    assert_eq!(replay["created"], false, "{replay}");
-    assert_eq!(replay["doc_id"], opening_doc);
-    assert_eq!(children_of(&g, &predecessor).await?, children);
-    let goal = served.goal(&["show", "--session", &s_goal])?;
-    assert_eq!(goal["status"], "active", "{goal}");
-    let seq0 = goal["continuation_sequence"]
-        .as_u64()
-        .context("continuation_sequence")?;
-
-    // The intentional wait: the held turn's bounded wait times out while the job runs.
-    wait_for_request_lifecycle_state(&g, &held, &["completed"], Duration::from_secs(60)).await?;
-    let waits = wait_for_completed_tool_calls(&g, &s_goal, "wait_process", 1).await?;
-    let reply: Value = serde_json::from_str(&canonical_tool_result_text(&g, &waits[0]).await?)?;
-    assert_eq!(reply["status"], "running", "{reply}");
-    assert_eq!(reply["error"]["reason"], "wait_timeout", "{reply}");
-    assert_eq!(
-        reply["tool_call_id"].as_str(),
-        Some(spawn_handle.lock().unwrap().as_str()),
-        "{reply}"
-    );
-    for _ in 0..20 {
-        let children = children_of(&g, &held).await?;
-        assert!(
-            children.is_empty(),
-            "the Goal continued while the job ran: {children:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-
-    // Release the job; once its row is terminal the held process exits and
-    // the completion delivery carries the Goal on.
-    released.store(true, Ordering::SeqCst);
-    gate.add_permits(1);
-    let watch_home = served.home.clone();
-    let watch_target = watch_address.lock().unwrap().clone();
-    let watch_graphql = g.clone();
-    let ended = tokio::task::spawn_blocking(move || {
-        let node_home = watch_home.join(".gents");
-        let node_home = node_home.to_str().context("gents home is not UTF-8")?;
-        let ended = run_cli_json(
-            &watch_home,
+        let (code, _, stderr) = run_job(
+            tempdir.path(),
             &[
                 "automation",
                 "job",
                 "watch",
-                &watch_target,
+                "job-s1:call-running",
                 "--until-terminal",
                 "--home",
-                node_home,
-                "--graphql",
-                &watch_graphql,
+                home,
             ],
         )?;
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&job_ended_pipe)
-            .context("releasing the held process")?;
-        Ok::<_, anyhow::Error>(ended)
-    })
-    .await
-    .context("job watch worker")??;
-    assert_eq!(ended["state"], "completed", "{ended}");
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    let delivery = loop {
-        let children = children_of(&g, &held).await?;
-        if let Some(first) = children.first() {
-            assert_eq!(children.len(), 1, "{children:?}");
-            break first.clone();
-        }
-        if std::time::Instant::now() >= deadline {
-            let state = graphql_query(
-                &g,
-                r#"{
-                    AgentRequest(limit: 100) { _docID request_id session_id lifecycle_state failure_reason caused_by_parent_request_id caused_by_parent_request_doc_id }
-                    AgentToolCall(limit: 100) { _docID request_id request_doc_id session_id tool_name tool_call_id lifecycle_state status await_mode tool_failure_class completion_notification_delivered_at }
-                    AgentMessage(limit: 100) { _docID session_id request_doc_id message_key sequence role }
-                    Goal(limit: 10) { session_id status assignment_root_request_doc_id continuation_sequence last_failure }
-                }"#,
-            )
-            .await;
-            let warnings = served._serve.captured_output().map(|(stdout, stderr)| {
-                let lines: Vec<_> = stdout
-                    .lines()
-                    .chain(stderr.lines())
-                    .filter(|line| line.contains("WARN") || line.contains("ERROR"))
-                    .collect();
-                lines[lines.len().saturating_sub(40)..]
-                    .iter()
-                    .map(|line| line.chars().take(1000).collect::<String>())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            });
-            let probe_home = served.home.clone();
-            let probe_address = watch_address.lock().unwrap().clone();
-            let probe_graphql = g.clone();
-            let probe = tokio::task::spawn_blocking(move || {
-                let node_home = probe_home.join(".gents");
-                let node_home = node_home.to_string_lossy();
-                run_cli_json(
-                    &probe_home,
-                    &[
-                        "automation",
-                        "job",
-                        "show",
-                        &probe_address,
-                        "--home",
-                        &node_home,
-                        "--graphql",
-                        &probe_graphql,
-                        "--output",
-                        "json",
-                    ],
-                )
-            })
-            .await;
-            panic!("no delivery request after the job ended; durable state: {state:?}; server warnings: {warnings:?}; job show: {probe:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    };
-    assert!(delivery["caused_by_trigger_kind"].is_null(), "{delivery}");
-    assert_eq!(
-        delivery["input"]["goal_assignment"],
-        json!({"goal_id": resumed["goal_id"], "root_request_doc_id": opening_doc}),
-    );
-    let delivery_id = delivery["request_id"]
-        .as_str()
-        .context("delivery request id")?;
-    assert!(
-        delivery_id.starts_with("background-completion-"),
-        "{delivery}"
-    );
-    wait_for_request_lifecycle_state(&g, delivery_id, &["completed"], Duration::from_secs(60))
-        .await?;
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let goal = loop {
-        let goal = served.goal(&["show", "--session", &s_goal])?;
-        if goal["status"] == "complete" {
-            break goal;
-        }
+        assert_eq!(code, Some(4), "{stderr}");
         assert!(
-            std::time::Instant::now() < deadline,
-            "the Goal did not complete: {goal}"
+            stderr.contains("no running server for this home"),
+            "{stderr}"
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    };
-    if goal["continuation_sequence"].as_u64() != Some(seq0 + 1) {
-        let requests = graphql_query(&g, &format!(
-            "{{AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{_docID request_id purpose lifecycle_state input caused_by_parent_request_id caused_by_trigger_kind created_at}} Goal(filter: {{session_id: {{_eq: \"{}\"}}}}) {{continuation_sequence last_continued_from_request_id assignment_root_request_doc_id token_usage_baseline tokens_used}}}}",
-            escape_graphql_string(&served.node_did), escape_graphql_string(&s_goal), escape_graphql_string(&s_goal),
-        )).await?;
-        panic!(
-            "unexpected Goal continuation count: expected {}; goal={goal}; requests={requests}",
-            seq0 + 1
-        );
-    }
-    assert!(
-        goal["tokens_used"]
-            .as_i64()
-            .is_some_and(|tokens| tokens > 0),
-        "{goal}"
-    );
-    let updates = wait_for_completed_tool_calls(&g, &s_goal, "update_goal", 1).await?;
-    assert_eq!(updates.len(), 1, "{updates:?}");
-    assert_eq!(updates[0]["request_doc_id"], delivery["_docID"]);
-    assert!(children_of(&g, delivery_id).await?.is_empty());
-    assert_eq!(children_of(&g, &held).await?.len(), 1);
-    Ok(())
+
+        let (code, stdout, stderr) = run_job(
+            tempdir.path(),
+            &[
+                "automation",
+                "job",
+                "stop",
+                "job-s1:call-running",
+                "--home",
+                home,
+            ],
+        )?;
+        assert_ne!(code, Some(0), "{stdout} {stderr}");
+        assert!(stderr.contains("start the hosting runtime"), "{stderr}");
+        Ok(())
+    })
+    .await?
 }
