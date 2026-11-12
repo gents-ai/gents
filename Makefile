@@ -283,8 +283,10 @@ live-triggers:
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_triggers $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),workspace_change_unit_cycle::change_unit_pack_) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
 
 live-client:
+	$(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG)
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime native_client_submits_signed_input_and_observes_live_and_durable_output $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime enrolled_client_resumes_a_durable_goal_and_observes_completion $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime managed_runtime_replacement_preserves_running_input_enrollment_and_transcript $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
 
 live-editor:
 	@test -d "$$GENTS_VSCODE_ROOT" || { echo "Set GENTS_VSCODE_ROOT to the installed-editor extension checkout" >&2; exit 2; }
