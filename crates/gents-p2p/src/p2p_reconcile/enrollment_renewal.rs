@@ -254,7 +254,6 @@ mod tests {
     #[test]
     fn generated_approval_cases_match_renewal_projection() {
         use chrono::{SecondsFormat, TimeZone};
-        use serde_json::Value;
         let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_auto_renewal_cases;
         let timestamp = |seconds: i64| {
             Utc.timestamp_opt(1_800_000_000 + seconds, 0)
@@ -264,51 +263,48 @@ mod tests {
         };
         let mut checked = 0;
         for case in cases {
-            let current = &case["current"];
-            let proposed = &case["proposal"];
-            let number = |v: &Value, key: &str| v[key].as_i64().unwrap();
-            let text = |v: &Value, key: &str| v[key].as_str().unwrap().to_owned();
-            let limit = current["renewal_limit"].as_u64();
-            let selected = limit.unwrap_or(number(current, "lease_seconds") as u64);
-            let model_now = number(case, "now");
+            let current = &case.current;
+            let proposed = &case.proposal;
+            let limit = current.renewal_limit;
+            let selected = limit.unwrap_or(current.lease_seconds);
+            let model_now = case.now as i64;
             let now_seconds = model_now * 30;
             let now = Utc
                 .timestamp_opt(1_800_000_000 + now_seconds, 0)
                 .single()
                 .unwrap();
-            let expires = now_seconds + (number(current, "expires_at") - model_now) * 60_480;
-            let mut active =
-                active_enrollment(number(current, "sequence") as u64, &timestamp(expires));
-            active.request.network_id = text(current, "network");
-            active.request.candidate_did = text(current, "member");
-            active.request.candidate_peer = text(current, "peer");
-            active.request.owner_node_did = text(current, "owner");
-            active.request.profile = text(current, "profile");
+            let expires = now_seconds + (current.expires_at as i64 - model_now) * 60_480;
+            let mut active = active_enrollment(current.sequence, &timestamp(expires));
+            active.request.network_id = current.network.clone();
+            active.request.candidate_did = current.member.clone();
+            active.request.candidate_peer = current.peer.clone();
+            active.request.owner_node_did = current.owner.clone();
+            active.request.profile = current.profile.clone();
             active.decision.decided_at =
-                timestamp(expires - number(current, "lease_seconds") * 86_400);
+                timestamp(expires - current.lease_seconds as i64 * 86_400);
             let mut request = active.request.clone();
             request.request_id = "renewal".into();
-            request.network_id = text(proposed, "network");
-            request.candidate_did = text(proposed, "member");
-            request.candidate_peer = text(proposed, "peer");
-            request.owner_node_did = text(proposed, "owner");
-            request.profile = text(proposed, "profile");
+            request.network_id = proposed.network.clone();
+            request.candidate_did = proposed.member.clone();
+            request.candidate_peer = proposed.peer.clone();
+            request.owner_node_did = proposed.owner.clone();
+            request.profile = proposed.profile.clone();
             request.issued_at = timestamp(now_seconds - 60);
             request.expires_at = timestamp(now_seconds + 60);
             request.challenge = gents_protocol::enrollment::renewal_challenge(
                 &request.network_id,
                 &request.candidate_did,
                 &request.candidate_peer,
-                number(proposed, "predecessor_sequence") as u64,
+                proposed.predecessor_sequence,
                 "0123456789abcdef0123456789abcdef",
             )
             .unwrap();
-            let mut state = projection(if current["revoked"].as_bool().unwrap() {
+            let mut state = projection(if current.revoked {
                 Vec::new()
             } else {
                 vec![active.clone()]
             });
-            if current["authority_conflict"].as_bool().unwrap() {
+            if current.authority_conflict {
                 state.conflict = Some("conflict".into());
             }
             state.next_authorization_sequences.insert(
@@ -316,7 +312,7 @@ mod tests {
                     active.request.network_id.clone(),
                     active.request.candidate_did.clone(),
                 ),
-                number(current, "next_sequence") as u64,
+                current.next_sequence,
             );
             state.pending.push(PendingEnrollment {
                 request_doc_id: "generated".into(),
@@ -325,15 +321,15 @@ mod tests {
             });
             let actual = state.renewal_lease_for(
                 "renewal",
-                current["enabled"].as_bool().unwrap(),
+                current.enabled,
                 limit.map(|n| n * 86_400),
                 now,
             );
             assert_eq!(
                 actual.is_ok(),
-                case["projection_allowed"].as_bool().unwrap(),
+                case.projection_allowed,
                 "{}",
-                text(case, "name")
+                case.name
             );
             if let Ok(lease) = actual {
                 assert_eq!(lease.as_secs(), selected * 86_400);
