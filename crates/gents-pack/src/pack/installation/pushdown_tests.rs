@@ -1,20 +1,137 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::json;
 
-use gents_pack::pack::DriftPolicy;
+use crate::pack::archive::{pack_dir, PackArchive};
+use crate::pack::{
+    install_prepared_document_graph, installed_catalog, load_pack_config,
+    prepare_document_pack_install, DriftPolicy, InstalledVia, PackInstallOptions, PackSource,
+};
 use gents_store::config_client::ConfigAccess;
+use gents_store::identity::{KeyIdentity, NodeIdentity};
+
+#[test]
+fn source_metadata_rejects_paths_and_invalid_registry_digests() {
+    for name in ["/private/pack.gents", "folder\\pack.gents", ".."] {
+        assert!(PackSource::Local {
+            file_name: Some(name.into())
+        }
+        .validate()
+        .is_err());
+    }
+    assert!(PackSource::Local {
+        file_name: Some("pack.gents".into())
+    }
+    .validate()
+    .is_ok());
+    assert!(PackSource::Registry {
+        namespace: "fixture".into(),
+        name: "shared_fixture".into(),
+        version: "1.0.0".into(),
+        artifact_digest: "invalid".into(),
+    }
+    .validate()
+    .is_err());
+}
+
+#[tokio::test]
+async fn document_install_records_portable_source_and_history() {
+    let keys = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(keys.path().join("node.key"), None).unwrap();
+    let owner = identity.did().to_string();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
+    let access = ConfigAccess::local_as(node.clone(), owner.parse().unwrap());
+    access
+        .write(
+            "test.pack_source.node",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\", enabled: true}}) {{_docID}} }}",
+                gents_store::graphql::escape_graphql_string(&owner),
+            ),
+        )
+        .await
+        .unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/tests/fixtures/packs/shared_fixture");
+    let (bytes, _) = pack_dir(&fixture).unwrap();
+    let archive = PackArchive::from_bytes(&bytes).unwrap();
+    let config = load_pack_config(
+        archive.manifest(),
+        &PackInstallOptions {
+            node_did: owner.clone(),
+        },
+        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let mut prepared = prepare_document_pack_install(
+        &access,
+        &owner,
+        archive.manifest(),
+        &config,
+        &BTreeMap::new(),
+        &[],
+        InstalledVia::Operator,
+        None,
+        Some(&archive),
+        &|_| None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    let coordinate = "fixture/shared_fixture";
+    let local = PackSource::local(Path::new("/private/folder/shared.pack"));
+    for source in [local.clone(), PackSource::Store] {
+        prepared.sources.insert(coordinate.into(), source);
+        install_prepared_document_graph(
+            &access,
+            &owner,
+            &archive,
+            &prepared,
+            DriftPolicy::Refuse,
+            None,
+            false,
+            true,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+    }
+    let catalog = installed_catalog(&access, &owner, None).await.unwrap();
+    let record = &catalog[coordinate].record;
+    assert_eq!(record["source"], json!({"kind": "store"}));
+    assert_eq!(
+        record["source_history"][0]["source"],
+        serde_json::to_value(local).unwrap()
+    );
+    assert_eq!(record["source_history"][0]["digest"], archive.digest());
+    assert!(!record.to_string().contains("/private/folder"));
+    node.shutdown().await.unwrap();
+}
 
 #[tokio::test]
 async fn locally_installed_pack_agent_holds_the_projected_baseline() {
     use gents_store::identity::NodeIdentity as _;
-    let (db, user, user_access) =
-        crate::test_support::root::signed_test_node_without_agent("local-pack-baseline").await;
+    let (db, user, user_access) = gents_inference::test_support::signed_test_node_without_agent(
+        "local-pack-baseline",
+        Default::default(),
+    )
+    .await;
     let runtime = db.node_identity.clone();
-    let (_guard, dir) = gents_pack::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
-    let (bytes, _) = gents_pack::pack::archive::pack_dir(&dir).unwrap();
-    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
     let backend = json!({"node_did":runtime.did(),"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}});
     let profile = json!({"node_did":runtime.did(),"profile_id":"profile","backend_id":"backend","model_name":"test-model"});
@@ -55,7 +172,7 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
         .await
         .unwrap();
     let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
-    let prepared = gents_pack::pack::prepare_document_pack_archive_with_runtime(
+    let prepared = crate::pack::prepare_document_pack_archive_with_runtime(
         &local,
         runtime.did(),
         &archive,
@@ -91,7 +208,7 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
         held
     };
     assert!(held(db.node.clone(), agent.clone()).await.is_empty());
-    gents_pack::pack::install_prepared_document_graph(
+    crate::pack::install_prepared_document_graph(
         &user_access,
         runtime.did(),
         &archive,
@@ -126,15 +243,17 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
 #[tokio::test]
 async fn pack_install_applies_exactly_the_declared_placement_readers() {
     use gents_store::identity::{GrantSet, NodeIdentity as _};
-    let (db, user, user_access) =
-        crate::test_support::root::signed_test_node_without_agent("pack-placement-readers").await;
+    let (db, user, user_access) = gents_inference::test_support::signed_test_node_without_agent(
+        "pack-placement-readers",
+        Default::default(),
+    )
+    .await;
     let runtime = db.node_identity.clone();
     let root = tempfile::tempdir().unwrap();
     let host_path = root.path().to_string_lossy().into_owned();
-    let (_guard, dir) =
-        gents_pack::test_support::fixture_pack_copy("placement_fixture", &json!({}));
-    let (bytes, _) = gents_pack::pack::archive::pack_dir(&dir).unwrap();
-    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("placement_fixture", &json!({}));
+    let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
     let backend = json!({"node_did":runtime.did(),"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}});
     let profile = json!({"node_did":runtime.did(),"profile_id":"profile","backend_id":"backend","model_name":"test-model"});
@@ -178,7 +297,7 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
     let environment =
         move |name: &str| (name == "PLACEMENT_FIXTURE_ROOT").then(|| host_path.clone());
     let install = || async {
-        let prepared = gents_pack::pack::prepare_document_pack_archive_with_runtime(
+        let prepared = crate::pack::prepare_document_pack_archive_with_runtime(
             &local,
             runtime.did(),
             &archive,
@@ -191,7 +310,7 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
         )
         .await
         .unwrap();
-        gents_pack::pack::install_prepared_document_graph(
+        crate::pack::install_prepared_document_graph(
             &user_access,
             runtime.did(),
             &archive,
@@ -279,7 +398,7 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
                 assert_eq!(install().await, bindings);
             }
             "removed" => {
-                gents_pack::pack::remove_pack(
+                crate::pack::remove_pack(
                     &user_access,
                     runtime.did(),
                     "fixture/placement_fixture",

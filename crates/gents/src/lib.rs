@@ -108,7 +108,4 @@ mod tool_source_policy_tests;
 mod tools_tests;
 
 #[cfg(test)]
-mod pack_installation_root_tests;
-
-#[cfg(test)]
 mod session_tests;
