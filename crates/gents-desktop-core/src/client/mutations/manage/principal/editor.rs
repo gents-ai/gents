@@ -654,41 +654,37 @@ mod tests {
 
     #[test]
     fn config_editor_matches_executable_lean_contract() {
-        let contract: Value =
-            gents_lean_contract::load_contract_snapshot().expect("Lean settings contract");
-        let cases = &contract["client_settings_cases"];
-        for case in cases["revisions"].as_array().unwrap() {
-            let decode = |value: &Value| {
-                (!value.is_null()).then(|| ConfigEditorRevision {
-                    document_id: value["document"].to_string(),
-                    composite_cid: value["composite"].to_string(),
-                })
+        let cases = &gents_lean_vocab::lean_contract_snapshot().client_settings_cases;
+        for case in &cases.revisions {
+            let decode = |document: u64, composite: u64| ConfigEditorRevision {
+                document_id: document.to_string(),
+                composite_cid: composite.to_string(),
             };
             assert_eq!(
                 revision_matches(
-                    decode(&case["expected"]).as_ref(),
-                    decode(&case["current"]).as_ref()
+                    case.expected
+                        .as_ref()
+                        .map(|value| decode(value.document, value.composite))
+                        .as_ref(),
+                    case.current
+                        .as_ref()
+                        .map(|value| decode(value.document, value.composite))
+                        .as_ref()
                 ),
-                case["matches"].as_bool().unwrap()
+                case.matches
             );
         }
-        for case in cases["fields"].as_array().unwrap() {
-            let target =
-                SelfConfigTarget::from_collection_name(case["collection"].as_str().unwrap())
-                    .unwrap();
+        for case in &cases.fields {
+            let target = SelfConfigTarget::from_collection_name(case.collection.as_str()).unwrap();
             assert_eq!(
                 serde_json::to_value(editable_fields(target)).unwrap(),
-                case["editable"]
+                serde_json::to_value(&case.editable).unwrap()
             );
         }
-        for case in cases["savedProjections"].as_array().unwrap() {
+        for case in &cases.saved_projections {
             assert_eq!(
-                adopt_saved_projection(
-                    case["read"].as_bool().unwrap(),
-                    case["physical"].as_bool().unwrap(),
-                    case["content"].as_bool().unwrap()
-                ),
-                case["adopt"].as_bool().unwrap()
+                adopt_saved_projection(case.read, case.physical, case.content),
+                case.adopt
             );
         }
     }
