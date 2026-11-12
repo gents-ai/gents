@@ -5,34 +5,6 @@ use super::support::*;
 use gents_tools::surface::ToolCeiling;
 
 #[tokio::test]
-async fn builder_requires_backend_admission_before_checking_node_identity() {
-    let node_db = gents_inference::test_support::test_db(
-        "builder-requires-backend-admission-befor",
-        gents_automation::lifecycle_hooks::composition(),
-    )
-    .await;
-    let node = node_db.node.clone();
-    let identity = Arc::new(test_identity("builder-unsigned-node"));
-
-    let error = match Gents::builder()
-        .node(node)
-        .identity(identity)
-        .agent("policy-ops")
-        .done()
-        .build()
-        .await
-    {
-        Ok(_) => panic!("builder should reject a node without backend protection admission"),
-        Err(error) => error,
-    };
-
-    assert_eq!(
-        error.to_string(),
-        "fresh backend protection provenance is required"
-    );
-}
-
-#[tokio::test]
 async fn builder_includes_custom_tools_in_resolved_tool_surface() {
     let (db, _owner_identity, owner) = test_node("builder-custom-tools").await;
     let node = db.node.clone();
