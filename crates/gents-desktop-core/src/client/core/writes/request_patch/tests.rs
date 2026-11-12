@@ -47,52 +47,40 @@ fn cached_rows_must_match_physical_rows_at_the_current_fence() {
 
 #[test]
 fn generated_publication_cases_drive_request_patch_cache_admission() {
-    let snapshot: serde_json::Value =
-        gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
-    let fixture = &snapshot["client_request_patch_publication_cases"];
-    for case in fixture["reuse"].as_array().expect("reuse cases") {
+    let fixture =
+        &gents_lean_vocab::lean_contract_snapshot().client_request_patch_publication_cases;
+    for case in &fixture.reuse {
         assert_eq!(
             request_patch_cache_reusable(
-                case["memoized"].as_bool().expect("memoized state"),
-                case["same_signature"]
-                    .as_bool()
-                    .expect("signature comparison"),
-                case["fence_accepted"].as_bool().expect("publication fence"),
-                case["rows_current"]
-                    .as_bool()
-                    .expect("physical row comparison"),
+                case.memoized,
+                case.same_signature,
+                case.fence_accepted,
+                case.rows_current,
             ),
-            case["expected_reuse"].as_bool().expect("Lean result"),
+            case.expected_reuse,
             "{}",
-            case["name"].as_str().expect("case name")
+            case.name
         );
     }
-    for case in fixture["fresh_read"].as_array().expect("fresh-read cases") {
+    for case in &fixture.fresh_read {
         let (store, _) = ObservedStore::new(ClientStore::from_rows(ClientStoreRows::default()));
         let captured = store.capture_read();
-        let fence_accepted = case["fence_accepted"].as_bool().expect("fence expectation");
-        if !fence_accepted {
+        if !case.fence_accepted {
             store.merge_chat_patch(request_patch(request_row("processing")));
         }
-        let published = case["patch_available"]
-            .as_bool()
-            .expect("fresh patch availability")
+        let published = case
+            .patch_available
             .then(|| {
                 store.merge_chat_patch_at_read(&captured, request_patch(request_row("pending")))
             })
             .flatten()
             .is_some();
-        let action = match (case["patch_available"].as_bool().unwrap(), published) {
+        let action = match (case.patch_available, published) {
             (false, false) => "no_patch",
             (true, true) => "merge_fresh",
             (true, false) => "reject_candidate",
             (false, true) => panic!("missing patch was published"),
         };
-        assert_eq!(
-            action,
-            case["expected_action"].as_str().expect("Lean action"),
-            "{}",
-            case["name"].as_str().expect("case name")
-        );
+        assert_eq!(action, case.expected_action.as_str(), "{}", case.name);
     }
 }
