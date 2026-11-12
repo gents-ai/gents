@@ -907,6 +907,17 @@ async fn cache_is_runtime_local_and_replacement_sign_ins_reject_late_responses()
     );
 }
 
+#[test]
+fn a_write_lands_only_on_the_credential_row_it_was_read_for() {
+    gents_lean_vocab::families::usage_write_binding::replay(|input| {
+        let mut row = credential(A, None, None);
+        row.doc_id = Some(input.current.clone());
+        credential_target(A, CODEX, input.observed.as_deref(), row)
+            .unwrap()
+            .is_some()
+    });
+}
+
 #[tokio::test]
 async fn newer_observations_win_and_backend_edits_get_an_empty_cache() {
     let (db, _user, _user_access) =
