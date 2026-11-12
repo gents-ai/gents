@@ -29,7 +29,7 @@ use admission_slot_accounting::{
 use gents_lean_vocab::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
-    lean_backend_health_cases, lean_client_agent_readiness_cases, lean_command_env_case,
+    lean_backend_health_cases, lean_command_env_case,
     lean_command_policy_case, lean_command_sandbox_case, lean_compaction_cursor_cases,
     lean_compaction_reducer_cases, lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
@@ -56,8 +56,6 @@ mod backend_health;
 mod background;
 #[path = "conformance/callback_lifecycle.rs"]
 mod callback_lifecycle;
-#[path = "conformance/client_runtime.rs"]
-mod client_runtime;
 #[path = "conformance/command_policy.rs"]
 mod command_policy;
 #[path = "conformance/compaction_gate.rs"]

@@ -5276,6 +5276,7 @@ dependencies = [
  "gents-lean-vocab",
  "gents-schemas",
  "graphql-parser",
+ "query",
  "rapidhash",
  "regex",
  "reqwest 0.12.28",

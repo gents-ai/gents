@@ -66,3 +66,22 @@ fn unordered_turn_rejects_ambiguous_tips() {
     ];
     assert_eq!(derive_turn(&ambiguous), None);
 }
+
+#[test]
+fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
+    use crate::client_protocol::{
+        derive_attempt, AttemptView, ClientTurnState, RequestLifecycleState, RequestSnapshot,
+    };
+
+    let view = AttemptView {
+        request: RequestSnapshot {
+            request_id: "r1".into(),
+            retry_parent_request: None,
+            lifecycle_state: RequestLifecycleState::Interrupted,
+            is_superseded: false,
+        },
+    };
+    assert_eq!(derive_attempt(&view), ClientTurnState::Interrupted);
+    assert!(ClientTurnState::Interrupted.is_terminal());
+    assert_eq!(ClientTurnState::Interrupted.rank(), 2);
+}

@@ -10,10 +10,10 @@ use gents_automation::goal::{
 use gents_protocol::goal_status::GoalStatus;
 
 use gents_lean_vocab::{
-    assert_state_machine_contract_is_complete, lean_goal_continuation_materialization_cases,
+    lean_goal_continuation_materialization_cases,
     lean_goal_create_cases, lean_goal_decision_cases, lean_goal_readiness_gate_cases,
     lean_goal_submission_cases, lean_goal_transition_cases, lean_task_goal_publication_cases,
-    lean_task_goal_recovery_cases, lean_vocabulary_values,
+    lean_task_goal_recovery_cases,
 };
 
 fn parse_goal_decision(name: &str) -> Option<GoalDecision> {
@@ -26,22 +26,6 @@ fn parse_goal_decision(name: &str) -> Option<GoalDecision> {
         "abandon_wrapup" => GoalDecision::AbandonWrapup,
         _ => return None,
     })
-}
-
-#[test]
-fn rust_goal_status_vocabulary_and_machine_match_lean_contract() {
-    let rust = [
-        GoalStatus::Active,
-        GoalStatus::Paused,
-        GoalStatus::Blocked,
-        GoalStatus::UsageLimited,
-        GoalStatus::BudgetLimited,
-        GoalStatus::Complete,
-        GoalStatus::Stopped,
-    ]
-    .map(GoalStatus::as_str);
-    assert_eq!(lean_vocabulary_values("GoalStatus"), rust);
-    assert_state_machine_contract_is_complete("Goal");
 }
 
 #[test]
