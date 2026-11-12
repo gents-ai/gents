@@ -3011,7 +3011,6 @@ pub struct LeanContractSnapshot {
     pub client_optimistic_send_cases: serde_json::Value,
     pub identity_client_agent_recovery_cases: Vec<LeanIdentityClientAgentRecoveryCase>,
     pub client_publication_protected_collection: String,
-    pub watcher_actor_cases: Vec<LeanWatcherActorCase>,
     pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
     pub identity_bootstrap_cases: Vec<LeanIdentityBootstrapCase>,
     pub identity_bootstrap_reservation_cases: Vec<LeanIdentityBootstrapReservationCase>,
@@ -12036,23 +12035,6 @@ pub struct LeanWakeInputCase {
 pub struct LeanWakeInputRow {
     pub header: String,
     pub notification_key: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWatcherActorCase {
-    pub candidates: Vec<LeanWatcherActorCaseCandidatesItem>,
-    pub expected: Vec<String>,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWatcherActorCaseCandidatesItem {
-    pub available: bool,
-    pub configured: bool,
-    pub did: String,
-    pub identity_resolved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

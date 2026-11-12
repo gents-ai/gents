@@ -2318,15 +2318,15 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
         gents_inference::backends::health::BackendHealthMap::new(),
     );
     let original = load_document_runtime_view(&node, root.did()).await.unwrap();
-    for case in &gents_lean_vocab::lean_contract_snapshot().watcher_actor_cases {
-        let name = case.name.as_str();
-        if !matches!(name, "disabled-resolved" | "disabled-unresolved") {
-            continue;
-        }
+    for case in gents_lean_vocab::families::watcher_actors_scanned::cases() {
+        let name = case.input.name.as_str();
+        let [candidate] = case.input.candidates.as_slice() else {
+            panic!("{name}: the served view holds one Agent");
+        };
         let mut view = original.clone();
         let agent = &mut view.agents.get_mut(&did).unwrap().value;
-        agent.enabled = false;
-        if name == "disabled-unresolved" {
+        agent.enabled = candidate.available;
+        if !candidate.identity_resolved {
             agent.creation_nonce = "invalid".into();
         }
         let snapshot = resolve_document_runtime_snapshot_from_view(&node, &context, &view)
@@ -2337,12 +2337,16 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
             gents_protocol::node_readiness::AgentReadinessUnavailableReason::AgentDisabled
         );
         let active = snapshot.activate(1, Default::default());
-        let selected = active.watcher_identities().unwrap();
-        let expected = &case.expected;
-        assert_eq!(selected.len(), expected.len(), "{name}");
-        if !expected.is_empty() {
-            assert_eq!(selected[0].did(), did);
-        }
+        let scanned = active
+            .watcher_identities()
+            .unwrap()
+            .iter()
+            .map(|identity| {
+                assert_eq!(identity.did(), did, "{name}: a foreign identity is scanned");
+                candidate.did.clone()
+            })
+            .collect::<Vec<_>>();
+        case.check(scanned);
     }
     node.shutdown().await.unwrap();
 }

@@ -99,6 +99,7 @@ import Proofs.Automation.Triggers.NativeRoute
 import Proofs.Session.Identity.SessionInputEdit
 import Proofs.Conformance.Identity.SessionInputEdit
 import Proofs.Automation.EventDelivery.WatcherConformance
+import Proofs.Conformance.WatcherActors
 import Proofs.Conformance.ClientInstallation
 import Proofs.Conformance.RuntimeServiceReplacement
 import Proofs.Conformance.ClientSettings
@@ -386,8 +387,6 @@ def snapshotCoverageTailJson : String :=
       ++ Conformance.EventDelivery.sourceInstancesJson ++ ","
     ++ "\"event_delivery_convergence_traces\":"
       ++ Conformance.EventDelivery.convergenceTracesJson ++ ","
-    ++ "\"watcher_actor_cases\":"
-      ++ EventDelivery.WatcherConformance.actorCasesJson ++ ","
     ++ "\"watcher_scoped_scan_cases\":"
       ++ EventDelivery.WatcherConformance.casesJson ++ ","
     ++ "\"coverage_ledger\":"

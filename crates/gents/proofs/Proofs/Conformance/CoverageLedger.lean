@@ -1547,6 +1547,11 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "family"
+      "watcher_actors_scanned_unreached"
+      "model-production-gap: the served runtime fixture provisions one Agent, so the mixed candidate set (an available, an unavailable, an unresolved and an unconfigured Agent in one view) is not built by any production test yet.")
+      "event-delivery" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
       "delegated_finality_served_unreached"
       "model-production-gap: the session-message commit keeps no caller-side knowledge state for a pending read, a foreign receipt or an invalid abort proof, and no attempt counter or retry and failure-report permission, so pending-is-unconfirmed, foreign-receipt, no-proof-of-abort and failure-proof-cannot-undo-child have no production form.")
       "identity-permission" [Surface.runtimeInternal]
