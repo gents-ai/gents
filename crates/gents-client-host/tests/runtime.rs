@@ -190,6 +190,18 @@ async fn editor_recovers_goal_commands_after_lost_replies_and_reload() -> Result
     copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
 }
 
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_recovers_text_goal_commands_after_lost_replies_and_reload() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), "live-goal-delivery")
+        .await
+        .with_context(|| {
+            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
+        })?;
+    copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
+}
+
 #[cfg(feature = "editor-e2e")]
 #[cfg_attr(
     windows,
@@ -713,10 +725,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     #[cfg(feature = "editor-e2e")]
     if matches!(journey, Journey::EditorGoalReplacement) {
         return live_runtime::exercise_editor(root, "live-goal-replacement").await;
-    }
-    #[cfg(feature = "editor-e2e")]
-    if matches!(journey, Journey::EditorGoalDelivery) {
-        return live_runtime::exercise_editor(root, "live-goal-delivery").await;
     }
     #[cfg(feature = "editor-e2e")]
     if matches!(journey, Journey::EditorHistory)
