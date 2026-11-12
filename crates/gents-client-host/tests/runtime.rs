@@ -290,6 +290,22 @@ async fn enrolled_client_resumes_a_durable_goal_and_observes_completion() -> Res
     })
 }
 
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_steers_text_input_into_a_live_request() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), "live-steering").await?;
+    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+}
+
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_steers_text_input_and_preserves_a_live_goal() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), "live-goal-steering").await?;
+    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+}
+
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_preserves_live_session_and_draft_across_window_reload() -> Result<()> {

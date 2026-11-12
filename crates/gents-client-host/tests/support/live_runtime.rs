@@ -23,6 +23,8 @@ mod live_file_actions;
 mod live_gate;
 #[path = "live_goals.rs"]
 mod live_goals;
+#[path = "live_steering.rs"]
+mod live_steering;
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -37,7 +39,9 @@ pub async fn exercise_editor(root: &Path, scenario: &str) -> Result<()> {
 
 async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
     let target = live_target().await;
-    let gates = live_goals::gates(root, editor).await?;
+    let mut gates = live_goals::gates(root, editor).await?;
+    let steering = matches!(editor, Some("live-steering" | "live-goal-steering"));
+    let goal_steering = editor == Some("live-goal-steering");
     let root_owned = root.to_owned();
     let (binary, homes) = tokio::task::spawn_blocking(move || {
         Ok::<_, anyhow::Error>((
@@ -165,15 +169,26 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
         configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor).await?;
-        let opening = if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools." } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools." };
-        let receipt = client.try_call(id, "desktop_chat_send", json!({"request": {
-            "nodeDid": node, "agentDid": agent,
-            "content": opening,
-            "delivery": "queue",
-        }})).await?;
+        let opening = if steering { gates[0].prompt() } else if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools.".to_owned() } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.".to_owned() };
+        let receipt = if goal_steering {
+            client.try_call(id, "desktop_goal_control", json!({"request":{"nodeDid":node,"agentDid":agent,"action":{"kind":"create","objective":opening,"tokenBudget":"16000"}}})).await?
+        } else {
+            client.try_call(id, "desktop_chat_send", json!({"request": {
+                "nodeDid": node, "agentDid": agent, "content": opening, "delivery": "queue",
+            }})).await?
+        };
         id += 1;
         let session = receipt["sessionId"].as_str().context("submitted session")?;
         let request = receipt["requestId"].as_str().context("submitted request")?;
+        if steering {
+            gates[0].wait_started(WAIT).await?;
+            let mut fixture = json!({"gate":gates[0].descriptor()});
+            if goal_steering {
+                fixture["continuationGate"] = gates[1].descriptor();
+            }
+            tokio::fs::write(root.join("editor-steering-fixture.json"), serde_json::to_vec(&fixture)?).await?;
+            super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), editor.unwrap()).await?;
+        }
         if !goal && editor.is_none() {
         let live = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({
             "nodeDid":node,"sessionId":session,"timelineLimit":40,
@@ -220,7 +235,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
             wait_goal(&mut client, &mut updates, &mut id, node, session, "complete").await?;
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == resumed_request && value["turnState"] == "completed").await?;
         }
-        if let Some(scenario) = editor {
+        if steering {
+            live_steering::verify(&access, root, node, session, request, &client_did, receipt["goalId"].as_str()).await?;
+        }
+        if let Some(scenario) = editor.filter(|_| !steering) {
             live_goals::prepare(root, scenario, &gates).await?;
             if scenario == "live-review" {
                 live_file_actions::prepare_review(root).await?;
@@ -246,7 +264,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
                 tokio::fs::write(root.join("editor-review-canonical.json"), serde_json::to_vec(&evidence)?).await?;
                 projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
             } else if scenario == "live-delivery" {
-                live_delivery::verify(&access, root, node, session, &client_did, opening).await?;
+                live_delivery::verify(&access, root, node, session, &client_did, &opening).await?;
                 projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
             } else if scenario == "live-workspace" {
                 let evidence = super::editor_workspace::verify(&access, root, node, session, &client_did).await?;
@@ -296,14 +314,14 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
                     retained["timelineItems"] == projection["timelineItems"],
                     "native client restart changed the durable transcript"
                 );
-                if goal {
+                if goal || goal_steering {
                     wait_goal(
                         &mut restarted,
                         &mut restarted_updates,
                         &mut id,
                         node,
                         &session,
-                        "complete",
+                        if goal_steering { "paused" } else { "complete" },
                     )
                     .await?;
                 }
@@ -319,8 +337,13 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
             Err(error)
         }
     };
+    for gate in &mut gates {
+        gate.release().await?;
+    }
     stop(&mut runtime).await?;
-    drain.await??;
+    tokio::time::timeout(WAIT, drain)
+        .await
+        .context("runtime output cleanup deadline")???;
     result
 }
 
@@ -360,7 +383,11 @@ async fn configure(
         gate.configure(&mut document, node);
     }
     if !gates.is_empty() {
-        let instruction = if editor == Some("live-goal-delivery") {
+        let instruction = if editor == Some("live-goal-steering") {
+            "For the opening Goal request, run its given held command. Do not complete the Goal. For the first later automatic Goal continuation, run the continuation command appended below and acknowledge its completion without changing Goal status."
+        } else if editor == Some("live-steering") {
+            "Run the held tool from the opening request. If the user steers with additional input while it runs, acknowledge the additional input after the tool completes."
+        } else if editor == Some("live-goal-delivery") {
             "For a Goal opening, run its held tool and then answer without completing the Goal. On a resumed Goal continuation after the opening completes, call update_goal with status complete."
         } else {
             "For a Goal opening, run its held tool and then answer without changing the Goal status. If the current user input is Complete the second goal from this follow-up, call update_goal with status complete. For other ordinary messages, answer briefly without changing the Goal."
@@ -370,7 +397,12 @@ async fn configure(
             .context("held tool contexts")?
         {
             let previous = context["system_prompt"].as_str().unwrap_or_default();
-            context["system_prompt"] = json!(format!("{previous}\n{instruction}"));
+            let continuation = if editor == Some("live-goal-steering") {
+                gates[1].prompt()
+            } else {
+                String::new()
+            };
+            context["system_prompt"] = json!(format!("{previous}\n{instruction}\n{continuation}"));
         }
     }
     client
