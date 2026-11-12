@@ -8,7 +8,7 @@ use gents_session::request::lifecycle::{
 use gents_session::request::streaming::DefraStreamWriter;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::{sync::Arc, time::Duration};
 
 /// A Node whose runtime root is `root`. Agents derived from `root` are then the
@@ -335,7 +335,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         let node = rooted_node(&identity).await;
         let agent = derived_agent(&identity);
         assert_ne!(identity.did(), agent.did());
-        let automated = case["automated_root"].as_bool().unwrap();
+        let automated = case.automated_root;
         let mut root = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "output-root",
@@ -383,7 +383,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             root_request.request_hop,
         )
         .unwrap();
-        if !case["authenticated_child"].as_bool().unwrap() {
+        if !case.authenticated_child {
             child.caused_by_parent_request_doc_id = Some("wrong-physical-parent".into());
         }
         gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut child)
@@ -417,15 +417,17 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         let outsider_row = persist_request(&node, agent.as_ref(), &outsider).await;
         let mut stored = rapidhash::RapidHashSet::default();
         let mut previous: Option<(RequestLifecycle, Option<String>)> = None;
-        let mut writes_by_request: std::collections::BTreeMap<u64, Vec<&Value>> =
-            Default::default();
-        for write in case["writes"].as_array().unwrap() {
-            let call = write["call_doc"].as_u64().unwrap();
+        let mut writes_by_request: std::collections::BTreeMap<
+            u64,
+            Vec<&gents_lean_vocab::LeanLogicalOutputObligationCaseWritesItem>,
+        > = Default::default();
+        for write in &case.writes {
+            let call = write.call_doc;
             if !stored.insert(call) {
                 continue;
             }
             writes_by_request
-                .entry(write["request_doc"].as_u64().unwrap())
+                .entry(write.request_doc)
                 .or_default()
                 .push(write);
         }
@@ -445,15 +447,15 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             let writer = begin_writer(&mut lifecycle, &node).await;
             let mut last_message_doc_id: Option<String> = None;
             for (turn, write) in writes.iter().enumerate() {
-                let call = write["call_doc"].as_u64().unwrap();
-                let expected = if !case["count_valid"].as_bool().unwrap() {
+                let call = write.call_doc;
+                let expected = if !case.count_valid {
                     if call == 100 {
                         2
                     } else {
                         3
                     }
                 } else {
-                    case["expected_count"].as_u64().unwrap_or(2)
+                    case.expected_count.unwrap_or(2)
                 };
                 let (accepted, message_doc_id) = publish_accepted_turn(
                     &writer,
@@ -461,7 +463,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     turn,
                     0,
                     &format!("native-write-{call}"),
-                    if write["tool"] == 1 {
+                    if write.tool == 1 {
                         "write_result"
                     } else {
                         "other_tool"
@@ -473,9 +475,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     &node,
                     &mut lifecycle,
                     accepted,
-                    write["completed"]
-                        .as_bool()
-                        .expect("modeled write completion"),
+                    write.completed,
                 )
                 .await;
                 last_message_doc_id = Some(message_doc_id);
@@ -488,24 +488,23 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         let configured = vec![(
             "write_result".into(),
             gents_documents::WriteToolOutputObligation {
-                scope: if case["request_scope"].as_bool().unwrap() {
+                scope: if case.request_scope {
                     gents_documents::WriteToolOutputObligationScope::Request
                 } else {
                     gents_documents::WriteToolOutputObligationScope::Trigger
                 },
-                minimum_writes: case["minimum"].as_u64().unwrap() as usize,
-                expected_count_field: (case["expected_count"].is_number()
-                    || !case["count_valid"].as_bool().unwrap())
-                .then(|| "expected_total".into()),
+                minimum_writes: case.minimum as usize,
+                expected_count_field: (case.expected_count.is_some() || !case.count_valid)
+                    .then(|| "expected_total".into()),
             },
         )];
         let observed =
             match OutputObligationGate::for_request(node.clone(), &request, &configured).await {
                 Err(error) => {
                     assert!(
-                        !case["authenticated_child"].as_bool().unwrap(),
+                        !case.authenticated_child,
                         "{}: unexpected ancestry error {error:#}",
-                        case["name"]
+                        case.name
                     );
                     assert!(error.to_string().contains("parent is absent"), "{error:#}");
                     "reject"
@@ -516,9 +515,9 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     match gate.unmet().await {
                         Err(error) => {
                             assert!(
-                                !case["count_valid"].as_bool().unwrap(),
+                                !case.count_valid,
                                 "{}: unexpected gate error {error:#}",
-                                case["name"]
+                                case.name
                             );
                             assert!(error.to_string().contains("disagree"), "{error:#}");
                             "reject"
@@ -530,9 +529,9 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             };
         assert_eq!(
             observed,
-            case["expected_decision"].as_str().unwrap(),
+            case.expected_decision.as_str(),
             "{}",
-            case["name"]
+            case.name
         );
         node.shutdown().await.expect("node shutdown");
     }
