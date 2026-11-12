@@ -36,6 +36,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         grant_authority: false,
         wire: Vec::new(),
         expect_digest: None,
+        root_agents: None,
         explicit: true,
     }))
     .await
@@ -895,9 +896,10 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
             dynamic_consent: false,
             tool_calls_consent: false,
         };
-        let error = super::super::wire::wire_in(&access, "did:key:remote", home.path(), &request)
-            .await
-            .unwrap_err();
+        let error =
+            super::super::wire::wire_in_owned(&access, "did:key:remote", home.path(), &request)
+                .await
+                .unwrap_err();
         let text = format!("{error:#}");
         let allowed = cases["pack_wire_target_cases"]
             .as_array()
@@ -930,7 +932,7 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
 }
 
 #[tokio::test]
-async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
+async fn wire_reports_unconfirmed_when_the_served_endpoint_is_unreachable() {
     let home = initialized_home().await;
     let init = crate::home_state::read_init_config(home.path())
         .unwrap()
@@ -971,7 +973,7 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
     let error = super::super::wire::wire_in(&access, &init.node_did, home.path(), &request)
         .await
         .unwrap_err();
-    assert!(format!("{error:#}").contains("stop the runtime"));
+    assert!(format!("{error:#}").contains("outcome is unconfirmed"));
 }
 
 #[tokio::test]

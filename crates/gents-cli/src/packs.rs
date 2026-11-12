@@ -80,7 +80,9 @@ pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
 
 /// Installs `package`, or with `preview` reports what the install would
 /// write. With `expect_digest`, a pack whose content digest differs (the one
-/// a preview reported, or a link named) is refused before any write.
+/// a preview reported, or a link named) is refused before any write. With
+/// `root_agents`, the `PACK=AGENT` rows a preview listed, an approved install
+/// grants its tool root to those agents only.
 #[allow(clippy::too_many_arguments)]
 pub async fn install(
     home: PathBuf,
@@ -91,6 +93,7 @@ pub async fn install(
     grant_authority: bool,
     preview: bool,
     expect_digest: Option<String>,
+    root_agents: Option<Vec<String>>,
 ) -> Result<Value, PackChangeError> {
     capture_report(command::install(PackInstallArgs {
         package,
@@ -106,6 +109,7 @@ pub async fn install(
         grant_authority,
         wire: Vec::new(),
         expect_digest,
+        root_agents,
         explicit: true,
     }))
     .await

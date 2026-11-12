@@ -40,6 +40,12 @@ end Sample
 "#;
 
 #[test]
+fn pack_operator_wire_contract_cases_parse_through_typed_snapshot() {
+    let snapshot = lean_contract_snapshot();
+    assert!(!snapshot.pack_operator_wire_cases.is_empty());
+}
+
+#[test]
 fn reports_missing_namespace() {
     let error = parse_lean_to_defradb_values(NORMAL_LEAN, "Missing").unwrap_err();
     assert_eq!(error, LeanVocabularyParseError::MissingNamespace);
