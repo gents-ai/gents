@@ -2713,10 +2713,10 @@ async fn generated_background_process_identity_cases_cancel_only_the_physical_in
 
 #[tokio::test]
 async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_output() {
-    use gents_session::test_support::{fixture, fixture_access, fixture_query};
     use gents_loop::loop_stream::LoopStreamItem;
     use gents_loop::stream_processor::StreamProcessor;
     use gents_protocol::message::Message;
+    use gents_session::test_support::{fixture, fixture_access, fixture_query};
     let (node, path, mut lifecycle, writer) = fixture("owned-input").await;
     let request_doc_id = lifecycle.request().doc_id.clone();
     let hook = crate::call::hook::DefraSessionHook::with_identity(

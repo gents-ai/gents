@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-use anyhow::{anyhow, Result};
-use serde_json::{json, Value};
+use crate::test_support::self_config::{
+    call_config_tool, config, config_call, node_identity, take_agent_tool, test_plugins,
+    SelfConfigFixture,
+};
+use anyhow::Result;
 use gents_documents::patch::SelfConfigTarget;
-use gents_loop::tool::{Tool, ToolDyn};
-use gents_store::graphql::escape_graphql_string;
+use gents_loop::tool::ToolDyn;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 use gents_tools::builtin::self_config::agent_management::agent_mutate;
 use gents_tools::builtin::self_config::command::agents::agent_params;
@@ -12,10 +12,9 @@ use gents_tools::builtin::self_config::test_support::{
     agent_request, anchored_request, node_default_agent, tools_request,
 };
 use gents_tools::builtin::self_config::*;
-use crate::test_support::self_config::{
-    call_config_tool, config, config_call, node_identity, take_agent_tool, test_plugins,
-    SelfConfigFixture,
-};
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 #[tokio::test]
 async fn selected_configuration_requires_and_observes_user_grant() {
@@ -67,8 +66,7 @@ async fn selected_configuration_requires_and_observes_user_grant() {
 
 #[tokio::test]
 async fn pack_install_uses_current_node_and_inference_chain() {
-    let (home, plugins) =
-        crate::test_support::home_with_fixture_pack("plugin_documents_fixture");
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("plugin_documents_fixture");
     let (fixture, tools) = signed_pack_tool("pack-install", plugins).await;
     let node_did = fixture.node_did();
     let coordinator = fixture.install_sibling("coordinator").await;
@@ -377,8 +375,7 @@ async fn signed_pack_tool(
 
 #[tokio::test]
 async fn a_digest_the_store_does_not_hold_points_at_the_built_pack_file() {
-    let (home, plugins) =
-        crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (_fixture, tools) = signed_pack_tool("pack-absent-digest", plugins).await;
     let absent = format!("sha256:{}", "ab".repeat(32));
     for verb in ["update", "install"] {
@@ -408,8 +405,7 @@ async fn a_digest_the_store_does_not_hold_points_at_the_built_pack_file() {
 
 #[tokio::test]
 async fn pack_list_pages_the_packs_the_home_store_holds() {
-    let (_home, plugins) =
-        crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (_fixture, tools) = signed_pack_tool("pack-list", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
@@ -451,8 +447,7 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
 
 #[tokio::test]
 async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
-    let (home, plugins) =
-        crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (_fixture, tools) = signed_pack_tool("pack-list-damaged", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
@@ -481,8 +476,7 @@ async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offlin
     let _registry_lock = PACK_REGISTRY_ENV.lock().await;
     let _registry =
         gents_store::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
-    let (_home, plugins) =
-        crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (_fixture, tools) = signed_pack_tool("pack-update-offline", plugins).await;
     let error = config_call(
         &tools,
@@ -1125,10 +1119,9 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     let source = root.path().join("synthetic-codex");
     std::fs::create_dir_all(&source).unwrap();
     let marker = root.path().join("SHOULD_NEVER_RUN");
-    let source_config = include_str!(
-        "../../gents/tests/fixtures/configuration_discovery/codex-user/config.toml"
-    )
-    .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy());
+    let source_config =
+        include_str!("../../gents/tests/fixtures/configuration_discovery/codex-user/config.toml")
+            .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy());
     std::fs::write(source.join("config.toml"), source_config).unwrap();
 
     let mut grants = config(&["tools"]);
@@ -1287,17 +1280,13 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     let marker = root.path().join("SHOULD_NEVER_RUN");
     std::fs::write(
         user_root.join("config.toml"),
-        include_str!(
-            "../../gents/tests/fixtures/configuration_discovery/codex-user/config.toml"
-        )
-        .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy()),
+        include_str!("../../gents/tests/fixtures/configuration_discovery/codex-user/config.toml")
+            .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy()),
     )
     .unwrap();
     std::fs::write(
         user_root.join("AGENTS.md"),
-        include_str!(
-            "../../gents/tests/fixtures/configuration_discovery/codex-user/AGENTS.md"
-        ),
+        include_str!("../../gents/tests/fixtures/configuration_discovery/codex-user/AGENTS.md"),
     )
     .unwrap();
     std::fs::write(
@@ -4153,8 +4142,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
 
 #[tokio::test]
 async fn pack_documents_install_and_release_documents_dependencies() {
-    let (home, plugins) =
-        crate::test_support::home_with_fixture_pack("dependent_fixture");
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("dependent_fixture");
     let (_fixture, directory) =
         gents_pack::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
     let (bytes, _) = gents_pack::pack::archive::pack_dir(&directory).unwrap();
@@ -5011,9 +4999,9 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let (workspace, artifact, archive) =
         gents_pack::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
     let home = tempfile::tempdir().unwrap();
-    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(
-        Some(home.path().to_owned()),
-    ));
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
     let fixture = SelfConfigFixture::new("native-pack").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
@@ -5244,9 +5232,9 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     let (workspace, artifact, _) =
         gents_pack::pack::plugin_lifecycle::tests::fixture("1.0.0", true);
     let home = tempfile::tempdir().unwrap();
-    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(
-        Some(home.path().to_owned()),
-    ));
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
     let fixture = SelfConfigFixture::new("native-pack-refusals").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
@@ -5562,9 +5550,9 @@ async fn native_pack_local_path_plugins_only_still_requires_operator_grant() {
     let (workspace, artifact, _) =
         gents_pack::pack::plugin_lifecycle::tests::fixture("1.0.0", true);
     let home = tempfile::tempdir().unwrap();
-    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(
-        Some(home.path().to_owned()),
-    ));
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
     let workspace = &workspace;
     let (_agent_fixture, tools) =
         pack_tool_with_local_read("local-plugins-only", plugins, workspace.path()).await;
@@ -5704,8 +5692,7 @@ async fn install_chat_account_fences(fixture: &SelfConfigFixture) {
 
 #[tokio::test]
 async fn pack_documents_install_refuses_non_default_account_inference_bindings() {
-    let (_home, plugins) =
-        crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (fixture, tools) = signed_pack_tool("documents-account-fence", plugins).await;
     install_chat_account_fences(&fixture).await;
     // The User publishes the fenced profiles under the Node; the Agent reads

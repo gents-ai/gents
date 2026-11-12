@@ -1,10 +1,10 @@
 use super::AwaitMode;
 use super::ToolRowKind;
-use gents_lean_vocab::{
-    lean_r6_backgrounding_case, lean_restart_disposition_cases, LeanRestartRowKind,
-};
 use crate::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
+};
+use gents_lean_vocab::{
+    lean_r6_backgrounding_case, lean_restart_disposition_cases, LeanRestartRowKind,
 };
 use gents_session::session::tool_call_state::CancelCause;
 use gents_store::config_client::ConfigAccess;

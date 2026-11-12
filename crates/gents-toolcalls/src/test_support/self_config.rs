@@ -1,13 +1,11 @@
-use std::collections::BTreeSet;
-use std::sync::Arc;
-use anyhow::{anyhow, Result};
-use serde_json::{json, Value};
+use anyhow::Result;
 use gents_loop::tool::ToolDyn;
-use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::NodeIdentity;
-use gents_tools::surface::SelfConfigToolConfig;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
+use gents_store::graphql::escape_graphql_string;
 use gents_tools::builtin::self_config::*;
+use gents_tools::surface::SelfConfigToolConfig;
+use serde_json::{json, Value};
+use std::sync::Arc;
 
 pub fn test_plugins() -> Arc<crate::plugin::executor::PluginExecutor> {
     Arc::new(crate::plugin::executor::PluginExecutor::default())
@@ -638,9 +636,7 @@ pub async fn config_call(
 /// A digest names a stored pack. One the store does not hold is answered
 /// with where a just-built pack is, not an OS error and a home path.
 
-pub fn node_identity(
-    label: &str,
-) -> std::sync::Arc<dyn gents_store::identity::NodeIdentity> {
+pub fn node_identity(label: &str) -> std::sync::Arc<dyn gents_store::identity::NodeIdentity> {
     let tempdir = tempfile::tempdir().expect("identity tempdir");
     std::sync::Arc::new(
         gents_store::identity::KeyIdentity::load_or_create(

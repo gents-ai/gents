@@ -120,6 +120,7 @@ async fn commit_signer_identities(
 
 #[tokio::test]
 async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload() {
+    use crate::call::lifecycle::ToolCallLifecycle;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
@@ -132,7 +133,6 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
     };
     use gents_protocol::tool_call::AwaitMode;
-    use crate::call::lifecycle::ToolCallLifecycle;
 
     let (node, _dir, identity, agent) = test_node().await;
 

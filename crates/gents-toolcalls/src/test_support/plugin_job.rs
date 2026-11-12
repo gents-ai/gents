@@ -1,3 +1,11 @@
+use crate::background::job::admit::{
+    HostFacts, RootCall, StepCall, StepChild, StepContext, StepRow,
+};
+use crate::background::job::control::{KillAction, KillObservation};
+use crate::background::job::dispatch::{Delivery, ToolCallView};
+use crate::background::status::ProcessControlScope;
+use crate::call::lifecycle::ToolRowKind;
+use crate::plugin::data::StampContext;
 use gents_lean_vocab::{
     LeanPluginJobCeiling, LeanPluginJobContext, LeanPluginJobControlEcho, LeanPluginJobExtras,
     LeanPluginJobGuestPin, LeanPluginJobHostFacts, LeanPluginJobKill, LeanPluginJobObservation,
@@ -12,12 +20,6 @@ use gents_protocol::job::{
 };
 use gents_protocol::tool_call::AwaitMode;
 use gents_session::session::tool_call_state::ToolCallState;
-use crate::background::job::admit::{HostFacts, RootCall, StepCall, StepChild, StepContext, StepRow};
-use crate::background::job::control::{self, KillAction, KillObservation};
-use crate::background::job::dispatch::{Delivery, ToolCallView};
-use crate::background::status::ProcessControlScope;
-use crate::call::lifecycle::ToolRowKind;
-use crate::plugin::data::StampContext;
 use gents_tools::surface::EndpointScope;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;

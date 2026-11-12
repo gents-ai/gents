@@ -616,15 +616,15 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_protocol::job::{DataOp, PluginDataDeclaration};
-    use serde_json::{json, Map, Value};
-    use std::collections::BTreeMap;
     use crate::plugin::application_write::Observation as WriteFacts;
     use gents_lean_vocab::{
         lean_plugin_data_cases, LeanPluginDataInsertOutcome, LeanPluginDataInvocation,
         LeanPluginDataOnConflict, LeanPluginDataOperation, LeanPluginDataRefusal,
         LeanPluginDataStamp, LeanPluginDataWriteFacts,
     };
+    use gents_protocol::job::{DataOp, PluginDataDeclaration};
+    use serde_json::{json, Map, Value};
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn agent_data_caller_never_uses_a_node_identity() {

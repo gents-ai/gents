@@ -165,11 +165,27 @@ impl ToolDyn for PendingTool {
 async fn setup_hook(
     test_name: &str,
     registry: BackgroundToolRegistry,
-) -> (gents_inference::test_support::TestDb, DefraSessionHook, String, String) {
-    let db = test_db(test_name, gents_session::test_support::no_lifecycle_plugins()).await;
+) -> (
+    gents_inference::test_support::TestDb,
+    DefraSessionHook,
+    String,
+    String,
+) {
+    let db = test_db(
+        test_name,
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    let hook = setup_private_hook(&db.node, &db.node_identity, &request_id, &session_id, registry).await;
+    let hook = setup_private_hook(
+        &db.node,
+        &db.node_identity,
+        &request_id,
+        &session_id,
+        registry,
+    )
+    .await;
     (db, hook, session_id, request_id)
 }
 
@@ -577,7 +593,11 @@ async fn list_background_tools_reports_running_live_output_bytes() {
 
 #[tokio::test]
 async fn list_background_tools_rejects_sibling_requests() {
-    let db = test_db("r4c-list-bg-sibling", gents_session::test_support::no_lifecycle_plugins()).await;
+    let db = test_db(
+        "r4c-list-bg-sibling",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let (hook_1, _session_1, _request_1) = setup_hook_on_db(
         &db,
         "parent-one",
@@ -604,7 +624,14 @@ async fn setup_hook_on_db(
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> (DefraSessionHook, String, String) {
-    let hook = setup_private_hook(&db.node, &db.node_identity, request_id, session_id, registry).await;
+    let hook = setup_private_hook(
+        &db.node,
+        &db.node_identity,
+        request_id,
+        session_id,
+        registry,
+    )
+    .await;
     (hook, session_id.to_string(), request_id.to_string())
 }
 

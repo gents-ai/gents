@@ -1,22 +1,22 @@
+use crate::background::job::admit;
+use crate::background::job::admit::{is_stalled, Refusal};
+use crate::background::job::control::{self, KillCause};
+use crate::background::job::dispatch::{host_pin, split_address, unique_handle, Delivery};
+use crate::background::job::driver;
+use crate::background::job::recovery::{
+    step_invocation_allowed, tick_action, RecoveryFacts, TickAction,
+};
+use crate::plugin::job_calls;
+use crate::test_support::plugin_job::*;
 use gents_lean_vocab::{
     lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases, lean_plugin_job_control_cases,
     LeanPluginJobAdoptionCase, LeanPluginJobControlCase,
 };
-use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState, JobStepOutput};
-use crate::background::job::admit;
-use crate::background::job::control::{self, KillCause};
-use crate::background::job::dispatch::{host_pin, split_address, unique_handle, Delivery};
-use crate::background::job::driver;
-use crate::plugin::job_calls;
-use std::collections::BTreeSet;
-use crate::background::job::admit::{is_stalled, Refusal};
-use crate::background::job::recovery::{
-    step_invocation_allowed, tick_action, RecoveryFacts, TickAction,
-};
 use gents_lean_vocab::{
     lean_plugin_job_recovery_cases, lean_recovery_sweep_cases, LeanPluginJobRecoveryRow,
 };
-use crate::test_support::plugin_job::*;
+use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState, JobStepOutput};
+use std::collections::BTreeSet;
 
 const PLUGIN_JOB_SWEEP_ID: &str = "tool_call_lifecycle_recover_plugin_job_rows";
 
@@ -60,70 +60,68 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
             .map(|kill| kill.retry_key.as_str())
             .collect();
         expected_kills.sort_unstable();
-        let settled =
-            match crate::background::job::admit::admit_step(&context, &job, &output) {
-                Ok(admitted) => {
-                    assert!(expected.admitted, "{}: admitted a refused step", case.name);
-                    assert!(!expected.dynamic_code_disabled, "{}", case.name);
-                    assert_eq!(expected.code, None, "{}", case.name);
-                    assert_eq!(
-                        Some(&admitted),
-                        expected_job.as_ref(),
-                        "{}: admitted row",
+        let settled = match crate::background::job::admit::admit_step(&context, &job, &output) {
+            Ok(admitted) => {
+                assert!(expected.admitted, "{}: admitted a refused step", case.name);
+                assert!(!expected.dynamic_code_disabled, "{}", case.name);
+                assert_eq!(expected.code, None, "{}", case.name);
+                assert_eq!(
+                    Some(&admitted),
+                    expected_job.as_ref(),
+                    "{}: admitted row",
+                    case.name
+                );
+                assert_eq!(admitted.state, expected_state, "{}", case.name);
+                assert!(expected_kills.is_empty(), "{}: kill", case.name);
+                admitted
+            }
+            Err(refusal) => {
+                assert!(
+                    !expected.admitted,
+                    "{}: refused an admitted step",
+                    case.name
+                );
+                assert_eq!(
+                    refusal.code(),
+                    expected.code.as_deref(),
+                    "{}: refusal code",
+                    case.name
+                );
+                use crate::background::job::admit::PolicyDenialDetail;
+                match case.name.as_str() {
+                    "dynamic_check_spawn_refused" => assert_eq!(
+                        refusal.detail,
+                        Some(PolicyDenialDetail::DynamicCheck),
+                        "{}",
                         case.name
-                    );
-                    assert_eq!(admitted.state, expected_state, "{}", case.name);
-                    assert!(expected_kills.is_empty(), "{}: kill", case.name);
-                    admitted
+                    ),
+                    "caller_target_unconfigured_refused" => assert_eq!(
+                        refusal.detail,
+                        Some(PolicyDenialDetail::TargetUnavailable),
+                        "{}",
+                        case.name
+                    ),
+                    _ => {}
                 }
-                Err(refusal) => {
-                    assert!(
-                        !expected.admitted,
-                        "{}: refused an admitted step",
-                        case.name
-                    );
-                    assert_eq!(
-                        refusal.code(),
-                        expected.code.as_deref(),
-                        "{}: refusal code",
-                        case.name
-                    );
-                    use crate::background::job::admit::PolicyDenialDetail;
-                    match case.name.as_str() {
-                        "dynamic_check_spawn_refused" => assert_eq!(
-                            refusal.detail,
-                            Some(PolicyDenialDetail::DynamicCheck),
-                            "{}",
-                            case.name
-                        ),
-                        "caller_target_unconfigured_refused" => assert_eq!(
-                            refusal.detail,
-                            Some(PolicyDenialDetail::TargetUnavailable),
-                            "{}",
-                            case.name
-                        ),
-                        _ => {}
-                    }
-                    assert_eq!(
-                    refusal.refusal
-                        == crate::background::job::admit::Refusal::DynamicCodeDisabled,
+                assert_eq!(
+                    refusal.refusal == crate::background::job::admit::Refusal::DynamicCodeDisabled,
                     expected.dynamic_code_disabled,
                     "{}: dynamic-source refusal detail",
                     case.name
                 );
-                    assert!(expected.job.is_none(), "{}", case.name);
-                    assert_eq!(
-                        refusal.closed_row().state,
-                        expected_state,
-                        "{}: row state",
-                        case.name
-                    );
-                    let mut kills: Vec<&str> = refusal.kills().iter().map(String::as_str).collect();
-                    kills.sort_unstable();
-                    assert_eq!(kills, expected_kills, "{}: killed children", case.name);
-                    refusal.closed_row().clone()
-                }
-            };
+                assert!(expected.job.is_none(), "{}", case.name);
+                assert_eq!(
+                    refusal.closed_row().state,
+                    expected_state,
+                    "{}: row state",
+                    case.name
+                );
+                let mut kills: Vec<&str> = refusal.kills().iter().map(String::as_str).collect();
+                kills.sort_unstable();
+                assert_eq!(kills, expected_kills, "{}: killed children", case.name);
+                refusal.closed_row().clone()
+            }
+        };
         if let Some(trace) = &case.wire_trace {
             let durable = match trace.interruption.as_str() {
                 "before_kill" if !expected.admitted => &job,

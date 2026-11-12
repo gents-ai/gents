@@ -1,8 +1,8 @@
-use gents_store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequest;
 use gents_session::request::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
 use gents_session::request::lifecycle::test_support::TestDb;
 use gents_session::request::lifecycle::{ExecutionOrigin, RequestTerminalOutcome};
+use gents_store::identity::NodeIdentity;
 
 pub fn background_hints(parent: &AgentRequest) -> RequestQueue {
     RequestQueue {

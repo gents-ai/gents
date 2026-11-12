@@ -347,9 +347,10 @@ async fn step0(output: Value, options: Options) -> Step0 {
             cwd.as_ref().map(|cwd| cwd.path().to_owned()),
         );
         runtime
-            .bind_snapshot(crate::test_support::FixedAgentIdentities::boxed(
-                vec![caller.clone(), worker.clone()],
-            ))
+            .bind_snapshot(crate::test_support::FixedAgentIdentities::boxed(vec![
+                caller.clone(),
+                worker.clone(),
+            ]))
             .unwrap();
         let admission = gents_store::service::RuntimeServiceAdmission::default();
         if !options.kicks {
@@ -395,14 +396,14 @@ async fn job_chain(
     gents_session::request::lifecycle::RequestLifecycle,
     Option<(gents_session::request::lifecycle::RequestLifecycle, String)>,
 ) {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-    };
-    use gents_session::request::lifecycle::ClaimOutcome;
     use crate::call::lifecycle::admission_fixture::{
         materialize_session_message, pending_client_fixture_request,
         publish_accepted_on_claimed_request,
     };
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+    use gents_session::request::lifecycle::ClaimOutcome;
     let request_id = format!("step0-{}", uuid::Uuid::new_v4());
     let session_id = format!("session-{}", uuid::Uuid::new_v4());
     let create = AgentRequestCreate::base(
@@ -504,10 +505,7 @@ async fn job_chain(
     (current, parent)
 }
 
-async fn write_pin_for_tool(
-    tool: &crate::call::lifecycle::ToolCallLifecycle,
-    pin: &JobPin,
-) {
+async fn write_pin_for_tool(tool: &crate::call::lifecycle::ToolCallLifecycle, pin: &JobPin) {
     let access = tool.access().unwrap();
     let doc = tool.doc_id().unwrap();
     access
@@ -1764,10 +1762,7 @@ impl Step0 {
         }
     }
 
-    async fn run_later_step(
-        &self,
-        row: &str,
-    ) -> crate::background::job::driver::StepOutcome {
+    async fn run_later_step(&self, row: &str) -> crate::background::job::driver::StepOutcome {
         let driver = self.hook.job_driver.as_ref().unwrap();
         crate::background::job::driver::run_step(
             driver.runtime(),

@@ -1,10 +1,10 @@
-use gents_store::identity::NodeIdentity;
 use crate::test_support::background_completion::{
     admission_verifier, background_hints, desktop_owned_session,
 };
 use gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
 use gents_session::request::lifecycle::test_support::test_db;
 use gents_session::request::lifecycle::ExecutionOrigin;
+use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
 async fn a_returned_result_is_admitted_into_a_paired_client_session() {

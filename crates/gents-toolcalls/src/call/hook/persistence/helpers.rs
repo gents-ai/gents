@@ -738,12 +738,14 @@ mod tests {
             .unwrap_or(0)
     }
 
-    async fn bump_admission_sequence(access: &gents_store::config_client::ConfigAccess, doc_id: &str) {
+    async fn bump_admission_sequence(
+        access: &gents_store::config_client::ConfigAccess,
+        doc_id: &str,
+    ) {
         access
             .transact_write("test.background_admission_bump", |txn| {
                 Box::pin(async move {
-                    reserve_background_slot_in_txn(txn, doc_id, BackgroundSlot::Requested, "")
-                        .await
+                    reserve_background_slot_in_txn(txn, doc_id, BackgroundSlot::Requested, "").await
                 })
             })
             .await
@@ -784,9 +786,9 @@ mod tests {
         bump_admission_sequence(&access, &doc_id).await;
         assert_eq!(admission_sequence(&access, &doc_id).await, before + 1);
         let result = renewal.commit().await;
-        assert!(gents_store::config_client::is_classified_transaction_conflict(
-            &result.unwrap_err()
-        ));
+        assert!(
+            gents_store::config_client::is_classified_transaction_conflict(&result.unwrap_err())
+        );
         assert_eq!(
             request_row(&access, &doc_id)
                 .await
@@ -897,8 +899,8 @@ mod tests {
             gents_session::request::lifecycle::RenewalAttemptOutcome::Committed
         );
         let result = admission.commit().await;
-        assert!(gents_store::config_client::is_classified_transaction_conflict(
-            &result.unwrap_err()
-        ));
+        assert!(
+            gents_store::config_client::is_classified_transaction_conflict(&result.unwrap_err())
+        );
     }
 }
