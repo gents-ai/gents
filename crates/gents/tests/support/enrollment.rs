@@ -51,7 +51,7 @@ pub async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
 
 /// Upsert the admin's signed Network on `node` and sign a fresh offer from it.
 pub async fn signed_enrollment_offer(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     network_id: &str,
     network_name: &str,
     admin_identity: &dyn NodeIdentity,
@@ -289,7 +289,7 @@ pub async fn authorize_enrollment_generation(
         candidate_sig,
     );
     let response = gents_store::config_client::ConfigAccess::write_local_response(
-        node,
+        &node,
         "test.authorize_enrollment_generation.request",
         &request_mutation,
     )

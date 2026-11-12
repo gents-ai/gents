@@ -847,7 +847,7 @@ pub async fn create_session_document(
 }
 
 pub async fn seed_session_observation_from_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     session_id: &str,
     request_id: &str,
     preview: &str,
@@ -890,7 +890,7 @@ pub async fn seed_session_observation_from_request(
 }
 
 pub async fn seed_session_observation(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     session_id: &str,
     observation: &gents_protocol::session::SessionObservation,
 ) {
