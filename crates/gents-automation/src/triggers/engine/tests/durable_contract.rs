@@ -371,12 +371,13 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
     for case in contract()["admissions"].as_array().unwrap() {
-        let node_db = gents_inference::test_support::test_db(
-            "generated-fire-transactions-are-atomic-a",
-            crate::lifecycle_hooks::composition(),
-        )
-        .await;
-        let node = node_db.node.clone();
+        let node = Arc::new(
+            gents_store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        ensure_runtime_schemas(&node).await.unwrap();
         let pre: State = decode(&case["pre"]);
         for (index, request) in pre.requests.iter().enumerate() {
             let fire = receipt(&request.fire, index);
@@ -477,11 +478,18 @@ async fn persisted_outcome_requests(
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
     for trace in contract()["outcome_traces"].as_array().unwrap() {
         // The Task's Agent admits, claims, terminalizes and recovers its fires.
-        let db = crate::triggers::callback::test_node_builder("outcome-trace").await;
+        let (db, _user, _access, binding) =
+            crate::test_support::signed_test_node(trace["name"].as_str().unwrap()).await;
         let node = db.node.clone();
-        crate::triggers::callback::seed_test_agent(&node, db.node_identity.did()).await;
-        let agent = crate::triggers::callback::test_agent_identity();
-        let access = crate::triggers::callback::test_agent_access(&node);
+        let agent =
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
         let mut published = std::collections::BTreeMap::new();
         let mut terminal_states = std::collections::BTreeMap::new();
         for (index, step) in trace["steps"].as_array().unwrap().iter().enumerate() {
@@ -749,14 +757,20 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity as _;
     for case in contract()["cursors"].as_array().unwrap() {
-        let db = gents_inference::test_support::test_db(
-            "arrival-checkpoints",
-            crate::lifecycle_hooks::composition(),
-        )
-        .await;
-        let node = db.node.clone();
-        let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+        let home = tempfile::tempdir().unwrap();
+        let root =
+            gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+                .unwrap();
         let owner = root.did();
+        let node = std::sync::Arc::new(
+            gents_store::test_support::node_builder()
+                .with_node_identity_did(owner)
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
+        ensure_runtime_schemas(&node).await.unwrap();
         let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         gents_inference::test_support::install_test_agent_binding(
             &node, owner, "trigger", &binding,
@@ -1080,13 +1094,19 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
     for case in contract()["callback_cursors"].as_array().unwrap() {
         let name = &case["name"];
         use gents_store::identity::NodeIdentity as _;
-        let db = gents_inference::test_support::test_db(
-            "callback-checkpoints",
-            crate::lifecycle_hooks::composition(),
-        )
-        .await;
-        let node = db.node.clone();
-        let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+        let dir = tempfile::tempdir().unwrap();
+        let root =
+            gents_store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
+                .unwrap();
+        let node = std::sync::Arc::new(
+            gents_store::test_support::node_builder()
+                .with_node_identity_did(root.did())
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
+        ensure_runtime_schemas(&node).await.unwrap();
         let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let owner = root.did();
         gents_inference::test_support::install_test_agent_binding(
