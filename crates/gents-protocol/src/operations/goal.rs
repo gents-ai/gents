@@ -117,6 +117,7 @@ pub enum GoalReason {
 pub enum GoalSetDecision {
     Apply,
     Denied,
+    RuntimeOnly,
     ReasonNotAccepted,
     NothingToChange,
     PersonOnly,
@@ -213,7 +214,9 @@ pub enum GoalOperationError {
     InvalidBudget,
     #[error("provide objective, token_budget, status or auto_resume to change the goal")]
     NothingToChange,
-    #[error("only a person may pause, stop, mark limits, clear the budget or choose reset resume")]
+    #[error("usage_limited and budget_limited are set by the runtime when a limit is reached")]
+    RuntimeOnly,
+    #[error("only a person may pause, stop, clear the budget or choose reset resume")]
     PersonOnly,
     #[error("objective and token_budget can only be edited while status is active")]
     FieldsNeedKeep,
@@ -282,6 +285,7 @@ impl GoalOperationError {
             Self::InvalidObjective
             | Self::InvalidBudget
             | Self::NothingToChange
+            | Self::RuntimeOnly
             | Self::PersonOnly
             | Self::FieldsNeedKeep
             | Self::ObligationsUnmet(_)

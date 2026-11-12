@@ -111,7 +111,9 @@ theorem a_live_goal_is_never_replaced (actor : Actor) (session : Session) (expec
 
 /-- The status a set asks for. `block` from a person is an operator block;
 from the working Agent it is a blocked audit, which blocks only after
-`Goals.step?` counts enough of them. -/
+`Goals.step?` counts enough of them. `usageLimited` and `budgetLimited` name
+statuses a set may ask for only to be refused: the runtime alone reaches them,
+when a limit is hit. -/
 inductive Target where
   | keep
   | activate
@@ -143,12 +145,15 @@ inductive Reason where
 inductive SetDecision where
   | apply
   | denied
+  /-- Usage and budget limits are set by the runtime when a limit is reached,
+  never by a person or an Agent. -/
+  | runtimeOnly
   /-- A reason accompanies only completion and a block; elsewhere it is
   refused rather than dropped. -/
   | reasonNotAccepted
   | nothingToChange
-  /-- Only a person may pause, stop, mark limits, clear the budget or choose
-  reset resume. -/
+  /-- Only a person may pause, stop, clear the budget or choose reset
+  resume. -/
   | personOnly
   /-- The working Agent edits fields or changes status, not both at once. -/
   | fieldsNeedKeep
@@ -180,6 +185,10 @@ def changesStatus : Target → Bool
   | .keep | .activate => false
   | _ => true
 
+def runtimeTarget : Target → Bool
+  | .usageLimited | .budgetLimited => true
+  | _ => false
+
 def takesReason : Target → Bool
   | .complete | .block => true
   | _ => false
@@ -210,6 +219,7 @@ def setDecision (actor : Actor) (status : Goals.Status) (target : Target)
     (fields : FieldChange) (reason : Reason) (autoResume : Bool) (obligationsMet : Bool) :
     SetDecision :=
   if actor = .otherAgent then .denied
+  else if runtimeTarget target = true then .runtimeOnly
   else if reason ≠ .absent ∧ takesReason target = false then .reasonNotAccepted
   else if target = .keep ∧ fields = .none ∧ autoResume = false then .nothingToChange
   else if actor = .workingAgent ∧
@@ -228,19 +238,25 @@ theorem other_agent_never_sets (status : Goals.Status) (target : Target) (fields
     (reason : Reason) (autoResume obligationsMet : Bool) :
     setDecision .otherAgent status target fields reason autoResume obligationsMet = .denied := rfl
 
+theorem limits_are_runtime_only (actor : Actor) (status : Goals.Status) (fields : FieldChange)
+    (reason : Reason) (autoResume obligationsMet : Bool) :
+    setDecision actor status .usageLimited fields reason autoResume obligationsMet ≠ .apply ∧
+      setDecision actor status .budgetLimited fields reason autoResume obligationsMet ≠ .apply := by
+  cases actor <;> simp [setDecision, runtimeTarget]
+
 theorem working_agent_cannot_pause_or_stop (status : Goals.Status) (fields : FieldChange)
     (reason : Reason) (autoResume obligationsMet : Bool) :
     setDecision .workingAgent status .pause fields reason autoResume obligationsMet ≠ .apply ∧
       setDecision .workingAgent status .stop fields reason autoResume obligationsMet ≠ .apply := by
   cases status <;> cases fields <;> cases reason <;> cases autoResume <;> cases obligationsMet <;>
-    simp [setDecision, agentTarget, changesStatus, takesReason]
+    simp [setDecision, agentTarget, changesStatus, runtimeTarget, takesReason]
 
 theorem working_agent_never_clears_the_budget (status : Goals.Status) (target : Target)
     (reason : Reason) (autoResume obligationsMet : Bool) :
     setDecision .workingAgent status target .clearBudget reason autoResume obligationsMet ≠
       .apply := by
   cases status <;> cases target <;> cases reason <;> cases autoResume <;> cases obligationsMet <;>
-    simp [setDecision, agentTarget, changesStatus, takesReason]
+    simp [setDecision, agentTarget, changesStatus, runtimeTarget, takesReason]
 
 theorem applied_edit_is_editable (actor : Actor) (status : Goals.Status) (target : Target)
     (fields : FieldChange) (reason : Reason) (autoResume obligationsMet : Bool)
@@ -258,7 +274,7 @@ theorem working_agent_completes_only_with_obligations_met (status : Goals.Status
     (fields : FieldChange) (reason : Reason) (autoResume : Bool) :
     setDecision .workingAgent status .complete fields reason autoResume false ≠ .apply := by
   cases status <;> cases fields <;> cases reason <;> cases autoResume <;>
-    simp [setDecision, agentTarget, changesStatus, takesReason, legal, action,
+    simp [setDecision, agentTarget, changesStatus, runtimeTarget, takesReason, legal, action,
       observed, Goals.step?]
 
 theorem activation_is_never_a_set (actor : Actor) (status : Goals.Status) (fields : FieldChange)
@@ -266,7 +282,7 @@ theorem activation_is_never_a_set (actor : Actor) (status : Goals.Status) (field
     setDecision actor status .activate fields reason autoResume obligationsMet ≠ .apply := by
   cases actor <;> cases status <;> cases fields <;> cases reason <;> cases autoResume <;>
     cases obligationsMet <;>
-    simp_all [setDecision, agentTarget, changesStatus, origin, Edit.editable,
+    simp_all [setDecision, agentTarget, changesStatus, origin, Edit.editable, runtimeTarget,
       takesReason]
 
 theorem applied_set_is_a_legal_transition (actor : Actor) (status : Goals.Status)
@@ -288,7 +304,7 @@ theorem budget_limited_goal_is_only_completed_by_its_agent (target : Target)
       .apply) :
     target = .complete := by
   cases target <;> cases fields <;> cases reason <;> cases autoResume <;> cases obligationsMet <;>
-    simp_all [setDecision, agentTarget, changesStatus, origin, Edit.editable,
+    simp_all [setDecision, agentTarget, changesStatus, origin, Edit.editable, runtimeTarget,
       takesReason, legal, action, observed, Goals.step?]
 
 theorem agent_block_is_an_audit_of_a_named_condition (status : Goals.Status)
@@ -297,7 +313,7 @@ theorem agent_block_is_an_audit_of_a_named_condition (status : Goals.Status)
       .apply) :
     status = .active ∧ reason = .given := by
   cases status <;> cases fields <;> cases reason <;> cases autoResume <;> cases obligationsMet <;>
-    simp_all [setDecision, agentTarget, changesStatus, origin, Edit.editable,
+    simp_all [setDecision, agentTarget, changesStatus, origin, Edit.editable, runtimeTarget,
       takesReason, legal, action, observed, Goals.step?]
 
 end GoalAutomation.Operations

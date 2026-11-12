@@ -113,6 +113,8 @@ pub fn set_decision(
     let changes_status = !matches!(target, GoalTarget::Keep | GoalTarget::Activate);
     if actor == GoalActor::OtherAgent {
         D::Denied
+    } else if matches!(target, GoalTarget::UsageLimited | GoalTarget::BudgetLimited) {
+        D::RuntimeOnly
     } else if reason != GoalReason::Absent
         && !matches!(target, GoalTarget::Complete | GoalTarget::Block)
     {
@@ -475,6 +477,7 @@ fn plan_set(
     ) {
         GoalSetDecision::Apply => {}
         GoalSetDecision::Denied => return Err(GoalOperationError::Denied),
+        GoalSetDecision::RuntimeOnly => return Err(GoalOperationError::RuntimeOnly),
         GoalSetDecision::ReasonNotAccepted => return Err(GoalOperationError::ReasonNotAccepted),
         GoalSetDecision::NothingToChange => return Err(GoalOperationError::NothingToChange),
         GoalSetDecision::PersonOnly => return Err(GoalOperationError::PersonOnly),

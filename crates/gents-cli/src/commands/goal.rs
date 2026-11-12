@@ -272,8 +272,6 @@ impl From<GoalStatusArg> for GoalStatus {
             GoalStatusArg::Active => Self::Active,
             GoalStatusArg::Paused => Self::Paused,
             GoalStatusArg::Blocked => Self::Blocked,
-            GoalStatusArg::UsageLimited => Self::UsageLimited,
-            GoalStatusArg::BudgetLimited => Self::BudgetLimited,
             GoalStatusArg::Complete => Self::Complete,
         }
     }
