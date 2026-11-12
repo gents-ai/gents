@@ -2387,14 +2387,9 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyModeSanitizeCases"
       "Checks the composed native provider-view sanitizer on finite coherent, unique-call-id witnesses, and that the tagged association view is the native-order view whose send-boundary ordering is that composed view. General native reachability and arbitrary transcript premises remain outside this fence.")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "rendered_capture_cases"
-      "RenderedCaptureCases"
-      "Drives provider-send ordering with scripted sink outcomes. Durable fresh/idempotent/conflicting bindings are observed separately by the real sink consumer; no test-side store model remains.")
-      "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "RenderedCaptureCases")
+      "family"
+      "contracts_rendered_capture")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -2420,24 +2415,24 @@ def caseCoverage : List CoverageEntry :=
       "Drives absent, zero and positive pinned limits with inference/compaction rows through the real physical-request query and ledger factory. Full process restart and InferenceCall write ownership remain separate boundaries.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "RenderedCaptureKeyCases")
+      "family"
+      "contracts_rendered_capture_key")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
+      "capture_scope_cases"
       "CaptureScopeCases")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "CaptureOrderCases")
+      "family"
+      "contracts_capture_order")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "RenderedCaptureCases")
+      "family"
+      "contracts_rendered_capture")
       "rendered-capture" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "RenderedCaptureCases")
+      "family"
+      "contracts_rendered_capture")
       "rendered-capture" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "event_delivery_transition_cases"

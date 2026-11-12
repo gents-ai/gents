@@ -4,8 +4,6 @@ use crate::rendered_request::{
 };
 use serde_json::{json, Value};
 
-use gents_lean_vocab::lean_rendered_capture_cases;
-
 fn node_did(id: u64) -> String {
     format!("did:key:z6Mk-node-{id}")
 }
@@ -193,69 +191,6 @@ fn a_request_doc_id_cannot_forge_another_scopes_key() {
     )
     .expect("capture key");
     assert_ne!(sneaky, target);
-}
-
-#[test]
-fn generated_rendered_capture_cases_never_permit_an_uncaptured_send() {
-    let cases = lean_rendered_capture_cases();
-    assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
-
-    let mut saw_rejection = false;
-    let mut saw_idempotent = false;
-
-    for case in cases {
-        assert!(
-            matches!(
-                case.capture_outcome.as_str(),
-                "fresh" | "idempotent" | "rejected"
-            ),
-            "{}: unknown capture outcome {:?}",
-            case.name,
-            case.capture_outcome
-        );
-        assert_eq!(
-            case.capture_durable,
-            case.capture_outcome != "rejected",
-            "{}: durability must follow the outcome",
-            case.name
-        );
-
-        if case.send_permitted {
-            assert_eq!(
-                case.durable_after,
-                Some(case.request),
-                "{}: a permitted send must leave this key bound to this request",
-                case.name
-            );
-            assert_eq!(case.post_stage, "durablyCaptured", "{}", case.name);
-            assert_eq!(case.final_stage, "sent", "{}", case.name);
-            assert_eq!(case.provider_requests_observed, 1, "{}", case.name);
-        } else {
-            assert_ne!(
-                case.durable_after,
-                Some(case.request),
-                "{}: a refused send must not claim this request is durable",
-                case.name
-            );
-            assert_eq!(case.post_stage, "assembled", "{}", case.name);
-            assert_eq!(case.final_stage, "assembled", "{}", case.name);
-            assert_eq!(case.provider_requests_observed, 0, "{}", case.name);
-        }
-
-        saw_rejection |= case.capture_outcome == "rejected";
-        saw_idempotent |= case.capture_outcome == "idempotent";
-    }
-
-    assert!(
-        saw_rejection,
-        "the generated rows must include a key rebound to a different canonical \
-         request; without it the fail-closed path is untested"
-    );
-    assert!(
-        saw_idempotent,
-        "the generated rows must include an identical recapture; without it \
-         idempotent redelivery is untested"
-    );
 }
 
 #[test]

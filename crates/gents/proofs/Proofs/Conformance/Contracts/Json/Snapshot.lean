@@ -298,8 +298,6 @@ def snapshotPromptTailJson : String :=
 
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"rendered_capture_cases\":"
-      ++ renderedCaptureCasesJson ++ ","
     ++ "\"durable_reduction_cases\":"
       ++ durableReductionCasesJson ++ ","
     ++ "\"compaction_projection_join_cases\":"

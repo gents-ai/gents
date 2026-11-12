@@ -6,28 +6,62 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-def renderedCaptureCaseJson (witness : RenderedCaptureCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"node_did\":" ++ toString witness.nodeDid ++ ","
-    ++ "\"session_id\":" ++ toString witness.sessionId ++ ","
-    ++ "\"request_id\":" ++ toString witness.requestId ++ ","
-    ++ "\"turn_index\":" ++ toString witness.turnIndex ++ ","
-    ++ "\"attempt\":" ++ toString witness.attempt ++ ","
-    ++ "\"request\":" ++ toString witness.request ++ ","
-    ++ "\"prior_binding\":" ++ jsonOptionalNat witness.priorBinding ++ ","
-    ++ "\"capture_outcome\":" ++ jsonString witness.captureOutcome ++ ","
-    ++ "\"capture_durable\":" ++ boolString witness.captureDurable ++ ","
-    ++ "\"post_stage\":" ++ jsonString witness.postStage ++ ","
-    ++ "\"send_permitted\":" ++ boolString witness.sendPermitted ++ ","
-    ++ "\"provider_requests_observed\":"
-      ++ toString witness.providerRequestsObserved ++ ","
-    ++ "\"durable_after\":" ++ jsonOptionalNat witness.durableAfter ++ ","
-    ++ "\"final_stage\":" ++ jsonString witness.finalStage
-    ++ "}"
+structure CaptureScenarioInput where
+  nodeDid : Nat
+  sessionId : Nat
+  requestId : Nat
+  turnIndex : Nat
+  attempt : Nat
+  /-- Opaque canonical-request identity. Equal values mean equal canonical JSON. -/
+  request : Nat
+  priorBinding : Option Nat
+  deriving Lean.ToJson
 
-def renderedCaptureCasesJson : String :=
-  jsonArray (renderedCaptureCases.map renderedCaptureCaseJson)
+structure CaptureScenarioOutput where
+  captureOutcome : String
+  captureDurable : Bool
+  postStage : String
+  sendPermitted : Bool
+  providerRequestsObserved : Nat
+  durableAfter : Option Nat
+  finalStage : String
+  deriving Lean.ToJson
+
+example : renderedCaptureCases.any (·.captureOutcome == "rejected") := by native_decide
+
+example : renderedCaptureCases.any (·.captureOutcome == "idempotent") := by native_decide
+
+example : renderedCaptureCases.all (fun c =>
+    c.captureDurable == (c.captureOutcome != "rejected") &&
+      (if c.sendPermitted then
+        c.durableAfter == some c.request && c.postStage == "durablyCaptured" &&
+          c.finalStage == "sent" && c.providerRequestsObserved == 1
+      else
+        c.durableAfter != some c.request && c.postStage == "assembled" &&
+          c.finalStage == "assembled" && c.providerRequestsObserved == 0)) := by
+  native_decide
+
+/-- One provider attempt through the owned loop whose capture sink is the real
+durable sink, seeded with the scenario's prior binding for the same key. -/
+@[conformance_family]
+def renderedCapture : Family CaptureScenarioInput CaptureScenarioOutput where
+  inputs := renderedCaptureCases.map fun c =>
+    { nodeDid := c.nodeDid, sessionId := c.sessionId, requestId := c.requestId
+      turnIndex := c.turnIndex, attempt := c.attempt, request := c.request
+      priorBinding := c.priorBinding }
+  model := fun i =>
+    let sc : RenderedCapture.Scenario :=
+      { key := { nodeDid := i.nodeDid, sessionId := i.sessionId, requestId := i.requestId
+                 turnIndex := i.turnIndex, attempt := i.attempt }
+        request := { value := i.request }
+        priorBinding := i.priorBinding.map fun value => { value } }
+    { captureOutcome := sc.outcome.toContract
+      captureDurable := sc.outcome.durable
+      postStage := sc.postStage.toContract
+      sendPermitted := sc.sendPermitted
+      providerRequestsObserved := sc.providerRequests
+      durableAfter := sc.durableAfter.map (·.value)
+      finalStage := sc.finalStage.toContract }
 
 structure CaptureKeyPair where
   leftNodeDid : Nat

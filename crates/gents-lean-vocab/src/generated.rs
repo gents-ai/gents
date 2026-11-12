@@ -569,10 +569,6 @@ pub fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
     &lean_contract_snapshot().recovery_sweep_cases
 }
 
-pub fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
-    &lean_contract_snapshot().rendered_capture_cases
-}
-
 pub fn lean_repaired_projection_admission_cases() -> &'static [LeanRepairedProjectionCase] {
     &lean_contract_snapshot().repaired_projection_admission_cases
 }
@@ -3319,7 +3315,6 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_replay_shape_cases: Vec<LeanPromptAssemblyReplayShapeCase>,
     pub prompt_assembly_replay_prefix_cases: Vec<LeanPromptAssemblyReplayPrefixCase>,
     pub protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
-    pub rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub durable_reduction_cases: Vec<LeanDurableReductionCase>,
     pub compaction_projection_join_cases: Vec<LeanCompactionProjectionJoinCase>,
     pub compaction_canonical_projection_cases: Vec<LeanCanonicalCompactionCase>,
@@ -10083,25 +10078,6 @@ pub struct LeanRemoteAgentDeliveryClaimCaseRecordIntent {
     pub target: String,
     pub target_agent_doc_id: String,
     pub target_session_doc_id: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanRenderedCaptureCase {
-    pub name: String,
-    pub node_did: u64,
-    pub session_id: u64,
-    pub request_id: u64,
-    pub turn_index: usize,
-    pub attempt: u32,
-    pub request: u64,
-    pub prior_binding: Option<u64>,
-    pub capture_outcome: String,
-    pub capture_durable: bool,
-    pub post_stage: String,
-    pub send_permitted: bool,
-    pub provider_requests_observed: usize,
-    pub durable_after: Option<u64>,
-    pub final_stage: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
