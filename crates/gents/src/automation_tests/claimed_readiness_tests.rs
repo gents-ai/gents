@@ -45,6 +45,32 @@ fn recovery_projection(goal: &GoalDocument) -> Value {
     })
 }
 
+fn case_before(before: &gents_lean_vocab::LeanGoalClaimedReadinessCaseBefore) -> Value {
+    json!({
+        "status": before.status,
+        "blocked_audits": before.blocked_audits,
+        "wrapup_requested": before.wrapup_requested,
+        "wrapup_completed": before.wrapup_completed,
+        "infrastructure_retries": before.infrastructure_retries,
+        "last_failure": before.last_failure,
+        "continuation_sequence": before.continuation_sequence,
+        "parent": before.parent,
+    })
+}
+
+fn case_expected(expected: &gents_lean_vocab::LeanGoalClaimedReadinessCaseExpected) -> Value {
+    json!({
+        "status": expected.status,
+        "blocked_audits": expected.blocked_audits,
+        "wrapup_requested": expected.wrapup_requested,
+        "wrapup_completed": expected.wrapup_completed,
+        "infrastructure_retries": expected.infrastructure_retries,
+        "last_failure": expected.last_failure,
+        "continuation_sequence": expected.continuation_sequence,
+        "parent": expected.parent,
+    })
+}
+
 async fn source(
     db: &TestDb,
 ) -> (
@@ -326,9 +352,9 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
     let case = gents_lean_vocab::lean_contract_snapshot()
         .goal_claimed_readiness_cases
         .iter()
-        .find(|case| case["name"] == "claimed_ready_materializes_retry")
+        .find(|case| case.name == "claimed_ready_materializes_retry")
         .unwrap();
-    let mut before = case["before"].clone();
+    let mut before = case_before(&case.before);
     before["infrastructure_retries"] = json!(0);
     before["last_failure"] = Value::Null;
     let db = test_db("required-question-continuation").await;
@@ -405,17 +431,17 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().goal_claimed_readiness_cases;
     assert!(!cases.is_empty());
     for case in cases {
-        let name = case["name"].as_str().unwrap();
+        let name = case.name.as_str();
         let db = test_db(name).await;
-        let before = install_claim(&db, &case["before"]).await;
+        let before = install_claim(&db, &case_before(&case.before)).await;
         let parent = before.last_continued_from_request_id.as_deref().unwrap();
         let (controller, status, _status_owner) = source(&db).await;
-        let observation = case["observation"].as_str().unwrap();
-        let settled = case["settled"].as_bool().unwrap();
-        let child_exists = case["child_exists"].as_bool().unwrap();
+        let observation = case.observation.as_str();
+        let settled = case.settled;
+        let child_exists = case.child_exists;
         let native_observation = match observation {
             "ready" => GoalAgentObservation::Ready {
-                newer_than_terminal: case["newer_than_terminal"].as_bool().unwrap(),
+                newer_than_terminal: case.newer_than_terminal,
             },
             "backend_recovering" => GoalAgentObservation::BackendRecovering,
             "unavailable" => GoalAgentObservation::Unavailable,
@@ -435,7 +461,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
             GoalClaimedDecision::Stop => "stop",
             GoalClaimedDecision::Inactive => "inactive",
         };
-        assert_eq!(decision_name, case["decision"].as_str().unwrap(), "{name}");
+        assert_eq!(decision_name, case.decision.as_str(), "{name}");
         if child_exists {
             publish_readiness(&db, "ready", &status, true, true).await;
             assert!(controller
@@ -452,7 +478,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
             observation,
             &status,
             settled,
-            case["newer_than_terminal"].as_bool().unwrap(),
+            case.newer_than_terminal,
         )
         .await;
         let observed = load_goal(&db).await;
@@ -469,7 +495,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
             "{name}"
         );
         let after = load_goal(&db).await;
-        assert_eq!(recovery_projection(&after), case["expected"], "{name}");
+        assert_eq!(recovery_projection(&after), case_expected(&case.expected), "{name}");
         assert_eq!(
             controller
                 .continuation_child_exists(
@@ -497,7 +523,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
                 .await
                 .unwrap()
                 .expect("ready claim recovers");
-            let retries = case["before"]["infrastructure_retries"].as_i64().unwrap();
+            let retries = case.before.infrastructure_retries;
             let retry_prompt =
                 format!("recovery attempt {retries} of {MAX_INFRASTRUCTURE_RETRIES}");
             assert!(
@@ -507,7 +533,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
             );
             assert_eq!(
                 recovery_projection(&load_goal(&db).await),
-                case["expected"],
+                case_expected(&case.expected),
                 "{name}: recovery preserves retry charge and prompt"
             );
         } else if decision == GoalClaimedDecision::Stop {
@@ -578,10 +604,10 @@ async fn readiness_stop_rejects_a_replaced_claim_epoch() {
     let case = gents_lean_vocab::lean_contract_snapshot()
         .goal_claimed_readiness_cases
         .iter()
-        .find(|case| case["name"] == "claimed_settled_invalid_pauses")
+        .find(|case| case.name == "claimed_settled_invalid_pauses")
         .unwrap();
     let db = test_db("claimed-readiness-stale-epoch").await;
-    let stale = install_claim(&db, &case["before"]).await;
+    let stale = install_claim(&db, &case_before(&case.before)).await;
     let parent = stale.last_continued_from_request_id.as_deref().unwrap();
     assert!(
         claim_continuation_from_access(&agent_access(&db).await, &stale, parent)
