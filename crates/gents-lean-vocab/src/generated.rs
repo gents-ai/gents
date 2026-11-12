@@ -321,10 +321,6 @@ pub fn lean_lifecycle_hook_supersede_cases() -> &'static [LeanLifecycleHookSuper
     &lean_contract_snapshot().lifecycle_hook_supersede_cases
 }
 
-pub fn lean_live_overlay_cases() -> &'static [LeanLiveOverlayCase] {
-    &lean_contract_snapshot().live_overlay_cases
-}
-
 pub fn lean_lsp_action_cases() -> &'static [LeanLspActionCase] {
     &lean_contract_snapshot().lsp_action_cases
 }
@@ -3247,7 +3243,6 @@ pub struct LeanContractSnapshot {
     pub artifact_admission_cases: Vec<serde_json::Value>,
     pub artifact_spawn_cases: Vec<serde_json::Value>,
     pub command_env_cases: Vec<LeanCommandEnvCase>,
-    pub live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub request_progress_cases: Vec<LeanRequestProgressCase>,
     pub pending_user_turn_cases: Vec<LeanPendingUserTurnCase>,
     pub queued_steering_trace_cases: Vec<LeanQueuedSteeringTraceCase>,
@@ -7273,28 +7268,6 @@ pub struct LeanLifecycleTransitionCase {
     pub classification: String,
     pub action: Option<String>,
     pub boundary: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLiveOverlayCase {
-    pub name: String,
-    #[serde(rename = "liveOutputAvailable")]
-    pub live_output_available: bool,
-    #[serde(rename = "hasDurableOwner")]
-    pub has_durable_owner: bool,
-    #[serde(rename = "precedingToolCalls")]
-    pub preceding_tool_calls: u64,
-    #[serde(rename = "turnTerminal")]
-    pub turn_terminal: bool,
-    #[serde(rename = "turnLabel")]
-    pub turn_label: String,
-    #[serde(rename = "hasContent")]
-    pub has_content: bool,
-    #[serde(rename = "hasReasoning")]
-    pub has_reasoning: bool,
-    #[serde(rename = "expectOverlay")]
-    pub expect_overlay: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

@@ -1197,8 +1197,8 @@ def caseCoverage : List CoverageEntry :=
       "Pending: L2 renames the consumer test and L3 the production projector it drives.")
       "runtime-reconcile" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "live_overlay_cases"
-      "LiveOverlayCases")
+      "family"
+      "contract_cases_live_overlay")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"

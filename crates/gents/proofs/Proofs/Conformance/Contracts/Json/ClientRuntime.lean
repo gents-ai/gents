@@ -84,19 +84,6 @@ def boundaryCaseJson (inputs : List (Nat × QueuedSteering.BoundaryInputKind)) :
     | some id => toString id
   "{\"inputs\":" ++ jsonArray (inputs.map entryJson) ++ ",\"expected\":" ++ expected ++ "}"
 
-def liveOverlayCaseJson (witness : LiveOverlayCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"liveOutputAvailable\":" ++ boolString witness.liveOutputAvailable ++ ","
-    ++ "\"hasDurableOwner\":" ++ boolString witness.hasDurableOwner ++ ","
-    ++ "\"precedingToolCalls\":" ++ toString witness.precedingToolCalls ++ ","
-    ++ "\"turnTerminal\":" ++ boolString witness.turnTerminal ++ ","
-    ++ "\"turnLabel\":" ++ jsonString witness.turnLabel ++ ","
-    ++ "\"hasContent\":" ++ boolString witness.hasContent ++ ","
-    ++ "\"hasReasoning\":" ++ boolString witness.hasReasoning ++ ","
-    ++ "\"expectOverlay\":" ++ boolString witness.expectOverlay
-    ++ "}"
-
 def requestProgressCaseJson (witness : RequestProgressCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

@@ -917,8 +917,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"command_isolation_cases\":" ++ Conformance.CommandIsolation.casesJson.compress ++ ","
     ++ "\"command_env_cases\":"
       ++ jsonArray (CommandPolicy.commandEnvCases.map commandEnvCaseJson) ++ ","
-    ++ "\"live_overlay_cases\":"
-      ++ jsonArray (liveOverlayCases.map liveOverlayCaseJson) ++ ","
     ++ "\"request_progress_cases\":"
       ++ jsonArray (requestProgressCases.map requestProgressCaseJson) ++ ","
     ++ "\"pending_user_turn_cases\":"

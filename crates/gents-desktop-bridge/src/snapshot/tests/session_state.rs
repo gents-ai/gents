@@ -3,8 +3,8 @@ use crate::types::ReconstructionState;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use gents_lean_vocab::{
-    lean_desktop_client_shell_cases, lean_live_overlay_cases,
-    lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
+    lean_desktop_client_shell_cases, lean_request_lifecycle_operator_ui_cases,
+    lean_transcript_cases,
 };
 
 fn session(requester_did: Option<&str>) -> AgentSession {
@@ -774,20 +774,20 @@ fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
 
 #[test]
 fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
-    let cases = lean_live_overlay_cases();
-    for case in cases {
-        let lifecycle = if case.turn_terminal {
+    for case in gents_lean_vocab::families::contract_cases_live_overlay::cases() {
+        let input = &case.input;
+        let lifecycle = if input.turn_terminal {
             RequestLifecycleState::Completed
         } else {
             RequestLifecycleState::Processing
         };
         let mut request = request("req-2", lifecycle);
         request.doc_id = Some("req-2".into());
-        request.execution_generation = case
+        request.execution_generation = input
             .live_output_available
             .then(|| "generation-1".to_string());
-        request.execution_lease_secs = case.live_output_available.then_some(300);
-        request.execution_lease_expires_at = case
+        request.execution_lease_secs = input.live_output_available.then_some(300);
+        request.execution_lease_expires_at = input
             .live_output_available
             .then(|| "2026-04-21T12:05:00Z".to_string());
         let mut rows = ClientStoreRows {
@@ -795,10 +795,10 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
             requests: vec![request],
             ..ClientStoreRows::default()
         };
-        if case.has_durable_owner {
+        if input.has_durable_owner {
             push_canonical_text_message(
                 &mut rows,
-                &format!("{}-owner", case.name),
+                &format!("{}-owner", input.name),
                 "session-1",
                 Some("req-2"),
                 1,
@@ -806,10 +806,10 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
                 "materialized answer",
             );
         }
-        if case.live_output_available && !case.has_durable_owner {
+        if input.live_output_available && !input.has_durable_owner {
             let mut runs = Vec::new();
             let mut payload = String::new();
-            if case.has_content {
+            if input.has_content {
                 payload.push('C');
                 runs.push(SegmentRun {
                     stream: 0,
@@ -821,20 +821,20 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
                     }),
                 });
             }
-            if case.has_reasoning {
+            if input.has_reasoning {
                 payload.push('R');
                 runs.push(SegmentRun {
-                    stream: u32::from(case.has_content),
+                    stream: u32::from(input.has_content),
                     bytes: 1,
                     declaration: Some(StreamDeclaration {
                         block_index: 0,
-                        part_index: u32::from(case.has_content),
+                        part_index: u32::from(input.has_content),
                         payload: StreamPayload::Reasoning,
                     }),
                 });
             }
             rows.output_segments.push(OutputSegmentRow {
-                doc_id: format!("{}-open", case.name),
+                doc_id: format!("{}-open", input.name),
                 segment: OutputSegment {
                     node_did: "did:test:amy".into(),
                     requester_did: None,
@@ -864,15 +864,14 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
             "session-1",
             Some("req-2"),
         )
-        .unwrap_or_else(|| panic!("case {} should produce a snapshot", case.name));
-        assert_eq!(
-            snapshot
-                .timeline_items
-                .iter()
-                .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })),
-            case.expect_overlay,
-            "{}",
-            case.name
+        .unwrap_or_else(|| panic!("case {} should produce a snapshot", input.name));
+        case.check(
+            gents_lean_vocab::families::contract_cases_live_overlay::LiveOverlayOutput {
+                expect_overlay: snapshot
+                    .timeline_items
+                    .iter()
+                    .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })),
+            },
         );
     }
 }
