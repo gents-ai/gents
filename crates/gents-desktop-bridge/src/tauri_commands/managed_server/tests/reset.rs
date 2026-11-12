@@ -301,139 +301,6 @@ fn orphaned_client_state_is_archived_without_touching_any_home() {
     assert!(home.join("init.json").is_file());
 }
 
-#[test]
-fn a_reviewed_home_that_is_gone_or_reidentified_orphans_the_client_state() {
-    let reviewed = ReviewedHome {
-        node_home: "/homes/a".into(),
-        node_did: "did:key:a".into(),
-    };
-    let identity = |home: &str, did: &str| HomeIdentity {
-        reviewed: ReviewedHome {
-            node_home: home.into(),
-            node_did: did.into(),
-        },
-        tool_ceiling: None,
-        tool_root: None,
-    };
-    let a = identity("/homes/a", "did:key:a");
-    let b = identity("/homes/b", "did:key:b");
-    assert_eq!(
-        classify_binding(None, None, None, false, None),
-        ClientBinding::Unbound
-    );
-    assert_eq!(
-        classify_binding(Some(&reviewed), Some(&a), Some(&a), true, None),
-        ClientBinding::BoundToHome
-    );
-    let reidentified = identity("/homes/a", "did:key:b");
-    assert_eq!(
-        classify_binding(
-            Some(&reviewed),
-            Some(&reidentified),
-            Some(&reidentified),
-            true,
-            None
-        ),
-        ClientBinding::Orphaned
-    );
-    assert_eq!(
-        classify_binding(Some(&reviewed), None, None, false, None),
-        ClientBinding::Orphaned
-    );
-    assert_eq!(
-        classify_binding(Some(&reviewed), None, None, true, None),
-        ClientBinding::Unbound,
-        "an unreadable init marker is not evidence the node is gone"
-    );
-    assert_eq!(
-        classify_binding(Some(&reviewed), Some(&b), Some(&a), true, None),
-        ClientBinding::Unbound,
-        "switching to another home while the reviewed one still exists keeps the client"
-    );
-    assert_eq!(
-        classify_binding(
-            Some(&reviewed),
-            Some(&identity("/homes/moved", "did:key:a")),
-            None,
-            false,
-            None
-        ),
-        ClientBinding::Unbound,
-        "the reviewed identity relocated to the configured home keeps the client"
-    );
-    assert_eq!(
-        classify_binding(Some(&reviewed), Some(&b), None, false, None),
-        ClientBinding::Orphaned,
-        "the reviewed home is gone and the configured home is another node"
-    );
-}
-
-#[test]
-fn client_state_for_a_rebuilt_node_is_orphaned() {
-    let configured = HomeIdentity {
-        reviewed: ReviewedHome {
-            node_home: "/homes/a".into(),
-            node_did: "did:key:new".into(),
-        },
-        tool_ceiling: None,
-        tool_root: None,
-    };
-    assert_eq!(
-        classify_binding(
-            None,
-            Some(&configured),
-            None,
-            false,
-            Some(("did:key:old", "/homes/a")),
-        ),
-        ClientBinding::Orphaned
-    );
-}
-
-#[test]
-fn client_state_for_the_same_node_is_bound() {
-    let configured = HomeIdentity {
-        reviewed: ReviewedHome {
-            node_home: "/homes/a".into(),
-            node_did: "did:key:a".into(),
-        },
-        tool_ceiling: None,
-        tool_root: None,
-    };
-    for local_peer in [Some(("did:key:a", "/homes/a")), None] {
-        assert_eq!(
-            classify_binding(None, Some(&configured), None, false, local_peer),
-            ClientBinding::Unbound
-        );
-    }
-    assert_eq!(
-        classify_binding(None, None, None, false, Some(("did:key:a", "/homes/a"))),
-        ClientBinding::Unbound
-    );
-}
-
-#[test]
-fn client_state_for_another_intact_home_is_unbound() {
-    let configured = HomeIdentity {
-        reviewed: ReviewedHome {
-            node_home: "/homes/other".into(),
-            node_did: "did:key:other".into(),
-        },
-        tool_ceiling: None,
-        tool_root: None,
-    };
-    assert_eq!(
-        classify_binding(
-            None,
-            Some(&configured),
-            None,
-            false,
-            Some(("did:key:old", "/homes/a"))
-        ),
-        ClientBinding::Unbound
-    );
-}
-
 #[tokio::test]
 async fn client_start_archives_state_paired_with_a_missing_home() {
     let (temp, state) = orchestration_state();
@@ -465,12 +332,9 @@ async fn client_start_archives_state_paired_with_a_missing_home() {
     let reset = retire_orphaned_client_state(&state)
         .await
         .unwrap()
-        .reset
+        .archive
         .expect("orphaned state is archived");
-    assert!(reset.completed);
-    assert!(PathBuf::from(reset.backup_path.unwrap())
-        .join("desktop/node/MANIFEST")
-        .is_file());
+    assert!(reset.join("desktop/node/MANIFEST").is_file());
     assert!(!desktop.node_data_dir().exists());
     assert!(desktop.peer_directory_path().exists());
     assert_eq!(
@@ -488,7 +352,7 @@ async fn client_start_archives_state_paired_with_a_missing_home() {
         !retire_orphaned_client_state(&state)
             .await
             .unwrap()
-            .lost_local_node(),
+            .local_node_lost,
         "nothing is left to retire"
     );
 }
@@ -556,15 +420,13 @@ async fn client_start_retires_the_local_peer_of_a_missing_home_and_keeps_remotes
 
     let retired = retire_orphaned_client_state(&state).await.unwrap();
 
-    assert!(retired.lost_local_node());
+    assert!(retired.local_node_lost);
     assert_eq!(retired.local_peers, 1);
     assert_eq!(saved_peer_ids(&state).await, ["studio"]);
-    let reset = retired.reset.expect("orphaned state is archived");
-    let archive = PathBuf::from(reset.backup_path.unwrap()).join("desktop/local-peers.json");
-    assert!(reset
-        .retired_paths
-        .iter()
-        .any(|path| Path::new(path).ends_with("desktop/local-peers.json")));
+    let archive = retired
+        .archive
+        .expect("orphaned state is archived")
+        .join("desktop/local-peers.json");
     let archived: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(archive).unwrap()).unwrap();
     assert_eq!(archived[0]["peer_id"], "old-local");
@@ -583,7 +445,7 @@ async fn a_local_peer_left_after_an_earlier_archive_is_retired_on_the_next_launc
 
     let retired = retire_orphaned_client_state(&state).await.unwrap();
 
-    assert!(retired.reset.is_none());
+    assert!(retired.archive.is_none());
     assert_eq!(retired.local_peers, 1);
     assert!(saved_peer_ids(&state).await.is_empty());
     assert!(state
@@ -615,7 +477,7 @@ async fn a_failed_peer_step_moves_nothing_and_the_next_launch_retries() {
     std::fs::remove_dir(&obstacle).unwrap();
     let retired = retire_orphaned_client_state(&state).await.unwrap();
     assert_eq!(retired.local_peers, 1);
-    assert!(retired.reset.is_some());
+    assert!(retired.archive.is_some());
     assert!(saved_peer_ids(&state).await.is_empty());
     assert!(!desktop.root().join(MANAGED_SERVER_CONFIG).exists());
 }
@@ -651,7 +513,7 @@ async fn an_unreadable_init_record_keeps_the_local_peer() {
 
     let retired = retire_orphaned_client_state(&state).await.unwrap();
 
-    assert!(!retired.lost_local_node());
+    assert!(!retired.local_node_lost);
     assert_eq!(saved_peer_ids(&state).await, ["old-local"]);
 }
 
@@ -709,10 +571,12 @@ async fn client_start_keeps_state_paired_with_its_home() {
         &stored.to_string(),
     );
 
-    assert!(!retire_orphaned_client_state(&state)
-        .await
-        .unwrap()
-        .lost_local_node());
+    assert!(
+        !retire_orphaned_client_state(&state)
+            .await
+            .unwrap()
+            .local_node_lost
+    );
     assert!(desktop.node_data_dir().join("MANIFEST").is_file());
     assert!(desktop.root().join(MANAGED_SERVER_CONFIG).is_file());
 }

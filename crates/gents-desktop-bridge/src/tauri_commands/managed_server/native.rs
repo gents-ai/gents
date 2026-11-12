@@ -1,11 +1,8 @@
-use super::port::{observe_port_readiness, user_status_signer, PortReadiness};
-use super::status::emit_status;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::tauri_commands::service_executable::{
     ensure_installable_location, resolve_service_executable,
 };
-use gents_protocol::serve_lifecycle::outdated_runtime_message;
 use gents_service::args::ServiceAction;
 use tauri::{AppHandle, Runtime};
 
@@ -38,132 +35,6 @@ where
     R: Runtime,
 {
     build_native_service(app, state, true)
-}
-
-pub(crate) fn refresh_packaged_install<R>(
-    app: &AppHandle<R>,
-    state: &DesktopAppState,
-) -> Result<(), BridgeError>
-where
-    R: Runtime,
-{
-    if state.policy.node_home.is_none() {
-        return Ok(());
-    }
-    let _lifecycle = state.managed_server_lifecycle.blocking_lock();
-    let native = native_service(app, state)?;
-    if native.pending_update().map_err(native_error)?.is_some()
-        || native.has_managed_executable().map_err(native_error)?
-    {
-        return Ok(());
-    }
-    let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
-    if executable.install()? {
-        tracing::info!(
-            target: "gents_desktop::managed_server",
-            runtime = %executable.service_path().display(),
-            "refreshed the Gents runtime from the application package"
-        );
-    }
-    if let Err(error) = ensure_installable_location(executable.service_path()) {
-        tracing::warn!(
-            target: "gents_desktop::managed_server",
-            error = %error.message,
-            "leaving the installed service definition unchanged"
-        );
-        return Ok(());
-    }
-    let service = native_service(app, state)?;
-    let status = service.status().map_err(native_error)?;
-    if !status.installed {
-        return Ok(());
-    }
-    if status.is_active_or_transitioning() {
-        if !status.running
-            && service
-                .installed_executable_differs()
-                .map_err(native_error)?
-        {
-            tracing::info!(
-                target: "gents_desktop::managed_server",
-                runtime = %executable.service_path().display(),
-                "reinstalling the stopped node service, whose definition names a runtime that moved"
-            );
-            service_action(&service, ServiceAction::Stop { keep_enabled: true })
-                .map_err(native_error)?;
-            return service_action(&service, install_action()).map_err(native_error);
-        }
-        tracing::info!(
-            target: "gents_desktop::managed_server",
-            "agent restart pending before the updated service definition applies"
-        );
-        return Ok(());
-    }
-    service_action(&service, install_action()).map_err(native_error)
-}
-
-pub(crate) async fn restart_outdated_managed_job<R>(
-    app: &AppHandle<R>,
-    state: &DesktopAppState,
-) -> Result<(), BridgeError>
-where
-    R: Runtime,
-{
-    let Some(node_home) = state.policy.node_home.clone() else {
-        return Ok(());
-    };
-    let _lifecycle = state.managed_server_lifecycle.lock().await;
-    if state.app_exit.is_quitting() {
-        return Ok(());
-    }
-    let preserve = run_native(native_service(app, state)?, |service| {
-        Ok(service.pending_update()?.is_some() || service.has_managed_executable()?)
-    })
-    .await?;
-    if preserve {
-        return Ok(());
-    }
-    let PortReadiness::Outdated { version } = observe_port_readiness(
-        &node_home,
-        user_status_signer(state, &node_home).await.as_ref(),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    if !run_native(native_service(app, state)?, |service| service.status())
-        .await?
-        .running
-    {
-        return Ok(());
-    }
-    ensure_launchable_here(app, state)?;
-    tracing::info!(
-        target: "gents_desktop::managed_server",
-        version = version.as_deref().unwrap_or("unknown"),
-        "restarting the node service, whose runtime predates this app"
-    );
-    state.managed_server.lock().await.starting = true;
-    emit_status(app, state).await;
-    let restarted = run_native(launchable_native_service(app, state)?, |service| {
-        service_action(&service, ServiceAction::Stop { keep_enabled: true })?;
-        service_action(&service, install_action())?;
-        service_action(&service, ServiceAction::Start { enable: false })
-    })
-    .await;
-    {
-        let mut managed = state.managed_server.lock().await;
-        managed.starting = false;
-        if let Err(error) = &restarted {
-            managed.last_error = Some(format!(
-                "{} Restarting it failed: {}",
-                outdated_runtime_message(version.as_deref()),
-                error.message
-            ));
-        }
-    }
-    emit_status(app, state).await;
-    restarted
 }
 
 fn build_native_service<R>(

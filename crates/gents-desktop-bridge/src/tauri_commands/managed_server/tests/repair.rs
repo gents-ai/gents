@@ -2,12 +2,12 @@ use super::super::repair::{archive_client_store, repair_with, service_executable
 use super::*;
 use crate::config::ManagedServerPolicy;
 use crate::types::ManagedServerRepairOutcome;
-use gents::store::local::storage_backend::IncompatibleStoreKind;
-use gents_server::repair::home::BrokenHome;
-use gents_server::repair::{Blocker, Finding, HomeDecision, Prepared, Report};
+use gents_protocol::operations::install_repair::IncompatibleStoreKind;
+use gents_protocol::operations::install_repair::{Finding, RepairOutcome, RepairReceipt};
 
-fn report(repaired: Vec<Finding>, outcome: Prepared) -> anyhow::Result<Report<Prepared>> {
-    Ok(Report {
+fn report(repaired: Vec<Finding>, outcome: RepairOutcome) -> anyhow::Result<RepairReceipt> {
+    Ok(RepairReceipt {
+        client: None,
         repaired,
         outcome,
         serving_home: None,
@@ -15,8 +15,8 @@ fn report(repaired: Vec<Finding>, outcome: Prepared) -> anyhow::Result<Report<Pr
     })
 }
 
-fn ready() -> anyhow::Result<Report<Prepared>> {
-    report(Vec::new(), Prepared::Ready)
+fn ready() -> anyhow::Result<RepairReceipt> {
+    report(Vec::new(), RepairOutcome::Ready)
 }
 
 #[test]
@@ -103,80 +103,26 @@ async fn unreadable_saved_connections_are_reported_as_repaired() {
         .await
         .unwrap();
     assert_eq!(result.outcome, ManagedServerRepairOutcome::Ready);
-    assert_eq!(
-        result.repaired,
-        vec!["Saved connections couldn't be read and were set aside; add your remote nodes again."]
-    );
     assert!(result.saved_peers.is_empty());
     assert!(!paths.peer_directory_path().exists());
     let set_aside = std::fs::read_dir(paths.root())
         .unwrap()
         .filter_map(Result::ok)
-        .any(|entry| {
+        .find(|entry| {
             entry
                 .file_name()
                 .to_string_lossy()
                 .starts_with("peers.json.unreadable-")
-        });
-    assert!(set_aside, "the unreadable copy is kept");
-}
-
-#[tokio::test]
-async fn the_outcome_mappings() {
-    let capital = |text: String| {
-        let mut chars = text.chars();
-        chars
-            .next()
-            .unwrap()
-            .to_uppercase()
-            .chain(chars)
-            .collect::<String>()
-    };
-    let decision = HomeDecision {
-        home: PathBuf::from("/h"),
-        why: BrokenHome::InitConfigMissing,
-        default_home: PathBuf::from("/d"),
-        serving_home: PathBuf::from("/s"),
-    };
-    let why = capital(decision.why.to_string());
-    let keychain = Blocker::KeychainUnavailable;
-    let keychain_text = capital(keychain.to_string());
-    let cases = vec![
-        (
-            Prepared::Blocked(Blocker::BackgroundApprovalPending { detail: None }),
-            ManagedServerRepairOutcome::Ready,
-            None,
-        ),
-        (
-            Prepared::Blocked(keychain),
-            ManagedServerRepairOutcome::Blocked,
-            Some(keychain_text),
-        ),
-        (
-            Prepared::Decide(decision),
-            ManagedServerRepairOutcome::Blocked,
-            Some(why),
-        ),
-        (
-            Prepared::NeedsSetup,
-            ManagedServerRepairOutcome::NeedsSetup,
-            None,
-        ),
-    ];
-    for (prepared, outcome, blocker) in cases {
-        let (_temp, state) = orchestration_state();
-        let result = repair_with(&state, true, move |_, _| async move {
-            report(vec![Finding::ServiceProgramMissing], prepared)
         })
-        .await
-        .unwrap();
-        assert_eq!(result.outcome, outcome);
-        assert_eq!(result.blocker, blocker);
-        assert_eq!(
-            result.repaired,
-            vec![capital(Finding::ServiceProgramMissing.to_string())]
-        );
-    }
+        .expect("the unreadable copy is kept")
+        .path();
+    assert_eq!(
+        result.repaired,
+        vec![format!(
+        "Saved connections couldn't be read and were set aside at {}; add your remote nodes again",
+        set_aside.display()
+    )]
+    );
 }
 
 #[tokio::test]
@@ -188,7 +134,7 @@ async fn older_data_set_aside_after_a_replaced_service_opens_setup_and_names_the
         kept_at: kept_at.clone(),
     };
     let result = repair_with(&state, true, |_, _| async {
-        report(vec![set_aside], Prepared::NeedsSetup)
+        report(vec![set_aside], RepairOutcome::NeedsSetup)
     })
     .await
     .unwrap();
@@ -208,10 +154,12 @@ fn refused_with(state: &DesktopAppState, kind: IncompatibleStoreKind) {
         .managed_server
         .try_lock()
         .expect("managed server state is free")
-        .incompatible_store = Some(gents::store::local::storage_backend::IncompatibleStore {
-        kind,
-        data_path: state.policy.node_home.clone().unwrap().join("data"),
-    });
+        .incompatible_store = Some(
+        gents_protocol::operations::install_repair::IncompatibleStore {
+            kind,
+            data_path: state.policy.node_home.clone().unwrap().join("data"),
+        },
+    );
 }
 
 #[tokio::test]
@@ -226,7 +174,7 @@ async fn an_older_refusal_a_launch_saw_is_set_aside_then_setup_runs() {
     let result = repair_with(&state, true, |choice, refused| async move {
         assert!(refused, "the observed refusal reaches the repair owner");
         assert!(!choice.explicit);
-        report(vec![set_aside], Prepared::NeedsSetup)
+        report(vec![set_aside], RepairOutcome::NeedsSetup)
     })
     .await
     .unwrap();
@@ -295,7 +243,7 @@ async fn archiving_the_client_store_leaves_the_grant_and_identity_in_place() {
     write(paths.peer_directory_path(), "{}");
     archive_client_store(
         &state,
-        gents::store::local::storage_backend::IncompatibleStoreKind::MissingStoreKey,
+        gents_protocol::operations::install_repair::IncompatibleStoreKind::MissingStoreKey,
     )
     .await
     .unwrap();
@@ -370,7 +318,7 @@ async fn another_versions_client_store_is_set_aside_and_the_banner_names_the_bac
 
 #[tokio::test]
 async fn the_field_state_after_an_upgrade_of_another_versions_store_is_set_aside_whole() {
-    use gents::store::local::store_key::upgrade;
+    use gents_store::local::store_key::upgrade;
     let (temp, state) = orchestration_state();
     let paths = &state.policy.desktop_paths;
     gents_desktop_core::test_fixtures::write_other_version_client_store(paths, true, false).await;
@@ -414,7 +362,7 @@ async fn a_held_store_or_an_unreadable_key_is_never_set_aside() {
     let (temp, state) = orchestration_state();
     let paths = &state.policy.desktop_paths;
     gents_desktop_core::test_fixtures::write_other_version_client_store(paths, true, true).await;
-    let held = gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+    let held = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
     let before = tree(temp.path());
     let result = repair_with(&state, true, |_, _| async { ready() })
         .await
@@ -473,7 +421,7 @@ async fn a_removed_home_reports_the_lost_local_node_and_where_its_data_went() {
     );
 
     let result = repair_with(&state, true, |_, _| async {
-        report(Vec::new(), Prepared::NeedsSetup)
+        report(Vec::new(), RepairOutcome::NeedsSetup)
     })
     .await
     .unwrap();
@@ -492,7 +440,7 @@ async fn a_removed_home_reports_the_lost_local_node_and_where_its_data_went() {
 async fn a_node_serving_a_deleted_folder_is_a_lost_node_not_a_repair() {
     let (_temp, state) = orchestration_state();
     let result = repair_with(&state, true, |_, _| async {
-        report(vec![Finding::StaleNode], Prepared::NeedsSetup)
+        report(vec![Finding::StaleNode], RepairOutcome::NeedsSetup)
     })
     .await
     .unwrap();

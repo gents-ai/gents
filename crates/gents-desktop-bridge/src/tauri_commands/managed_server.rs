@@ -318,46 +318,6 @@ fn ensure_app_not_quitting(state: &DesktopAppState) -> Result<(), BridgeError> {
     Ok(())
 }
 
-pub(crate) async fn start_configured_managed_server<R>(
-    app: &AppHandle<R>,
-    state: &DesktopAppState,
-) -> Result<(), BridgeError>
-where
-    R: Runtime,
-{
-    if state.policy.managed_server != ManagedServerPolicy::Allowed
-        || state.policy.node_home.is_none()
-    {
-        return Ok(());
-    }
-    let lifecycle = state.managed_server_lifecycle.lock().await;
-    if state.app_exit.is_quitting() {
-        return Ok(());
-    }
-    let Some(stored) = load_bound_preference(state).await? else {
-        return Ok(());
-    };
-    if stored.reviewed_for.is_none() || stored.node_name.trim().is_empty() {
-        return Ok(());
-    }
-    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
-    if !native.installed || native.running || native.is_active_or_transitioning() {
-        return Ok(());
-    }
-    start_managed_server(
-        app,
-        ManagedServerStartRequest {
-            node_name: stored.node_name,
-            tool_ceiling: None,
-            tool_root: None,
-        },
-        state,
-        lifecycle,
-    )
-    .await?;
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn desktop_managed_server_restart<R>(
     app: AppHandle<R>,

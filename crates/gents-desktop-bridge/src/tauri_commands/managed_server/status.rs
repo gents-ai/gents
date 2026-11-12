@@ -12,12 +12,12 @@ use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerState, ManagedServerStatus};
-use gents_store::local::storage_backend::IncompatibleStoreKind;
 use gents_desktop_core::preference::StoredManagedServer;
+use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
-use gents_server::repair::crash_loop;
-pub(super) use gents_server::repair::crash_loop::{CrashLoopWatch, JobSample};
-use gents_server::repair::reason::{blocker_for_exit, read_last_error};
+use gents_service::repair::crash_loop;
+pub(super) use gents_service::repair::crash_loop::{CrashLoopWatch, JobSample};
+use gents_service::repair::reason::{blocker_for_exit, read_last_error};
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// A store refusal the launch-time repair does not own: a missing store key

@@ -278,8 +278,8 @@ fn a_foreign_store_is_never_deleted_by_the_bridge() {
     let (home, desktop) = dirty_home(&temp);
     let plan = plan_home_reset(
         Some(&home),
-        Some(gents_store::local::storage_backend::IncompatibleStore {
-            kind: gents_store::local::storage_backend::IncompatibleStoreKind::ForeignVersion,
+        Some(gents_protocol::operations::install_repair::IncompatibleStore {
+            kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::ForeignVersion,
             data_path: home.join("data"),
         }),
         None,
@@ -313,7 +313,7 @@ fn an_insecure_old_key_scopes_the_home_like_a_refused_store() {
     let (home, desktop) = dirty_home(&temp);
     let refused = refused_runtime_store(
         &home,
-        Some(gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey),
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey),
     );
     assert_eq!(refused.data_path, home.join("keys"));
     let preview = plan_home_reset(
@@ -409,7 +409,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
     std::fs::remove_dir_all(home.join("data")).unwrap();
     let refused = refused_runtime_store(
         &home,
-        Some(gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey),
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey),
     );
 
     let lock = lock_home_for_retirement(&home).unwrap();
@@ -531,8 +531,8 @@ fn a_store_from_another_build_is_not_reported_as_older() {
     let (home, desktop) = dirty_home(&temp);
     let preview = plan_home_reset(
         Some(&home),
-        Some(gents_store::local::storage_backend::IncompatibleStore {
-            kind: gents_store::local::storage_backend::IncompatibleStoreKind::ForeignVersion,
+        Some(gents_protocol::operations::install_repair::IncompatibleStore {
+            kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::ForeignVersion,
             data_path: home.join("data"),
         }),
         None,

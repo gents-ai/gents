@@ -39,7 +39,7 @@ pub fn diagnostics_hint(user_home: &Path) -> String {
     format!(
         "{}. Runtime startup errors: {}",
         gents::runtime::native_logging::diagnostics_hint(),
-        gents_server::native_service::runtime_error_log(user_home).display()
+        gents_service::native_service::runtime_error_log(user_home).display()
     )
 }
 

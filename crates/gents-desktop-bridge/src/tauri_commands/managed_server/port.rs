@@ -1,14 +1,15 @@
-use super::authority::{parse_tool_ceiling, suggested_tool_root};
+use super::authority::suggested_tool_root;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerState, ManagedServerStatus};
 use gents_desktop_core::local_runtime::HostedRuntimeStatusError;
+use gents_desktop_core::preference::parse_tool_ceiling;
+use gents_protocol::operations::install_repair::Blocker;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
-use gents_store::config_client::ClientSigningCapability;
-use gents_server::repair::port::{
+use gents_service::repair::port::{
     observe_port, read_initialized_did, served_identity, PortObservation, ServedIdentity,
 };
-use gents_server::repair::Blocker;
+use gents_store::config_client::ClientSigningCapability;
 use std::path::Path;
 
 pub(super) enum PortReadiness {
@@ -129,7 +130,7 @@ pub(super) async fn observe_port_readiness_at(
     user: Option<&ClientSigningCapability>,
 ) -> Result<PortReadiness, BridgeError> {
     let node_home = &config.home;
-    let initialized_did = if gents_server::server_host::initialized_home(node_home) {
+    let initialized_did = if gents_service::server_host::initialized_home(node_home) {
         read_initialized_did(node_home).await
     } else {
         None

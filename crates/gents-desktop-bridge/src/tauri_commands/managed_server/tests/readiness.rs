@@ -521,11 +521,11 @@ async fn a_missing_store_key_exit_is_not_an_incompatible_home() {
         || async { Ok(PortReadiness::NotListening) },
         || async {
             Ok(NativeProgress::Failed(
-                gents_server::native_service::ServiceExit {
+                gents_service::native_service::ServiceExit {
                     reason: "exited with code 72".to_string(),
                     restarts: 1,
                     clean: false,
-                    code: Some(gents_server::native_service::MISSING_STORE_KEY_EXIT_CODE),
+                    code: Some(gents_service::native_service::MISSING_STORE_KEY_EXIT_CODE),
                 },
             ))
         },

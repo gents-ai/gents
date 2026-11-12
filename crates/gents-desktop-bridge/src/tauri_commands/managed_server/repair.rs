@@ -1,23 +1,21 @@
-use super::native::{launchable_native_service, native_service};
+use super::native::native_service;
 use super::pairing::drain_managed_runtime_pairing;
 use super::port::capitalize;
 use crate::config::ManagedServerPolicy;
 use crate::error::BridgeError;
 use crate::state::DesktopAppState;
-use crate::types::{HomeResetDisposition, ManagedServerRepairOutcome, ManagedServerRepairResult};
-use gents::store::local::storage_backend::IncompatibleStoreKind;
-use gents_desktop_core::client::{
-    client_store_from_other_version, client_store_key_missing, set_aside_unreadable_peer_directory,
-};
-use gents_desktop_core::home_reset::{plan_home_reset, resolve_user_home, ClientBinding};
+use crate::types::{ManagedServerRepairOutcome, ManagedServerRepairResult};
+use gents_desktop_core::client::client_store_from_other_version;
+use gents_desktop_core::home_reset::resolve_user_home;
 use gents_desktop_core::preference::MANAGED_SERVER_CONFIG;
-use gents_server::repair::{
-    prepare, set_aside_refused, sets_aside_refused, Blocker, Finding, HomeChoice, Prepared,
-    Progress, RepairStep, Report, ServiceMove, ServiceProgram,
+use gents_protocol::operations::install_repair::IncompatibleStoreKind;
+use gents_protocol::operations::install_repair::RepairInput;
+use gents_protocol::operations::install_repair::{
+    Blocker, Finding, HomeChoice, RepairOutcome, RepairReceipt, RepairStep, ServiceMove,
 };
+use gents_service::repair::{execute, sets_aside_refused, Progress, ServiceProgram};
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tauri::{AppHandle, Manager as _, Runtime};
 
 struct Quiet;
@@ -36,12 +34,12 @@ where
 {
     let service_defined = state.policy.managed_server == ManagedServerPolicy::Allowed
         && state.policy.node_home.is_some()
-        && gents_server::native_service::NativeServicePlatform::current()
+        && gents_service::native_service::NativeServicePlatform::current()
             .ok()
             .zip(native_service(app, state).ok())
             .is_some_and(|(platform, service)| service.config().definition_path(platform).exists());
     let handle = app.clone();
-    let program: ServiceProgram = Arc::new(move || {
+    let program = ServiceProgram::new(move || {
         service_executable(&handle, &handle.state::<DesktopAppState>()).map_err(|error| {
             Blocker::ServiceUpdateFailed {
                 reason: error.message,
@@ -49,11 +47,17 @@ where
         })
     });
     repair_with(state, service_defined, |choice, refused| async move {
-        if refused {
-            set_aside_refused(&choice, &mut Quiet).await
+        let input = if refused {
+            RepairInput::Refused { choice }
         } else {
-            prepare(&choice, &program, ServiceMove::BeforeSetup, &mut Quiet).await
-        }
+            RepairInput::Prepare {
+                choice,
+                service_move: ServiceMove::BeforeSetup,
+            }
+        };
+        execute(input, &program, &mut Quiet, None)
+            .await
+            .map_err(anyhow::Error::from)
     })
     .await
 }
@@ -67,10 +71,23 @@ pub(super) fn service_executable<R>(
 where
     R: Runtime,
 {
-    Ok(launchable_native_service(app, state)?
-        .config()
-        .executable
-        .clone())
+    use crate::tauri_commands::service_executable::{
+        ensure_installable_location, resolve_service_executable, ServiceExecutable,
+    };
+    let resolved = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+    match resolved {
+        ServiceExecutable::InPlace(path) => {
+            ensure_installable_location(&path)?;
+            Ok(path)
+        }
+        ServiceExecutable::Packaged { source, .. } => {
+            gents_service::service_update::stage_repair_executable(
+                &source,
+                state.policy.desktop_paths.root(),
+            )
+            .map_err(|error| BridgeError::untyped(error.to_string()))
+        }
+    }
 }
 
 /// `prepare` is also told whether a launch or status read already saw the
@@ -83,7 +100,7 @@ pub(super) async fn repair_with<P, F>(
 ) -> Result<ManagedServerRepairResult, BridgeError>
 where
     P: FnOnce(HomeChoice, bool) -> F,
-    F: Future<Output = anyhow::Result<Report<Prepared>>>,
+    F: Future<Output = anyhow::Result<RepairReceipt>>,
 {
     let paths = &state.policy.desktop_paths;
     let preference_present = paths.root().join(MANAGED_SERVER_CONFIG).exists();
@@ -114,7 +131,7 @@ where
     let report = prepare(choice, refused)
         .await
         .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
-    if refused && matches!(report.outcome, Prepared::NeedsSetup) {
+    if refused && matches!(report.outcome, RepairOutcome::NeedsSetup) {
         state.managed_server.lock().await.incompatible_store = None;
     }
     // A node serving a deleted folder is part of the lost local node.
@@ -126,52 +143,33 @@ where
         .map(|finding| capitalize(finding.to_string()))
         .collect();
     let (mut outcome, mut blocker) = match report.outcome {
-        Prepared::Ready => (ManagedServerRepairOutcome::Ready, None),
-        Prepared::NeedsSetup => (ManagedServerRepairOutcome::NeedsSetup, None),
-        Prepared::Blocked(gents_server::repair::Blocker::BackgroundApprovalPending { .. }) => {
+        RepairOutcome::Ready | RepairOutcome::Answering(_) => {
             (ManagedServerRepairOutcome::Ready, None)
         }
-        Prepared::Blocked(blocker) => (
+        RepairOutcome::NeedsSetup => (ManagedServerRepairOutcome::NeedsSetup, None),
+        RepairOutcome::Blocked(
+            gents_protocol::operations::install_repair::Blocker::BackgroundApprovalPending {
+                ..
+            },
+        ) => (ManagedServerRepairOutcome::Ready, None),
+        RepairOutcome::Blocked(blocker) => (
             ManagedServerRepairOutcome::Blocked,
             Some(capitalize(blocker.to_string())),
         ),
-        Prepared::Decide(decision) => (
+        RepairOutcome::Decide(decision) => (
             ManagedServerRepairOutcome::Blocked,
             Some(capitalize(decision.why.to_string())),
         ),
     };
 
     let peers_path = paths.peer_directory_path();
-    let mut local_node_lost = false;
+    let mut local_node_lost = stale_node;
     let late = async {
-        if set_aside_unreadable_peer_directory(peers_path)
-            .await?
-            .is_some()
-        {
-            repaired.push(
-                "Saved connections couldn't be read and were set aside; add your remote nodes again."
-                    .to_owned(),
-            );
-        }
-        let retired = super::reset::retire_orphaned_client_state_locked(state)
+        let client = repair_client_state(state, &mut repaired).await?;
+        local_node_lost |= client.local_node_lost;
+        gents_desktop_core::client::load_peer_records(peers_path)
             .await
-            .map_err(|error| anyhow::anyhow!(error.message))?;
-        local_node_lost = retired.lost_local_node() || stale_node;
-        if client_store_is_from_other_version(state).await? {
-            repaired.push(
-                set_aside_other_version_client_store(state)
-                    .await
-                    .map_err(|error| anyhow::anyhow!(error.message))?,
-            );
-        }
-        if client_store_key_missing(paths).await? {
-            archive_client_store(state, IncompatibleStoreKind::MissingStoreKey)
-                .await
-                .map_err(|error| anyhow::anyhow!(error.message))?;
-            repaired
-                .push("The desktop's local data couldn't be unlocked and was set aside.".to_owned());
-        }
-        gents_desktop_core::client::load_peer_records(peers_path).await
+            .map_err(|error| BridgeError::untyped(error.to_string()))
     }
     .await;
     let saved_peers = match late {
@@ -220,38 +218,67 @@ pub(super) async fn archive_client_store(
     state: &DesktopAppState,
     kind: IncompatibleStoreKind,
 ) -> Result<PathBuf, BridgeError> {
-    use gents::store::local::storage_backend::IncompatibleStore;
-    drain_managed_runtime_pairing(state).await;
-    let _client = crate::tauri_commands::lifecycle::exclusion::exclude_client(state).await?;
-    let paths = &state.policy.desktop_paths;
-    let user_home = resolve_user_home(dirs::home_dir())?;
-    let plan = plan_home_reset(
-        None,
-        None,
-        Some(IncompatibleStore {
-            kind,
-            data_path: paths.node_data_dir().to_path_buf(),
-        }),
-        paths,
-        &user_home,
-        ClientBinding::Unbound,
-    )?
-    .keeping_managed_server_preference();
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
-    let backup = plan.backup_path(&stamp)?;
-    plan.preflight(&backup)?;
-    let result = plan.retire(HomeResetDisposition::Archive, Some(&backup))?;
-    state
-        .bridge
-        .lock()
-        .expect("desktop bridge lock poisoned")
-        .incompatible_client_store = None;
-    tracing::info!(
-        target: "gents_desktop::managed_server",
-        backup = ?result.backup_path,
-        retired = result.retired_paths.len(),
-        ?kind,
-        "archived a desktop client store this build cannot open"
+    let client = repair_client_state(state, &mut Vec::new()).await?;
+    client
+        .findings
+        .into_iter()
+        .find_map(|finding| match finding {
+            Finding::ClientStoreSetAside { kept_at } => Some(kept_at),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            BridgeError::untyped(format!(
+                "the client store no longer requires repair for {kind:?}"
+            ))
+        })
+}
+
+pub(super) struct ClientLifecycle<'a>(pub(super) &'a DesktopAppState);
+
+#[async_trait::async_trait]
+impl gents_service::repair::ClientExclusion for ClientLifecycle<'_> {
+    async fn exclude(
+        &self,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, gents_service::repair::RepairFailure> {
+        drain_managed_runtime_pairing(self.0).await;
+        crate::tauri_commands::lifecycle::exclusion::exclude_client(self.0)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message).into())
+    }
+}
+
+pub(super) async fn repair_client_state(
+    state: &DesktopAppState,
+    notes: &mut Vec<String>,
+) -> Result<gents_protocol::operations::install_repair::RepairClientReceipt, BridgeError> {
+    let input = gents_protocol::operations::install_repair::RepairClientInput {
+        root: state.policy.desktop_paths.root().to_path_buf(),
+        user_home: resolve_user_home(dirs::home_dir())?,
+        node_home: state
+            .policy
+            .node_home
+            .clone()
+            .filter(|_| state.policy.managed_server == ManagedServerPolicy::Allowed),
+    };
+    let receipt = execute(
+        RepairInput::Client { input },
+        &ServiceProgram::new(gents_service::repair::current_program),
+        &mut Quiet,
+        Some(&ClientLifecycle(state)),
+    )
+    .await
+    .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let client = receipt
+        .client
+        .ok_or_else(|| BridgeError::untyped("client repair returned no receipt"))?;
+    notes.extend(
+        client
+            .findings
+            .iter()
+            .map(|finding| capitalize(finding.to_string())),
     );
-    Ok(backup)
+    if let RepairOutcome::Blocked(blocker) = receipt.outcome {
+        return Err(BridgeError::untyped(blocker.to_string()));
+    }
+    Ok(client)
 }

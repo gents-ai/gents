@@ -1,14 +1,6 @@
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{ManagedServerStatus, ManagedServerToolCeiling};
-use gents_desktop_core::preference::ReviewedHome;
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct HomeIdentity {
-    pub(super) reviewed: ReviewedHome,
-    pub(super) tool_ceiling: Option<ManagedServerToolCeiling>,
-    pub(super) tool_root: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct EffectiveManagedAuthority {
@@ -142,13 +134,4 @@ pub(super) fn suggested_tool_root() -> Option<String> {
     dirs::home_dir()
         .and_then(|path| std::fs::canonicalize(path).ok())
         .map(|path| path.to_string_lossy().into_owned())
-}
-
-pub(super) fn parse_tool_ceiling(value: &str) -> Option<ManagedServerToolCeiling> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "meta-only" | "metaonly" | "meta_only" => Some(ManagedServerToolCeiling::MetaOnly),
-        "readonly" => Some(ManagedServerToolCeiling::Readonly),
-        "readwrite" => Some(ManagedServerToolCeiling::Readwrite),
-        _ => None,
-    }
 }

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn the_log_tail_is_read_once_per_exit() {
-    let exit = |restarts| gents_server::native_service::ServiceExit {
+    let exit = |restarts| gents_service::native_service::ServiceExit {
         reason: "exited with code 1".to_string(),
         restarts,
         clean: false,
@@ -176,13 +176,13 @@ fn loaded_native_job_owns_a_ready_endpoint_between_process_states() {
 async fn a_deleted_home_is_reported_until_a_new_setup_writes_its_init_json() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join(".gents");
-    let exit = |code| gents_server::native_service::ServiceExit {
+    let exit = |code| gents_service::native_service::ServiceExit {
         reason: format!("exited with code {code}"),
         restarts: 0,
         clean: false,
         code: Some(code),
     };
-    let home_gone = exit(gents_server::native_service::HOME_GONE_EXIT_CODE);
+    let home_gone = exit(gents_service::native_service::HOME_GONE_EXIT_CODE);
 
     assert_eq!(deleted_home(None, Some(&exit(1)), false, &home).await, None);
     let deleted = deleted_home(None, Some(&home_gone), false, &home).await;
@@ -285,7 +285,7 @@ async fn reviewed_preference_is_written_before_native_restart_attempt() {
 
 #[test]
 fn external_server_rejects_a_different_initialized_identity() {
-    use gents_server::repair::port::{served_identity, ServedIdentity};
+    use gents_service::repair::port::{served_identity, ServedIdentity};
     let live = |did: &str| serde_json::json!({ "node_did": did });
     assert_eq!(
         served_identity(Some("did:key:local"), &live("did:key:local")),

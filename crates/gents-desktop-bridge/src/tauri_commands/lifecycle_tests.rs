@@ -101,7 +101,7 @@ fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
     );
     assert_eq!(
         store.map(|store| store.kind),
-        Some(gents_store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::UnknownLineage)
     );
 
     let refused =
@@ -387,7 +387,7 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
     let store = store.expect("typed refusal");
     assert_eq!(
         store.kind,
-        gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey
+        gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey
     );
     assert_eq!(store.data_path, paths.identity_key_path());
     assert_eq!(
@@ -410,7 +410,7 @@ async fn a_remote_only_start_sets_aside_another_versions_client_store() {
         &BridgeConfig {
             home: HomePolicy::FixedRoot(temp.path().join("client")),
             bootstrap: BootstrapPolicy::PairedRemoteOnly,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             ..Default::default()
         },
         None,

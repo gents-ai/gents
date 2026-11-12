@@ -1,8 +1,9 @@
-use super::authority::{parse_tool_ceiling, EffectiveManagedAuthority, HomeIdentity};
+use super::authority::EffectiveManagedAuthority;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::ManagedServerToolCeiling;
-use gents_desktop_core::preference::{ReviewedHome, StoredManagedServer, MANAGED_SERVER_CONFIG};
+use gents_desktop_core::preference::{read_home_identity, HomeIdentity};
+use gents_desktop_core::preference::{StoredManagedServer, MANAGED_SERVER_CONFIG};
 
 pub(super) async fn read_initialized_name(node_home: &std::path::Path) -> Option<String> {
     tokio::fs::read(node_home.join("init.json"))
@@ -69,27 +70,6 @@ pub(super) async fn save_confirmed_preference(
         .await?;
     }
     Ok(())
-}
-
-pub(super) async fn read_home_identity(node_home: &std::path::Path) -> Option<HomeIdentity> {
-    let home = tokio::fs::canonicalize(node_home).await.ok()?;
-    let bytes = tokio::fs::read(node_home.join("init.json")).await.ok()?;
-    let init: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    let text = |key: &str| {
-        init.get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    };
-    Some(HomeIdentity {
-        reviewed: ReviewedHome {
-            node_home: home.to_string_lossy().into_owned(),
-            node_did: text("node_did")?,
-        },
-        tool_ceiling: text("tool_ceiling").as_deref().and_then(parse_tool_ceiling),
-        tool_root: text("tool_root"),
-    })
 }
 
 fn bind_preference(
