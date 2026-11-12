@@ -16,6 +16,7 @@ mod mailbox_live;
 mod p2p_admission_concurrent_live;
 #[path = "e2e_live/seed_live.rs"]
 mod seed_live;
+#[cfg(unix)]
 #[path = "e2e_live/session_message_live.rs"]
 mod session_message_live;
 #[path = "e2e_live/steward_loop_live.rs"]
@@ -73,13 +74,16 @@ mod plugin_surface_live;
 #[cfg(unix)]
 #[path = "e2e_live/plugin_admission_live.rs"]
 mod plugin_admission_live;
+#[cfg(unix)]
 #[path = "e2e_live/process_lifecycle_live.rs"]
 mod process_lifecycle_live;
 #[path = "e2e_live/session_limit_live.rs"]
 mod session_limit_live;
 
+#[cfg(unix)]
 #[path = "e2e_live/tool_recovery_live.rs"]
 mod tool_recovery_live;
 
+#[cfg(unix)]
 #[path = "e2e_background/r6_background_recovery.rs"]
 mod r6_background_recovery;
