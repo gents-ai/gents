@@ -1,3 +1,4 @@
+import Proofs.Conformance.Identity.NodeProvisioning
 import Proofs.Conformance.HomeResolution
 import Proofs.Conformance.GraphqlName
 import Proofs.Conformance.ClaudeRefresh
@@ -660,8 +661,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.GrantSetsConformance.delegationCasesJson ++ ","
     ++ "\"identity_agent_baseline_cases\":"
       ++ Identity.GrantSetsConformance.baselineCasesJson ++ ","
-    ++ "\"identity_agent_creation_exposure_cases\":"
-      ++ Identity.NodeProvisioningConformance.agentCreationExposureCasesJson ++ ","
     ++ "\"identity_agent_creator_cases\":"
       ++ Identity.NodeProvisioningConformance.agentCreatorCasesJson ++ ","
     ++ "\"identity_agent_block_signing_cases\":"

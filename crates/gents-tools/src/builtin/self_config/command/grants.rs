@@ -166,25 +166,16 @@ mod creation_exposure_tests {
 
     #[test]
     fn modeled_agent_creation_exposure_controls_the_command() {
-        for case in
-            &gents_lean_vocab::lean_contract_snapshot().identity_agent_creation_exposure_cases
-        {
+        gents_lean_vocab::families::node_provisioning_agent_creation_exposure::replay(|i| {
             let mut categories = BTreeSet::new();
-            if case["node_category"].as_bool().unwrap() {
+            if i.node_category {
                 categories.insert("node".to_owned());
             }
-            if case["agent_category"].as_bool().unwrap() {
+            if i.agent_category {
                 categories.insert("agent".to_owned());
             }
-            for operation in ["create", "clone", "edit", "disable"] {
-                assert_eq!(
-                    agent_command_exposed(&categories),
-                    case["exposed"].as_bool().unwrap(),
-                    "{} {operation}",
-                    case["name"]
-                );
-            }
-        }
+            agent_command_exposed(&categories)
+        });
     }
 }
 
