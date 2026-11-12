@@ -1,6 +1,7 @@
 import Proofs.Automation.Mailbox.Reply
 import Proofs.Automation.Mailbox.Executable
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Functions.Automation
 
 namespace Conformance.MailboxReplyContracts
 open Mailbox Conformance.Contracts
@@ -52,37 +53,71 @@ private def variants : List (String × ReplyEnvelope × ReplyEvidence) :=
 
 private def boolJson (value : Bool) : String := if value then "true" else "false"
 
-private def caseJson (item : Item) (name : String) (envelope : ReplyEnvelope)
-    (reply : ReplyEvidence) : String :=
-  let post := claimReply? item envelope reply
-  "{\"variant\":" ++ jsonString name ++
-  ",\"status\":" ++ jsonString item.status.toDefraDB ++
-  ",\"resolved_doc_id\":" ++ jsonString item.resolvedDocId ++
-  ",\"handling\":" ++ jsonString envelope.handling.toDefraDB ++
-  ",\"mailbox_doc_id\":" ++ jsonString envelope.docId ++
-  ",\"target_agent_did\":" ++ jsonString envelope.agentDid ++
-  ",\"target_node_did\":" ++ jsonString envelope.targetNodeDid ++
-  ",\"bound_session_id\":" ++ (envelope.sessionId.map jsonString).getD "null" ++
-  ",\"deadline_valid\":" ++ boolJson envelope.deadlineValid ++
-  ",\"question_current\":" ++ boolJson envelope.questionCurrent ++
-  ",\"request_doc_id\":" ++ jsonString reply.requestDocId ++
-  ",\"source_doc_id\":" ++ jsonString reply.sourceDocId ++
-  ",\"requester_did\":" ++ jsonString reply.requesterDid ++
-  ",\"node_did\":" ++ jsonString reply.nodeDid ++
-  ",\"agent_did\":" ++ jsonString reply.agentDid ++
-  ",\"session_id\":" ++ jsonString reply.sessionId ++
-  ",\"authenticated\":" ++ boolJson reply.authenticated ++
-  ",\"recipient_authorized\":" ++ boolJson reply.recipientAuthorized ++
-  ",\"interactive\":" ++ boolJson reply.interactive ++
-  ",\"accepted\":" ++ boolJson post.isSome ++
-  ",\"post_status\":" ++ (post.map (jsonString ∘ Status.toDefraDB ∘ Item.status)).getD "null" ++
-  ",\"post_resolved_doc_id\":" ++ (post.map (jsonString ∘ Item.resolvedDocId)).getD "null" ++ "}"
+structure ClaimInput where
+  variant : String
+  status : Status
+  resolvedDocId : String
+  handling : Handling
+  mailboxDocId : String
+  targetAgentDid : String
+  targetNodeDid : String
+  boundSessionId : Option String
+  deadlineValid : Bool
+  questionCurrent : Bool
+  requestDocId : String
+  sourceDocId : String
+  requesterDid : String
+  nodeDid : String
+  agentDid : String
+  sessionId : String
+  authenticated : Bool
+  recipientAuthorized : Bool
+  interactive : Bool
+  deriving Lean.ToJson
 
-def casesJson : String := jsonArray <|
+structure ClaimOutput where
+  accepted : Bool
+  postStatus : Option Status
+  postResolvedDocId : Option String
+  deriving Lean.ToJson
+
+private def claimInput (item : Item) (name : String) (envelope : ReplyEnvelope)
+    (reply : ReplyEvidence) : ClaimInput :=
+  { variant := name, status := item.status, resolvedDocId := item.resolvedDocId
+    handling := envelope.handling, mailboxDocId := envelope.docId
+    targetAgentDid := envelope.agentDid, targetNodeDid := envelope.targetNodeDid
+    boundSessionId := envelope.sessionId, deadlineValid := envelope.deadlineValid
+    questionCurrent := envelope.questionCurrent, requestDocId := reply.requestDocId
+    sourceDocId := reply.sourceDocId, requesterDid := reply.requesterDid, nodeDid := reply.nodeDid
+    agentDid := reply.agentDid, sessionId := reply.sessionId, authenticated := reply.authenticated
+    recipientAuthorized := reply.recipientAuthorized, interactive := reply.interactive }
+
+private def claimOf (i : ClaimInput) : ClaimOutput :=
+  let post := claimReply? (baselineItem i.status i.resolvedDocId)
+    { docId := i.mailboxDocId, handling := i.handling, targetNodeDid := i.targetNodeDid
+      agentDid := i.targetAgentDid, sessionId := i.boundSessionId
+      deadlineValid := i.deadlineValid, questionCurrent := i.questionCurrent }
+    { requestDocId := i.requestDocId, sourceDocId := i.sourceDocId
+      requesterDid := i.requesterDid, nodeDid := i.nodeDid, agentDid := i.agentDid
+      sessionId := i.sessionId, authenticated := i.authenticated
+      recipientAuthorized := i.recipientAuthorized, interactive := i.interactive }
+  { accepted := post.isSome
+    postStatus := post.map Item.status
+    postResolvedDocId := post.map Item.resolvedDocId }
+
+private def claimInputs : List ClaimInput :=
   [Status.open, .acted, .dismissed, .expired].flatMap fun status =>
     ["", "request-doc", "other-request"].flatMap fun receipt =>
       variants.map fun (name, envelope, reply) =>
-        caseJson (baselineItem status receipt) name envelope reply
+        claimInput (baselineItem status receipt) name envelope reply
+
+example : claimInputs.any (fun i => i.variant == "expired-deadline" && i.status == .acted &&
+    i.resolvedDocId == "request-doc" && (claimOf i).accepted) = true := by native_decide
+
+@[conformance_family]
+def claim : Family ClaimInput ClaimOutput where
+  inputs := claimInputs
+  model := claimOf
 
 private def savedAnswer : AnswerCacheBinding :=
   { client := "client", node := "node", agent := "agent", session := "session",

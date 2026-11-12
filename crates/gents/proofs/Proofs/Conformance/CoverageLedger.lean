@@ -1012,8 +1012,8 @@ def caseCoverage : List CoverageEntry :=
       "mailbox_notification_contracts_stamp")
       "mailbox" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "mailbox_reply_cases"
-      "MailboxReplyCases"
+      "family"
+      "mailbox_reply_contracts_claim"
       "Decision cases cover reply matching and terminal-state eligibility. Signed-row loading, atomic request/item claim, and concurrent dismissal require transaction-owner integration tests.")
       "mailbox" [Surface.runtimeInternal]
   , tagged (consumerCoverage

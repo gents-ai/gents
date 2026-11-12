@@ -2999,7 +2999,6 @@ pub struct LeanContractSnapshot {
     pub plugin_job_lineage_cases: Vec<LeanPluginJobLineageCase>,
     pub plugin_job_recovery_cases: Vec<LeanPluginJobRecoveryCase>,
     pub plugin_job_wake_cases: Vec<LeanPluginJobWakeCase>,
-    pub mailbox_reply_cases: Vec<LeanMailboxReplyCase>,
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
@@ -7441,33 +7440,6 @@ pub struct LeanMailboxQuestionCaseWaitsItem {
     pub open: bool,
     pub same_parent: bool,
     pub waiting: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxReplyCase {
-    pub accepted: bool,
-    pub agent_did: String,
-    pub authenticated: bool,
-    pub bound_session_id: Option<String>,
-    pub deadline_valid: bool,
-    pub handling: String,
-    pub interactive: bool,
-    pub mailbox_doc_id: String,
-    pub node_did: String,
-    pub post_resolved_doc_id: Option<String>,
-    pub post_status: Option<String>,
-    pub question_current: bool,
-    pub recipient_authorized: bool,
-    pub request_doc_id: String,
-    pub requester_did: String,
-    pub resolved_doc_id: String,
-    pub session_id: String,
-    pub source_doc_id: String,
-    pub status: String,
-    pub target_agent_did: String,
-    pub target_node_did: String,
-    pub variant: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
