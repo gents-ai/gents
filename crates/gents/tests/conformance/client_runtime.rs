@@ -31,9 +31,9 @@ where
 #[test]
 fn generated_agent_readiness_cases_drive_the_production_projector() {
     use gents_protocol::row::{
-        project_node_readiness, project_node_readiness_source, AgentReadinessSourceEntry,
-        NodeReadinessProcessState, NodeReadinessRow, ProjectedAgentReadiness,
-        NODE_READINESS_FORMAT_VERSION,
+        project_node_readiness_source, project_node_readiness_with_storage,
+        AgentReadinessSourceEntry, NodeReadinessProcessState, NodeReadinessRow,
+        ProjectedAgentReadiness, RuntimeStorageObservation, NODE_READINESS_FORMAT_VERSION,
     };
 
     let cases = lean_client_agent_readiness_cases();
@@ -80,11 +80,13 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
             },
             updated_at: "2026-08-28T00:00:00Z".to_string(),
         };
-        let projection = project_node_readiness(
+        let storage = RuntimeStorageObservation::from_unavailable(case.storage_unavailable);
+        let projection = project_node_readiness_with_storage(
             case.observation_present.then_some(&row),
             "did:test:lean-readiness",
             ["20"],
             Some("20"),
+            storage,
         );
         let projected = projection
             .agents
@@ -93,11 +95,12 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
         for timestamp in ["1970-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
             let mut aged_row = row.clone();
             aged_row.updated_at = timestamp.to_string();
-            let aged = project_node_readiness(
+            let aged = project_node_readiness_with_storage(
                 case.observation_present.then_some(&aged_row),
                 "did:test:lean-readiness",
                 ["20"],
                 Some("20"),
+                storage,
             );
             assert_eq!(aged.agents, projection.agents, "{}: {timestamp}", case.name);
             assert_eq!(
@@ -117,7 +120,7 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
         };
         assert_eq!(state, case.expected_state, "{} state", case.name);
         assert_eq!(reason, case.expected_reason, "{} reason", case.name);
-        if case.observation_kind == "observed" {
+        if case.observation_kind == "observed" && !case.storage_unavailable {
             assert_eq!(
                 state == "ready",
                 case.expected_runtime_admissible,

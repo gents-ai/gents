@@ -1,5 +1,6 @@
 use gents_protocol::row::{
-    project_node_readiness_summary, AgentReadinessUnavailableReason, ProjectedNodeReadinessSummary,
+    project_node_readiness_summary_with_storage, AgentReadinessUnavailableReason,
+    AgentReadinessUnknownReason, ProjectedNodeReadinessSummary, RuntimeStorageObservation,
 };
 use serde_json::{json, Value};
 
@@ -14,14 +15,26 @@ pub(crate) fn render_healthz_payload(
     data: Option<&MetricsQueryData>,
     error: Option<String>,
 ) -> Value {
-    render_healthz_payload_at(state, data, error, chrono::Utc::now())
+    render_healthz_payload_at(
+        state,
+        data,
+        error,
+        chrono::Utc::now(),
+        state.storage_observation(),
+    )
 }
+
+/// Recovery for a latched store: the operator frees space and restarts this
+/// node over the same home. Nothing is reset, and the runtime does not resend.
+pub(crate) const STORAGE_UNAVAILABLE_RECOVERY: &str =
+    "runtime storage is unavailable; free disk space, then restart this node with the same history folder";
 
 fn render_healthz_payload_at(
     state: &RuntimeHttpState,
     data: Option<&MetricsQueryData>,
     error: Option<String>,
     _observed_at: chrono::DateTime<chrono::Utc>,
+    storage: RuntimeStorageObservation,
 ) -> Value {
     let version = version_response();
     let uptime_seconds = state.started_instant.elapsed().as_secs();
@@ -36,7 +49,19 @@ fn render_healthz_payload_at(
                 .node_readiness
                 .iter()
                 .find(|row| row.node_did == state.node_did);
-            let readiness = project_node_readiness_summary(local_readiness_row, &state.node_did);
+            // The storage fault is process-local: the row below is exactly the
+            // write a latched store refuses, so it still reads ready.
+            let readiness = project_node_readiness_summary_with_storage(
+                local_readiness_row,
+                &state.node_did,
+                storage,
+            );
+            let storage_unavailable = matches!(
+                readiness,
+                ProjectedNodeReadinessSummary::Unknown(
+                    AgentReadinessUnknownReason::StorageUnavailable
+                )
+            );
             let runtime_ready = matches!(&readiness, ProjectedNodeReadinessSummary::Observed(_));
             let runtime_degraded = match &readiness {
                 ProjectedNodeReadinessSummary::Observed(summary) => {
@@ -91,6 +116,16 @@ fn render_healthz_payload_at(
                         "status": runtime_status,
                         "ready": runtime_ready,
                         "count": usize::from(local_readiness_row.is_some()),
+                    },
+                    "storage": if storage_unavailable {
+                        json!({
+                            "status": "unhealthy",
+                            "writable": false,
+                            "reason": "storage_unavailable",
+                            "recovery": STORAGE_UNAVAILABLE_RECOVERY,
+                        })
+                    } else {
+                        json!({ "status": "ok", "writable": true })
                     },
                     "backends": {
                         "status": backend_status,
@@ -282,7 +317,13 @@ mod tests {
             },
         };
 
-        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
+        let payload = render_healthz_payload_at(
+            &state(),
+            Some(&data),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Writable,
+        );
 
         assert_eq!(
             payload.get("status").and_then(|v| v.as_str()),
@@ -336,7 +377,13 @@ mod tests {
             liveness: RuntimeLivenessSnapshot::default(),
         };
 
-        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
+        let payload = render_healthz_payload_at(
+            &state(),
+            Some(&data),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Writable,
+        );
 
         assert_eq!(
             payload
@@ -359,16 +406,82 @@ mod tests {
             liveness: RuntimeLivenessSnapshot::default(),
         };
 
-        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
+        let payload = render_healthz_payload_at(
+            &state(),
+            Some(&data),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Writable,
+        );
 
         assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+    }
+
+    /// A latched store cannot update the readiness row, so the row keeps
+    /// reporting the last ready snapshot; health must come from the join.
+    #[test]
+    fn healthz_reports_storage_unavailable_over_a_stale_ready_row() {
+        let data = healthy_data();
+        let ready = render_healthz_payload_at(
+            &state(),
+            Some(&data),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Writable,
+        );
+        assert_eq!(ready.get("status").and_then(Value::as_str), Some("ok"));
+
+        let payload = render_healthz_payload_at(
+            &state(),
+            Some(&data),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Unavailable,
+        );
+
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("unhealthy"),
+            "the same ready readiness row must not report health once writes fail"
+        );
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            payload
+                .pointer("/checks/runtime/ready")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/checks/storage/status")
+                .and_then(Value::as_str),
+            Some("unhealthy")
+        );
+        assert_eq!(
+            payload
+                .pointer("/checks/storage/reason")
+                .and_then(Value::as_str),
+            Some("storage_unavailable")
+        );
+        assert_eq!(
+            payload
+                .pointer("/checks/storage/recovery")
+                .and_then(Value::as_str),
+            Some(STORAGE_UNAVAILABLE_RECOVERY)
+        );
     }
 
     #[test]
     fn healthz_fails_closed_when_readiness_is_missing_or_malformed() {
         let mut missing = healthy_data();
         missing.node_readiness.clear();
-        let payload = render_healthz_payload_at(&state(), Some(&missing), None, observed_at());
+        let payload = render_healthz_payload_at(
+            &state(),
+            Some(&missing),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Writable,
+        );
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
             Some("unhealthy")
@@ -384,7 +497,13 @@ mod tests {
 
         let mut malformed = healthy_data();
         malformed.node_readiness[0].snapshot_json = "{}".to_string();
-        let payload = render_healthz_payload_at(&state(), Some(&malformed), None, observed_at());
+        let payload = render_healthz_payload_at(
+            &state(),
+            Some(&malformed),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Writable,
+        );
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
             Some("unhealthy")
@@ -397,7 +516,13 @@ mod tests {
         let mut data = healthy_data();
         data.node_readiness[0].updated_at = "2026-05-13T11:59:00Z".to_string();
 
-        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
+        let payload = render_healthz_payload_at(
+            &state(),
+            Some(&data),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Writable,
+        );
 
         assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
         assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
@@ -408,7 +533,13 @@ mod tests {
         let mut data = healthy_data();
         data.node_runtimes.clear();
 
-        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
+        let payload = render_healthz_payload_at(
+            &state(),
+            Some(&data),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Writable,
+        );
 
         assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
         assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
@@ -434,7 +565,13 @@ mod tests {
         data.node_runtimes[0].node_did = "did:test:foreign".to_string();
         data.node_readiness[0].node_did = "did:test:foreign".to_string();
 
-        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
+        let payload = render_healthz_payload_at(
+            &state(),
+            Some(&data),
+            None,
+            observed_at(),
+            RuntimeStorageObservation::Writable,
+        );
 
         assert_eq!(
             payload.get("status").and_then(Value::as_str),

@@ -318,6 +318,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
         node_did.clone(),
         Arc::new(RejectRouterGenerationWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     status.initialize_startup(&agent_did).await.unwrap();
     status

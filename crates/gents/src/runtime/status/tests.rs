@@ -343,7 +343,11 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = node.node_identity_did().unwrap();
 
-    let (first_owner, first) = RuntimeStatusHandle::start(node.clone(), node_did);
+    let (first_owner, first) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did,
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     first.initialize_startup("general").await.unwrap();
     first
         .set_process_state_durable(ProcessLifecycleState::Ready)
@@ -361,7 +365,11 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     );
     first_owner.close().await.unwrap();
 
-    let (second_owner, second) = RuntimeStatusHandle::start(node.clone(), node_did);
+    let (second_owner, second) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did,
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     second.initialize_startup("general").await.unwrap();
     let restarted = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
         &fetch_node_readiness_row(&node, node_did)
@@ -421,7 +429,11 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = node.node_identity_did().unwrap().to_owned();
-    let (owner, status) = RuntimeStatusHandle::start(node.clone(), node_did.clone());
+    let (owner, status) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did.clone(),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     status.readiness().initialize("general").await.unwrap();
     let action = case
         .action
@@ -842,4 +854,109 @@ async fn goal_settled_uses_live_runtime_status_cases() {
         };
         assert_eq!(actual, case["expected"].as_bool().unwrap(), "{case}");
     }
+}
+
+/// A latched store rejects the readiness write that would report it, so the
+/// durable row keeps whatever it last held. The fault has to be retained in
+/// the process and joined at the reader.
+#[tokio::test]
+async fn storage_full_readiness_write_is_retained_as_a_process_local_fault() {
+    use gents_protocol::row::{
+        project_node_readiness_summary, project_node_readiness_summary_with_storage,
+        AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState as ProcessState,
+        NodeReadinessRow as ReadinessRow, NodeReadinessSnapshot, ProjectedNodeReadinessSummary,
+        RuntimeStorageObservation, NODE_READINESS_FORMAT_VERSION,
+    };
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("native transaction")]
+    struct NativeTransaction(#[source] storage::corekv::Error);
+
+    struct StorageFullWriter;
+
+    #[async_trait::async_trait]
+    impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for StorageFullWriter {
+        async fn upsert(
+            &self,
+            _node_did: &str,
+            _snapshot: &gents_protocol::row::NodeReadinessSnapshot,
+            _updated_at: &str,
+        ) -> anyhow::Result<()> {
+            Err(anyhow::Error::new(NativeTransaction(
+                storage::corekv::Error::from(std::io::Error::new(
+                    std::io::ErrorKind::StorageFull,
+                    "write-ahead log left in an unknown state: No space left on device (os error 28)",
+                )),
+            )))
+        }
+    }
+
+    let node = test_node().await;
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let (owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node,
+        node_did.clone(),
+        Arc::new(StorageFullWriter),
+        std::time::Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
+
+    assert!(!status.storage_fault().is_unavailable());
+    let error = status
+        .initialize_startup("did:test:agent")
+        .await
+        .expect_err("a latched store cannot persist readiness");
+    assert!(
+        crate::store::graphql::is_storage_full(error.as_ref()),
+        "{}",
+        gents_protocol::error_chain::ErrorChain(error.as_ref()),
+    );
+    assert!(
+        status.storage_fault().is_unavailable(),
+        "the write that cannot be persisted must still be observable"
+    );
+
+    // The row the reader has is the last one the store accepted, and it still
+    // reports a ready runtime.
+    let stale_ready = ReadinessRow {
+        node_did: node_did.clone(),
+        snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
+            format_version: NODE_READINESS_FORMAT_VERSION,
+            process_state: ProcessState::Ready,
+            active_generation: 1,
+            router_generation: 1,
+            default_agent_did: "did:test:agent".to_string(),
+            agents: vec![AgentReadinessEntry {
+                agent_did: "did:test:agent".to_string(),
+                state: AgentReadinessState::Ready,
+                reason: None,
+            }],
+        })
+        .unwrap(),
+        updated_at: "2026-11-12T00:00:00Z".to_string(),
+    };
+    assert!(
+        matches!(
+            project_node_readiness_summary(Some(&stale_ready), &node_did),
+            ProjectedNodeReadinessSummary::Observed(_)
+        ),
+        "the durable row alone cannot carry the fault"
+    );
+    assert_eq!(
+        project_node_readiness_summary_with_storage(
+            Some(&stale_ready),
+            &node_did,
+            status.storage_fault().observation(),
+        ),
+        ProjectedNodeReadinessSummary::Unknown(
+            gents_protocol::row::AgentReadinessUnknownReason::StorageUnavailable
+        ),
+        "the reader must join the process-local fault with the frozen row"
+    );
+    assert_eq!(
+        status.storage_fault().observation(),
+        RuntimeStorageObservation::Unavailable
+    );
+
+    owner.close().await.ok();
 }

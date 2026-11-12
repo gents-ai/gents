@@ -230,6 +230,16 @@ source consistency checks, not a separate runtime compatibility version.
   notice. Codex as a model provider, including `accounts login codex`, is
   unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
+- A node that ran out of disk kept reporting itself ready. Its storage stops
+  accepting writes until the process is restarted, and the readiness row health
+  is read from is one of the writes it refuses, so the row froze on the last
+  healthy snapshot. The runtime now keeps that fault in the process and
+  `/healthz` and `/status` report it: unhealthy, with a `storage` check that
+  says to free disk space and restart the node with the same history folder.
+  Shutdown no longer reports the unwritable store as a teardown failure and is
+  bounded as a whole, so the restart can take the home. Nothing is reset and no
+  message is resent: a send whose outcome is unknown keeps its identity and is
+  re-checked after the restart.
 - Stopping the native service waits for the runtime's own shutdown instead of
   about a second, so a stop that succeeds no longer reports `native supervisor
   did not confirm that the Gents job unloaded or became inactive`. Stop node in

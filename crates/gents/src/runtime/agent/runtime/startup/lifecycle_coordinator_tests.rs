@@ -54,6 +54,7 @@ async fn admission_gate_waits_for_durable_ready_retry_ack() {
         "did:test:ready-gate-persistence",
         writer.clone(),
         std::time::Duration::from_millis(5),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     status.initialize_startup("general").await.unwrap();
     let gate = super::super::router::RuntimeAdmissionGate::closed();

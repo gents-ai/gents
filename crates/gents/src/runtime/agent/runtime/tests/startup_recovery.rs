@@ -1512,3 +1512,119 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
         "a demoted agent's task must not stay active"
     );
 }
+
+/// Readiness writes during teardown are exactly what a latched store refuses.
+/// Shutdown must still complete and release the home, and must not report the
+/// incident as its own failure.
+struct StorageFullAfterReadyWriter {
+    ready: tokio::sync::Notify,
+    ready_seen: std::sync::atomic::AtomicBool,
+}
+
+impl Default for StorageFullAfterReadyWriter {
+    fn default() -> Self {
+        Self {
+            ready: tokio::sync::Notify::new(),
+            ready_seen: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("native transaction")]
+struct NativeTransactionFailure(#[source] storage::corekv::Error);
+
+fn latched_write_ahead_log_error() -> anyhow::Error {
+    anyhow::Error::new(NativeTransactionFailure(storage::corekv::Error::from(
+        std::io::Error::new(
+            std::io::ErrorKind::StorageFull,
+            "write-ahead log left in an unknown state: No space left on device (os error 28)",
+        ),
+    )))
+}
+
+#[async_trait::async_trait]
+impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for StorageFullAfterReadyWriter {
+    async fn upsert(
+        &self,
+        _node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
+        _updated_at: &str,
+    ) -> anyhow::Result<()> {
+        if self.ready_seen.load(std::sync::atomic::Ordering::SeqCst)
+            && matches!(
+                snapshot.process_state,
+                NodeReadinessProcessState::ShuttingDown | NodeReadinessProcessState::Shutdown
+            )
+        {
+            return Err(latched_write_ahead_log_error());
+        }
+        if snapshot.process_state == NodeReadinessProcessState::Ready {
+            self.ready_seen
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.ready.notify_waiters();
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn storage_full_readiness_writes_do_not_fail_or_stall_shutdown() {
+    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    let fixture = held_runtime_fixture_with_status(
+        "shutdown-storage-full",
+        "backend-shutdown-storage-full",
+        mock_endpoint.endpoint(),
+        1,
+        "healthy",
+    )
+    .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity.clone(),
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let storage_fault = agent.storage_fault();
+    let writer = Arc::new(StorageFullAfterReadyWriter::default());
+    let ready = writer.clone();
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let run = tokio::spawn(super::startup::run_agent_with_readiness_writer(
+        agent,
+        shutdown_rx,
+        writer.clone(),
+        Duration::from_millis(1),
+    ));
+
+    tokio::time::timeout(STARTUP_DEADLOCK_GUARD, async {
+        while !ready.ready_seen.load(std::sync::atomic::Ordering::SeqCst) {
+            let notified = ready.ready.notified();
+            if ready.ready_seen.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            notified.await;
+        }
+    })
+    .await
+    .expect("runtime must publish Ready before the store latches");
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(STARTUP_DEADLOCK_GUARD, run)
+        .await
+        .expect("teardown must be bounded when readiness writes fail")
+        .expect("agent task should join")
+        .expect("an unwritable store is the incident, not a teardown failure");
+
+    assert!(
+        storage_fault.is_unavailable(),
+        "the refused readiness writes must leave an observable storage fault"
+    );
+}

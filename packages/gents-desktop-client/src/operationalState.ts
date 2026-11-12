@@ -193,6 +193,8 @@ export function nodeReadinessDetail(
         return "The agent is still applying its latest configuration";
       case "agent_not_assigned":
         return "Agent is not assigned to this runtime";
+      case "storage_unavailable":
+        return "The node runtime cannot write to its storage. Free disk space, then restart this node with the same history folder.";
     }
   }
 

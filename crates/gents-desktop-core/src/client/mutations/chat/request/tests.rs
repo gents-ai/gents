@@ -1753,3 +1753,96 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
     assert!(row.backend_id.is_none());
     chat.shutdown().await
 }
+
+/// Lean `StorageFailure.observe`: a storage-full write leaves the outcome
+/// unknown while keeping `same_request` and `same_bytes`. Recovery therefore
+/// re-checks that identity; it never mints another request for the message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unknown_outcome_is_rechecked_under_its_own_identity() -> Result<()> {
+    let contract = tokio::task::spawn_blocking(
+        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
+    )
+    .await??;
+    let unknown_outcome: Vec<_> = contract["storage_failure_cases"]
+        .as_array()
+        .context("storage failure cases")?
+        .iter()
+        .filter(|case| case["outcome_unknown"] == true)
+        .collect();
+    assert!(!unknown_outcome.is_empty());
+    for case in &unknown_outcome {
+        assert_eq!(case["same_request"], true);
+        assert_eq!(case["same_bytes"], true);
+        assert_eq!(case["stop_automatic_retry"], true);
+    }
+
+    let home = crate::test_fixtures::ServedRuntimeHome::start().await;
+    let agent = home.publish_chat_agent().await;
+    let user = home.user().clone();
+    let result = async {
+        let request_id = "storage-unknown-outcome";
+        let session_id = "storage-unknown-outcome-session";
+        // The send's idempotency key is the request identity's own key, so a
+        // re-check cannot address anything but the same request.
+        let retry_key = gents::request::lifecycle::client_request_key(user.did(), request_id);
+        let send = |content: &'static str| {
+            let access = home.user_access();
+            let user = user.clone();
+            let agent_did = agent.agent_did.clone();
+            let node_did = home.node_did().to_owned();
+            async move {
+                super::submit_request(
+                    &crate::client::ClientStore::default(),
+                    &access,
+                    session_id,
+                    &node_did,
+                    user.did(),
+                    user.as_ref(),
+                    AgentRequestAdmissionRecord::client(user.did()),
+                    content,
+                    Some(&agent_did),
+                    SubmitRequestOptions {
+                        request_id: Some(request_id.to_owned()),
+                        ..SubmitRequestOptions::default()
+                    },
+                )
+                .await
+            }
+        };
+
+        // The send whose reply the client never saw.
+        let submitted = send("delivery whose outcome is unknown").await?;
+        assert_eq!(submitted.request_id, request_id);
+        let committed = fetch_request_row_for_test(&home.user_access(), request_id).await?;
+        assert_eq!(committed.retry_key.as_deref(), Some(retry_key.as_str()));
+        assert!(committed.admission_signature.is_some());
+
+        // Recovery after the restart: the same identity is re-checked, and the
+        // request the runtime holds is returned instead of a second one.
+        let rechecked = send("delivery whose outcome is unknown").await?;
+        assert_eq!(rechecked.request_id, request_id);
+        assert_eq!(rechecked.session_id, committed.session_id.clone().unwrap());
+        assert_eq!(
+            request_count_by_id_for_test(&home.user_access(), request_id).await?,
+            1,
+            "recovery must not create a second request for the same message"
+        );
+        assert_eq!(
+            request_count_for_session_for_test(&home.user_access(), session_id).await?,
+            1
+        );
+
+        let after = fetch_request_row_for_test(&home.user_access(), request_id).await?;
+        assert_eq!(after.request_id, committed.request_id, "same_request");
+        assert_eq!(after.retry_key, committed.retry_key, "same retry key");
+        assert_eq!(
+            after.admission_signature, committed.admission_signature,
+            "same_bytes: the retained signature is not re-signed"
+        );
+        assert_eq!(after.content, committed.content);
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    home.shutdown().await;
+    result
+}

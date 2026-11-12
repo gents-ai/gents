@@ -78,8 +78,19 @@ pub(crate) struct NodeReadinessPublisherOwner {
 }
 
 const MAX_PERSIST_ATTEMPTS: usize = 5;
-const MIN_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
+const MIN_PERSIST_ATTEMPT_TIMEOUT_MS: u64 = 250;
+const MIN_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(MIN_PERSIST_ATTEMPT_TIMEOUT_MS);
 const PRODUCTION_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+const PRODUCTION_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// Upper bound on one production readiness command, retries included. Owners
+/// that bound a larger scope containing a readiness call must stay above it.
+pub(crate) const PRODUCTION_COMMAND_TIMEOUT: Duration = Duration::from_millis(
+    (PRODUCTION_PERSIST_ATTEMPT_TIMEOUT.as_secs() + PRODUCTION_RETRY_DELAY.as_secs())
+        * 1000
+        * MAX_PERSIST_ATTEMPTS as u64
+        + MIN_PERSIST_ATTEMPT_TIMEOUT_MS,
+);
 
 #[async_trait::async_trait]
 pub(crate) trait NodeReadinessWriter: Send + Sync {
@@ -193,7 +204,7 @@ impl NodeReadinessPublisherHandle {
         Self::start_with_writer_and_timeout(
             Arc::new(DefraNodeReadinessWriter { node }),
             node_did,
-            Duration::from_secs(1),
+            PRODUCTION_RETRY_DELAY,
             Some(PRODUCTION_PERSIST_ATTEMPT_TIMEOUT),
         )
     }
@@ -223,7 +234,7 @@ impl NodeReadinessPublisherHandle {
         Self::start_with_writer_and_timeout(
             Arc::new(DefraNodeReadinessWriter { node }),
             node_did,
-            Duration::from_secs(1),
+            PRODUCTION_RETRY_DELAY,
             None,
         )
     }

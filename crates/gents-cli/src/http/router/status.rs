@@ -77,6 +77,7 @@ pub(super) async fn status_handler(
             "cli_tools": state.cli_tools,
                 "home": state.home,
                 "runtime": runtime,
+                "storage": health.pointer("/checks/storage").cloned().unwrap_or(Value::Null),
                 "runtimes": data.node_runtimes,
                 "backends": data.inference_backends,
                 "liveness": data.liveness,

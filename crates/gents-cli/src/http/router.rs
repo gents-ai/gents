@@ -57,6 +57,20 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) serve_lifecycle: ServeLifecycleHandle,
 }
 
+impl RuntimeHttpState {
+    /// Whether the activated runtime can still write its store.
+    ///
+    /// A latched store cannot record the fault in the readiness row, so this
+    /// reads the running runtime's process-local observation and the readiness
+    /// readers join it with the (frozen) row.
+    pub(crate) fn storage_observation(&self) -> gents_protocol::row::RuntimeStorageObservation {
+        self.activation_runtime
+            .get()
+            .map(|runtime| runtime.storage_fault().observation())
+            .unwrap_or_default()
+    }
+}
+
 /// Ready only after serve writes `runtime.json` for this process; never
 /// returns to starting.
 #[derive(Clone, Debug, Default)]

@@ -20,11 +20,13 @@ pub use agent_request::{
 pub use crate::node_readiness::{
     decode_node_readiness_snapshot, effective_agent_readiness_admission,
     is_behavior_unavailable_rejection, project_node_readiness, project_node_readiness_source,
-    project_node_readiness_summary, AgentReadinessEntry, AgentReadinessSourceEntry,
+    project_node_readiness_summary, project_node_readiness_summary_with_storage,
+    project_node_readiness_with_storage, AgentReadinessEntry, AgentReadinessSourceEntry,
     AgentReadinessState, AgentReadinessUnavailableReason, AgentReadinessUnknownReason,
     EffectiveAgentReadinessAdmission, NodeReadinessProcessState, NodeReadinessProjection,
     NodeReadinessRow, NodeReadinessSnapshot, NodeReadinessSummary, ProjectedAgentReadiness,
-    ProjectedNodeReadinessSummary, BEHAVIOR_NOT_ASSIGNED_MESSAGE, NODE_READINESS_FORMAT_VERSION,
+    ProjectedNodeReadinessSummary, RuntimeStorageObservation, BEHAVIOR_NOT_ASSIGNED_MESSAGE,
+    NODE_READINESS_FORMAT_VERSION,
 };
 
 pub(crate) fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
