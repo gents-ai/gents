@@ -205,3 +205,5 @@ pub async fn self_config_fixture(
     .await;
     gents_toolcalls::test_support::self_config::SelfConfigFixture::from_db(db, name).await
 }
+
+pub mod loop_stream;

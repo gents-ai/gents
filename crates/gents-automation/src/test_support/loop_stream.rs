@@ -1,22 +1,42 @@
-use super::*;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures::{stream, Stream, StreamExt};
+use gents_inference::llm::message::{AssistantContent, ToolResultContent, UserContent};
+use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+
+use gents_inference::llm::message::Message;
+use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
+use tokio::sync::Mutex;
+
+use gents_loop::loop_stream::*;
+use gents_store::test_support::first_content;
+use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
+
+use gents_inference::rendered_request::{AssemblyBuildPath, AssemblyTrace};
+use rig::completion::{GetTokenUsage, Usage};
+
 use gents_inference::test_support::TestDb;
 use tokio::sync::Notify;
 
 #[derive(Default)]
-pub(super) struct StreamEntryGate {
-    pub(super) entered: Notify,
-    pub(super) release: Notify,
+pub struct StreamEntryGate {
+    pub entered: Notify,
+    pub release: Notify,
 }
 
-pub(super) enum ScriptedCall {
+pub enum ScriptedCall {
     Turn(Vec<RawStreamingChoice<()>>),
     FailStream(CompletionError),
     TurnWithMidStreamError(Vec<RawStreamingChoice<()>>, CompletionError),
 }
 
 #[derive(Clone)]
-pub(super) struct ScriptedModel {
-    pub(super) calls: Arc<Mutex<VecDeque<ScriptedCall>>>,
+pub struct ScriptedModel {
+    pub calls: Arc<Mutex<VecDeque<ScriptedCall>>>,
     seen_histories: Arc<Mutex<Vec<Vec<Message>>>>,
     seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
     seen_max_tokens: Arc<Mutex<Vec<Option<u64>>>>,
@@ -28,15 +48,15 @@ pub(super) struct ScriptedModel {
 }
 
 impl ScriptedModel {
-    pub(super) fn new(chunks: Vec<RawStreamingChoice<()>>) -> Self {
+    pub fn new(chunks: Vec<RawStreamingChoice<()>>) -> Self {
         Self::new_turns(vec![chunks])
     }
 
-    pub(super) fn new_turns(turns: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
+    pub fn new_turns(turns: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
         Self::new_calls(turns.into_iter().map(ScriptedCall::Turn).collect())
     }
 
-    pub(super) fn new_calls(calls: Vec<ScriptedCall>) -> Self {
+    pub fn new_calls(calls: Vec<ScriptedCall>) -> Self {
         Self {
             calls: Arc::new(Mutex::new(calls.into())),
             seen_histories: Arc::new(Mutex::new(Vec::new())),
@@ -50,43 +70,40 @@ impl ScriptedModel {
         }
     }
 
-    pub(super) fn with_provider_observer(
-        mut self,
-        observer: Arc<dyn Fn(bool) + Send + Sync>,
-    ) -> Self {
+    pub fn with_provider_observer(mut self, observer: Arc<dyn Fn(bool) + Send + Sync>) -> Self {
         self.provider_observer = Some(observer);
         self
     }
 
-    pub(super) fn with_stream_entry_gate(mut self, gate: Arc<StreamEntryGate>) -> Self {
+    pub fn with_stream_entry_gate(mut self, gate: Arc<StreamEntryGate>) -> Self {
         self.stream_entry_gate = Some(gate);
         self
     }
 
-    pub(super) fn without_capture(mut self) -> Self {
+    pub fn without_capture(mut self) -> Self {
         self.capture_requests = false;
         self
     }
 
-    pub(super) fn new_stalling(chunks: Vec<RawStreamingChoice<()>>) -> Self {
+    pub fn new_stalling(chunks: Vec<RawStreamingChoice<()>>) -> Self {
         let mut model = Self::new_calls(vec![ScriptedCall::Turn(chunks)]);
         model.stall_after_chunks = true;
         model
     }
 
-    pub(super) async fn seen_histories(&self) -> Vec<Vec<Message>> {
+    pub async fn seen_histories(&self) -> Vec<Vec<Message>> {
         self.seen_histories.lock().await.clone()
     }
 
-    pub(super) async fn seen_tools(&self) -> Vec<Vec<String>> {
+    pub async fn seen_tools(&self) -> Vec<Vec<String>> {
         self.seen_tools.lock().await.clone()
     }
 
-    pub(super) async fn seen_max_tokens(&self) -> Vec<Option<u64>> {
+    pub async fn seen_max_tokens(&self) -> Vec<Option<u64>> {
         self.seen_max_tokens.lock().await.clone()
     }
 
-    pub(super) async fn seen_requests(&self) -> Vec<CompletionRequest> {
+    pub async fn seen_requests(&self) -> Vec<CompletionRequest> {
         self.seen_requests.lock().await.clone()
     }
 }
@@ -174,8 +191,8 @@ impl CompletionModel for ScriptedModel {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(super) struct UsageResponse {
-    pub(super) usage: Option<Usage>,
+pub struct UsageResponse {
+    pub usage: Option<Usage>,
 }
 
 impl GetTokenUsage for UsageResponse {
@@ -184,11 +201,7 @@ impl GetTokenUsage for UsageResponse {
     }
 }
 
-pub(super) fn usage_response(
-    input_tokens: u64,
-    output_tokens: u64,
-    total_tokens: u64,
-) -> UsageResponse {
+pub fn usage_response(input_tokens: u64, output_tokens: u64, total_tokens: u64) -> UsageResponse {
     UsageResponse {
         usage: Some(Usage {
             input_tokens,
@@ -204,20 +217,20 @@ type UsageTurns = VecDeque<Vec<RawStreamingChoice<UsageResponse>>>;
 type SeenDispatch = (u64, Option<u64>);
 
 #[derive(Clone)]
-pub(super) struct UsageScriptedModel {
+pub struct UsageScriptedModel {
     turns: Arc<Mutex<UsageTurns>>,
     seen_dispatches: Arc<Mutex<Vec<SeenDispatch>>>,
 }
 
 impl UsageScriptedModel {
-    pub(super) fn new(turns: Vec<Vec<RawStreamingChoice<UsageResponse>>>) -> Self {
+    pub fn new(turns: Vec<Vec<RawStreamingChoice<UsageResponse>>>) -> Self {
         Self {
             turns: Arc::new(Mutex::new(turns.into())),
             seen_dispatches: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    pub(super) async fn seen_dispatches(&self) -> Vec<(u64, Option<u64>)> {
+    pub async fn seen_dispatches(&self) -> Vec<(u64, Option<u64>)> {
         self.seen_dispatches.lock().await.clone()
     }
 }
@@ -251,7 +264,7 @@ impl CompletionModel for UsageScriptedModel {
             u64::try_from(
                 completion_request_input_components(
                     &request,
-                    &crate::turn::provider_input::ProviderInputCounter::new(
+                    &gents_loop::provider_input::ProviderInputCounter::new(
                         gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
                         gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
                         "test-model",
@@ -274,9 +287,9 @@ impl CompletionModel for UsageScriptedModel {
     }
 }
 
-pub(super) struct EchoTool {
-    pub(super) name: String,
-    pub(super) output: String,
+pub struct EchoTool {
+    pub name: String,
+    pub output: String,
 }
 
 impl ToolDyn for EchoTool {
@@ -299,10 +312,10 @@ impl ToolDyn for EchoTool {
     }
 }
 
-pub(super) struct CountingTool {
-    pub(super) name: String,
-    pub(super) output: String,
-    pub(super) calls: Arc<AtomicUsize>,
+pub struct CountingTool {
+    pub name: String,
+    pub output: String,
+    pub calls: Arc<AtomicUsize>,
 }
 
 impl ToolDyn for CountingTool {
@@ -330,9 +343,9 @@ impl ToolDyn for CountingTool {
     }
 }
 
-pub(super) struct FixedTool {
-    pub(super) name: String,
-    pub(super) output: String,
+pub struct FixedTool {
+    pub name: String,
+    pub output: String,
 }
 
 impl ToolDyn for FixedTool {
@@ -355,14 +368,14 @@ impl ToolDyn for FixedTool {
     }
 }
 
-pub(super) fn echo_tool() -> Box<dyn ToolDyn> {
+pub fn echo_tool() -> Box<dyn ToolDyn> {
     Box::new(EchoTool {
         name: "echo".to_string(),
         output: "ECHOED".to_string(),
     })
 }
 
-pub(super) fn echo_tool_turn() -> Vec<RawStreamingChoice<()>> {
+pub fn echo_tool_turn() -> Vec<RawStreamingChoice<()>> {
     vec![
         RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
             "call-1".to_string(),
@@ -373,9 +386,7 @@ pub(super) fn echo_tool_turn() -> Vec<RawStreamingChoice<()>> {
     ]
 }
 
-pub(super) fn usage_echo_tool_turn(
-    response: UsageResponse,
-) -> Vec<RawStreamingChoice<UsageResponse>> {
+pub fn usage_echo_tool_turn(response: UsageResponse) -> Vec<RawStreamingChoice<UsageResponse>> {
     vec![
         RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
             "call-1".to_string(),
@@ -386,18 +397,18 @@ pub(super) fn usage_echo_tool_turn(
     ]
 }
 
-pub(super) fn tool_result_text(content: &ToolResultContent) -> &str {
+pub fn tool_result_text(content: &ToolResultContent) -> &str {
     match content {
         ToolResultContent::Text(text) => text.text.as_str(),
         ToolResultContent::Image(_) => "",
     }
 }
 
-pub(super) fn config(max_turns: usize) -> LoopConfig {
+pub fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
         replay: LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
-            crate::turn::provider_input::ProviderInputCounter::new(
+            gents_loop::provider_input::ProviderInputCounter::new(
                 gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
                 gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
                 "test-model",
@@ -431,7 +442,7 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
     }
 }
 
-pub(super) fn owned_config(max_turns: usize) -> LoopConfig {
+pub fn owned_config(max_turns: usize) -> LoopConfig {
     let mut config = config(max_turns);
     config.on_rendered_request = Some(
         gents_inference::rendered_request::scope::ambient_arming_sink(
@@ -442,24 +453,24 @@ pub(super) fn owned_config(max_turns: usize) -> LoopConfig {
 }
 
 #[derive(Debug)]
-pub(super) struct AttemptEvent {
-    pub(super) turn: usize,
-    pub(super) attempt: u32,
-    pub(super) will_retry: bool,
-    pub(super) backoff: Duration,
+pub struct AttemptEvent {
+    pub turn: usize,
+    pub attempt: u32,
+    pub will_retry: bool,
+    pub backoff: Duration,
 }
 
 #[derive(Debug, Default)]
-pub(super) struct CollectedScriptedStream {
-    pub(super) attempts: Vec<AttemptEvent>,
-    pub(super) text_chunks: Vec<String>,
-    pub(super) tool_results: Vec<String>,
-    pub(super) retractions: Vec<(usize, u32)>,
-    pub(super) final_text: Option<String>,
-    pub(super) error: Option<String>,
+pub struct CollectedScriptedStream {
+    pub attempts: Vec<AttemptEvent>,
+    pub text_chunks: Vec<String>,
+    pub tool_results: Vec<String>,
+    pub retractions: Vec<(usize, u32)>,
+    pub final_text: Option<String>,
+    pub error: Option<String>,
 }
 
-pub(super) async fn collect_scripted_stream<S>(stream: S) -> CollectedScriptedStream
+pub async fn collect_scripted_stream<S>(stream: S) -> CollectedScriptedStream
 where
     S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
 {
@@ -509,7 +520,7 @@ where
     collected
 }
 
-pub(super) async fn collect_owned_scripted_stream<S>(
+pub async fn collect_owned_scripted_stream<S>(
     stream: S,
     hook: &DefraSessionHook,
     writer: &gents_session::request::streaming::DefraStreamWriter,
@@ -523,7 +534,7 @@ where
         .await
 }
 
-pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S>(
+pub async fn collect_owned_scripted_stream_with_capture_scope<S>(
     stream: S,
     hook: &DefraSessionHook,
     writer: &gents_session::request::streaming::DefraStreamWriter,
@@ -557,7 +568,7 @@ where
     let collection = gents_inference::rendered_request::scope::scope_request(scope, async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
-        let mut processor = crate::runtime::agent::stream_processor::StreamProcessor::new(
+        let mut processor = gents_loop::stream_processor::StreamProcessor::new(
             hook, writer, lifecycle, &doc_id, profile,
         );
         let mut collected = CollectedScriptedStream::default();
@@ -616,7 +627,7 @@ where
     }
 }
 
-pub(super) async fn owned_test_hook() -> (
+pub async fn owned_test_hook() -> (
     TestDb,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
@@ -625,7 +636,7 @@ pub(super) async fn owned_test_hook() -> (
     owned_test_hook_with_policy(FailurePolicy::default()).await
 }
 
-pub(super) async fn owned_test_hook_with_policy(
+pub async fn owned_test_hook_with_policy(
     policy: FailurePolicy,
 ) -> (
     TestDb,
@@ -640,7 +651,7 @@ pub(super) async fn owned_test_hook_with_policy(
 
 /// Claims a request whose stored content no longer matches its signature, so
 /// the claimed caller's attribution cannot be verified.
-pub(super) async fn owned_test_hook_with_unattributable_request() -> (
+pub async fn owned_test_hook_with_unattributable_request() -> (
     TestDb,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
@@ -664,7 +675,7 @@ enum RequestSignature {
 
 /// A fixture whose requests are attributed to the node's own identity, which
 /// the returned `TestDb` holds as `node_identity`.
-pub(super) async fn owned_test_hook_with_identity() -> (
+pub async fn owned_test_hook_with_identity() -> (
     TestDb,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
@@ -680,7 +691,7 @@ pub(super) async fn owned_test_hook_with_identity() -> (
     (db, hook, writer, lifecycle)
 }
 
-pub(super) async fn owned_test_hook_with_folded_case(
+pub async fn owned_test_hook_with_folded_case(
     case: &gents_lean_vocab::LeanFoldTurnInputCase,
 ) -> (
     TestDb,
@@ -748,11 +759,9 @@ async fn owned_test_hook_with_identity_policy(
 ) {
     // Every fixture runs under the node's held root, so the Agent, its requests
     // and its loop writes are all signed actors.
-    let db = gents_inference::test_support::test_db(
-        "owned-loop",
-        gents_automation::lifecycle_hooks::composition(),
-    )
-    .await;
+    let db =
+        gents_inference::test_support::test_db("owned-loop", crate::lifecycle_hooks::composition())
+            .await;
     let root = db.node_identity.clone();
     let node = db.node.clone();
     let node_did_owned = root.did().to_owned();
@@ -920,7 +929,7 @@ async fn owned_test_hook_with_identity_policy(
 
 /// The loop's rows are owned by the claimed Agent and invisible to the node
 /// identity, so fixture observations read them as that Agent.
-pub(super) async fn agent_query(
+pub async fn agent_query(
     reader: &gents_store::config_client::ConfigAccess,
     query: &str,
 ) -> serde_json::Value {
@@ -931,7 +940,7 @@ pub(super) async fn agent_query(
 }
 
 /// [`agent_query`] in the node's response shape for fixtures that inspect it.
-pub(super) async fn agent_response(
+pub async fn agent_response(
     reader: &gents_store::config_client::ConfigAccess,
     query: &str,
 ) -> defra_node::QueryResponse {
@@ -940,7 +949,7 @@ pub(super) async fn agent_response(
 
 /// Canonical tool output for one call, read as the claimed Agent in the
 /// request's own requester scope.
-pub(super) async fn agent_tool_output(
+pub async fn agent_tool_output(
     lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
     tool_doc_id: &str,
 ) -> String {
@@ -958,23 +967,23 @@ pub(super) async fn agent_tool_output(
     .into_text()
 }
 
-pub(super) fn transient_provider_error(label: &str) -> CompletionError {
+pub fn transient_provider_error(label: &str) -> CompletionError {
     CompletionError::ProviderError(format!("status code 503: {label}"))
 }
 
-pub(super) fn permanent_provider_error() -> CompletionError {
+pub fn permanent_provider_error() -> CompletionError {
     CompletionError::ProviderError("status code 400: duplicate field max_tokens".to_string())
 }
 
-pub(super) fn parse_400_text(tag: &str) -> String {
+pub fn parse_400_text(tag: &str) -> String {
     format!("BadRequestError: Expecting value [{tag}]: line 1 column 28 (char 27)")
 }
 
-pub(super) fn parse_400_error(tag: &str) -> CompletionError {
+pub fn parse_400_error(tag: &str) -> CompletionError {
     CompletionError::ProviderError(parse_400_text(tag))
 }
 
-pub(super) fn assert_duration_in_range(delay: Duration, low_ms: u64, high_ms: u64) {
+pub fn assert_duration_in_range(delay: Duration, low_ms: u64, high_ms: u64) {
     let actual_ms = delay.as_millis() as u64;
     assert!(
         actual_ms >= low_ms && actual_ms <= high_ms,
@@ -982,7 +991,7 @@ pub(super) fn assert_duration_in_range(delay: Duration, low_ms: u64, high_ms: u6
     );
 }
 
-pub(super) fn history_has_control_char_tool_arg(history: &[Message]) -> bool {
+pub fn history_has_control_char_tool_arg(history: &[Message]) -> bool {
     history.iter().any(|message| match message {
         Message::Assistant { content, .. } => content.iter().any(|item| match item {
             AssistantContent::ToolCall(tool_call) => {
@@ -994,7 +1003,7 @@ pub(super) fn history_has_control_char_tool_arg(history: &[Message]) -> bool {
     })
 }
 
-pub(super) fn history_has_tool_call(history: &[Message], tool_name: &str) -> bool {
+pub fn history_has_tool_call(history: &[Message], tool_name: &str) -> bool {
     history.iter().any(|message| match message {
         Message::Assistant { content, .. } => content.iter().any(|item| {
             matches!(
@@ -1007,7 +1016,7 @@ pub(super) fn history_has_tool_call(history: &[Message], tool_name: &str) -> boo
     })
 }
 
-pub(super) fn history_has_tool_result_text(history: &[Message], expected: &str) -> bool {
+pub fn history_has_tool_result_text(history: &[Message], expected: &str) -> bool {
     history.iter().any(|message| match message {
         Message::User { content } => content.iter().any(|item| {
             matches!(
@@ -1020,7 +1029,7 @@ pub(super) fn history_has_tool_result_text(history: &[Message], expected: &str) 
     })
 }
 
-pub(super) fn json_value_has_control_char(value: &serde_json::Value) -> bool {
+pub fn json_value_has_control_char(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::String(text) => text.chars().any(char::is_control),
         serde_json::Value::Array(values) => values.iter().any(json_value_has_control_char),
@@ -1028,3 +1037,17 @@ pub(super) fn json_value_has_control_char(value: &serde_json::Value) -> bool {
         _ => false,
     }
 }
+
+pub mod capture;
+
+pub mod invalid_tool_progress;
+
+pub mod repeated_tool_failure;
+
+pub mod request_assembly;
+
+pub mod schema_argument_repair;
+
+pub mod streaming;
+
+pub mod tool_execution;

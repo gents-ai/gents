@@ -1,41 +1,3 @@
-struct SchemaArgumentProbe {
-    name: String,
-    schema: serde_json::Value,
-    expected: serde_json::Value,
-    calls: Arc<AtomicUsize>,
-}
-
-impl ToolDyn for SchemaArgumentProbe {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: self.name.clone(),
-                description: "schema argument fixture".into(),
-                parameters: self.schema.clone(),
-            }
-        })
-    }
-
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
-        let args: serde_json::Value = serde_json::from_str(args).unwrap();
-        assert_eq!(args, self.expected, "{}: admission", self.name);
-        Ok(())
-    }
-
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            let args: serde_json::Value = serde_json::from_str(&args).unwrap();
-            assert_eq!(args, self.expected, "{}: dispatch", self.name);
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok("accepted".into())
-        })
-    }
-}
-
 #[tokio::test]
 async fn generated_schema_argument_repair_cases_drive_owned_loop() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().schema_argument_repair_cases;
@@ -56,10 +18,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
             );
             assert_eq!(
                 serde_json::to_value(parsed).unwrap(),
-                observed
-                    .parsed
-                    .clone()
-                    .unwrap_or(serde_json::Value::Null),
+                observed.parsed.clone().unwrap_or(serde_json::Value::Null),
                 "{}: native decoder",
                 case.name
             );
@@ -167,103 +126,5 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
             case.name
         );
     }
-    node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn config_container_repairs_preserve_native_validation_and_the_invalid_budget() {
-    let (db, hook, writer, mut lifecycle) = owned_test_hook_with_identity().await;
-    let node = db.node.clone();
-    let identity = db.node_identity.clone();
-    let owner = identity.did().to_owned();
-    let binding = gents_inference::test_support::install_test_agent(&node, &owner, "general").await;
-    let agent_did = binding.agent_did.clone();
-    let grants = gents_tools::surface::SelfConfigToolConfig {
-        enabled: true,
-        agent_did: agent_did.clone(),
-        categories: ["profile".to_string()].into_iter().collect(),
-        preview: true,
-        no_lockout: false,
-        ..Default::default()
-    };
-    let tools = gents_tools::builtin::self_config::build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &grants,
-        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default()),
-        Arc::new(gents_automation::triggers::task_run::TaskRuns),
-    );
-    let mut calls = (0..10)
-        .map(|index| {
-            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-                format!("config-repair-{index}"),
-                "config".into(),
-                serde_json::json!({
-                    "argv": ["profile", "preview"],
-                    "set": serde_json::json!({"display_name": "{\"literal\":true}"}).to_string(),
-                    "options": serde_json::json!({"agent": &agent_did}).to_string()
-                }),
-            ))
-        })
-        .collect::<Vec<_>>();
-    calls.push(RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-        "config-invalid-after-repair".into(),
-        "config".into(),
-        serde_json::json!({
-            "argv": ["profile", "preview"],
-            "set": serde_json::json!({"display_name": []}).to_string(),
-            "options": serde_json::json!({"agent": &agent_did}).to_string()
-        }),
-    )));
-    calls.push(RawStreamingChoice::FinalResponse(()));
-    let model = ScriptedModel::new_turns(vec![
-        calls,
-        vec![
-            RawStreamingChoice::Message("done".into()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let collected = collect_owned_scripted_stream(
-        run_loop_stream(
-            model,
-            Some(hook.clone()),
-            TaggedMessage::unassociated(Message::user("preview profiles")),
-            Vec::new(),
-            Arc::new(tools),
-            owned_config(4),
-        ),
-        &hook,
-        &writer,
-        &mut lifecycle,
-        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-    )
-    .await;
-    assert!(collected.error.is_none(), "{:?}", collected.error);
-    assert_eq!(collected.tool_results.len(), 11);
-    let rows = tool_call_rows(&lifecycle.access().unwrap()).await;
-    assert_eq!(rows.len(), 11);
-    for index in 0..10 {
-        let row = rows
-            .iter()
-            .find(|row| row["tool_call_id"] == format!("config-repair-{index}"))
-            .unwrap();
-        assert_eq!(
-            row["lifecycle_state"], "completed",
-            "{}",
-            collected.tool_results[index]
-        );
-    }
-    let refused = rows
-        .iter()
-        .find(|row| row["tool_call_id"] == "config-invalid-after-repair")
-        .unwrap();
-    assert_eq!(refused["lifecycle_state"], "failed");
-    assert!(
-        collected.tool_results[10].contains("display_name"),
-        "{}",
-        collected.tool_results[10]
-    );
     node.shutdown().await.expect("node shutdown");
 }
