@@ -654,7 +654,7 @@ async fn seed_accepted_request_projection(
 /// Fixture fault injection only: force the exact stored lease fields the
 /// production recovery predicate compares; no live path writes them directly.
 async fn seed_expired_execution_lease(
-    node: &gents::defra_node::Node,
+    node: &Arc<gents::defra_node::Node>,
     request_doc_id: &str,
     generation: Option<&str>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -685,7 +685,13 @@ async fn seed_expired_execution_lease(
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response: gents::defra_node::QueryResponse = serde_json::from_value(
+        gents_store::config_client::ConfigAccess::local(node.clone())
+            .write("test.seed_execution_lease", &mutation)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert!(
         !response.has_errors(),
         "set execution lease failed: {:?}",
@@ -915,17 +921,18 @@ async fn recover_all_marks_requests_as_error() {
     .unwrap();
     assert_eq!(report.requests_recovered, 1);
 
-    let resp = db
-        .node
-        .execute(
-            r#"{
+    let resp = gents_store::graphql::graphql_with_transaction_retry(
+        &db.node,
+        r#"{
                 AgentRequest(
                     filter: { request_id: { _eq: "stuck-1" } },
                     limit: 1
                 ) { request_id lifecycle_state execution_generation }
             }"#,
-        )
-        .await;
+        "test.lifecycle_recovery",
+    )
+    .await
+    .expect("read lifecycle recovery documents");
     let request = first_row::<StatusRow>(&resp, "AgentRequest");
     assert_eq!(request.lifecycle_state, Some(RequestLifecycleState::Failed));
     assert_ne!(
@@ -978,11 +985,12 @@ async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
     assert_eq!(report.requests_recovered, 1);
 
     let escaped_request_doc_id = gents_store::graphql::escape_graphql_string(&request_doc_id);
-    let request_resp = db
-        .node
-        .execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }}, limit: 1)
-            {{ request_id lifecycle_state failure_reason terminal_output }} }}"#))
-        .await;
+    let request_resp = gents_store::graphql::graphql_with_transaction_retry(
+            &db.node,
+            &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }}, limit: 1)
+            {{ request_id lifecycle_state failure_reason terminal_output }} }}"#),
+            "test.lifecycle_recovery",
+        ).await.expect("read lifecycle recovery documents");
     let request = first_row::<StatusRow>(&request_resp, "AgentRequest");
     assert_eq!(
         request.request_id, "stuck-complete",
@@ -1007,15 +1015,18 @@ async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
          selects the exact existing header rather than republishing"
     );
 
-    let response = db
-        .node
-        .execute(&format!(
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        &db.node,
+        &format!(
             r#"{{ AgentMessage(
                     filter: {{ request_doc_id: {{ _eq: "{escaped_request_doc_id}" }} }},
                     limit: 1
                 ) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-        ))
-        .await;
+        ),
+        "test.lifecycle_recovery",
+    )
+    .await
+    .expect("read lifecycle recovery documents");
     let message =
         decode_transcript_message_row(&first_row::<serde_json::Value>(&response, "AgentMessage"))
             .unwrap();
@@ -1093,16 +1104,17 @@ async fn recover_all_leaves_live_execution_lease_untouched() {
     assert_eq!(report.responses_recovered, 0);
     assert_eq!(report.requests_recovered, 0);
 
-    let request_response = db
-        .node
-        .execute(
-            r#"{
+    let request_response = gents_store::graphql::graphql_with_transaction_retry(
+        &db.node,
+        r#"{
                 AgentRequest(filter: { request_id: { _eq: "live-request" } }, limit: 1) {
                     request_id lifecycle_state execution_generation execution_lease_expires_at
                 }
             }"#,
-        )
-        .await;
+        "test.lifecycle_recovery",
+    )
+    .await
+    .expect("read lifecycle recovery documents");
     let request = first_row::<StatusRow>(&request_response, "AgentRequest");
     assert_eq!(
         request.lifecycle_state,
@@ -1115,15 +1127,18 @@ async fn recover_all_leaves_live_execution_lease_untouched() {
     );
 
     let escaped_request_doc_id = gents_store::graphql::escape_graphql_string(&request_doc_id);
-    let message = db
-        .node
-        .execute(&format!(
+    let message = gents_store::graphql::graphql_with_transaction_retry(
+        &db.node,
+        &format!(
             r#"{{ AgentMessage(
                     filter: {{ request_doc_id: {{ _eq: "{escaped_request_doc_id}" }} }},
                     limit: 1
                 ) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-        ))
-        .await;
+        ),
+        "test.lifecycle_recovery",
+    )
+    .await
+    .expect("read lifecycle recovery documents");
     let message =
         decode_transcript_message_row(&first_row::<serde_json::Value>(&message, "AgentMessage"))
             .unwrap();
@@ -1198,7 +1213,13 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
             ) {{ _docID }}
         }}"#
     );
-    let response = db.node.execute(&mutation).await;
+    let response: gents::defra_node::QueryResponse = serde_json::from_value(
+        gents_store::config_client::ConfigAccess::local(db.node.clone())
+            .write("test.seed_durable_interrupt", &mutation)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert!(
         !response.has_errors(),
         "set durable interrupt failed: {:?}",
@@ -1215,17 +1236,18 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
     assert_eq!(report.requests_recovered, 1);
     assert_eq!(report.responses_recovered, 1);
 
-    let request_response = db
-        .node
-        .execute(
-            r#"{
+    let request_response = gents_store::graphql::graphql_with_transaction_retry(
+        &db.node,
+        r#"{
                 AgentRequest(
                     filter: { request_id: { _eq: "interrupted-request" } },
                     limit: 1
                 ) { request_id lifecycle_state failure_reason execution_generation }
             }"#,
-        )
-        .await;
+        "test.lifecycle_recovery",
+    )
+    .await
+    .expect("read lifecycle recovery documents");
     let request = first_row::<StatusRow>(&request_response, "AgentRequest");
     assert_eq!(
         request.lifecycle_state,
@@ -1242,15 +1264,18 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
         "recovery must take ownership with a fresh generation"
     );
 
-    let segment_response = db
-        .node
-        .execute(&format!(
+    let segment_response = gents_store::graphql::graphql_with_transaction_retry(
+        &db.node,
+        &format!(
             r#"{{ AgentOutputSegment(
                     filter: {{ request_doc_id: {{ _eq: "{escaped_request_doc_id}" }} }},
                     limit: 2
                 ) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
-        ))
-        .await;
+        ),
+        "test.lifecycle_recovery",
+    )
+    .await
+    .expect("read lifecycle recovery documents");
     assert!(
         !segment_response.has_errors(),
         "fetch recovered segments failed: {:?}",
@@ -1286,15 +1311,18 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
         "the exact retained extent is closed Partial"
     );
 
-    let response = db
-        .node
-        .execute(&format!(
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        &db.node,
+        &format!(
             r#"{{ AgentMessage(
-                    filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }},
+                    filter: {{ request_doc_id: {{ _eq: "{escaped_request_doc_id}" }} }},
                     limit: 1
                 ) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-        ))
-        .await;
+        ),
+        "test.lifecycle_recovery",
+    )
+    .await
+    .expect("read lifecycle recovery documents");
     let message =
         decode_transcript_message_row(&first_row::<serde_json::Value>(&response, "AgentMessage"))
             .unwrap();
