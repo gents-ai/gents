@@ -1,6 +1,7 @@
 use crate::call::hook::fixtures::*;
 use crate::call::hook::*;
 use chrono::Utc;
+use gents_inference::llm::ToolCallHookAction;
 use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
 
@@ -109,3 +110,15 @@ pub async fn tool_row(
     row.clone()
 }
 
+pub async fn invoke(
+    hook: &DefraSessionHook,
+    id: &str,
+    name: &str,
+    args: &str,
+) -> serde_json::Value {
+    accept_hook_tool_call(hook, id, name, args, None).await;
+    let ToolCallHookAction::Skip { reason } = hook.on_tool_call(name, None, id, args).await else {
+        panic!("accepted {name} must return a tool result")
+    };
+    serde_json::from_str(&reason).unwrap()
+}
