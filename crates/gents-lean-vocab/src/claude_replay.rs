@@ -173,3 +173,111 @@ impl Block {
         block
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Source {
+    pub kind: String,
+    pub scope: Option<u64>,
+    pub turn: Option<u64>,
+    pub attempt: Option<u64>,
+    pub auxiliary_kind: Option<String>,
+    pub call: Option<u64>,
+    pub key: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tag {
+    pub request: u64,
+    pub source: Source,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Row {
+    pub source: Option<Tag>,
+    pub physical_header: Option<String>,
+    pub block_indices: Vec<u64>,
+    pub blocks: Vec<InputBlock>,
+}
+
+impl Row {
+    pub fn block_indices(&self) -> Vec<usize> {
+        self.block_indices
+            .iter()
+            .map(|index| usize::try_from(*index).expect("block index fits"))
+            .collect()
+    }
+}
+
+pub fn parts_of(parts: &[ReasoningContent]) -> Vec<Part> {
+    parts
+        .iter()
+        .map(|part| match part {
+            ReasoningContent::Text { text, signature } => Part {
+                kind: "text".to_owned(),
+                payload: bytes_of(text),
+                signature: signature.clone(),
+            },
+            ReasoningContent::Redacted { data } => Part {
+                kind: "redacted".to_owned(),
+                payload: bytes_of(data),
+                signature: None,
+            },
+            ReasoningContent::Encrypted(payload) => Part {
+                kind: "encrypted".to_owned(),
+                payload: bytes_of(payload),
+                signature: None,
+            },
+            ReasoningContent::Summary(payload) => Part {
+                kind: "summary".to_owned(),
+                payload: bytes_of(payload),
+                signature: None,
+            },
+        })
+        .collect()
+}
+
+pub fn input_blocks_of(content: &[AssistantContent], known: &[InputBlock]) -> Vec<InputBlock> {
+    let bare = |kind: &str| InputBlock {
+        kind: kind.to_owned(),
+        payload: None,
+        id: None,
+        parts: None,
+        doc_id: None,
+        call_id: None,
+        name: None,
+        arguments: None,
+        signature: None,
+        additional_params: None,
+    };
+    content
+        .iter()
+        .map(|item| match item {
+            AssistantContent::Text(text) => InputBlock {
+                payload: Some(bytes_of(&text.text)),
+                ..bare("text")
+            },
+            AssistantContent::Reasoning(reasoning) => InputBlock {
+                id: reasoning.id.clone(),
+                parts: Some(parts_of(&reasoning.content)),
+                ..bare("reasoning")
+            },
+            AssistantContent::ToolCall(call) => {
+                let doc_id = known
+                    .iter()
+                    .find(|block| block.kind == "toolCall" && block.id.as_ref() == Some(&call.id))
+                    .and_then(|block| block.doc_id);
+                InputBlock {
+                    doc_id,
+                    id: Some(call.id.clone()),
+                    call_id: call.call_id.clone(),
+                    name: Some(call.function.name.clone()),
+                    arguments: Some(bytes_of(&call.function.arguments.to_string())),
+                    signature: call.signature.clone(),
+                    additional_params: call.additional_params.as_ref().map(Value::to_string),
+                    ..bare("toolCall")
+                }
+            }
+            AssistantContent::Image(_) => bare("unsupportedMedia"),
+        })
+        .collect()
+}

@@ -212,38 +212,6 @@ fn native_modeled_provider_view(
 }
 
 #[test]
-fn generated_replay_shape_cases_bind_source_index_projection() {
-    use gents_lean_vocab::lean_prompt_assembly_replay_shape_cases;
-    use gents_loop::loop_stream::select_tagged_assistant_blocks;
-
-    let cases = lean_prompt_assembly_replay_shape_cases();
-    assert!(!cases.is_empty(), "Lean emitted no replay-shape cases");
-    for case in cases {
-        let source = native_tagged_message(&case.source);
-        match select_tagged_assistant_blocks(&source, &case.retained_indices) {
-            Err(error) => {
-                assert_eq!(
-                    replay_checkpoint_outcome(&error),
-                    case.outcome,
-                    "{}",
-                    case.name
-                );
-                assert!(case.shaped.is_none(), "{}", case.name);
-            }
-            Ok(shaped) => {
-                assert_eq!(case.outcome, "ok", "{}", case.name);
-                assert_eq!(
-                    shaped,
-                    native_tagged_message(case.shaped.as_ref().expect("modeled shaped row")),
-                    "{}",
-                    case.name
-                );
-            }
-        }
-    }
-}
-
-#[test]
 fn generated_reasoning_suffix_cases_bind_native_selection() {
     use gents_lean_vocab::lean_prompt_assembly_reasoning_suffix_cases;
     use gents_loop::claude_messages_body::{replay_stage, select_replay, ReplayIssuer};

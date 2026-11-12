@@ -473,10 +473,6 @@ pub fn lean_prompt_assembly_repair_cases() -> &'static [LeanPromptAssemblyRepair
     &lean_contract_snapshot().prompt_assembly_repair_cases
 }
 
-pub fn lean_prompt_assembly_replay_shape_cases() -> &'static [LeanPromptAssemblyReplayShapeCase] {
-    &lean_contract_snapshot().prompt_assembly_replay_shape_cases
-}
-
 pub fn lean_prompt_assembly_retention_cases() -> &'static [LeanPromptAssemblyRetentionCase] {
     &lean_contract_snapshot().prompt_assembly_retention_cases
 }
@@ -3291,7 +3287,6 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_reasoning_suffix_cases: Vec<
         LeanPromptAssemblyReasoningSuffixCase,
     >,
-    pub prompt_assembly_replay_shape_cases: Vec<LeanPromptAssemblyReplayShapeCase>,
     pub protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub durable_reduction_cases: Vec<LeanDurableReductionCase>,
@@ -9425,16 +9420,6 @@ pub struct LeanPromptAssemblyRepairCase {
     pub expected: String,
     pub expected_twice: String,
     pub payload_only: bool,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyReplayShapeCase {
-    pub name: String,
-    pub source: LeanClaudeTaggedReplayRow,
-    pub retained_indices: Vec<usize>,
-    pub outcome: String,
-    pub shaped: Option<LeanClaudeTaggedReplayRow>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

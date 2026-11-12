@@ -911,18 +911,102 @@ def promptAssemblyReasoningSuffixCaseJson
 def promptAssemblyReasoningSuffixCasesJson : String :=
   jsonArray (promptAssemblyReasoningSuffixCases.map promptAssemblyReasoningSuffixCaseJson)
 
-def promptAssemblyReplayShapeCaseJson (witness : PromptAssemblyReplayShapeCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"source\":" ++ claudeTaggedReplayRowJson witness.source ++
-    ",\"retained_indices\":" ++ jsonArray (witness.retainedIndices.map toString) ++
-    ",\"outcome\":" ++ jsonString witness.outcome ++
-    ",\"shaped\":" ++
-      (match witness.shaped with
-       | none => "null"
-       | some row => claudeTaggedReplayRowJson row) ++ "}"
+def auxiliaryKindName : CanonicalOutput.AuxiliaryKind → String
+  | .compaction => "compaction"
+  | .compactionFallback => "compaction_fallback"
+  | .title => "title"
+  | .accessReview => "access_review"
 
-def promptAssemblyReplayShapeCasesJson : String :=
-  jsonArray (promptAssemblyReplayShapeCases.map promptAssemblyReplayShapeCaseJson)
+def auxiliaryKindOfName : Option String → CanonicalOutput.AuxiliaryKind
+  | some "compaction_fallback" => .compactionFallback
+  | some "title" => .title
+  | some "access_review" => .accessReview
+  | _ => .compaction
+
+structure SourceWire where
+  kind : String
+  scope : Option Nat
+  turn : Option Nat
+  attempt : Option Nat
+  auxiliaryKind : Option String
+  call : Option Nat
+  key : Option Nat
+  deriving Lean.ToJson
+
+def SourceWire.bare (kind : String) : SourceWire :=
+  { kind, scope := none, turn := none, attempt := none, auxiliaryKind := none, call := none
+    key := none }
+
+def SourceWire.ofModel : CanonicalOutput.Source → SourceWire
+  | .provider scope turn attempt =>
+      { SourceWire.bare "provider" with
+        scope := some scope, turn := some turn, attempt := some attempt }
+  | .auxiliary kind scope turn attempt =>
+      { SourceWire.bare "auxiliary" with
+        auxiliaryKind := some (auxiliaryKindName kind), scope := some scope, turn := some turn
+        attempt := some attempt }
+  | .tool call => { SourceWire.bare "tool" with call := some call }
+  | .toolEffectArguments call => { SourceWire.bare "tool_effect_arguments" with call := some call }
+  | .authored key => { SourceWire.bare "authored" with key := some key }
+
+def SourceWire.toModel (source : SourceWire) : CanonicalOutput.Source :=
+  match source.kind with
+  | "provider" => .provider (source.scope.getD 0) (source.turn.getD 0) (source.attempt.getD 0)
+  | "auxiliary" =>
+      .auxiliary (auxiliaryKindOfName source.auxiliaryKind) (source.scope.getD 0)
+        (source.turn.getD 0) (source.attempt.getD 0)
+  | "tool" => .tool (source.call.getD 0)
+  | "tool_effect_arguments" => .toolEffectArguments (source.call.getD 0)
+  | _ => .authored (source.key.getD 0)
+
+structure ReplayTagWire where
+  request : Nat
+  source : SourceWire
+  deriving Lean.ToJson
+
+def ReplayTagWire.ofModel (tag : PromptAssembly.ClaudeMap.ReplayTag) : ReplayTagWire :=
+  { request := tag.request, source := .ofModel tag.source }
+
+def ReplayTagWire.toModel (tag : ReplayTagWire) : PromptAssembly.ClaudeMap.ReplayTag :=
+  { request := tag.request, source := tag.source.toModel }
+
+structure ReplayRowWire where
+  source : Option ReplayTagWire
+  physicalHeader : Option String
+  blockIndices : List Nat
+  blocks : List ReplayInputBlockWire
+  deriving Lean.ToJson
+
+def ReplayRowWire.ofModel (row : PromptAssembly.ClaudeMap.TaggedReplayRow) : ReplayRowWire :=
+  { source := row.source.map ReplayTagWire.ofModel, physicalHeader := row.physicalHeader
+    blockIndices := row.blockIndices, blocks := row.blocks.map ReplayInputBlockWire.ofModel }
+
+def ReplayRowWire.toModel (row : ReplayRowWire) : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+  { source := row.source.map ReplayTagWire.toModel, physicalHeader := row.physicalHeader
+    blockIndices := row.blockIndices, blocks := row.blocks.map ReplayInputBlockWire.toModel }
+
+structure ReplayShapeInput where
+  name : String
+  source : ReplayRowWire
+  retainedIndices : List Nat
+  deriving Lean.ToJson
+
+structure ReplayShapeOutput where
+  outcome : String
+  shaped : Option ReplayRowWire
+  deriving Lean.ToJson
+
+/-- One tagged assistant row narrowed to the requested source block indices:
+production `select_tagged_assistant_blocks`. -/
+@[conformance_family]
+def promptAssemblyReplayShape : Family ReplayShapeInput ReplayShapeOutput where
+  inputs := promptAssemblyReplayShapeCases.map fun c =>
+    { name := c.name, source := .ofModel c.source, retainedIndices := c.retainedIndices }
+  model := fun i =>
+    match PromptAssembly.ClaudeMap.selectReplayBlocks
+        (fun index _ => decide (index ∈ i.retainedIndices)) i.source.toModel with
+    | .error error => { outcome := PromptAssembly.ClaudeMap.errorName error, shaped := none }
+    | .ok shaped => { outcome := "ok", shaped := some (.ofModel shaped) }
 
 inductive ReplayFlatKind where
   | ordinary

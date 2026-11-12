@@ -517,3 +517,174 @@ fn generated_claude_replay_cases_drive_native_messages_body() {
         }
     });
 }
+
+fn native_replay_tag(
+    tag: &gents_lean_vocab::claude_replay::Tag,
+) -> crate::claude_messages_body::ReplayTag {
+    use gents_protocol::output::OutputSource;
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+    let source = &tag.source;
+    let number = |value: Option<u64>, name: &str| {
+        value.unwrap_or_else(|| panic!("modeled {} source lacks {name}", source.kind))
+    };
+    let turn = || u32::try_from(number(source.turn, "turn")).expect("modeled turn fits");
+    let attempt =
+        || u32::try_from(number(source.attempt, "attempt")).expect("modeled attempt fits");
+    let native = match source.kind.as_str() {
+        "provider" => OutputSource::ProviderTurn {
+            scope: format!(
+                "inference.{}",
+                number(source.scope, "scope")
+                    .checked_add(1)
+                    .expect("scope fits")
+            )
+            .parse()
+            .expect("modeled provider scope"),
+            turn_index: turn(),
+            attempt: attempt(),
+        },
+        "auxiliary" => OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: match source.auxiliary_kind.as_deref() {
+                    Some("compaction") => CaptureScopeKind::Compaction,
+                    Some("compaction_fallback") => CaptureScopeKind::CompactionFallback,
+                    Some("title") => CaptureScopeKind::Title,
+                    Some("access_review") => CaptureScopeKind::AccessReview,
+                    other => panic!("unmodeled auxiliary kind {other:?}"),
+                },
+                seq: number(source.scope, "scope"),
+            },
+            turn_index: turn(),
+            attempt: attempt(),
+        },
+        "tool" => OutputSource::ToolCall {
+            tool_call_doc_id: format!("tool-{}", number(source.call, "call")),
+        },
+        "authored" => OutputSource::Authored {
+            key: format!("authored-{}", number(source.key, "key")),
+        },
+        other => panic!("unmodeled replay source {other}"),
+    };
+    crate::claude_messages_body::ReplayTag {
+        request_doc_id: format!("request-{}", tag.request),
+        source: native,
+    }
+}
+
+fn tag_of(
+    native: &crate::claude_messages_body::ReplayTag,
+    known: &[gents_lean_vocab::claude_replay::Tag],
+) -> gents_lean_vocab::claude_replay::Tag {
+    known
+        .iter()
+        .find(|tag| native_replay_tag(tag) == *native)
+        .cloned()
+        .unwrap_or_else(|| panic!("production invented the replay tag {native:?}"))
+}
+
+fn known_tags(
+    rows: &[gents_lean_vocab::claude_replay::Row],
+) -> Vec<gents_lean_vocab::claude_replay::Tag> {
+    rows.iter().filter_map(|row| row.source.clone()).collect()
+}
+
+fn known_blocks(
+    rows: &[gents_lean_vocab::claude_replay::Row],
+) -> Vec<gents_lean_vocab::claude_replay::InputBlock> {
+    rows.iter().flat_map(|row| row.blocks.clone()).collect()
+}
+
+fn wire_blocks(
+    content: &[AssistantContent],
+    known: &[gents_lean_vocab::claude_replay::InputBlock],
+) -> Vec<gents_lean_vocab::claude_replay::InputBlock> {
+    let blocks = gents_lean_vocab::claude_replay::input_blocks_of(content, known);
+    assert_eq!(
+        gents_lean_vocab::claude_replay::assistant_content(&blocks),
+        content,
+        "the wire form of production content renders back to it"
+    );
+    blocks
+}
+
+fn native_tagged_message(
+    row: &gents_lean_vocab::claude_replay::Row,
+) -> crate::loop_stream::TaggedMessage {
+    crate::loop_stream::TaggedMessage {
+        message: Message::Assistant {
+            request_id: None,
+            id: None,
+            content: gents_lean_vocab::claude_replay::assistant_content(&row.blocks),
+        },
+        source: row.source.as_ref().map(native_replay_tag),
+        physical_header: row.physical_header.clone(),
+        block_indices: row.block_indices(),
+    }
+}
+
+fn row_of_tagged_message(
+    tagged: &crate::loop_stream::TaggedMessage,
+    known: &[gents_lean_vocab::claude_replay::Row],
+) -> gents_lean_vocab::claude_replay::Row {
+    let Message::Assistant {
+        request_id: None,
+        id: None,
+        content,
+    } = &tagged.message
+    else {
+        panic!("a tagged replay row is an assistant message without ids: {tagged:?}");
+    };
+    gents_lean_vocab::claude_replay::Row {
+        source: tagged
+            .source
+            .as_ref()
+            .map(|tag| tag_of(tag, &known_tags(known))),
+        physical_header: tagged.physical_header.clone(),
+        block_indices: tagged
+            .block_indices
+            .iter()
+            .map(|index| u64::try_from(*index).expect("block index fits"))
+            .collect(),
+        blocks: wire_blocks(content, &known_blocks(known)),
+    }
+}
+
+fn replay_checkpoint_outcome(
+    error: &crate::claude_messages_body::ReplayCheckpointError,
+) -> &'static str {
+    use crate::claude_messages_body::ReplayCheckpointError as Error;
+    match error {
+        Error::InvalidSplit => "invalidReplaySplit",
+        Error::InvalidAssociation => "invalidReplayAssociation",
+        Error::DuplicateAssociation => "duplicateReplayAssociation",
+        Error::RequiredInPrefix => "requiredReplayInPrefix",
+        Error::MissingRequired => "missingRequiredReplay",
+        Error::Codec(error) => replay_codec_outcome(error),
+    }
+}
+
+#[test]
+fn generated_replay_shape_cases_bind_source_index_projection() {
+    use crate::loop_stream::select_tagged_assistant_blocks;
+    gents_lean_vocab::families::contracts_prompt_assembly_replay_shape::replay(|case| {
+        let source_row: gents_lean_vocab::claude_replay::Row = recode(&case.source);
+        let retained = case
+            .retained_indices
+            .iter()
+            .map(|index| usize::try_from(*index).expect("index fits"))
+            .collect::<Vec<_>>();
+        match select_tagged_assistant_blocks(&native_tagged_message(&source_row), &retained) {
+            Err(error) => gents_lean_vocab::families::contracts_prompt_assembly_replay_shape::ReplayShapeOutput {
+                outcome: replay_checkpoint_outcome(&error).to_owned(),
+                shaped: None,
+            },
+            Ok(shaped) => gents_lean_vocab::families::contracts_prompt_assembly_replay_shape::ReplayShapeOutput {
+                outcome: "ok".to_owned(),
+                shaped: Some(recode(&row_of_tagged_message(
+                    &shaped,
+                    std::slice::from_ref(&source_row),
+                ))),
+            },
+        }
+    });
+}
