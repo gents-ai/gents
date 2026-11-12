@@ -24,6 +24,27 @@ structure Title where
   text : String
   source : TitleSource
   deriving DecidableEq, Repr
+
+/-- The title a manual request carries: the trimmed conversation title, with
+source task, or none when the title is absent or blank. -/
+def requestTitle (raw : Option String) : Option Title :=
+  match raw with
+  | none => none
+  | some text =>
+      if text.trim.isEmpty then none
+      else some { text := text.trim, source := .task }
+
+/-- Enqueueing a manual request writes the AgentRequest only. The runtime that
+claims the request materializes the AgentSession, so no session row exists
+before admission. -/
+def enqueueMaterializesSession : Bool := false
+
+theorem writes_manual_request_with_deferred_conversation_title :
+    (requestTitle (some "mini-host-health-20260430t180405z")).map (·.text) =
+      some "mini-host-health-20260430t180405z" ∧
+    enqueueMaterializesSession = false := by
+  native_decide
+
 structure ForkOrigin where
   sourceSession : SessionId
   atUserTurn : Nat

@@ -294,70 +294,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writes_manual_request_with_deferred_conversation_title() {
+    async fn manual_request_enqueue_matches_lean_model() {
         let (db, node_did, agent) = test_node().await;
         let node = db.node.clone();
-        let actor = ::identity::Did::new(agent.did()).unwrap();
 
-        let doc_id = write_manual_agent_request_with_conversation_title(
-            &node,
-            actor,
-            agent.as_ref(),
-            ManualRequestTarget {
-                node_did: &node_did,
-                agent_did: agent.did(),
-                task_id: "task-1",
-            },
-            "hello {{ args.name }}",
-            serde_json::json!({"name": "Amy"}),
-            Some("mini-host-health-20260430t180405z"),
-        )
-        .await
-        .unwrap();
+        for case in gents_lean_vocab::families::manual_request_enqueue::cases() {
+            let actor = ::identity::Did::new(agent.did()).unwrap();
+            let doc_id = write_manual_agent_request_with_conversation_title(
+                &node,
+                actor,
+                agent.as_ref(),
+                ManualRequestTarget {
+                    node_did: &node_did,
+                    agent_did: agent.did(),
+                    task_id: "task-1",
+                },
+                "hello {{ args.name }}",
+                serde_json::json!({"name": "Amy"}),
+                case.input.conversation_title.as_deref(),
+            )
+            .await
+            .unwrap();
 
-        let query = format!(
-            r#"{{
-                AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                    session_id
-                    input
-                }}
-            }}"#
-        );
-        let response = agent_query(&node, agent.as_ref(), &query).await;
-        let request = response["data"]["AgentRequest"]
-            .as_array()
-            .and_then(|rows| rows.first())
-            .expect("request row");
-        let session_id = request
-            .get("session_id")
-            .and_then(Value::as_str)
-            .expect("request should have session_id");
-        let input = request
-            .get("input")
-            .expect("request should carry canonical input");
-        assert_eq!(
-            input.pointer("/initial_title/text").and_then(Value::as_str),
-            Some("mini-host-health-20260430t180405z")
-        );
+            let query = format!(
+                r#"{{
+                    AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                        session_id
+                        input
+                    }}
+                }}"#
+            );
+            let response = agent_query(&node, agent.as_ref(), &query).await;
+            let request = response["data"]["AgentRequest"]
+                .as_array()
+                .and_then(|rows| rows.first())
+                .expect("request row");
+            let session_id = request
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let initial_title = request
+                .get("input")
+                .and_then(|input| input.pointer("/initial_title/text"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
 
-        let session_query = format!(
-            r#"{{
-                AgentSession(
-                    filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                    limit: 1
-                ) {{
-                    title
-                }}
-            }}"#
-        );
-        let session_response = agent_query(&node, agent.as_ref(), &session_query).await;
-        let sessions = session_response["data"]["AgentSession"]
-            .as_array()
-            .expect("session rows");
-        assert!(
-            sessions.is_empty(),
-            "enqueue persists only AgentRequest; the runtime materializes AgentSession"
-        );
+            let session_materialized = match session_id.as_deref() {
+                Some(session_id) => {
+                    let session_query = format!(
+                        r#"{{
+                            AgentSession(
+                                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                                limit: 1
+                            ) {{
+                                title
+                            }}
+                        }}"#
+                    );
+                    let session_response =
+                        agent_query(&node, agent.as_ref(), &session_query).await;
+                    !session_response["data"]["AgentSession"]
+                        .as_array()
+                        .expect("session rows")
+                        .is_empty()
+                }
+                None => false,
+            };
+
+            case.check(
+                gents_lean_vocab::families::manual_request_enqueue::EnqueueOutput {
+                    initial_title,
+                    request_binds_session: session_id.is_some(),
+                    session_materialized,
+                },
+            );
+        }
     }
 
     #[tokio::test]
