@@ -26,7 +26,6 @@ include!("budgeting.rs");
 include!("capture.rs");
 include!("claude.rs");
 include!("responses_replay.rs");
-include!("one_shot.rs");
 include!("request_assembly.rs");
 include!("retry.rs");
 include!("streaming.rs");
