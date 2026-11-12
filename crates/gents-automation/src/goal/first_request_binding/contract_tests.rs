@@ -186,7 +186,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 value.to_owned()
             }
         };
-        if let Some(current) = case["current"].as_str() {
+        if let Some(current) = case.current.as_deref() {
             let doc = escape_graphql_string(&goal.doc_id);
             let current = root(current);
             access.transact_write("test.first_binding.previous_root", |txn| {
@@ -203,16 +203,19 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             goal = fixture_goal(&access, signer.did(), "session").await;
         }
         let mut reference: Option<GoalAssignmentInput> =
-            serde_json::from_value(case["reference"].clone()).unwrap();
+            case.reference.as_ref().map(|reference| GoalAssignmentInput {
+                goal_id: reference.goal_id.clone(),
+                root_request_doc_id: reference.root_request_doc_id.clone(),
+            });
         if let Some(reference) = reference.as_mut() {
             if reference.goal_id == "goal" {
                 reference.goal_id = goal.goal_id.clone();
             }
         }
-        if case["goal"] == "" {
+        if case.goal.is_empty() {
             goal.goal_id.clear();
         }
-        let request_doc = root(case["request_doc"].as_str().unwrap());
+        let request_doc = root(case.request_doc.as_str());
         let result = access
             .transact_write("test.first_binding.transaction", |txn| {
                 let goal = &goal;
@@ -220,23 +223,23 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 let reference = reference.as_ref();
                 Box::pin(async move {
                     bind_goal_first_request_in_txn(txn, goal, request_doc, reference).await?;
-                    anyhow::ensure!(case["commit"] == true, "injected publication discard");
+                    anyhow::ensure!(case.commit, "injected publication discard");
                     Ok(())
                 })
             })
             .await;
         assert_eq!(
             result.is_ok(),
-            case["accepted"] == true && case["commit"] == true,
+            case.accepted && case.commit,
             "{}: {result:?}",
-            case["name"]
+            case.name
         );
         let after = fixture_goal(&access, signer.did(), "session").await;
         assert_eq!(
             after.assignment_root_request_doc_id,
-            case["expected_root"].as_str().map(root),
+            case.expected_root.as_deref().map(root),
             "{}",
-            case["name"]
+            case.name
         );
 
         let task_session = "task-session";
@@ -258,18 +261,15 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             }
         };
         let selected = task_assignment_goal_id(
-            case["current_task_goal"].as_str().map(task_id).as_deref(),
+            case.current_task_goal.as_deref().map(task_id).as_deref(),
             signer.did(),
             task_session,
         );
-        assert_eq!(
-            selected,
-            task_id(case["expected_task_goal"].as_str().unwrap())
-        );
-        if let Some(observed) = case["observed_task_goal"].as_str() {
+        assert_eq!(selected, task_id(&case.expected_task_goal));
+        if let Some(observed) = case.observed_task_goal.as_deref() {
             let identity = GoalCreationIdentity {
                 goal_id: task_id(observed),
-                creation_key: format!("task-create:{}", case["name"]),
+                creation_key: format!("task-create:{}", case.name),
             };
             access
                 .transact_write("test.first_binding.task_goal", |txn| {
@@ -322,9 +322,9 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             .await;
         assert_eq!(
             checked.is_ok(),
-            case["task_binding_valid"] == true,
+            case.task_binding_valid,
             "{}: {checked:?}",
-            case["name"]
+            case.name
         );
         let agent_access = ConfigAccess::local_managed_agent(
             node.clone(),
@@ -378,9 +378,9 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             crate::triggers::write_task_delivery(&agent_access, &fire, true, &request).await;
         assert_eq!(
             admitted.is_ok(),
-            case["task_binding_valid"] == true,
+            case.task_binding_valid,
             "{}: admission error {:?}",
-            case["name"],
+            case.name,
             admitted.as_ref().err()
         );
         if let Ok(admitted) = admitted {
