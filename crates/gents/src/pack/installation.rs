@@ -255,9 +255,10 @@ struct RecordedDocument {
     digest: String,
     created: bool,
     /// A Tools document whose `host.root` this pack's install supplied: the
-    /// pack authored none, so the install gave it its installer's own
-    /// ([`installer_tool_root`]). Tools that name a root themselves, by
-    /// literal or variable, never carry it, whatever that root renders to.
+    /// pack named none as installed (it authored no root, or one that
+    /// rendered empty), so the install gave it its installer's own
+    /// ([`installer_tool_root`]). Tools whose root the pack names never
+    /// carry it once that root renders to a path, including the installer's.
     /// Written by the install that fills the root, the only place that knows
     /// it, and read by [`pack_root_record`]; a record written before the
     /// field existed reads as false.

@@ -967,9 +967,12 @@ pub async fn installer_tool_root(
 /// Returns the `tools_id` of each Tools it gave the root. This is the one
 /// place that knows a root was supplied rather than authored, so the fact is
 /// carried from here into the pack's installation record
-/// (`RecordedDocument::installer_root`) and the grant reads it there: a
-/// Tools that names its own root, by literal or variable, is never among
-/// them, whatever that root renders to.
+/// (`RecordedDocument::installer_root`) and the grant reads it there. A
+/// Tools whose root the pack names, by literal or variable, is never among
+/// them once that root renders to a path, including the installer's own. A
+/// root that renders empty (`${ROOT:-}` with no value) names nothing: the
+/// document is rootless as installed, takes the installer's root like one
+/// that authors none, and is among them.
 async fn default_host_tool_roots(
     access: &ConfigAccess,
     owner: &str,
