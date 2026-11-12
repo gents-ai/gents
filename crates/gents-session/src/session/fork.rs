@@ -1200,38 +1200,39 @@ mod tests {
 
     #[test]
     fn generated_edit_fork_bindings_control_destination_reuse() {
-        fn scope(value: &Value) -> SessionScope {
+        fn scope(
+            value: &gents_lean_vocab::families::contracts_edit_fork_decision::Scope,
+        ) -> SessionScope {
             SessionScope {
-                node_did: value["node"].as_u64().unwrap().to_string(),
-                session_id: value["session"].as_u64().unwrap().to_string(),
-                requester_did: value["requester"].as_u64().map(|id| id.to_string()),
+                node_did: value.node.to_string(),
+                session_id: value.session.to_string(),
+                requester_did: value.requester.map(|id| id.to_string()),
             }
         }
-        fn binding(value: &Value) -> EditForkBinding {
+        fn binding(
+            value: &gents_lean_vocab::families::contracts_edit_fork_decision::EditForkBinding,
+        ) -> EditForkBinding {
             EditForkBinding {
-                client_did: value["client"].as_u64().unwrap().to_string(),
-                parent: scope(&value["parent"]),
-                child: scope(&value["child"]),
-                message_key: value["message_key"].as_str().unwrap().to_owned(),
+                client_did: value.client.to_string(),
+                parent: scope(&value.parent),
+                child: scope(&value.child),
+                message_key: value.message_key.clone(),
             }
         }
-        let cases =
-            &gents_lean_vocab::lean_contract_snapshot().session_document_edit_fork_binding_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let retained = match case["retained_kind"].as_str().unwrap() {
-                "missing" => ExistingEditFork::Missing,
-                "unbound" => ExistingEditFork::Unbound,
-                "bound" => ExistingEditFork::Bound(binding(&case["retained"])),
-                other => panic!("untranslated retained fork {other}"),
+        gents_lean_vocab::families::contracts_edit_fork_decision::replay::<String>(|i| {
+            let retained = match (i.retained_kind.as_str(), &i.retained) {
+                ("missing", None) => ExistingEditFork::Missing,
+                ("unbound", None) => ExistingEditFork::Unbound,
+                ("bound", Some(retained)) => ExistingEditFork::Bound(binding(retained)),
+                other => panic!("untranslated retained fork {other:?}"),
             };
-            let actual = match decide_edit_fork(&binding(&case["requested"]), &retained) {
+            match decide_edit_fork(&binding(&i.requested), &retained) {
                 EditForkDecision::Create => "create",
                 EditForkDecision::Reuse => "reuse",
                 EditForkDecision::Refuse => "refuse",
-            };
-            assert_eq!(actual, case["decision"].as_str().unwrap(), "{case}");
-        }
+            }
+            .to_owned()
+        });
     }
 
     #[tokio::test]

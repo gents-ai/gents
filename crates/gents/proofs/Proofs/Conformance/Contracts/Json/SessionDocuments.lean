@@ -6,6 +6,7 @@ import Proofs.Conformance.ContractCases.SessionDocuments
 import Proofs.Conformance.ContractCases.Types
 import Lean
 import Proofs.Conformance.RuntimeInput
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
@@ -240,19 +241,6 @@ private def forkJson (name : String) (source : SessionFork.History)
           ("reads_transcript", toJson (SessionFork.readsTranscript grant copied target.session))])
       |>.getD []))]
 
-private def editForkBindingJson (binding : SessionFork.EditForkBinding) : Json := Json.mkObj
-  [("client", toJson binding.client), ("parent", scopeJson binding.parent), ("child", scopeJson binding.child),
-   ("message_key", toJson binding.messageKey)]
-
-private def editForkJson (witness : EditForkCase) : Json := Json.mkObj
-  [("name", toJson witness.name), ("requested", editForkBindingJson witness.requested),
-   ("retained_kind", toJson (match witness.retained with
-      | .missing => "missing" | .unbound => "unbound" | .bound _ => "bound")),
-   ("retained", match witness.retained with
-      | .bound binding => editForkBindingJson binding | _ => Json.null),
-   ("decision", toJson (match SessionFork.decideEditFork witness.requested witness.retained with
-      | .create => "create" | .reuse => "reuse" | .refuse => "refuse"))]
-
 private def editBlockName {α : Type} : CanonicalOutput.MessageBlock α → String
   | .text _ => "text"
   | .reasoning _ _ => "reasoning"
@@ -411,8 +399,31 @@ def sessionDocumentSelectionCasesJson : String :=
 def sessionDocumentEditAnchorCasesJson : String :=
   (toJson (editAnchorCases.map editAnchorJson)).compress
 
-def sessionDocumentEditForkBindingCasesJson : String :=
-  (toJson (editForkCases.map editForkJson)).compress
+deriving instance ToJson for AgentSession.Scope, SessionFork.EditForkBinding,
+  SessionFork.EditForkDecision
+
+structure EditForkInput where
+  name : String
+  requested : SessionFork.EditForkBinding
+  retainedKind : String
+  retained : Option SessionFork.EditForkBinding
+  deriving ToJson
+
+def EditForkInput.retainedFork (i : EditForkInput) : SessionFork.ExistingEditFork :=
+  match i.retainedKind, i.retained with
+  | "bound", some binding => .bound binding
+  | "unbound", _ => .unbound
+  | _, _ => .missing
+
+@[conformance_family]
+def editForkDecision : Family EditForkInput SessionFork.EditForkDecision where
+  inputs := editForkCases.map fun c =>
+    { name := c.name, requested := c.requested
+      retainedKind := match c.retained with
+        | .missing => "missing" | .unbound => "unbound" | .bound _ => "bound"
+      retained := match c.retained with
+        | .bound binding => some binding | _ => none }
+  model := fun i => SessionFork.decideEditFork i.requested i.retainedFork
 
 def sessionDocumentForkCasesJson : String :=
   (toJson [

@@ -652,7 +652,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"session_document_projection_cases\":" ++ sessionDocumentProjectionCasesJson ++ ","
     ++ "\"session_document_selection_cases\":" ++ sessionDocumentSelectionCasesJson ++ ","
     ++ "\"session_document_edit_anchor_cases\":" ++ sessionDocumentEditAnchorCasesJson ++ ","
-    ++ "\"session_document_edit_fork_binding_cases\":" ++ sessionDocumentEditForkBindingCasesJson ++ ","
     ++ "\"session_document_fork_cases\":" ++ sessionDocumentForkCasesJson ++ ","
     ++ "\"plugin_job_opening_cases\":" ++ pluginJobOpeningCasesJson ++ ","
     ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","
