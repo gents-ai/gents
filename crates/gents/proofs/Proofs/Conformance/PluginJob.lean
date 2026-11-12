@@ -954,21 +954,187 @@ def controlCasesJson : String :=
 
 /-- A newly committed spawn must be visible to every subsequent kill transaction,
 even when recovery originally observed the empty pre-step row. -/
-def commitKillCasesJson : String := Id.run do
-  let initial := pinned [] 0 0
-  let out := effects [spawn "new" targetA]
-  let .ok committed := admitStep context initial out | return "[]"
-  let variants : List (String × (Job × List (SpawnKey × Recovery.KillAction))) := [
-    ("stop", Control.kill committed .stop observation),
-    ("pause", Control.kill committed .pause observation),
-    ("deadline", RecoveryTrace.killAfterCommit context initial out .deadline observation),
-    ("engineChanged", settleStep { context with engineDigest := "replacement" } committed out observation),
-    ("notAvailable", settleStep { context with available := false } committed out observation)]
-  return (toJson (variants.map fun (cause, result) => Json.mkObj [
-    ("cause", toJson cause), ("initial", jobJson initial), ("output", outputJson out),
-    ("committed", jobJson committed), ("row_state", rowStateJson result.1.state),
-    ("kills", toJson (result.2.map fun (entry : SpawnKey × Recovery.KillAction) => Json.mkObj [
-      ("slot", toJson entry.1.slot), ("action", toJson entry.2.toContract)]))])).compress
+structure TargetWire where
+  node : String
+  agent : String
+  deriving ToJson, FromJson, Inhabited
+
+structure CeilingWire where
+  targets : List String
+  max_live : Nat
+  max_spawns : Nat
+  max_messages_per_slot : Nat
+  result_bytes : Nat
+  max_wall_secs : Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure PinWire where
+  script_id : String
+  source_digest : String
+  engine_digest : String
+  plugin_ref : String
+  handle : String
+  cwd : String
+  args_digest : String
+  chain_root : String
+  origin : String
+  agent_budget : Nat
+  adopted_at : Nat
+  resume_of : Option String
+  replayed_from : Option String
+  ceiling_at_pin : CeilingWire
+  deriving ToJson, FromJson, Inhabited
+
+structure GuestPinWire where
+  script_id : String
+  source_digest : String
+  handle : String
+  agent_budget : Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure ResumeWire where
+  row_doc_id : String
+  engine_current : Bool
+  answer : Option String
+  budget : Option Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure ChildWire where
+  retry_key : String
+  slot : String
+  attempt : Nat
+  target : TargetWire
+  state : String
+  messages : Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure CallWire where
+  argv : List String
+  args : Option String
+  script : Option String
+  agent_budget : Option Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure RootCallWire where
+  argv : List String
+  args : Option String
+  agent_budget : Option Nat
+  deriving ToJson, FromJson, Inhabited
+
+/-- A job row in the shape `jobJson` writes. -/
+structure JobWire where
+  root : String
+  row_doc_id : String
+  caller_session : String
+  caller_cwd : String
+  handle : String
+  caller_hop : Nat
+  call : CallWire
+  root_call : Option RootCallWire
+  resume : Option ResumeWire
+  pin : Option PinWire
+  children : List ChildWire
+  spent : Nat
+  observed_terminal : Nat
+  consecutive_failures : Nat
+  state : String
+  deriving ToJson, FromJson, Inhabited
+
+structure ExtrasWire where
+  writes : Nat
+  scratch : List String
+  progress : Bool
+  deriving ToJson, FromJson, Inhabited
+
+structure SpawnWire where
+  slot : String
+  attempt : Nat
+  target : TargetWire
+  cwd : Option String
+  deriving ToJson, FromJson, Inhabited
+
+structure ControlWire where
+  row_doc_id : String
+  control : String
+  deriving ToJson, FromJson, Inhabited
+
+/-- A step output in the shape `outputJson` writes: its `kind` and the riders
+that variant carries. -/
+structure OutputWire where
+  kind : String
+  extras : ExtrasWire
+  control : Option (List ControlWire)
+  pin : Option GuestPinWire
+  resume : Option ResumeWire
+  suspend : Option String
+  reason : Option String
+  spawns : Option (List SpawnWire)
+  messages : Option (List String)
+  interrupts : Option (List String)
+  deriving ToJson, FromJson, Inhabited
+
+def jobWire (j : Job) : JobWire :=
+  match fromJson? (jobJson j) with
+  | .ok wire => wire
+  | .error _ => default
+
+def outputWire (o : StepOutput) : OutputWire :=
+  match fromJson? (outputJson o) with
+  | .ok wire => wire
+  | .error _ => default
+
+private def rowStateSpelling (s : RowState) : String :=
+  match rowStateJson s with
+  | .str spelling => spelling
+  | _ => ""
+
+private def commitKillInitial : Job := pinned [] 0 0
+
+private def commitKillOutput : StepOutput := effects [spawn "new" targetA]
+
+private def commitKillVariants : List (String × Job × (Job × List (SpawnKey × Recovery.KillAction))) :=
+  match admitStep context commitKillInitial commitKillOutput with
+  | .error _ => []
+  | .ok committed => [
+      ("stop", committed, Control.kill committed .stop observation),
+      ("pause", committed, Control.kill committed .pause observation),
+      ("deadline", committed,
+        RecoveryTrace.killAfterCommit context commitKillInitial commitKillOutput .deadline observation),
+      ("engineChanged", committed,
+        settleStep { context with engineDigest := "replacement" } committed commitKillOutput observation),
+      ("notAvailable", committed,
+        settleStep { context with available := false } committed commitKillOutput observation)]
+
+structure KillWire where
+  slot : String
+  action : String
+  deriving ToJson
+
+structure CommitKillInput where
+  cause : String
+  initial : JobWire
+  output : OutputWire
+  committed : JobWire
+  deriving ToJson
+
+structure CommitKillOutput where
+  rowState : String
+  kills : List KillWire
+  deriving ToJson
+
+@[conformance_family]
+def commitKills : Family CommitKillInput CommitKillOutput where
+  inputs := commitKillVariants.map fun (cause, committed, _) =>
+    { cause, initial := jobWire commitKillInitial, output := outputWire commitKillOutput
+      committed := jobWire committed }
+  model := fun i => match commitKillVariants.find? (·.1 == i.cause) with
+    | some (_, _, (row, kills)) =>
+      { rowState := rowStateSpelling row.state
+        kills := kills.map fun (key, action) => { slot := key.slot, action := action.toContract } }
+    | none => { rowState := "", kills := [] }
+
+example : commitKills.inputs.map (·.committed.children.length) = [1, 1, 1, 1, 1] := by
+  native_decide
 
 private def allKinds : List PackKind := [.documents, .assets, .plugins]
 

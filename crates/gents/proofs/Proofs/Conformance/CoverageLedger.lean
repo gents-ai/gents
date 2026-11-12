@@ -1885,8 +1885,8 @@ def caseCoverage : List CoverageEntry :=
       "DurableObservationCases")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_commit_kill_cases"
-      "PluginJobCommitKillCases")
+      "family"
+      "plugin_job_commit_kills")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_process_claim_cases"
