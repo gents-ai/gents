@@ -102,6 +102,9 @@ mod documents_selection_tests;
 mod pack_export_tests;
 
 #[cfg(test)]
+mod tool_source_policy_tests;
+
+#[cfg(test)]
 mod tools_tests;
 
 #[cfg(test)]
