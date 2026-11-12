@@ -2565,6 +2565,9 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "family" "node_provisioning_reservation_unreached"
       "model-production-gap: no production path reaches these emitted cases yet (file-sync-failed: no production path makes the file sync of a newly created bootstrap marker fail)")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "node_provisioning_bootstrap_grant_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (not-exclusive, foreign-runtime, unauthenticated-client, existing-or-unknown-node, store-not-fresh, reservation-not-durable, nac-disabled, already-published: init decides each inline across its store lock, runtime match, client authentication, Node and store observation, reservation, NAC status and publication steps; no production function takes the bootstrap observation)")
+      "identity-permission" [Surface.runtimeInternal]
   ]
 
 def followUpHookCoverage : List CoverageEntry :=

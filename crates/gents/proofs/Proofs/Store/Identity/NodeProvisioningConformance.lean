@@ -34,17 +34,6 @@ def bootstrapCases : List (String × BootstrapObservation) :=
    ("already-published", { freshBootstrap with configurationPublished := true }),
    ("crash-after-reservation", bootstrapAfterCrash freshBootstrap)]
 
-def bootstrapCaseJson (name : String) (o : BootstrapObservation) : Json := Json.mkObj
-  [("name", toJson name), ("exclusive", toJson o.exclusive),
-   ("matching_runtime", toJson o.matchingRuntime), ("authenticated_client", toJson o.authenticatedClient),
-   ("node_absent_observed", toJson o.nodeAbsentObserved), ("store_empty_observed", toJson o.storeEmptyObserved),
-   ("reservation_durable", toJson o.reservationDurable), ("nac_enabled", toJson o.nacEnabled),
-   ("fresh_evidence", toJson o.freshEvidence), ("configuration_published", toJson o.configurationPublished),
-   ("expected_may_grant", toJson (bootstrapMayGrant o))]
-
-def bootstrapCasesJson : String := (toJson (bootstrapCases.map fun (name, observation) =>
-  bootstrapCaseJson name observation)).compress
-
 def runtimeNacCasesJson : String := (toJson ([NacStatus.notConfigured, .enabled,
   .disabledTemporarily].map fun status =>
     Json.mkObj [("status", toJson status.name),

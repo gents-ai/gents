@@ -3039,7 +3039,6 @@ pub struct LeanContractSnapshot {
     pub client_publication_protected_collection: String,
     pub watcher_actor_cases: Vec<LeanWatcherActorCase>,
     pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
-    pub identity_bootstrap_cases: Vec<LeanIdentityBootstrapCase>,
     pub identity_runtime_nac_cases: Vec<LeanIdentityRuntimeNacCase>,
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub identity_callback_parent_actor_cases: Vec<serde_json::Value>,
@@ -5991,22 +5990,6 @@ pub struct LeanIdentityAgent {
     pub creation_nonce: String,
     pub node: String,
     pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityBootstrapCase {
-    pub authenticated_client: bool,
-    pub configuration_published: bool,
-    pub exclusive: bool,
-    pub expected_may_grant: bool,
-    pub fresh_evidence: bool,
-    pub matching_runtime: bool,
-    pub nac_enabled: bool,
-    pub name: String,
-    pub node_absent_observed: bool,
-    pub reservation_durable: bool,
-    pub store_empty_observed: bool,
 }
 
 #[derive(Debug, Deserialize)]
