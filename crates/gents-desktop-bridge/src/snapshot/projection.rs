@@ -239,6 +239,7 @@ mod tests {
                     addr: "/ip4/10.0.0.1/tcp/1".into(),
                     source: Some("manual".into()),
                     graphql: Some("http://10.0.0.1/graphql".into()),
+                    local: false,
                 }],
             },
             client: Some(DesktopRuntimeSnapshot {
@@ -412,6 +413,7 @@ mod tests {
                 }],
                 ended_access: Vec::new(),
             }),
+            repair_note: None,
         }
     }
 

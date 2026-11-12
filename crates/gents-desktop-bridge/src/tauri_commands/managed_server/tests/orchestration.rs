@@ -428,8 +428,7 @@ fn a_crash_looping_job_is_reported_failed_with_its_exit_reason() {
     let status = status_from(&idle, None, Some(&native), Some(&exit), Some((&exit, 2)));
     assert_eq!(status.state, ManagedServerState::Failed);
     let error = status.error.unwrap();
-    assert!(error.contains("exited with code 78"));
-    assert!(error.contains("restarted 2 times in a row"));
+    assert!(error.contains("exit code 78"), "{error}");
 
     let blocked = gents_server::native_service::NativeServiceStatus {
         requires_approval: true,

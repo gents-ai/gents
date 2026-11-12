@@ -488,6 +488,10 @@ impl From<gents_desktop_core::client::EndedAccess> for EndedAccessView {
 pub struct DesktopClientSnapshot {
     pub bootstrap: DesktopBootstrapSummary,
     pub client: Option<DesktopRuntimeSnapshot>,
+    /// What this client start set aside before opening, for the repair banner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub repair_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

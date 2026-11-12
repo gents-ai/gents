@@ -107,6 +107,7 @@ pub(crate) async fn build_desktop_client_snapshot(
     DesktopClientSnapshot {
         bootstrap: fixture.build_bootstrap_summary().await,
         client: Some(build_runtime_snapshot(fixture.desktop_core().as_ref()).await),
+        repair_note: None,
     }
 }
 

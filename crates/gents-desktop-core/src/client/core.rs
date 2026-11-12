@@ -39,6 +39,7 @@ use super::query::{
 };
 use crate::remote_admin::PairingErrorClass;
 
+pub use bootstrap::{client_store_from_other_version, client_store_key_missing};
 pub use enrollment::EnrollmentRequestResult;
 pub use file_review::tool_file_changes_on;
 pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};

@@ -156,6 +156,7 @@ where
             tauri_commands::managed_server::desktop_managed_server_set_auto_start,
             tauri_commands::managed_server::desktop_managed_server_restart,
             tauri_commands::managed_server::desktop_managed_server_reset,
+            tauri_commands::managed_server::desktop_managed_server_repair,
             tauri_commands::managed_server::desktop_managed_server_validate_root,
             tauri_commands::managed_server::desktop_agent_workspace_root_select,
             tauri_commands::managed_server::desktop_managed_server_open_login_items,

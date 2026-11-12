@@ -115,6 +115,14 @@ impl PeerRecord {
         self.source.as_deref() == Some("enrollment")
     }
 
+    /// A record of this desktop's managed node at `node_home` that is not the
+    /// node now there (`current_did`; `None` when the home holds none).
+    pub fn is_stale_local_peer(&self, node_home: &Path, current_did: Option<&str>) -> bool {
+        self.is_managed_runtime()
+            && self.local_node_home.as_deref().map(Path::new) == Some(node_home)
+            && current_did != Some(self.node_did.as_str())
+    }
+
     pub fn is_managed_runtime(&self) -> bool {
         self.local_node_home
             .as_deref()
@@ -884,6 +892,104 @@ pub async fn load_peer_records(path: &Path) -> Result<Vec<PeerRecord>> {
     Ok(records)
 }
 
+/// Moves the saved records of the local node at `node_home` that are not the
+/// node now there (`current_did`; `None` when the home holds none) into
+/// `archive`, appending to records an earlier retirement left there. Left in
+/// place, a desktop reconnects to a node that is gone and counts it as a saved
+/// node, so setup never runs. Remote peers stay. The archive is written before
+/// `peers.json` changes, so an interrupted retirement loses no record.
+pub async fn retire_stale_local_peers(
+    path: &Path,
+    node_home: &Path,
+    current_did: Option<&str>,
+    archive: &Path,
+) -> Result<usize> {
+    let mut directory = PeerDirectory::open_writer(path).await?;
+    let mut candidate = directory.clone();
+    let (stale, kept): (Vec<_>, Vec<_>) = candidate
+        .peers
+        .drain(..)
+        .partition(|peer| peer.is_stale_local_peer(node_home, current_did));
+    if stale.is_empty() {
+        return Ok(0);
+    }
+    candidate.peers = kept;
+    let mut archived: Vec<PeerRecord> = match tokio::fs::read(archive).await {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(records) => records,
+            // A broken archive is kept aside rather than blocking every start.
+            Err(_) => {
+                set_aside_unreadable(archive).await?;
+                Vec::new()
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", archive.display())),
+    };
+    archived.extend(stale.iter().cloned());
+    let staged = archive.with_extension("json.staged");
+    let mut file = tokio::fs::File::create(&staged)
+        .await
+        .with_context(|| format!("creating {}", staged.display()))?;
+    tokio::io::AsyncWriteExt::write_all(&mut file, &serde_json::to_vec_pretty(&archived)?)
+        .await
+        .with_context(|| format!("writing {}", staged.display()))?;
+    file.sync_all()
+        .await
+        .with_context(|| format!("syncing {}", staged.display()))?;
+    drop(file);
+    tokio::fs::rename(&staged, archive)
+        .await
+        .with_context(|| format!("persisting {}", archive.display()))?;
+    directory.commit(candidate).await?;
+    Ok(stale.len())
+}
+
+/// Renames an unreadable `peers.json` aside so startup can continue without
+/// it. A running desktop holds the lease for its lifetime, so a held lease
+/// leaves the file alone.
+pub async fn set_aside_unreadable_peer_directory(path: &Path) -> Result<Option<PathBuf>> {
+    if read_stored_directory(path)
+        .await
+        .and_then(|stored| validate_fresh_directory(&stored))
+        .is_ok()
+    {
+        return Ok(None);
+    }
+    let lock_path = path.with_extension("lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("opening peer-directory lock {}", lock_path.display()))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(None),
+        Err(TryLockError::Error(error)) => {
+            return Err(error).with_context(|| format!("locking peer directory {}", path.display()))
+        }
+    }
+    let _lease = PeerDirectoryLease(lock);
+    set_aside_unreadable(path).await.map(Some)
+}
+
+/// Renames `path` to a fresh `<name>.json.unreadable-<stamp>` sibling.
+pub async fn set_aside_unreadable(path: &Path) -> Result<PathBuf> {
+    let stamp = Utc::now().format("%Y-%m-%d-%H%M%S");
+    let mut target = path.with_extension(format!("json.unreadable-{stamp}"));
+    let mut attempt = 1;
+    while tokio::fs::try_exists(&target).await? {
+        attempt += 1;
+        target = path.with_extension(format!("json.unreadable-{stamp}-{attempt}"));
+    }
+    tokio::fs::rename(path, &target)
+        .await
+        .with_context(|| format!("setting aside {} as {}", path.display(), target.display()))?;
+    Ok(target)
+}
+
 fn normalize_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
     let trimmed = value.trim();
     (!trimmed.is_empty())
@@ -935,6 +1041,149 @@ fn sort_peer_records(records: &mut [PeerRecord]) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn garbage_saved_connections_are_set_aside() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        std::fs::write(&path, "{").unwrap();
+        let moved = set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!path.exists());
+        assert!(moved
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("peers.json.unreadable-"));
+        assert_eq!(std::fs::read(&moved).unwrap(), b"{");
+        assert!(load_peer_records(&path).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_local_peers_of_another_node_at_the_home_are_retired() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let archive = tempdir.path().join("local-peers.json");
+        let peer = |peer_id: &str, node_did: &str, home: Option<&str>| {
+            serde_json::json!({
+                "peer_id": peer_id, "node_did": node_did, "label": peer_id, "addr": "iroh:peer",
+                "source": "enrollment", "graphql": "http://127.0.0.1:21919/api/v0/graphql",
+                "local_node_home": home,
+                "created_at": "2026-11-04T00:00:00Z", "updated_at": "2026-11-04T00:00:00Z"
+            })
+        };
+        let peers = [
+            peer("old", "did:test:old", Some("/home")),
+            peer("current", "did:test:new", Some("/home")),
+            peer("other-home", "did:test:other", Some("/elsewhere")),
+            peer("remote", "did:test:remote", None),
+        ];
+        std::fs::write(&path, serde_json::json!({ "peers": peers }).to_string()).unwrap();
+        let earlier = [peer("earlier", "did:test:older", Some("/home"))];
+        std::fs::write(&archive, serde_json::json!(earlier).to_string()).unwrap();
+
+        let retired =
+            retire_stale_local_peers(&path, Path::new("/home"), Some("did:test:new"), &archive)
+                .await
+                .unwrap();
+
+        assert_eq!(retired, 1);
+        let kept: Vec<_> = load_peer_records(&path)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|peer| peer.peer_id)
+            .collect();
+        assert_eq!(kept, ["current", "other-home", "remote"]);
+        let archived: Vec<PeerRecord> =
+            serde_json::from_slice(&std::fs::read(&archive).unwrap()).unwrap();
+        assert_eq!(
+            archived
+                .iter()
+                .map(|peer| peer.peer_id.as_str())
+                .collect::<Vec<_>>(),
+            ["earlier", "old"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broken_archive_is_set_aside_and_the_stale_peer_still_retires() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let archive = tempdir.path().join("local-peers.json");
+        let peer = serde_json::json!({
+            "peer_id": "old", "node_did": "did:test:old", "label": "old", "addr": "iroh:peer",
+            "source": "enrollment", "graphql": "http://127.0.0.1:21919/api/v0/graphql",
+            "local_node_home": "/home",
+            "created_at": "2026-11-04T00:00:00Z", "updated_at": "2026-11-04T00:00:00Z"
+        });
+        std::fs::write(&path, serde_json::json!({ "peers": [peer] }).to_string()).unwrap();
+        std::fs::write(&archive, "{ not json").unwrap();
+
+        let retired = retire_stale_local_peers(&path, Path::new("/home"), None, &archive)
+            .await
+            .unwrap();
+
+        assert_eq!(retired, 1);
+        assert!(load_peer_records(&path).await.unwrap().is_empty());
+        let archived: Vec<PeerRecord> =
+            serde_json::from_slice(&std::fs::read(&archive).unwrap()).unwrap();
+        assert_eq!(archived[0].peer_id, "old");
+        let aside: Vec<_> = std::fs::read_dir(tempdir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("local-peers.json.unreadable-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+    }
+
+    #[tokio::test]
+    async fn an_old_source_is_set_aside() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let peer = serde_json::json!({
+            "peer_id": "peer", "node_did": "did:test:runtime", "label": "runtime", "addr": "iroh:peer",
+            "source": "manual",
+            "created_at": "2026-11-04T00:00:00Z", "updated_at": "2026-11-04T00:00:00Z"
+        });
+        std::fs::write(&path, serde_json::json!({ "peers": [peer] }).to_string()).unwrap();
+        assert!(set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn readable_connections_are_left_alone() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        assert!(set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .is_none());
+        std::fs::write(&path, r#"{"peers":[]}"#).unwrap();
+        assert!(set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn a_held_lease_leaves_the_file() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let _owner = PeerDirectory::open_writer(&path).await.unwrap();
+        std::fs::write(&path, "{").unwrap();
+        assert!(set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(path.exists());
+    }
 
     #[test]
     fn operator_endpoint_requires_the_canonical_runtime_suffix() {

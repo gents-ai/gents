@@ -293,6 +293,7 @@ impl LiveBridgeFixture {
             addr: peer_record.addr.clone(),
             source: peer_record.source.clone(),
             graphql: peer_record.graphql.clone(),
+            local: peer_record.is_managed_runtime(),
         }];
 
         tracing::info!(

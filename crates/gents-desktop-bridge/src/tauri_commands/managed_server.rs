@@ -5,6 +5,7 @@ pub(super) mod pairing;
 mod port;
 mod preference;
 mod readiness;
+pub(super) mod repair;
 pub(super) mod reset;
 mod start;
 pub(crate) mod start_wait;
@@ -15,9 +16,10 @@ use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    AgentWorkspaceRootSelectRequest, HomeResetDisposition, ManagedServerResetRequest,
-    ManagedServerResetResult, ManagedServerRestartRequest, ManagedServerRootValidation,
-    ManagedServerRootValidationRequest, ManagedServerStartRequest, ManagedServerStatus,
+    AgentWorkspaceRootSelectRequest, HomeResetDisposition, ManagedServerRepairResult,
+    ManagedServerResetRequest, ManagedServerResetResult, ManagedServerRestartRequest,
+    ManagedServerRootValidation, ManagedServerRootValidationRequest, ManagedServerStartRequest,
+    ManagedServerStatus,
 };
 use authority::{
     runtime_tool_ceiling, validate_ready_runtime, validate_tool_root, EffectiveManagedAuthority,
@@ -148,6 +150,17 @@ where
     };
     let _lifecycle = lock_lifecycle_superseding_start(&state).await;
     retire_incompatible_home(&app, &state, confirmation, disposition, full_reset).await
+}
+
+#[tauri::command]
+pub async fn desktop_managed_server_repair<R>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopAppState>,
+) -> Result<ManagedServerRepairResult, BridgeError>
+where
+    R: Runtime,
+{
+    repair::repair_managed_server(&app, &state).await
 }
 
 #[tauri::command]

@@ -22,6 +22,7 @@ mod crash_loop;
 mod orchestration;
 mod pairing;
 mod readiness;
+mod repair;
 mod reset;
 mod reset_store;
 mod startup_readiness;
@@ -90,6 +91,7 @@ fn ready_status(node_did: &str) -> ManagedServerStatus {
         runtime_booting: false,
         error: None,
         error_code: None,
+        deleted_home: None,
     }
 }
 

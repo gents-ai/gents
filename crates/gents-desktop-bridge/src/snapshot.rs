@@ -11,7 +11,8 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gents_desktop_core::client::{
-    load_peer_records, project_sync_health, ClientCore, DesktopPaths, P2PHealth, SyncHealth,
+    load_peer_records, project_sync_health, ClientCore, DesktopPaths, P2PHealth, PeerRecord,
+    SyncHealth,
 };
 
 use super::config::ResolvedBridgePolicy;
@@ -92,21 +93,26 @@ async fn build_bootstrap_summary_raw(
             .as_ref()
             .and_then(|config| normalize_optional(config.tool_root.as_deref())),
         desktop_home: desktop_paths.root().display().to_string(),
-        diagnostics_hint: crate::logging::diagnostics_hint(desktop_paths.root()),
+        diagnostics_hint: crate::logging::diagnostics_hint(&dirs::home_dir().unwrap_or_default()),
         node_home_exists,
         client_state_exists: desktop_paths.client_state_exists(),
-        saved_peers: peer_records
-            .iter()
-            .map(|peer| SavedPeerView {
-                peer_id: peer.peer_id.clone(),
-                label: peer.label.clone(),
-                node_did: peer.node_did.clone(),
-                addr: peer.addr.clone(),
-                source: peer.source.clone(),
-                graphql: peer.graphql.clone(),
-            })
-            .collect(),
+        saved_peers: saved_peer_views(&peer_records),
     })
+}
+
+pub(crate) fn saved_peer_views(peers: &[PeerRecord]) -> Vec<SavedPeerView> {
+    peers
+        .iter()
+        .map(|peer| SavedPeerView {
+            peer_id: peer.peer_id.clone(),
+            label: peer.label.clone(),
+            node_did: peer.node_did.clone(),
+            addr: peer.addr.clone(),
+            source: peer.source.clone(),
+            graphql: peer.graphql.clone(),
+            local: peer.is_managed_runtime(),
+        })
+        .collect()
 }
 
 fn read_stored_init_config(
@@ -240,7 +246,11 @@ pub async fn build_client_snapshot_with_grants(
         None => None,
     };
     Ok(project_client_snapshot(
-        DesktopClientSnapshot { bootstrap, client },
+        DesktopClientSnapshot {
+            bootstrap,
+            client,
+            repair_note: None,
+        },
         grants,
     ))
 }

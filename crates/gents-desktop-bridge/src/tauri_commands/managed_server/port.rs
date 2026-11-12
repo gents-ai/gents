@@ -1,13 +1,15 @@
 use super::authority::{parse_tool_ceiling, suggested_tool_root};
-use super::preference::read_initialized_did;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerState, ManagedServerStatus};
 use gents::store::config_client::ClientSigningCapability;
 use gents_desktop_core::local_runtime::HostedRuntimeStatusError;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
+use gents_server::repair::port::{
+    observe_port, read_initialized_did, served_identity, PortObservation, ServedIdentity,
+};
+use gents_server::repair::Blocker;
 use std::path::Path;
-use std::time::Duration;
 
 pub(super) enum PortReadiness {
     Ready(ManagedServerStatus),
@@ -82,43 +84,36 @@ pub(super) struct ForeignRuntime {
 }
 
 impl ForeignRuntime {
-    fn from_payload(port: u16, payload: &serde_json::Value) -> Self {
-        let field = |name: &str| {
-            payload
-                .get(name)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        };
-        Self {
-            port,
-            node_did: field("node_did"),
-            home: field("home"),
-        }
-    }
-
     pub(super) fn message(&self) -> String {
-        let port = self.port;
-        let Some(did) = self.node_did.as_deref() else {
-            return format!(
-                "Port {port} is in use by a program that does not advertise a Gents identity, and the local Node needs that port. Quit that program, then start the Node again."
-            );
-        };
-        let (located, home) = match self.home.as_deref() {
-            Some(home) => (format!(" from home {home}"), home),
-            None => (String::new(), "<its home>"),
-        };
-        format!(
-            "Port {port} is already served by a different Gents Node ({did}){located}, and the local Node needs that port. Stop the other Node with `gents runtime service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents runtime server`. Or restart it on another port with `gents runtime server --home {home} --http-port <port>`."
-        )
+        sentence(&match self.node_did {
+            Some(_) => Blocker::HandStartedNode {
+                port: self.port,
+                home: self.home.clone(),
+            },
+            None => Blocker::PortInUse {
+                port: self.port,
+                holder: None,
+            },
+        })
     }
 }
 
 pub(super) fn occupied_port_message(port: u16) -> String {
-    format!(
-        "Port {port} is in use by another program that is not a Gents Node, and the local Node needs that port. Quit that program, then start the Node again."
-    )
+    sentence(&Blocker::PortInUse { port, holder: None })
+}
+
+/// Blockers read as lowercase clauses after "couldn't start:"; the bridge
+/// shows them as sentences.
+pub(super) fn sentence(blocker: &Blocker) -> String {
+    capitalize(blocker.to_string())
+}
+
+pub(super) fn capitalize(text: String) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => text,
+    }
 }
 
 pub(super) async fn observe_port_readiness(
@@ -134,26 +129,17 @@ pub(super) async fn observe_port_readiness_at(
     user: Option<&ClientSigningCapability>,
 ) -> Result<PortReadiness, BridgeError> {
     let node_home = &config.home;
-    let Some(payload) = default_port_payload(config).await? else {
-        let address = std::net::SocketAddr::new(config.http_addr, config.http_port);
-        let accepts = tokio::time::timeout(
-            Duration::from_millis(250),
-            tokio::net::TcpStream::connect(address),
-        )
-        .await
-        .is_ok_and(|connected| connected.is_ok());
-        return Ok(if accepts {
-            PortReadiness::Occupied(config.http_port)
-        } else {
-            PortReadiness::NotListening
-        });
-    };
     let initialized_did = if gents_server::server_host::initialized_home(node_home) {
         read_initialized_did(node_home).await
     } else {
         None
     };
-    let classified = classify_port_payload(config.http_port, initialized_did.as_deref(), payload);
+    let (identity, payload) = match observe_port(config, initialized_did.as_deref()).await {
+        PortObservation::NotListening => return Ok(PortReadiness::NotListening),
+        PortObservation::NotGents => return Ok(PortReadiness::Occupied(config.http_port)),
+        PortObservation::Gents { identity, payload } => (identity, payload),
+    };
+    let classified = classify_identified_payload(config.http_port, identity, payload);
     let PortReadiness::Ready(status) = classified else {
         return Ok(classified);
     };
@@ -186,14 +172,27 @@ pub(super) fn classify_port_payload(
     initialized_did: Option<&str>,
     payload: serde_json::Value,
 ) -> PortReadiness {
+    let identity = served_identity(initialized_did, &payload);
+    classify_identified_payload(port, identity, payload)
+}
+
+fn classify_identified_payload(
+    port: u16,
+    identity: ServedIdentity,
+    payload: serde_json::Value,
+) -> PortReadiness {
+    if let ServedIdentity::Different { node_did, home } = identity {
+        return PortReadiness::Foreign(ForeignRuntime {
+            port,
+            node_did,
+            home,
+        });
+    }
     let live_did = payload
         .get("node_did")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
-    if ensure_matching_identity(initialized_did, &live_did, port).is_err() {
-        return PortReadiness::Foreign(ForeignRuntime::from_payload(port, &payload));
-    }
     match ObservedServeLifecycle::observe(&payload) {
         ObservedServeLifecycle::Ready => {
             PortReadiness::Ready(managed_status_from_payload(payload, &live_did))
@@ -250,17 +249,7 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
         runtime_booting: false,
         error: None,
         error_code: None,
-    }
-}
-
-async fn default_port_payload(
-    config: &gents_server::server_host::ServerConfig,
-) -> Result<Option<serde_json::Value>, BridgeError> {
-    match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&config.status_url())
-        .await
-    {
-        Ok(payload) => Ok(Some(payload)),
-        Err(_) => Ok(None),
+        deleted_home: None,
     }
 }
 
@@ -300,21 +289,6 @@ pub(super) fn ensure_native_owns_running_endpoint(
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
             "The running local Node is not owned by the native Gents service. Stop it explicitly before using managed controls.",
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn ensure_matching_identity(
-    initialized_did: Option<&str>,
-    live_did: &str,
-    port: u16,
-) -> Result<(), BridgeError> {
-    if !matches!(initialized_did, Some(initialized) if !initialized.trim().is_empty() && !live_did.trim().is_empty() && initialized == live_did)
-    {
-        return Err(BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            format!("port {port} does not advertise the initialized Gents identity"),
         ));
     }
     Ok(())

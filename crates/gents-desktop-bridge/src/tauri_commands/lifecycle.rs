@@ -122,6 +122,29 @@ where
         );
         return Err(error);
     }
+    // A remote-only desktop runs no repair, so its start sets aside another
+    // version's store too. Any other probe failure is left to the start,
+    // which reports it typed.
+    let repair_note = {
+        use super::managed_server::repair::{
+            client_store_is_from_other_version, set_aside_other_version_client_store,
+        };
+        let _lifecycle = state.managed_server_lifecycle.lock().await;
+        match client_store_is_from_other_version(&state).await {
+            Ok(false) => None,
+            Ok(true) => match set_aside_other_version_client_store(&state).await {
+                Ok(note) => Some(note),
+                Err(error) => {
+                    tracing::warn!(error = %error.message, "could not set aside another version's client store");
+                    None
+                }
+            },
+            Err(error) => {
+                tracing::warn!(error = %format!("{error:#}"), "could not check the client store's version");
+                None
+            }
+        }
+    };
 
     let progress_rx = claim_or_join_client_start(&app, &state);
 
@@ -136,9 +159,11 @@ where
 
     super::managed_server::pairing::start_running_managed_pairing(&state, Arc::clone(&core)).await;
 
-    build_client_snapshot_with_grants(Some(&core), &state.policy, grants)
+    let mut snapshot = build_client_snapshot_with_grants(Some(&core), &state.policy, grants)
         .await
-        .map_err(BridgeError::untyped)
+        .map_err(BridgeError::untyped)?;
+    snapshot.repair_note = repair_note;
+    Ok(snapshot)
 }
 
 #[tauri::command]

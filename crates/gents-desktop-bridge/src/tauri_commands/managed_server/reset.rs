@@ -69,9 +69,17 @@ pub(super) fn classify_binding(
     configured: Option<&HomeIdentity>,
     reviewed_home: Option<&HomeIdentity>,
     reviewed_init_present: bool,
+    local_peer: Option<(&str, &str)>,
 ) -> ClientBinding {
     let Some(reviewed) = reviewed else {
-        return ClientBinding::Unbound;
+        return match (configured, local_peer) {
+            (Some(home), Some((did, node_home)))
+                if home.reviewed.node_home == node_home && home.reviewed.node_did != did =>
+            {
+                ClientBinding::Orphaned
+            }
+            _ => ClientBinding::Unbound,
+        };
     };
     if configured.is_some_and(|home| home.reviewed == *reviewed) {
         return ClientBinding::BoundToHome;
@@ -91,6 +99,18 @@ async fn client_binding(state: &DesktopAppState) -> ClientBinding {
     let Some(node_home) = state.policy.node_home.as_deref() else {
         return ClientBinding::Unbound;
     };
+    let configured = read_home_identity(node_home).await;
+    let local_peer = gents_desktop_core::client::load_peer_records(
+        state.policy.desktop_paths.peer_directory_path(),
+    )
+    .await
+    .ok()
+    .and_then(|peers| {
+        peers
+            .into_iter()
+            .find(|peer| peer.source.as_deref() == Some("local-standard"))
+            .and_then(|peer| peer.local_node_home.map(|home| (peer.node_did, home)))
+    });
     let reviewed = match load_preference(state).await {
         Ok(stored) => stored.and_then(|stored| stored.reviewed_for),
         Err(error) => {
@@ -103,9 +123,16 @@ async fn client_binding(state: &DesktopAppState) -> ClientBinding {
         }
     };
     let Some(reviewed) = reviewed else {
-        return ClientBinding::Unbound;
+        return classify_binding(
+            None,
+            configured.as_ref(),
+            None,
+            false,
+            local_peer
+                .as_ref()
+                .map(|(did, home)| (did.as_str(), home.as_str())),
+        );
     };
-    let configured = read_home_identity(node_home).await;
     let reviewed_path = Path::new(&reviewed.node_home);
     let reviewed_home = read_home_identity(reviewed_path).await;
     let Ok(reviewed_init_present) =
@@ -118,41 +145,110 @@ async fn client_binding(state: &DesktopAppState) -> ClientBinding {
         configured.as_ref(),
         reviewed_home.as_ref(),
         reviewed_init_present,
+        local_peer
+            .as_ref()
+            .map(|(did, home)| (did.as_str(), home.as_str())),
     )
+}
+
+/// What launch retired of a local node whose home is gone or holds another node.
+#[derive(Debug, Default)]
+pub(crate) struct OrphanRetirement {
+    /// The archive of the orphaned client state, when the binding was orphaned.
+    pub reset: Option<ManagedServerResetResult>,
+    /// Saved peers of the old node moved out of `peers.json`.
+    pub local_peers: usize,
+}
+
+impl OrphanRetirement {
+    /// This desktop had a local node that is no longer at its home.
+    pub fn lost_local_node(&self) -> bool {
+        self.reset.is_some() || self.local_peers > 0
+    }
 }
 
 pub(in crate::tauri_commands) async fn retire_orphaned_client_state(
     state: &DesktopAppState,
-) -> Result<Option<ManagedServerResetResult>, BridgeError> {
+) -> Result<OrphanRetirement, BridgeError> {
     if state.policy.managed_server != ManagedServerPolicy::Allowed {
-        return Ok(None);
+        return Ok(OrphanRetirement::default());
     }
     let _lifecycle = state.managed_server_lifecycle.lock().await;
-    if client_binding(state).await != ClientBinding::Orphaned {
-        return Ok(None);
+    retire_orphaned_client_state_locked(state).await
+}
+
+/// The stale peer step runs on every call, whatever the binding, and before
+/// the archive moves `managed-server.json`, so a failure in either leaves
+/// state the next launch retires again.
+pub(super) async fn retire_orphaned_client_state_locked(
+    state: &DesktopAppState,
+) -> Result<OrphanRetirement, BridgeError> {
+    let stale = stale_local_peers(state).await?;
+    let orphaned = client_binding(state).await == ClientBinding::Orphaned;
+    if stale.is_none() && !orphaned {
+        return Ok(OrphanRetirement::default());
     }
     drain_managed_runtime_pairing(state).await;
     let _client = crate::tauri_commands::lifecycle::exclusion::exclude_client(state).await?;
-    let user_home = resolve_user_home(dirs::home_dir())?;
-    let plan = plan_home_reset(
-        None,
-        None,
-        None,
-        &state.policy.desktop_paths,
-        &user_home,
-        ClientBinding::Orphaned,
-    )?;
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
-    let backup = plan.backup_path(&stamp)?;
-    plan.preflight(&backup)?;
-    let result = plan.retire(HomeResetDisposition::Archive, Some(&backup))?;
+    let paths = &state.policy.desktop_paths;
+    let local_peers = match (stale, state.policy.node_home.as_deref()) {
+        (Some(current), Some(home)) => gents_desktop_core::client::retire_stale_local_peers(
+            paths.peer_directory_path(),
+            home,
+            current.as_deref(),
+            &paths.retired_local_peers_path(),
+        )
+        .await
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?,
+        _ => 0,
+    };
+    let reset = if orphaned {
+        let user_home = resolve_user_home(dirs::home_dir())?;
+        let plan = plan_home_reset(None, None, None, paths, &user_home, ClientBinding::Orphaned)?;
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
+        let backup = plan.backup_path(&stamp)?;
+        plan.preflight(&backup)?;
+        Some(plan.retire(HomeResetDisposition::Archive, Some(&backup))?)
+    } else {
+        None
+    };
     tracing::info!(
         target: "gents_desktop::managed_server",
-        backup = ?result.backup_path,
-        retired = result.retired_paths.len(),
-        "archived desktop client state paired with a node that is no longer here"
+        backup = ?reset.as_ref().and_then(|reset| reset.backup_path.as_deref()),
+        retired = reset.as_ref().map_or(0, |reset| reset.retired_paths.len()),
+        local_peers,
+        "retired desktop client state paired with a node that is no longer here"
     );
-    Ok(Some(result))
+    Ok(OrphanRetirement { reset, local_peers })
+}
+
+/// `Some(current DID at the home)` when a saved peer of this desktop's managed
+/// node is not the node now there. An unreadable `init.json` is not proof the
+/// node there is another, and an unreadable `peers.json` is set aside by the
+/// repair, so neither retires anything.
+async fn stale_local_peers(state: &DesktopAppState) -> Result<Option<Option<String>>, BridgeError> {
+    let Some(home) = state.policy.node_home.as_deref() else {
+        return Ok(None);
+    };
+    let current = if present(&gents::store::local::home::init_config_path(home))? {
+        match read_home_identity(home).await {
+            Some(identity) => Some(identity.reviewed.node_did),
+            None => return Ok(None),
+        }
+    } else {
+        None
+    };
+    let Ok(peers) = gents_desktop_core::client::load_peer_records(
+        state.policy.desktop_paths.peer_directory_path(),
+    )
+    .await
+    else {
+        return Ok(None);
+    };
+    Ok(peers
+        .iter()
+        .any(|peer| peer.is_stale_local_peer(home, current.as_deref()))
+        .then_some(current))
 }
 
 pub(super) async fn retire_incompatible_home<R>(
