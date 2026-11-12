@@ -56,3 +56,11 @@ mod field_recovery_turn;
 
 #[path = "e2e_live/steering_delivery_live.rs"]
 mod steering_delivery_live;
+#[path = "e2e_live/plugin_goal_live.rs"]
+mod plugin_goal_live;
+#[allow(dead_code)]
+#[path = "e2e_background/plugin_job_support.rs"]
+mod plugin_job_support;
+
+#[path = "e2e_live/runtime_entry_live.rs"]
+mod runtime_entry_live;

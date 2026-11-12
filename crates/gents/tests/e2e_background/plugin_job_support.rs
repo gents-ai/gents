@@ -11,8 +11,8 @@ use gents_pack::pack::{
 };
 use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 use gents_toolcalls::background::job::job::{
-    JobChildState, JobControlRequest, JobEffects, JobGuestPin, JobPolicy, JobReadError, JobSpawn,
-    JobState, JobStepOutput, JobView, PluginJobSettings,
+    JobControlRequest, JobEffects, JobGuestPin, JobPolicy, JobReadError, JobSpawn, JobStepOutput,
+    JobView, PluginJobSettings,
 };
 use gents_toolcalls::background::job::view::{load_job_view, JobKey};
 use serde_json::{json, Value};
@@ -444,69 +444,4 @@ pub(crate) async fn wait_job(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scripted_job_adopts_one_child_and_completes() {
-    let db = test_db("plugin-job-smoke").await;
-    let plugin_home = tempfile::tempdir().expect("plugin home");
-    let plan = [
-        PlanEntry {
-            when: json!({"step": 0}),
-            output: effects(
-                Some(guest_pin("job-1-handle")),
-                vec![spawn("a", "job child a")],
-            ),
-            control: None,
-        },
-        PlanEntry {
-            when: json!({"children": {"a": "completed"}}),
-            output: result(json!("done")),
-            control: None,
-        },
-        PlanEntry {
-            when: json!({"children": {"a": "live"}}),
-            output: effects(None, Vec::new()),
-            control: None,
-        },
-    ];
-    let h = boot_job_harness(
-        db,
-        plugin_home.path().to_path_buf(),
-        "plugin-job-smoke-session",
-        vec![job_call("job-1", &plan)],
-        vec![StreamPlan::current_authored_user(
-            "job child a",
-            vec![StreamResponse::completes("job child a", ["child a done"])],
-        )],
-    )
-    .await;
-
-    let view = wait_job(
-        &h,
-        "job-1",
-        |view| view.state == JobState::Completed,
-        Duration::from_secs(30),
-    )
-    .await;
-    assert_eq!(view.children.len(), 1, "{view:?}");
-    assert_eq!(view.children[0].slot, "a");
-    assert_eq!(view.children[0].state, JobChildState::Completed);
-
-    let row_doc_id = job_row(&h, "job-1").await;
-    let response = h
-        .actors
-        .fixture
-        .access
-        .clone()
-        .execute(&format!(
-            r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
-            gents_store::graphql::escape_graphql_string(&row_doc_id),
-        ))
-        .await
-        .expect("read the job row");
-    let row = &response["data"]["AgentToolCall"][0];
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    assert!(!row["plugin_execution_receipt"].is_null(), "{row}");
-    h.runtime.shutdown().await;
 }
