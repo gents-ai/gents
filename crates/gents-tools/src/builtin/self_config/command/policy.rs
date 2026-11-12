@@ -731,34 +731,31 @@ mod tests {
     }
 
     #[test]
-    fn modeled_lockout_guard_matches_the_grant_owner() {
-        let lean = gents_lean_vocab::lean_contract_snapshot();
-        let protected = lean
-            .policy_lockout_cases
-            .protected
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let owned = GrantSet::AgentBaseline
-            .permissions()
-            .iter()
-            .chain(GrantSet::PolicyDelegate.permissions())
-            .map(|permission| permission.as_str().to_owned())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(owned, protected);
-        for row in &lean.policy_lockout_cases.rows {
-            let permission =
-                NodePermission::parse(row.permission.as_str()).expect("modeled permission");
-            assert_eq!(
-                keeps_lockout(
-                    row.no_lockout,
-                    row.is_self,
-                    row.delete,
-                    &PolicyTarget::Node(permission),
-                ),
-                row.kept,
-                "{row:?}"
-            );
-        }
+    fn contracts_policy_lockout_matches_lean() {
+        gents_lean_vocab::families::contracts_policy_lockout::replay(|i| {
+            let owned = GrantSet::AgentBaseline
+                .permissions()
+                .iter()
+                .chain(GrantSet::PolicyDelegate.permissions())
+                .map(|permission| permission.as_str().to_owned())
+                .collect::<BTreeSet<_>>();
+            gents_lean_vocab::families::contracts_policy_lockout::LockoutOutput {
+                protected: owned.into_iter().collect(),
+                kept: i
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        let permission = NodePermission::parse(row.permission.as_str())
+                            .expect("modeled permission");
+                        keeps_lockout(
+                            row.no_lockout,
+                            row.is_self,
+                            row.delete,
+                            &PolicyTarget::Node(permission),
+                        )
+                    })
+                    .collect(),
+            }
+        });
     }
 }

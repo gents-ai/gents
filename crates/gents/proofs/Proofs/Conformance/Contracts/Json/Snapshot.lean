@@ -834,8 +834,6 @@ def snapshotClientCasesJson : String :=
       ++ selfConfigResourceReadExposureCasesJson ++ ","
     ++ "\"self_config_scope_cases\":"
       ++ selfConfigScopeCasesJson ++ ","
-    ++ "\"policy_lockout_cases\":"
-      ++ policyLockoutCasesJson ++ ","
     ++ "\"self_config_cases\":"
       ++ selfConfigCasesJson ++ ","
     ++ "\"agent_decision_cases\":"

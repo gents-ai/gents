@@ -110,25 +110,38 @@ def policyGrantBound : Family PolicyGrantBoundInput Bool where
     ({ Grants.bot with policy := i.candidatePolicy } : Grants).boundedBy
       { Grants.bot with policy := i.storedPolicy } { Grants.bot with policy := i.heldPolicy }
 
-/-- The node permissions a no-lockout Agent keeps against its own revoke, and for
-each permission and change, whether the lockout guard keeps it. Rust
-`policy::keeps_lockout` must agree on every row. -/
-def policyLockoutCasesJson : String :=
-  let permissions := (Identity.GrantSets.lockoutProtected ++ ["patch-collection"]).eraseDups
-  let rows := permissions.flatMap fun p =>
-    [false, true].flatMap fun delete =>
-      [false, true].flatMap fun noLockout =>
-        [false, true].map fun isSelf =>
-          let change : Identity.GrantSets.Change :=
-            ⟨.permission p, delete, true, false⟩
-          "{\"permission\":" ++ jsonString p
-            ++ ",\"delete\":" ++ scBool delete
-            ++ ",\"no_lockout\":" ++ scBool noLockout
-            ++ ",\"is_self\":" ++ scBool isSelf
-            ++ ",\"kept\":"
-            ++ scBool (Identity.GrantSets.selfChangeKeepsLockout noLockout isSelf change) ++ "}"
-  "{\"protected\":" ++ jsonStringArray Identity.GrantSets.lockoutProtected
-    ++ ",\"rows\":" ++ jsonArray rows ++ "}"
+structure LockoutRow where
+  permission : String
+  delete : Bool
+  noLockout : Bool
+  isSelf : Bool
+  deriving Lean.ToJson
+
+structure LockoutInput where
+  rows : List LockoutRow
+  deriving Lean.ToJson
+
+structure LockoutOutput where
+  «protected» : List String
+  kept : List Bool
+  deriving Lean.ToJson
+
+/-- The node permissions a no-lockout Agent keeps against its own revoke (as a
+sorted set), and for each permission and change whether the lockout guard
+keeps it. -/
+@[conformance_family]
+def policyLockout : Family LockoutInput LockoutOutput where
+  inputs :=
+    let permissions := (Identity.GrantSets.lockoutProtected ++ ["patch-collection"]).eraseDups
+    [{ rows := permissions.flatMap fun permission =>
+        [false, true].flatMap fun delete =>
+          [false, true].flatMap fun noLockout =>
+            [false, true].map fun isSelf => { permission, delete, noLockout, isSelf } }]
+  model := fun i =>
+    { «protected» := Identity.GrantSets.lockoutProtected.eraseDups.mergeSort fun a b => a ≤ b
+      kept := i.rows.map fun row =>
+        Identity.GrantSets.selfChangeKeepsLockout row.noLockout row.isSelf
+          ⟨.permission row.permission, row.delete, true, false⟩ }
 
 def selfConfigSelectionJson : Option (List (FieldKey × FieldValue)) → String
   | none => "null"
