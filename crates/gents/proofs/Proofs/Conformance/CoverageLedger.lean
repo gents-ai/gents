@@ -2521,6 +2521,9 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp "session_document_projection_cases" "SessionDocumentCases"
       "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")
       "client-shell" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "contracts_edit_anchor_fork_unreached"
+      "model-production-gap: the served fork fixture publishes user-text turns only; edit anchors in histories with assistant, tool-result or empty user messages, duplicate keys or absent anchors are not built by a production scenario.")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_document_selection_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_document_fork_cases" "SessionDocumentCases")

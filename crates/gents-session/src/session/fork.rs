@@ -1180,22 +1180,16 @@ mod tests {
 
     #[test]
     fn generated_edit_anchors_select_exact_canonical_user_messages() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_edit_anchor_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let messages = case["messages"]
-                .as_array()
-                .unwrap()
+        gents_lean_vocab::families::contracts_edit_anchor_cut::replay(|i| {
+            let messages = i
+                .messages
                 .iter()
-                .map(modeled_message)
+                .map(|message| modeled_message(&serde_json::to_value(message).unwrap()))
                 .collect::<Vec<_>>();
-            let expected = case["cut"].as_u64().map(|cut| u32::try_from(cut).unwrap());
-            assert_eq!(
-                edit_cut(messages.iter(), case["key"].as_str().unwrap()),
-                expected,
-                "{case}"
-            );
-        }
+            gents_lean_vocab::families::contracts_edit_anchor_cut::EditAnchorCut {
+                cut: edit_cut(messages.iter(), &i.key).map(u64::from),
+            }
+        });
     }
 
     #[test]

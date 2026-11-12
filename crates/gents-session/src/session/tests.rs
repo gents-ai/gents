@@ -691,63 +691,67 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
 async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source() {
     use gents_store::identity::NodeIdentity;
     const SOURCE: &str = "edit-source";
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_edit_anchor_cases
-        .iter()
-        .find(|case| case["name"] == "three_user_turns")
-        .unwrap();
-    let (db, user, client, binding) = fork_reader_node("edit-fork").await;
-    let node = &db.node;
-    let node_did = db.node_identity.did();
-    let modeled_messages = case["messages"].as_array().unwrap();
-    for (index, message) in modeled_messages.iter().enumerate() {
-        assert_eq!(message["sequence"].as_u64().unwrap(), (index + 1) as u64);
-    }
-    let messages = modeled_messages
-        .iter()
-        .map(|message| message["key"].as_str().unwrap().to_owned())
-        .collect::<Vec<_>>();
-    let keys = publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
-    let anchor = modeled_messages
-        .iter()
-        .position(|message| message["key"] == case["key"])
-        .unwrap();
-    let before = history_on(&client, SOURCE, node_did, Some(user.did()), None)
-        .await
-        .unwrap();
-    let receipt = fork_on(
-        &client,
-        ForkParams {
-            source_session_id: SOURCE,
-            boundary: ForkBoundary::BeforeMessageKey(&keys[anchor]),
-            caller_node_did: node_did,
-            caller_requester_did: Some(user.did()),
-            target_agent_did: None,
-        },
-    )
-    .await
-    .unwrap();
-    let retained = usize::try_from(case["retained_count"].as_u64().unwrap()).unwrap();
-    assert_eq!(receipt.copied_messages as usize, retained);
-    assert_eq!(
-        history_on(
+    for case in gents_lean_vocab::families::contracts_edit_anchor_fork::cases() {
+        let (db, user, client, binding) = fork_reader_node("edit-fork").await;
+        let node = &db.node;
+        let node_did = db.node_identity.did();
+        for (index, message) in case.input.messages.iter().enumerate() {
+            assert_eq!(message.sequence, (index + 1) as u64);
+        }
+        let messages = case
+            .input
+            .messages
+            .iter()
+            .map(|message| message.key.clone())
+            .collect::<Vec<_>>();
+        let keys = publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+        let anchor = case
+            .input
+            .messages
+            .iter()
+            .position(|message| message.key == case.input.key)
+            .unwrap();
+        let before = history_on(&client, SOURCE, node_did, Some(user.did()), None)
+            .await
+            .unwrap();
+        let receipt = fork_on(
             &client,
-            &receipt.session_id,
-            node_did,
-            Some(user.did()),
-            None
+            ForkParams {
+                source_session_id: SOURCE,
+                boundary: ForkBoundary::BeforeMessageKey(&keys[anchor]),
+                caller_node_did: node_did,
+                caller_requester_did: Some(user.did()),
+                target_agent_did: None,
+            },
         )
         .await
-        .unwrap(),
-        before[..retained]
-    );
-    assert_eq!(
-        history_on(&client, SOURCE, node_did, Some(user.did()), None)
+        .unwrap();
+        let retained = receipt.copied_messages as usize;
+        assert_eq!(
+            history_on(
+                &client,
+                &receipt.session_id,
+                node_did,
+                Some(user.did()),
+                None
+            )
             .await
             .unwrap(),
-        before
-    );
-    node.shutdown().await.expect("shut down test node");
+            before[..retained]
+        );
+        assert_eq!(
+            history_on(&client, SOURCE, node_did, Some(user.did()), None)
+                .await
+                .unwrap(),
+            before
+        );
+        case.check(
+            gents_lean_vocab::families::contracts_edit_anchor_fork::EditAnchorRetained {
+                retained_count: Some(u64::from(receipt.copied_messages)),
+            },
+        );
+        node.shutdown().await.expect("shut down test node");
+    }
 }
 
 async fn session_doc_id(

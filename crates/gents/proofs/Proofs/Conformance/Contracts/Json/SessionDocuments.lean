@@ -248,16 +248,6 @@ private def editBlockName {α : Type} : CanonicalOutput.MessageBlock α → Stri
   | .toolResult _ _ _ _ => "toolResult"
   | .media _ => "media"
 
-private def editAnchorJson (witness : EditAnchorCase) : Json := Json.mkObj
-  [("name", toJson witness.name), ("key", toJson witness.key),
-   ("messages", toJson (witness.source.messages.map fun message => Json.mkObj
-     [("key", toJson message.key), ("sequence", toJson message.sequence),
-      ("role", toJson (roleName message.header.role)),
-      ("blocks", toJson (message.blocks.map editBlockName))])),
-   ("cut", toJson (SessionFork.editCut witness.source witness.key)),
-   ("retained_count", toJson ((SessionFork.editCut witness.source witness.key).map fun cut =>
-      (SessionFork.copyPrefix witness.source child remap childKey cut).messages.length))]
-
 private def archiveDecisionName : AgentSession.Archive.Decision → String
   | .denied => "denied"
   | .unchanged => "unchanged"
@@ -409,8 +399,63 @@ def sessionDocumentSelectionCasesJson : String :=
       selectionJson "same_second_live_outranks_later_refusal" [sameSecondClaim, sameSecondRefusal] 1 10 none,
       selectionJson "earlier_second_live_loses" [{ sameSecondClaim with createdAt := 1 }, finishedPredecessor] 1 10 none]).compress
 
-def sessionDocumentEditAnchorCasesJson : String :=
-  (toJson (editAnchorCases.map editAnchorJson)).compress
+structure EditMessage where
+  key : String
+  sequence : Nat
+  role : String
+  blocks : List String
+  deriving ToJson
+
+/-- The wire projection of a modeled edit-anchor case: each message's key,
+sequence, role and block kinds. The model reads the case's own history. -/
+structure EditAnchorInput where
+  name : String
+  key : String
+  messages : List EditMessage
+  deriving ToJson
+
+def EditAnchorInput.ofCase (witness : EditAnchorCase) : EditAnchorInput :=
+  { name := witness.name, key := witness.key
+    messages := witness.source.messages.map fun message =>
+      { key := message.key, sequence := message.sequence, role := roleName message.header.role
+        blocks := message.blocks.map editBlockName } }
+
+def EditAnchorInput.source? (i : EditAnchorInput) : Option SessionFork.History :=
+  (editAnchorCases.find? (·.name == i.name)).map (·.source)
+
+structure EditAnchorCut where
+  cut : Option Nat
+  deriving ToJson
+
+@[conformance_family]
+def editAnchorCut : Family EditAnchorInput EditAnchorCut where
+  inputs := editAnchorCases.map EditAnchorInput.ofCase
+  model := fun i => { cut := i.source?.bind fun source => SessionFork.editCut source i.key }
+
+structure EditAnchorRetained where
+  retainedCount : Option Nat
+  deriving ToJson
+
+def editAnchorRetained (i : EditAnchorInput) : EditAnchorRetained :=
+  { retainedCount := i.source?.bind fun source =>
+      (SessionFork.editCut source i.key).map fun cut =>
+        (SessionFork.copyPrefix source child remap childKey cut).messages.length }
+
+/-- The fork scenario publishes signed user-text turns only, so only a history
+made of user messages can be built on a served node. -/
+@[conformance_family]
+def editAnchorFork : Family EditAnchorInput EditAnchorRetained where
+  inputs := (editAnchorCases.filter fun c => c.name ∈ ["three_user_turns"]).map EditAnchorInput.ofCase
+  model := editAnchorRetained
+
+/-- model-production-gap: the served fork fixture publishes user-text turns
+only; histories with assistant, tool-result or empty user messages, duplicate
+keys or anchors that no message carries are not built by any production
+scenario, so their retained prefix is not replayed. -/
+@[conformance_family]
+def editAnchorForkUnreached : Family EditAnchorInput EditAnchorRetained where
+  inputs := (editAnchorCases.filter fun c => c.name ∉ ["three_user_turns"]).map EditAnchorInput.ofCase
+  model := editAnchorRetained
 
 deriving instance ToJson for SessionFork.EditForkBinding, SessionFork.EditForkDecision
 
