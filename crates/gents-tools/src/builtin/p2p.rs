@@ -261,13 +261,14 @@ impl P2pTool {
                 ))
             }
             ["network", "list"] => {
-                let peers = self
-                    .rows(
-                        "PeerRegistry",
-                        None,
-                        "peer_id node_did display_name network_id addresses status updated_at",
-                    )
-                    .await?;
+                let access =
+                    ConfigAccess::local_as(self.node.clone(), identity::Did::new(actor.did())?);
+                let mut peers = gents_p2p::operations::registry::list_registered_peers(
+                    &access,
+                    chrono::Utc::now(),
+                )
+                .await?;
+                peers.truncate(50);
                 Ok(reply(
                     json!({"peers":peers}),
                     None,
@@ -482,7 +483,7 @@ fn reply(outcome: Value, next_call: Option<Value>, observations: Value) -> Reply
 fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
         None => "Actions: status; network_list, network_get; enrollment_offer, enrollment_request, enrollment_pending, enrollment_approve, enrollment_deny, enrollment_revoke, enrollment_history, enrollment_renewal_policy. Action help with topic status, network, enrollment or scope explains each; scope covers grants and capability boundaries. Identity comes from the running node. Mutation grants are explicit.",
-        Some("status" | "network") => "status returns native connected peer references (raw IDs or transport addresses) and native sync facts. network_list lists up to 50 registered peers with exact DIDs and addresses. network_get takes peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority or current connectivity; network_get's connected field is the observed transport connection. status defaults to backlog facts; details:true returns native diagnostic counters.",
+        Some("status" | "network") => "status returns native connected peer references (raw IDs or transport addresses) and native sync facts. network_list lists up to 50 registered peers with exact DIDs and addresses; online means the peer reports online and its heartbeat is fresh, paired means this node pairs with it. network_get takes peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority or current connectivity; network_get's connected field is the observed transport connection. status defaults to backlog facts; details:true returns native diagnostic counters.",
         Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending and approves it. enrollment_offer requires mutation authority and returns this node's signed offer_token, peer_id and DID; the token is valid 5 minutes unless valid_for_secs asks for up to 3600, which a relay through people or other agents needs, and the joining node must request before expires_at; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for 30 days by default; lease_seconds may set a lease of up to 90 days. It materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, not this node in the requester's. Enrollment in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned enrollment document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted. Approved entries carry lease_state, lease_remaining_days and renewal_due, which turns true inside the last 7 days of the lease. Automatic renewal is off by default. enrollment_renewal_policy sets auto_renew and an optional maximum lease_seconds for this network; disabling it immediately stops automatic approvals. Renewal is re-enrollment before expiry: the same four calls with a fresh offer, request and approval for the same peer; the approval takes the peer's next authorization sequence and supersedes the old generation in place, so the peer's enrollment route stays. After expiry the peer's routes and remote requests stop until it re-enrolls.",
         Some("scope") => "P2P carries discovery and enrollment only. This tool never pairs or syncs application, protocol configuration or credential collections, whatever the tool grants or document ACP say; read authorized documents through query. Enrollment is a separate signed authority, and mutation authority gates offers, requests and decisions.",
         Some(resource) => bail!("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}"),
