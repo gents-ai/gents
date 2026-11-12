@@ -2603,16 +2603,21 @@ mod tests {
             tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
                 .await
                 .unwrap();
-        let cases = snapshot["identity_bootstrap_cases"].as_array().unwrap();
+        let cases = &gents_lean_vocab::lean_contract_snapshot().identity_bootstrap_cases;
         assert_eq!(
-            cases.iter().find(|case| case["name"] == "fresh").unwrap()["expected_may_grant"],
+            cases
+                .iter()
+                .find(|case| case.name == "fresh")
+                .unwrap()
+                .expected_may_grant,
             true
         );
         assert_eq!(
             cases
                 .iter()
-                .find(|case| case["name"] == "crash-after-reservation")
-                .unwrap()["expected_may_grant"],
+                .find(|case| case.name == "crash-after-reservation")
+                .unwrap()
+                .expected_may_grant,
             false
         );
         let temp = tempfile::tempdir().unwrap();
@@ -2878,17 +2883,12 @@ mod tests {
 
     #[tokio::test]
     async fn consumed_bootstrap_reservation_is_not_replayed() {
-        let snapshot: Value =
-            tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
-                .await
-                .unwrap();
-        let case = snapshot["identity_bootstrap_reservation_cases"]
-            .as_array()
-            .unwrap()
+        let case = gents_lean_vocab::lean_contract_snapshot()
+            .identity_bootstrap_reservation_cases
             .iter()
-            .find(|case| case["name"] == "exists-or-create-failed")
+            .find(|case| case.name == "exists-or-create-failed")
             .unwrap();
-        assert_eq!(case["expected"], false);
+        assert_eq!(case.expected, false);
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(&home).unwrap();
