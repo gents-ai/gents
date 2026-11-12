@@ -5,6 +5,7 @@ import Proofs.ToolCalls.PluginJob.Authority
 import Proofs.ToolCalls.PluginJob.ExecutionIdentity
 import Proofs.ToolCalls.PluginJob.RecoveryTrace
 import Proofs.ToolCalls.Recovery.Sweeps.PluginJob
+import Proofs.Conformance.Family
 import Lean
 
 /-!
@@ -1553,21 +1554,68 @@ theorem lineage_regressions :
       , [some "req-a", some "req-a-retry"], [some "req-a"], [some "req-a", none], [some "req-b"], [none] ] := by
   native_decide
 
-private def requestRowJson (r : DurableLineage.RequestRow) : Json :=
-  Json.mkObj [("created_at", toJson r.createdAt), ("_docID", toJson r.docId),
-    ("session_id", toJson r.session), ("is_public", toJson r.isPublic),
-    ("caused_by_parent_request_doc_id", toJson r.causeRequestDoc),
-    ("caused_by_parent_tool_call_doc_id", toJson r.causeToolCallDoc),
-    ("opening_request_doc_id", toJson r.sessionOpening)]
+structure LineageRowWire where
+  createdAt : Nat
+  docId : String
+  sessionId : String
+  isPublic : Bool
+  causedByParentRequestDocId : Option String
+  causedByParentToolCallDocId : Option String
+  openingRequestDocId : Option String
+  deriving ToJson
 
-private def renderLineage (c : LineageCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("rows", toJson (c.rows.map requestRowJson)),
-    ("queries", toJson ((c.queries.zip (openingDocs c)).map fun ((cause, session), opening) =>
-      Json.mkObj [("cause_request_doc_id", toJson cause), ("session_id", toJson session),
-        ("expected_opening_doc_id", toJson opening),
-        ("listed_start", toJson (DurableLineage.listedStart c.rows cause session))]))]
+structure LineageQueryWire where
+  causeRequestDocId : String
+  sessionId : String
+  deriving ToJson
 
-def lineageCasesJson : String := (toJson (lineageCases.map renderLineage)).compress
+structure LineageInput where
+  name : String
+  rows : List LineageRowWire
+  queries : List LineageQueryWire
+  deriving ToJson
+
+private def lineageRowWire (r : DurableLineage.RequestRow) : LineageRowWire :=
+  { createdAt := r.createdAt, docId := r.docId, sessionId := r.session, isPublic := r.isPublic
+    causedByParentRequestDocId := r.causeRequestDoc
+    causedByParentToolCallDocId := r.causeToolCallDoc, openingRequestDocId := r.sessionOpening }
+
+private def lineageRow (w : LineageRowWire) : DurableLineage.RequestRow :=
+  { createdAt := w.createdAt, docId := w.docId, session := w.sessionId, isPublic := w.isPublic
+    causeRequestDoc := w.causedByParentRequestDocId
+    causeToolCallDoc := w.causedByParentToolCallDocId, sessionOpening := w.openingRequestDocId }
+
+private def lineageInput (c : LineageCase) : LineageInput :=
+  { name := c.name, rows := c.rows.map lineageRowWire
+    queries := c.queries.map fun (cause, session) => { causeRequestDocId := cause, sessionId := session } }
+
+private def lineageOpenings (i : LineageInput) : List (Option String) :=
+  i.queries.map fun q =>
+    (DurableLineage.openingRequest (i.rows.map lineageRow) q.causeRequestDocId q.sessionId).map (·.docId)
+
+example : lineageCases.all (fun c => lineageOpenings (lineageInput c) == openingDocs c) := by
+  native_decide
+
+example : (lineageCases.map (·.name)).Nodup := by native_decide
+
+example : lineageCases.all (fun c => (c.rows.map (·.docId)).Nodup && !c.queries.isEmpty &&
+    (openingDocs c).all fun opening => opening.all fun doc => c.rows.any (·.docId == doc)) := by
+  native_decide
+
+example : lineageCases.all (fun c => c.queries.all fun (cause, session) =>
+    !DurableLineage.listedStart c.rows cause session ||
+      (DurableLineage.openingRequest c.rows cause session).isSome) := by
+  native_decide
+
+@[conformance_family]
+def lineageStarting : Conformance.Family LineageInput (List (Option String)) where
+  inputs := lineageCases.map lineageInput
+  model := lineageOpenings
+
+@[conformance_family]
+def lineageOpening : Conformance.Family LineageInput (List (Option String)) where
+  inputs := lineageCases.map lineageInput
+  model := lineageOpenings
 
 /-- One plugin-job row before a sweep tick or a stale observer invocation. -/
 structure RecoveryCase where

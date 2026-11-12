@@ -409,10 +409,6 @@ pub fn lean_plugin_job_key_cases() -> &'static [LeanPluginJobKeyCase] {
     &lean_contract_snapshot().plugin_job_key_cases
 }
 
-pub fn lean_plugin_job_lineage_cases() -> &'static [LeanPluginJobLineageCase] {
-    &lean_contract_snapshot().plugin_job_lineage_cases
-}
-
 pub fn lean_plugin_job_recovery_cases() -> &'static [LeanPluginJobRecoveryCase] {
     &lean_contract_snapshot().plugin_job_recovery_cases
 }
@@ -2991,7 +2987,6 @@ pub struct LeanContractSnapshot {
     pub plugin_job_control_cases: Vec<LeanPluginJobControlCase>,
     pub plugin_job_authority_cases: Vec<LeanPluginJobAuthorityCase>,
     pub plugin_job_wire_cases: Vec<LeanPluginJobWireCase>,
-    pub plugin_job_lineage_cases: Vec<LeanPluginJobLineageCase>,
     pub plugin_job_recovery_cases: Vec<LeanPluginJobRecoveryCase>,
     pub plugin_job_wake_cases: Vec<LeanPluginJobWakeCase>,
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
@@ -8680,26 +8675,6 @@ pub struct LeanPluginJobKillExpected {
     pub kill: Vec<LeanPluginJobKill>,
 }
 
-/// `Conformance.PluginJob.lineageCasesJson`: request rows and the
-/// `DurableLineage.openingRequest` each `(cause, session)` query selects.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobLineageCase {
-    pub name: String,
-    pub rows: Vec<LeanPluginJobRequestRow>,
-    pub queries: Vec<LeanPluginJobLineageQuery>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobLineageQuery {
-    pub cause_request_doc_id: String,
-    pub session_id: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub expected_opening_doc_id: Option<String>,
-    pub listed_start: bool,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPluginJobMessageKey {
@@ -8866,22 +8841,6 @@ pub struct LeanPluginJobRecoveryRow {
     pub available: bool,
     pub stepped: bool,
     pub step_in_flight: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobRequestRow {
-    pub created_at: u64,
-    #[serde(rename = "_docID")]
-    pub doc_id: String,
-    pub session_id: String,
-    pub is_public: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub caused_by_parent_request_doc_id: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub caused_by_parent_tool_call_doc_id: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub opening_request_doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

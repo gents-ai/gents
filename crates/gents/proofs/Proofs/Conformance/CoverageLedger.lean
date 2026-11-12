@@ -1706,18 +1706,13 @@ def caseCoverage : List CoverageEntry :=
       "plugin_job_wire_cases"
       "PluginJobWireCases")
       "plugin-jobs" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "plugin_job_lineage_cases"
-      "PluginJobLineageCases"
-      "Rows decode strictly against DurableLineage.openingRequest. The client consumers that drive the native opening-request owner are pending.")
-      "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_lineage_cases"
-      "PluginJobLineageCases")
-      "plugin-jobs" [Surface.operatorCli]
+      "family"
+      "plugin_job_lineage_starting")
+      "plugin-jobs" [Surface.runtimeInternal, Surface.operatorCli]
   , tagged (consumerCoverage
-      "plugin_job_lineage_cases"
-      "PluginJobLineageCases")
+      "family"
+      "plugin_job_lineage_opening")
       "plugin-jobs" [Surface.operatorUi]
   , tagged (consumerCoverage
       "plugin_job_recovery_cases"
