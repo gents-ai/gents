@@ -1,6 +1,7 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 import Proofs.Runtime.RuntimeReconcile.StartupReadiness
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -304,31 +305,42 @@ def startupReadinessCases : List StartupReadinessCase :=
 def startupReadinessCasesJson : String :=
   jsonArray (startupReadinessCases.map startupReadinessCaseJson)
 
-def snapshotDemotionCaseJson (name : String) (unavailable : Finset AgentDid)
-    (demotions : List AgentDid) : String :=
-  let pre : ResolvedSnapshot :=
-    { defaultAgent := 1, runnable := {1, 2}, unavailable := unavailable,
-      dependenciesSatisfied := {1, 2} }
-  let post := demotions.foldl ResolvedSnapshot.demote pre
-  let ids := fun (values : Finset AgentDid) => jsonArray ((values.sort (· ≤ ·)).map toString)
-  "{\"witness\":" ++ jsonString name ++
-    ",\"default_agent\":" ++ toString pre.defaultAgent ++
-    ",\"runnable\":" ++ ids pre.runnable ++
-    ",\"unavailable\":" ++ ids pre.unavailable ++
-    ",\"demotions\":" ++ jsonArray (demotions.map toString) ++
-    ",\"post_runnable\":" ++ ids post.runnable ++
-    ",\"post_unavailable\":" ++ ids post.unavailable ++
-    ",\"post_default_agent\":" ++ toString post.defaultAgent ++
-    ",\"well_formed\":" ++ boolString (decide post.wellFormed) ++ "}"
+structure SnapshotDemotionInput where
+  name : String
+  defaultAgent : Nat
+  runnable : List Nat
+  unavailable : List Nat
+  demotions : List Nat
+  deriving Lean.ToJson
 
-def snapshotDemotionCasesJson : String :=
-  jsonArray [
-    snapshotDemotionCaseJson "snapshot_demotion.no_failures" {} [],
-    snapshotDemotionCaseJson "snapshot_demotion.other_agent" {} [2],
-    snapshotDemotionCaseJson "snapshot_demotion.default_agent" {} [1],
-    snapshotDemotionCaseJson "snapshot_demotion.all_agents" {} [1, 2],
-    snapshotDemotionCaseJson "snapshot_demotion.repeated_failure" {} [2, 2],
-    snapshotDemotionCaseJson "snapshot_demotion.retains_prior_unavailability" {3} [2]
-  ]
+structure SnapshotDemotionOutput where
+  postRunnable : List Nat
+  postUnavailable : List Nat
+  postDefaultAgent : Nat
+  wellFormed : Bool
+  deriving Lean.ToJson
+
+def snapshotDemotionInput (name : String) (unavailable : List Nat) (demotions : List Nat) :
+    SnapshotDemotionInput :=
+  { name, defaultAgent := 1, runnable := [1, 2], unavailable, demotions }
+
+@[conformance_family]
+def snapshotDemotion : Family SnapshotDemotionInput SnapshotDemotionOutput where
+  inputs :=
+    [ snapshotDemotionInput "snapshot_demotion.no_failures" [] []
+    , snapshotDemotionInput "snapshot_demotion.other_agent" [] [2]
+    , snapshotDemotionInput "snapshot_demotion.default_agent" [] [1]
+    , snapshotDemotionInput "snapshot_demotion.all_agents" [] [1, 2]
+    , snapshotDemotionInput "snapshot_demotion.repeated_failure" [] [2, 2]
+    , snapshotDemotionInput "snapshot_demotion.retains_prior_unavailability" [3] [2] ]
+  model := fun i =>
+    let pre : ResolvedSnapshot :=
+      { defaultAgent := i.defaultAgent, runnable := i.runnable.toFinset,
+        unavailable := i.unavailable.toFinset, dependenciesSatisfied := i.runnable.toFinset }
+    let post := i.demotions.foldl ResolvedSnapshot.demote pre
+    { postRunnable := post.runnable.sort (· ≤ ·)
+      postUnavailable := post.unavailable.sort (· ≤ ·)
+      postDefaultAgent := post.defaultAgent
+      wellFormed := decide post.wellFormed }
 
 end Conformance.Contracts

@@ -649,10 +649,6 @@ pub fn lean_sibling_tools_cases() -> &'static [LeanSiblingToolsCase] {
     &lean_contract_snapshot().sibling_tools_cases
 }
 
-pub fn lean_snapshot_demotion_cases() -> &'static [LeanSnapshotDemotionCase] {
-    &lean_contract_snapshot().snapshot_demotion_cases
-}
-
 pub fn lean_startup_readiness_cases() -> &'static [LeanStartupReadinessCase] {
     &lean_contract_snapshot().startup_readiness_cases
 }
@@ -2479,37 +2475,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +3000,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3223,7 +3187,6 @@ pub struct LeanContractSnapshot {
     pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub startup_readiness_cases: Vec<LeanStartupReadinessCase>,
-    pub snapshot_demotion_cases: Vec<LeanSnapshotDemotionCase>,
     pub plugin_reference_cases: Vec<serde_json::Value>,
     pub plugin_pin_cases: Vec<serde_json::Value>,
     pub pack_wire_lock_cases: Vec<serde_json::Value>,
@@ -11232,20 +11195,6 @@ pub struct LeanSiblingToolsCase {
     pub existing_network: String,
     pub admitted: bool,
     pub result_network: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSnapshotDemotionCase {
-    pub default_agent: u64,
-    pub demotions: Vec<u64>,
-    pub post_default_agent: u64,
-    pub post_runnable: Vec<u64>,
-    pub post_unavailable: Vec<u64>,
-    pub runnable: Vec<u64>,
-    pub unavailable: Vec<u64>,
-    pub well_formed: bool,
-    pub witness: String,
 }
 
 #[derive(Debug, Deserialize)]

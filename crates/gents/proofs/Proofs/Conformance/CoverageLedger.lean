@@ -900,8 +900,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginReferenceCases")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "snapshot_demotion_cases"
-      "SnapshotDemotionCases")
+      "family"
+      "contracts_snapshot_demotion")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "startup_readiness_cases"
