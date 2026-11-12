@@ -491,13 +491,15 @@ def caseCoverage : List CoverageEntry :=
       "identity_secret_publication_cases" "IdentitySecretPublicationCases"
       "The snapshot emits and the decoder accepts these cases; no native test reads them.")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "remote_agent_delivery_recovery_cases" "RemoteAgentDeliveryRecoveryCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  , tagged (boundaryCoverage
+      "family"
+      "remote_delivery_recovery_unreached"
+      "model-production-gap: remote Agent delivery is refused before any send until the authenticated HTTP delivery path exists, so no production tool call reserves a signed remote intent, records an attempt or retains a target receipt.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "remote_agent_delivery_response_cases" "RemoteAgentDeliveryResponseCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  , tagged (boundaryCoverage
+      "family"
+      "remote_delivery_response_unreached"
+      "model-production-gap: remote Agent delivery is refused before any send, so production never verifies a target-signed terminal response against a retained receipt.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "scope_collection_rules_template_rules")
       "pairing-reconcile" [Surface.runtimeInternal]

@@ -1,4 +1,5 @@
 import Proofs.Conformance.Views
+import Proofs.Conformance.RemoteDelivery
 import Proofs.Conformance.AgentViews
 import Proofs.Conformance.InferenceViews
 import Proofs.Conformance.PluginGrantDeclaration
@@ -919,10 +920,8 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"agent_delivery_cases\":"
       ++ jsonArray (QueuedSteering.agentDeliveryCases.map agentDeliveryCaseJson) ++ ","
     ++ "\"remote_agent_delivery_cases\":" ++ Request.RemoteDelivery.casesJson ++ ","
-    ++ "\"remote_agent_delivery_recovery_cases\":" ++ Request.RemoteDelivery.recoveryCasesJson ++ ","
     ++ "\"remote_agent_delivery_claim_cases\":" ++ Request.RemoteDelivery.claimCasesJson ++ ","
     ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
-    ++ "\"remote_agent_delivery_response_cases\":" ++ Request.RemoteDelivery.responseCasesJson ++ ","
     ++ "\"interrupt_delivery_cases\":"
       ++ jsonArray (QueuedSteering.interruptDeliveryCases.map interruptDeliveryCaseJson) ++ ","
 
