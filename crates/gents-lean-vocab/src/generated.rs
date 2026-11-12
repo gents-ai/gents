@@ -801,21 +801,6 @@ pub struct LeanAgentBaselineStep {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanAgentBlockSigningCase {
-    pub name: String,
-    pub managed: bool,
-    pub valid: bool,
-    pub node: String,
-    pub actor: String,
-    pub signer: Option<String>,
-    pub binding_node: Option<String>,
-    pub root_held: bool,
-    pub expected: String,
-    pub config_tool: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanAgentCandidate {
     pub node_did: String,
     pub agents: Vec<LeanCandidateAgent>,
@@ -2981,10 +2966,8 @@ pub struct LeanContractSnapshot {
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
     pub identity_publication_cases: Vec<LeanIdentityPublicationCase>,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
-    pub identity_delegation_cases: Vec<LeanDelegationCase>,
     pub identity_agent_baseline_cases: Vec<LeanAgentBaselineCase>,
     pub identity_agent_creator_cases: Vec<serde_json::Value>,
-    pub identity_agent_block_signing_cases: Vec<LeanAgentBlockSigningCase>,
     pub identity_private_journal_policy: LeanPrivateJournalPolicy,
     pub mailbox_runtime_notice_case: serde_json::Value,
     pub mailbox_claimed_recipient_cases: Vec<LeanMailboxClaimedRecipientCase>,
@@ -3529,16 +3512,6 @@ pub struct LeanDelegatedFinalityCase {
 pub struct LeanDelegatedFinalityCaseActionsItem {
     pub kind: String,
     pub valid: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDelegationCase {
-    pub name: String,
-    pub holder: String,
-    pub relation: String,
-    pub delete: bool,
-    pub expected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

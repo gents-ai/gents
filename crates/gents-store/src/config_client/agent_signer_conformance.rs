@@ -34,15 +34,14 @@ async fn managed_signing_selection_conforms_to_lean() {
             .unwrap(),
     );
     let unconfigured_node = Arc::new(defra_node::Node::builder().build().await.unwrap());
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .identity_agent_block_signing_cases
-            .clone()
-    })
+    let cases = tokio::task::spawn_blocking(
+        gents_lean_vocab::families::agent_block_signing_managed_route::cases::<String>,
+    )
     .await
     .unwrap();
     for case in &cases {
-        let selected_node = match case.node.as_str() {
+        let input = &case.input;
+        let selected_node = match input.node.as_str() {
             "node" => &node,
             "foreign-node" => &foreign_node,
             "" => &unconfigured_node,
@@ -54,7 +53,7 @@ async fn managed_signing_selection_conforms_to_lean() {
             _,
             &dyn NodeIdentity,
             &dyn NodeIdentity,
-        ) = match case.binding_node.as_deref() {
+        ) = match input.binding_node.as_deref() {
             Some("foreign-node") => (
                 &foreign_root,
                 &foreign_binding_a,
@@ -71,14 +70,14 @@ async fn managed_signing_selection_conforms_to_lean() {
             ),
             Some(other) => panic!("unknown binding node {other}"),
         };
-        let actor = match case.actor.as_str() {
+        let actor = match input.actor.as_str() {
             "agent-a" => selected_a.did(),
             "agent-b" => selected_b.did(),
             "user" => user.did(),
             "node" => root.did(),
             other => other,
         };
-        let actual = if !case.managed {
+        let actual = if !input.managed {
             let access = if actor.is_empty() {
                 ConfigAccess::local(selected_node.clone())
             } else {
@@ -91,7 +90,7 @@ async fn managed_signing_selection_conforms_to_lean() {
                 "refuse"
             }
         } else {
-            let selected = match case.signer.as_deref() {
+            let selected = match input.signer.as_deref() {
                 Some("agent-a") => Some((binding_a, selected_a)),
                 Some("agent-b") => Some((binding_b, selected_b)),
                 None => None,
@@ -99,10 +98,10 @@ async fn managed_signing_selection_conforms_to_lean() {
             };
             let resolved = selected.and_then(|(binding, selected)| {
                 let mut binding = binding.clone();
-                if !case.valid {
+                if !input.valid {
                     binding.agent_did = user.did().to_owned();
                 }
-                if case.root_held {
+                if input.root_held {
                     crate::identity::resolve_agent_identity(binding_root, &binding).ok()
                 } else {
                     let claimed = crate::identity::RegisteredIdentity::from_registered_did(
@@ -114,7 +113,7 @@ async fn managed_signing_selection_conforms_to_lean() {
                     assert!(
                         resolved.is_err(),
                         "{}: a DID-only root must not mint a managed signer",
-                        case.name
+                        input.name
                     );
                     resolved.ok()
                 }
@@ -135,7 +134,7 @@ async fn managed_signing_selection_conforms_to_lean() {
                 None => "refuse",
             }
         };
-        assert_eq!(actual, case.expected, "{}", case.name);
+        case.check(actual.to_owned());
     }
     node.shutdown().await.unwrap();
     foreign_node.shutdown().await.unwrap();
