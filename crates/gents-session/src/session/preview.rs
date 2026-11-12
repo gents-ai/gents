@@ -130,19 +130,17 @@ mod tests {
                 }),
             };
             let current = SessionRequestObservation {
-                request_doc_id: case["doc"].as_u64().unwrap().to_string(),
-                request_id: case["request"].as_u64().unwrap().to_string(),
-                lifecycle_state: serde_json::from_value(case["state"].clone()).unwrap(),
-            };
-            assert_eq!(
-                serde_json::to_value(observe_reply_preview(
-                    &observation,
-                    &current,
-                    case["reply"].as_str()
+                request_doc_id: case.doc.to_string(),
+                request_id: case.request.to_string(),
+                lifecycle_state: serde_json::from_value(serde_json::Value::String(
+                    case.state.clone(),
                 ))
                 .unwrap(),
-                case["preview"],
-                "{case}"
+            };
+            assert_eq!(
+                observe_reply_preview(&observation, &current, case.reply.as_deref()),
+                case.preview,
+                "{case:?}"
             );
         }
     }
