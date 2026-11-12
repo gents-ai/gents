@@ -13,10 +13,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let model = &gents_lean_vocab::lean_contract_snapshot().identity_receiver_grant_cases;
     let expected = model
         .iter()
-        .find(|case| case["sender_granted"] == true && case["delivered"] == false)
-        .unwrap()["receiver_granted"]
-        .as_bool()
-        .unwrap();
+        .find(|case| case.sender_granted && !case.delivered)
+        .unwrap()
+        .receiver_granted;
     let directory = tempfile::tempdir()?;
     let candidate_path = directory.path().join("candidate");
     let admin_path = directory.path().join("admin");
