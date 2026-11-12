@@ -12,14 +12,8 @@ structure ObservedInput where
   probeStatus : BackendProbeStatus
   deriving ToJson
 
-inductive AdmissionDecision where
-  | available
-  | unavailable
-  deriving ToJson
-
 structure AdmissionOutput where
   available : Bool
-  admissionDecision : AdmissionDecision
   deriving ToJson
 
 structure DisplayOutput where
@@ -34,15 +28,16 @@ def observedInputs : List ObservedInput :=
 @[conformance_family]
 def admission : Family ObservedInput AdmissionOutput where
   inputs := observedInputs
-  model := fun i =>
-    let available := backendAvailable i.enabled i.probeStatus
-    { available
-      admissionDecision := if available then .available else .unavailable }
+  model := fun i => { available := backendAvailable i.enabled i.probeStatus }
 
 @[conformance_family]
 def display : Family ObservedInput DisplayOutput where
   inputs := observedInputs
   model := fun i => { available := backendAvailable i.enabled i.probeStatus }
+
+example : backendHealthAdmissionCases.all fun c =>
+    c.admissionDecision == if c.expectedAvailable then "available" else "unavailable" := by
+  native_decide
 
 example : backendHealthAdmissionCases.all (·.observedDocumentOnly) := by decide
 

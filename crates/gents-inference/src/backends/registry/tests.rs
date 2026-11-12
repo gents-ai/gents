@@ -107,7 +107,7 @@ fn node_oauth_account_ref_round_trips_and_stays_absent_when_none() {
 fn generated_backend_health_admission_cases_match_registry_and_admission_policy() {
     use gents_lean_vocab::families::backend_health_admission_admission as wire;
 
-    gents_lean_vocab::families::backend_health_admission_admission::replay::<String, String>(
+    gents_lean_vocab::families::backend_health_admission_admission::replay::<String>(
         |input: &wire::ObservedInput<String>| {
         let mut backend = base_backend();
         backend.enabled = input.enabled;
@@ -129,10 +129,7 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
             available,
             "{input:?}: document-configured availability and admission availability disagree"
         );
-        wire::AdmissionOutput {
-            available,
-            admission_decision: if available { "available" } else { "unavailable" }.to_owned(),
-        }
+        wire::AdmissionOutput { available }
         },
     );
 }
