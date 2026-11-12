@@ -529,6 +529,14 @@ def caseCoverage : List CoverageEntry :=
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
+      "node_provisioning_runtime_nac")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "node_provisioning_runtime_nac_unreached"
+      "model-production-gap: every production node open enables NAC, so no production path observes a node whose NAC was never configured (not_configured).")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "root_admission_contracts_admission")
       "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

@@ -53,9 +53,4 @@ def reservationCasesJson : String := (toJson ([
       ("directory_synced", toJson directorySynced),
       ("expected", toJson (reservationConfirmed created fileSynced directorySynced))])).compress
 
-def runtimeNacCasesJson : String := (toJson ([NacStatus.notConfigured, .enabled,
-  .disabledTemporarily].map fun status =>
-    Json.mkObj [("status", toJson status.name),
-      ("may_start", toJson (runtimeMayStart status))])).compress
-
 end Identity.NodeProvisioningConformance

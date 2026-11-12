@@ -2991,7 +2991,6 @@ pub struct LeanContractSnapshot {
     pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
     pub identity_bootstrap_cases: Vec<LeanIdentityBootstrapCase>,
     pub identity_bootstrap_reservation_cases: Vec<LeanIdentityBootstrapReservationCase>,
-    pub identity_runtime_nac_cases: Vec<LeanIdentityRuntimeNacCase>,
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub identity_callback_parent_actor_cases: Vec<serde_json::Value>,
     pub identity_eval_record_cases: Vec<LeanIdentityEvalRecordCase>,
@@ -6455,13 +6454,6 @@ pub struct LeanIdentityReplicaGrantCase {
     pub runtime_read: bool,
     pub user_read: bool,
     pub user_write: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityRuntimeNacCase {
-    pub may_start: bool,
-    pub status: String,
 }
 
 #[derive(Debug, Deserialize)]
