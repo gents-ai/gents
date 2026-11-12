@@ -664,7 +664,6 @@ def snapshotSessionCasesJson : String :=
       ++ titleRequestAdmissionCasesJson ++ ","
     ++ "\"title_request_purpose_wire_cases\":"
       ++ titlePurposeWireCasesJson ++ ","
-    ++ "\"title_text_cases\":" ++ Conformance.TitleText.casesJson ++ ","
     ++ "\"title_usage_cases\":"
       ++ Conformance.TitleUsage.casesJson ++ ","
     ++ "\"provider_usage_cases\":"

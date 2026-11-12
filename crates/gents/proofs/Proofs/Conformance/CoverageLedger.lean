@@ -2084,9 +2084,13 @@ def caseCoverage : List CoverageEntry :=
       "CanonicalDispatchObservationCases")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "title_text_cases"
-      "TitleTextCases")
-      "canonical-output" [Surface.operatorUi, Surface.runtimeInternal]
+      "family"
+      "title_text_generation")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "title_text_summary")
+      "canonical-output" [Surface.operatorUi]
   , tagged (followUpCoverage
       "title_admission_join_cases"
       "TitleAdmissionJoinCases"

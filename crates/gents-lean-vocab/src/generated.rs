@@ -3172,7 +3172,6 @@ pub struct LeanContractSnapshot {
     pub scope_template_cases: Vec<LeanScopeTemplateCase>,
     pub title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
     pub title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
-    pub title_text_cases: LeanTitleTextCases,
     pub title_usage_cases: Vec<LeanTitleUsageCase>,
     pub provider_usage_cases: Vec<serde_json::Value>,
     pub title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
@@ -11715,46 +11714,6 @@ pub struct LeanTitleRuntimeEvidence {
 pub struct LeanTitleSignedPurpose {
     pub physical: u64,
     pub purpose: LeanRequestPurpose,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleTextCases {
-    pub cases: Vec<LeanTitleTextCasesCase>,
-    pub preamble: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleTextCasesCase {
-    pub captures: Vec<LeanTitleTextCasesCaseCapturesItem>,
-    pub expected_display: String,
-    pub expected_generated: String,
-    pub expected_input: String,
-    pub expected_prompt: String,
-    pub fallback: String,
-    pub generated_source: bool,
-    pub name: String,
-    pub raw: String,
-    pub recent: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleTextCasesCaseCapturesItem {
-    #[serde(rename = "capturedAt")]
-    pub captured_at: String,
-    pub content: String,
-    pub kind: String,
-    pub range: Option<serde_json::Value>,
-    pub source: String,
-    #[serde(rename = "terminalName")]
-    pub terminal_name: Option<serde_json::Value>,
-    pub unsaved: bool,
-    pub uri: Option<serde_json::Value>,
-    pub version: Option<serde_json::Value>,
-    #[serde(rename = "workspaceUri")]
-    pub workspace_uri: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
