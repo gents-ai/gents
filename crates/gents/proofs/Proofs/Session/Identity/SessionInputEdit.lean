@@ -63,12 +63,6 @@ def shouldSweep (notification resync tick : Bool) : Bool := notification || resy
 
 theorem tick_recovers_a_missed_notification : shouldSweep false false true = true := by rfl
 
-def discoveryCasesJson : String :=
-  (Lean.toJson (["agent", "other"].map fun actor => Lean.Json.mkObj
-    [("actor", Lean.toJson actor),
-     ("visible", Lean.toJson (!(discover fixture [actor] "edit-doc").isEmpty)),
-     ("selected", Lean.toJson (!(selectedForEffect (discover fixture [actor] "edit-doc") "agent").isEmpty))])).compress
-
 inductive Outcome where
   | pending | applied | rejected
   deriving BEq, DecidableEq, Repr

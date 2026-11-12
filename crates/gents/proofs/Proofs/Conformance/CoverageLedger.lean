@@ -1536,8 +1536,8 @@ def caseCoverage : List CoverageEntry :=
       "Checks execution-context binding only. Native workspace policy, relationship publication and authorization retain their separate owners.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_input_edit_native_discovery_cases"
-      "SessionCommandNativeDiscovery")
+      "family"
+      "session_input_edit_native_discovery")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_input_edit_native_claim_cases"
