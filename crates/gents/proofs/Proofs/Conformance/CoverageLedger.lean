@@ -2524,8 +2524,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "session_document_retry_cases" "SessionDocumentCases"
       "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "background_wake_row_cases" "BackgroundWakeRowCases"
-      "Consume exact physical-parent and cross-requester authoritative rows through background publication after its owner migrates. Existing DB wake tests do not establish every generated row verdict.")
+  , tagged (boundaryCoverage "family" "contracts_background_wake_rows_unreached"
+      "model-production-gap: background publication still redrives a failed wake through its pre-migration owner; no production path publishes the successor from exact physical-parent and cross-requester authoritative rows. Existing DB wake tests do not establish these row verdicts.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "family" "configuration_scope_context_bounds"
       "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")

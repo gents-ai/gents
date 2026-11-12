@@ -3083,7 +3083,6 @@ pub struct LeanContractSnapshot {
     pub plugin_job_opening_cases: Vec<LeanPluginJobOpeningCase>,
     pub session_reply_preview_cases: Vec<LeanSessionReplyPreviewCase>,
     pub request_input_cases: Vec<serde_json::Value>,
-    pub background_wake_row_cases: Vec<serde_json::Value>,
     pub discovery_guidance_cases: Vec<LeanDiscoveryGuidanceCase>,
     pub budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub goal_decision_cases: Vec<LeanGoalDecisionCase>,
@@ -11449,53 +11448,6 @@ pub struct LeanTitleGoalContinuation {
 pub struct LeanTitleInitialTitle {
     pub text: String,
     pub source: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleJoinBinding {
-    pub purpose: LeanRequestPurpose,
-    pub physical_request: String,
-    pub logical_request: String,
-    pub parent_physical: String,
-    pub parent_logical: String,
-    pub node: String,
-    pub session: String,
-    pub authenticated: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleJoinRow {
-    pub physical_request: String,
-    pub logical_request: String,
-    pub model_signed_fields_hex: Vec<String>,
-    pub physical_binding_current: bool,
-    pub branch_fields_exact: bool,
-    pub pending_deadline_absent: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleJoinWorld {
-    pub own_physical: String,
-    pub model_own_physical: String,
-    pub purpose: LeanRequestPurpose,
-    pub session: String,
-    pub node_did: String,
-    pub queue_scope_node: String,
-    pub queue_scope_session: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub queue_active: Option<String>,
-    pub lease_pending: bool,
-    pub lease_vacant: bool,
-    pub lease_now: u64,
-    pub claimed_absent: bool,
-    pub terminal_selection_absent: bool,
-    pub gate_actor: u64,
-    pub gate_phase: String,
-    pub gate_independent: bool,
-    pub gate_sibling_waiting: bool,
 }
 
 #[derive(Debug, Deserialize)]

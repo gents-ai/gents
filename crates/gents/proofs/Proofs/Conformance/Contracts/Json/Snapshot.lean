@@ -646,7 +646,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"session_document_fork_cases\":" ++ sessionDocumentForkCasesJson ++ ","
     ++ "\"plugin_job_opening_cases\":" ++ pluginJobOpeningCasesJson ++ ","
     ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","
-    ++ "\"background_wake_row_cases\":" ++ backgroundWakeRowsCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
