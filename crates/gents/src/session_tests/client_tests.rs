@@ -30,7 +30,7 @@ use std::sync::Arc;
     #[tokio::test]
     async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back_together() {
         let cases = &gents_lean_vocab::lean_contract_snapshot().goal_backed_runtime_cases;
-        let modeled = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
+        let modeled = |name: &str| cases.iter().find(|case| case.name == name).unwrap();
         let (db, user, client, binding) =
             crate::test_support::root::signed_test_node("runtime-goal-opening").await;
         let node = db.node.clone();
@@ -80,11 +80,11 @@ use std::sync::Arc;
             serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
         assert_eq!(
             !rows["data"]["Goal"].as_array().unwrap().is_empty(),
-            modeled("created")["goal"]
+            modeled("created").goal
         );
         assert_eq!(
             !rows["data"]["AgentRequest"].as_array().unwrap().is_empty(),
-            modeled("created")["request"]
+            modeled("created").request
         );
         assert_eq!(row.session_doc_id.as_deref(), session["_docID"].as_str());
         assert!(row
@@ -105,14 +105,14 @@ use std::sync::Arc;
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            modeled("created")["session"]
+            modeled("created").session
         );
         assert_eq!(
             !user_rows["data"]["AgentRequest"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            modeled("created")["grants"]
+            modeled("created").grants
         );
         let other_home = tempfile::tempdir().unwrap();
         let other = KeyIdentity::load_or_create(other_home.path().join("other.key"), None).unwrap();
@@ -177,7 +177,7 @@ use std::sync::Arc;
                 .is_err(),
                 "{name}"
             );
-            assert_eq!(modeled(name)["request"], false);
+            assert!(!modeled(name).request);
         }
         assert!(gents_automation::goal::submit_goal_backed_request_with_identity(
             &node,
@@ -191,7 +191,7 @@ use std::sync::Arc;
         )
         .await
         .is_err());
-        assert_eq!(modeled("foreign-actor")["request"], false);
+        assert!(!modeled("foreign-actor").request);
         admin
             .grant_node_permission(
                 &identity::Did::new(agent.did()).unwrap(),
@@ -238,7 +238,7 @@ use std::sync::Arc;
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            modeled("duplicate-after-revocation")["grants"]
+            modeled("duplicate-after-revocation").grants
         );
         let mut rejected = request.clone();
         rejected.request_id = "rejected-opening".into();
@@ -267,9 +267,9 @@ use std::sync::Arc;
         for name in ["AgentSession", "AgentRequest", "Goal", "GoalCreationClaim"] {
             assert_eq!(after["data"][name].as_array().unwrap().len(), 1, "{name}");
         }
-        assert_eq!(modeled("aborted")["session"], false);
-        assert_eq!(modeled("aborted")["goal"], false);
-        assert_eq!(modeled("aborted")["request"], false);
+        assert!(!modeled("aborted").session);
+        assert!(!modeled("aborted").goal);
+        assert!(!modeled("aborted").request);
         drop(user);
     }
 
