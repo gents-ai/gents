@@ -2933,7 +2933,6 @@ pub struct LeanContractSnapshot {
     pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,
     pub goal_config_reactivation_cases: Vec<LeanGoalConfigReactivationCase>,
     pub goal_reset_resume_cases: Vec<LeanGoalResetResumeCase>,
-    pub trigger_delivery_admission_cases: serde_json::Value,
     pub trigger_delivery_observed_claim_cases: serde_json::Value,
     pub trigger_delivery_outcome_trace_cases: serde_json::Value,
     pub trigger_delivery_retained_outcome_cases: serde_json::Value,

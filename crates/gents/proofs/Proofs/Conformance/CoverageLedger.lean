@@ -579,8 +579,8 @@ def caseCoverage : List CoverageEntry :=
       "ProcessTransitions")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_admission_cases"
-      "Triggers.Durable")
+      "family"
+      "trigger_delivery_fire_admission")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery_session_cases"

@@ -365,20 +365,27 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
 }
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
-    for case in contract()["trigger_delivery_admission_cases"]
-        .as_array()
-        .unwrap()
-    {
+    for case in gents_lean_vocab::families::trigger_delivery_fire_admission::cases() {
         let node_db = gents_inference::test_support::test_db(
             "generated-fire-transactions-are-atomic-a",
             crate::lifecycle_hooks::composition(),
         )
         .await;
         let node = node_db.node.clone();
-        let pre: State = decode(&case["pre"]);
+        let pre: State = gents_lean_vocab::family::recode(&case.input.pre);
         for (index, request) in pre.requests.iter().enumerate() {
             let fire = receipt(&request.fire, index);
-            let mutation = request_mutation(&fire);
+            let lifecycle = if request.terminal {
+                "completed"
+            } else if request.running {
+                "claimed"
+            } else {
+                "pending"
+            };
+            let mutation = request_mutation(&fire).replace(
+                "lifecycle_state: \"pending\"",
+                &format!("lifecycle_state: \"{lifecycle}\""),
+            );
             gents_store::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
@@ -388,10 +395,10 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
             .await
             .unwrap();
         }
-        let f: Fire = decode(&case["fire"]);
+        let f: Fire = gents_lean_vocab::family::recode(&case.input.fire);
         let fire = receipt(&f, pre.requests.len());
         let mutation = request_mutation(&fire);
-        let commit = case["commit"].as_bool().unwrap();
+        let commit = case.input.commit;
         let result = gents_store::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
@@ -405,33 +412,21 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
             },
         )
         .await;
-        if case["source_allowed"].as_bool().unwrap() {
-            assert_eq!(result.is_ok(), commit, "{}", case["name"]);
-        } else {
-            assert!(result.is_err(), "outcome chaining must reject admission");
-        }
-        let response = gents_store::graphql::graphql_with_transaction_retry(
-            &node,
-            "{ TriggerFire { fire_key } AgentRequest { request_id } }",
-            "test.fire_receipts",
+        let post = observed_delivery_state(
+            &gents_store::config_client::ConfigAccess::local(node.clone()),
+            FireIdentity::clone,
         )
-        .await
-        .unwrap();
-        let post: State = decode(&case["post"]);
-        let data = response.data.unwrap();
-        assert_eq!(
-            data["TriggerFire"].as_array().unwrap().len(),
-            post.receipts.len(),
-            "{}",
-            case["name"]
+        .await;
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_fire_admission::AdmissionOutput {
+                source_allowed: gents_documents::event_trigger::outcome_source_allowed(
+                    &fire.identity.source_collection,
+                    fire.emit_outcome,
+                ),
+                committed: result.is_ok(),
+                post: gents_lean_vocab::family::recode(&post),
+            },
         );
-        assert_eq!(
-            data["AgentRequest"].as_array().unwrap().len(),
-            post.requests.len(),
-            "{}",
-            case["name"]
-        );
-        assert!(post.outcomes.is_empty());
     }
 }
 

@@ -130,26 +130,43 @@ def stateJson (s : State) : String := object [
   ("outcomes", jsonArray (s.outcomes.map identityJson)),
   ("goals", jsonArray (s.goals.map goalBindingJson))]
 
-def admissionCase (name : String) (pre : State) (f : Fire) (commit : Bool) : String :=
-  object [("name", jsonString name), ("pre", stateJson pre), ("fire", fireJson f),
-    ("commit", toString commit),
-    ("source_allowed", toString (Triggers.outcomeSourceAllowed f.identity.collection f.emitOutcome)),
-    ("post", stateJson (admitTransaction pre f commit))]
+structure AdmissionInput where
+  name : String
+  pre : StateWire
+  fire : FireWire
+  commit : Bool
+  deriving Lean.ToJson
 
-def admissionCases : List String := [
-  admissionCase "outcome_consumer_cannot_opt_in" {}
-    { fire "outcome" with identity := { (fire "outcome").identity with collection := "FireOutcome" } } true,
-  admissionCase "outcome_consumer_opted_out_admitted" {}
-    { fire "outcome" with emitOutcome := false, identity := { (fire "outcome").identity with collection := "FireOutcome" } } true,
-  admissionCase "crash_before_fire_commit" {} (fire "a") false,
-  admissionCase "fire_commit" {} (fire "a") true,
-  admissionCase "crash_after_fire_commit_retry" (admit {} (fire "a")) (fire "a") true,
-  admissionCase "same_trigger_under_two_owners" (admit {} (fire "a"))
-    { fire "a" with identity := identity "owner-b" "a" } true,
-  admissionCase "same_document_other_collection" (admit {} (fire "a"))
-    { fire "a" with identity := { identity "owner-a" "a" with collection := "Other" } } true,
-  admissionCase "serial_burst_is_persisted" (claim (admit {} (fire "a")) (fire "a").identity)
-    { fire "b" with session := "other-session" } true]
+structure AdmissionOutput where
+  sourceAllowed : Bool
+  committed : Bool
+  post : StateWire
+  deriving Lean.ToJson
+
+def admissionInput (name : String) (pre : State) (f : Fire) (commit : Bool) : AdmissionInput :=
+  { name, pre := .ofModel pre, fire := .ofModel f, commit }
+
+@[conformance_family]
+def fireAdmission : Family AdmissionInput AdmissionOutput where
+  inputs := [
+    admissionInput "outcome_consumer_cannot_opt_in" {}
+      { fire "outcome" with identity := { (fire "outcome").identity with collection := "FireOutcome" } } true,
+    admissionInput "outcome_consumer_opted_out_admitted" {}
+      { fire "outcome" with emitOutcome := false, identity := { (fire "outcome").identity with collection := "FireOutcome" } } true,
+    admissionInput "crash_before_fire_commit" {} (fire "a") false,
+    admissionInput "fire_commit" {} (fire "a") true,
+    admissionInput "crash_after_fire_commit_retry" (admit {} (fire "a")) (fire "a") true,
+    admissionInput "same_trigger_under_two_owners" (admit {} (fire "a"))
+      { fire "a" with identity := identity "owner-b" "a" } true,
+    admissionInput "same_document_other_collection" (admit {} (fire "a"))
+      { fire "a" with identity := { identity "owner-a" "a" with collection := "Other" } } true,
+    admissionInput "serial_burst_is_persisted" (claim (admit {} (fire "a")) (fire "a").identity)
+      { fire "b" with session := "other-session" } true]
+  model := fun i =>
+    let f := i.fire.toModel
+    let allowed := Triggers.outcomeSourceAllowed f.identity.collection f.emitOutcome
+    { sourceAllowed := allowed, committed := allowed && i.commit,
+      post := .ofModel (admitTransaction i.pre.toModel f i.commit) }
 
 def claimObservationJson (row : ClaimObservation) : String := object [
   ("document", jsonString row.document), ("owner", jsonString row.owner),
@@ -715,9 +732,6 @@ def latestAdmissionCases : List String :=
     object [("name", jsonString name), ("pre", stateJson before),
       ("fire", fireJson next), ("destination_allowed", toString allowed),
       ("post", stateJson (admitLatest before next allowed))]
-
-def triggerDeliveryAdmissionCasesJson : String :=
-  jsonArray admissionCases
 
 def triggerDeliveryObservedClaimCasesJson : String :=
   jsonArray observedClaimCases
