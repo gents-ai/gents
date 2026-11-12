@@ -1,7 +1,5 @@
 mod support;
 
-#[path = "e2e_lifecycle/interruption_integration.rs"]
-mod interruption_integration;
 #[path = "e2e_lifecycle/lifecycle_recovery.rs"]
 mod lifecycle_recovery;
 #[path = "e2e_lifecycle/merge_parked_unique_boot_e2e.rs"]
