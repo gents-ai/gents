@@ -1152,6 +1152,20 @@ mod tests {
         assert!(!rendered.document.contains(hostile));
     }
 
+    /// DefraDB rejects several fields in one order object; a multi-field
+    /// order is a list of single-field objects, applied in order.
+    #[test]
+    fn a_multi_field_order_renders_one_object_per_field() {
+        let rendered = Query::select(Selection::doc_id())
+            .order_by(request::CREATED_AT, Direction::Desc)
+            .order_by(request::REQUEST_ID, Direction::Asc)
+            .render();
+        assert_eq!(
+            rendered.document,
+            "query { AgentRequest(order: [{created_at: DESC}, {request_id: ASC}]) { _docID } }"
+        );
+    }
+
     #[test]
     fn a_repeated_field_keeps_an_explicit_conjunction() {
         let rendered = Query::select(Selection::doc_id())
