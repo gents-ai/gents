@@ -2541,8 +2541,10 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp "family" "configuration_scope_oauth_account"
       "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")
       "apply-reconcile" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "discovery_scope_cases" "DiscoveryScopeCases"
-      "Exercise backend-owner and credential-scoped catalog selection in the production discovery owner, including shared/OAuth and foreign-owner rejection.")
+  , tagged (consumerCoverage "family" "configuration_scope_discovery")
+      "apply-reconcile" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "family" "configuration_scope_discovery_unreached"
+      "model-production-gap: a backend observation carries no owner; production reaches a catalog only through the owner-qualified backend document that holds it, so no production call is handed a foreign owner's same-labelled catalog.")
       "apply-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "initialization_initial_inference")
       "apply-reconcile" [Surface.operatorCli]

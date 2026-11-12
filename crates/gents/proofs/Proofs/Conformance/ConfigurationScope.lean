@@ -206,27 +206,52 @@ example : catalogFor "alice" "backend" none (some ⟨"bob", advertisement none�
 example : catalogFor "alice" "backend" none (some ⟨"alice", advertisement none⟩) =
     some (advertisement none) := by rfl
 
-private def discoveryCaseJson (name requestedOwner observedOwner requestedBackend : String)
-    (requestedCredentials observedCredentials : Option String) : Json :=
-  let observed := advertisement observedCredentials
-  let result := catalogFor requestedOwner requestedBackend requestedCredentials (some ⟨observedOwner, observed⟩)
-  let catalogJson := fun (c : DiscoveryObservation) => Json.mkObj
-    [("backend_id", toJson c.backendId), ("credential_node", toJson c.nodeDid),
-     ("model_names_with_unknown_capabilities", toJson (c.models.map (·.modelName)))]
-  Json.mkObj [("name", toJson name), ("requested_owner", toJson requestedOwner),
-    ("requested_backend", toJson requestedBackend), ("requested_credentials", toJson requestedCredentials),
-    ("observed_owner", toJson observedOwner), ("observed", catalogJson observed),
-    ("result", result.map catalogJson |>.getD Json.null)]
+structure DiscoveryInput where
+  name : String
+  requestedOwner : String
+  requestedBackend : String
+  requestedCredentials : Option String
+  observedOwner : String
+  observedCredentials : Option String
+  deriving ToJson
 
-def discoveryCasesJson : String := (toJson [
-  discoveryCaseJson "same_owner_shared_credentials" "alice" "alice" "backend" none none,
-  discoveryCaseJson "foreign_owner_same_label_shared_credentials" "alice" "bob" "backend" none none,
-  discoveryCaseJson "wrong_backend" "alice" "alice" "other" none none,
-  discoveryCaseJson "matching_oauth_scope" "alice" "alice" "backend" (some "alice") (some "alice"),
-  discoveryCaseJson "foreign_oauth_scope" "alice" "alice" "backend" (some "alice") (some "bob"),
-  discoveryCaseJson "oauth_is_not_shared_credentials" "alice" "alice" "backend" none (some "alice"),
-  discoveryCaseJson "shared_catalog_is_not_oauth" "alice" "alice" "backend" (some "alice") none,
-  discoveryCaseJson "oauth_catalog_still_requires_backend_owner" "alice" "bob" "backend" (some "alice") (some "alice")
-  ]).compress
+structure CatalogObservation where
+  backendId : String
+  credentialNode : Option String
+  modelNamesWithUnknownCapabilities : List String
+  deriving ToJson
+
+private def discoveryInputs : List DiscoveryInput :=
+  [ ⟨"same_owner_shared_credentials", "alice", "backend", none, "alice", none⟩
+  , ⟨"foreign_owner_same_label_shared_credentials", "alice", "backend", none, "bob", none⟩
+  , ⟨"wrong_backend", "alice", "other", none, "alice", none⟩
+  , ⟨"matching_oauth_scope", "alice", "backend", some "alice", "alice", some "alice"⟩
+  , ⟨"foreign_oauth_scope", "alice", "backend", some "alice", "alice", some "bob"⟩
+  , ⟨"oauth_is_not_shared_credentials", "alice", "backend", none, "alice", some "alice"⟩
+  , ⟨"shared_catalog_is_not_oauth", "alice", "backend", some "alice", "alice", none⟩
+  , ⟨"oauth_catalog_still_requires_backend_owner", "alice", "backend", some "alice", "bob",
+      some "alice"⟩ ]
+
+private def discoveryModel (i : DiscoveryInput) : Option CatalogObservation :=
+  (catalogFor i.requestedOwner i.requestedBackend i.requestedCredentials
+    (some ⟨i.observedOwner, advertisement i.observedCredentials⟩)).map fun catalog =>
+      { backendId := catalog.backendId, credentialNode := catalog.nodeDid
+        modelNamesWithUnknownCapabilities := catalog.models.map (·.modelName) }
+
+/-- `backend_catalog` reads the observation of the backend document it was
+given, so it only sees catalogs whose backend owner is the requested owner. -/
+@[conformance_family]
+def discovery : Conformance.Family DiscoveryInput (Option CatalogObservation) where
+  inputs := discoveryInputs.filter fun i => i.observedOwner == i.requestedOwner
+  model := discoveryModel
+
+/-- model-production-gap: a backend observation carries no owner of its own;
+production reaches a catalog only through the owner-qualified backend document
+that holds it, so no production call is handed another owner's catalog for a
+same-labelled backend and these owner-rejection cases are not reached. -/
+@[conformance_family]
+def discoveryUnreached : Conformance.Family DiscoveryInput (Option CatalogObservation) where
+  inputs := discoveryInputs.filter fun i => i.observedOwner != i.requestedOwner
+  model := discoveryModel
 
 end Conformance.ConfigurationScope

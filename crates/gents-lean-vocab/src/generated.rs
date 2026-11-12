@@ -3093,7 +3093,6 @@ pub struct LeanContractSnapshot {
     pub session_reply_preview_cases: Vec<LeanSessionReplyPreviewCase>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub background_wake_row_cases: Vec<serde_json::Value>,
-    pub discovery_scope_cases: Vec<serde_json::Value>,
     pub discovery_guidance_cases: Vec<LeanDiscoveryGuidanceCase>,
     pub budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub goal_decision_cases: Vec<LeanGoalDecisionCase>,
