@@ -110,9 +110,12 @@ async fn explicit_agent_resolution_matches_lean_binding_cases() {
 async fn private_session_selection_is_actor_scoped_and_matches_lean() {
     let fixture = PrivateSessionFixture::new().await;
     let cases = &gents_lean_vocab::lean_contract_snapshot().runtime_session_selection_cases;
-    assert_eq!(cases.len(), 3);
+    assert_eq!(cases.len(), 4);
     for case in cases {
         let name = case.name.as_str();
+        if name == "materialized" {
+            continue;
+        }
         let bound = if name == "mismatched" {
             fixture.other.did()
         } else {
@@ -155,4 +158,57 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
             .is_none()
     );
     fixture.db.node.shutdown().await.unwrap();
+}
+
+/// Lean `RuntimeState.materializedSessionVisible`: a runtime request written by
+/// the production pending-request owner carries its session, so the router's
+/// Agent-scoped selection finds it instead of leaving the request pending.
+#[tokio::test]
+async fn materialized_request_session_is_selectable_and_matches_lean() {
+    let case = gents_lean_vocab::lean_contract_snapshot()
+        .runtime_session_selection_cases
+        .iter()
+        .find(|case| case.name == "materialized")
+        .cloned()
+        .expect("modeled materialized session selection");
+    let (db, _user, _access, binding) =
+        crate::test_support::root::signed_test_node("materialized-session-selection").await;
+    let node_did = db.node_identity.did().to_owned();
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    let enqueued =
+        gents_session::request::lifecycle::materialize::write_pending_agent_request_with_identity(
+            &db.node,
+            identity::Did::new(agent.did()).unwrap(),
+            &node_did,
+            agent.did(),
+            "materialized selection probe",
+            gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+            gents_session::request::lifecycle::TriggerLineage {
+                trigger_id: None,
+                trigger_kind: Some("manual".into()),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+            },
+            Some("materialized probe"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(agent.as_ref()),
+        )
+        .await
+        .unwrap();
+    let mut routed = request(Some(agent.did()), &enqueued.session_id);
+    routed.node_did = node_did;
+    routed.requester_did = Some(agent.did().to_owned());
+    let observed = match resolve_agent_for_request(&db.node, &routed).await.unwrap() {
+        None => "unavailable",
+        Some(value) if value.rejection_reason.is_some() => "mismatched",
+        Some(_) => "matched",
+    };
+    assert_eq!(observed, case.expected.as_str());
+    db.node.shutdown().await.unwrap();
 }

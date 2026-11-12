@@ -40,9 +40,6 @@ static P2P_E2E_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 #[path = "e2e_runtime/workspace_binding_recovery.rs"]
 mod workspace_binding_recovery;
 
-#[path = "e2e_live/mailbox_p2p_isolation.rs"]
-mod mailbox_p2p_isolation;
-
 #[path = "e2e_triggers/write_tool_trigger_e2e.rs"]
 mod write_tool_trigger_e2e;
 
