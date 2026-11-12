@@ -1,3 +1,4 @@
+import Proofs.Conformance.EventGroupClock
 import Proofs.Conformance.GoalResetResumeAccount
 import Proofs.Conformance.GoalOperatorResumeProfiles
 import Proofs.Conformance.Identity.SessionInputEdit
