@@ -245,37 +245,29 @@ async fn user_signed_node(
 #[tokio::test]
 async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()> {
     let home = tempfile::tempdir()?;
-    let runtime = Arc::new(KeyIdentity::load_or_create(
-        home.path().join("runtime"),
-        None,
-    )?);
+    // The node runs the runtime's tool ceiling as its permission projector,
+    // which derives each live Agent's baseline node grants from its document.
+    let composition = gents_automation::lifecycle_hooks::composition();
+    let db = gents_inference::test_support::test_db_with_tool_policy(
+        "agent-creator",
+        composition.clone(),
+        Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
+    )
+    .await;
+    let runtime = Arc::new(gents_store::test_support::held_runtime_identity(
+        db.node_identity.did(),
+    ));
     let user = KeyIdentity::load_or_create(home.path().join("user"), None)?;
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let address = listener.local_addr()?;
-    // The production runtime projector derives each live Agent's baseline
-    // node grants from its document; the creator reads its own row through it.
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_document_projector(gents_store::local::document_projector(
-                runtime.clone(),
-                std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
-            )?)
-            .with_http(defra_node::HttpConfig::with_listener(listener)?)
-            .build()
-            .await?,
-    );
-    gents_store::schema::ensure_runtime_schemas(&node).await?;
+    let node = db.node.clone();
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     let user_did = identity::Did::new(user.did())?;
     gents_store::identity::GrantSet::OperatorUser
         .grant(&admin, &user_did)
         .await?;
-    let endpoint =
-        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
-            .with_client_signing_capability(user.client_signing_capability()?)?
-            .with_client_signed_agent_creates();
+    let endpoint = GraphqlEndpoint::as_principal(db.client_endpoint(), user.did())
+        .with_client_signing_capability(user.client_signing_capability()?)?
+        .with_client_signed_agent_creates()
+        .with_extensions(&composition)?;
     let node_doc = user_signed_node(&endpoint, runtime.did(), user.did())
         .await
         .context("publishing the user-owned Node")?;
