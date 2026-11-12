@@ -848,10 +848,14 @@ def caseCoverage : List CoverageEntry :=
       "causal_hop_session_list_cases"
       "SessionListEntryCases")
       "request-lifecycle" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "family"
+      "contracts_title_admission_fresh_verifier"
+      "The fresh verifier replays signed title and access-review admission through native signing and the pending-disposition owner. Watcher admission, pending rejection and crash rediscovery owners are not bound.")
+      "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "title_request_admission_cases"
-      "TitleRequestAdmissionCases"
-      "Model-derived signed title-purpose admission and pending-disposition inputs cover exact runtime-local-control parent-only provenance, forbidden request controls, unavailable observation retry, authoritative denial, and unchanged Pending on admit. Bind the generated rows to native signing, watcher admission, pending rejection and crash rediscovery owners before claiming native coverage.")
+      "family" "contracts_title_admission_fresh_verifier_unreached"
+      "model-production-gap: the native fresh-verifier fixture signs the parent and title request through native signing and admission records and cannot represent these eight modeled inputs.")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "title_request_purpose_wire_cases"

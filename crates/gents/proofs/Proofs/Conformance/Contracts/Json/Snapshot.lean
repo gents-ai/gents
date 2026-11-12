@@ -660,8 +660,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
-    ++ "\"title_request_admission_cases\":"
-      ++ titleRequestAdmissionCasesJson ++ ","
     ++ "\"title_request_purpose_wire_cases\":"
       ++ titlePurposeWireCasesJson ++ ","
     ++ "\"title_usage_cases\":"

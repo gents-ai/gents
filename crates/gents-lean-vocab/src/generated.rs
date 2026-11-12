@@ -693,10 +693,6 @@ pub fn lean_title_admission_join_cases() -> &'static [LeanTitleAdmissionJoinCase
     &lean_contract_snapshot().title_admission_join_cases
 }
 
-pub fn lean_title_request_admission_cases() -> &'static [LeanTitleRequestAdmissionCase] {
-    &lean_contract_snapshot().title_request_admission_cases
-}
-
 pub fn lean_title_request_purpose_wire_cases() -> &'static [LeanTitleRequestPurposeWireCase] {
     &lean_contract_snapshot().title_request_purpose_wire_cases
 }
@@ -3157,7 +3153,6 @@ pub struct LeanContractSnapshot {
     >,
     pub scope_node_route_cases: Vec<LeanScopeNodeRouteCase>,
     pub scope_template_cases: Vec<LeanScopeTemplateCase>,
-    pub title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
     pub title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
     pub title_usage_cases: Vec<LeanTitleUsageCase>,
     pub provider_usage_cases: Vec<serde_json::Value>,
@@ -11374,19 +11369,6 @@ pub enum LeanTerminalSelection {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanTitleAdmission {
-    pub kind: String,
-    pub signer_did: String,
-    pub issuer_did: String,
-    pub source_request_id: String,
-    pub runtime_source_kind: String,
-    pub signature_valid: bool,
-    pub model_signed_fields_hex: Vec<String>,
-    pub model_expected_fields_hex: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanTitleAdmissionJoinCase {
     pub name: String,
     pub admission_case: String,
@@ -11407,20 +11389,6 @@ pub struct LeanTitleAdmissionJoinCase {
     pub expected_queue_active: Option<String>,
     pub expected_queue_unchanged: bool,
     pub expected_own_physical: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleGoalContinuation {
-    pub sequence: u64,
-    pub wrapup: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleInitialTitle {
-    pub text: String,
-    pub source: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -11472,112 +11440,12 @@ pub struct LeanTitleJoinWorld {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanTitleParentEvidence {
-    pub request_id: String,
-    pub document_id: String,
-    pub node_did: String,
-    pub session_id: String,
-    pub agent_did: String,
-    pub logical_binding_current: bool,
-    pub physical_binding_current: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleQueueInput {
-    pub delivery: LeanTitleQueueDelivery,
-    #[serde(deserialize_with = "required_nullable")]
-    pub position: Option<LeanTitleQueuePosition>,
-    pub source: String,
-    pub policy: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub key: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub queued_after_request_id: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub interrupted_request_id: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub background_completion_wake_version: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleRequest {
-    pub hop: u32,
-    pub request_id: String,
-    pub purpose: LeanRequestPurpose,
-    pub target_node: String,
-    pub requester_did: String,
-    pub agent_did: String,
-    pub session_id: String,
-    pub content: String,
-    pub input: LeanTitleRequestInput,
-    pub model_input_fields_hex: Vec<String>,
-    pub created_at: String,
-    pub trigger_config_document_id: String,
-    pub model_retry_fields_hex: Vec<String>,
-    pub model_trigger_fields_hex: Vec<String>,
-    pub model_parent_fields_hex: Vec<String>,
-    pub model_workspace_fields_hex: Vec<String>,
-    pub model_semantic_fields_hex: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleRequestAdmissionCase {
-    pub name: String,
-    pub parent_observed_state: String,
-    pub observation_available: bool,
-    pub branch_fields_exact: bool,
-    pub pending_deadline_absent: bool,
-    pub request: LeanTitleRequest,
-    pub admission: LeanTitleAdmission,
-    #[serde(deserialize_with = "required_nullable")]
-    pub runtime_evidence: Option<LeanTitleRuntimeEvidence>,
-    pub session_agent: String,
-    pub expected_admitted: bool,
-    pub expected_claimable: bool,
-    pub expected_disposition: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub expected_pending_state: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleRequestInput {
-    pub selected_skill_ids: Vec<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub cwd: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub initial_title: Option<LeanTitleInitialTitle>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub queue: Option<LeanTitleQueueInput>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub goal_continuation: Option<LeanTitleGoalContinuation>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanTitleRequestPurposeWireCase {
     pub name: String,
     #[serde(deserialize_with = "required_nullable")]
     pub wire: Option<String>,
     #[serde(deserialize_with = "required_nullable")]
     pub expected_decoded: Option<LeanRequestPurpose>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTitleRuntimeEvidence {
-    pub source_kind: String,
-    pub issuer_did: String,
-    pub source_request_id: String,
-    pub target_node: String,
-    pub target_runtime_attestation_valid: bool,
-    pub source_binding_current: bool,
-    pub source_document_binding_current: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub title_parent: Option<LeanTitleParentEvidence>,
 }
 
 #[derive(Debug, Deserialize)]
