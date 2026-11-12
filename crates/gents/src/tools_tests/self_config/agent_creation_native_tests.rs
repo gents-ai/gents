@@ -403,7 +403,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     .with_node_binding(Some(node_binding.clone()));
     // Creating an Agent needs the agent catalog grant (`SelfConfig.mayCreateAgent`).
     let mut tool_config =
-        gents_toolcalls::test_support::self_config::config(&["agent", "tools", "node"]);
+        crate::tools_tests::self_config::fixture::config(&["agent", "tools", "node"]);
     tool_config.agent_did = creator.agent_did.clone();
     let tools = super::build_self_config_tools_with_runtime(
         Arc::default(),

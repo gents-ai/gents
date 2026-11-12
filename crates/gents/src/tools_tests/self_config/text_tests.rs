@@ -1,8 +1,8 @@
 use super::*;
-use gents_protocol::tool_names::CONFIG_TOOL_NAME;
-use gents_toolcalls::test_support::self_config::{
+use crate::tools_tests::self_config::fixture::{
     call_config_tool, config, node_identity, SelfConfigFixture,
 };
+use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 use gents_tools::builtin::self_config::test_support::tools_request;
 
 type Tools = Vec<Box<dyn ToolDyn>>;
