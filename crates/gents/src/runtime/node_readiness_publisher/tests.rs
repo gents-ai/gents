@@ -62,14 +62,12 @@ impl NodeReadinessWriter for ControlledWriter {
 
 #[tokio::test(start_paused = true)]
 async fn generated_readiness_publication_traces_write_only_semantic_changes() {
-    let cases = gents_lean_vocab::lean_readiness_publication_cases();
-    assert_eq!(cases.len(), 2);
-    for case in cases {
+    for case in gents_lean_vocab::families::contracts_readiness_publication::cases() {
         let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
         let writer = Arc::new(ControlledWriter {
             plans: std::sync::Mutex::new(VecDeque::from(vec![
                 WritePlan::Success;
-                case.states.len()
+                case.input.states.len()
             ])),
             attempts: attempts_tx,
             release: Semaphore::new(0),
@@ -80,9 +78,9 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
             "did:test:semantic-readiness-writer",
             Duration::from_millis(1),
         );
-        assert_eq!(case.states.len(), case.publishes.len());
-        for (index, (&state, &publishes)) in case.states.iter().zip(&case.publishes).enumerate() {
-            let (process, expected) = match state {
+        let mut publishes = Vec::with_capacity(case.input.states.len());
+        for (index, &state) in case.input.states.iter().enumerate() {
+            let (process, written) = match state {
                 0 => (
                     ProcessLifecycleState::Recovering,
                     NodeReadinessProcessState::Recovering,
@@ -103,7 +101,11 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
             } else {
                 publisher.set_process_state(process).await.unwrap();
             }
-            assert_eq!(attempts_rx.try_recv().ok(), publishes.then_some(expected));
+            let attempt = attempts_rx.try_recv().ok();
+            if let Some(attempt) = attempt {
+                assert_eq!(attempt, written);
+            }
+            publishes.push(attempt.is_some());
             tokio::time::advance(Duration::from_secs(3600)).await;
             tokio::task::yield_now().await;
             assert!(
@@ -111,6 +113,11 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
                 "idle time must not publish readiness"
             );
         }
+        case.check(
+            gents_lean_vocab::families::contracts_readiness_publication::ReadinessPublicationOutput {
+                publishes,
+            },
+        );
         owner.close().await.unwrap();
     }
 }

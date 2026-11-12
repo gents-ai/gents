@@ -13,10 +13,18 @@ def readinessPublicationTrace (previous : Option Nat) : List Nat → List Bool
       RuntimeReconcile.StartupReadiness.shouldPublish previous next ::
         readinessPublicationTrace (some next) rest
 
-def readinessPublicationCasesJson : String :=
-  jsonArray ([ [0, 0, 0, 1, 1, 2], [0, 1, 0, 0, 2] ].map fun states =>
-    "{\"states\":" ++ jsonArray (states.map toString) ++
-    ",\"publishes\":" ++ jsonArray ((readinessPublicationTrace none states).map boolString) ++ "}")
+structure ReadinessPublicationInput where
+  states : List Nat
+  deriving Lean.ToJson
+
+structure ReadinessPublicationOutput where
+  publishes : List Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def readinessPublication : Family ReadinessPublicationInput ReadinessPublicationOutput where
+  inputs := [ { states := [0, 0, 0, 1, 1, 2] }, { states := [0, 1, 0, 0, 2] } ]
+  model := fun i => { publishes := readinessPublicationTrace none i.states }
 
 def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
   "{"

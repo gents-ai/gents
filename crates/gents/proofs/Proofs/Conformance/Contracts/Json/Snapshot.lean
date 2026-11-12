@@ -807,8 +807,6 @@ def snapshotClientCasesJson : String :=
     ++ "\"pack_eval_subject_cases\":" ++ PackInstallation.evalSubjectCasesJson ++ ","
     ++ "\"startup_readiness_cases\":"
       ++ startupReadinessCasesJson ++ ","
-    ++ "\"readiness_publication_cases\":"
-      ++ readinessPublicationCasesJson ++ ","
     ++ "\"runtime_session_selection_cases\":" ++ sessionSelectionCasesJson ++ ","
     ++ "\"runtime_configuration_admission_cases\":" ++ configurationAdmissionCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"

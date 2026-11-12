@@ -557,10 +557,6 @@ pub fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
     &lean_contract_snapshot().r6_backgrounding_cases
 }
 
-pub fn lean_readiness_publication_cases() -> &'static [LeanReadinessPublicationCase] {
-    &lean_contract_snapshot().readiness_publication_cases
-}
-
 pub fn lean_reasoning_audit_cases() -> &'static [LeanReasoningAuditCase] {
     &lean_contract_snapshot().reasoning_audit_cases
 }
@@ -3193,7 +3189,6 @@ pub struct LeanContractSnapshot {
     pub pack_wire_target_cases: Vec<serde_json::Value>,
     pub pack_finality_cases: Vec<serde_json::Value>,
     pub hosted_plugin_cases: Vec<serde_json::Value>,
-    pub readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub eval_outcome_cases: Vec<LeanEvalOutcomeCase>,
     pub eval_document_capture_cases: Vec<LeanEvalDocumentCaptureCase>,
     pub optimization_cases: LeanOptimizationCases,
@@ -9903,12 +9898,6 @@ pub struct LeanR6BackgroundingCase {
     pub redrive_allowed: Option<bool>,
     #[serde(default)]
     pub operation: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanReadinessPublicationCase {
-    pub states: Vec<u64>,
-    pub publishes: Vec<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

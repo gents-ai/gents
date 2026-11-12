@@ -908,8 +908,8 @@ def caseCoverage : List CoverageEntry :=
       "StartupReadinessCases")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "readiness_publication_cases"
-      "ReadinessPublicationCases"
+      "family"
+      "contracts_readiness_publication"
       "Pending the node readiness publisher rename (L3). The native consumer drives semantic state changes and idle time through a controlled writer. Durable DefraDB publication and host/process failure behavior are not exercised by this writer fixture.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (followUpCoverage
