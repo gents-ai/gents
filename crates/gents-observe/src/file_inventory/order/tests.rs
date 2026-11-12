@@ -12,7 +12,15 @@ use serde_json::{json, Value};
 // These labels bind metadata representations; source admission and capture
 // integrity remain with the separate database-backed canonical owners.
 fn document(value: &Value) -> String {
-    format!("document-{:020}", value.as_u64().unwrap())
+    document_id(value.as_u64().unwrap())
+}
+
+fn document_id(id: u64) -> String {
+    format!("document-{id:020}")
+}
+
+fn document_number(id: &str) -> u64 {
+    id.strip_prefix("document-").unwrap().parse().unwrap()
 }
 
 fn text(value: &Value) -> String {
@@ -390,20 +398,6 @@ fn generated_orders_use_canonical_publication_observations() {
         let expected = (!case["expected"].is_null()).then(|| window(&case["expected"]));
         assert_eq!(observed, expected, "{}", case["name"]);
     }
-    for case in contracts["file_inventory_order_resolution_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let windows = case["windows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(window)
-            .collect::<Vec<_>>();
-        let observed =
-            resolve(&windows).map(|tools| tools.into_iter().map(str::to_owned).collect::<Vec<_>>());
-        assert_eq!(observed, ids(&case["expected"]), "{}", case["name"]);
-    }
     for case in contracts["file_inventory_order_entry_cases"]
         .as_array()
         .unwrap()
@@ -470,13 +464,6 @@ fn generated_orders_use_canonical_publication_observations() {
         14
     );
     assert_eq!(
-        contracts["file_inventory_order_resolution_cases"]
-            .as_array()
-            .unwrap()
-            .len(),
-        7
-    );
-    assert_eq!(
         contracts["file_inventory_order_entry_cases"]
             .as_array()
             .unwrap()
@@ -490,4 +477,20 @@ fn generated_orders_use_canonical_publication_observations() {
             .len(),
         13
     );
+}
+
+#[test]
+fn order_resolution_follows_the_lean_model() {
+    gents_lean_vocab::families::file_inventory_contracts_order_resolution::replay(|input| {
+        let windows = input
+            .windows
+            .iter()
+            .map(|window| Window {
+                tool: document_id(window.tool),
+                admitted: window.admitted.try_into().unwrap(),
+                delivered: window.delivered.try_into().unwrap(),
+            })
+            .collect::<Vec<_>>();
+        resolve(&windows).map(|tools| tools.into_iter().map(document_number).collect())
+    });
 }

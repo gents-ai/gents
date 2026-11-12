@@ -3,6 +3,7 @@ import Proofs.Observe.FileInventory.OrderCases
 import Proofs.Observe.FileInventory.ReaderCases
 import Proofs.Conformance.Contracts.Json.FileInventoryClosure
 import Proofs.Conformance.Contracts.Json.NativeExecution
+import Proofs.Conformance.Family
 
 namespace Conformance.FileInventoryContracts
 
@@ -294,10 +295,17 @@ def orderingWindowCasesJson : String := jsonArray (Order.Examples.windowCases.ma
      ("closure", closureJson closure), ("tool", toolJson tool),
      ("expected", optional windowJson (Order.window selected closure tool))])
 
-def orderingResolutionCasesJson : String := jsonArray (Order.Examples.resolutionCases.map
-  fun (name, windows) => object
-    [("name", jsonString name), ("windows", jsonArray (windows.map windowJson)),
-     ("expected", optional (fun ids => jsonArray (ids.map toString)) (Order.resolve windows))])
+deriving instance Lean.ToJson for Order.Window
+
+structure OrderResolutionInput where
+  name : String
+  windows : List Order.Window
+  deriving Lean.ToJson
+
+@[conformance_family]
+def orderResolution : Family OrderResolutionInput (Option (List Nat)) where
+  inputs := Order.Examples.resolutionCases.map fun (name, windows) => { name, windows }
+  model := fun i => Order.resolve i.windows
 
 def orderingComparisonCasesJson : String := jsonArray (Order.Examples.comparisonCases.map
   fun (name, selected, closure, node, root, path) => object
