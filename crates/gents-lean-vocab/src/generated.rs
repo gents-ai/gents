@@ -733,10 +733,6 @@ pub fn lean_workspace_binding_cases() -> &'static [LeanWorkspaceBindingCase] {
     &lean_contract_snapshot().workspace_binding_cases
 }
 
-pub fn lean_workspace_cases() -> &'static [LeanWorkspaceCase] {
-    &lean_contract_snapshot().workspace_cases
-}
-
 pub fn lean_write_input_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().write_input_cases
 }
@@ -3396,7 +3392,6 @@ pub struct LeanContractSnapshot {
     pub identity_derivation_cases: Vec<LeanIdentityDerivationCase>,
     pub identity_contracts: Vec<LeanIdentityContract>,
     pub pack_eval_subject_cases: Vec<LeanPackEvalSubjectCase>,
-    pub workspace_cases: Vec<LeanWorkspaceCase>,
     pub workspace_binding_cases: Vec<LeanWorkspaceBindingCase>,
     pub callback_cases: Vec<LeanCallbackCase>,
     pub callback_retry_cases: Vec<LeanCallbackRetryCase>,
@@ -12161,15 +12156,6 @@ pub struct LeanWorkspaceBindingRef {
     pub node_did: String,
     pub seal_hash: Option<String>,
     pub state: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanWorkspaceCase {
-    pub name: String,
-    pub from: String,
-    pub to: String,
-    pub seal_hash: Option<String>,
-    pub legal: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

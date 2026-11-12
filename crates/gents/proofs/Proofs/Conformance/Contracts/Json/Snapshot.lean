@@ -1112,8 +1112,6 @@ def snapshotFileCasesJson : String :=
   ""
     ++ "\"workspace_path_alias_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
-    ++ "\"workspace_cases\":"
-      ++ workspaceCasesJson ++ ","
     ++ "\"workspace_binding_cases\":"
       ++ workspaceBindingCasesJson ++ ","
     ++ "\"callback_transition_case_count\":" ++ toString callbackTransitionCaseCount ++ ","

@@ -1,23 +1,60 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
 import Proofs.Session.Workspace.Conformance
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
 open CommandPolicy
 
-def workspaceCaseJson (witness : Workspace.Conformance.WorkspaceCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"from\":" ++ jsonString witness.fromState.toDefraDB ++ ","
-    ++ "\"to\":" ++ jsonString witness.toState.toDefraDB ++ ","
-    ++ "\"seal_hash\":" ++ jsonOptionalString witness.sealHash ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal
-    ++ "}"
+structure WorkspaceTransitionInput where
+  name : String
+  fromState : String
+  toState : String
+  sealHash : Option String
+  deriving Lean.ToJson
 
-def workspaceCasesJson : String :=
-  jsonArray (Workspace.Conformance.workspaceCases.map workspaceCaseJson)
+structure WorkspaceTransitionOutput where
+  legal : Bool
+  state : String
+  deriving Lean.ToJson
+
+private def workspaceTransitionInput (c : Workspace.Conformance.WorkspaceCase) :
+    WorkspaceTransitionInput :=
+  { name := c.name, fromState := c.fromState.toDefraDB, toState := c.toState.toDefraDB
+    sealHash := c.sealHash }
+
+private def workspaceTransitionOf (i : WorkspaceTransitionInput) : WorkspaceTransitionOutput :=
+  match WorkspaceState.fromDefraDB? i.fromState, WorkspaceState.fromDefraDB? i.toState with
+  | some fromState, some toState =>
+    let pre := Workspace.Conformance.preWorkspace
+      { name := i.name, fromState, toState, sealHash := i.sealHash, legal := false }
+    match IsolatedWorkspace.step? pre toState with
+    | some post => { legal := true, state := post.state.toDefraDB }
+    | none => { legal := false, state := pre.state.toDefraDB }
+  | _, _ => { legal := false, state := i.fromState }
+
+private def quickstartNames : List String := ["provision_frozen_base"]
+
+/-- Quickstart provisioning is the production path that persists a workspace
+straight from provisioning to sealed with the frozen base tree. -/
+@[conformance_family]
+def workspaceQuickstartTransition : Family WorkspaceTransitionInput WorkspaceTransitionOutput where
+  inputs := (Workspace.Conformance.workspaceCases.filter (quickstartNames.contains ·.name)).map
+    workspaceTransitionInput
+  model := workspaceTransitionOf
+
+/-- model-production-gap: production has no lifecycle-transition owner; each
+transition is written inline by a host executor plan (create, seal, cleanup),
+and no scenario replays these transitions through those plans. The illegal
+transitions (sealing without a hash, skipping cleaning) have no production
+path at all. -/
+@[conformance_family]
+def workspaceTransitionUnreached : Family WorkspaceTransitionInput WorkspaceTransitionOutput where
+  inputs := (Workspace.Conformance.workspaceCases.filter (!quickstartNames.contains ·.name)).map
+    workspaceTransitionInput
+  model := workspaceTransitionOf
 
 def bindingWitnessJson (workspaceId : String)
     (witness : Workspace.Conformance.BindingWitness) : String :=

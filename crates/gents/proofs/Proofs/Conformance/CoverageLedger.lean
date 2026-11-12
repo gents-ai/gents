@@ -2490,10 +2490,13 @@ def caseCoverage : List CoverageEntry :=
       "state_machine"
       "Request")
       "interrupt-and-cancel" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_workspace_quickstart_transition")
+      "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "workspace_cases"
-      "WorkspaceCases"
-      "Replay these cases through the production Workspace lifecycle owner after its canonical node fields migrate; the deleted test-local state table was not implementation coverage.")
+      "family" "contracts_workspace_transition_unreached"
+      "model-production-gap: production has no lifecycle-transition owner; host executor plans write each transition inline and no scenario replays these transitions through them, and the illegal transitions have no production path.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "workspace_binding_cases"
