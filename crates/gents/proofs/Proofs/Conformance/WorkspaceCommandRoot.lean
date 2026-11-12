@@ -1,15 +1,25 @@
 import Proofs.Session.CommandPolicy.Sandbox
-import Lean
+import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Session
 
 namespace Conformance.WorkspaceCommandRoot
+
 open Lean CommandPolicy
 
-def casesJson : Json := toJson <|
-  ([.readOnly, .workspaceWrite, .artifactWrite, .unrestricted] : List ExecutionMode).flatMap fun mode =>
-  [false, true].flatMap fun configured =>
-  [false, true].flatMap fun full =>
-  [false, true].map fun within => Json.mkObj [
-    ("mode", toJson mode.toDefraDB), ("configured", toJson configured),
-    ("fullAccess", toJson full), ("within", toJson within), ("selectedWorkspace", toJson (useWorkspaceRoot mode configured full within))]
+structure Input where
+  mode : ExecutionMode
+  configured : Bool
+  fullAccess : Bool
+  within : Bool
+  deriving ToJson
+
+@[conformance_family]
+def selection : Family Input Bool where
+  inputs :=
+    ([.readOnly, .workspaceWrite, .artifactWrite, .unrestricted] : List ExecutionMode).flatMap fun mode =>
+    [false, true].flatMap fun configured =>
+    [false, true].flatMap fun fullAccess =>
+    [false, true].map fun within => { mode, configured, fullAccess, within }
+  model := fun i => useWorkspaceRoot i.mode i.configured i.fullAccess i.within
 
 end Conformance.WorkspaceCommandRoot

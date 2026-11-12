@@ -80,29 +80,18 @@ mod tests {
     use super::*;
     use crate::plugin::approval::workspace::{self, Mode, WorkspaceKey};
 
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Case {
-        mode: CommandExecutionMode,
-        configured: bool,
-        full_access: bool,
-        within: bool,
-        selected_workspace: bool,
-    }
-
     #[tokio::test]
     async fn generated_workspace_command_roots_preserve_the_tool_ceiling() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_command_root_cases;
-        assert_eq!(cases.len(), 32);
-        for value in cases {
-            let case: Case = serde_json::from_value(value.clone()).unwrap();
+        for case in gents_lean_vocab::families::workspace_command_root_selection::cases::<
+            CommandExecutionMode,
+        >() {
             let folder = tempfile::tempdir().unwrap();
             let home = folder.path().join("runtime");
             std::fs::create_dir(&home).unwrap();
             let root = folder.path().join("tool-root");
             std::fs::create_dir(&root).unwrap();
             let root = root.canonicalize().unwrap();
-            let project = if case.within {
+            let project = if case.input.within {
                 root.join("project")
             } else {
                 folder.path().join("project")
@@ -110,8 +99,8 @@ mod tests {
             std::fs::create_dir(&project).unwrap();
             let project = project.canonicalize().unwrap();
             let key = WorkspaceKey::canonical("node", "requester", "agent", &project).unwrap();
-            if case.configured {
-                let mode = if case.full_access {
+            if case.input.configured {
+                let mode = if case.input.full_access {
                     Mode::FullAccess
                 } else {
                     Mode::Ask
@@ -126,12 +115,17 @@ mod tests {
                 Some(&project),
             )
             .unwrap();
-            let policy = CommandExecutionPolicy::write_capable().with_mode(case.mode);
+            let policy = CommandExecutionPolicy::write_capable().with_mode(case.input.mode);
             let selected = workspace::scope(scope, async { writable_root(&root, &policy) })
                 .await
                 .unwrap();
-            assert_eq!(selected == project, case.selected_workspace, "{value}");
-            assert!(selected.starts_with(&root), "{value}");
+            assert!(
+                selected.starts_with(&root),
+                "selected workspace {} escapes the tool root {}",
+                selected.display(),
+                root.display()
+            );
+            case.check(selected == project);
         }
     }
 }
