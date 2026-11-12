@@ -35,8 +35,8 @@ enum Baseline {
 }
 
 #[tokio::test]
-#[ignore = "M5: needs GENTS_EVAL_TARGET, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
-async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_promote() {
+#[ignore = "quality experiment: select GENTS_LIVE_TARGET and an optimization pack/definition; promotion depends on measured model performance"]
+async fn experiment_golden_prompt_beats_a_thin_one_and_reaches_ready_to_promote() {
     let fixture = Fixture::new("live-accept", Baseline::Thin).await;
     let proposer = fixture.proposer(
         &fixture.golden_prompt,
@@ -65,8 +65,8 @@ async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_pro
 }
 
 #[tokio::test]
-#[ignore = "M5: needs GENTS_EVAL_TARGET, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
-async fn live_reject_a_prompt_that_ignores_the_task_never_reaches_ready_to_promote() {
+#[ignore = "quality experiment: select GENTS_LIVE_TARGET and an optimization pack/definition; promotion depends on measured model performance"]
+async fn experiment_prompt_that_ignores_the_task_never_reaches_ready_to_promote() {
     let fixture = Fixture::new("live-reject", Baseline::Golden).await;
     let proposer = fixture.proposer(DEGRADED_PROMPT, "shorter is better");
     let outcome = fixture.drive(&proposer).await;

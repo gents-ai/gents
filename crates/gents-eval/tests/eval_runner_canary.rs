@@ -646,8 +646,7 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
 }
 #[cfg(feature = "live-e2e")]
 #[tokio::test]
-#[ignore = "select GENTS_LIVE_TARGET and run the live eval target"]
-async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honoured() {
+async fn live_paired_trials_preserve_the_seed_and_retain_both_answers() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_ansi(false)
@@ -657,37 +656,16 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
         .try_init();
 
     let target = support::live_inference::live_target().await;
-    let (canary, mut request) = canary_request(target.endpoint(), "run-live").await;
+    let (canary, mut request) = live_canary_request(&target, "run-live").await;
     canary
-        .install(vec![
-            (
-                Collection::InferenceBackend,
-                serde_json::to_value(InferenceBackend {
-                    backend_id: "canary-backend".into(),
-                    ..target.backend(&canary.owner)
-                })
-                .unwrap(),
-            ),
-            (
-                Collection::InferenceSampling,
-                json!({
-                    "node_did": canary.owner,
-                    "sampling_id": "canary-sampling",
-                    "temperature": 0.7,
-                }),
-            ),
-            (
-                Collection::InferenceProfile,
-                serde_json::to_value(InferenceProfile {
-                    profile_id: "canary".into(),
-                    backend_id: "canary-backend".into(),
-                    sampling_id: Some("canary-sampling".into()),
-                    execution_id: None,
-                    ..target.profile(&canary.owner)
-                })
-                .unwrap(),
-            ),
-        ])
+        .install(vec![(
+            Collection::InferenceSampling,
+            json!({
+                "node_did": canary.owner,
+                "sampling_id": "canary-sampling",
+                "temperature": 0.7,
+            }),
+        )])
         .await;
     request.case_ids = Some(vec!["one-stage".to_string()]);
     request.trials_per_case = 1;
@@ -699,7 +677,7 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
     request.cells.push(candidate);
 
     let executor = canary.executor();
-    run(
+    let outcome = run(
         &canary.access,
         &request,
         &executor,
@@ -713,6 +691,15 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
     let trials = load_trials(&canary.access, &request.owner, &request.run_id)
         .await
         .unwrap();
+    assert_eq!(
+        (outcome.completed, outcome.not_evidence),
+        (2, 0),
+        "{trials:#?}"
+    );
+    assert!(
+        trials.iter().all(|trial| trial.completion.is_some()),
+        "{trials:#?}"
+    );
     assert_eq!(trials.len(), 2, "{trials:#?}");
     let mut arms = Vec::new();
     for cell_id in ["baseline", "candidate"] {
