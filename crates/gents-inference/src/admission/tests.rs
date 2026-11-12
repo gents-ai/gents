@@ -464,77 +464,6 @@ fn assert_reconstructed_slot_count(rows: &[Value], backend_id: &str, expected: u
     );
 }
 
-fn assert_fleet_case_matches_call_row(case: &LeanFleetSlotAccountingCase, row: &Value) {
-    assert!(
-        case.row_backend_ids == vec![case.backend_id.clone()],
-        "single-row Fleet slot helper called with non-single-backend case {}: {:?}",
-        case.name,
-        case.row_backend_ids
-    );
-    assert!(
-        case.row_states.len() == 1,
-        "single-row Fleet slot helper called with multi-row case {}: {:?}",
-        case.name,
-        case.row_states
-    );
-    if case.admission_state == "released" {
-        let expected_terminal_state = match case.request_state.as_str() {
-            "completed" => "completed",
-            "failed" => "failed",
-            "interrupted" | "superseded" | "dead" => "cancelled",
-            other => panic!(
-                "Fleet slot released case {} has non-terminal request_state={other}",
-                case.name
-            ),
-        };
-        assert_eq!(
-            case.row_states[0].as_str(),
-            expected_terminal_state,
-            "Fleet slot released case {} projected the wrong terminal InferenceCall state",
-            case.name
-        );
-    }
-    assert_eq!(
-        row.get("backend_id").and_then(Value::as_str),
-        Some(case.row_backend_ids[0].as_str()),
-        "Fleet slot case {} projected backend drifted from persisted InferenceCall row",
-        case.name
-    );
-    assert_eq!(
-        row.get("call_state").and_then(Value::as_str),
-        Some(case.row_states[0].as_str()),
-        "Fleet slot case {} projected call_state drifted from persisted InferenceCall row",
-        case.name
-    );
-
-    let contribution = slot_contribution(slot_row_from_value(row), &case.backend_id);
-    assert_eq!(
-        contribution, case.expected_contribution,
-        "Fleet slot case {} drifted from admission slot contribution",
-        case.name
-    );
-    assert_eq!(
-        contribution, case.reconstructed_running_count,
-        "Fleet slot case {} one-row projection drifted from admission reconstruction",
-        case.name
-    );
-}
-
-fn sorted_call_states_for_backend(rows: &[Value], backend_id: &str) -> Vec<String> {
-    let mut states = rows
-        .iter()
-        .filter(|row| row.get("backend_id").and_then(Value::as_str) == Some(backend_id))
-        .map(|row| {
-            row.get("call_state")
-                .and_then(Value::as_str)
-                .expect("InferenceCall row must include call_state")
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    states.sort();
-    states
-}
-
 async fn wait_for_call_row_count(
     node: &Arc<EmbeddedNode>,
     signer: &gents_store::identity::ManagedAgentSigner,
@@ -661,17 +590,11 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     let running_context = test_context(&registry, "req-fleet-running", &backend_id).await;
     let queued_context = test_context(&registry, "req-fleet-waiting", &backend_id).await;
 
-    scope_request(running_context, async {
+    let (running_row, queued_row) = scope_request(running_context, async {
         let mut running_permit = registry.acquire_current_call_for_test().await.unwrap();
-        let running_row = wait_for_request_call_state(
-            &node,
-            &registry.signer,
-            "req-fleet-running",
-            &acquired.row_states[0],
-        )
-        .await;
-        assert_fleet_case_matches_call_row(acquired, &running_row);
-        assert_fleet_case_matches_call_row(executing, &running_row);
+        let running_row =
+            wait_for_request_call_state(&node, &registry.signer, "req-fleet-running", "running")
+                .await;
 
         let queued_registry = registry.clone();
         let queued = tokio::spawn(async move {
@@ -684,120 +607,123 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
             })
             .await;
         });
-        let queued_row = wait_for_request_call_state(
-            &node,
-            &registry.signer,
-            "req-fleet-waiting",
-            &waiting.row_states[0],
-        )
-        .await;
-        assert_fleet_case_matches_call_row(waiting, &queued_row);
+        let queued_row =
+            wait_for_request_call_state(&node, &registry.signer, "req-fleet-waiting", "queued")
+                .await;
 
         running_permit.finish_success(None).await.unwrap();
         drop(running_permit);
         queued.await.unwrap();
+        (running_row, queued_row)
     })
     .await;
 
-    let completed_row = wait_for_request_call_state(
-        &node,
-        &registry.signer,
-        "req-fleet-running",
-        &released.row_states[0],
-    )
-    .await;
-    assert_fleet_case_matches_call_row(released, &completed_row);
+    let completed_row =
+        wait_for_request_call_state(&node, &registry.signer, "req-fleet-running", "completed")
+            .await;
 
-    let (bounded_db, bounded_signer) = test_node().await;
-    let bounded_node = bounded_db.node.clone();
-    let bounded_registry = TestRegistry::new(bounded_node.clone(), bounded_signer);
-    bounded_registry.reconcile(
-        1,
-        &RapidHashMap::from_iter([(
-            backend_id.clone(),
-            config(&backend_id, bounded.max_concurrent, 1),
-        )]),
-    );
+    for case in contribution_cases {
+        let row = match case.input.admission_state.as_str() {
+            "acquired" | "executing" => &running_row,
+            "waiting" => &queued_row,
+            "released" => &completed_row,
+            other => panic!("the admission scenario has no {other} checkpoint"),
+        };
+        let observation = fleet_observation(&[row], &backend_id, case.input.max_concurrent);
+        case.check(observation);
+    }
 
-    let completed_context =
-        test_context(&bounded_registry, "req-fleet-bound-completed", &backend_id).await;
-    scope_request(completed_context, async {
-        let mut permit = bounded_registry
-            .acquire_current_call_for_test()
-            .await
-            .unwrap();
-        permit.finish_success(None).await.unwrap();
-        drop(permit);
-    })
-    .await;
+    for case in bound_cases {
+        let (bounded_db, bounded_signer) = test_node().await;
+        let bounded_node = bounded_db.node.clone();
+        let bounded_registry = TestRegistry::new(bounded_node.clone(), bounded_signer);
+        bounded_registry.reconcile(
+            1,
+            &RapidHashMap::from_iter([(
+                backend_id.clone(),
+                config(&backend_id, case.input.max_concurrent as usize, 1),
+            )]),
+        );
 
-    let first_context =
-        test_context(&bounded_registry, "req-fleet-bound-running-1", &backend_id).await;
-    let second_context =
-        test_context(&bounded_registry, "req-fleet-bound-running-2", &backend_id).await;
-    let queued_context =
-        test_context(&bounded_registry, "req-fleet-bound-queued", &backend_id).await;
-
-    let mut first = scope_request(first_context, async {
-        bounded_registry
-            .acquire_current_call_for_test()
-            .await
-            .unwrap()
-    })
-    .await;
-    let mut second = scope_request(second_context, async {
-        bounded_registry
-            .acquire_current_call_for_test()
-            .await
-            .unwrap()
-    })
-    .await;
-    let queued_registry = bounded_registry.clone();
-    let queued = tokio::spawn(async move {
-        scope_request(queued_context, async move {
-            let mut permit = queued_registry
+        let completed_context =
+            test_context(&bounded_registry, "req-fleet-bound-completed", &backend_id).await;
+        scope_request(completed_context, async {
+            let mut permit = bounded_registry
                 .acquire_current_call_for_test()
                 .await
                 .unwrap();
             permit.finish_success(None).await.unwrap();
+            drop(permit);
         })
         .await;
-    });
 
-    wait_for_request_call_state(
-        &bounded_node,
-        &bounded_registry.signer,
-        "req-fleet-bound-queued",
-        "queued",
-    )
-    .await;
-    let rows = wait_for_call_row_count(
-        &bounded_node,
-        &bounded_registry.signer,
-        bounded.active_count,
-    )
-    .await;
-    let reconstructed = running_slot_count_for_backend(&rows, &backend_id);
-    assert_eq!(
-        reconstructed, bounded.reconstructed_running_count,
-        "generated fleet bounded case drifted from runtime admission reconstruction"
-    );
-    assert_eq!(reconstructed, bounded.slot_count);
-    assert!(reconstructed <= bounded.max_concurrent);
+        let first_context =
+            test_context(&bounded_registry, "req-fleet-bound-running-1", &backend_id).await;
+        let second_context =
+            test_context(&bounded_registry, "req-fleet-bound-running-2", &backend_id).await;
+        let queued_context =
+            test_context(&bounded_registry, "req-fleet-bound-queued", &backend_id).await;
 
-    let mut expected_states = bounded.row_states.clone();
-    expected_states.sort();
-    assert_eq!(
-        sorted_call_states_for_backend(&rows, &backend_id),
-        expected_states,
-        "generated fleet bounded projection must match the real admission row states"
-    );
+        let mut first = scope_request(first_context, async {
+            bounded_registry
+                .acquire_current_call_for_test()
+                .await
+                .unwrap()
+        })
+        .await;
+        let mut second = scope_request(second_context, async {
+            bounded_registry
+                .acquire_current_call_for_test()
+                .await
+                .unwrap()
+        })
+        .await;
+        let queued_registry = bounded_registry.clone();
+        let queued = tokio::spawn(async move {
+            scope_request(queued_context, async move {
+                let mut permit = queued_registry
+                    .acquire_current_call_for_test()
+                    .await
+                    .unwrap();
+                permit.finish_success(None).await.unwrap();
+            })
+            .await;
+        });
 
-    first.finish_success(None).await.unwrap();
-    drop(first);
-    queued.await.unwrap();
-    second.finish_success(None).await.unwrap();
-    drop(second);
+        wait_for_request_call_state(
+            &bounded_node,
+            &bounded_registry.signer,
+            "req-fleet-bound-queued",
+            "queued",
+        )
+        .await;
+        let rows = wait_for_call_row_count(
+            &bounded_node,
+            &bounded_registry.signer,
+            case.input.active_count as usize,
+        )
+        .await;
+        let ordered = [
+            "req-fleet-bound-running-1",
+            "req-fleet-bound-running-2",
+            "req-fleet-bound-queued",
+            "req-fleet-bound-completed",
+        ]
+        .map(|request_id| {
+            rows.iter()
+                .find(|row| row.get("request_id").and_then(Value::as_str) == Some(request_id))
+                .unwrap_or_else(|| panic!("no InferenceCall row for {request_id}: {rows:?}"))
+        });
+        assert_eq!(rows.len(), ordered.len(), "{rows:?}");
+        let observation = fleet_observation(&ordered, &backend_id, case.input.max_concurrent);
+        case.check(gents_lean_vocab::family::recode(&observation));
+
+        first.finish_success(None).await.unwrap();
+        drop(first);
+        queued.await.unwrap();
+        second.finish_success(None).await.unwrap();
+        drop(second);
+    }
 }
 
 #[tokio::test]

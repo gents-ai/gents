@@ -1035,17 +1035,17 @@ def caseCoverage : List CoverageEntry :=
       "Retry policy and canonical-execution composition are executable Lean witnesses. The native owned loop must still implement retraction-before-retry and immutable acceptance before this is consumer coverage.")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
-      "fleet_slot_accounting_cases"
+      "Proofs.Conformance.FleetSlotAccounting"
       "FleetSlotAccounting"
       boundaryFleetSlotAccountingDerivedViewId)
       "fleet-slot-accounting" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "fleet_slot_accounting_cases"
-      "FleetSlotAccounting")
+      "family"
+      "fleet_slot_accounting_contribution")
       "fleet-slot-accounting" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "fleet_slot_accounting_cases"
-      "FleetSlotAccounting")
+      "family"
+      "fleet_slot_accounting_bound")
       "fleet-slot-accounting" [Surface.api]
   , tagged (boundaryCoverage
       "persistence_failure_policy_cases"

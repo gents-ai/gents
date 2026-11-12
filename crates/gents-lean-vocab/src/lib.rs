@@ -267,22 +267,6 @@ pub fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
         .unwrap_or_else(|| panic!("Lean ClientShell case {name:?} was not emitted"))
 }
 
-pub fn lean_inference_slot_accounting_case(name: &str) -> &'static LeanInferenceSlotAccountingCase {
-    lean_contract_snapshot()
-        .inference_slot_accounting_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean inference slot-accounting case {name:?} was not emitted"))
-}
-
-pub fn lean_fleet_slot_accounting_case(name: &str) -> &'static LeanFleetSlotAccountingCase {
-    lean_contract_snapshot()
-        .fleet_slot_accounting_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean fleet slot-accounting case {name:?} was not emitted"))
-}
-
 pub fn lean_queue_deadline_case(name: &str) -> &'static LeanQueueDeadlineConformanceCase {
     lean_contract_snapshot()
         .queue_deadline_conformance_cases
