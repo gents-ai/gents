@@ -1,4 +1,3 @@
-use crate::client::source_matches_node;
 use gents_documents::inference_backend::observation_binding;
 use serde::{Deserialize, Serialize};
 
@@ -189,21 +188,16 @@ impl InferenceSetupState {
                         &row.node_did,
                         &row.backend_id,
                         metadata_doc,
-                        store.backend_observations.iter().enumerate().map(
-                            |(index, observation)| {
-                                (
-                                    observation_binding::ObservationKey {
-                                        node_did: store
-                                            .backend_observation_source_node_dids
-                                            .get(index)
-                                            .and_then(Option::as_deref),
-                                        backend_id: &observation.backend_id,
-                                        metadata_doc_id: observation.metadata_doc_id.as_deref(),
-                                    },
-                                    observation,
-                                )
-                            },
-                        ),
+                        store.backend_observations.iter().map(|observation| {
+                            (
+                                observation_binding::ObservationKey {
+                                    node_did: Some(node_did),
+                                    backend_id: &observation.backend_id,
+                                    metadata_doc_id: observation.metadata_doc_id.as_deref(),
+                                },
+                                observation,
+                            )
+                        }),
                     )
                     .ok()
                     .flatten()
@@ -216,17 +210,8 @@ impl InferenceSetupState {
         let mut inference_profiles = store
             .inference_profiles
             .iter()
-            .enumerate()
-            .filter(|(index, row)| {
-                row.node_did == node_did
-                    && source_matches_node(
-                        &store.inference_profile_source_node_dids,
-                        *index,
-                        node_did,
-                        false,
-                    )
-            })
-            .map(|(_, row)| row.clone())
+            .filter(|row| row.node_did == node_did)
+            .cloned()
             .collect::<Vec<_>>();
         inference_profiles.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
         Self {

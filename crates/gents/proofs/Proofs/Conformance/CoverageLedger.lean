@@ -1131,10 +1131,6 @@ def caseCoverage : List CoverageEntry :=
       "update_handoff_transitions")
       "runtime-reconcile" [Surface.runtimeInternal, Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_observation_scope_cases"
-      "ClientObservationScopeCases")
-      "client-shell" [Surface.operatorUi]
-  , tagged (consumerCoverage
       "inference_observation_cases"
       "InferenceObservationCases")
       "client-shell" [Surface.operatorUi]
@@ -1527,6 +1523,10 @@ def caseCoverage : List CoverageEntry :=
       "MailboxNativePolicyCases"
       "Tests native mailbox publication and recipient revocation; authenticated producer provenance and durable runtime notices remain separate obligations.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "family"
+      "revoke_follows_grant_steps")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "node_file_requests_access"

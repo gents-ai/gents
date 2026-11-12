@@ -60,7 +60,7 @@ async fn generated_accepted_receipt_survives_projection_refresh_failure() {
         .iter()
         .find(|case| case.name == "applied_receipt_projection_failure")
         .expect("modeled applied receipt with failed projection");
-    let (store, _version) = ObservedStore::new(ClientStore::default());
+    let store = crate::client::observe::ObservedStores::new().ensure("did:test:node");
     let before = store.projection_revision().store_version;
     let receipt = applied_receipt();
     let accepted = merge_accepted_edit_projection(
@@ -121,7 +121,7 @@ async fn incomplete_or_foreign_edit_projection_keeps_store_and_receipt() {
         .as_str()
         .expect("physical ID")
         .to_owned();
-    let (store, _version) = ObservedStore::new(ClientStore::default());
+    let store = crate::client::observe::ObservedStores::new().ensure("did:test:node");
     let before = store.projection_revision().store_version;
 
     let missing = merge_accepted_edit_projection(

@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
 use tokio::sync::watch;
 
-use crate::client::store::{ClientStore, SharedClientStore, StoreScope};
+use crate::client::store::{ClientStore, SharedClientStore};
 
 #[derive(Debug, Default)]
 pub struct ObserverMetrics {
@@ -78,138 +78,68 @@ pub struct StoreUpdateNotice {
     pub revision: StoreProjectionRevision,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StorePatchMergeOutcome {
-    pub store_version: u64,
-}
-
 enum ProvenanceUpdate {
-    Preserve,
     Compare,
     Invalidate,
 }
 
-/// One family of publication epochs: unknown ownership invalidates every
-/// scope; classified changes invalidate only their actual owners.
-#[derive(Clone, Default)]
-struct Epochs {
-    all: Arc<()>,
-    shared: Arc<()>,
-    nodes: BTreeMap<String, Arc<()>>,
-}
-
-impl Epochs {
-    fn accepts(&self, captured: &Self, scope: &StoreScope) -> bool {
-        match scope {
-            StoreScope::All => Arc::ptr_eq(&self.all, &captured.all),
-            StoreScope::Nodes(nodes) => {
-                Arc::ptr_eq(&self.shared, &captured.shared)
-                    && nodes.iter().all(|node| {
-                        match (self.nodes.get(node), captured.nodes.get(node)) {
-                            (Some(current), Some(previous)) => Arc::ptr_eq(current, previous),
-                            (None, None) => true,
-                            _ => false,
-                        }
-                    })
-            }
-        }
-    }
-
-    fn touch(&mut self, scope: &StoreScope) {
-        self.all = Arc::new(());
-        match scope {
-            StoreScope::All => self.shared = Arc::new(()),
-            StoreScope::Nodes(nodes) => {
-                for node in nodes {
-                    self.nodes.insert(node.clone(), Arc::new(()));
-                }
-            }
-        }
-    }
-}
-
-/// `ClientDataPublication` epochs: publications move `data`, request events
-/// move `events`. A snapshot reload checks `data` only; a patch checks both.
+/// `ClientDataPublication` epochs of one node's store: publications move
+/// `data`, request events move `events`. A snapshot reload checks `data`
+/// only; a patch checks both.
 #[derive(Clone, Default)]
 pub(crate) struct StoreReadFence {
-    data: Epochs,
-    events: Epochs,
+    data: Arc<()>,
+    events: Arc<()>,
 }
 
 impl StoreReadFence {
-    /// `ClientDataPublication.acceptsFor`.
-    fn accepts(&self, captured: &Self, scope: &StoreScope) -> bool {
-        self.accepts_reload(captured, scope) && self.events.accepts(&captured.events, scope)
+    /// `ClientDataPublication.accepts`.
+    fn accepts(&self, captured: &Self) -> bool {
+        self.accepts_reload(captured) && Arc::ptr_eq(&self.events, &captured.events)
     }
 
-    /// `ClientDataPublication.acceptsReloadFor`.
-    fn accepts_reload(&self, captured: &Self, scope: &StoreScope) -> bool {
-        self.data.accepts(&captured.data, scope)
+    /// `ClientDataPublication.acceptsReload`.
+    fn accepts_reload(&self, captured: &Self) -> bool {
+        Arc::ptr_eq(&self.data, &captured.data)
     }
 
-    fn touch(&mut self, scope: &StoreScope) {
-        self.data.touch(scope);
+    fn touch(&mut self) {
+        self.data = Arc::new(());
     }
 
-    fn touch_events(&mut self, scope: &StoreScope) {
-        self.events.touch(scope);
+    fn touch_events(&mut self) {
+        self.events = Arc::new(());
     }
 }
 
 enum StoreMutation {
+    /// A reload of the node, replacing every row its store holds.
     Replace(ClientStore),
-    ReplaceNode(String, ClientStore),
     Chat(ClientStore),
-    Observer(ClientStore),
 }
 
 impl StoreMutation {
-    /// A node reload publishing only the snapshot's rows for that node.
-    fn replace_node(node: &str, incoming: ClientStore) -> Self {
-        Self::ReplaceNode(node.to_owned(), incoming.node_rows(node))
-    }
-
-    /// The epochs the mutation moves.
-    fn scope(&self, current: &ClientStore) -> StoreScope {
-        match self {
-            Self::Replace(_) => StoreScope::All,
-            Self::ReplaceNode(node, incoming) => current.replacement_scope(node, incoming),
-            Self::Chat(incoming) | Self::Observer(incoming) => current.merge_scope(incoming),
-        }
-    }
-
     /// Whether a read captured at `captured` may still publish this mutation:
-    /// a snapshot reload checks the publication epochs of its `reloadCheck`
-    /// scope, a patch also checks the request-event epochs of its footprint.
-    fn accepts(
-        &self,
-        fences: &StoreReadFence,
-        captured: &StoreReadFence,
-        current: &ClientStore,
-        scope: &StoreScope,
-    ) -> bool {
+    /// a snapshot reload checks the publication epoch, a patch also checks
+    /// the request-event epoch.
+    fn accepts(&self, fences: &StoreReadFence, captured: &StoreReadFence) -> bool {
         match self {
-            Self::Replace(_) => fences.accepts_reload(captured, scope),
-            Self::ReplaceNode(node, incoming) => {
-                fences.accepts_reload(captured, &current.replacement_check_scope(node, incoming))
-            }
-            Self::Chat(_) | Self::Observer(_) => fences.accepts(captured, scope),
+            Self::Replace(_) => fences.accepts_reload(captured),
+            Self::Chat(_) => fences.accepts(captured),
         }
     }
 
-    fn provenance(&self) -> ProvenanceUpdate {
+    fn provenance(&self) -> Option<ProvenanceUpdate> {
         match self {
-            Self::Replace(_) | Self::ReplaceNode(_, _) => ProvenanceUpdate::Invalidate,
-            Self::Chat(incoming) | Self::Observer(incoming) => provenance_update(incoming),
+            Self::Replace(_) => Some(ProvenanceUpdate::Invalidate),
+            Self::Chat(incoming) => provenance_update(incoming),
         }
     }
 
     fn apply(self, current: &ClientStore) -> ClientStore {
         match self {
             Self::Replace(incoming) => incoming,
-            Self::ReplaceNode(node, incoming) => current.replace_node_scope(&node, incoming),
             Self::Chat(incoming) => current.merge_chat_patch(incoming),
-            Self::Observer(incoming) => current.merge_snapshot(incoming),
         }
     }
 }
@@ -271,58 +201,144 @@ impl RuntimeConnectionStatus {
 }
 
 struct ObservedState {
-    runtime_connections: BTreeMap<String, RuntimeConnectionStatus>,
     snapshot: SharedClientStore,
     revision: StoreProjectionRevision,
     fences: StoreReadFence,
 }
 
-#[derive(Default)]
-struct PendingResync {
-    full: bool,
-    node_dids: rapidhash::RapidHashSet<String>,
-}
-
-pub struct ObservedStore {
-    state: RwLock<ObservedState>,
-    focused_request_id: RwLock<Option<String>>,
+/// What every node's store shares: the fleet notice that any store, status or
+/// membership changed, and the observer's queue of nodes to read again.
+struct Fleet {
     version_tx: watch::Sender<u64>,
-    change_tx: watch::Sender<StoreUpdateNotice>,
     resync_tx: watch::Sender<u64>,
-    pending_resync: StdMutex<PendingResync>,
+    pending_resync: StdMutex<BTreeSet<String>>,
 }
 
-impl ObservedStore {
-    pub fn new(initial_snapshot: ClientStore) -> (Arc<Self>, watch::Receiver<u64>) {
-        let (version_tx, version_rx) = watch::channel(1_u64);
-        let revision = StoreProjectionRevision {
-            store_version: 1,
-            provenance_version: 1,
-            request_event_version: 1,
-        };
-        let (change_tx, _change_rx) = watch::channel(StoreUpdateNotice { revision });
-        let (resync_tx, _resync_rx) = watch::channel(0_u64);
-        let store = Arc::new(Self {
-            state: RwLock::new(ObservedState {
-                runtime_connections: BTreeMap::new(),
-                snapshot: Arc::new(initial_snapshot.into_observer_projection()),
-                revision,
-                fences: StoreReadFence::default(),
+impl Fleet {
+    fn changed(&self) {
+        self.version_tx
+            .send_modify(|version| *version = version.saturating_add(1));
+    }
+}
+
+/// Every node's own store, keyed by node DID. A node's rows are read and
+/// observed only through that node's connection and published only into its
+/// store (`ClientDataPublication.Fleet`); no store holds another node's rows.
+pub struct ObservedStores {
+    stores: RwLock<BTreeMap<String, Arc<ObservedStore>>>,
+    runtime_connections: RwLock<BTreeMap<String, RuntimeConnectionStatus>>,
+    fleet: Arc<Fleet>,
+}
+
+impl ObservedStores {
+    pub fn new() -> Arc<Self> {
+        let (version_tx, _) = watch::channel(1_u64);
+        let (resync_tx, _) = watch::channel(0_u64);
+        Arc::new(Self {
+            stores: RwLock::new(BTreeMap::new()),
+            runtime_connections: RwLock::new(BTreeMap::new()),
+            fleet: Arc::new(Fleet {
+                version_tx,
+                resync_tx,
+                pending_resync: StdMutex::new(BTreeSet::new()),
             }),
-            focused_request_id: RwLock::new(None),
-            version_tx,
-            change_tx,
-            resync_tx,
-            pending_resync: StdMutex::new(PendingResync::default()),
-        });
-        (store, version_rx)
+        })
+    }
+
+    /// The node's store, if it is observed.
+    pub fn store(&self, node_did: &str) -> Option<Arc<ObservedStore>> {
+        self.stores
+            .read()
+            .expect("observed stores lock poisoned")
+            .get(node_did)
+            .cloned()
+    }
+
+    /// The node's store, created empty for a node not yet observed.
+    pub fn ensure(&self, node_did: &str) -> Arc<ObservedStore> {
+        if let Some(store) = self.store(node_did) {
+            return store;
+        }
+        let store = {
+            let mut stores = self.stores.write().expect("observed stores lock poisoned");
+            stores
+                .entry(node_did.to_owned())
+                .or_insert_with(|| {
+                    ObservedStore::create(node_did, ClientStore::default(), self.fleet.clone())
+                })
+                .clone()
+        };
+        self.fleet.changed();
+        store
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_for_test(
+        &self,
+        node_did: &str,
+        initial: ClientStore,
+    ) -> Arc<ObservedStore> {
+        let store = ObservedStore::create(node_did, initial, self.fleet.clone());
+        self.stores
+            .write()
+            .expect("observed stores lock poisoned")
+            .insert(node_did.to_owned(), store.clone());
+        store
+    }
+
+    /// Drops a node no longer configured, with its rows.
+    pub(crate) fn remove(&self, node_did: &str) {
+        let removed = self
+            .stores
+            .write()
+            .expect("observed stores lock poisoned")
+            .remove(node_did)
+            .is_some();
+        if removed {
+            self.fleet.changed();
+        }
+    }
+
+    /// The rows the node's store shows; empty for a node not observed.
+    pub fn snapshot(&self, node_did: &str) -> SharedClientStore {
+        self.store(node_did)
+            .map(|store| store.snapshot())
+            .unwrap_or_default()
+    }
+
+    /// [`Self::snapshot`] with the revision of the node's store; a node not
+    /// observed shows no rows at the initial revision.
+    pub fn snapshot_with_revision(
+        &self,
+        node_did: &str,
+    ) -> (SharedClientStore, StoreProjectionRevision) {
+        self.store(node_did)
+            .map(|store| store.snapshot_with_revision())
+            .unwrap_or_else(|| {
+                (
+                    SharedClientStore::default(),
+                    StoreProjectionRevision {
+                        store_version: 1,
+                        provenance_version: 1,
+                        request_event_version: 1,
+                    },
+                )
+            })
+    }
+
+    pub fn node_dids(&self) -> Vec<String> {
+        self.stores
+            .read()
+            .expect("observed stores lock poisoned")
+            .keys()
+            .cloned()
+            .collect()
     }
 
     pub fn runtime_connection(&self, node_did: &str) -> Option<RuntimeConnectionStatus> {
-        self.state
+        self.runtime_connections
             .read()
-            .expect("store snapshot lock poisoned")
-            .runtime_connections
+            .expect("runtime connections lock poisoned")
             .get(node_did)
             .copied()
     }
@@ -339,20 +355,83 @@ impl ObservedStore {
         status: Option<RuntimeConnectionStatus>,
     ) {
         let changed = {
-            let mut state = self.state.write().expect("store snapshot lock poisoned");
+            let mut connections = self
+                .runtime_connections
+                .write()
+                .expect("runtime connections lock poisoned");
             match status {
-                Some(status) => {
-                    state
-                        .runtime_connections
-                        .insert(node_did.to_owned(), status)
-                        != Some(status)
-                }
-                None => state.runtime_connections.remove(node_did).is_some(),
+                Some(status) => connections.insert(node_did.to_owned(), status) != Some(status),
+                None => connections.remove(node_did).is_some(),
             }
         };
         if changed {
-            self.invalidate_projection(false);
+            self.fleet.changed();
         }
+    }
+
+    /// Advances on every publication into any node's store and every change
+    /// of the observed nodes or their connection status.
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.fleet.version_tx.subscribe()
+    }
+
+    pub fn version(&self) -> u64 {
+        *self.fleet.version_tx.borrow()
+    }
+
+    pub(crate) fn subscribe_resync_requests(&self) -> watch::Receiver<u64> {
+        self.fleet.resync_tx.subscribe()
+    }
+
+    /// The nodes whose stores asked to be read again, each once.
+    pub(crate) fn take_resync_requests(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .fleet
+                .pending_resync
+                .lock()
+                .expect("pending resync lock poisoned"),
+        )
+        .into_iter()
+        .collect()
+    }
+}
+
+/// One node's observed rows.
+pub struct ObservedStore {
+    node_did: String,
+    state: RwLock<ObservedState>,
+    focused_request_id: RwLock<Option<String>>,
+    version_tx: watch::Sender<u64>,
+    change_tx: watch::Sender<StoreUpdateNotice>,
+    fleet: Arc<Fleet>,
+}
+
+impl ObservedStore {
+    fn create(node_did: &str, initial_snapshot: ClientStore, fleet: Arc<Fleet>) -> Arc<Self> {
+        let revision = StoreProjectionRevision {
+            store_version: 1,
+            provenance_version: 1,
+            request_event_version: 1,
+        };
+        let (version_tx, _) = watch::channel(1_u64);
+        let (change_tx, _) = watch::channel(StoreUpdateNotice { revision });
+        Arc::new(Self {
+            node_did: node_did.to_owned(),
+            state: RwLock::new(ObservedState {
+                snapshot: Arc::new(initial_snapshot.into_observer_projection()),
+                revision,
+                fences: StoreReadFence::default(),
+            }),
+            focused_request_id: RwLock::new(None),
+            version_tx,
+            change_tx,
+            fleet,
+        })
+    }
+
+    pub fn node_did(&self) -> &str {
+        &self.node_did
     }
 
     pub fn snapshot(&self) -> SharedClientStore {
@@ -391,58 +470,29 @@ impl ObservedStore {
         self.change_tx.subscribe()
     }
 
-    pub(crate) fn subscribe_resync_requests(&self) -> watch::Receiver<u64> {
-        self.resync_tx.subscribe()
+    /// A refused read drops the node's rows, which this client may no longer
+    /// read, and asks the observer for its own authenticated read, which owns
+    /// the node's connection status.
+    pub fn clear_after_refused_read(&self) {
+        let _ = self.update_if(None, StoreMutation::Replace(ClientStore::default()));
+        self.request_resync();
     }
 
-    /// A refused read drops the node's cached rows, which this client may no
-    /// longer read, and asks the observer for its own authenticated read,
-    /// which owns the node's connection status.
-    pub fn clear_node_after_refused_read(&self, node_did: &str) {
-        let _ = self.update_if(
-            None,
-            StoreMutation::replace_node(node_did, ClientStore::default()),
-        );
-        self.request_resync(Some(node_did));
-    }
-
-    /// Coalesces stale async publishers into the observer's bounded
-    /// authoritative reload loop.
-    pub(crate) fn request_resync(&self, node_did: Option<&str>) {
-        self.enqueue_resync_request(node_did);
-        self.resync_tx.send_modify(|generation| {
+    /// Queues this node for the observer's authoritative reload; requests
+    /// coalesce into one load.
+    pub(crate) fn request_resync(&self) {
+        self.enqueue_resync_request();
+        self.fleet.resync_tx.send_modify(|generation| {
             *generation = generation.saturating_add(1);
         });
     }
 
-    pub(crate) fn enqueue_resync_request(&self, node_did: Option<&str>) {
-        const MAX_PENDING_SCOPES: usize = 16;
-        let mut pending = self
+    pub(crate) fn enqueue_resync_request(&self) {
+        self.fleet
             .pending_resync
             .lock()
-            .expect("pending resync lock poisoned");
-        if pending.full {
-        } else if let Some(node_did) = node_did {
-            pending.node_dids.insert(node_did.to_owned());
-            if pending.node_dids.len() > MAX_PENDING_SCOPES {
-                pending.full = true;
-                pending.node_dids.clear();
-            }
-        } else {
-            pending.full = true;
-            pending.node_dids.clear();
-        }
-    }
-
-    pub(crate) fn take_resync_requests(&self) -> (bool, Vec<String>) {
-        let mut pending = self
-            .pending_resync
-            .lock()
-            .expect("pending resync lock poisoned");
-        let full = std::mem::take(&mut pending.full);
-        let mut node_dids: Vec<_> = std::mem::take(&mut pending.node_dids).into_iter().collect();
-        node_dids.sort();
-        (full, node_dids)
+            .expect("pending resync lock poisoned")
+            .insert(self.node_did.clone());
     }
 
     pub fn focused_request_id(&self) -> Option<String> {
@@ -483,54 +533,16 @@ impl ObservedStore {
         )
     }
 
-    pub fn merge_snapshot(&self, incoming: ClientStore) -> u64 {
-        self.merge_observer_patch(incoming)
-    }
-
-    pub fn merge_observer_patch(&self, incoming: ClientStore) -> u64 {
-        self.merge_observer_patch_with_outcome(incoming)
-            .store_version
-    }
-
-    pub fn merge_observer_patch_with_outcome(
-        &self,
-        incoming: ClientStore,
-    ) -> StorePatchMergeOutcome {
-        StorePatchMergeOutcome {
-            store_version: self
-                .update_if(
-                    None,
-                    StoreMutation::Observer(incoming.into_observer_projection()),
-                )
-                .expect("unconditional store update"),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn merge_observer_patch_at_read(
-        &self,
-        captured: &StoreReadFence,
-        incoming: ClientStore,
-    ) -> Option<StorePatchMergeOutcome> {
-        self.update_if(
-            Some(captured),
-            StoreMutation::Observer(incoming.into_observer_projection()),
-        )
-        .map(|store_version| StorePatchMergeOutcome { store_version })
-    }
-
     pub(crate) fn replace_reloaded_snapshot_at_read(
         &self,
         captured: &StoreReadFence,
-        node_did: Option<&str>,
         incoming: ClientStore,
     ) -> bool {
-        let incoming = incoming.into_observer_projection();
-        let mutation = match node_did {
-            Some(node) => StoreMutation::replace_node(node, incoming),
-            None => StoreMutation::Replace(incoming),
-        };
-        self.update_if(Some(captured), mutation).is_some()
+        self.update_if(
+            Some(captured),
+            StoreMutation::Replace(incoming.into_observer_projection()),
+        )
+        .is_some()
     }
 
     /// Publish a structural database change without retaining its transcript
@@ -542,7 +554,7 @@ impl ObservedStore {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             if provenance_changed {
-                state.fences.touch_events(&StoreScope::All);
+                state.fences.touch_events();
             }
             state.revision = StoreProjectionRevision {
                 store_version: state.revision.store_version.saturating_add(1),
@@ -563,54 +575,40 @@ impl ObservedStore {
         notice.revision.store_version
     }
 
-    pub(crate) fn observe_request_event(&self, doc_id: Option<&str>) -> u64 {
+    /// `ClientDataPublication.requestEvent`: a change delivered on this
+    /// node's subscription, or a gap in it.
+    pub(crate) fn observe_request_event(&self) -> u64 {
         let mut state = self.state.write().expect("store snapshot lock poisoned");
-        let scope = state.snapshot.request_event_scope(doc_id);
-        Self::record_request_event(&mut state, &scope)
-    }
-
-    /// `ClientDataPublication.observerEvent`: a change delivered on
-    /// `node_did`'s subscription, whose observer reads only that node's rows.
-    pub(crate) fn observe_node_event(&self, node_did: &str) -> u64 {
-        let mut state = self.state.write().expect("store snapshot lock poisoned");
-        let scope = state.snapshot.node_event_scope(node_did);
-        Self::record_request_event(&mut state, &scope)
-    }
-
-    fn record_request_event(state: &mut ObservedState, scope: &StoreScope) -> u64 {
-        state.fences.touch_events(scope);
+        state.fences.touch_events();
         state.revision.request_event_version =
             state.revision.request_event_version.saturating_add(1);
         state.revision.request_event_version
     }
 
     fn publish_notice(&self, notice: StoreUpdateNotice) {
-        self.version_tx.send_if_modified(|current| {
+        let mut published = self.version_tx.send_if_modified(|current| {
             if *current >= notice.revision.store_version {
                 return false;
             }
             *current = notice.revision.store_version;
             true
         });
-        self.change_tx.send_if_modified(|current| {
+        published |= self.change_tx.send_if_modified(|current| {
             if current.revision.store_version >= notice.revision.store_version {
                 return false;
             }
             *current = notice;
             true
         });
+        if published {
+            self.fleet.changed();
+        }
     }
 
     #[cfg(test)]
-    pub(crate) fn accepts_chat_patch_read(
-        &self,
-        captured: &StoreReadFence,
-        incoming: &ClientStore,
-    ) -> bool {
+    pub(crate) fn accepts_chat_patch_read(&self, captured: &StoreReadFence) -> bool {
         let state = self.state.read().expect("store snapshot lock poisoned");
-        state
-            .fences
-            .accepts(captured, &state.snapshot.merge_scope(incoming))
+        state.fences.accepts(captured)
     }
 
     /// Checks the publication fence and cached request evidence against the
@@ -623,8 +621,7 @@ impl ObservedStore {
         incoming: &ClientStore,
     ) -> (bool, bool) {
         let state = self.state.read().expect("store snapshot lock poisoned");
-        let scope = state.snapshot.merge_scope(incoming);
-        let fence_accepted = state.fences.accepts(captured, &scope);
+        let fence_accepted = state.fences.accepts(captured);
         let rows_current = !incoming.requests.is_empty()
             && incoming.requests.iter().all(|expected| {
                 let Some(doc_id) = expected.doc_id.as_deref() else {
@@ -638,10 +635,7 @@ impl ObservedStore {
     fn update_if(&self, captured: Option<&StoreReadFence>, mutation: StoreMutation) -> Option<u64> {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
-            let scope = mutation.scope(&state.snapshot);
-            if captured.is_some_and(|captured| {
-                !mutation.accepts(&state.fences, captured, &state.snapshot, &scope)
-            }) {
+            if captured.is_some_and(|captured| !mutation.accepts(&state.fences, captured)) {
                 return None;
             }
             let store_version = state.revision.store_version.saturating_add(1);
@@ -652,13 +646,13 @@ impl ObservedStore {
                     .revision
                     .provenance_version
                     .saturating_add(u64::from(match provenance {
-                        ProvenanceUpdate::Preserve => false,
-                        ProvenanceUpdate::Compare => {
+                        None => false,
+                        Some(ProvenanceUpdate::Compare) => {
                             !same_provenance_inputs(state.snapshot.as_ref(), &next)
                         }
-                        ProvenanceUpdate::Invalidate => true,
+                        Some(ProvenanceUpdate::Invalidate) => true,
                     }));
-            state.fences.touch(&scope);
+            state.fences.touch();
             state.snapshot = Arc::new(next);
             state.revision = StoreProjectionRevision {
                 store_version,
@@ -674,12 +668,8 @@ impl ObservedStore {
     }
 }
 
-fn provenance_update(patch: &ClientStore) -> ProvenanceUpdate {
-    if patch.requests.is_empty() && patch.sessions.is_empty() {
-        ProvenanceUpdate::Preserve
-    } else {
-        ProvenanceUpdate::Compare
-    }
+fn provenance_update(patch: &ClientStore) -> Option<ProvenanceUpdate> {
+    (!patch.requests.is_empty() || !patch.sessions.is_empty()).then_some(ProvenanceUpdate::Compare)
 }
 
 /// Lineage-read observations including the remote request lifecycle; lease

@@ -399,7 +399,7 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
         "tool_service_registries":[], "event_sources":[], "agent_targets":[],
         "datastore_tool_surfaces":[], "sessions":[], "requests":[], "backend_observations":[]
     }});
-    let store = core.store().clone();
+    let store = core.stores().ensure(&did);
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v0/graphql"))
         .respond_with(move |_: &wiremock::Request| {

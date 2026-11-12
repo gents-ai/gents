@@ -110,6 +110,34 @@ fn target_words(target: &PolicyTarget) -> String {
     }
 }
 
+/// The `policy` argv that applies `verb` to the same subject and target.
+fn change_argv(verb: &str, subject: &::identity::Did, target: &PolicyTarget) -> Value {
+    let mut argv = vec![
+        "policy".to_owned(),
+        verb.to_owned(),
+        "--subject".to_owned(),
+        subject.as_str().to_owned(),
+    ];
+    match target {
+        PolicyTarget::Node(permission) => {
+            argv.extend(["--permission".to_owned(), permission.as_str().to_owned()]);
+        }
+        PolicyTarget::Relation {
+            collection,
+            doc_id,
+            relation,
+        } => argv.extend([
+            "--collection".to_owned(),
+            collection.clone(),
+            "--doc".to_owned(),
+            doc_id.clone(),
+            "--relation".to_owned(),
+            relation.clone(),
+        ]),
+    }
+    json!({ "argv": argv })
+}
+
 fn target_json(target: Option<&PolicyTarget>) -> Value {
     match target {
         None => Value::Null,
@@ -590,9 +618,21 @@ impl ConfigCommandTool {
         if relation {
             assumptions.push("Document relationships are read as direct tuples only: owner, implied-relation, admin and Tools paths are not evaluated.".to_owned());
         }
+        // Whoever can grant can revoke (Lean `GrantSets.revoke_follows_grant`),
+        // so a grant names the call that withdraws it.
+        let how_to_proceed = if grant {
+            json!({
+                "to_withdraw": change_argv("revoke", &call.subject, target),
+            })
+        } else {
+            json!({
+                "to_restore": change_argv("grant", &call.subject, target),
+            })
+        };
         ordered! {
             "answer": answer,
             "effective_access": access_now,
+            "how_to_proceed": how_to_proceed,
             "assumptions": assumptions,
             "metadata": json!({
                 "acting_agent_did": actor.as_str(),
@@ -644,6 +684,28 @@ mod tests {
         ]))
         .is_err());
         assert!(parse_target(&parsed(&["--collection", "Agent"])).is_err());
+    }
+
+    #[test]
+    fn a_grant_names_the_revoke_of_the_same_target() {
+        let subject = ::identity::Did::new("did:key:z6MkSubject".to_owned()).unwrap();
+        let target = parse_target(&parsed(&[
+            "--collection",
+            "AgentSession",
+            "--doc",
+            "bae-1",
+            "--relation",
+            "reader",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            change_argv("revoke", &subject, &target),
+            json!({"argv": [
+                "policy", "revoke", "--subject", "did:key:z6MkSubject",
+                "--collection", "AgentSession", "--doc", "bae-1", "--relation", "reader",
+            ]})
+        );
     }
 
     #[test]

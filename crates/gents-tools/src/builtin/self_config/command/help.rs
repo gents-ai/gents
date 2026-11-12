@@ -399,7 +399,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "policy explain  same options as check; when denied, names the grant that would allow it",
                 "policy grant | revoke  same options as check; acts as this agent",
             ],
-            notes: "Delegation is held-bounded: you can grant or revoke only what you hold, never admin-class permissions (bypass-dac, NAC relation changes, enable/disable/purge) and never a wildcard subject. Reading another identity's node permissions needs NacStatus or admin. Subjects are DIDs; display names are not resolved. Receipts give the answer first, then the subject's access after the change, what was refused, and assumptions.",
+            notes: "Delegation is held-bounded: you can grant or revoke only what you hold, never admin-class permissions (bypass-dac, NAC relation changes, enable/disable/purge) and never a wildcard subject. Reading another identity's node permissions needs NacStatus or admin. Subjects are DIDs; display names are not resolved. A document relationship you can grant you can revoke. Receipts give the answer first, then the subject's access after the change, the call that undoes it, and assumptions.",
             next: "policy get to see what you hold; policy check --permission NAME to test one permission.",
         },
         "page" => Page {

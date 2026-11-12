@@ -42,6 +42,7 @@ impl GrantSet {
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,
+                NodePermission::DacRelationDelete,
             ],
             Self::OperatorUser => &[
                 NodePermission::CollectionGet,

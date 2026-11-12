@@ -892,10 +892,6 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
             store.backend_observations[0].catalogs[0].models[0].model_name,
             "retained-model"
         );
-        assert_eq!(
-            store.backend_observation_source_node_dids,
-            [Some(backend.node_did.clone())]
-        );
     }
     runtime.shutdown().await;
     Ok(())

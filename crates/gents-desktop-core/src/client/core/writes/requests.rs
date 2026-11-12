@@ -11,9 +11,9 @@ use crate::error::request_operation_failure;
 fn request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
-    node_did: Option<&str>,
+    node_did: &str,
 ) -> Result<AgentRequestRow> {
-    find_request_in_scope(rows, request_id, node_did)?
+    find_request_in_scope(rows, request_id, Some(node_did))?
         .with_context(|| format!("request {request_id} not found"))
 }
 
@@ -62,14 +62,14 @@ impl ClientCore {
         match gents::operations::request::send(&access, signer.as_ref(), input).await {
             Ok(receipt) => {
                 let result = observe_submitted_request(
-                    &self.store,
+                    &self.stores.ensure(&node_did),
                     SubmittedRequest {
                         request_id: receipt.request_id,
                         session_id: receipt.session_id,
                         node_did: receipt.node_did,
                         agent_did: receipt.agent_did,
                     },
-                    self.refresh_written_node(&node_did),
+                    self.refresh_node(&node_did),
                 )
                 .await;
                 self.clear_mutation_error();
@@ -81,19 +81,19 @@ impl ClientCore {
                 );
                 Ok(result)
             }
-            Err(error) => Err(self.record_mutation_error(
-                "submit request",
-                request_operation_failure(error),
-            )),
+            Err(error) => {
+                Err(self.record_mutation_error("submit request", request_operation_failure(error)))
+            }
         }
     }
 
-    pub fn request_in_scope(
-        &self,
-        request_id: &str,
-        node_did: Option<&str>,
-    ) -> Result<AgentRequestRow> {
-        request_in_scope(&self.store.snapshot().requests, request_id, node_did)
+    /// The request as `node_did`'s store shows it.
+    pub fn request_in_scope(&self, request_id: &str, node_did: &str) -> Result<AgentRequestRow> {
+        request_in_scope(
+            &self.stores.snapshot(node_did).requests,
+            request_id,
+            node_did,
+        )
     }
 
     pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
@@ -145,9 +145,9 @@ impl ClientCore {
         match result {
             Ok(receipt) => {
                 let result = observe_submitted_request(
-                    &self.store,
+                    &self.stores.ensure(&node_did),
                     receipt.into(),
-                    self.refresh_written_node(&node_did),
+                    self.refresh_node(&node_did),
                 )
                 .await;
                 self.clear_mutation_error();

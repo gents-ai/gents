@@ -141,14 +141,9 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
         &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
     )
     .expect("row-level malformed config is skipped");
-    let trigger_observations: Vec<TriggerObservation> = parse_observation_query_rows_with_source(
-        &data,
-        "triggers",
-        TRIGGER_OBSERVATION_FIELDS,
-        None,
-    )
-    .expect("trigger observation remains independently decodable")
-    .0;
+    let trigger_observations: Vec<TriggerObservation> =
+        parse_observation_query_rows(&data, "triggers", TRIGGER_OBSERVATION_FIELDS)
+            .expect("trigger observation remains independently decodable");
     let backends: Vec<gents_documents::InferenceBackendMetadata> =
         parse_projected_query_rows(&data, "inference_backends", INFERENCE_BACKEND_FIELDS, "")
             .expect("row-level malformed config is skipped");
@@ -165,15 +160,12 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
             "",
         )
         .expect("canonical backend fixture");
-    let backend_observations: Vec<InferenceBackendObservation> =
-        parse_observation_query_rows_with_source(
-            &data,
-            "backend_observations",
-            INFERENCE_BACKEND_OBSERVATION_FIELDS,
-            None,
-        )
-        .expect("backend observation remains independently decodable")
-        .0;
+    let backend_observations: Vec<InferenceBackendObservation> = parse_observation_query_rows(
+        &data,
+        "backend_observations",
+        INFERENCE_BACKEND_OBSERVATION_FIELDS,
+    )
+    .expect("backend observation remains independently decodable");
 
     assert!(
         triggers.is_empty(),
@@ -192,65 +184,6 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
     assert_eq!(
         backend_observations[0].probe_status.as_deref(),
         Some("ready")
-    );
-}
-
-#[test]
-fn patch_observation_provenance_stays_aligned_for_repeated_logical_ids() {
-    let data = serde_json::json!({
-        "triggers": [
-        {
-            "node_did": "did:alpha", "trigger_id": "shared", "future_config": true,
-            "last_status": "alpha", "last_attempt_at": null,
-            "last_fired_source_doc_id": null, "last_error": null, "fire_count": 1
-        },
-        {
-            "node_did": "did:beta", "trigger_id": "shared", "future_config": true,
-            "last_status": "beta", "last_attempt_at": null,
-            "last_fired_source_doc_id": null, "last_error": null, "fire_count": 2
-        }
-        ],
-        "inference_backends": [
-            {"node_did": "did:alpha", "backend_id": "shared", "catalogs": [], "last_probe": null, "probe_status": "alpha"},
-            {"node_did": "did:beta", "backend_id": "shared", "catalogs": [], "last_probe": null, "probe_status": "beta"}
-        ]
-    });
-    let (observations, source_node_dids): (Vec<TriggerObservation>, Vec<Option<String>>) =
-        parse_observation_query_rows_with_source(
-            &data,
-            "triggers",
-            TRIGGER_OBSERVATION_FIELDS,
-            Some("node_did"),
-        )
-        .expect("observation rows");
-
-    assert_eq!(observations[0].last_status.as_deref(), Some("alpha"));
-    assert_eq!(observations[1].last_status.as_deref(), Some("beta"));
-    assert_eq!(
-        source_node_dids,
-        [Some("did:alpha".into()), Some("did:beta".into())]
-    );
-    let (backend_observations, backend_source_node_dids): (
-        Vec<InferenceBackendObservation>,
-        Vec<Option<String>>,
-    ) = parse_observation_query_rows_with_source(
-        &data,
-        "inference_backends",
-        INFERENCE_BACKEND_OBSERVATION_FIELDS,
-        Some("node_did"),
-    )
-    .expect("backend observations");
-    assert_eq!(
-        backend_observations[0].probe_status.as_deref(),
-        Some("alpha")
-    );
-    assert_eq!(
-        backend_observations[1].probe_status.as_deref(),
-        Some("beta")
-    );
-    assert_eq!(
-        backend_source_node_dids,
-        [Some("did:alpha".into()), Some("did:beta".into())]
     );
 }
 
@@ -664,15 +597,13 @@ async fn load_node_scoped_snapshot_excludes_other_nodes() {
 }
 
 #[test]
-fn catalog_freshness_failure_keeps_other_backend_observations_and_scope_alignment() {
+fn catalog_freshness_failure_keeps_other_backend_observations() {
     let data = serde_json::json!({"inference_backends":[
         {"backend_id":"bad", "node_did":"did:bad", "catalogs":null,
             "catalog_freshness":{"version":255,"entries":[]}},
         {"backend_id":"good", "node_did":"did:good", "catalogs":null}
     ]});
-    let (observations, sources) =
-        parse_backend_observation_rows(&data, "inference_backends").unwrap();
+    let observations = parse_backend_observation_rows(&data, "inference_backends").unwrap();
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].backend_id, "good");
-    assert_eq!(sources, [Some("did:good".into())]);
 }

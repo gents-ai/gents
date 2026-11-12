@@ -10,7 +10,7 @@ use p2p::iroh::parse_public_peer_addr;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Instant};
 
-use super::super::observe::{spawn_observer, ObservedStore};
+use super::super::observe::{spawn_observer, ObservedStores};
 use super::super::paths::DesktopPaths;
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
@@ -141,10 +141,7 @@ impl ClientCore {
             subscribe_all_collections(node.as_ref()).await?;
             checkpoint("collection_subscriptions");
 
-            let observation_scope = super::observation_scope::ObservationScope::new();
-
-            let initial_snapshot = Default::default();
-            let (store, _store_updates) = ObservedStore::new(initial_snapshot);
+            let stores = ObservedStores::new();
             checkpoint("initial_snapshot");
 
             let p2p = gents_store::identity::node_p2p(&node)
@@ -186,7 +183,7 @@ impl ClientCore {
             }
             sync_state.replace_transport_observation(initial_health);
             let observer = spawn_observer(
-                Arc::clone(&store),
+                Arc::clone(&stores),
                 sync_state.clone(),
                 gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                     node_identity.private_key_bytes(),
@@ -211,11 +208,10 @@ impl ClientCore {
                 node: Arc::clone(&node),
                 p2p,
                 route_manager,
-                store,
+                stores,
                 observer: tokio::sync::Mutex::new(Some(observer)),
                 sync_state,
                 p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
-                observation_scope,
                 inference_observations: Default::default(),
                 inference_observation_epoch: Default::default(),
                 request_patch_signatures: tokio::sync::Mutex::new(

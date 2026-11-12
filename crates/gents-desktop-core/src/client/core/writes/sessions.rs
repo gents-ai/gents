@@ -7,35 +7,21 @@ use gents_store::config_client::ConfigAccess;
 use super::{ensure_peer_chat_ready, ClientCore};
 use crate::error::session_operation_failure;
 
-fn mailbox_node_for_document<'a>(
-    rows: &'a [gents_protocol::row::MailboxItemRow],
-    doc_id: &str,
-) -> Result<&'a str> {
-    let mut matching = rows.iter().filter(|item| item.doc_id == doc_id);
-    let item = matching.next().context("MailboxItem not found")?;
-    anyhow::ensure!(
-        matching.next().is_none(),
-        "MailboxItem is ambiguous across runtimes"
-    );
-    Ok(&item.node_did)
-}
-
 impl ClientCore {
+    /// Dismisses the mailbox item `doc_id` on `node_did`, the node whose own
+    /// store lists it.
     pub async fn dismiss_mailbox_item(
         &self,
+        node_did: &str,
         doc_id: &str,
     ) -> Result<gents_session::session::mailbox::MailboxItem> {
-        let snapshot = self.store.snapshot();
-        let node_did = mailbox_node_for_document(&snapshot.mailbox_items, doc_id)?;
         let access = self.operator_access(node_did)?;
         let result = gents_session::operations::mailbox::dismiss(&access, doc_id)
             .await
             .map_err(crate::error::mailbox_operation_failure);
         match result {
             Ok(item) => {
-                if self.refresh_node(node_did).await?.is_none() {
-                    self.refresh_store().await?;
-                }
+                self.refresh_node(node_did).await?;
                 self.clear_mutation_error();
                 Ok(item)
             }
@@ -104,9 +90,7 @@ impl ClientCore {
         .await;
         match result {
             Ok(receipt) => {
-                if self.refresh_node(node_did).await?.is_none() {
-                    self.refresh_store().await?;
-                }
+                self.refresh_node(node_did).await?;
                 self.clear_mutation_error();
                 Ok(receipt)
             }
@@ -141,9 +125,7 @@ impl ClientCore {
         .await;
         match result {
             Ok(_) => {
-                if self.refresh_node(node_did).await?.is_none() {
-                    self.refresh_store().await?;
-                }
+                self.refresh_node(node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -153,30 +135,9 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error(
-                "rename session",
-                session_operation_failure(error),
-            )),
+            Err(error) => {
+                Err(self.record_mutation_error("rename session", session_operation_failure(error)))
+            }
         }
     }
-}
-
-#[cfg(test)]
-#[test]
-fn mailbox_document_must_resolve_to_one_runtime() {
-    let row: gents_protocol::row::MailboxItemRow = serde_json::from_value(serde_json::json!({
-        "_docID":"item", "item_key":"key", "requester_did":"client", "node_did":"node-a",
-        "status":"open", "kind":"flag", "action":"ack", "title":"title",
-        "source_kind":"agent", "source_id":"source", "target_node_did":"node-a",
-        "target_agent_did":"agent", "created_at":"now"
-    }))
-    .unwrap();
-    assert_eq!(
-        mailbox_node_for_document(std::slice::from_ref(&row), "item").unwrap(),
-        "node-a"
-    );
-    let mut duplicate = row.clone();
-    duplicate.node_did = "node-b".into();
-    assert!(mailbox_node_for_document(&[row, duplicate], "item").is_err());
-    assert!(mailbox_node_for_document(&[], "missing").is_err());
 }

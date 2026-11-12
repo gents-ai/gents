@@ -174,7 +174,6 @@ fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
             backend_observations: vec![
                 serde_json::from_value(observation.clone()).expect("observation")
             ],
-            backend_observation_source_node_dids: vec![Some("did:test:amy".into())],
             inference_profiles: vec![serde_json::from_value(profile).expect("profile")],
             ..ClientStoreRows::default()
         };

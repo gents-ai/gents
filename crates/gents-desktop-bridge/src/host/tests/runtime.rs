@@ -168,7 +168,7 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
     )
     .await
     .unwrap();
-    core.refresh_store().await.unwrap();
+    core.refresh_node(&node).await.unwrap();
     let host = ClientHost::new(core.clone());
     let result = host
         .execute(

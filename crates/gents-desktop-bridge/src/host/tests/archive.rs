@@ -77,10 +77,10 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     let node = runtime.node_did().to_owned();
     crate::tests::support::submit_request(&core, &runtime, &agent, "shared-archive", "opening")
         .await;
-    core.refresh_store().await.unwrap();
+    core.refresh_node(&node).await.unwrap();
     let before = core
-        .store()
-        .snapshot()
+        .stores()
+        .snapshot(&node)
         .sessions
         .iter()
         .find(|session| session.session_id == "shared-archive")
@@ -149,8 +149,8 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     let mut expected = before;
     expected.archive_revision = restored_revision;
     assert_eq!(
-        core.store()
-            .snapshot()
+        core.stores()
+            .snapshot(&node)
             .sessions
             .iter()
             .find(|session| session.session_id == "shared-archive"),
@@ -167,11 +167,11 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     .await
     .unwrap();
     runtime.connect(&reopened).await;
-    reopened.refresh_store().await.unwrap();
+    reopened.refresh_node(&node).await.unwrap();
     assert_eq!(
         reopened
-            .store()
-            .snapshot()
+            .stores()
+            .snapshot(&node)
             .sessions
             .iter()
             .find(|session| session.session_id == "shared-archive"),

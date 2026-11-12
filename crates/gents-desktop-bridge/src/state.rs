@@ -74,27 +74,7 @@ pub struct DesktopBridge {
 }
 
 impl DesktopBridge {
-    fn selected_node_did(&self) -> Option<String> {
-        if self.selected_nodes_by_window.len() == 1 {
-            self.selected_nodes_by_window
-                .values()
-                .next()
-                .cloned()
-                .flatten()
-        } else {
-            None
-        }
-    }
-
-    fn apply_window_selection(&self) {
-        if let Some(core) = &self.core {
-            let selected = self.selected_node_did();
-            core.set_selected_node_did(selected);
-        }
-    }
-
     pub(crate) fn install_core(&mut self, core: Arc<ClientCore>) {
-        core.set_selected_node_did(self.selected_node_did());
         self.core = Some(core);
     }
 
@@ -131,7 +111,6 @@ impl DesktopBridge {
         };
         let changed = *selected != node_did;
         *selected = node_did;
-        self.apply_window_selection();
         changed
     }
 
@@ -205,7 +184,6 @@ impl DesktopAppState {
             .selected_nodes_by_window
             .entry(label.to_owned())
             .or_default();
-        bridge.apply_window_selection();
     }
 
     pub(crate) fn clear_plugin_approval_subscriptions(&self, label: &str) {
@@ -243,9 +221,7 @@ impl DesktopAppState {
                 wait.cancel.cancel();
             }
         }
-        if bridge.selected_nodes_by_window.remove(label).is_some() {
-            bridge.apply_window_selection();
-        }
+        bridge.selected_nodes_by_window.remove(label);
     }
 }
 
@@ -258,7 +234,7 @@ where
     R: Runtime,
 {
     spawn(async move {
-        let mut store_updates = core.store_change_updates();
+        let mut store_updates = core.store_updates();
         let mut sync_updates = core.sync_state_updates();
 
         loop {
