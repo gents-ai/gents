@@ -44,6 +44,9 @@ mod process_control_scope;
 #[path = "tests/retained_record_warnings.rs"]
 mod retained_record_warnings;
 
+#[path = "tests/background_shutdown.rs"]
+mod background_shutdown;
+
 #[path = "tests/session_message_commit.rs"]
 mod session_message_commit;
 

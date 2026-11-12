@@ -197,6 +197,12 @@ pub struct BackgroundExecutionRegistry {
 
 pub(crate) const LIVE_STOP_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct BackgroundShutdownReport {
+    pub(crate) stopped: usize,
+    pub(crate) unstopped: usize,
+}
+
 impl BackgroundExecutionRegistry {
     #[cfg(test)]
     pub(crate) fn with_stop_release_observer(mut self, observer: Arc<tokio::sync::Notify>) -> Self {
@@ -617,6 +623,64 @@ impl BackgroundExecutionRegistry {
     ) -> crate::tools::exec::ProcessStopOutcome {
         self.stop_execution_inner(tool_call_id, tool_call_doc_id, true)
             .await
+    }
+
+    /// Stops every execution this runtime still owns, concurrently, through
+    /// the same stop path an explicit cancel takes, so the worker settles its
+    /// own row while the node is still open. A shutdown stop cannot name the
+    /// tool, so each one is settled as a native process: an execution whose
+    /// process evidence is unproven is reported unstopped and keeps its
+    /// durable record for the next start's recovery sweep, rather than being
+    /// assumed exited.
+    pub(crate) async fn shutdown(&self) -> BackgroundShutdownReport {
+        let live = self
+            .lock_executions()
+            .values()
+            .map(|execution| {
+                (
+                    execution.tool_call_id.clone(),
+                    execution.tool_call_doc_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut stops = tokio::task::JoinSet::new();
+        for (tool_call_id, tool_call_doc_id) in live {
+            let registry = self.clone();
+            stops.spawn(async move {
+                let outcome = registry
+                    .stop_native_process(&tool_call_id, &tool_call_doc_id)
+                    .await;
+                (tool_call_id, tool_call_doc_id, outcome)
+            });
+        }
+        let mut report = BackgroundShutdownReport::default();
+        while let Some(joined) = stops.join_next().await {
+            match joined {
+                Ok((tool_call_id, tool_call_doc_id, outcome)) => {
+                    if matches!(
+                        outcome,
+                        crate::tools::exec::ProcessStopOutcome::Stopped
+                            | crate::tools::exec::ProcessStopOutcome::AlreadyExited
+                    ) {
+                        report.stopped += 1;
+                    } else {
+                        report.unstopped += 1;
+                        tracing::warn!(
+                            %tool_call_id,
+                            %tool_call_doc_id,
+                            outcome = outcome.as_str(),
+                            "background process was not observed to stop during shutdown; \
+                             its record is left for recovery"
+                        );
+                    }
+                }
+                Err(error) => {
+                    report.unstopped += 1;
+                    tracing::warn!(%error, "background process stop failed to join during shutdown");
+                }
+            }
+        }
+        report
     }
 
     #[cfg(windows)]
