@@ -149,6 +149,7 @@ import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.Workspace
+import Proofs.Conformance.PairingReconcileSupervisor
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.SelfConfigAgent
@@ -868,14 +869,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"managed_exec_tool_boundary_cases\":"
       ++ jsonArray
         (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
-    ++ "\"pairing_reconcile_shutdown_boundary_cases\":"
-      ++ jsonArray
-        (pairingReconcileShutdownBoundaryCases.map
-          pairingReconcileShutdownBoundaryCaseJson) ++ ","
-    ++ "\"pairing_reconcile_sweep_retry_boundary_cases\":"
-      ++ jsonArray
-        (pairingReconcileSweepRetryBoundaryCases.map
-          pairingReconcileSweepRetryBoundaryCaseJson) ++ ","
     ++ "\"pairing_reconcile_sweep_scheduling_cases\":"
       ++ jsonArray
         (pairingReconcileSweepSchedulingCases.map

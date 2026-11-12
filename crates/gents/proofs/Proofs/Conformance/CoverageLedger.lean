@@ -1107,13 +1107,9 @@ def caseCoverage : List CoverageEntry :=
       "ManagedExecToolBoundaryCases"
       "Drive each generated native-tool route through its actual managed process boundary. Names and processTree flags are not evidence of runtime routing.")
       "managed-exec" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "pairing_reconcile_cases"
-      "PairingReconcileShutdownBoundaryCases")
+  , tagged (consumerCoverage "family" "pairing_reconcile_supervisor_shutdown_race")
       "pairing-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "pairing_reconcile_cases"
-      "PairingReconcileSweepRetryBoundaryCases")
+  , tagged (consumerCoverage "family" "pairing_reconcile_supervisor_sweep_retry")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "pairing_reconcile_cases"

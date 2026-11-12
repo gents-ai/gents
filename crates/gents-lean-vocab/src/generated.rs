@@ -361,14 +361,6 @@ pub fn lean_pairing_reconcile_cases() -> &'static [LeanPairingReconcileCase] {
     &lean_contract_snapshot().pairing_reconcile_cases
 }
 
-pub fn lean_pairing_reconcile_shutdown_boundary_cases() -> &'static [LeanPairingReconcileShutdownBoundaryCase] {
-    &lean_contract_snapshot().pairing_reconcile_shutdown_boundary_cases
-}
-
-pub fn lean_pairing_reconcile_sweep_retry_boundary_cases() -> &'static [LeanPairingReconcileSweepRetryBoundaryCase] {
-    &lean_contract_snapshot().pairing_reconcile_sweep_retry_boundary_cases
-}
-
 pub fn lean_pairing_reconcile_sweep_scheduling_cases() -> &'static [LeanPairingReconcileSweepSchedulingCase] {
     &lean_contract_snapshot().pairing_reconcile_sweep_scheduling_cases
 }
@@ -3214,12 +3206,6 @@ pub struct LeanContractSnapshot {
     pub backend_health_admission_cases: Vec<LeanBackendHealthAdmissionCase>,
     pub native_filesystem_boundary_cases: Vec<LeanNativeFilesystemBoundaryCase>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
-    pub pairing_reconcile_shutdown_boundary_cases: Vec<
-        LeanPairingReconcileShutdownBoundaryCase,
-    >,
-    pub pairing_reconcile_sweep_retry_boundary_cases: Vec<
-        LeanPairingReconcileSweepRetryBoundaryCase,
-    >,
     pub pairing_reconcile_sweep_scheduling_cases: Vec<
         LeanPairingReconcileSweepSchedulingCase,
     >,
@@ -7802,38 +7788,12 @@ pub struct LeanPairingReconcileCase {
     pub after: LeanPairingReconcileSnapshot,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LeanPairingReconcileShutdownBoundaryCase {
-    pub name: String,
-    pub supervisor: String,
-    pub work_class: String,
-    pub boundary: String,
-    pub per_admin_call_timeout_ms: usize,
-    pub cancellation_observed_inside_sweep: bool,
-    pub current_admin_future_dropped: bool,
-    pub remaining_peers_skipped: bool,
-    pub shutdown_join_bounded: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanPairingReconcileSnapshot {
     pub connected: bool,
     pub desired_replicators: Vec<String>,
     pub actual_replicators: Vec<String>,
     pub converged: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanPairingReconcileSweepRetryBoundaryCase {
-    pub name: String,
-    pub supervisor: String,
-    pub work_class: String,
-    pub boundary: String,
-    pub failure_scope: String,
-    pub failure_terminal: bool,
-    pub retry_trigger: String,
-    pub cancellation_prioritized: bool,
-    pub convergence_retried: bool,
 }
 
 #[derive(Debug, Deserialize)]

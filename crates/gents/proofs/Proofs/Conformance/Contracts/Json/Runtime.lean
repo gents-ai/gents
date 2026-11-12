@@ -63,42 +63,6 @@ def clientAgentReadinessCaseJson (witness : ClientAgentReadinessCase) : String :
     ++ "\"expected_runtime_admissible\":" ++ boolString witness.expectedRuntimeAdmissible
     ++ "}"
 
-def pairingReconcileShutdownBoundaryCaseJson
-    (witness : PairingReconcileShutdownBoundaryCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"supervisor\":" ++ jsonString witness.supervisor ++ ","
-    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
-    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
-    ++ "\"per_admin_call_timeout_ms\":"
-      ++ toString witness.perAdminCallTimeoutMs ++ ","
-    ++ "\"cancellation_observed_inside_sweep\":"
-      ++ boolString witness.cancellationObservedInsideSweep ++ ","
-    ++ "\"current_admin_future_dropped\":"
-      ++ boolString witness.currentAdminFutureDropped ++ ","
-    ++ "\"remaining_peers_skipped\":"
-      ++ boolString witness.remainingPeersSkipped ++ ","
-    ++ "\"shutdown_join_bounded\":"
-      ++ boolString witness.shutdownJoinBounded
-    ++ "}"
-
-def pairingReconcileSweepRetryBoundaryCaseJson
-    (witness : PairingReconcileSweepRetryBoundaryCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"supervisor\":" ++ jsonString witness.supervisor ++ ","
-    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
-    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
-    ++ "\"failure_scope\":" ++ jsonString witness.failureScope ++ ","
-    ++ "\"failure_terminal\":"
-      ++ boolString witness.failureTerminal ++ ","
-    ++ "\"retry_trigger\":" ++ jsonString witness.retryTrigger ++ ","
-    ++ "\"cancellation_prioritized\":"
-      ++ boolString witness.cancellationPrioritized ++ ","
-    ++ "\"convergence_retried\":"
-      ++ boolString witness.convergenceRetried
-    ++ "}"
-
 def pairingReconcileSweepSchedulingCaseJson
     (witness : PairingReconcileSweepSchedulingCase) : String :=
   "{"
