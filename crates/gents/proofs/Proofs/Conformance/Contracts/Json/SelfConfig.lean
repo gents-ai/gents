@@ -94,20 +94,21 @@ def selfConfigGrantsJson (g : Grants) : String :=
   "{\"pack_install\":" ++ scBool g.packInstall ++ ",\"policy\":" ++ scBool g.policy
     ++ ",\"pack_authority\":" ++ scBool g.packAuthority ++ "}"
 
+structure PolicyGrantBoundInput where
+  candidatePolicy : Bool
+  storedPolicy : Bool
+  heldPolicy : Bool
+  deriving Lean.ToJson
+
 /-- Every combination of the policy grant bit on the candidate, the stored Tools and
-the invoker, with pack installation off. Rust `OperatorGrants::bounded_by` must
-match `Grants.boundedBy` on each row. -/
-def policyGrantBoundCasesJson : String :=
-  let bools := [false, true]
-  jsonArray <| bools.flatMap fun candidate => bools.flatMap fun stored =>
-    bools.map fun held =>
-      let c : Grants := { Grants.bot with policy := candidate }
-      let s : Grants := { Grants.bot with policy := stored }
-      let h : Grants := { Grants.bot with policy := held }
-      "{\"candidate_policy\":" ++ scBool candidate
-        ++ ",\"stored_policy\":" ++ scBool stored
-        ++ ",\"held_policy\":" ++ scBool held
-        ++ ",\"accepted\":" ++ scBool (c.boundedBy s h) ++ "}"
+the invoker, with pack installation off. -/
+@[conformance_family]
+def policyGrantBound : Family PolicyGrantBoundInput Bool where
+  inputs := [false, true].flatMap fun candidatePolicy => [false, true].flatMap fun storedPolicy =>
+    [false, true].map fun heldPolicy => { candidatePolicy, storedPolicy, heldPolicy }
+  model := fun i =>
+    ({ Grants.bot with policy := i.candidatePolicy } : Grants).boundedBy
+      { Grants.bot with policy := i.storedPolicy } { Grants.bot with policy := i.heldPolicy }
 
 /-- The node permissions a no-lockout Agent keeps against its own revoke, and for
 each permission and change, whether the lockout guard keeps it. Rust

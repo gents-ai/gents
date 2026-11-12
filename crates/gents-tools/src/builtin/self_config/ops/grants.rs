@@ -198,20 +198,15 @@ mod lean_bound_tests {
     use super::*;
 
     #[test]
-    fn modeled_grant_bound_matches_the_owner() {
-        for case in &gents_lean_vocab::lean_contract_snapshot().policy_grant_bound_cases {
-            let grants = |policy: bool| OperatorGrants {
-                pack_install: false,
-                policy,
-                pack_authority: false,
-            };
-            assert_eq!(
-                grants(case.candidate_policy)
-                    .bounded_by(&grants(case.stored_policy), &grants(case.held_policy)),
-                case.accepted,
-                "{case:?}"
-            );
-        }
+    fn contracts_policy_grant_bound_matches_lean() {
+        let grants = |policy: bool| OperatorGrants {
+            pack_install: false,
+            policy,
+            pack_authority: false,
+        };
+        gents_lean_vocab::families::contracts_policy_grant_bound::replay(|i| {
+            grants(i.candidate_policy).bounded_by(&grants(i.stored_policy), &grants(i.held_policy))
+        });
     }
 
     #[test]
