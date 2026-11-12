@@ -353,10 +353,6 @@ pub fn lean_optimization_cases() -> &'static LeanOptimizationCases {
     &lean_contract_snapshot().optimization_cases
 }
 
-pub fn lean_pack_eval_subject_cases() -> &'static [LeanPackEvalSubjectCase] {
-    &lean_contract_snapshot().pack_eval_subject_cases
-}
-
 pub fn lean_pairing_reconcile_cases() -> &'static [LeanPairingReconcileCase] {
     &lean_contract_snapshot().pairing_reconcile_cases
 }
@@ -2479,37 +2475,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +3000,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3433,7 +3397,6 @@ pub struct LeanContractSnapshot {
     pub identity_atomic_client_request_cases: Vec<serde_json::Value>,
     pub identity_derivation_cases: Vec<LeanIdentityDerivationCase>,
     pub identity_contracts: Vec<LeanIdentityContract>,
-    pub pack_eval_subject_cases: Vec<LeanPackEvalSubjectCase>,
     pub workspace_cases: Vec<LeanWorkspaceCase>,
     pub workspace_binding_cases: Vec<LeanWorkspaceBindingCase>,
     pub callback_cases: Vec<LeanCallbackCase>,
@@ -7802,23 +7765,6 @@ pub struct LeanOutputTarget {
     pub coordinate: LeanCanonicalCoordinate,
     pub writer: LeanCanonicalWriter,
     pub message_id: Option<u64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPackEvalSubjectCase {
-    pub name: String,
-    pub selected: Option<LeanPackIdentityBinding>,
-    pub slot: String,
-    pub expected: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPackIdentityBinding {
-    pub slot: String,
-    pub creation_nonce: String,
-    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

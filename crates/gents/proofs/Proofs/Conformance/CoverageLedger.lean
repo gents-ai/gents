@@ -888,8 +888,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_pack_installation_identity_reference")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pack_eval_subject_cases"
-      "PackEvalSubjectCases")
+      "family"
+      "contracts_pack_installation_eval_subject")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

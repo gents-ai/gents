@@ -198,18 +198,16 @@ def casesJson : String := jsonArray [
 ]
 
 
-def identityBindingJson (binding : Configuration.PackIdentity.Binding) : String :=
-  "{\"slot\":" ++ jsonString binding.slot ++
-    ",\"creation_nonce\":" ++ jsonString binding.creationNonce ++
-    ",\"agent_did\":" ++ jsonString binding.agentDid ++ "}"
+structure EvalSubjectInput where
+  name : String
+  selected : Option Configuration.PackIdentity.Binding
+  slot : String
+  deriving Lean.ToJson
 
-def evalSubjectCasesJson : String := jsonArray (Configuration.PackIdentity.evalSubjectCases.map fun c =>
-  let result := Configuration.PackIdentity.resolveEvalSubject c.selected c.slot
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"selected\":" ++ (match c.selected with
-      | none => "null" | some binding => identityBindingJson binding) ++
-    ",\"slot\":" ++ jsonString c.slot ++
-    ",\"expected\":" ++ (match result with
-      | none => "null" | some did => jsonString did) ++ "}")
+@[conformance_family]
+def evalSubject : Conformance.Family EvalSubjectInput (Option String) where
+  inputs := Configuration.PackIdentity.evalSubjectCases.map fun c =>
+    EvalSubjectInput.mk c.name c.selected c.slot
+  model := fun i => Configuration.PackIdentity.resolveEvalSubject i.selected i.slot
 
 end Conformance.Contracts.PackInstallation
