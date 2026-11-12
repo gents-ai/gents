@@ -36,6 +36,7 @@ impl View for GoalRows {
         use fields::goal as f;
         let mut query = Query::select(
             Selection::new()
+                .field(f::DOC_ID)
                 .field(f::GOAL_ID)
                 .field(f::SESSION_ID)
                 .field(f::NODE_DID)
@@ -44,6 +45,8 @@ impl View for GoalRows {
                 .field(f::STATUS)
                 .field(f::TOKEN_BUDGET)
                 .field(f::TOKENS_USED)
+                .field(f::TOKEN_USAGE_BASELINE)
+                .field(f::ASSIGNMENT_ROOT_REQUEST_DOC_ID)
                 .field(f::ACTIVE_TIME_SECONDS)
                 .field(f::ACTIVE_STARTED_AT)
                 .field(f::CONSECUTIVE_BLOCKED_AUDITS)
@@ -56,6 +59,7 @@ impl View for GoalRows {
                 .field(f::INFRASTRUCTURE_RETRY_COUNT)
                 .field(f::LAST_FAILURE)
                 .field(f::COMPLETION_EVIDENCE)
+                .field(f::AUTO_RESUME_AT_RESET)
                 .field(f::CREATED_AT)
                 .field(f::UPDATED_AT),
         )
@@ -69,6 +73,36 @@ impl View for GoalRows {
         }
         query
     }
+}
+
+pub struct CanonicalGoal {
+    rows: GoalRows,
+}
+
+impl View for CanonicalGoal {
+    type Collection = fields::goal::Doc;
+    type Row = crate::goal::GoalDocument;
+
+    fn query(&self, reader_did: &str) -> Query<Self::Collection> {
+        self.rows.query(reader_did)
+    }
+
+    fn finish(&self, mut rows: Vec<Self::Row>) -> Vec<Self::Row> {
+        crate::goal::sort_goals_canonical(&mut rows);
+        rows.truncate(1);
+        rows
+    }
+}
+
+pub async fn canonical_goal(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Option<crate::goal::GoalDocument>, gents_store::views::ViewError> {
+    let view = CanonicalGoal {
+        rows: GoalRows::new(node_did).sessions(vec![session_id.to_owned()]),
+    };
+    Ok(access.read_view(&view).await?.pop())
 }
 
 #[derive(Debug, Clone)]
