@@ -23,8 +23,8 @@ use super::super::types::{
     SessionContextView, SessionLiveDeltaView, SessionLiveTextPatchView,
     SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
 };
+use super::request_matches_node;
 use super::timeline::build_rendered_timeline;
-use super::{request_matches_node, source_matches_node};
 
 pub(super) fn question_reply_view(
     store: &ClientStore,
@@ -317,7 +317,9 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     include_live_tail: bool,
     request_projection: Option<&[AgentRequestRow]>,
 ) -> anyhow::Result<Option<DesktopSessionSnapshot>> {
-    let (store, projection_revision) = core.store().snapshot_with_revision();
+    let (store, projection_revision) = core
+        .stores()
+        .snapshot_with_revision(node_did.unwrap_or_default());
     let observed_queue_ids = pending_queue_doc_ids(
         request_projection.unwrap_or(&store.requests),
         node_did,

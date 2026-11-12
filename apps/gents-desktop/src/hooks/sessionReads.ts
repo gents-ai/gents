@@ -282,7 +282,7 @@ export function createSessionReads({
     const nodeDid =
       projected?.sessionId === nextSessionId
         ? (projected.nodeDid ?? store.getState().nodeDid)
-        : null;
+        : store.getState().nodeDid;
     try {
       setError(null);
       await api.reloadSession(nextSessionId, nodeDid);

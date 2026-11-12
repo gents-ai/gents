@@ -15,25 +15,24 @@ pub(crate) use query::load_inference_configuration;
 
 pub use collection_resolver::CollectionResolver;
 pub use core::{
-    tool_file_changes_on, ChatRouteRefusal, ClientCore, ClientCoreOptions,
-    ClientObservationAttachment, ClientPeerStatus, ClientRouteStatus, ClientStoreKeyProvider,
-    ClientSyncStateSnapshot, EnrollmentActivationError, EnrollmentRequestResult,
-    GoalSubmissionReference, InferenceActivity, InferenceObservation, InferenceTarget,
-    LocalHomeAccessError, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
+    tool_file_changes_on, ChatRouteRefusal, ClientCore, ClientCoreOptions, ClientPeerStatus,
+    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
+    EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
+    InferenceTarget, LocalHomeAccessError, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
     RefreshedRequestProjection, RetainedGoalSubmission, StoreRefresh, STUCK_THRESHOLD_ATTEMPTS,
 };
 
 pub use mutations::{apply_config_components_on, patch_config_components_on, set_default_agent_on};
 pub use mutations::{
     delete_event_source_on, delete_schedule_on, delete_skill_on, delete_tool_service_registry_on,
-    delete_trigger_on, upsert_event_source_on, upsert_node_on,
-    upsert_schedule_on, upsert_skill_on, upsert_tool_service_registry_on, upsert_trigger_on,
+    delete_trigger_on, upsert_event_source_on, upsert_node_on, upsert_schedule_on, upsert_skill_on,
+    upsert_tool_service_registry_on, upsert_trigger_on,
 };
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
-    ObservedStore, ObserverHandle, ObserverMetricsSnapshot, RuntimeConnectionStatus,
-    StoreProjectionRevision, StoreUpdateNotice,
+    ObservedStore, ObservedStores, ObserverHandle, ObserverMetricsSnapshot,
+    RuntimeConnectionStatus, StoreProjectionRevision, StoreUpdateNotice,
 };
 pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
 pub(crate) use peer_directory::PeerDirectory;
@@ -58,9 +57,8 @@ pub use query::{
 pub use schema::subscribed_collection_names;
 pub use store::{
     folded_requests, queued_behind_turn, request_answer_owner, session_display_request,
-    session_summary_entries, session_turn_request, source_matches_node, ClientStore,
-    ClientStoreRows, SessionSummaryEntry, TaskRecentRuns,
-    TranscriptView,
+    session_summary_entries, session_turn_request, ClientStore, ClientStoreRows,
+    SessionSummaryEntry, TaskRecentRuns, TranscriptView,
 };
 pub use sync_projection::{
     project_sync_health, SyncHealth, SyncHealthCause, SyncHealthState, SyncNextAction,

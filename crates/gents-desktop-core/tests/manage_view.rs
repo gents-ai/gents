@@ -119,7 +119,7 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     }))?;
     core.save_trigger(&trigger).await?;
 
-    let snapshot = core.store().snapshot();
+    let snapshot = core.stores().snapshot(node_did);
     assert!(snapshot
         .nodes
         .iter()
@@ -160,8 +160,8 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
 
     core.delete_skill("amy-skill", node_did).await?;
     assert!(!core
-        .store()
-        .snapshot()
+        .stores()
+        .snapshot(node_did)
         .skills
         .iter()
         .any(|row| row.node_did == node_did && row.skill_id == "amy-skill"));

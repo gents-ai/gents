@@ -44,7 +44,13 @@ where
         .as_array()
         .expect("vocabulary values")
         .iter()
-        .map(|name| if mutated { perturbed(name) } else { name.clone() })
+        .map(|name| {
+            if mutated {
+                perturbed(name)
+            } else {
+                name.clone()
+            }
+        })
         .collect();
     for name in &lean {
         let decoded: T = serde_json::from_value(name.clone()).unwrap_or_else(|error| {

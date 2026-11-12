@@ -574,7 +574,7 @@ async fn expired_enrollment_lease_neither_gates_nor_rewrites_the_route() {
         "{error:#}"
     );
     assert!(core.sync_state.records()[0].pairing_ready);
-    assert!(core.store().snapshot().requests.is_empty());
+    assert!(core.stores().snapshot("did:key:owner").requests.is_empty());
     let persisted = crate::client::load_peer_records(core.paths().peer_directory_path())
         .await
         .unwrap();
@@ -947,31 +947,6 @@ fn p2p_health_materially_changed_ignores_probe_timestamps() {
 }
 
 #[tokio::test]
-async fn selected_node_did_channel_updates_subscribers() {
-    use crate::client::paths::DesktopPaths;
-
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let options = ClientCoreOptions::local_only();
-    let core = ClientCore::start_with_paths_and_options(paths, options)
-        .await
-        .expect("client core");
-
-    let mut rx = core.selected_node_did_rx();
-    assert_eq!(rx.borrow().clone(), None);
-
-    core.set_selected_node_did(Some("did:alpha".to_string()));
-    rx.changed().await.expect("watch update");
-    assert_eq!(rx.borrow().clone(), Some("did:alpha".to_string()));
-
-    core.set_selected_node_did(None);
-    rx.changed().await.expect("watch update");
-    assert_eq!(rx.borrow().clone(), None);
-
-    Arc::new(core).shutdown().await.expect("shutdown");
-}
-
-#[tokio::test]
 async fn scoped_refresh_of_an_unrouted_node_fails_without_a_local_replica() {
     use crate::client::paths::DesktopPaths;
 
@@ -982,21 +957,17 @@ async fn scoped_refresh_of_an_unrouted_node_fails_without_a_local_replica() {
         .await
         .expect("client core");
 
-    core.refresh_store().await.expect("refresh full");
-    let before = core.store().projection_revision().store_version;
-
     // Node configuration is read from its runtime's authenticated endpoint;
     // there is no replica to fall back to.
-    core.set_selected_node_did(Some("did:any".to_string()));
     let error = core
-        .refresh_store()
+        .refresh_node("did:any")
         .await
-        .expect_err("a selected node without a route has no readable store");
+        .expect_err("a node without a route has no readable store");
     assert!(
         format!("{error:#}").contains("has no authenticated database endpoint"),
         "{error:#}"
     );
-    assert_eq!(core.store().projection_revision().store_version, before);
+    assert!(core.stores().snapshot("did:any").nodes.is_empty());
 
     Arc::new(core).shutdown().await.expect("shutdown");
 }
@@ -1043,7 +1014,7 @@ async fn failed_selection_refresh_schedules_scoped_observer_recovery() {
     );
     let observer = core.observer.lock().await.take().expect("observer owner");
     observer.shutdown().await;
-    let _ = core.store.take_resync_requests();
+    let _ = core.stores.take_resync_requests();
 
     core.node.shutdown().await.unwrap();
     let error = core
@@ -1052,9 +1023,10 @@ async fn failed_selection_refresh_schedules_scoped_observer_recovery() {
         .expect_err("a stopped local database cannot refresh the selected scope");
     assert!(!error.to_string().is_empty());
 
-    let (full, scopes) = core.store.take_resync_requests();
-    assert!(!full, "the failed selected refresh remains scoped");
-    assert_eq!(scopes, vec!["did:test:selection-recovery"]);
+    assert_eq!(
+        core.stores.take_resync_requests(),
+        vec!["did:test:selection-recovery"]
+    );
 
     core.shutdown().await.expect("shutdown client core");
 }
@@ -1239,7 +1211,9 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         .submit_request("session", &owner, "send directly", Some(&agent.agent_did))
         .await?;
     assert_eq!(
-        core.store().focused_request_id(),
+        core.stores()
+            .store(&owner)
+            .and_then(|store| store.focused_request_id()),
         Some(submitted.request_id.clone())
     );
     let rows = owner_request(submitted.request_id.clone()).await?;
@@ -1425,7 +1399,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
         .await?;
     assert!(matches!(
         core.refresh_node(&owner).await?,
-        Some(StoreRefresh::Published { .. })
+        StoreRefresh::Published { .. }
     ));
     let first = core
         .refresh_local_request(&owner, "terminal-page", Some("latest"), None, &docs)
@@ -1443,8 +1417,8 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
         second.published_version
     );
     assert!(core
-        .store
-        .snapshot()
+        .stores
+        .snapshot(&owner)
         .request_row_by_doc_id(&docs[0])
         .is_some());
     core.shutdown().await?;
@@ -1480,40 +1454,32 @@ async fn direct_refresh_distinguishes_published_from_superseded_reads() -> anyho
         async move { core.refresh_node(&node).await }
     });
     proxy.next().await.release();
-    assert!(matches!(
-        refresh.await??,
-        Some(StoreRefresh::Published { .. })
-    ));
-    let _ = core.store.take_resync_requests();
+    assert!(matches!(refresh.await??, StoreRefresh::Published { .. }));
+    let _ = core.stores.take_resync_requests();
 
     let refresh = tokio::spawn({
         let (core, node) = (core.clone(), node.clone());
         async move { core.refresh_node(&node).await }
     });
     let held = proxy.next().await;
-    let newer = core
-        .store
-        .merge_observer_patch(crate::client::store::ClientStore::from_rows(
-            crate::client::store::ClientStoreRows {
-                sessions: vec![serde_json::from_value(serde_json::json!({
-                    "node_did": node, "session_id": "newer", "agent_did": "agent",
-                    "created_at": "2026-01-01T00:00:00Z",
-                }))?],
-                ..Default::default()
-            },
-        ));
+    let newer =
+        core.stores
+            .ensure(&node)
+            .merge_chat_patch(crate::client::store::ClientStore::from_rows(
+                crate::client::store::ClientStoreRows {
+                    sessions: vec![serde_json::from_value(serde_json::json!({
+                        "node_did": node, "session_id": "newer", "agent_did": "agent",
+                        "created_at": "2026-01-01T00:00:00Z",
+                    }))?],
+                    ..Default::default()
+                },
+            ));
     held.release();
-    assert_eq!(
-        refresh.await??,
-        Some(StoreRefresh::Superseded { version: newer })
-    );
-    assert_eq!(
-        core.store.take_resync_requests(),
-        (false, vec![node.clone()])
-    );
+    assert_eq!(refresh.await??, StoreRefresh::Superseded { version: newer });
+    assert_eq!(core.stores.take_resync_requests(), vec![node.clone()]);
     assert!(core
-        .store
-        .snapshot()
+        .stores
+        .snapshot(&node)
         .sessions
         .iter()
         .any(|session| session.session_id == "newer"));

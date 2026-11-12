@@ -20,109 +20,6 @@ fn select(state: &DesktopAppState, label: &str, did: Option<&str>) {
         .select_window_node(label, did.map(str::to_owned), |_| {});
 }
 
-fn selected(state: &DesktopAppState) -> Option<String> {
-    state.bridge.lock().unwrap().selected_node_did()
-}
-
-#[test]
-fn closing_either_window_restores_the_survivors_latest_selection_without_focus() {
-    for (closed, survivor, expected) in [
-        ("main", "second", "did:second"),
-        ("second", "main", "did:updated"),
-    ] {
-        let (_temp, state) = state();
-        state.register_window("main");
-        select(&state, "main", Some("did:first"));
-        assert_eq!(selected(&state).as_deref(), Some("did:first"));
-
-        state.register_window("second");
-        assert_eq!(selected(&state), None);
-        select(&state, "second", Some("did:second"));
-        select(&state, "main", Some("did:updated"));
-        assert_eq!(selected(&state), None);
-
-        state.window_event(closed, &tauri::WindowEvent::Focused(false));
-        assert_eq!(selected(&state), None);
-        state.window_event(closed, &tauri::WindowEvent::Destroyed);
-        assert_eq!(selected(&state).as_deref(), Some(expected));
-        select(&state, closed, Some("did:stale"));
-        state.window_event(closed, &tauri::WindowEvent::Destroyed);
-        assert_eq!(selected(&state).as_deref(), Some(expected));
-
-        state.window_event(survivor, &tauri::WindowEvent::Destroyed);
-        assert_eq!(selected(&state), None);
-        select(&state, survivor, Some("did:stale"));
-        assert!(!state.bridge.lock().unwrap().has_window(survivor));
-    }
-}
-
-#[test]
-fn an_unselected_survivor_and_multiple_views_keep_the_scope_open() {
-    let (_temp, state) = state();
-    state.register_window("main");
-    state.register_window("second");
-    state.register_window("third");
-    select(&state, "main", Some("did:first"));
-    select(&state, "second", Some("did:second"));
-    state.window_event("main", &tauri::WindowEvent::Destroyed);
-    assert_eq!(selected(&state), None);
-    state.window_event("second", &tauri::WindowEvent::Destroyed);
-    assert_eq!(selected(&state), None);
-    select(&state, "third", Some("did:third"));
-    state.register_window("third");
-    assert_eq!(selected(&state).as_deref(), Some("did:third"));
-    select(&state, "third", None);
-    assert_eq!(selected(&state), None);
-}
-
-#[tokio::test]
-async fn window_scope_reaches_the_core_and_survives_core_recreation() {
-    let (_temp, state) = state();
-    state.register_window("main");
-    select(&state, "main", Some("did:first"));
-    let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
-            state.policy.desktop_paths.clone(),
-            gents_desktop_core::client::ClientCoreOptions::local_only(),
-        )
-        .await
-        .expect("client core"),
-    );
-    state.bridge.lock().unwrap().install_core(Arc::clone(&core));
-    assert_eq!(core.selected_node_did().as_deref(), Some("did:first"));
-    let mut scope = core.selected_node_did_rx();
-
-    state.register_window("second");
-    assert!(scope.has_changed().unwrap());
-    assert_eq!(*scope.borrow_and_update(), None);
-    select(&state, "second", Some("did:second"));
-    select(&state, "main", Some("did:updated"));
-    assert!(!scope.has_changed().unwrap());
-    state.window_event("second", &tauri::WindowEvent::Destroyed);
-    assert_eq!(core.selected_node_did().as_deref(), Some("did:updated"));
-    scope.borrow_and_update();
-    select(&state, "second", Some("did:stale"));
-    assert!(!scope.has_changed().unwrap());
-
-    state.bridge.lock().unwrap().core.take();
-    core.shutdown().await.expect("shutdown first core");
-    drop(core);
-    let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
-            state.policy.desktop_paths.clone(),
-            gents_desktop_core::client::ClientCoreOptions::local_only(),
-        )
-        .await
-        .expect("recreated client core"),
-    );
-    state.bridge.lock().unwrap().install_core(Arc::clone(&core));
-    assert_eq!(core.selected_node_did().as_deref(), Some("did:updated"));
-    state.window_event("main", &tauri::WindowEvent::Destroyed);
-    assert_eq!(core.selected_node_did(), None);
-    state.bridge.lock().unwrap().core.take();
-    core.shutdown().await.expect("shutdown recreated core");
-}
-
 /// Regression: the selection was written and the watches cancelled after it
 /// in a second critical section, so a delivery between them sent the old
 /// node's snapshot to a window that selects the new one (TLA
@@ -200,53 +97,6 @@ fn destroying_or_navigating_a_window_retires_only_its_prompt_subscriptions() {
     state.clear_plugin_approval_subscriptions("second");
     assert!(!*active.borrow());
     assert!(state.bridge.lock().unwrap().has_window("second"));
-}
-
-#[tokio::test]
-async fn external_attachment_release_retains_the_current_window_scope() {
-    let actions = [("select", None), ("detach", None), ("select", Some(1))];
-    let trace = gents_lean_vocab::lean_contract_snapshot()
-        .client_observation_scope_cases
-        .iter()
-        .find(|case| {
-            case.initial.requested == Some(1)
-                && case.initial.attachments == 1
-                && case.actions.len() == actions.len()
-                && case
-                    .actions
-                    .iter()
-                    .zip(actions)
-                    .all(|(action, (kind, node))| action.kind == kind && action.node == node)
-        })
-        .expect("modeled desktop-window and external-attachment trace");
-    let expected = |index: usize| {
-        trace.expected[index]
-            .effective
-            .map(|id| format!("did:scope:{id}"))
-    };
-    let (_temp, state) = state();
-    state.register_window("main");
-    select(&state, "main", Some("did:scope:1"));
-    let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
-            state.policy.desktop_paths.clone(),
-            gents_desktop_core::client::ClientCoreOptions::local_only(),
-        )
-        .await
-        .unwrap(),
-    );
-    state.bridge.lock().unwrap().install_core(core.clone());
-    let attachment = core.observe_all_nodes().unwrap();
-    assert_eq!(core.selected_node_did(), expected(0));
-    state.register_window("second");
-    select(&state, "second", Some("did:scope:2"));
-    assert_eq!(core.selected_node_did(), expected(1));
-    drop(attachment);
-    assert_eq!(core.selected_node_did(), expected(2));
-    state.window_event("second", &tauri::WindowEvent::Destroyed);
-    assert_eq!(core.selected_node_did(), expected(3));
-    state.bridge.lock().unwrap().core.take();
-    core.shutdown().await.unwrap();
 }
 
 /// Replays window traces through the bridge's window registry and checks
@@ -428,11 +278,6 @@ fn two_windows_on_two_nodes_resolve_through_their_own_selection() {
         serde_json::json!({"nodeDid": "did:b"}),
     )
     .unwrap();
-    assert_eq!(
-        core.selected_node_did(),
-        None,
-        "no shared selection with two windows"
-    );
     assert_eq!(acted_on(&main), [Some("did:a"); 2]);
     assert_eq!(acted_on(&second), [Some("did:b"); 2]);
     let named = invoke(
@@ -482,7 +327,6 @@ fn two_windows_on_two_nodes_resolve_through_their_own_selection() {
         "a destroyed window acts on nothing"
     );
     assert_eq!(acted_on(&main), [Some("did:b"); 2]);
-    assert_eq!(core.selected_node_did().as_deref(), Some("did:b"));
 
     state.bridge.lock().unwrap().core.take();
     runtime.block_on(core.shutdown()).unwrap();

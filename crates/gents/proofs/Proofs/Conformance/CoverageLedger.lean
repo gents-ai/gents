@@ -1131,10 +1131,6 @@ def caseCoverage : List CoverageEntry :=
       "update_handoff_transitions")
       "runtime-reconcile" [Surface.runtimeInternal, Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_observation_scope_cases"
-      "ClientObservationScopeCases")
-      "client-shell" [Surface.operatorUi]
-  , tagged (consumerCoverage
       "inference_observation_cases"
       "InferenceObservationCases")
       "client-shell" [Surface.operatorUi]

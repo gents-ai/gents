@@ -44,7 +44,7 @@ async fn merge_accepted_edit_projection(
             ..ClientStoreRows::default()
         });
         if store.merge_chat_patch_at_read(&captured, patch).is_none() {
-            store.request_resync(Some(node_did));
+            store.request_resync();
             anyhow::bail!("accepted edit projection read became stale before publication");
         }
         anyhow::Result::<()>::Ok(())
@@ -209,7 +209,7 @@ impl ClientCore {
                     .unwrap_or_else(|| self.node_identity.did().to_string());
                 let receipt = merge_accepted_edit_projection(
                     &self.session_queue_access(node_did)?,
-                    self.store.as_ref(),
+                    self.stores.ensure(node_did).as_ref(),
                     receipt,
                     &selected_doc_ids,
                     node_did,

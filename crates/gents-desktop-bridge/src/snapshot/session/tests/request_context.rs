@@ -104,13 +104,13 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         )
         .await;
         assert!(
-            core.store()
-                .snapshot()
+            core.stores()
+                .snapshot(&node_did)
                 .requests
                 .iter()
                 .any(|row| row.request_id == request_id),
             "refreshed request {request_id} missing from store: {:?}",
-            core.store().snapshot().requests
+            core.stores().snapshot(&node_did).requests
         );
     }
 
@@ -222,13 +222,13 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         .unwrap();
 
     assert!(
-        core.store()
-            .snapshot()
+        core.stores()
+            .snapshot(&node_did)
             .requests
             .iter()
             .any(|row| row.request_id == "request-pending"),
         "pending request lost before snapshot: {:?}",
-        core.store().snapshot().requests
+        core.stores().snapshot(&node_did).requests
     );
     let snapshot = build_session_snapshot_for_node(
         core.as_ref(),

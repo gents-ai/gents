@@ -9,10 +9,10 @@
 use anyhow::{Context, Result};
 use gents_documents::write_tools_document;
 use gents_documents::{load_agent_context_and_tools_in_txn, Tools};
-use gents_protocol::operations::NextCall;
 use gents_protocol::operations::workspace_root::{
     EnabledUpdate, WorkspaceRootError, WorkspaceRootPublish, WorkspaceRootVerb,
 };
+use gents_protocol::operations::NextCall;
 use gents_protocol::operations::StringUpdate;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;

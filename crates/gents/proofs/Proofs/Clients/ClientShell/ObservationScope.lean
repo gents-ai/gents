@@ -1,65 +1,14 @@
-namespace ClientObservationScope
-
-structure State where
-  requested : Option Nat
-  attachments : Nat
-  deriving DecidableEq, Repr
-
-inductive Action where
-  | select (node : Option Nat)
-  | attach
-  | detach
-  deriving DecidableEq, Repr
-
-/-- An attached frontend may observe another node than the embedding shell.
-The shared observer must retain the full authorized scope until it detaches;
-this changes observation focus, never document authorization. Each runtime scope
-is observed through its authenticated endpoint, using the client DID. Missing or
-unavailable endpoints cannot be replaced by locally replicated runtime documents. -/
-def effective (state : State) : Option Nat :=
-  if state.attachments = 0 then state.requested else none
-
-def step (state : State) : Action → State
-  | .select node => { state with requested := node }
-  | .attach => { state with attachments := state.attachments + 1 }
-  | .detach => { state with attachments := state.attachments - 1 }
-
-theorem attached_scope_is_open (state : State) (h : 0 < state.attachments) :
-    effective state = none := by
-  simp [effective, Nat.ne_of_gt h]
-
-theorem selection_cannot_narrow_an_attached_observer
-    (state : State) (node : Option Nat) (h : 0 < state.attachments) :
-    effective (step state (.select node)) = none := by
-  simp [step, effective, Nat.ne_of_gt h]
-
-theorem last_detachment_restores_current_intent
-    (state : State) (h : state.attachments = 1) :
-    effective (step state .detach) = state.requested := by
-  simp [step, effective, h]
-
-theorem attachment_and_detachment_preserve_focus (state : State) :
-    effective (step (step state .attach) .detach) = effective state := by
-  simp [step]
-
-theorem selection_during_attachment_survives_detachment
-    (state : State) (node : Option Nat) (h : state.attachments = 1) :
-    effective (step (step state (.select node)) .detach) = node := by
-  simp [step, effective, h]
-
-theorem detached_count_stays_zero (node : Option Nat) :
-    step { requested := node, attachments := 0 } .detach =
-      { requested := node, attachments := 0 } := by
-  rfl
-
-end ClientObservationScope
-
 /-! Several desktop windows, each on its own node. A window is registered by
 its native creation and retired only by its native destruction; each holds its
-own node selection, pack watches, prompt subscriptions and store view. The
-runtime observer is shared and node-scoped (one source per runtime, TLA
-`RuntimeConnectionTransport`), so a window reads its node's slice of it. TLA
-`WindowIndependence` checks delivery and convergence across two windows. -/
+own node selection, pack watches, prompt subscriptions and store view. Each
+runtime is observed through its own connection into its own store (one source
+and one store per runtime, TLA `RuntimeConnectionTransport`); no store holds
+another node's rows, so a window reads its node's own store and the fleet view
+summarizes each node from that node's store. A connection is the runtime's
+authenticated endpoint under the client DID; a missing or unavailable endpoint
+is never replaced by locally replicated runtime documents, and observation never
+changes document authorization. TLA `WindowIndependence` checks
+delivery and convergence across two windows. -/
 namespace ClientWindowScope
 
 /-- `none`: the window is not registered (never created, or destroyed). -/
@@ -82,7 +31,7 @@ never acts on the node another window selected. -/
 def commandNode (s : Selections) (window : Nat) (explicit : Option Nat) : Option Nat :=
   explicit <|> (s window).join
 
-/-- A node-scoped delivery (a pack watch event, a node's store slice) reaches
+/-- A node-scoped delivery (a pack watch event, a node's store) reaches
 a window only while it selects that node. -/
 def delivers (s : Selections) (window node : Nat) : Bool :=
   decide ((s window).join = some node)

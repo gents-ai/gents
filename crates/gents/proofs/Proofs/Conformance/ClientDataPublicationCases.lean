@@ -10,84 +10,6 @@ private def stateJson (state : State) : String :=
   ",\"request_event_epoch\":" ++ toString state.requestEventEpoch ++
   ",\"transcript_epoch\":" ++ toString state.transcriptEpoch ++ "}"
 
-private def optionNatJson : Option Nat → String
-  | none => "null"
-  | some value => toString value
-
-private def scopedConfigRowsJson (rows : List ScopedConfigRow) : String :=
-  "[" ++ String.intercalate "," (rows.map fun row =>
-    "{\"owner\":" ++ toString row.owner ++ ",\"key\":\"" ++ row.key ++
-    "\",\"value\":\"" ++ row.value ++ "\",\"source\":" ++
-    optionNatJson row.source ++ "}") ++ "]"
-
-private def scopedObservationRowsJson (rows : List ScopedObservationRow) : String :=
-  "[" ++ String.intercalate "," (rows.map fun row =>
-    "{\"key\":\"" ++ row.key ++ "\",\"value\":\"" ++ row.value ++
-    "\",\"source\":" ++ optionNatJson row.source ++ "}") ++ "]"
-
-private def scopedReplacementCaseJson (name : String) (scope : Nat)
-    (incomingAuthoritativeOwners incomingTriggerOwners : List Nat)
-    (currentConfigs incomingConfigs : List ScopedConfigRow)
-    (currentObservations incomingObservations : List ScopedObservationRow) : String := Id.run do
-  let expectedConfigs := replaceConfigScope scope currentConfigs incomingConfigs
-  let expectedObservations := replaceObservationScope scope currentObservations incomingObservations
-  let lookupJson (owner : Nat) : String :=
-    let value := (scopedObservationFor owner "shared-trigger" expectedObservations).map
-      ScopedObservationRow.value
-    "{\"owner\":" ++ toString owner ++ ",\"value\":" ++
-      (value.map (fun text => "\"" ++ text ++ "\"")).getD "null" ++ "}"
-  return "{\"name\":\"" ++ name ++ "\",\"scope\":" ++
-    toString scope ++ ",\"current_configs\":" ++ scopedConfigRowsJson currentConfigs ++
-    ",\"incoming_configs\":" ++ scopedConfigRowsJson incomingConfigs ++
-    ",\"expected_configs\":" ++ scopedConfigRowsJson expectedConfigs ++
-    ",\"current_observations\":" ++ scopedObservationRowsJson currentObservations ++
-    ",\"incoming_observations\":" ++ scopedObservationRowsJson incomingObservations ++
-    ",\"expected_observations\":" ++ scopedObservationRowsJson expectedObservations ++
-    ",\"incoming_authoritative_owners\":[" ++
-      String.intercalate "," (incomingAuthoritativeOwners.map toString) ++
-    "],\"expected_authoritative_owners\":[" ++
-      String.intercalate "," ((incomingAuthoritativeOwners.filter (· == scope)).map toString) ++
-    "],\"incoming_trigger_owners\":[" ++
-      String.intercalate "," (incomingTriggerOwners.map toString) ++
-    "],\"lookups\":[" ++ lookupJson 1 ++ "," ++ lookupJson 2 ++ "," ++ lookupJson 3 ++ "]}"
-
-private def scopedReplacementCasesJson : String :=
-  let currentConfigs : List ScopedConfigRow := [
-    { owner := 1, key := "shared-session", value := "stale-alpha", source := none },
-    { owner := 2, key := "shared-session", value := "beta", source := none }
-  ]
-  let currentObservations : List ScopedObservationRow := [
-    { key := "shared-trigger", value := "unknown", source := none },
-    { key := "shared-trigger", value := "stale-alpha", source := some 1 },
-    { key := "shared-trigger", value := "beta", source := some 2 }
-  ]
-  let base := scopedReplacementCaseJson "scoped_replace_preserves_foreign_and_unknown_rows" 1
-    [1]
-    [1]
-    currentConfigs
-    [{ owner := 1, key := "shared-session", value := "fresh-alpha", source := some 1 }]
-    currentObservations
-    [{ key := "shared-trigger", value := "fresh-alpha", source := some 1 }]
-  let foreignIncoming := scopedReplacementCaseJson "scoped_replace_ignores_foreign_incoming_rows" 1
-    [2]
-    []
-    currentConfigs
-    [{ owner := 2, key := "shared-session", value := "forged-beta", source := some 2 }]
-    currentObservations
-    [{ key := "shared-trigger", value := "forged-beta", source := some 2 }]
-  let duplicateIncoming := scopedReplacementCaseJson "scoped_replace_upserts_duplicate_target_keys" 1
-    [1]
-    [1]
-    currentConfigs
-    [ { owner := 1, key := "shared-session", value := "first-alpha", source := some 1 }
-    , { owner := 1, key := "shared-session", value := "last-alpha", source := some 1 }
-    ]
-    currentObservations
-    [ { key := "shared-trigger", value := "first-alpha", source := some 1 }
-    , { key := "shared-trigger", value := "last-alpha", source := some 1 }
-    ]
-  "[" ++ String.intercalate "," [base, foreignIncoming, duplicateIncoming] ++ "]"
-
 private def caseJson (name : String) (initial current : State) (read : Read)
     (action : String) : String :=
   "{\"name\":\"" ++ name ++ "\",\"initial\":" ++ stateJson initial ++
@@ -100,79 +22,56 @@ private def caseJson (name : String) (initial current : State) (read : Read)
 private def natArrayJson (values : List Nat) : String :=
   "[" ++ String.intercalate "," (values.map toString) ++ "]"
 
+/-- An action on one node's store while a read of node 1 is in flight. -/
 private inductive PublicationAction where
-  | merge (owners : List Nat)
-  | request (owner : Option Nat)
-  | unknownObservation
-  | replaceAll
-  | transcript
+  | merge (node : Nat)
+  | request (node : Nat)
+  | transcript (node : Nat)
 
-private def sessionRow (owner : Nat) (value : String) : ScopedConfigRow :=
-  { owner, key := "session-" ++ toString owner, value, source := some owner }
-
-private def applyPublicationAction (state : State × List ScopedConfigRow)
-    (action : PublicationAction) : State × List ScopedConfigRow :=
+private def applyPublicationAction (state : Fleet × (Nat → String))
+    (action : PublicationAction) : Fleet × (Nat → String) :=
   match action with
-  | .merge owners =>
-      (dataChange state.1 (.nodes owners),
-        upsertConfigRows state.2 (owners.map fun owner => sessionRow owner "concurrent"))
-  | .request owner =>
-      (requestEventFor state.1 ((owner.map (fun node => Scope.nodes [node])).getD Scope.all),
-        state.2)
-  | .unknownObservation => (dataChange state.1 .all, state.2)
-  | .replaceAll => (dataChange state.1 .all, [sessionRow 2 "replacement"])
-  | .transcript => (transcriptInvalidation state.1, state.2)
+  | .merge node =>
+      (state.1.on node dataChange,
+        fun other => if other = node then "concurrent" else state.2 other)
+  | .request node => (state.1.on node requestEvent, state.2)
+  | .transcript node => (state.1.on node transcriptInvalidation, state.2)
 
 private def publicationActionJson : PublicationAction → String
-  | .merge owners => "{\"op\":\"merge\",\"owners\":" ++ natArrayJson owners ++
-      ",\"rows\":" ++ scopedConfigRowsJson (owners.map fun owner => sessionRow owner "concurrent") ++ "}"
-  | .request owner => "{\"op\":\"request\",\"owner\":" ++ optionNatJson owner ++ "}"
-  | .unknownObservation => "{\"op\":\"unknown_observation\"}"
-  | .replaceAll => "{\"op\":\"replace_all\",\"rows\":" ++
-      scopedConfigRowsJson [sessionRow 2 "replacement"] ++ "}"
-  | .transcript => "{\"op\":\"transcript\"}"
+  | .merge node => "{\"op\":\"merge\",\"node\":" ++ toString node ++ "}"
+  | .request node => "{\"op\":\"request\",\"node\":" ++ toString node ++ "}"
+  | .transcript node => "{\"op\":\"transcript\",\"node\":" ++ toString node ++ "}"
 
-private def scopedPublicationCaseJson (name : String) (owners : Option (List Nat))
-    (merge : Bool) (actions : List PublicationAction) : String := Id.run do
+/-- Two nodes, each with its own store holding one session row. A read of node
+1 publishes `incoming` as a patch (`merge`) or a reload after `actions`. -/
+private def nodePublicationCaseJson (name : String) (merge : Bool)
+    (actions : List PublicationAction) : String := Id.run do
   let initial : State :=
     { dataEpoch := 1, provenanceEpoch := 1, requestEventEpoch := 1, transcriptEpoch := 0 }
-  let initialRows := [sessionRow 1 "initial", sessionRow 2 "initial"]
-  let (current, currentRows) := actions.foldl applyPublicationAction (initial, initialRows)
-  let scope := owners.map Scope.nodes |>.getD Scope.all
-  let incoming := (owners.getD [1]).map fun owner => sessionRow owner "incoming"
-  let accepted := if merge then acceptsFor current (beginRead initial) scope
-    else acceptsReloadFor current (beginRead initial) scope
-  let expected := if accepted then
-      if merge then upsertConfigRows currentRows incoming
-      else match owners with
-        | some [node] => replaceConfigScope node currentRows incoming
-        | _ => incoming
-    else currentRows
-  let ownersJson := (owners.map natArrayJson).getD "null"
-  return "{\"name\":\"" ++ name ++ "\",\"owners\":" ++ ownersJson ++
-    ",\"merge\":" ++ toString merge ++ ",\"initial\":" ++ scopedConfigRowsJson initialRows ++
-    ",\"incoming\":" ++ scopedConfigRowsJson incoming ++ ",\"actions\":[" ++
-    String.intercalate "," (actions.map publicationActionJson) ++
-    "],\"accepted\":" ++ toString accepted ++ ",\"expected\":" ++
-    scopedConfigRowsJson expected ++ "}"
+  let fleet : Fleet := fun _ => initial
+  let read := beginRead (fleet 1)
+  let (current, rows) := actions.foldl applyPublicationAction (fleet, fun _ => "initial")
+  let accepted := if merge then accepts (current 1) read else acceptsReload (current 1) read
+  let expected (node : Nat) : String :=
+    if node = 1 ∧ accepted = true then "incoming" else rows node
+  return "{\"name\":\"" ++ name ++ "\",\"merge\":" ++ toString merge ++
+    ",\"actions\":[" ++ String.intercalate "," (actions.map publicationActionJson) ++
+    "],\"accepted\":" ++ toString accepted ++
+    ",\"expected\":[{\"node\":1,\"value\":\"" ++ expected 1 ++
+    "\"},{\"node\":2,\"value\":\"" ++ expected 2 ++ "\"}]}"
 
-private def scopedPublicationCasesJson : String :=
+private def nodePublicationCasesJson : String :=
   "[" ++ String.intercalate "," [
-    scopedPublicationCaseJson "unrelated_node_publication_rebases_scoped_reload" (some [1]) false [.merge [2]],
-    scopedPublicationCaseJson "continuous_unrelated_publications_allow_recovery" (some [1]) false (List.replicate 64 (.merge [2])),
-    scopedPublicationCaseJson "same_node_publication_rejects_reload" (some [1]) false [.merge [1]],
-    scopedPublicationCaseJson "same_node_request_event_preserves_reload" (some [1]) false [.request (some 1)],
-    scopedPublicationCaseJson "sustained_request_events_preserve_reload" (some [1]) false (List.replicate 64 (.request (some 1))),
-    scopedPublicationCaseJson "unrelated_request_event_allows_reload" (some [1]) false [.request (some 2)],
-    scopedPublicationCaseJson "unknown_request_event_preserves_reload" (some [1]) false [.request none],
-    scopedPublicationCaseJson "same_node_request_event_rejects_patch" (some [1]) true [.request (some 1)],
-    scopedPublicationCaseJson "unknown_request_event_rejects_patch" (some [1]) true [.request none],
-    scopedPublicationCaseJson "unknown_observation_rejects_reload" (some [1]) false [.unknownObservation],
-    scopedPublicationCaseJson "full_replacement_rejects_reload" (some [1]) false [.replaceAll],
-    scopedPublicationCaseJson "transcript_notice_preserves_reload" (some [1]) false [.transcript],
-    scopedPublicationCaseJson "full_read_rejects_unrelated_publication" none false [.merge [2]],
-    scopedPublicationCaseJson "patch_uses_all_actual_owners" (some [1, 2]) true [.request (some 2)],
-    scopedPublicationCaseJson "patch_rebases_over_unrelated_owner" (some [1]) true [.merge [2]]
+    nodePublicationCaseJson "other_node_publication_preserves_reload" false [.merge 2],
+    nodePublicationCaseJson "continuous_other_node_publications_preserve_reload" false (List.replicate 64 (.merge 2)),
+    nodePublicationCaseJson "same_node_publication_rejects_reload" false [.merge 1],
+    nodePublicationCaseJson "same_node_request_event_preserves_reload" false [.request 1],
+    nodePublicationCaseJson "sustained_request_events_preserve_reload" false (List.replicate 64 (.request 1)),
+    nodePublicationCaseJson "transcript_notice_preserves_reload" false [.transcript 1],
+    nodePublicationCaseJson "same_node_request_event_rejects_patch" true [.request 1],
+    nodePublicationCaseJson "same_node_publication_rejects_patch" true [.merge 1],
+    nodePublicationCaseJson "other_node_request_event_preserves_patch" true [.request 2],
+    nodePublicationCaseJson "other_node_publication_preserves_patch" true [.merge 2]
   ] ++ "]"
 
 private def requestScopeActions (scopes : List Nat) : List String :=
@@ -188,12 +87,10 @@ private def recoveryActionsJson (setupScopes failedScopes externalScopes : List 
 
 private def recoveryJson (name : String) (initial recovery : Recovery)
     (setupScopes failedScopes externalScopes : List Nat) (timerAdvanced : Bool) : String :=
-  "{\"name\":\"" ++ name ++ "\",\"full\":" ++ toString recovery.full ++
-  ",\"pending_scopes\":[" ++ String.intercalate "," (recovery.pendingScopes.map toString) ++
+  "{\"name\":\"" ++ name ++ "\",\"pending_scopes\":[" ++ String.intercalate "," (recovery.pendingScopes.map toString) ++
   "],\"generation\":" ++ toString recovery.generation ++
   ",\"retry_scheduled\":" ++ toString recovery.retryScheduled ++
-  ",\"initial\":{\"full\":" ++ toString initial.full ++
-  ",\"pending_scopes\":" ++ natArrayJson initial.pendingScopes ++
+  ",\"initial\":{\"pending_scopes\":" ++ natArrayJson initial.pendingScopes ++
   ",\"generation\":" ++ toString initial.generation ++
   ",\"retry_scheduled\":" ++ toString initial.retryScheduled ++ "},\"actions\":" ++
   recoveryActionsJson setupScopes failedScopes externalScopes timerAdvanced ++ "}"
@@ -227,7 +124,7 @@ def casesJson : String := Id.run do
     caseJson "newer_data_publication_rejects_old_read" initial afterNewerPublication read "replace_requests"
   ] ++ "]"
   let recovery : Recovery :=
-    { full := false, pendingScopes := [], generation := 0, retryScheduled := false }
+    { pendingScopes := [], generation := 0, retryScheduled := false }
   let setupScopes := [1, 2, 3]
   let queued := setupScopes.foldl requestScope recovery
   let (inFlight, _) := takeBatch queued
@@ -240,8 +137,7 @@ def casesJson : String := Id.run do
     recoveryJson "retry_timer_releases_gate_without_losing_scopes" recovery afterRetryTimer setupScopes setupScopes [] true
   ] ++ "]"
   return "{\"publication\":" ++ publicationCases ++ ",\"recovery\":" ++ recoveryCases ++
-    ",\"scoped_replacement\":" ++ scopedReplacementCasesJson ++
-    ",\"scoped_publication\":" ++ scopedPublicationCasesJson ++
+    ",\"node_publication\":" ++ nodePublicationCasesJson ++
     ",\"notice_delivery\":" ++ noticeCasesJson ++ "}"
 
 end Conformance.ClientDataPublication

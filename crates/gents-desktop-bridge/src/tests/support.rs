@@ -55,7 +55,6 @@ pub async fn served_desktop() -> ServedDesktop {
         .unwrap(),
     );
     let (runtime, agent) = served_runtime_for(&core, ServedRoute::CoHosted).await;
-    core.set_selected_node_did(Some(runtime.node_did().to_owned()));
     ServedDesktop {
         core,
         runtime,
@@ -204,7 +203,6 @@ impl RunningDesktop {
             )
             .await;
         runtime.connect(&core).await;
-        core.set_selected_node_did(Some(runtime.node_did().to_owned()));
         let running = runtime.boot().await;
         Self {
             core,

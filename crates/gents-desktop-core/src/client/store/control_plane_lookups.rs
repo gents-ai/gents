@@ -93,16 +93,7 @@ impl ClientStore {
             .filter_map(|trigger| {
                 self.trigger_observations
                     .iter()
-                    .enumerate()
-                    .find(|(index, observation)| {
-                        observation.trigger_id == trigger.trigger_id
-                            && self
-                                .trigger_observation_source_node_dids
-                                .get(*index)
-                                .and_then(|source| source.as_deref())
-                                == Some(trigger.node_did.as_str())
-                    })
-                    .map(|(_, observation)| observation)
+                    .find(|observation| observation.trigger_id == trigger.trigger_id)
             })
             .collect::<Vec<_>>();
 

@@ -241,7 +241,7 @@ async fn live_glm_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Resul
         run_cli_json_with_env(&home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home_arg], &owner_env)?;
         wait_for_chat_ready_enrollment(&core, &node_did).await?;
         wait_for_client_node_readiness(&core, &node_did).await?;
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(&node_did);
         let mut agent = snapshot.agents.iter().find(|row| row.node_did == node_did && row.agent_did == agent_did).cloned().context("selected Agent unavailable")?;
         let mut context = snapshot.contexts.iter().find(|row| Some(&row.context_id) == agent.context_id.as_ref() && row.node_did == node_did).cloned().context("selected AgentContext unavailable")?;
         let tools = Tools { tools_id: "live-plugin-denial-tools".into(), node_did: node_did.clone(), integrations: Some(IntegrationTools {

@@ -34,15 +34,7 @@ impl ClientStore {
             .into_iter()
             .flat_map(|indexes| indexes.iter())
             .copied()
-            .filter(|index| {
-                row_is_in_node_scope(
-                    self.tool_calls[*index].node_did.as_deref(),
-                    self.tool_call_source_node_dids
-                        .get(*index)
-                        .and_then(|source| source.as_deref()),
-                    node_did,
-                )
-            })
+            .filter(|index| row_node_matches(self.tool_calls[*index].node_did.as_deref(), node_did))
             .collect::<Vec<_>>();
         TranscriptView {
             messages: message_indexes
@@ -217,11 +209,7 @@ impl ClientStore {
     }
 
     pub(crate) fn request_row_by_doc_id(&self, doc_id: &str) -> Option<&AgentRequestRow> {
-        let index = self
-            .request_index_by_doc_id
-            .get(doc_id)
-            .copied()
-            .flatten()?;
+        let index = self.request_index_by_doc_id.get(doc_id).copied()?;
         let row = self.requests.get(index)?;
         (row.doc_id.as_deref() == Some(doc_id)).then_some(row)
     }

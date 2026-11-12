@@ -108,7 +108,8 @@ fn observed_store_can_stay_payload_free_while_scoped_rows_produce_a_verified_suf
     let mut rows = rows();
     let initial = ClientStore::from_rows(rows.clone());
     let cursor = cursor(&initial);
-    let (observed, _) = gents_desktop_core::client::ObservedStore::new(initial);
+    let observed = gents_desktop_core::client::ObservedStores::new().ensure("did:test:node");
+    observed.replace_snapshot(initial);
     assert!(observed.snapshot().output_segments.is_empty());
     rows.output_segments.push(segment(1, " world 🌍"));
     let store = ClientStore::from_rows(rows);
@@ -293,8 +294,10 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         observation: None,
     });
     let full = ClientStore::from_rows(rows.clone());
-    core.store().merge_observer_patch(full.clone());
-    let observed = core.store().snapshot();
+    core.stores()
+        .ensure(&node_did)
+        .merge_chat_patch(full.clone());
+    let observed = core.stores().snapshot(&node_did);
     assert!(observed.output_segments.is_empty());
     let cursor = canonical_live_text(&observed, &full, "session", Some(&node_did), "logical")
         .unwrap()
@@ -440,6 +443,6 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     .await
     .unwrap();
     assert_eq!(terminal.outcome, "snapshotRequired");
-    assert!(core.store().snapshot().output_segments.is_empty());
+    assert!(core.stores().snapshot(&node_did).output_segments.is_empty());
     Arc::new(core).shutdown().await.unwrap();
 }

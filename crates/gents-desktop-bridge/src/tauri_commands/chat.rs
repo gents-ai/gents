@@ -135,18 +135,7 @@ pub async fn desktop_session_reload(
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
-    let node_did = node_did
-        .or_else(|| {
-            core.store()
-                .snapshot()
-                .sessions
-                .iter()
-                .find(|session| session.session_id == session_id)
-                .map(|session| session.node_did.clone())
-        })
-        .ok_or_else(|| {
-            BridgeError::untyped("session reload requires a node for the selected session")
-        })?;
+    let node_did = crate::commands::resolve_session_node(&session_id, node_did)?;
     core.reload_session(&session_id, &node_did)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
@@ -168,14 +157,10 @@ pub async fn desktop_session_live_delta(
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
-    let node_did = node_did.or_else(|| {
-        core.store()
-            .snapshot()
-            .sessions
-            .iter()
-            .find(|session| session.session_id == session_id)
-            .map(|session| session.node_did.clone())
-    });
+    let node_did = Some(crate::commands::resolve_session_node(
+        &session_id,
+        node_did,
+    )?);
     Ok(Some(
         build_session_live_delta(
             core.as_ref(),
@@ -259,8 +244,10 @@ where
         return Err(BridgeError::untyped("desktop client is not running"));
     };
 
-    let scope = state.window_command_node(window.label(), node_did.as_deref());
-    crate::commands::retry_request(&core, &request_id, scope.as_deref())
+    let node_did = state
+        .window_command_node(window.label(), node_did.as_deref())
+        .ok_or_else(|| BridgeError::untyped("a retry names its node"))?;
+    crate::commands::retry_request(&core, &request_id, &node_did)
         .await
         .map_err(BridgeError::classify_transport_error)
 }

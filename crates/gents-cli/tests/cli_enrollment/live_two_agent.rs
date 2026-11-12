@@ -101,8 +101,8 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 .context("waiting for enrolled desktop Node readiness")?;
 
             let mut agent = core
-                .store()
-                .snapshot()
+                .stores()
+                .snapshot(&node_did)
                 .agents
                 .iter()
                 .find(|row| row.node_did == node_did && row.agent_did == default_agent)

@@ -89,7 +89,8 @@ impl ClientCore {
             return Ok(None);
         }
 
-        let mut captured = self.store.capture_read();
+        let store = self.stores.ensure(node_did);
+        let mut captured = store.capture_read();
         let access = self.session_queue_access(node_did)?;
         let source = "runtime";
         let access = &access;
@@ -156,9 +157,8 @@ impl ClientCore {
             let mut signatures = self.request_patch_signatures.lock().await;
             let cached_signature = signatures.get(&cache_key) == Some(&signature);
             if cached_signature {
-                let (fence_accepted, rows_current) = self
-                    .store
-                    .current_request_patch_read_status(&captured, &patch);
+                let (fence_accepted, rows_current) =
+                    store.current_request_patch_read_status(&captured, &patch);
                 if request_patch_cache_reusable(
                     cached_signature,
                     true,
@@ -169,7 +169,7 @@ impl ClientCore {
                 }
                 signatures.remove(&cache_key);
                 if !fence_accepted {
-                    self.store.request_resync(Some(node_did));
+                    store.request_resync();
                     return Ok(None);
                 }
             }
@@ -182,7 +182,7 @@ impl ClientCore {
             .is_some_and(|row| row.is_terminal());
         if terminal {
             self.refresh_node(node_did).await?;
-            captured = self.store.capture_read();
+            captured = store.capture_read();
             let Some(refreshed) = read().await? else {
                 return Ok(None);
             };
@@ -195,8 +195,8 @@ impl ClientCore {
             signature = chat_patch_signature(&patch);
         }
         let (rows, bytes, _hash) = signature;
-        let Some(version) = self.store.merge_chat_patch_at_read(&captured, patch) else {
-            self.store.request_resync(Some(node_did));
+        let Some(version) = store.merge_chat_patch_at_read(&captured, patch) else {
+            store.request_resync();
             return Ok(None);
         };
         let mut signatures = self.request_patch_signatures.lock().await;
