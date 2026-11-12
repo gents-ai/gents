@@ -42,7 +42,6 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
     assert_eq!(case["result"], "committed");
     let intent = &case["intent"];
     use gents_store::identity::NodeIdentity;
-    let temp = tempfile::tempdir().unwrap();
     let node_db = gents_inference::test_support::test_db(
         "remote-delivery-waits-for-authenticated-",
         crate::test_support::no_lifecycle_plugins(),

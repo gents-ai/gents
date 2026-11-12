@@ -7,8 +7,6 @@ use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
 use serde_json::json;
 
-use crate::test_support::goal_hook::{bind_signed_request, set_goal_as_session_owner};
-
 mod goal_context;
 
 #[tokio::test]

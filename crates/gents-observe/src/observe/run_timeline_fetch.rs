@@ -889,8 +889,7 @@ mod tests {
         use gents_protocol::request_admission::{
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
-        use gents_store::identity::{KeyIdentity, NodeIdentity};
-        let directory = tempfile::tempdir().unwrap();
+        use gents_store::identity::NodeIdentity;
         let node_db = gents_inference::test_support::test_db(
             "fetches-native-goal-history-without-proj",
             gents_automation::lifecycle_hooks::composition(),

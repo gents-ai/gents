@@ -525,7 +525,6 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         ("compacted prompt".to_string(), 1_000, "dispatch"),
     ] {
         let expected_rows = committed(rebuilt_result);
-        let identity_home = tempfile::tempdir().unwrap();
         let node_db = gents_inference::test_support::test_db(
             "staged-turn-reduction-commits-its-row-on",
             gents_automation::lifecycle_hooks::composition(),

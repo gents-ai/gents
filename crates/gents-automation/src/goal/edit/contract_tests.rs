@@ -219,7 +219,6 @@ fn generated_goal_objective_whitespace_matches_native_character_classification()
 
 #[tokio::test]
 async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
-    let directory = tempfile::tempdir().unwrap();
     let node_db = gents_inference::test_support::test_db(
         "edited-fields-match-operator-updates-wit",
         crate::lifecycle_hooks::composition(),

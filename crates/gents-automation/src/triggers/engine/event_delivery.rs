@@ -697,7 +697,6 @@ mod tests {
     #[tokio::test]
     async fn shared_clock_survives_restart_and_quiescence_is_owner_scoped() {
         use gents_store::identity::NodeIdentity as _;
-        let home = tempfile::tempdir().unwrap();
         let node_db = gents_inference::test_support::test_db(
             "shared-clock-survives-restart-and-quiesc",
             crate::lifecycle_hooks::composition(),

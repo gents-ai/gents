@@ -163,7 +163,7 @@ pub struct TurnAssignmentHandoff {
 }
 
 impl TurnAssignmentHandoff {
-    pub fn new(
+    pub(crate) fn new(
         terminal: &crate::call::lifecycle::CausedRequestTerminal,
         assignment: AssignmentObservation,
     ) -> Self {
