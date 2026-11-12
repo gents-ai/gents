@@ -4,15 +4,10 @@ use super::plugin_lifecycle::{install, tests::fixture};
 
 #[tokio::test]
 async fn generated_local_publication_survives_notification_outcomes() {
-    let contract = gents_lean_vocab::lean_contract_snapshot();
-    for case in contract
-        .plugin_resource_publication_cases
-        .as_array()
-        .unwrap()
-    {
+    for case in gents_lean_vocab::families::plugin_resources_publication::cases::<String, String>() {
         let home = tempfile::tempdir().unwrap();
         let (_previous_dir, _, previous) = fixture("1.0.0", false);
-        if case["previous"].as_bool().unwrap() {
+        if case.input.previous {
             install(
                 home.path(),
                 &previous,
@@ -28,7 +23,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
         }
         let (_next_dir, _, next) = fixture("2.0.0", false);
         let bindings = BTreeMap::new();
-        match case["outcome"].as_str().unwrap() {
+        match case.input.outcome.as_str() {
             "local_failure" => {
                 let result = crate::plugin::install::install_pack_plugins_with_bindings(
                     home.path(),
@@ -130,31 +125,28 @@ async fn generated_local_publication_survives_notification_outcomes() {
             }
             other => panic!("unknown modeled publication outcome {other}"),
         }
-        let expected_version = match case["expected"].as_str() {
-            Some("new") => Some("2.0.0"),
-            Some("previous") => Some("1.0.0"),
-            None => None,
-            other => panic!("unknown modeled visible installation {other:?}"),
-        };
         let pin = super::read_home_install(home.path(), "fixture/native_echo_pack").unwrap();
-        assert_eq!(
-            pin.as_ref().map(|pin| pin.version.as_str()),
-            expected_version,
-            "{case}"
-        );
+        let visible = pin.as_ref().map(|pin| pin.version.clone());
         let records = crate::plugin::store::list_records(home.path()).unwrap();
         assert_eq!(
-            records.len(),
-            usize::from(expected_version.is_some()),
-            "{case}"
+            records
+                .iter()
+                .map(|record| record.version.clone())
+                .collect::<Vec<_>>(),
+            visible.iter().cloned().collect::<Vec<_>>(),
+            "{:?}",
+            case.input
         );
-        if let Some(expected) = expected_version {
-            assert_eq!(records[0].version, expected, "{case}");
-        }
         assert!(
             crate::plugin::store::try_lock_store(home.path()).is_ok(),
-            "{case}"
+            "{:?}",
+            case.input
         );
+        case.check(visible.map(|version| match version.as_str() {
+            "2.0.0" => "new".to_owned(),
+            "1.0.0" => "previous".to_owned(),
+            other => panic!("unknown fixture version {other}"),
+        }));
     }
 }
 

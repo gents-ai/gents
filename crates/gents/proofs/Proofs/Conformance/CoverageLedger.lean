@@ -1643,8 +1643,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginInvocationCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_publication_cases"
-      "ToolPolicy.PluginPublication")
+      "family"
+      "plugin_resources_publication")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_receipt_cases"

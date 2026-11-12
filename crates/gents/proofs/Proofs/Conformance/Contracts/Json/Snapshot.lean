@@ -1015,8 +1015,6 @@ def snapshotRecoveryCasesJson : String :=
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"plugin_resource_publication_cases\":"
-      ++ Conformance.PluginResources.pluginResourcePublicationCasesJson ++ ","
     ++ "\"plugin_resource_tool_call_cases\":"
       ++ Conformance.PluginResources.pluginResourceToolCallCasesJson ++ ","
     ++ "\"plugin_resource_child_admission_cases\":"

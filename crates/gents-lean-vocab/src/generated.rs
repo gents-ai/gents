@@ -2972,7 +2972,6 @@ pub struct LeanContractSnapshot {
     pub invalid_tool_progress_cases: Vec<LeanInvalidToolProgressCase>,
     pub repeated_tool_failure_cases: Vec<serde_json::Value>,
     pub tool_timeout_cases: LeanToolTimeoutCases,
-    pub plugin_resource_publication_cases: serde_json::Value,
     pub plugin_resource_tool_call_cases: serde_json::Value,
     pub plugin_resource_child_admission_cases: serde_json::Value,
     pub plugin_resource_tool_effect_cases: serde_json::Value,

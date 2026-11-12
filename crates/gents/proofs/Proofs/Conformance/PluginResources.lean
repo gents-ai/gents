@@ -205,14 +205,34 @@ private def childAdmissionJson : Json := toJson <| [false, true].flatMap fun sel
       ("selected", toJson selected), ("route", toJson name), ("admitted", toJson admitted),
       ("expected", toJson (PluginCalls.childAdmissible selected route admitted))]
 
-private def publicationJson : Json := toJson <| [false, true].flatMap fun previous =>
-  [("local_failure", [PluginPublication.Event.localFailure]),
-   ("notification_success", [.localPublished, .notificationSucceeded]),
-   ("notification_failure", [.localPublished, .notificationFailed]),
-   ("notification_cancelled", [.localPublished, .cancelled])].map fun (outcome, events) =>
-    Json.mkObj [("previous", toJson previous), ("outcome", toJson outcome),
-      ("expected", if PluginPublication.installedNew events then toJson "new"
-        else if previous then toJson "previous" else Json.null)]
+inductive PublicationOutcome where
+  | localFailure | notificationSuccess | notificationFailure | notificationCancelled
+  deriving ToJson
+
+/-- The installation a home shows after an install attempt. -/
+inductive VisibleInstallation where
+  | new | previous
+  deriving ToJson
+
+structure PublicationInput where
+  previous : Bool
+  outcome : PublicationOutcome
+  deriving ToJson
+
+def publicationEvents : PublicationOutcome → List PluginPublication.Event
+  | .localFailure => [.localFailure]
+  | .notificationSuccess => [.localPublished, .notificationSucceeded]
+  | .notificationFailure => [.localPublished, .notificationFailed]
+  | .notificationCancelled => [.localPublished, .cancelled]
+
+@[conformance_family]
+def publication : Family PublicationInput (Option VisibleInstallation) where
+  inputs := [false, true].flatMap fun previous =>
+    [PublicationOutcome.localFailure, .notificationSuccess, .notificationFailure,
+      .notificationCancelled].map fun outcome => { previous, outcome }
+  model := fun i =>
+    if PluginPublication.installedNew (publicationEvents i.outcome) then some .new
+    else if i.previous then some .previous else none
 
 /-- `PackPlugin.host_imports`: a plugin that declares `run_script` gets the
 `gents` imports linked on every call; one that does not gets none, so a guest
@@ -447,9 +467,6 @@ theorem route_regressions :
       [ false, false, false, true, false, false, false, true
       , false, false, false, true, false, false, false, true ] := by
   native_decide
-
-def pluginResourcePublicationCasesJson : String :=
-  publicationJson.compress
 
 def pluginResourceToolCallCasesJson : String :=
   toolCallsJson.compress
