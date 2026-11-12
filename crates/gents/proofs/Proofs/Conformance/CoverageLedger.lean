@@ -2560,7 +2560,7 @@ def caseCoverage : List CoverageEntry :=
       "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through callback_recovery_cases.")
       "triggers" [Surface.runtimeInternal]
 
-  , tagged (consumerCoverage "discovery_guidance_cases" "DiscoveryGuidanceCases")
+  , tagged (consumerCoverage "family" "contracts_discovery_guidance_presented")
       "prompt-assembly" [Surface.agentFacing]
   ]
 

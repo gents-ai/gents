@@ -4,6 +4,7 @@ import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Session.Compaction.Executable
 import Proofs.Session.PromptAssembly.ClaudeWire
 import Proofs.Session.PromptAssembly.ResponsesStorage
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -679,11 +680,13 @@ def providerToolIdentityCasesJson : String :=
     ",\"input\":" ++ jsonArray (row.input.map providerToolIdentityJson) ++
     ",\"expected\":" ++ jsonArray (row.expected.map providerToolIdentityJson) ++ "}")
 
-def discoveryGuidanceCasesJson : String :=
-  jsonArray (discoveryGuidanceCases.map fun row =>
-    "{\"name\":" ++ jsonString row.name ++
-    ",\"enabled\":" ++ toString row.enabled ++
-    ",\"presented\":" ++ jsonArray (row.presented.map jsonString) ++
-    ",\"expected\":" ++ toString row.expected ++ "}")
+deriving instance Lean.ToJson for DiscoveryGuidanceCase
+
+/-- Whether the prompt preamble carries the tool-discovery workflow for an
+enablement and the tools actually presented: production `build_preamble`. -/
+@[conformance_family]
+def discoveryGuidancePresented : Family DiscoveryGuidanceCase Bool where
+  inputs := discoveryGuidanceCases
+  model := DiscoveryGuidanceCase.expected
 
 end Conformance.Contracts

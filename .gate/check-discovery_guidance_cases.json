@@ -1,0 +1,10 @@
+{
+ "ok": true,
+ "problems": [],
+ "per_key": {
+  "discovery_guidance_cases": []
+ },
+ "notes": [
+  "contracts_discovery_guidance_presented: consumer crates/gents/src/turn/prompt/tests.rs"
+ ]
+}
