@@ -220,19 +220,10 @@ pub(crate) fn refusal(
     package: &str,
     error: gents_protocol::operations::pack::PackOperationError,
 ) -> anyhow::Error {
-    use gents_protocol::operations::NextCall;
     if error.passthrough().is_some() {
         return anyhow::Error::new(error);
     }
-    let next = match error.recovery(operation) {
-        NextCall::Preview { resource, .. } => format!("gents config {resource} show {package}"),
-        NextCall::List { resource } => format!("gents config {resource} list"),
-        NextCall::Verb { resource, verb } => format!("gents config {resource} {verb}"),
-        NextCall::VerbHelp { resource, verb } => format!("gents config {resource} {verb} --help"),
-        NextCall::ResourceHelp { resource } | NextCall::Inspect { resource } => {
-            format!("gents config {resource} --help")
-        }
-    };
+    let next = crate::next_call::command(error.recovery(operation), Some(package));
     anyhow::anyhow!("{error}. Next: {next}")
 }
 

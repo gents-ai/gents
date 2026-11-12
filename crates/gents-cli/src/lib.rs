@@ -31,6 +31,7 @@ mod config_writes;
 mod desired_state;
 mod graphql_access;
 mod interactive_backend;
+mod next_call;
 mod operation_failure;
 pub mod packs;
 mod request_helpers;

@@ -22,26 +22,7 @@ impl InferenceFailure {
 
 impl std::fmt::Display for InferenceFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let next = match self.next {
-            NextCall::VerbHelp {
-                resource,
-                verb: "update" | "create",
-            } => format!("gents config {resource} set --help"),
-            NextCall::VerbHelp { resource, verb } => {
-                format!("gents config {resource} {verb} --help")
-            }
-            NextCall::ResourceHelp { resource } => format!("gents config {resource} --help"),
-            NextCall::Inspect { resource } => format!("gents config {resource} show <ID>"),
-            NextCall::List { resource } => format!("gents config {resource} list"),
-            NextCall::Verb {
-                resource: "backend",
-                verb: "accounts",
-            } => "gents accounts list".to_owned(),
-            NextCall::Verb { resource, verb } => format!("gents config {resource} {verb}"),
-            NextCall::Preview { resource, verb } => {
-                format!("gents config {resource} {verb} --preview")
-            }
-        };
+        let next = crate::next_call::command(self.next, None);
         write!(formatter, "{}\nNext: {next}", ErrorChain(&self.error))
     }
 }

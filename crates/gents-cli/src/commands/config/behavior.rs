@@ -125,23 +125,7 @@ impl AgentFailure {
 
 impl std::fmt::Display for AgentFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // An edit is `config agent set`; the operations layer names it `update`.
-        let next = match self.next {
-            NextCall::VerbHelp {
-                resource: "agent",
-                verb: "update",
-            } => "gents config agent set --help".to_owned(),
-            NextCall::VerbHelp { resource, verb } => {
-                format!("gents config {resource} {verb} --help")
-            }
-            NextCall::ResourceHelp { resource } => format!("gents config {resource} --help"),
-            NextCall::Inspect { resource } => format!("gents config {resource} show <AGENT_DID>"),
-            NextCall::List { resource } => format!("gents config {resource} list"),
-            NextCall::Preview { resource, verb } => {
-                format!("gents config {resource} {verb} --preview")
-            }
-            NextCall::Verb { resource, verb } => format!("gents config {resource} {verb}"),
-        };
+        let next = crate::next_call::command(self.next, None);
         write!(formatter, "{}\nNext: {next}", self.error)?;
         if matches!(self.error, AgentOperationError::CatalogNotHeld) {
             write!(
