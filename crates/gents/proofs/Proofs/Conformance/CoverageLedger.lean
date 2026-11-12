@@ -1542,8 +1542,8 @@ def caseCoverage : List CoverageEntry :=
       "SessionCommandNativeDiscovery")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_input_edit_native_claim_cases"
-      "SessionInputEditNativeClaim")
+      "family"
+      "session_input_edit_claim")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_private_journal_policy"

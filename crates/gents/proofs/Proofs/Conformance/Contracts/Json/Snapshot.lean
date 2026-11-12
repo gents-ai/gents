@@ -96,6 +96,7 @@ import Proofs.Store.Identity.PackPlacementReaders
 import Proofs.Store.Identity.AgentTargetAccess
 import Proofs.Automation.Triggers.NativeRoute
 import Proofs.Session.Identity.SessionInputEdit
+import Proofs.Conformance.Identity.SessionInputEdit
 import Proofs.Automation.EventDelivery.WatcherConformance
 import Proofs.Conformance.ClientInstallation
 import Proofs.Conformance.RuntimeServiceReplacement
@@ -713,7 +714,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
     ++ "\"session_input_edit_native_discovery_cases\":" ++ Identity.SessionInputEdit.discoveryCasesJson ++ ","
-    ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
     ++ "\"identity_private_journal_policy\":"
       ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
     ++ "\"client_optimistic_send_cases\":"

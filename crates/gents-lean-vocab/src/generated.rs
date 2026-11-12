@@ -3010,7 +3010,6 @@ pub struct LeanContractSnapshot {
     pub session_input_edit_native_discovery_cases: Vec<
         LeanSessionInputEditNativeDiscoveryCase,
     >,
-    pub session_input_edit_native_claim_cases: Vec<serde_json::Value>,
     pub client_optimistic_send_cases: serde_json::Value,
     pub identity_client_agent_recovery_cases: Vec<LeanIdentityClientAgentRecoveryCase>,
     pub client_publication_protected_collection: String,
