@@ -134,43 +134,41 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
 async fn generated_fresh_startup_preserves_enrollment_authority() {
     use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
 
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let case = snapshot
-        .enrollment_startup_cases
-        .iter()
-        .find(|case| case.name == "fresh_startup")
-        .unwrap();
-    let (temp, state) = orchestration_state();
-    let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(temp.path().join("client")),
-            ClientCoreOptions::local_only(),
-        )
-        .await
-        .unwrap(),
-    );
-    let access = gents_store::config_client::ConfigAccess::local_as(
-        core.node_arc(),
-        ::identity::Did::new(core.node_identity().did()).unwrap(),
-    );
-    let query = "{ NetworkEnrollmentRequest { _docID } NetworkEnrollmentDecision { _docID } NetworkAuthorizationRevision { _docID } }";
-    let before = access.execute(query).await.unwrap();
-    for name in [
-        "NetworkEnrollmentRequest",
-        "NetworkEnrollmentDecision",
-        "NetworkAuthorizationRevision",
-    ] {
-        assert!(
-            before["data"][name].as_array().unwrap().is_empty(),
-            "{before}"
+    for case in gents_lean_vocab::families::enrollment_pending_requests_startup::cases() {
+        let (temp, state) = orchestration_state();
+        let core = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                DesktopPaths::from_root(temp.path().join("client")),
+                ClientCoreOptions::local_only(),
+            )
+            .await
+            .unwrap(),
         );
+        let access = gents_store::config_client::ConfigAccess::local_as(
+            core.node_arc(),
+            ::identity::Did::new(core.node_identity().did()).unwrap(),
+        );
+        let query = "{ NetworkEnrollmentRequest { _docID } NetworkEnrollmentDecision { _docID } NetworkAuthorizationRevision { _docID } }";
+        let before = access.execute(query).await.unwrap();
+        for name in [
+            "NetworkEnrollmentRequest",
+            "NetworkEnrollmentDecision",
+            "NetworkAuthorizationRevision",
+        ] {
+            assert!(
+                before["data"][name].as_array().unwrap().is_empty(),
+                "{before}"
+            );
+        }
+        start_running_managed_pairing(&state, Arc::clone(&core)).await;
+        let after = access.execute(query).await.unwrap();
+        case.check(
+            gents_lean_vocab::families::enrollment_pending_requests_startup::StartupOutput {
+                authority_unchanged: before["data"] == after["data"],
+            },
+        );
+        drain_managed_runtime_pairing(&state).await;
+        core.shutdown().await.unwrap();
+        drop(temp);
     }
-    start_running_managed_pairing(&state, Arc::clone(&core)).await;
-    let after = access.execute(query).await.unwrap();
-    assert_eq!(
-        before["data"] == after["data"],
-        case.expected_authority_unchanged,
-    );
-    drain_managed_runtime_pairing(&state).await;
-    core.shutdown().await.unwrap();
 }

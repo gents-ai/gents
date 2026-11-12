@@ -3132,7 +3132,6 @@ pub struct LeanContractSnapshot {
     pub client_chat_readiness_causes: Vec<LeanClientChatReadinessCausesItem>,
     pub client_sync_health_cases: Vec<LeanClientSyncHealthCase>,
     pub enrollment_route_readiness_cases: Vec<LeanEnrollmentRouteReadinessCase>,
-    pub enrollment_startup_cases: Vec<LeanEnrollmentStartupCase>,
     pub enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub enrollment_auto_renewal_cases: Vec<LeanEnrollmentAutoRenewalCase>,
@@ -3861,13 +3860,6 @@ pub struct LeanEnrollmentRouteReadinessCase {
     pub operator_endpoint: bool,
     pub route_applied: bool,
     pub sequence_fresh: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentStartupCase {
-    pub expected_authority_unchanged: bool,
-    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
