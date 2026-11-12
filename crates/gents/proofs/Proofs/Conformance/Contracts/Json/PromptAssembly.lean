@@ -488,46 +488,56 @@ def promptAssemblyClaudeThinkingStreamCaseJson
 def promptAssemblyClaudeThinkingStreamCasesJson : String :=
   jsonArray (promptAssemblyClaudeThinkingStreamCases.map promptAssemblyClaudeThinkingStreamCaseJson)
 
-private def responsesStorageFamilyJson :
-    PromptAssembly.ResponsesStorage.Family → String
+@[conformance_vocabulary]
+def responsesStorageFamilyName : PromptAssembly.ResponsesStorage.Family → String
   | .openAiCompatible => "OpenAiCompatible"
   | .xaiGrokOAuth => "XaiGrokOAuth"
   | .chatGptCodex => "ChatGptCodex"
   | .openRouter => "OpenRouter"
 
-private def responsesStorageWireJson :
-    PromptAssembly.ResponsesStorage.Wire → String
-  | .responses => "responses"
-  | .chatCompletions => "chat_completions"
+deriving instance Lean.ToJson for PromptAssembly.ResponsesStorage.Family,
+  PromptAssembly.ResponsesStorage.Wire
 
-def promptAssemblyResponsesStorageCaseJson
-    (witness : PromptAssembly.ResponsesStorage.Case) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"family\":" ++ jsonString (responsesStorageFamilyJson witness.family) ++
-    ",\"wire\":" ++ jsonString (responsesStorageWireJson witness.wire) ++
-    ",\"endpoint\":" ++ jsonString witness.endpoint ++
-    ",\"store\":" ++ (match witness.expected.store with
-      | none => "null"
-      | some value => boolString value) ++
-    ",\"encrypted_include\":" ++ boolString
-      (witness.expected.includes.contains
-        PromptAssembly.ResponsesStorage.encryptedReasoningInclude) ++ "}"
+structure ResponsesStorageInput where
+  name : String
+  family : PromptAssembly.ResponsesStorage.Family
+  wire : PromptAssembly.ResponsesStorage.Wire
+  endpoint : String
+  deriving Lean.ToJson
 
-def promptAssemblyResponsesStorageCasesJson : String :=
-  jsonArray (PromptAssembly.ResponsesStorage.cases.map
-    promptAssemblyResponsesStorageCaseJson)
+structure ResponsesStorageOutput where
+  store : Option Bool
+  encryptedInclude : Bool
+  deriving Lean.ToJson
 
-def promptAssemblyResponsesEffortCaseJson
-    (witness : PromptAssembly.ResponsesStorage.EffortCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"endpoint\":" ++ jsonString witness.endpoint ++
-    ",\"advertised\":" ++ jsonOptionalStringArray witness.advertised ++
-    ",\"requested\":" ++ jsonOptionalString witness.requested ++
-    ",\"expected\":" ++ jsonOptionalString witness.expected ++ "}"
+/-- Whether the projected Responses body asks not to be stored and requests
+encrypted reasoning: production `loop_config` and its provider body projection. -/
+@[conformance_family]
+def promptAssemblyResponsesStorage : Family ResponsesStorageInput ResponsesStorageOutput where
+  inputs := PromptAssembly.ResponsesStorage.cases.map fun c =>
+    { name := c.name, family := c.family, wire := c.wire, endpoint := c.endpoint }
+  model := fun i =>
+    let storage := PromptAssembly.ResponsesStorage.storage i.family i.wire i.endpoint
+    { store := storage.store
+      encryptedInclude :=
+        storage.includes.contains PromptAssembly.ResponsesStorage.encryptedReasoningInclude }
 
-def promptAssemblyResponsesEffortCasesJson : String :=
-  jsonArray (PromptAssembly.ResponsesStorage.effortCases.map
-    promptAssemblyResponsesEffortCaseJson)
+structure ResponsesEffortInput where
+  name : String
+  endpoint : String
+  advertised : Option (List String)
+  requested : Option String
+  deriving Lean.ToJson
+
+/-- The reasoning effort the projected Responses body sends: production
+`loop_config` and its provider body projection. -/
+@[conformance_family]
+def promptAssemblyResponsesEffort : Family ResponsesEffortInput (Option String) where
+  inputs := PromptAssembly.ResponsesStorage.effortCases.map fun c =>
+    { name := c.name, endpoint := c.endpoint, advertised := c.advertised
+      requested := c.requested }
+  model := fun i =>
+    PromptAssembly.ResponsesStorage.sentEffort i.endpoint i.advertised i.requested
 
 private def claudeReplayInputBlockJson :
     CanonicalOutput.MessageBlock (List UInt8) → String

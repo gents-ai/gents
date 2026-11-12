@@ -249,12 +249,9 @@ fn openrouter_additional_params_require_parameters() {
 
 #[test]
 fn generated_responses_storage_cases_drive_loop_config() {
-    use gents_lean_vocab::lean_prompt_assembly_responses_storage_cases;
+    use gents_lean_vocab::families::contracts_prompt_assembly_responses_storage as storage;
 
-    let cases = lean_prompt_assembly_responses_storage_cases();
-    assert!(!cases.is_empty());
-    let mut mismatches = Vec::new();
-    for case in cases {
+    storage::replay::<String, String>(|case| {
         let mut agent = agent_with_retry(Default::default());
         agent.backend_provider_kind =
             BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
@@ -293,26 +290,19 @@ fn generated_responses_storage_cases_drive_loop_config() {
                     item.as_str() == Some(gents_loop::provider_patches::ENCRYPTED_REASONING_INCLUDE)
                 })
             });
-        if (store, encrypted_include) != (case.store, case.encrypted_include) {
-            mismatches.push(format!(
-                "{}: store {store:?} include {encrypted_include}",
-                case.name
-            ));
+        storage::ResponsesStorageOutput {
+            store,
+            encrypted_include,
         }
-    }
-    assert!(mismatches.is_empty(), "{mismatches:#?}");
+    });
 }
 
 #[test]
 fn generated_responses_effort_cases_drive_loop_config() {
     use gents_documents::inference_defaults::ReasoningEffort;
-    use gents_lean_vocab::lean_prompt_assembly_responses_effort_cases;
 
     let parse = |value: &String| ReasoningEffort::parse(value).expect("Lean effort");
-    let cases = lean_prompt_assembly_responses_effort_cases();
-    assert!(!cases.is_empty());
-    let mut mismatches = Vec::new();
-    for case in cases {
+    gents_lean_vocab::families::contracts_prompt_assembly_responses_effort::replay(|case| {
         let mut agent = agent_with_retry(Default::default());
         agent.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
         agent.openai_wire_api = gents_loop::openai_wire::OpenAiWireApi::Responses;
@@ -344,14 +334,10 @@ fn generated_responses_effort_cases_drive_loop_config() {
             .provider_input_counter
             .project_body(&request)
             .expect("project body");
-        let sent = body
-            .pointer("/reasoning/effort")
-            .and_then(serde_json::Value::as_str);
-        if sent != case.expected.as_deref() {
-            mismatches.push(format!("{}: effort {sent:?}", case.name));
-        }
-    }
-    assert!(mismatches.is_empty(), "{mismatches:#?}");
+        body.pointer("/reasoning/effort")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    });
 }
 
 #[test]

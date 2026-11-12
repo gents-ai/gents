@@ -1151,10 +1151,6 @@ def snapshotFileCasesJson : String :=
     ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","
     ++ "\"prompt_assembly_service_tier_cases\":" ++
       promptAssemblyServiceTierCasesJson ++ ","
-    ++ "\"prompt_assembly_responses_storage_cases\":" ++
-      promptAssemblyResponsesStorageCasesJson ++ ","
-    ++ "\"prompt_assembly_responses_effort_cases\":" ++
-      promptAssemblyResponsesEffortCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
     ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"

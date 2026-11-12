@@ -497,14 +497,6 @@ pub fn lean_prompt_assembly_replay_shape_cases() -> &'static [LeanPromptAssembly
     &lean_contract_snapshot().prompt_assembly_replay_shape_cases
 }
 
-pub fn lean_prompt_assembly_responses_effort_cases() -> &'static [LeanPromptAssemblyResponsesEffortCase] {
-    &lean_contract_snapshot().prompt_assembly_responses_effort_cases
-}
-
-pub fn lean_prompt_assembly_responses_storage_cases() -> &'static [LeanPromptAssemblyResponsesStorageCase] {
-    &lean_contract_snapshot().prompt_assembly_responses_storage_cases
-}
-
 pub fn lean_prompt_assembly_retention_cases() -> &'static [LeanPromptAssemblyRetentionCase] {
     &lean_contract_snapshot().prompt_assembly_retention_cases
 }
@@ -3338,12 +3330,6 @@ pub struct LeanContractSnapshot {
         LeanPromptAssemblyClaudeThinkingStreamCase,
     >,
     pub prompt_assembly_service_tier_cases: Vec<LeanPromptAssemblyServiceTierCase>,
-    pub prompt_assembly_responses_storage_cases: Vec<
-        LeanPromptAssemblyResponsesStorageCase,
-    >,
-    pub prompt_assembly_responses_effort_cases: Vec<
-        LeanPromptAssemblyResponsesEffortCase,
-    >,
     pub prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
     pub prompt_assembly_claude_checkpoint_cases: Vec<
         LeanPromptAssemblyClaudeCheckpointCase,
@@ -9563,29 +9549,6 @@ pub struct LeanPromptAssemblyReplayShapeCase {
     pub retained_indices: Vec<usize>,
     pub outcome: String,
     pub shaped: Option<LeanClaudeTaggedReplayRow>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyResponsesEffortCase {
-    pub name: String,
-    pub endpoint: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub advertised: Option<Vec<String>>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub requested: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub expected: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyResponsesStorageCase {
-    pub name: String,
-    pub family: String,
-    pub wire: String,
-    pub endpoint: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub store: Option<bool>,
-    pub encrypted_include: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
