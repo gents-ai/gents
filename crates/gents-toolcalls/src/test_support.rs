@@ -408,4 +408,5 @@ pub fn caller_agent_did(
 
 pub mod stream_processor;
 
+pub mod queue;
 pub mod workspace_rejection;

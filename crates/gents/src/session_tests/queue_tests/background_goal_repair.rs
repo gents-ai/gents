@@ -1,30 +1,4 @@
 use super::*;
-use gents_protocol::row::AgentRequest;
-use gents_session::request::lifecycle::test_support::{test_db, TestDb};
-use gents_store::graphql::escape_graphql_string;
-
-async fn fixture(name: &str) -> (TestDb, CanonicalBackgroundFixture) {
-    let db = test_db(name).await;
-    let fixture = canonical_background_fixture(&db, name).await;
-    (db, fixture)
-}
-
-async fn message_ids(db: &TestDb, key: &str) -> Vec<String> {
-    let key = escape_graphql_string(key);
-    let response = db
-        .agent_access
-        .execute(&format!(
-            r#"{{ AgentMessage(filter: {{message_key: {{_eq: "{key}"}}}}) {{ _docID }} }}"#
-        ))
-        .await
-        .unwrap();
-    response["data"]["AgentMessage"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|row| row["_docID"].as_str().unwrap().to_owned())
-        .collect()
-}
 
 #[tokio::test]
 async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
@@ -44,7 +18,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             .prepare_notification("terminal output")
             .await
             .unwrap();
-        let queue = hints(&parent);
+        let queue = gents_toolcalls::test_support::queue::background_goal_repair::hints(&parent);
         let gate = gents_session::request::lifecycle::queue::background_completion_gate(
             &db.node,
             &parent.session_id,
@@ -122,56 +96,4 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
     }
 }
 
-#[tokio::test]
-async fn canonical_publication_replay_preserves_one_input_and_one_wake() {
-    let (db, mut fixture) = fixture("ordinary-canonical-publication").await;
-    let parent = fixture.parent.clone();
-    let prepared = fixture
-        .prepare_notification("terminal output")
-        .await
-        .unwrap();
-    let mut first_wake = None;
-    let mut first_message = None;
-    for first in [true, false] {
-        let result = fixture
-            .publish_prepared_notification(
-                "terminal output",
-                "canonical-ordinary-notification",
-                "review notifications",
-                hints(&parent),
-                None,
-                &prepared,
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.created_request, first);
-        let wake = result
-            .request
-            .expect("ordinary publication returns wake")
-            .doc_id;
-        if first {
-            first_wake = Some(wake.clone());
-        }
-        assert_eq!(Some(&wake), first_wake.as_ref());
-        let messages = message_ids(&db, "canonical-ordinary-notification").await;
-        assert_eq!(messages.len(), 1);
-        if first {
-            first_message = messages.first().cloned();
-        }
-        assert_eq!(messages.first(), first_message.as_ref());
-        assert_eq!(queue_rows(&db, &parent.session_id).await.len(), 2);
-    }
-}
-
-fn hints(parent: &AgentRequest) -> RequestQueue {
-    RequestQueue {
-        delivery: Default::default(),
-        position: None,
-        source: QueueSource::BackgroundCompletion,
-        policy: QueuePolicy::Coalesce,
-        key: Some(format!("background_completion:{}", parent.session_id)),
-        queued_after_request_id: Some(parent.request_id.clone()),
-        interrupted_request_id: None,
-        background_completion_wake_version: None,
-    }
-}
+use gents_toolcalls::test_support::queue::background_goal_repair::*;
