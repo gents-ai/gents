@@ -4,11 +4,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
 use gents::support::live_inference::{live_target, wait_for_request_terminal, wait_for_rows};
-use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_protocol::row::{
     decode_node_readiness_snapshot, NodeReadinessProcessState, NodeReadinessRow,
 };
-use gents_store::{collection::Collection, config_client::ConfigAccess};
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -59,6 +58,43 @@ impl LiveCli {
         .await??;
         let node = node_did_from_init(&init)?;
         let agent = crate::support::agent_did_from_init(&init)?;
+        let backend_id = init
+            .pointer("/init/backend_id")
+            .and_then(Value::as_str)
+            .context("backend id")?;
+        let mut backend = target.backend(&node);
+        backend.backend_id = backend_id.into();
+        backend.max_concurrent = Some(4);
+        let mut profile = target.profile(&node);
+        profile.profile_id = inference_profile_id_from_init(&init)?;
+        profile.backend_id = backend_id.into();
+        let sampling = target.sampling(&node);
+        let target_home = home.clone();
+        let root = directory.path().join("live-target");
+        tokio::task::spawn_blocking(move || {
+            let state = target_home.join(".gents");
+            let state = state.to_str().context("runtime home is not UTF-8")?;
+            let root_arg = root.to_str().context("target configuration is not UTF-8")?;
+            crate::support::run_cli_text(
+                &target_home,
+                &["config", "export", "--home", state, "--root", root_arg],
+            )?;
+            let path = root.join("pack_config.json");
+            let mut config = crate::support::read_json_file(&path)?;
+            config["inference_backends"] = serde_json::to_value([backend])?;
+            config["inference_profiles"] = serde_json::to_value([profile])?;
+            if let Some(sampling) = sampling {
+                config["inference_sampling"] = serde_json::to_value([sampling])?;
+            }
+            crate::support::write_json_file(&path, &config)?;
+            crate::support::run_cli_json(
+                &target_home,
+                &["config", "apply", "--home", state, "--root", root_arg],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("configure the live target before starting its runtime")??;
         let mut child = Command::new(cli_bin())
             .env("HOME", &home)
             .env("RUST_LOG", "error")
@@ -117,26 +153,6 @@ impl LiveCli {
             },
         )
         .await;
-        let backend_id = init
-            .pointer("/init/backend_id")
-            .and_then(Value::as_str)
-            .context("backend id")?;
-        let mut backend = target.backend(&node);
-        backend.backend_id = backend_id.into();
-        backend.max_concurrent = Some(4);
-        let mut profile = target.profile(&node);
-        profile.profile_id = inference_profile_id_from_init(&init)?;
-        profile.backend_id = backend_id.into();
-        let mut documents = vec![
-            (Collection::InferenceBackend, serde_json::to_value(backend)?),
-            (Collection::InferenceProfile, serde_json::to_value(profile)?),
-        ];
-        if let Some(sampling) = target.sampling(&node) {
-            documents.push((
-                Collection::InferenceSampling,
-                serde_json::to_value(sampling)?,
-            ));
-        }
         let live = Self {
             home,
             graphql,
@@ -147,35 +163,7 @@ impl LiveCli {
             drain,
             directory,
         };
-        live.apply(documents).await?;
         Ok(live)
-    }
-
-    pub(crate) async fn apply(&self, documents: Vec<(Collection, Value)>) -> Result<()> {
-        let plan = DesiredStateApplyPlan::new(
-            documents
-                .into_iter()
-                .map(|(collection, value)| DesiredStateApplyDocument {
-                    collection,
-                    add: value.clone(),
-                    update: value,
-                })
-                .collect(),
-        )?;
-        self.access
-            .transact_write("test.live_cli.configuration", |txn| {
-                let plan = &plan;
-                Box::pin(async move {
-                    gents_documents::apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &gents_inference::resolved::ProviderProfilePolicy,
-                    )
-                    .await
-                    .map(|_| ())
-                })
-            })
-            .await
     }
 
     pub(crate) async fn output(&self, args: &[&str]) -> Result<Output> {
