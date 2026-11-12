@@ -1219,7 +1219,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     wait_for_runtime_quiescence(&graphql, &node, 2, Duration::from_secs(6)).await?;
 
     let session = Uuid::new_v4().to_string();
-    let submit = |content: &str, wait: bool| {
+    let submit = |content: &str, wait: bool, steer: bool| {
         let mut args = vec![
             "utils",
             "debug",
@@ -1241,6 +1241,9 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         } else {
             &["--no-wait"][..]
         });
+        if steer {
+            args.push("--steer");
+        }
         args.into_iter().map(str::to_owned).collect::<Vec<_>>()
     };
     let spawn = |args: Vec<String>| {
@@ -1328,6 +1331,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     let mut first = ChildGuard(Some(spawn(submit(
         "Start now: call bash_unrestricted as instructed and wait for its result before answering.",
         true,
+        false,
     ))?));
     let query = format!(
         r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash_unrestricted"}}}}) {{lifecycle_state}} }}"#,
@@ -1359,17 +1363,17 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         .context("active doc id")?
         .to_owned();
 
-    let steer_submit = run(submit(steer, false)).await?;
+    let steer_submit = run(submit(steer, false, true)).await?;
     let steer_request_id = steer_submit["request_id"]
         .as_str()
         .context("steer submit output lacks request_id")?
         .to_owned();
     wait_for_pending(vec![steer]).await?;
 
-    let mut waiter = ChildGuard(Some(spawn(submit(alpha, true))?));
+    let mut waiter = ChildGuard(Some(spawn(submit(alpha, true, true))?));
     wait_for_pending(vec![steer, alpha]).await?;
-    run(submit(beta, false)).await?;
-    run(submit(gamma, false)).await?;
+    run(submit(beta, false, true)).await?;
+    run(submit(gamma, false, true)).await?;
     let queued = wait_for_pending(vec![steer, alpha, beta, gamma]).await?;
     assert!(
         entries(&queued).all(|entry| entry["editable"] == true),
