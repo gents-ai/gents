@@ -3174,7 +3174,6 @@ pub struct LeanContractSnapshot {
     pub title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub frontend_client_shell_case_count: usize,
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
-    pub desktop_client_shell_case_count: usize,
     pub desktop_client_shell_cases: Vec<LeanClientShellCase>,
     pub client_session_turn_cases: Vec<LeanSessionTurnCase>,
     pub request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,

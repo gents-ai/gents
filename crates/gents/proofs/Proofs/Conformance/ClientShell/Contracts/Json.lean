@@ -87,9 +87,6 @@ def desktopClientShellCases : List ClientShellContractCase :=
 def desktopClientShellCasesJson : String :=
   jsonArray (desktopClientShellCases.map ClientShellContractCase.toJson)
 
-def desktopClientShellCaseCount : Nat :=
-  desktopClientShellCases.length
-
 def sessionTurnCasesJson : String := SessionTurnCases.casesJson
 
 def sessionTurnCaseCount : Nat := SessionTurnCases.caseCount

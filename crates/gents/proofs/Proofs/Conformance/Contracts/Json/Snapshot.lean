@@ -673,8 +673,6 @@ def snapshotSessionCasesJson : String :=
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
-    ++ "\"desktop_client_shell_case_count\":"
-      ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"client_telemetry_cases\":" ++ Conformance.ClientTelemetry.casesJson ++ ","
