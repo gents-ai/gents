@@ -1750,8 +1750,8 @@ def caseCoverage : List CoverageEntry :=
       "ToolTimeoutCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "workspace_path_alias_cases"
-      "WorkspacePathAliasCases")
+      "family"
+      "workspace_path_alias_admission")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_claimed_publication_cases"
