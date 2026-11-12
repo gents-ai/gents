@@ -48,7 +48,6 @@ async fn verified_client_lifecycle(
 #[derive(Deserialize)]
 struct PublicationContracts {
     goal_claimed_publication_cases: Vec<PublicationCase>,
-    goal_claimed_identity_cases: Vec<IdentityCase>,
     goal_claimed_target_cases: Vec<serde_json::Value>,
 }
 
@@ -186,16 +185,6 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
     }
 }
 
-#[derive(Deserialize)]
-struct IdentityCase {
-    selected: String,
-    signer: String,
-    actor: String,
-    parent: String,
-    allowed: bool,
-    candidate_allowed: bool,
-}
-
 #[tokio::test]
 async fn generated_claimed_identity_cases_drive_real_transactions() {
     let contracts: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
@@ -205,7 +194,7 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
         .find(|case| case.name == "claimed_active_publishes_without_reclaim")
         .unwrap()
         .before;
-    for case in &contracts.goal_claimed_identity_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().goal_claimed_identity_cases {
         let fixture = Fixture::new(before).await;
         let agent = fixture.parent.agent_did.as_str();
         let node = fixture.identity.did();
