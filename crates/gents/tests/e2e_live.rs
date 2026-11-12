@@ -77,3 +77,6 @@ mod plugin_admission_live;
 mod process_lifecycle_live;
 #[path = "e2e_live/session_limit_live.rs"]
 mod session_limit_live;
+
+#[path = "e2e_live/tool_recovery_live.rs"]
+mod tool_recovery_live;
