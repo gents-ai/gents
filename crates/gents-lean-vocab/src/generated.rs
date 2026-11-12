@@ -2974,7 +2974,6 @@ pub struct LeanContractSnapshot {
     pub plugin_job_wake_cases: Vec<LeanPluginJobWakeCase>,
     pub mailbox_notification_cases: Vec<LeanMailboxNotificationCase>,
     pub mailbox_reply_cases: Vec<LeanMailboxReplyCase>,
-    pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
@@ -7337,59 +7336,6 @@ pub struct LeanMailboxNotificationCase {
     pub open_exists: bool,
     pub outcome: String,
     pub same_content: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxQuestionCase {
-    pub accepted: bool,
-    pub dismissible: bool,
-    pub free_text: bool,
-    pub option_count: u64,
-    pub optional: bool,
-    pub presentations: Vec<LeanMailboxQuestionCasePresentationsItem>,
-    pub receipt_versions: Vec<LeanMailboxQuestionCaseReceiptVersionsItem>,
-    pub runtimes: Vec<LeanMailboxQuestionCaseRuntimesItem>,
-    pub selected: bool,
-    pub skip: bool,
-    pub text: bool,
-    pub valid: bool,
-    pub version: u64,
-    pub waits: Vec<LeanMailboxQuestionCaseWaitsItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxQuestionCasePresentationsItem {
-    pub has_prompt: bool,
-    pub multi_select: bool,
-    pub nonempty_prompt: bool,
-    pub order: Option<Vec<u64>>,
-    pub valid: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxQuestionCaseReceiptVersionsItem {
-    pub current: bool,
-    pub version: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxQuestionCaseRuntimesItem {
-    pub reply_version: Option<u64>,
-    pub supported: bool,
-    pub version: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxQuestionCaseWaitsItem {
-    pub completed: bool,
-    pub open: bool,
-    pub same_parent: bool,
-    pub waiting: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

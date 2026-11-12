@@ -1013,8 +1013,28 @@ def caseCoverage : List CoverageEntry :=
       "Decision cases cover reply matching and terminal-state eligibility. Signed-row loading, atomic request/item claim, and concurrent dismissal require transaction-owner integration tests.")
       "mailbox" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "mailbox_question_cases"
-      "MailboxQuestionCases")
+      "family"
+      "mailbox_question_contracts_questions")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_waits")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_awaiting")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_presentations")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_receipt_versions")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_runtimes")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "mailbox_handoff_cases"

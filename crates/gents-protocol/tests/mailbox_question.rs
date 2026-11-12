@@ -1,6 +1,11 @@
 use gents_protocol::mailbox_question::{
     question_requires_reply_receipt, MailboxQuestion, MailboxQuestionAnswer,
 };
+use gents_lean_vocab::families::mailbox_question_contracts_presentations::PresentationOutput;
+use gents_lean_vocab::families::mailbox_question_contracts_questions::QuestionOutput;
+use gents_lean_vocab::families::mailbox_question_contracts_receipt_versions::ReceiptOutput;
+use gents_lean_vocab::families::mailbox_question_contracts_runtimes::RuntimeOutput;
+use gents_lean_vocab::families::mailbox_question_contracts_waits::WaitOutput;
 use serde_json::json;
 
 #[test]
@@ -129,64 +134,94 @@ fn signed_question_evidence_rejects_retargeting_and_changed_decisions() {
         .is_err());
 }
 
+fn question_payload(version: u64, optional: bool, option_count: u64, free_text: bool) -> String {
+    json!({
+        "version": version,
+        "prompt": "Which approach?",
+        "options": (0..option_count).map(|i| json!({
+            "id": format!("choice-{i}"), "label": format!("Choice {i}")
+        })).collect::<Vec<_>>(),
+        "optional": optional,
+        "allow_free_text": free_text,
+    })
+    .to_string()
+}
+
 #[test]
 fn question_policy_follows_the_executable_model() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_question_cases;
-    assert_eq!(cases.len(), 640);
-    for case in cases {
-        let payload = json!({
-            "version": case.version,
-            "prompt": "Which approach?",
-            "options": (0..case.option_count).map(|i| json!({
-                "id": format!("choice-{i}"), "label": format!("Choice {i}")
-            })).collect::<Vec<_>>(),
-            "optional": case.optional,
-            "allow_free_text": case.free_text,
-        })
-        .to_string();
-        assert_eq!(
-            !question_requires_reply_receipt(&payload),
-            case.dismissible,
-            "{case:?}"
-        );
+    gents_lean_vocab::families::mailbox_question_contracts_questions::replay(|case| {
+        let payload = question_payload(case.version, case.optional, case.option_count, case.free_text);
         let question = MailboxQuestion::from_payload(&payload);
-        assert_eq!(question.is_ok(), case.valid, "{case:?}");
-        assert_eq!(case.waits.len(), 8);
-        for wait in &case.waits {
-            assert_eq!(
-                question
-                    .as_ref()
-                    .is_ok_and(|question| question.awaiting_answer(
-                        wait.open,
-                        wait.same_parent,
-                        wait.completed,
-                    )),
-                wait.waiting,
-                "{case:?}: {wait:?}",
-            );
+        let valid = question.is_ok();
+        let answer = serde_json::from_value::<MailboxQuestionAnswer>(json!({
+            "skip": case.skip,
+            "option_ids": if case.selected { vec!["choice-0"] } else { vec![] },
+            "free_text": if case.text { Some("My answer") } else { None },
+        }));
+        let content = question.and_then(|question| {
+            question.reply_content("Plan", &answer.expect("supported answer encoding"))
+        });
+        QuestionOutput {
+            valid,
+            accepted: content.is_ok(),
+            dismissible: !question_requires_reply_receipt(&payload),
         }
-        for presentation in &case.presentations {
-            let mut value: serde_json::Value = serde_json::from_str(&payload).unwrap();
-            value["multi_select"] = json!(presentation.multi_select);
-            if presentation.has_prompt {
-                value["options"][0]["prompt"] = json!(if presentation.nonempty_prompt {
-                    "Review this focused change and report the result."
-                } else {
-                    " "
-                });
-            }
-            if let Some(order) = &presentation.order {
-                value["recommended_order"] = json!(order
-                    .iter()
-                    .map(|index| format!("choice-{index}"))
-                    .collect::<Vec<_>>());
-            }
-            assert_eq!(
-                MailboxQuestion::from_payload(&value.to_string()).is_ok(),
-                presentation.valid,
-                "{case:?}: {presentation:?}"
-            );
+    });
+}
+
+#[test]
+fn awaiting_answer_follows_the_executable_model() {
+    gents_lean_vocab::families::mailbox_question_contracts_waits::replay(|case| WaitOutput {
+        waiting: MailboxQuestion::from_payload(&question_payload(
+            case.policy.version,
+            case.policy.optional,
+            case.policy.option_count,
+            case.policy.free_text,
+        )).is_ok_and(
+            |question| question.awaiting_answer(case.is_open, case.same_parent, case.completed),
+        ),
+    });
+}
+
+#[test]
+fn question_presentation_follows_the_executable_model() {
+    gents_lean_vocab::families::mailbox_question_contracts_presentations::replay(|case| {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&question_payload(
+            case.policy.version,
+            case.policy.optional,
+            case.policy.option_count,
+            case.policy.free_text,
+        )).unwrap();
+        value["multi_select"] = json!(case.multi_select);
+        if case.has_prompt {
+            value["options"][0]["prompt"] = json!(if case.nonempty_prompt {
+                "Review this focused change and report the result."
+            } else {
+                " "
+            });
         }
+        if let Some(order) = &case.order {
+            value["recommended_order"] = json!(order
+                .iter()
+                .map(|index| format!("choice-{index}"))
+                .collect::<Vec<_>>());
+        }
+        PresentationOutput {
+            valid: MailboxQuestion::from_payload(&value.to_string()).is_ok(),
+        }
+    });
+}
+
+#[test]
+fn reply_receipt_versions_follow_the_executable_model() {
+    gents_lean_vocab::families::mailbox_question_contracts_receipt_versions::replay(|case| {
+        let payload = question_payload(
+            case.policy.version,
+            case.policy.optional,
+            case.policy.option_count,
+            case.policy.free_text,
+        );
         let observed_hash = gents_protocol::mailbox_question::question_source_hash(
             "Plan",
             None,
@@ -195,12 +230,12 @@ fn question_policy_follows_the_executable_model() {
         )
         .unwrap();
         let valid_answer = MailboxQuestionAnswer {
-            option_ids: if case.option_count > 0 {
+            option_ids: if case.policy.option_count > 0 {
                 vec!["choice-0".into()]
             } else {
                 Vec::new()
             },
-            free_text: (case.option_count == 0).then(|| "My answer".into()),
+            free_text: (case.policy.option_count == 0).then(|| "My answer".into()),
             question_hash: Some(observed_hash),
             ..Default::default()
         };
@@ -212,51 +247,42 @@ fn question_policy_follows_the_executable_model() {
             Some("request"),
             valid_answer.clone(),
         );
-        for version in &case.receipt_versions {
-            let current = receipt.as_ref().ok().is_some_and(|original| {
-                let mut evidence = original.clone();
-                evidence.question_version = version.version.map(|version| version as u32);
-                let content = MailboxQuestion::from_payload(&payload)
-                    .unwrap()
-                    .reply_content("Plan", &valid_answer)
-                    .unwrap();
-                evidence
-                    .validate_for(
-                        "question",
-                        "Plan",
-                        None,
-                        &payload,
-                        Some("request"),
-                        &content,
-                    )
-                    .is_ok()
-            });
-            assert_eq!(current, version.current, "{case:?}: {version:?}");
-        }
-        for runtime in &case.runtimes {
-            let input = gents_protocol::request_input::RequestInput {
-                question_reply: Some(gents_protocol::mailbox_question::MailboxQuestionReply {
-                    question_version: runtime.reply_version.map(|version| version as u32),
-                    source_doc_id: "question".into(),
-                    question_hash: "source".into(),
-                    answer: Default::default(),
-                }),
-                ..Default::default()
-            };
-            assert_eq!(
-                input.question_reply_compatible(runtime.version),
-                runtime.supported,
-                "{case:?}: {runtime:?}"
-            );
-        }
-        let answer = serde_json::from_value::<MailboxQuestionAnswer>(json!({
-            "skip": case.skip,
-            "option_ids": if case.selected { vec!["choice-0"] } else { vec![] },
-            "free_text": if case.text { Some("My answer") } else { None },
-        }));
-        let content = question.and_then(|question| {
-            question.reply_content("Plan", &answer.expect("supported answer encoding"))
+        let current = receipt.as_ref().ok().is_some_and(|original| {
+            let mut evidence = original.clone();
+            evidence.question_version = case.version.map(|version| version as u32);
+            let content = MailboxQuestion::from_payload(&payload)
+                .unwrap()
+                .reply_content("Plan", &valid_answer)
+                .unwrap();
+            evidence
+                .validate_for(
+                    "question",
+                    "Plan",
+                    None,
+                    &payload,
+                    Some("request"),
+                    &content,
+                )
+                .is_ok()
         });
-        assert_eq!(content.is_ok(), case.accepted, "{case:?}");
-    }
+        ReceiptOutput { current }
+    });
+}
+
+#[test]
+fn reply_runtime_support_follows_the_executable_model() {
+    gents_lean_vocab::families::mailbox_question_contracts_runtimes::replay(|case| {
+        let input = gents_protocol::request_input::RequestInput {
+            question_reply: Some(gents_protocol::mailbox_question::MailboxQuestionReply {
+                question_version: case.reply_version.map(|version| version as u32),
+                source_doc_id: "question".into(),
+                question_hash: "source".into(),
+                answer: Default::default(),
+            }),
+            ..Default::default()
+        };
+        RuntimeOutput {
+            supported: input.question_reply_compatible(case.version),
+        }
+    });
 }
