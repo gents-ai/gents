@@ -33,17 +33,18 @@ def captureScope : Family CaptureScopeInput Nat where
   inputs := [[], [1], [1, 4, 2], [8, 8, 3], [0, 15]].map fun persisted => { persisted }
   model := fun i => RenderedCapture.nextScope i.persisted
 
-def healthCases : List (Nat × Nat × Option Nat) :=
-  [(10, 20, none), (10, 20, some 9), (10, 20, some 10),
-   (10, 20, some 20), (10, 20, some 21)]
+structure HealthInput where
+  startedMs : Nat
+  nowMs : Nat
+  observedMs : Option Nat
+  deriving ToJson
 
-def healthCaseJson (input : Nat × Nat × Option Nat) : String :=
-  let (started, now, observed) := input
-  "{\"started_ms\":" ++ toString started ++ ",\"now_ms\":" ++ toString now ++
-    ",\"observed_ms\":" ++ (observed.map toString).getD "null" ++
-    ",\"fresh\":" ++ (if RequestBackendWake.freshHealthy started now observed then "true" else "false") ++ "}"
-
-def healthCasesJson : String := jsonArray (healthCases.map healthCaseJson)
+@[conformance_family]
+def healthyWake : Family HealthInput Bool where
+  inputs :=
+    [ ⟨10, 20, none⟩, ⟨10, 20, some 9⟩, ⟨10, 20, some 10⟩,
+      ⟨10, 20, some 20⟩, ⟨10, 20, some 21⟩ ]
+  model := fun i => RequestBackendWake.freshHealthy i.startedMs i.nowMs i.observedMs
 
 def generationCases : List (Option Nat × Option Nat) :=
   [(none, none), (none, some 1), (some 1, some 1), (some 1, some 2), (some 2, none)]

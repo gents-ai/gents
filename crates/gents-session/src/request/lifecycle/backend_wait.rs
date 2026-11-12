@@ -672,20 +672,14 @@ mod tests {
 
     #[test]
     fn healthy_wakeup_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_health_wake_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let at = |millis| Utc.timestamp_millis_opt(millis).single().unwrap();
-            assert_eq!(
-                fresh_healthy(
-                    at(case.started_ms),
-                    at(case.now_ms),
-                    case.observed_ms.map(at)
-                ),
-                case.fresh,
-                "{case:?}"
-            );
-        }
+        let at = |millis: u64| {
+            Utc.timestamp_millis_opt(i64::try_from(millis).unwrap())
+                .single()
+                .unwrap()
+        };
+        gents_lean_vocab::families::backend_wake_healthy_wake::replay(|i| {
+            fresh_healthy(at(i.started_ms), at(i.now_ms), i.observed_ms.map(at))
+        });
     }
 }
 

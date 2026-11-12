@@ -1224,14 +1224,6 @@ pub struct LeanBackendHealthCase {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBackendHealthWakeCase {
-    pub started_ms: i64,
-    pub now_ms: i64,
-    pub observed_ms: Option<i64>,
-    pub fresh: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanBackendParkedFinalizeCase {
     pub request: gents_protocol::request_lifecycle::RequestLifecycleState,
     pub outcome: gents_protocol::request_lifecycle::RequestLifecycleState,
@@ -3230,7 +3222,6 @@ pub struct LeanContractSnapshot {
     pub tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub tool_retry_cases: Vec<LeanToolRetryCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub backend_health_wake_cases: Vec<LeanBackendHealthWakeCase>,
     pub backend_generation_mark_cases: Vec<LeanBackendGenerationMarkCase>,
     pub backend_resume_admission_cases: Vec<LeanBackendResumeAdmissionCase>,
     pub backend_repark_cases: Vec<LeanBackendReparkCase>,
