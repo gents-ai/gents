@@ -120,7 +120,7 @@ async fn scheduled_live_fire_completes_and_persists_trigger_writeback() {
         r#"{{AgentRequest(filter: {{caused_by_trigger_id: {{_eq: "{TRIGGER}"}}, caused_by_trigger_kind: {{_eq: "schedule"}}}}) {{request_id agent_did content execution_origin}}}}"#
     );
     let requests = wait_for_rows(
-        &actors.fixture.access,
+        &actors.agent_access,
         "AgentRequest",
         &request_query,
         Duration::from_secs(30),
@@ -137,7 +137,7 @@ async fn scheduled_live_fire_completes_and_persists_trigger_writeback() {
     assert!(request["content"].as_str().unwrap().contains(PROMPT));
     assert_eq!(
         wait_for_request_terminal(
-            &actors.fixture.access,
+            &actors.agent_access,
             request["request_id"].as_str().unwrap(),
             Duration::from_secs(120)
         )

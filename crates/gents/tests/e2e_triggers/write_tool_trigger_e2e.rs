@@ -19,8 +19,9 @@ use crate::support::{test_db, ManagedAgentFixture};
 const DRIFT_SIG: &str = "drift:host-doc:9f2c";
 const SUMMARY: &str = "studio-1 host doc is stale vs runtime";
 const TARGET_PATHS: &str = "infra/hosts/studio-1/host.md";
+const INSTRUCTION: &str = "An event trigger delivered the fields below. Reply with one short acknowledgement and call no tools.";
 const PROMPT_TEMPLATE: &str =
-    "drift={{ doc.drift_sig }} summary={{ doc.summary }} paths={{ doc.target_paths }}";
+    "An event trigger delivered the fields below. Reply with one short acknowledgement and call no tools.\n\ndrift={{ doc.drift_sig }} summary={{ doc.summary }} paths={{ doc.target_paths }}";
 
 const ACTION_REQUEST_SDL: &str = r#"
     type ActionRequest {
@@ -203,7 +204,8 @@ fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
         Some("scheduled"),
         "trigger-driven fires persist execution_origin=scheduled: {request:?}"
     );
-    let expected = format!("]\n\ndrift={DRIFT_SIG} summary={SUMMARY} paths={TARGET_PATHS}");
+    let expected =
+        format!("]\n\n{INSTRUCTION}\n\ndrift={DRIFT_SIG} summary={SUMMARY} paths={TARGET_PATHS}");
     assert!(
         request.content.as_deref().is_some_and(|content| content
             .starts_with(&format!("[event trigger:{trigger_id} · "))

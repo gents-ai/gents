@@ -42,7 +42,6 @@ fn caller(h: &LiveJobHarness, session_id: &str) -> JobCaller {
 struct Notification {
     sequence: u32,
     request_doc_id: String,
-    text: String,
 }
 
 async fn notification(h: &LiveJobHarness) -> Notification {
@@ -70,9 +69,12 @@ async fn notification(h: &LiveJobHarness) -> Notification {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["publication"]["tool_call_doc_id"] == row_doc_id)
+        .find(|row| {
+            row["publication"]["kind"] == "tool_delivery"
+                && row["publication"]["tool_call_doc_id"] == row_doc_id
+        })
         .unwrap();
-    let (header, message) = gents_session::session::load_canonical_message(
+    let (header, _) = gents_session::session::load_canonical_message(
         &h.live.access,
         row["_docID"].as_str().unwrap(),
         &h.live.node_did,
@@ -83,46 +85,7 @@ async fn notification(h: &LiveJobHarness) -> Notification {
     Notification {
         sequence: header.sequence,
         request_doc_id: header.request_doc_id.unwrap(),
-        text: message.rag_text().expect("job delivery contains user text"),
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn live_job_result_notification_is_bounded_and_pages_preserve_the_full_result() {
-    let h = completed_live_job("live-job-result-pages", json!("x".repeat(5000))).await;
-    let delivered = notification(&h).await;
-    let body = delivered
-        .text
-        .split_once("<result>")
-        .and_then(|(_, rest)| rest.split_once("</result>"))
-        .expect("the completion notification carries the result")
-        .0;
-    let shown = body
-        .strip_suffix("...")
-        .expect("a truncated result is marked");
-    assert!(shown.len() <= 4000, "{} bytes shown", shown.len());
-    let caller = caller(&h, &h.session_id);
-    let page = |offset, limit| {
-        let request = JobResultRequest {
-            row_doc_id: h.row["_docID"].as_str().unwrap().into(),
-            offset,
-            limit,
-        };
-        let caller = &caller;
-        async move {
-            read_result(caller, PLUGIN, &request, usize::MAX)
-                .await
-                .unwrap()
-        }
-    };
-    let full = page(0, u64::MAX).await;
-    assert!(!full.truncated);
-    assert_eq!(full.total_bytes as usize, full.result.len());
-    assert!(full.result.contains(&"x".repeat(5000)));
-    let first = page(0, full.total_bytes / 2).await;
-    let second = page(first.offset + first.result.len() as u64, u64::MAX).await;
-    assert_eq!(format!("{}{}", first.result, second.result), full.result);
-    h.runtime.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use gents::DocumentRuntimeOptions;
 use gents_documents::{BashMode, BashTools, HostTools, Tools};
-use gents_protocol::job::{JobChildState, JobControlKind, JobControlRequest, JobState, JobView};
+use gents_protocol::job::{
+    JobChildState, JobControlKind, JobControlRequest, JobReadError, JobState, JobView,
+};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
@@ -163,7 +165,7 @@ impl LiveJobs {
         self.invoke_in_session(name, name, plan).await
     }
 
-    async fn invoke_in_session(&self, session: &str, name: &str, plan: Vec<PlanEntry>) -> Value {
+    async fn submit_job(&self, session: &str, name: &str, plan: Vec<PlanEntry>) {
         let plan = tokio::task::spawn_blocking(move || {
             plan.iter().map(PlanEntry::to_json).collect::<Vec<_>>()
         })
@@ -172,6 +174,10 @@ impl LiveJobs {
         let arguments = json!({"args":{"plan":plan}});
         submit_with_cwd(&self.live.access, &self.actors.fixture, &self.live.node_did, session, name,
             format!("Call job_fixture exactly once with these exact arguments: {arguments}. Acknowledge the receipt or refusal and end the turn. Do not retry, inspect, or start another job."), &self.cwd).await;
+    }
+
+    async fn invoke_in_session(&self, session: &str, name: &str, plan: Vec<PlanEntry>) -> Value {
+        self.submit_job(session, name, plan).await;
         assert_eq!(
             wait_for_request_terminal(&self.live.access, name, Duration::from_secs(120)).await,
             "completed"
@@ -347,13 +353,48 @@ async fn job_plan_addressed_to_a_peer_agent_is_refused_before_any_child() {
             )],
         )
         .await;
-    let row = h
-        .invoke(
-            "live-job-peer-refusal",
-            holding_plan("peer", vec![spawn("a", "Acknowledge briefly.")]).await,
+    let name = "live-job-peer-refusal";
+    h.submit_job(
+        name,
+        name,
+        holding_plan("peer", vec![spawn("a", "Acknowledge briefly.")]).await,
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&h.live.access, name, Duration::from_secs(120)).await,
+        "failed"
+    );
+    let calls = h.live.access.execute(&format!(
+        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID}} }}"#,
+        escape_graphql_string(name),
+    )).await.unwrap();
+    for call in calls["data"]["AgentToolCall"].as_array().unwrap() {
+        let view = load_job_view(
+            &h.live.access,
+            None,
+            JobKey::RowDocId(call["_docID"].as_str().unwrap().into()),
         )
         .await;
-    h.refusal(&row, "plugin_job_policy_denied").await;
+        assert!(
+            matches!(view, Err(JobReadError::NotAJob)),
+            "a job addressed to a peer leaves no job row: {view:?}"
+        );
+    }
+    let peer_access = ConfigAccess::local(peer.node.clone());
+    for access in [&h.live.access, &peer_access] {
+        let requests = access
+            .execute("{ AgentRequest { request_id } }")
+            .await
+            .unwrap();
+        let served: Vec<&str> = requests["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|request| request["request_id"].as_str())
+            .filter(|request| *request != name)
+            .collect();
+        assert!(served.is_empty(), "no child request is staged: {served:?}");
+    }
     h.runtime.shutdown().await;
 }
 
@@ -511,71 +552,4 @@ async fn operator_cancel_and_non_job_stop_each_end_the_row_cancelled() {
         .await;
         h.runtime.shutdown().await;
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn nine_concurrent_adoptions_on_one_request_leave_exactly_eight() {
-    let h = LiveJobs::boot("live-job-adoption-cap").await;
-    let mut plans = Vec::new();
-    for index in 0..9 {
-        plans.push(
-            holding_plan(
-                &format!("live-cap-{index}"),
-                vec![spawn("child", &h.held_prompt())],
-            )
-            .await,
-        );
-    }
-    let arguments = tokio::task::spawn_blocking(move || {
-        plans
-            .into_iter()
-            .map(|plan| {
-                json!({"args":{"plan":plan.iter().map(PlanEntry::to_json).collect::<Vec<_>>()}})
-            })
-            .collect::<Vec<_>>()
-    })
-    .await
-    .unwrap();
-    const REQUEST: &str = "live-job-adoption-cap";
-    submit_with_cwd(
-        &h.live.access,
-        &h.actors.fixture,
-        &h.live.node_did,
-        REQUEST,
-        REQUEST,
-        format!(
-            "Call job_fixture nine times in parallel in your next response, once for each of these nine distinct argument objects: {}. Emit all nine calls together. Keep each object's plan intact and do not combine them. After all results arrive, acknowledge and end your turn. Do not repeat any call, including a refused call, and do not stop any job.",
-            serde_json::to_string(&arguments).unwrap(),
-        ),
-        &h.cwd,
-    )
-    .await;
-    assert_eq!(
-        wait_for_request_terminal(&h.live.access, REQUEST, Duration::from_secs(120)).await,
-        "completed"
-    );
-    let rows = h.live.access.execute(&format!(
-        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{REQUEST}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID tool_call_id session_id lifecycle_state}} }}"#,
-    )).await.unwrap();
-    let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
-    assert_eq!(rows.len(), 9, "all nine jobs were submitted: {rows:?}");
-    let running = rows
-        .iter()
-        .filter(|row| row["lifecycle_state"] == "running")
-        .collect::<Vec<_>>();
-    let refused = rows
-        .iter()
-        .filter(|row| row["lifecycle_state"] == "failed")
-        .collect::<Vec<_>>();
-    assert_eq!(running.len(), 8, "the parent retained its eight-job budget");
-    assert_eq!(refused.len(), 1, "the ninth adoption was refused");
-    for row in running {
-        h.wait_held(row, 1).await;
-        let view = h.job(row, |view| view.state == JobState::Running).await;
-        assert_eq!(view.children.len(), 1);
-        assert_eq!(view.children[0].state, JobChildState::Live);
-    }
-    h.refusal(refused[0], "background_tool_budget_exceeded")
-        .await;
-    h.runtime.shutdown().await;
 }

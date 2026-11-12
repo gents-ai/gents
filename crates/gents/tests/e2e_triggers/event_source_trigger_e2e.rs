@@ -18,7 +18,7 @@ use crate::support::test_db;
 const TRIGGER_ID: &str = "trigger-e2e-signup";
 const TASK_ID: &str = "task-e2e-signup";
 const EXTERNAL_ID: &str = "wh-1";
-const PROMPT_TEMPLATE: &str = "fired for {{ doc.external_id }}";
+const PROMPT_TEMPLATE: &str = "An event trigger fired for {{ doc.external_id }}. Reply with one short acknowledgement and call no tools.";
 
 const WEBHOOK_EVENT_SDL: &str = r#"
     type WebhookEvent {
