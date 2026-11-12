@@ -36,6 +36,7 @@ import Proofs.Runtime.CanonicalOutput
 import Proofs.Session.StreamingResponse.ReasoningAudit
 import Proofs.Runtime.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Session.PromptAssembly.ClaudeWire
+import Proofs.Session.PromptAssembly.ClaudeSse
 import Proofs.Session.PromptAssembly.ResponsesStorage
 import Proofs.Session.Compaction
 import Proofs.Session.PromptAssembly

@@ -187,86 +187,100 @@ mod candidate_sanitation_conformance {
         UserContent,
     };
 
-    #[test]
-    fn generated_provider_sanitation_preserves_complete_content_and_pairs() {
-        use gents_lean_vocab::families::prompt_assembly_provider_sanitation_sanitize_history_for_provider as family;
-        family::replay(|input| {
-            let messages = input
-                .rows
-                .iter()
-                .map(|row| {
-                    if row.role == "assistant" {
-                        Message::Assistant {
-                            request_id: None,
-                            id: None,
-                            content: row
-                                .content
-                                .iter()
-                                .map(|part| {
-                                    if part.kind == "call" {
-                                        AssistantContent::ToolCall(ToolCall {
-                                            id: part.id.to_string(),
-                                            call_id: Some(part.id.to_string()),
-                                            raw_arguments: None,
-                                            function: ToolFunction {
-                                                name: "echo".into(),
-                                                arguments: serde_json::json!({}),
-                                            },
-                                            signature: None,
-                                            additional_params: None,
-                                        })
-                                    } else {
-                                        AssistantContent::Text(Text {
-                                            text: part.id.to_string(),
-                                        })
-                                    }
-                                })
-                                .collect(),
-                        }
-                    } else if let Some(id) = row.result {
-                        Message::User {
-                            content: vec![UserContent::ToolResult(ToolResult {
-                                id: id.to_string(),
-                                call_id: Some(id.to_string()),
-                                content: row
-                                    .content
-                                    .iter()
-                                    .map(|part| ToolResultContent::text(part.id.to_string()))
-                                    .collect(),
-                            })],
-                        }
-                    } else {
-                        Message::User {
-                            content: row
-                                .content
-                                .iter()
-                                .map(|part| {
-                                    UserContent::Text(Text {
+    #[derive(serde::Deserialize)]
+    struct ModeledPart {
+        kind: String,
+        id: u64,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ModeledRow {
+        role: String,
+        result: Option<u64>,
+        content: Vec<ModeledPart>,
+    }
+
+    fn modeled_messages(rows: Vec<ModeledRow>) -> Vec<Message> {
+        rows.iter()
+            .map(|row| {
+                if row.role == "assistant" {
+                    Message::Assistant {
+                        request_id: None,
+                        id: None,
+                        content: row
+                            .content
+                            .iter()
+                            .map(|part| {
+                                if part.kind == "call" {
+                                    AssistantContent::ToolCall(ToolCall {
+                                        id: part.id.to_string(),
+                                        call_id: Some(part.id.to_string()),
+                                        raw_arguments: None,
+                                        function: ToolFunction {
+                                            name: "echo".into(),
+                                            arguments: serde_json::json!({}),
+                                        },
+                                        signature: None,
+                                        additional_params: None,
+                                    })
+                                } else {
+                                    AssistantContent::Text(Text {
                                         text: part.id.to_string(),
                                     })
-                                })
-                                .collect(),
-                        }
+                                }
+                            })
+                            .collect(),
                     }
-                })
-                .collect();
+                } else if let Some(id) = row.result {
+                    Message::User {
+                        content: vec![UserContent::ToolResult(ToolResult {
+                            id: id.to_string(),
+                            call_id: Some(id.to_string()),
+                            content: row
+                                .content
+                                .iter()
+                                .map(|part| ToolResultContent::text(part.id.to_string()))
+                                .collect(),
+                        })],
+                    }
+                } else {
+                    Message::User {
+                        content: row
+                            .content
+                            .iter()
+                            .map(|part| {
+                                UserContent::Text(Text {
+                                    text: part.id.to_string(),
+                                })
+                            })
+                            .collect(),
+                    }
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn generated_provider_sanitation_preserves_complete_content_and_pairs() {
+        use gents_lean_vocab::families::prompt_assembly_provider_sanitation_sanitize_history_for_provider as sanitation;
+        gents_lean_vocab::families::prompt_assembly_provider_sanitation_sanitize_history_for_provider::replay(|input: &sanitation::Input| {
             sanitize_history_for_provider(
                 crate::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-                messages,
+                modeled_messages(gents_lean_vocab::family::recode(&input.rows)),
             )
             .into_iter()
             .map(|message| match message {
-                Message::Assistant { content, .. } => family::Row {
+                Message::Assistant { content, .. } => sanitation::Row {
                     role: "assistant".into(),
                     result: None,
                     content: content
                         .into_iter()
                         .map(|part| match part {
-                            AssistantContent::Text(text) => family::Part {
+                            AssistantContent::Text(text) => sanitation::Part {
                                 kind: "text".into(),
                                 id: text.text.parse().unwrap(),
                             },
-                            AssistantContent::ToolCall(call) => family::Part {
+                            AssistantContent::ToolCall(call) => sanitation::Part {
                                 kind: "call".into(),
                                 id: call.id.parse().unwrap(),
                             },
@@ -279,13 +293,13 @@ mod candidate_sanitation_conformance {
                         UserContent::ToolResult(result) => Some(result.id.parse().unwrap()),
                         _ => None,
                     });
-                    family::Row {
+                    sanitation::Row {
                         role: "user".into(),
                         result,
                         content: content
                             .into_iter()
                             .flat_map(|part| match part {
-                                UserContent::Text(text) => vec![family::Part {
+                                UserContent::Text(text) => vec![sanitation::Part {
                                     kind: "text".into(),
                                     id: text.text.parse().unwrap(),
                                 }],
@@ -293,7 +307,7 @@ mod candidate_sanitation_conformance {
                                     .content
                                     .into_iter()
                                     .map(|part| match part {
-                                        ToolResultContent::Text(text) => family::Part {
+                                        ToolResultContent::Text(text) => sanitation::Part {
                                             kind: "text".into(),
                                             id: text.text.parse().unwrap(),
                                         },
@@ -309,6 +323,17 @@ mod candidate_sanitation_conformance {
             })
             .collect()
         });
+    }
+
+    #[test]
+    fn generated_safe_to_reduce_requires_closed_per_turn_pairs() {
+        gents_lean_vocab::families::prompt_assembly_provider_sanitation_safe_to_reduce::replay(
+            |input| {
+                safe_to_reduce(&modeled_messages(gents_lean_vocab::family::recode(
+                    &input.rows,
+                )))
+            },
+        );
     }
 }
 
