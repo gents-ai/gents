@@ -125,9 +125,9 @@ mod tests {
     fn visibility_matches_lean_for_direct_reads() {
         let cases = &gents_lean_vocab::lean_contract_snapshot().inference_visibility_cases;
         for case in cases {
-            let sessions = case["sessions"].as_u64().unwrap() as usize;
-            let requests = case["requests"].as_u64().unwrap() as usize;
-            let state = if case["active"].as_bool().unwrap() {
+            let sessions = case.sessions as usize;
+            let requests = case.requests as usize;
+            let state = if case.active {
                 "processing"
             } else {
                 "completed"
@@ -138,8 +138,8 @@ mod tests {
             }});
             assert_eq!(
                 activity_visible(&response),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
+                case.expected,
+                "{case:?}"
             );
         }
     }
@@ -149,9 +149,9 @@ mod tests {
         let cases = &gents_lean_vocab::lean_contract_snapshot().inference_route_cases;
         assert!(!cases.is_empty());
         for case in cases {
-            let sessions = case["sessions"].as_u64().unwrap() as usize;
-            let requests = case["requests"].as_u64().unwrap() as usize;
-            let state = if case["active"].as_bool().unwrap() {
+            let sessions = case.sessions as usize;
+            let requests = case.requests as usize;
+            let state = if case.active {
                 "processing"
             } else {
                 "completed"
@@ -160,16 +160,15 @@ mod tests {
                 "AgentSession": vec![serde_json::json!({"_docID":"session"}); sessions],
                 "AgentRequest": vec![serde_json::json!({"_docID":"request", "lifecycle_state":state}); requests],
             }});
-            let visible = case["holds_node_read"]
-                .as_bool()
-                .unwrap()
+            let visible = case
+                .holds_node_read
                 .then(|| activity_visible(&response));
             let observed = match visible {
                 None => "forbidden",
                 Some(true) => "visible",
                 Some(false) => "unavailable",
             };
-            assert_eq!(observed, case["expected"].as_str().unwrap(), "{case}");
+            assert_eq!(observed, case.expected.as_str(), "{case:?}");
         }
     }
 
