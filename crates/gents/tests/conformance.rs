@@ -28,7 +28,7 @@ use admission_slot_accounting::{
 };
 use gents_lean_vocab::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    lean_compaction_cursor_cases, lean_compaction_reducer_cases, lean_contract_snapshot,
+    lean_contract_snapshot,
     lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
     lean_event_delivery_transition_cases, lean_queue_deadline_cases, lean_r6_backgrounding_case,
     lean_r6_backgrounding_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
@@ -123,8 +123,8 @@ fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
 }
 
 #[test]
-fn generated_compaction_reducer_cases_pin_contract() {
-    streaming_compaction::generated_compaction_reducer_cases_pin_contract();
+fn compaction_reducers_follow_the_lean_model() {
+    streaming_compaction::compaction_reducers_follow_the_lean_model();
 }
 
 #[test]

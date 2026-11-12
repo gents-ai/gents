@@ -113,16 +113,8 @@ pub fn lean_compaction_canonical_projection_cases() -> &'static [LeanCanonicalCo
     &lean_contract_snapshot().compaction_canonical_projection_cases
 }
 
-pub fn lean_compaction_cursor_cases() -> &'static [LeanCompactionCursorCase] {
-    &lean_contract_snapshot().compaction_cursor_cases
-}
-
 pub fn lean_compaction_projection_join_cases() -> &'static [LeanCompactionProjectionJoinCase] {
     &lean_contract_snapshot().compaction_projection_join_cases
-}
-
-pub fn lean_compaction_reducer_cases() -> &'static [LeanCompactionReducerCase] {
-    &lean_contract_snapshot().compaction_reducer_cases
 }
 
 pub fn lean_completion_retry_cases() -> &'static [LeanCompletionRetryCase] {
@@ -2708,21 +2700,6 @@ pub enum LeanCommandResult {
     Interrupted,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LeanCompactionCursorCase {
-    pub name: String,
-    pub compacted: usize,
-    pub expected_cursor: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanCompactionInputRow {
-    Ordinary { role: String, text: String },
-    AssistantToolCalls { role: String, call_ids: Vec<String> },
-    ToolResult { role: String, call_id: String },
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanCompactionProjectionJoinCase {
@@ -2743,30 +2720,6 @@ pub struct LeanCompactionProjectionJoinCase {
     pub result: String,
     pub output_tokens: Option<usize>,
     pub committed_reductions: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanCompactionReducerCase {
-    pub input_rows: Vec<LeanCompactionInputRow>,
-    pub projected_prefix_ready: bool,
-    pub name: String,
-    pub group: String,
-    pub reducer: String,
-    pub legal: bool,
-    pub pre_message_count: usize,
-    pub post_message_count: usize,
-    pub preserves_pairs: bool,
-    pub preserves_order: bool,
-    pub gate_open: Option<bool>,
-    pub publication_ready: bool,
-    pub provider_fixpoint: bool,
-    pub turn_boundary: bool,
-    pub safe_to_reduce: bool,
-    pub reducer_is_identity: bool,
-    pub reducer_is_idempotent: bool,
-    pub split_index: usize,
-    pub safe_boundary: usize,
-    pub retained_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3265,8 +3218,6 @@ pub struct LeanContractSnapshot {
         LeanTerminalDiagnosticPresentationCase,
     >,
     pub terminal_diagnostic_replay_cases: Vec<LeanTerminalDiagnosticReplayCase>,
-    pub compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
-    pub compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
     pub prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
     pub provider_tool_identity_cases: Vec<serde_json::Value>,

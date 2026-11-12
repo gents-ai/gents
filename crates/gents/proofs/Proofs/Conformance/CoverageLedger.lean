@@ -2247,20 +2247,36 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyResponsesEffortCases"
       "The generated cases drive loop_config and the loop's own ProviderInputCounter projection, comparing the projected reasoning.effort. Premise: OpenAiCompatible on the Responses wire; kind and wire are not modelled, so these cases cannot catch a wrong kind/wire guard (pinned by inference_setup::tests::sent_reasoning_effort_leaves_other_kinds_and_wires_alone).")
       "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_compaction_reducer_gate")
+      "compaction" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_compaction_reducer_apply")
+      "compaction" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_compaction_reducer_gate_open")
+      "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
-      "compaction_reducer_cases"
-      "CompactionReducerCases"
-      "Strip/provider-view and immutable publication-gate cases are executable Lean witnesses. The native compaction owner must migrate its reducer gate and checkpoint execution before this is consumer coverage.")
+      "family"
+      "contracts_compaction_reducer_apply_unreached"
+      "model-production-gap: production summarizes by a token budget; no production reducer applies the model's fixed split index, so summarize message counts, pair and order preservation, identity and idempotence have no native observation.")
+      "compaction" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_compaction_reducer_identity_gate_unreached"
+      "model-production-gap: the identity reducer exists only in the model; no production compaction path evaluates its validity gate.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "protected_replay_compaction_cases"
       "ProtectedReplayCompactionCases"
       "Native replay association and reduction ceilings preserve the entire captured prefix of required reasoning. A nonempty required set refuses summarization with CannotFit; an empty set preserves the ordinary retention policy. Retirement of older requirements remains deferred. Generated cases bind modeled assistant blocks to native ceiling and split selection; the summary-provider refusal has separate native coverage.")
       "compaction" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "compaction_cursor_cases"
-      "CompactionCursorCases"
-      "The cursor fixtures share the migrated immutable compaction contract; the native bridge has not yet been regenerated.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_compaction_cursor")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "routing_affinity_cases"
