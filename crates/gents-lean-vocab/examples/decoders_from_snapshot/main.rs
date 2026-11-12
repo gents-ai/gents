@@ -6,34 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use generator::{GENERATED, ROOT, Source};
-
-fn rust_files(dir: &Path, base: &Path, out: &mut Vec<Source>) {
-    let mut entries: Vec<PathBuf> = fs::read_dir(dir)
-        .unwrap_or_else(|error| panic!("{}: {error}", dir.display()))
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            if path.file_name().is_some_and(|name| name != "target") {
-                rust_files(&path, base, out);
-            }
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(Source {
-                path: path.strip_prefix(base).unwrap().to_string_lossy().into_owned(),
-                text: fs::read_to_string(&path).unwrap(),
-            });
-        }
-    }
-}
-
-pub fn decoder_sources(src: &Path) -> Vec<Source> {
-    let mut sources = Vec::new();
-    rust_files(src, src, &mut sources);
-    sources.retain(|source| !source.path.ends_with("tests.rs"));
-    sources
-}
+use generator::{Source, GENERATED, ROOT};
 
 fn identifiers(text: &str) -> BTreeSet<&str> {
     text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
@@ -77,11 +50,14 @@ fn layer_keys(sources: &[Source], crates_dir: &Path, layer: &[&str]) -> BTreeSet
             continue;
         }
         let mut files = Vec::new();
-        rust_files(&path, &path, &mut files);
+        generator::rust_files(&path, &path, &mut files);
         for file in files {
             for word in identifiers(&file.text) {
                 if let Some(key) = names.get(word) {
-                    consumers.entry(key.clone()).or_default().insert(name.clone());
+                    consumers
+                        .entry(key.clone())
+                        .or_default()
+                        .insert(name.clone());
                 }
             }
         }
@@ -109,13 +85,16 @@ fn main() {
             "--layer" => layer = args.next(),
             "--write" => write = true,
             other => panic!(
-                "unknown argument {other}; usage: --snapshot FILE [--src DIR] [--layer crate,crate] [--report FILE] [--write]"
+                "unknown argument {other}; usage: [--snapshot FILE] [--src DIR] [--layer crate,crate] [--report FILE] [--write]"
             ),
         }
     }
-    let snapshot = fs::read_to_string(snapshot.expect("--snapshot FILE")).expect("snapshot file");
+    let snapshot = match snapshot {
+        Some(path) => fs::read_to_string(path).expect("snapshot file"),
+        None => gents_lean_contract::load_contract_json().expect("Lean conformance snapshot"),
+    };
     let snapshot = serde_json::from_str(&snapshot).expect("snapshot JSON");
-    let sources = decoder_sources(&src);
+    let sources = generator::decoder_sources(&src);
     let only = layer.map(|layer: String| {
         let crates_dir = src.parent().unwrap().parent().unwrap().to_path_buf();
         layer_keys(&sources, &crates_dir, &layer.split(',').collect::<Vec<_>>())
@@ -126,12 +105,23 @@ fn main() {
     let mut emptied = Vec::new();
     let none = BTreeSet::new();
     for (path, ranges) in &output.removals {
-        deleted += ranges.iter().map(|(start, end)| end - start + 1).sum::<usize>();
+        deleted += ranges
+            .iter()
+            .map(|(start, end)| end - start + 1)
+            .sum::<usize>();
         if !write {
             continue;
         }
-        let moved = if path == "lib.rs" { &none } else { &output.names };
-        let text = &sources.iter().find(|source| &source.path == path).unwrap().text;
+        let moved = if path == "lib.rs" {
+            &none
+        } else {
+            &output.names
+        };
+        let text = &sources
+            .iter()
+            .find(|source| &source.path == path)
+            .unwrap()
+            .text;
         match generator::prune(text, ranges, moved) {
             Some(text) => fs::write(src.join(path), text).unwrap(),
             None => {
@@ -147,8 +137,12 @@ fn main() {
             .lines()
             .filter(|line| {
                 !emptied.iter().any(|module| {
-                    [format!("mod {module};"), format!("pub mod {module};"), format!("pub use {module}::*;")]
-                        .contains(&(*line).to_owned())
+                    [
+                        format!("mod {module};"),
+                        format!("pub mod {module};"),
+                        format!("pub use {module}::*;"),
+                    ]
+                    .contains(&(*line).to_owned())
                 })
             })
             .map(str::to_owned)
@@ -160,7 +154,13 @@ fn main() {
                 .expect("lib.rs declares modules");
             lines.splice(
                 at..at,
-                ["#[rustfmt::skip]", "mod generated;", "pub use generated::*;", ""].map(str::to_owned),
+                [
+                    "#[rustfmt::skip]",
+                    "mod generated;",
+                    "pub use generated::*;",
+                    "",
+                ]
+                .map(str::to_owned),
             );
         }
         fs::write(src.join("lib.rs"), lines.join("\n") + "\n").unwrap();

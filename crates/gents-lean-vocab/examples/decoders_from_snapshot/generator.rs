@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use quote::ToTokens;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use syn::{Attribute, Fields, Item, Type};
 
 pub const ROOT: &str = "LeanContractSnapshot";
@@ -19,6 +21,37 @@ pub struct Output {
     pub removals: BTreeMap<String, Vec<(usize, usize)>>,
     pub names: BTreeSet<String>,
     pub report: Value,
+}
+
+pub fn rust_files(dir: &Path, base: &Path, out: &mut Vec<Source>) {
+    let mut entries: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("{}: {error}", dir.display()))
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            if path.file_name().is_some_and(|name| name != "target") {
+                rust_files(&path, base, out);
+            }
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(Source {
+                path: path
+                    .strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                text: fs::read_to_string(&path).unwrap(),
+            });
+        }
+    }
+}
+
+pub fn decoder_sources(src: &Path) -> Vec<Source> {
+    let mut sources = Vec::new();
+    rust_files(src, src, &mut sources);
+    sources.retain(|source| !source.path.ends_with("tests.rs"));
+    sources
 }
 
 #[derive(Default, Clone)]
@@ -75,7 +108,10 @@ impl Shape {
                 self.objects += 1;
                 if deep {
                     for (key, child) in map {
-                        self.fields.entry(key.clone()).or_default().observe(child, true);
+                        self.fields
+                            .entry(key.clone())
+                            .or_default()
+                            .observe(child, true);
                     }
                 }
             }
@@ -83,10 +119,16 @@ impl Shape {
     }
 
     fn kinds(&self) -> usize {
-        [self.bools, self.numbers, self.strings, self.arrays, self.objects]
-            .iter()
-            .filter(|count| **count > 0)
-            .count()
+        [
+            self.bools,
+            self.numbers,
+            self.strings,
+            self.arrays,
+            self.objects,
+        ]
+        .iter()
+        .filter(|count| **count > 0)
+        .count()
     }
 }
 
@@ -209,7 +251,12 @@ fn rename(name: &str, rule: Option<&String>, variant: bool) -> String {
     }
 }
 
-fn wire_name(ident: &syn::Ident, attrs: &[Attribute], rule: Option<&String>, variant: bool) -> String {
+fn wire_name(
+    ident: &syn::Ident,
+    attrs: &[Attribute],
+    rule: Option<&String>,
+    variant: bool,
+) -> String {
     let args = serde_args(attrs);
     if let Some(explicit) = args.get("rename") {
         return explicit.clone();
@@ -257,7 +304,11 @@ fn show(ty: &Type) -> String {
 }
 
 fn line_of(span: proc_macro2::Span, end: bool) -> usize {
-    if end { span.end().line } else { span.start().line }
+    if end {
+        span.end().line
+    } else {
+        span.start().line
+    }
 }
 
 fn first_line(attrs: &[Attribute], fallback: proc_macro2::Span) -> usize {
@@ -273,6 +324,9 @@ fn flatten_use(tree: &syn::UseTree, prefix: &str, out: &mut Vec<String>) {
     match tree {
         syn::UseTree::Path(path) => {
             flatten_use(&path.tree, &format!("{prefix}{}::", path.ident), out)
+        }
+        syn::UseTree::Name(name) if name.ident == "self" => {
+            out.push(prefix.trim_end_matches("::").to_owned())
         }
         syn::UseTree::Name(name) => out.push(format!("{prefix}{}", name.ident)),
         syn::UseTree::Rename(item) => {
@@ -368,7 +422,12 @@ impl Oracle {
                             );
                             oracle.loaders.insert(
                                 function.sig.ident.to_string(),
-                                Loader { file: index, item: function, lines, field },
+                                Loader {
+                                    file: index,
+                                    item: function,
+                                    lines,
+                                    field,
+                                },
                             );
                         }
                     }
@@ -407,7 +466,10 @@ impl Oracle {
                         let name = ident.to_string();
                         if let Item::Enum(item) = &item {
                             let args = serde_args(&item.attrs);
-                            if item.variants.iter().all(|v| matches!(v.fields, Fields::Unit))
+                            if item
+                                .variants
+                                .iter()
+                                .all(|v| matches!(v.fields, Fields::Unit))
                                 && !args.contains_key("tag")
                             {
                                 let names = item
@@ -421,7 +483,12 @@ impl Oracle {
                             }
                         }
                         let lines = (first_line(attrs, start), line_of(end, true));
-                        let decoder = Decoder { file: index, item, lines, skip };
+                        let decoder = Decoder {
+                            file: index,
+                            item,
+                            lines,
+                            skip,
+                        };
                         if oracle.decoders.insert(name.clone(), decoder).is_some() {
                             duplicates.insert(name);
                         }
@@ -458,9 +525,8 @@ impl Oracle {
                 if decoder.skip.is_some() || !out.insert(name) {
                     return;
                 }
-                let mut visit = |fields: &Fields| {
-                    fields.iter().for_each(|field| self.reach(&field.ty, out))
-                };
+                let mut visit =
+                    |fields: &Fields| fields.iter().for_each(|field| self.reach(&field.ty, out));
                 match &decoder.item {
                     Item::Struct(item) => visit(&item.fields),
                     Item::Enum(item) => item.variants.iter().for_each(|v| visit(&v.fields)),
@@ -549,7 +615,10 @@ impl Walker<'_> {
             ("String", 0) => value.is_string(),
             ("Value", 0) => {
                 if self.dry == 0 {
-                    self.untyped.entry(at.to_owned()).or_default().observe(value, true);
+                    self.untyped
+                        .entry(at.to_owned())
+                        .or_default()
+                        .observe(value, true);
                 }
                 true
             }
@@ -572,7 +641,13 @@ impl Walker<'_> {
         ok || self.fail(at, format!("{value} is not {name}"))
     }
 
-    fn walk_decoder(&mut self, name: &str, item: &Item, value: &Value, extra: Option<&str>) -> bool {
+    fn walk_decoder(
+        &mut self,
+        name: &str,
+        item: &Item,
+        value: &Value,
+        extra: Option<&str>,
+    ) -> bool {
         if self.dry == 0 {
             self.seen.entry(name.to_owned()).or_default().visits += 1;
         }
@@ -699,7 +774,11 @@ impl Walker<'_> {
 
     fn flattened_keys(&self, ty: &Type, out: &mut BTreeSet<String>) {
         let Some((name, _)) = head(ty) else { return };
-        let Some(Decoder { item: Item::Struct(item), .. }) = self.oracle.decoders.get(&name) else {
+        let Some(Decoder {
+            item: Item::Struct(item),
+            ..
+        }) = self.oracle.decoders.get(&name)
+        else {
             return;
         };
         let args = serde_args(&item.attrs);
@@ -707,7 +786,12 @@ impl Walker<'_> {
             if serde_args(&field.attrs).contains_key("flatten") {
                 self.flattened_keys(&field.ty, out);
             } else if let Some(ident) = &field.ident {
-                out.insert(wire_name(ident, &field.attrs, args.get("rename_all"), false));
+                out.insert(wire_name(
+                    ident,
+                    &field.attrs,
+                    args.get("rename_all"),
+                    false,
+                ));
             }
         }
     }
@@ -734,15 +818,18 @@ impl Walker<'_> {
                 let fits = self.walk(&field.ty, &Value::Object(map.clone()), owner);
                 self.dry -= 1;
                 if !fits {
-                    ok = self.fail(owner, format!("{label}{ident} flattened struct does not fit"));
+                    ok = self.fail(
+                        owner,
+                        format!("{label}{ident} flattened struct does not fit"),
+                    );
                 }
                 continue;
             }
             let wire = wire_name(ident, &field.attrs, container.get("rename_all"), false);
             let at = format!("{owner}.{label}{ident}");
-            let custom = args.get("deserialize_with").map(|path| {
-                path.rsplit("::").next().unwrap_or_default().to_owned()
-            });
+            let custom = args
+                .get("deserialize_with")
+                .map(|path| path.rsplit("::").next().unwrap_or_default().to_owned());
             let optional = option_inner(&field.ty).is_some();
             let child = map.get(&wire);
             if self.dry == 0 {
@@ -760,16 +847,21 @@ impl Walker<'_> {
                 (None, None) if optional => true,
                 (None, _) if defaulted => true,
                 (None, _) => false,
-                (Some(Value::Null), None) if !optional && !show(&field.ty).ends_with("Value") => false,
+                (Some(Value::Null), None) if !optional && !show(&field.ty).ends_with("Value") => {
+                    false
+                }
                 (Some(child), None | Some("required_nullable")) => {
                     ok &= self.walk(&field.ty, child, &at);
                     true
                 }
                 (Some(child), Some("ordered_pairs")) => {
-                    let pair = head(&field.ty).and_then(|(_, args)| match args.first().map(|t| peel(t)) {
-                        Some(Type::Tuple(tuple)) if tuple.elems.len() == 2 => Some(&tuple.elems[1]),
-                        _ => None,
-                    });
+                    let pair =
+                        head(&field.ty).and_then(|(_, args)| match args.first().map(|t| peel(t)) {
+                            Some(Type::Tuple(tuple)) if tuple.elems.len() == 2 => {
+                                Some(&tuple.elems[1])
+                            }
+                            _ => None,
+                        });
                     match (pair, child.as_object()) {
                         (Some(ty), Some(entries)) => {
                             for entry in entries.values() {
@@ -788,7 +880,10 @@ impl Walker<'_> {
             if !fits {
                 if self.dry == 0 {
                     let seen = self.seen.get_mut(owner).unwrap();
-                    seen.fields.get_mut(&format!("{label}{ident}")).unwrap().needs_option = true;
+                    seen.fields
+                        .get_mut(&format!("{label}{ident}"))
+                        .unwrap()
+                        .needs_option = true;
                 }
                 ok = self.fail(&at, "missing or null but required".into());
             }
@@ -800,10 +895,16 @@ impl Walker<'_> {
             }
             if self.dry == 0 {
                 let seen = self.seen.entry(owner.to_owned()).or_default();
-                seen.unknown.entry(format!("{label}{key}")).or_default().observe(child, true);
+                seen.unknown
+                    .entry(format!("{label}{key}"))
+                    .or_default()
+                    .observe(child, true);
             }
             if strict {
-                ok = self.fail(owner, format!("{label}{key} is not decoded by a strict type"));
+                ok = self.fail(
+                    owner,
+                    format!("{label}{key} is not decoded by a strict type"),
+                );
             }
         }
         ok
@@ -823,7 +924,9 @@ fn camel(name: &str) -> String {
 
 fn is_field_name(key: &str) -> bool {
     let mut chars = key.chars();
-    chars.next().is_some_and(|ch| ch.is_ascii_lowercase() || ch == '_')
+    chars
+        .next()
+        .is_some_and(|ch| ch.is_ascii_lowercase() || ch == '_')
         && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
 }
 
@@ -844,7 +947,10 @@ impl Inference<'_> {
         if shape.overflow || shape.values.len() < 2 {
             return None;
         }
-        let mut matches = self.unit_enums.iter().filter(|(_, names)| **names == shape.values);
+        let mut matches = self
+            .unit_enums
+            .iter()
+            .filter(|(_, names)| **names == shape.values);
         let (name, _) = matches.next()?;
         matches.next().is_none().then_some(name)
     }
@@ -861,9 +967,9 @@ impl Inference<'_> {
             1 if shape.strings > 0 => self.exact_enum(shape).cloned().unwrap_or("String".into()),
             1 if shape.arrays > 0 => {
                 let element = shape.element.as_deref().cloned().unwrap_or_default();
-                let singular = name.strip_suffix("Cases").map_or(format!("{name}Item"), |stem| {
-                    format!("{stem}Case")
-                });
+                let singular = name
+                    .strip_suffix("Cases")
+                    .map_or(format!("{name}Item"), |stem| format!("{stem}Case"));
                 let mut inner = self.infer(&element, &singular);
                 if element.nulls > 0 {
                     inner = format!("Option<{inner}>");
@@ -898,7 +1004,11 @@ impl Inference<'_> {
             if child.nulls > 0 || child.seen < shape.objects {
                 ty = format!("Option<{ty}>");
             }
-            let raw = if KEYWORDS.contains(&key.as_str()) { "r#" } else { "" };
+            let raw = if KEYWORDS.contains(&key.as_str()) {
+                "r#"
+            } else {
+                ""
+            };
             body.push_str(&format!("pub {raw}{key}: {ty},"));
         }
         self.structs.insert(
@@ -962,7 +1072,9 @@ fn disagreements(
     let mut ty = optional.unwrap_or(ty);
     let mut shape = &seen.shape;
     loop {
-        let Some((name, type_args)) = head(ty) else { break };
+        let Some((name, type_args)) = head(ty) else {
+            break;
+        };
         match (name.as_str(), type_args.len()) {
             ("Vec" | "BTreeSet", 1) => {
                 match shape.element.as_deref().filter(|element| element.seen > 0) {
@@ -1020,7 +1132,9 @@ fn patch_fields(
             patches.push(format!("{owner}.{label}{ident}: wrapped in Option"));
         }
     }
-    let Some(seen) = seen.filter(|_| strict) else { return };
+    let Some(seen) = seen.filter(|_| strict) else {
+        return;
+    };
     for (key, shape) in &seen.unknown {
         let Some(key) = key.strip_prefix(label).filter(|key| is_field_name(key)) else {
             continue;
@@ -1049,7 +1163,10 @@ fn patch_fields(
 
 pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<String>>) -> Output {
     let oracle = Oracle::parse(sources);
-    let root = oracle.decoders.get(ROOT).expect("oracle defines the snapshot root");
+    let root = oracle
+        .decoders
+        .get(ROOT)
+        .expect("oracle defines the snapshot root");
     let Item::Struct(root_item) = &root.item else {
         panic!("snapshot root is a struct")
     };
@@ -1063,7 +1180,13 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         dry: 0,
     };
     walker.walk_decoder(ROOT, &root.item, snapshot, None);
-    let Walker { seen, untyped, external, mismatches, .. } = walker;
+    let Walker {
+        seen,
+        untyped,
+        external,
+        mismatches,
+        ..
+    } = walker;
 
     let mut emitted = BTreeSet::from([ROOT.to_owned()]);
     let mut all_reached = BTreeSet::from([ROOT.to_owned()]);
@@ -1109,49 +1232,55 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         let decoder = &oracle.decoders[name];
         let type_seen = seen.get(name);
         let mut item = decoder.item.clone();
-        let mut note = |fields: &Fields, label: &str, findings: &mut BTreeMap<String, Vec<String>>| {
-            for field in fields {
-                let Some(ident) = &field.ident else { continue };
-                if name == ROOT {
-                    continue;
-                }
-                fields_total += 1;
-                let empty = FieldSeen::default();
-                let field_seen = type_seen
-                    .and_then(|seen| seen.fields.get(&format!("{label}{ident}")))
-                    .unwrap_or(&empty);
-                let found = disagreements(
-                    &oracle,
-                    &inference,
-                    &field.ty,
-                    &serde_args(&field.attrs),
-                    field_seen,
-                );
-                if found.is_empty() {
-                    fields_agree += 1;
-                }
-                for class in found {
-                    let (class, detail) = class.split_once(' ').unwrap_or((&class, ""));
-                    findings.entry(class.to_owned()).or_default().push(
-                        format!("{name}.{label}{ident}: {} {detail}", show(&field.ty))
-                            .trim()
-                            .to_owned(),
+        let mut note =
+            |fields: &Fields, label: &str, findings: &mut BTreeMap<String, Vec<String>>| {
+                for field in fields {
+                    let Some(ident) = &field.ident else { continue };
+                    if name == ROOT {
+                        continue;
+                    }
+                    fields_total += 1;
+                    let empty = FieldSeen::default();
+                    let field_seen = type_seen
+                        .and_then(|seen| seen.fields.get(&format!("{label}{ident}")))
+                        .unwrap_or(&empty);
+                    let found = disagreements(
+                        &oracle,
+                        &inference,
+                        &field.ty,
+                        &serde_args(&field.attrs),
+                        field_seen,
                     );
+                    if found.is_empty() {
+                        fields_agree += 1;
+                    }
+                    for class in found {
+                        let (class, detail) = class.split_once(' ').unwrap_or((&class, ""));
+                        findings.entry(class.to_owned()).or_default().push(
+                            format!("{name}.{label}{ident}: {} {detail}", show(&field.ty))
+                                .trim()
+                                .to_owned(),
+                        );
+                    }
                 }
-            }
-        };
+            };
         match &decoder.item {
             Item::Struct(item) => note(&item.fields, "", &mut findings),
             Item::Enum(item) => {
                 for variant in &item.variants {
-                    let count = type_seen.and_then(|seen| seen.variants.get(&variant.ident.to_string()));
+                    let count =
+                        type_seen.and_then(|seen| seen.variants.get(&variant.ident.to_string()));
                     if count.is_none() {
                         findings
                             .entry("variant_never_emitted".into())
                             .or_default()
                             .push(format!("{name}::{}", variant.ident));
                     } else {
-                        note(&variant.fields, &format!("{}.", variant.ident), &mut findings);
+                        note(
+                            &variant.fields,
+                            &format!("{}.", variant.ident),
+                            &mut findings,
+                        );
                     }
                 }
             }
@@ -1176,9 +1305,20 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
             Item::Struct(item) => {
                 bump(&mut item.vis);
                 let strict = serde_args(&item.attrs).contains_key("deny_unknown_fields");
-                patch_fields(&mut item.fields, "", type_seen, strict, name, &mut inference, &mut patches);
+                patch_fields(
+                    &mut item.fields,
+                    "",
+                    type_seen,
+                    strict,
+                    name,
+                    &mut inference,
+                    &mut patches,
+                );
                 if let Fields::Unnamed(fields) = &mut item.fields {
-                    fields.unnamed.iter_mut().for_each(|field| bump(&mut field.vis));
+                    fields
+                        .unnamed
+                        .iter_mut()
+                        .for_each(|field| bump(&mut field.vis));
                 }
             }
             Item::Enum(item) => {
@@ -1189,7 +1329,15 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
                     let label = format!("{}.", variant.ident);
                     let mut scratch = Vec::new();
                     let mut fields = variant.fields.clone();
-                    patch_fields(&mut fields, &label, type_seen, strict, name, &mut inference, &mut scratch);
+                    patch_fields(
+                        &mut fields,
+                        &label,
+                        type_seen,
+                        strict,
+                        name,
+                        &mut inference,
+                        &mut scratch,
+                    );
                     if !scratch.is_empty() {
                         if let (Fields::Named(patched), Fields::Named(original)) =
                             (&mut fields, &variant.fields)
@@ -1205,7 +1353,11 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
                         patches.extend(scratch);
                     }
                 }
-                for wire in type_seen.map(|seen| &seen.new_variants).into_iter().flatten() {
+                for wire in type_seen
+                    .map(|seen| &seen.new_variants)
+                    .into_iter()
+                    .flatten()
+                {
                     let ident = quote::format_ident!("{}", camel(wire));
                     let variant: syn::Variant = syn::parse_quote!(#[serde(rename = #wire)] #ident);
                     item.variants.push(variant);
@@ -1218,7 +1370,10 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         let path = &oracle.paths[decoder.file];
         origin_files.insert(decoder.file);
         if path != GENERATED {
-            removals.entry(path.clone()).or_default().push(decoder.lines);
+            removals
+                .entry(path.clone())
+                .or_default()
+                .push(decoder.lines);
         }
     }
 
@@ -1242,12 +1397,6 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
     for file in origin_files {
         uses.extend(oracle.uses[file].iter().cloned());
     }
-    uses.remove("crate::generated::*");
-
-    let mut text = String::from("#![allow(unused_imports)]\n\n");
-    for leaf in &uses {
-        text.push_str(&format!("use {leaf};\n"));
-    }
     let inferred: Vec<Item> = inference
         .structs
         .values()
@@ -1258,7 +1407,30 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         attrs: Vec::new(),
         items: loaders.into_iter().chain(items).chain(inferred).collect(),
     };
+    let mut file = file;
+    let modules = oracle
+        .paths
+        .iter()
+        .filter_map(|path| module_of(path).first().map(|m| (*m).to_owned()))
+        .collect();
+    syn::visit_mut::visit_file_mut(
+        &mut Paths {
+            moved: &emitted,
+            modules: &modules,
+        },
+        &mut file,
+    );
     let body = prettyplease::unparse(&file);
+    let referenced = words(&body);
+    let mut text = String::new();
+    for leaf in &uses {
+        let name = leaf_name(leaf);
+        if leaf == "crate::*"
+            || (name != "*" && referenced.contains(name) && !emitted.contains(name))
+        {
+            text.push_str(&format!("use {leaf};\n"));
+        }
+    }
     let mut previous_closed = false;
     for line in body.lines() {
         let opens = !line.starts_with(' ') && !line.starts_with('}') && !line.is_empty();
@@ -1278,7 +1450,9 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         .iter()
         .filter(|(name, _)| !all_reached.contains(*name))
         .map(|(name, decoder)| {
-            let reason = decoder.skip.unwrap_or("not reachable from the typed snapshot root");
+            let reason = decoder
+                .skip
+                .unwrap_or("not reachable from the typed snapshot root");
             (name, format!("{} ({})", reason, oracle.paths[decoder.file]))
         })
         .collect();
@@ -1308,7 +1482,77 @@ pub fn generate(snapshot: &Value, sources: &[Source], only: Option<&BTreeSet<Str
         "not_covered": not_covered,
         "external_types": external,
     });
-    Output { generated: text, removals, names: emitted, report }
+    Output {
+        generated: text,
+        removals,
+        names: emitted,
+        report,
+    }
+}
+
+fn words(text: &str) -> BTreeSet<&str> {
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+fn leaf_name(leaf: &str) -> &str {
+    leaf.rsplit([':', ' ']).next().unwrap_or(leaf)
+}
+
+struct Paths<'a> {
+    moved: &'a BTreeSet<String>,
+    modules: &'a BTreeSet<String>,
+}
+
+impl syn::visit_mut::VisitMut for Paths<'_> {
+    fn visit_path_mut(&mut self, path: &mut syn::Path) {
+        syn::visit_mut::visit_path_mut(self, path);
+        if path.segments.len() < 2 {
+            return;
+        }
+        let last = path.segments.last().unwrap().clone();
+        if self.moved.contains(&last.ident.to_string()) {
+            path.leading_colon = None;
+            path.segments = std::iter::once(last).collect();
+        } else if self.modules.contains(&path.segments[0].ident.to_string()) {
+            path.segments.insert(0, syn::parse_quote!(crate));
+        }
+    }
+}
+
+struct UseItem {
+    lines: (usize, usize),
+    leaves: Vec<String>,
+}
+
+fn body_and_uses(text: &str) -> (String, Vec<UseItem>, bool) {
+    let file = syn::parse_file(text).expect("source parses");
+    let mut uses = Vec::new();
+    for item in &file.items {
+        let Item::Use(item) = item else { continue };
+        if matches!(item.vis, syn::Visibility::Inherited) {
+            let mut leaves = Vec::new();
+            flatten_use(&item.tree, "", &mut leaves);
+            let lines = (
+                line_of(item.use_token.span, false),
+                line_of(item.semi_token.span, true),
+            );
+            uses.push(UseItem { lines, leaves });
+        }
+    }
+    let body: Vec<&str> = text
+        .lines()
+        .enumerate()
+        .filter(|(index, _)| {
+            !uses
+                .iter()
+                .any(|item| (item.lines.0..=item.lines.1).contains(&(index + 1)))
+        })
+        .map(|(_, line)| line)
+        .collect();
+    let only_uses = file.items.iter().all(|item| matches!(item, Item::Use(_)));
+    (body.join("\n"), uses, only_uses)
 }
 
 pub fn prune(text: &str, ranges: &[(usize, usize)], moved: &BTreeSet<String>) -> Option<String> {
@@ -1318,7 +1562,9 @@ pub fn prune(text: &str, ranges: &[(usize, usize)], moved: &BTreeSet<String>) ->
     }
     let mut out: Vec<&str> = Vec::new();
     for (index, line) in text.lines().enumerate() {
-        if drop.contains(&(index + 1)) || (line.is_empty() && out.last().is_some_and(|l| l.is_empty())) {
+        if drop.contains(&(index + 1))
+            || (line.is_empty() && out.last().is_some_and(|l| l.is_empty()))
+        {
             continue;
         }
         out.push(line);
@@ -1326,11 +1572,34 @@ pub fn prune(text: &str, ranges: &[(usize, usize)], moved: &BTreeSet<String>) ->
     while out.last().is_some_and(|line| line.is_empty()) {
         out.pop();
     }
-    let rest = syn::parse_file(&out.join("\n")).expect("pruned file parses");
-    if rest.items.iter().all(|item| matches!(item, Item::Use(_))) {
+    let (before, _, _) = body_and_uses(text);
+    let before = words(&before);
+    let pruned = out.join("\n");
+    let (after, uses, only_uses) = body_and_uses(&pruned);
+    if only_uses {
         return None;
     }
-    let globbed = out.iter().any(|line| ["use super::*;", "use crate::*;"].contains(line));
+    let after = words(&after);
+    let mut out: Vec<String> = out.into_iter().map(str::to_owned).collect();
+    for item in uses.iter().rev() {
+        let kept: Vec<String> = item
+            .leaves
+            .iter()
+            .filter(|leaf| {
+                let name = leaf_name(leaf);
+                !(moved.contains(name) || (before.contains(name) && !after.contains(name)))
+            })
+            .map(|leaf| format!("use {leaf};"))
+            .collect();
+        if kept.len() < item.leaves.len() {
+            out.splice(item.lines.0 - 1..item.lines.1, kept);
+        }
+    }
+    let out: Vec<&str> = out.iter().map(String::as_str).collect();
+    let mut out = out;
+    let globbed = out
+        .iter()
+        .any(|line| ["use super::*;", "use crate::*;"].contains(line));
     let refers = out.iter().any(|line| {
         line.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
             .any(|word| moved.contains(word))
