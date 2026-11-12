@@ -9,6 +9,11 @@
 use anyhow::{Context, Result};
 use gents_documents::write_tools_document;
 use gents_documents::{load_agent_context_and_tools_in_txn, Tools};
+use gents_protocol::operations::NextCall;
+use gents_protocol::operations::workspace_root::{
+    EnabledUpdate, WorkspaceRootError, WorkspaceRootPublish, WorkspaceRootVerb,
+};
+use gents_protocol::operations::StringUpdate;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use serde::Serialize;
@@ -31,16 +36,19 @@ pub async fn select_agent_workspace_root(
     agent_did: &str,
     root_path: &str,
 ) -> Result<AgentWorkspaceRoot> {
-    ensure_absolute(root_path)?;
-    let workspace_root_doc_id = gents_tools::surface::set_workspace_root_with_readers(
+    let published = gents_tools::surface::publish_workspace_root(
         access,
-        node_did,
-        root_path,
-        None,
-        true,
-        &[agent_did.to_owned()],
+        &WorkspaceRootPublish {
+            node_did: node_did.to_owned(),
+            root_path: root_path.to_owned(),
+            display_name: StringUpdate::Omitted,
+            enabled: EnabledUpdate::Enable,
+            reader_agents: vec![agent_did.to_owned()],
+        },
     )
-    .await?;
+    .await
+    .map_err(refusal)?;
+    let root_path = published.root_path.as_str();
     let mut tools = read_unshared_agent_tools(access, node_did, agent_did).await?;
     let tools_id = tools.tools_id.clone();
     if retarget_host_root(&mut tools, root_path) {
@@ -53,17 +61,32 @@ pub async fn select_agent_workspace_root(
     }
     Ok(AgentWorkspaceRoot {
         root_path: root_path.to_owned(),
-        workspace_root_doc_id,
+        workspace_root_doc_id: published.doc_id.clone(),
         tools_id,
     })
 }
 
-fn ensure_absolute(root_path: &str) -> Result<()> {
-    anyhow::ensure!(
-        std::path::Path::new(root_path).is_absolute(),
-        "workspace root path must be absolute, got {root_path}"
+/// A refused publication as the message the UI shows: what happened, then
+/// the next step in desktop terms for the call the operation names.
+fn refusal(error: WorkspaceRootError) -> anyhow::Error {
+    let next = match error.recovery(WorkspaceRootVerb::Publish) {
+        NextCall::List { resource: "agent" } => "Choose an enabled agent of this node.",
+        NextCall::List { .. } => "Choose a folder that no other node has published.",
+        NextCall::Inspect { .. } => {
+            "Ask the node's owner or an administrator to choose the folder."
+        }
+        NextCall::VerbHelp { .. }
+        | NextCall::ResourceHelp { .. }
+        | NextCall::Preview { .. }
+        | NextCall::Verb { .. } => "Choose the folder by its full path.",
+    };
+    let message = format!(
+        "{}. {next}",
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .trim_end_matches('.')
     );
-    Ok(())
+    anyhow::Error::new(error).context(message)
 }
 
 async fn read_unshared_agent_tools(
@@ -118,7 +141,6 @@ pub(crate) fn retarget_host_root(tools: &mut Tools, root_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_store::config_client::GraphqlEndpoint;
     use serde_json::json;
 
     fn tools(host: serde_json::Value) -> Tools {
@@ -160,28 +182,5 @@ mod tests {
         assert!(ensure_unshared("engineer-tools", 1).is_ok());
         let error = ensure_unshared("engineer-tools", 2).expect_err("shared tools refused");
         assert!(error.to_string().contains("2 Contexts"), "{error}");
-    }
-
-    #[test]
-    fn only_absolute_roots_are_selected() {
-        assert!(ensure_absolute("/work/three").is_ok());
-        let error = ensure_absolute("work/three").expect_err("relative root refused");
-        assert!(error.to_string().contains("must be absolute"), "{error}");
-    }
-
-    #[tokio::test]
-    async fn a_relative_root_is_refused_before_any_request_is_sent() {
-        let access = ConfigAccess::Graphql(GraphqlEndpoint::anonymous(
-            "http://127.0.0.1:9/api/v0/graphql",
-        ));
-        let error = select_agent_workspace_root(
-            &access,
-            "did:key:node",
-            "did:key:agent",
-            "relative/folder",
-        )
-        .await
-        .expect_err("relative root refused");
-        assert!(error.to_string().contains("must be absolute"), "{error:#}");
     }
 }

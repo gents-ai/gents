@@ -5,7 +5,7 @@ use gents_protocol::operations::document::WriteMode;
 use gents_protocol::operations::tools::ToolsSaveInput;
 use serde_json::{json, Value};
 
-use super::refusal::Refusal;
+use crate::commands::refusal::Refusal;
 
 pub(super) fn agent_target_entry_command(args: AgentTargetEntryArgs) -> Result<()> {
     crate::print_json(&serde_json::to_value(AgentTargetDocument {

@@ -6,6 +6,7 @@ use crate::tauri_commands::service_executable::{
     ensure_installable_location, resolve_service_executable,
 };
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
+use gents_service::args::ServiceAction;
 use tauri::{AppHandle, Runtime};
 
 pub(super) fn ensure_launchable_here<R>(
@@ -88,8 +89,9 @@ where
                 runtime = %executable.service_path().display(),
                 "reinstalling the stopped node service, whose definition names a runtime that moved"
             );
-            service.stop(false).map_err(native_error)?;
-            return service.install().map_err(native_error);
+            service_action(&service, ServiceAction::Stop { keep_enabled: true })
+                .map_err(native_error)?;
+            return service_action(&service, install_action()).map_err(native_error);
         }
         tracing::info!(
             target: "gents_desktop::managed_server",
@@ -97,7 +99,7 @@ where
         );
         return Ok(());
     }
-    service.install().map_err(native_error)
+    service_action(&service, install_action()).map_err(native_error)
 }
 
 pub(crate) async fn restart_outdated_managed_job<R>(
@@ -144,9 +146,9 @@ where
     state.managed_server.lock().await.starting = true;
     emit_status(app, state).await;
     let restarted = run_native(launchable_native_service(app, state)?, |service| {
-        service.stop(false)?;
-        service.install()?;
-        service.start(false)
+        service_action(&service, ServiceAction::Stop { keep_enabled: true })?;
+        service_action(&service, install_action())?;
+        service_action(&service, ServiceAction::Start { enable: false })
     })
     .await;
     {
@@ -209,6 +211,25 @@ pub(super) fn native_error(error: anyhow::Error) -> BridgeError {
         BridgeErrorCode::Backend
     };
     BridgeError::new(code, format!("{error:#}"))
+}
+
+/// Runs one lifecycle action through the service crate's handler, which
+/// admits it first. The service manager's own failure comes back unchanged.
+pub(super) fn service_action(
+    service: &gents_service::native_service::NativeServiceManager,
+    action: ServiceAction,
+) -> anyhow::Result<()> {
+    gents_service::lifecycle::perform(service, &action)
+        .map(drop)
+        .map_err(Into::into)
+}
+
+/// A reinstall that keeps the home's network settings and custom environment.
+pub(super) fn install_action() -> ServiceAction {
+    ServiceAction::Install {
+        network: Default::default(),
+        environment_file: None,
+    }
 }
 
 pub(super) async fn run_native<T, F>(

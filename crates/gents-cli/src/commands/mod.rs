@@ -32,6 +32,7 @@ pub(crate) mod plugin;
 pub(crate) mod prepare_runtime;
 pub(crate) mod provision;
 pub(crate) mod query;
+pub(crate) mod refusal;
 pub(crate) mod request;
 pub(crate) mod reset;
 pub(crate) mod response;
