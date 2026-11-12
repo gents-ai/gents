@@ -1039,29 +1039,9 @@ mod tests {
 
     #[test]
     fn generated_wire_targets_preserve_endpoint_and_permission_identity() {
-        #[derive(serde::Deserialize)]
-        struct Binding {
-            wire: String,
-            node: String,
-            agent: String,
-        }
-        #[derive(serde::Deserialize)]
-        struct Case {
-            bindings: Vec<Binding>,
-            wire: String,
-            ids: Vec<String>,
-            target: (String, String),
-            expected_resolved: Option<(String, String)>,
-            expected_permitted: bool,
-            expected_guest_targets: Vec<String>,
-        }
-        #[derive(serde::Deserialize)]
-        struct Contracts {
-            plugin_target_resolution_cases: Vec<Case>,
-        }
-        let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert!(!contracts.plugin_target_resolution_cases.is_empty());
-        for case in contracts.plugin_target_resolution_cases {
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_target_resolution_cases;
+        assert!(!cases.is_empty());
+        for case in cases {
             let available: Vec<_> = case
                 .bindings
                 .iter()
@@ -1074,15 +1054,25 @@ mod tests {
             let mut context = base_context();
             context.target_ids = case
                 .bindings
-                .into_iter()
-                .map(|binding| (binding.wire, (binding.node, binding.agent)))
+                .iter()
+                .map(|binding| {
+                    (
+                        binding.wire.clone(),
+                        (binding.node.clone(), binding.agent.clone()),
+                    )
+                })
                 .collect();
+            let target = (case.target[0].clone(), case.target[1].clone());
+            let expected_resolved = case
+                .expected_resolved
+                .as_ref()
+                .map(|pair| (pair[0].clone(), pair[1].clone()));
             assert_eq!(
-                resolve_target(&context, &case.wire),
-                case.expected_resolved.as_ref()
+                resolve_target(&context, &case.wire).cloned(),
+                expected_resolved
             );
             assert_eq!(
-                ids_permit(&context, &case.ids, &case.target),
+                ids_permit(&context, &case.ids, &target),
                 case.expected_permitted
             );
         }
