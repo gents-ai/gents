@@ -332,4 +332,21 @@ def writeCases : List WriteCase := Id.run do
           rows := rows ++ [{ previous := before, expected := expected, mode := mode, requestedTask := requestedTask }]
   return rows
 
+/-- Native file tools consult workspace consent only for a mutation under a
+saved preference. With no saved preference the workspace imposes no gate, and a
+preview (dry run) changes nothing, so it is routine under any mode. -/
+def fileToolRoute (saved : Option Input) (dryRun : Bool) : Route :=
+  match saved with
+  | none => .allow
+  | some input => if dryRun then .allow else route input
+
+theorem previews_and_callers_without_preferences_keep_their_existing_access
+    (saved : Option Input) (dryRun : Bool)
+    (unsaved : saved = none ∨ dryRun = true) :
+    fileToolRoute saved dryRun = .allow := by
+  rcases unsaved with h | h
+  · simp [fileToolRoute, h]
+  · subst h
+    cases saved <;> simp [fileToolRoute]
+
 end ToolPolicy.WorkspacePermissions

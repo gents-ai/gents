@@ -912,4 +912,52 @@ theorem capture_version_strictly_selects_the_storage_format :
       inlineDecode 3 .bareJson = .refused := by
   decide
 
+/-- The stored state of the block document one manifest entry names. A
+`wrongPayload` block holds bytes that do not hash to the entry's content key,
+while its field commit still matches the entry; an `absent` block has no
+document at the named id. -/
+inductive BlockState where
+  | healthy
+  | wrongPayload
+  | absent
+  deriving DecidableEq, Repr
+
+/-- The outcome of decoding one turn, as the reader reports it. -/
+inductive TurnOutcome where
+  | verbatim
+  | altered
+  | contentKeyMismatch
+  | verificationFailure
+  | storeFailure
+  deriving DecidableEq, Repr
+
+/-- A turn names one entry whose block is in `state`; every other entry is
+healthy. A block whose payload misses its content key fails the turn while the
+manifest is read, before anything is cached. An absent block fails the turn as
+unresolvable. -/
+def turnOutcome : BlockState → TurnOutcome
+  | .healthy => .verbatim
+  | .wrongPayload => .contentKeyMismatch
+  | .absent => .verificationFailure
+
+/-- Three turns resolved in order on one shared cache. Each turn's outcome is
+decided by its own manifest, so no earlier turn changes what a later one
+decodes to. -/
+def sequenceOutcomes (first second third : BlockState) :
+    TurnOutcome × TurnOutcome × TurnOutcome :=
+  (turnOutcome first, turnOutcome second, turnOutcome third)
+
+theorem a_misreferenced_block_entry_drops_only_its_own_turn :
+    sequenceOutcomes .wrongPayload .healthy .absent =
+      (.contentKeyMismatch, .verbatim, .verificationFailure) := by
+  rfl
+
+theorem content_key_mismatch_fails_closed (first third : BlockState) :
+    (sequenceOutcomes first .wrongPayload third).2.1 = .contentKeyMismatch := by
+  rfl
+
+theorem neighbor_outcome_ignores_earlier_turns (first third : BlockState) :
+    (sequenceOutcomes first .healthy third).2.1 = .verbatim := by
+  rfl
+
 end RenderedCapture

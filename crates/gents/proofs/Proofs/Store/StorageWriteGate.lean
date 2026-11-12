@@ -19,12 +19,15 @@ structure State where
 
 inductive Event where
   | siblingWait | elapsed | rollbackOwnerScheduled | storageReturned | deadlineObserved
-  | cleanupReturned | cleanupDeadlineObserved | dropReturned | release
+  | cleanupReturned | cleanupDeadlineObserved | dropReturned | release | consumerDrop
   deriving DecidableEq, Repr
 
 def pollable (s : State) : Bool := s.independent || !s.siblingWaiting
 
 def held (s : State) : Bool := s.phase != .released
+
+/-- The finalizer's future has ended, so the guard it owns has been dropped once. -/
+def guardDropCount (s : State) : Nat := if s.phase == .released then 1 else 0
 
 /-- Events ending in `Returned` are external observations, not guarantees;
     `rollbackOwnerScheduled` is not a cancellation request or intent. An armed
@@ -36,6 +39,8 @@ def step (s : State) (event : Event) : State :=
     match s.phase with
     | .storage | .cleanup => { s with phase := .cleanup, independent := true }
     | _ => s
+  else if event == .consumerDrop then
+    if s.independent then { s with phase := .released } else s
   else if !pollable s then s
   else match s.phase, event with
     | .storage, .storageReturned => { s with phase := .releasable }
@@ -97,6 +102,14 @@ theorem scheduled_rollback_timeout_releases_gate :
     held (run ⟨.storage, false, true⟩
       [.rollbackOwnerScheduled, .cleanupDeadlineObserved, .dropReturned, .release]) = false := by
   rfl
+
+/-- `finish_guard` spawns a finalizer whose handle aborts it when the stream is
+    dropped (`AbortOnDropHandle`); the aborted future releases the gate and drops
+    its guard once. Only a spawned (independent) finalizer is claimed here. -/
+theorem dropping_stream_aborts_owned_finalizer_and_releases_its_gate :
+    held (run ⟨.storage, true, false⟩ [.consumerDrop]) = false ∧
+      guardDropCount (run ⟨.storage, true, false⟩ [.consumerDrop]) = 1 := by
+  decide
 
 def ValidTrace (states : Nat → State) (events : Nat → Event) : Prop :=
   ∀ n, states (n + 1) = step (states n) (events n)

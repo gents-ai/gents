@@ -7,6 +7,8 @@ time recorded on the failed call that ended the latest request (`none`: no
 reset reported). `limitStartedAt` is that call's start. `profileNamesAccount`
 means the profile that served the call still selects the call's backend, and
 the serving sign-in connected before the limited call (the same sign-in).
+`accountPresent` is false once that sign-in has been removed: a removed account
+serves no call, so the Goal waits as it does for a disabled one.
 The held runtime Node obtains only this account-selection fact on the Agent's
 transaction snapshot; native document authorization controls the Node's read,
 and the Agent is not granted credential-secret access. -/
@@ -18,12 +20,14 @@ structure ResetFacts where
   profileNamesAccount : Bool
   accountEnabled : Bool
   backendEnabled : Bool
+  accountPresent : Bool
   deriving DecidableEq, Repr
 
 /-- A reset no later than the limited call's start is stale and never due;
 there is no cap on how far away the reset may be. -/
 def ResetFacts.due (f : ResetFacts) : Bool :=
   f.optedIn && f.profileNamesAccount && f.accountEnabled && f.backendEnabled &&
+    f.accountPresent &&
     match f.resetAt with
     | some t => decide (f.limitStartedAt < t) && decide (t ≤ f.now)
     | none => false
@@ -78,6 +82,11 @@ theorem no_reset_resume_after_account_change (s : Snapshot) (f : ResetFacts)
     (resumeBy s (.resetReached f) r commit).1 = s :=
   reset_resume_not_due_is_noop s f r commit
     (by rcases h with h | h | h <;> simp [ResetFacts.due, h])
+
+theorem waits_after_the_account_was_removed (s : Snapshot) (f : ResetFacts)
+    (r : Request) (commit : Bool) (h : f.accountPresent = false) :
+    (resumeBy s (.resetReached f) r commit).1 = s :=
+  reset_resume_not_due_is_noop s f r commit (by simp [ResetFacts.due, h])
 
 theorem no_reset_resume_for_a_stale_reset (s : Snapshot) (f : ResetFacts) (t : Nat)
     (r : Request) (commit : Bool) (h : f.resetAt = some t)

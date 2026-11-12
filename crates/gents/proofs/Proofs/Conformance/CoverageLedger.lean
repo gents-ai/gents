@@ -582,24 +582,24 @@ def caseCoverage : List CoverageEntry :=
       "Triggers.Durable")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_session_cases"
-      "Triggers.SessionKey")
+      "family"
+      "trigger_delivery_session_resolution")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_fire_budget_cases"
-      "Triggers.FireBudget")
+      "family"
+      "trigger_delivery_fire_budget_admission")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery_queue_cases"
       "Triggers.Queue")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_option_cases"
-      "Triggers.Types")
+      "family"
+      "trigger_delivery_delivery_options")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_observed_claim_cases"
-      "Triggers.Durable")
+      "family"
+      "trigger_delivery_observed_claim")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery_cursor_cases"
@@ -836,16 +836,16 @@ def caseCoverage : List CoverageEntry :=
       "AgentRequestAdmissionCases")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "causal_hop_step_cases"
-      "CausalHopContract")
+      "family"
+      "causal_hop_contracts_step_admission")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "causal_hop_session_target_cases"
-      "SessionTargetAuthorityCases")
+      "family"
+      "causal_hop_contracts_session_target")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "causal_hop_session_list_cases"
-      "SessionListEntryCases")
+      "family"
+      "causal_hop_contracts_session_list")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (followUpCoverage
       "title_request_admission_cases"
@@ -965,8 +965,8 @@ def caseCoverage : List CoverageEntry :=
       "InvocationCorrelationCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "lsp_action_cases"
-      "LspActionCases")
+      "family"
+      "contracts_lsp_action_authorization")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "self_config_field_tables"
@@ -1025,8 +1025,8 @@ def caseCoverage : List CoverageEntry :=
       "CountCarrierCases")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "logical_output_obligation_cases"
-      "LogicalOutputObligationCases")
+      "family"
+      "logical_output_obligation_contracts_gate")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "completion_retry_cases"
@@ -1158,8 +1158,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientRequestPatchPublicationCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_direct_session_read_cases"
-      "ClientDirectSessionReadCases")
+      "family"
+      "client_session_delivery_direct_read")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "storage_failure_cases"
@@ -1536,8 +1536,8 @@ def caseCoverage : List CoverageEntry :=
       "Checks execution-context binding only. Native workspace policy, relationship publication and authorization retain their separate owners.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_input_edit_native_discovery_cases"
-      "SessionCommandNativeDiscovery")
+      "family"
+      "session_input_edit_native_discovery")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_input_edit_native_claim_cases"
@@ -1552,8 +1552,8 @@ def caseCoverage : List CoverageEntry :=
       "FileReviewSubscriptionCases")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "file_review_route_cases"
-      "FileReviewRouteCases")
+      "family"
+      "file_review_routes")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "scope_node_route_cases"
@@ -1750,8 +1750,8 @@ def caseCoverage : List CoverageEntry :=
       "ToolTimeoutCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "workspace_path_alias_cases"
-      "WorkspacePathAliasCases")
+      "family"
+      "workspace_path_alias_admission")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_claimed_publication_cases"
@@ -1818,8 +1818,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalRequestAncestryCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_queue_assignment_cases"
-      "GoalQueueAssignmentCases")
+      "family"
+      "goal_queue_assignment_contracts_fold_decision")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_queue_assignment_contracts_steer_decision")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "durable_observation_cases"

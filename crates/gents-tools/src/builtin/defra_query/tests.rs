@@ -279,29 +279,49 @@ async fn rejects_query_against_collection_outside_scope() {
 }
 
 #[tokio::test]
-async fn refuses_a_protected_collection_even_when_unrestricted() {
+async fn protected_collections_are_refused_by_reads_and_discovery() {
     let node = seeded_node().await;
     let tool = DefraQueryTool::new(node, CollectionScope::all());
-
-    let err = Tool::call(
-        &tool,
-        DefraQueryParams {
-            collection: gents_protocol::schemas::EVAL_VERDICT_NAME.to_string(),
-            filter: None,
-            fields: vec!["score_bp".to_string()],
-            limit: None,
-        }
-        .into(),
-    )
-    .await
-    .expect_err("a protected collection must never be readable");
-
-    let message = format!("{err:#}");
-    assert!(message.contains("protected"), "{message}");
-    assert!(
-        message.contains(gents_protocol::schemas::EVAL_VERDICT_NAME),
-        "{message}"
-    );
+    for case in gents_lean_vocab::families::datastore_protection_refusal::cases() {
+        let collection = case.input.collection.clone();
+        let refused = |outcome: Option<String>| {
+            outcome.is_some_and(|message| {
+                message.contains("protected") && message.contains(collection.as_str())
+            })
+        };
+        let read = Tool::call(
+            &tool,
+            DefraQueryParams {
+                collection: collection.clone(),
+                filter: None,
+                fields: vec!["score_bp".to_string()],
+                limit: None,
+            }
+            .into(),
+        )
+        .await
+        .err()
+        .map(|error| format!("{error:#}"));
+        let discovery = Tool::call(
+            &tool,
+            DefraQueryParams {
+                collection: collection.clone(),
+                filter: None,
+                fields: vec!["*".to_string()],
+                limit: None,
+            }
+            .into(),
+        )
+        .await
+        .err()
+        .map(|error| format!("{error:#}"));
+        case.check(
+            gents_lean_vocab::families::datastore_protection_refusal::RefusalOutput {
+                read_refused: refused(read),
+                discovery_refused: refused(discovery),
+            },
+        );
+    }
 }
 
 #[tokio::test]
@@ -325,32 +345,6 @@ async fn refuses_client_publication_reads_and_discovery() {
         .expect_err("client publication data is not agent-readable");
         assert!(format!("{error:#}").contains("protected"));
     }
-}
-
-#[tokio::test]
-async fn refuses_discovery_of_a_protected_collection() {
-    let node = seeded_node().await;
-    let tool = DefraQueryTool::new(node, CollectionScope::all());
-
-    let err = Tool::call(
-        &tool,
-        DefraQueryParams {
-            collection: gents_protocol::schemas::EVAL_VERDICT_NAME.to_string(),
-            filter: None,
-            fields: vec!["*".to_string()],
-            limit: None,
-        }
-        .into(),
-    )
-    .await
-    .expect_err("a protected collection's field inventory must never be listed");
-
-    let message = format!("{err:#}");
-    assert!(message.contains("protected"), "{message}");
-    assert!(
-        message.contains(gents_protocol::schemas::EVAL_VERDICT_NAME),
-        "{message}"
-    );
 }
 
 #[tokio::test]
@@ -474,33 +468,32 @@ async fn wildcard_fields_returns_field_inventory() {
 }
 
 #[tokio::test]
-async fn discovery_excludes_restricted_fields() {
+async fn discovery_lists_exactly_the_fields_the_model_leaves_visible() {
     let node = seeded_node().await;
     let tool = DefraQueryTool::new(node, CollectionScope::all());
-
-    let output = Tool::call(
-        &tool,
-        DefraQueryParams {
-            collection: "InferenceBackend".to_string(),
-            filter: None,
-            fields: vec!["*".to_string()],
-            limit: None,
-        }
-        .into(),
-    )
-    .await
-    .expect("discovery must succeed");
-
-    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
-    let names: Vec<&str> = parsed["fields"]
-        .as_array()
-        .expect("fields array")
-        .iter()
-        .map(|f| f["name"].as_str().unwrap())
-        .collect();
-    assert!(names.contains(&"backend_id"), "{names:?}");
-    assert!(names.contains(&"endpoint"), "{names:?}");
-    assert!(!names.contains(&"auth"), "secret leaked: {names:?}");
+    for case in gents_lean_vocab::families::discovery_field_visibility_listing::cases() {
+        let output = Tool::call(
+            &tool,
+            DefraQueryParams {
+                collection: case.input.collection.clone(),
+                filter: None,
+                fields: vec!["*".to_string()],
+                limit: None,
+            }
+            .into(),
+        )
+        .await
+        .expect("discovery must succeed");
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        let listed = parsed["fields"]
+            .as_array()
+            .expect("fields array")
+            .iter()
+            .any(|f| f["name"].as_str() == Some(case.input.field.as_str()));
+        case.check(
+            gents_lean_vocab::families::discovery_field_visibility_listing::FieldOutput { listed },
+        );
+    }
 }
 
 #[tokio::test]

@@ -624,7 +624,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_misreferenced_block_entry_drops_only_its_own_turn() {
+    async fn rendered_capture_block_turns_match_the_lean_model() {
         let mut body = serde_json::json!({"model": "m", "stream": true});
         body["padding"] = serde_json::json!(capture_text(6000));
         let canonical = canonical_json_string(&body).unwrap();
@@ -641,7 +641,7 @@ mod tests {
             wrong_payload,
             "wrong-commit".to_string(),
         )];
-        let entries = chunks
+        let healthy = chunks
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
@@ -659,65 +659,68 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let store = MisreferencingBlockStore { docs };
-
-        let mut misreferenced = entries.clone();
-        misreferenced[0].doc_id = "block-wrong".into();
-        misreferenced[0].field_commit_cid = "wrong-commit".into();
         let encode_turn = |entries: &[encoding::ManifestEntry]| {
             let manifest = encoding::encode_manifest(entries).unwrap();
             encoding::encode_container(&manifest, &manifest).unwrap()
         };
-        let turn_n = encode_turn(&misreferenced);
-        let turn_m = encode_turn(&entries);
+        let turn_for = |state: &str| {
+            let mut entries = healthy.clone();
+            match state {
+                "healthy" => {}
+                "wrong_payload" => {
+                    entries[0].doc_id = "block-wrong".into();
+                    entries[0].field_commit_cid = "wrong-commit".into();
+                }
+                "absent" => entries[0].doc_id = "block-absent".into(),
+                other => panic!("unknown block state {other}"),
+            }
+            encode_turn(&entries)
+        };
+        let outcome_of = |decoded: Result<Value>| -> String {
+            match decoded {
+                Ok(value) if value == body => "verbatim".into(),
+                Ok(_) => "altered".into(),
+                Err(error) if error.downcast_ref::<CaptureStoreReadError>().is_some() => {
+                    "store_failure".into()
+                }
+                Err(error)
+                    if error
+                        .to_string()
+                        .contains("does not hash to its content key") =>
+                {
+                    "content_key_mismatch".into()
+                }
+                Err(_) => "verification_failure".into(),
+            }
+        };
 
-        let version = 3;
-        let mut cache = CaptureReadCache::default();
-        let error = decode_capture_json_from_cached(
-            &store,
-            version,
-            &turn_n,
-            CapturePayloadKind::RequestBody,
-            &mut cache,
-        )
-        .await
-        .expect_err("the misreferencing turn must fail closed");
-        assert!(
-            error.downcast_ref::<CaptureStoreReadError>().is_none(),
-            "a misreferenced block is a verification failure, not a store failure: {error:#}"
-        );
-        assert!(
-            error
-                .to_string()
-                .contains("does not hash to its content key"),
-            "{error:#}"
-        );
-
-        let replayed = decode_capture_json_from_cached(
-            &store,
-            version,
-            &turn_m,
-            CapturePayloadKind::RequestBody,
-            &mut cache,
-        )
-        .await
-        .expect("the neighboring turn must still replay through the shared cache");
-        assert_eq!(replayed, body);
-
-        let mut absent = entries.clone();
-        absent[0].doc_id = "block-absent".into();
-        let error = decode_capture_json_from_cached(
-            &store,
-            version,
-            &encode_turn(&absent),
-            CapturePayloadKind::RequestBody,
-            &mut cache,
-        )
-        .await
-        .expect_err("a manifest naming an absent document must fail closed");
-        assert!(
-            error.downcast_ref::<CaptureStoreReadError>().is_none(),
-            "an absent block is a verification failure, not a store failure: {error:#}"
-        );
+        let cases = gents_lean_vocab::families::rendered_capture_block_turns_sequence::cases::<
+            String,
+            String,
+        >();
+        for case in &cases {
+            let mut cache = CaptureReadCache::default();
+            let mut outcomes = Vec::new();
+            for state in [&case.input.first, &case.input.second, &case.input.third] {
+                let turn = turn_for(state.as_str());
+                let decoded = decode_capture_json_from_cached(
+                    &store,
+                    3,
+                    &turn,
+                    CapturePayloadKind::RequestBody,
+                    &mut cache,
+                )
+                .await;
+                outcomes.push(outcome_of(decoded));
+            }
+            case.check(
+                gents_lean_vocab::families::rendered_capture_block_turns_sequence::BlockTurnOutput {
+                    first: outcomes[0].clone(),
+                    second: outcomes[1].clone(),
+                    third: outcomes[2].clone(),
+                },
+            );
+        }
     }
 
     fn agent_request() -> gents_protocol::row::AgentRequest {

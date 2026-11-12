@@ -358,6 +358,17 @@ theorem plugin_writing_call_needs_read_write (hasWriteFields : Bool) :
     pluginCallAdmitted .readWrite (some .read) hasWriteFields true = false := by
   cases hasWriteFields <;> decide
 
+/-- A bound call needs a plugin that declares `bind_dir`: without one there is
+no directory to bind, so the call is refused at admission whatever the grant. -/
+def pluginBoundCallAdmitted (declaresBindDir : Bool) (declared : PluginAccess)
+    (granted : Option PluginAccess) (hasWriteFields setsWriteField : Bool) : Bool :=
+  declaresBindDir && pluginCallAdmitted declared granted hasWriteFields setsWriteField
+
+theorem call_bound_refuses_a_plugin_that_declares_no_bind_dir (declared : PluginAccess)
+    (granted : Option PluginAccess) (hasWriteFields setsWriteField : Bool) :
+    pluginBoundCallAdmitted false declared granted hasWriteFields setsWriteField = false := by
+  rfl
+
 /-- Who installed a pack: the operator, or an agent through self-configuration.
 Defined here so job authority reuses it without an import cycle. -/
 inductive InstallProvenance where

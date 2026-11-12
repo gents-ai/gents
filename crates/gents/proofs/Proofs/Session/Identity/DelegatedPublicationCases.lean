@@ -111,6 +111,23 @@ theorem missing_starter_aborts_atomic_publication :
     let s := [.commit false true true].foldl step (initial true)
     s.committed = false ∧ s.receipt = false ∧ s.toolRunning = false := by native_decide
 
+/-- The caller is dropped at the committed acknowledgement. The native transaction
+has committed the opening request, its session and the verified starter, but
+the caller recorded no receipt: the publication is unobserved and both pending
+markers remain. -/
+def droppedAckState : Publication := [good].foldl step (initial true)
+
+/-- The creator's actor watcher recovers the exact receipt, then publishes every
+relation and clears both pending markers before any claim. -/
+def watcherRecoveredState : Publication := [good, observed, grant].foldl step (initial true)
+
+theorem cancelled_after_child_commit_recovers_relationships_in_the_actor_watcher :
+    droppedAckState.committed = true ∧ droppedAckState.toolRunning = true ∧
+    allowed 5 droppedAckState.household "child-agent" "delivered_requests" "child-request" "read" = false ∧
+    watcherRecoveredState.requestPending = false ∧
+    allowed 5 watcherRecoveredState.household "child-agent" "delivered_requests" "child-request" "read" = true ∧
+    claim watcherRecoveredState grantedCommit = .claimed := by native_decide
+
 def actionJson : Action → Json
   | .commit starter receipt native => Json.mkObj [("kind", toJson ("commit" : String)),
       ("starter", toJson starter), ("creation_receipt", toJson receipt), ("native_commit", toJson native)]

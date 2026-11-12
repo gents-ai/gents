@@ -225,6 +225,49 @@ theorem staged_abort_preserves_active_pending
   unfold generationPending at hActive ⊢
   exact Finset.mem_erase.mpr ⟨hDifferent, Finset.mem_insert_of_mem hActive⟩
 
+inductive GenerationKind
+  | register
+  | retire
+  deriving DecidableEq, Repr
+
+structure GenerationStep where
+  kind : GenerationKind
+  generation : Nat
+  deriving DecidableEq, Repr
+
+structure GenerationObservation where
+  generationOnePending : Bool
+  generationTwoPending : Bool
+  ready : Bool
+  deriving DecidableEq, Repr
+
+def applyGenerationStep (owners : PendingGenerationOwners) (step : GenerationStep) :
+    PendingGenerationOwners :=
+  match step.kind with
+  | .register => registerGeneration step.generation owners
+  | .retire => releaseGeneration step.generation owners
+
+def observeGenerations (owners : PendingGenerationOwners) : GenerationObservation :=
+  { generationOnePending := decide (1 ∈ owners.generations)
+    generationTwoPending := decide (2 ∈ owners.generations)
+    ready := decide (owners.generations = ∅) }
+
+def observeGenerationTrace :
+    PendingGenerationOwners → List GenerationStep → List GenerationObservation
+  | _, [] => []
+  | owners, step :: rest =>
+      let next := applyGenerationStep owners step
+      observeGenerations next :: observeGenerationTrace next rest
+
+theorem aborted_staged_generation_does_not_release_active_startup_obligation :
+    observeGenerationTrace { generations := ∅ }
+        [⟨.register, 1⟩, ⟨.register, 2⟩, ⟨.retire, 2⟩, ⟨.retire, 1⟩] =
+      [ { generationOnePending := true, generationTwoPending := false, ready := false }
+      , { generationOnePending := true, generationTwoPending := true, ready := false }
+      , { generationOnePending := true, generationTwoPending := false, ready := false }
+      , { generationOnePending := false, generationTwoPending := false, ready := true } ] := by
+  decide
+
 structure ScopedDemotion where
   generation : Nat
   active : Bool

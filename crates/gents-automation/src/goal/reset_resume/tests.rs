@@ -160,29 +160,39 @@ async fn waits_for_a_sign_in_after_the_limited_call() {
 }
 
 #[tokio::test]
-async fn waits_after_the_account_was_removed() {
-    let reset = Reset::new("inference", Some(T)).await;
-    let admin = ConfigAccess::local_as(
-        reset.f.node.clone(),
-        ::identity::Did::new(reset.f.identity.did()).unwrap(),
-    );
-    admin
-        .grant_node_permission(
-            &::identity::Did::new(reset.f.user.did()).unwrap(),
-            gents_store::config_client::NodePermission::DocumentDelete,
-        )
-        .await
-        .unwrap();
-    let (did, credential) = (reset.f.identity.did(), reset.accounts.a_credential.as_str());
-    reset
-        .accounts
-        .access
-        .transact_write("test.remove_account", |txn| {
-            Box::pin(gents_inference::auth::credential::remove_account_in_txn(
-                txn, did, credential,
-            ))
-        })
-        .await
-        .unwrap();
-    reset.waits().await;
+async fn account_removal_follows_the_lean_reset_model() {
+    for case in gents_lean_vocab::families::goal_reset_resume_account_resumes::cases() {
+        let reset = Reset::new("inference", Some(T)).await;
+        if !case.input.account_present {
+            let admin = ConfigAccess::local_as(
+                reset.f.node.clone(),
+                ::identity::Did::new(reset.f.identity.did()).unwrap(),
+            );
+            admin
+                .grant_node_permission(
+                    &::identity::Did::new(reset.f.user.did()).unwrap(),
+                    gents_store::config_client::NodePermission::DocumentDelete,
+                )
+                .await
+                .unwrap();
+            let (did, credential) =
+                (reset.f.identity.did(), reset.accounts.a_credential.as_str());
+            reset
+                .accounts
+                .access
+                .transact_write("test.remove_account", |txn| {
+                    Box::pin(gents_inference::auth::credential::remove_account_in_txn(
+                        txn, did, credential,
+                    ))
+                })
+                .await
+                .unwrap();
+        }
+        let result = reset.resume(case.input.now as i64).await;
+        case.check(gents_lean_vocab::families::goal_reset_resume_account_resumes::ResumeOutput {
+            created: result.as_ref().is_some_and(|receipt| receipt.created),
+            goal_usage_limited: reset.f.goal_status().await == "usage_limited",
+            child_count: reset.f.children().await.len() as u64,
+        });
+    }
 }

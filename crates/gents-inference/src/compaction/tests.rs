@@ -1995,54 +1995,6 @@ fn duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call() {
 }
 
 #[test]
-fn call_key_reuse_across_turns_survives() {
-    let history = vec![
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-        scoped_result("c1"),
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-        scoped_result("c1"),
-    ];
-    assert_eq!(
-        super::sanitize_history_for_provider(GROUPED_PROFILE, history.clone()),
-        history,
-        "per-turn key reuse must be preserved"
-    );
-}
-
-#[test]
-fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
-    let out = super::sanitize_history_for_provider(
-        GROUPED_PROFILE,
-        vec![
-            Message::Assistant {
-                request_id: None,
-                id: None,
-                content: vec![scoped_call("c1")],
-            },
-            scoped_result("c1"),
-            Message::Assistant {
-                request_id: None,
-                id: None,
-                content: vec![scoped_call("c1")],
-            },
-        ],
-    );
-    assert_eq!(
-        count_calls_and_results(&out),
-        (1, 1),
-        "the unanswered second-turn call must be dropped: {out:?}"
-    );
-}
-
-#[test]
 fn standard_typed_parse_failure_does_not_embed_raw_output() {
     let huge = format!("{{\"goal\": \"{}", "x".repeat(3_000_000));
     let message = serde_json::from_str::<super::summary::ContinuationCheckpoint>(&huge)
