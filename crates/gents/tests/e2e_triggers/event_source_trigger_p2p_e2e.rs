@@ -16,11 +16,12 @@ use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
+use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db;
 
 const EXTERNAL_ID: &str = "wh-p2p-1";
 
-async fn register_replicated_event_schema(node: &EmbeddedNode) {
+async fn register_replicated_event_schema(node: &std::sync::Arc<EmbeddedNode>) {
     let sdl = r#"
         type ReplicatedEvent @branchable {
             external_id: String
@@ -28,12 +29,17 @@ async fn register_replicated_event_schema(node: &EmbeddedNode) {
             kind: String @index
         }
     "#;
-    node.add_collection(sdl)
+    gents_store::config_client::ConfigAccess::local(node.clone())
+        .add_collection(sdl)
         .await
         .expect("add_collection for ReplicatedEvent");
 }
 
-async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
+async fn write_replicated_event(
+    node: &std::sync::Arc<EmbeddedNode>,
+    external_id: &str,
+    kind: &str,
+) -> String {
     let mutation = format!(
         r#"mutation {{
             add_ReplicatedEvent(input: {{
@@ -45,7 +51,13 @@ async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &s
         escape_graphql_string(external_id),
         escape_graphql_string(kind),
     );
-    let response = node.execute(&mutation).await;
+    let response = gents_store::config_client::ConfigAccess::write_local_response(
+        node,
+        "test.p2p_fixture",
+        &mutation,
+    )
+    .await
+    .expect("P2P document access");
     assert!(
         !response.has_errors(),
         "add_ReplicatedEvent failed: {:?}",
@@ -60,10 +72,14 @@ async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &s
         .to_owned()
 }
 
-async fn replicated_events(node: &EmbeddedNode) -> Vec<Value> {
-    let response = node
-        .execute(r#"{ ReplicatedEvent { _docID external_id } }"#)
-        .await;
+async fn replicated_events(node: &std::sync::Arc<EmbeddedNode>) -> Vec<Value> {
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        r#"{ ReplicatedEvent { _docID external_id } }"#,
+        "test.p2p_observation",
+    )
+    .await
+    .expect("P2P document access");
     assert!(
         !response.has_errors(),
         "query ReplicatedEvent: {:?}",
@@ -86,17 +102,17 @@ fn refuses_runtime_local(result: Result<(), RemoteP2pAdminError>) -> bool {
 async fn p2p_refuses_to_replicate_an_application_event_source() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     let db_writer = test_p2p_db("event-trigger-p2p-writer").await;
-    register_replicated_event_schema(db_writer.node.as_ref()).await;
+    register_replicated_event_schema(&db_writer.node).await;
     let db_agent = test_p2p_db("event-trigger-p2p-agent").await;
-    register_replicated_event_schema(db_agent.node.as_ref()).await;
+    register_replicated_event_schema(&db_agent.node).await;
 
     let writer = EmbeddedRemoteP2pAdmin::new(db_writer.node.clone());
-    let agent_addr = wait_for_listen_addr(db_agent.node.as_ref()).await;
+    let agent_addr = wait_for_listen_addr(&db_agent.node).await;
     writer
         .connect(std::slice::from_ref(&agent_addr))
         .await
         .expect("connect writer to agent");
-    wait_for_connected_peer(db_writer.node.as_ref()).await;
+    wait_for_connected_peer(&db_writer.node).await;
 
     for node in [&db_writer.node, &db_agent.node] {
         assert!(
@@ -125,14 +141,24 @@ async fn p2p_refuses_to_replicate_an_application_event_source() {
 
     let source_doc_id = write_replicated_event(&db_writer.node, EXTERNAL_ID, "signup").await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
-    while tokio::time::Instant::now() < deadline {
+    let mut changes = db_agent.node.subscribe_changes("ReplicatedEvent").await;
+    loop {
         assert!(
-            replicated_events(db_agent.node.as_ref()).await.is_empty(),
+            replicated_events(&db_agent.node).await.is_empty(),
             "ReplicatedEvent {source_doc_id} reached the peer"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .is_err()
+        {
+            break;
+        }
     }
-    assert_eq!(replicated_events(db_writer.node.as_ref()).await.len(), 1);
+    assert!(
+        replicated_events(&db_agent.node).await.is_empty(),
+        "ReplicatedEvent reached the peer at the observation deadline"
+    );
+    assert_eq!(replicated_events(&db_writer.node).await.len(), 1);
 
     db_writer.node.shutdown().await.expect("node shutdown");
     db_agent.node.shutdown().await.expect("node shutdown");
