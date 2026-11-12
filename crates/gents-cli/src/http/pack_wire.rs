@@ -124,6 +124,8 @@ mod tests {
             targets_from: vec!["acme/pack".into()],
             remove: false,
             preview: false,
+            dynamic_consent: false,
+            tool_calls_consent: false,
         }
     }
 
