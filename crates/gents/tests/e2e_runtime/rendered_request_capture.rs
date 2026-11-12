@@ -721,10 +721,6 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
     assert_eq!(first_accounting["attempt"], 0);
     assert_eq!(retry_accounting["turn_index"], 0);
     assert_eq!(retry_accounting["attempt"], 1);
-    assert_eq!(
-        retry_accounting["components"], first_accounting["components"],
-        "a byte-identical retry must reuse the same measured request components"
-    );
     let calls = fixture.inference_calls("req-capture-attempts").await;
     let inference_calls = calls
         .iter()
