@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use gents::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
+use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
 use gents::runtime::embedded::EmbeddedHome;
 use gents_protocol::row::AgentRequest;
 use gents_store::graphql::escape_graphql_string;
@@ -15,7 +15,7 @@ pub mod agent_requests;
 pub mod agent_transcript;
 pub mod builder_runtime;
 pub mod commit_race_proxy;
-pub mod enrollment;
+
 pub mod fixtures;
 pub mod http_mock;
 pub(crate) mod identity_stubs;
@@ -23,7 +23,7 @@ pub mod interrupt;
 pub mod live_inference;
 pub mod mock_endpoint;
 pub mod mock_subscription;
-pub mod p2p_waits;
+
 pub mod pairing_conformance;
 pub mod signed_mailbox;
 pub mod snapshots;
@@ -75,13 +75,10 @@ impl TestDb {
             .expect("test home GraphQL endpoint");
         gents_store::config_client::ConfigAccess::Graphql(
             gents::runtime::lifecycle_hooks::compose_endpoint(
-                gents_store::config_client::GraphqlEndpoint::as_principal(
-                    endpoint,
-                    identity.did(),
-                )
-                .with_client_signing_capability(identity.client_signing_capability().unwrap())
-                .unwrap()
-                .with_client_signed_agent_creates(),
+                gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
+                    .with_client_signing_capability(identity.client_signing_capability().unwrap())
+                    .unwrap()
+                    .with_client_signed_agent_creates(),
             )
             .unwrap(),
         )
@@ -371,36 +368,6 @@ pub async fn test_db_in(tempdir: tempfile::TempDir) -> TestDb {
     test_db_from_home(home)
 }
 
-#[derive(Debug, Clone)]
-pub struct TestP2pAdmission {
-    pub max_concurrent_push_tasks: usize,
-    pub max_concurrent_dag_fetches: usize,
-    pub max_pending_dags: usize,
-    pub rate_limit_burst: u32,
-    pub rate_limit_rate: f64,
-}
-
-impl Default for TestP2pAdmission {
-    fn default() -> Self {
-        Self {
-            max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
-            max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
-            max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
-            rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
-            rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
-        }
-    }
-}
-
-impl TestP2pAdmission {
-    pub fn single_push_worker() -> Self {
-        Self {
-            max_concurrent_push_tasks: 1,
-            ..Self::default()
-        }
-    }
-}
-
 pub async fn test_p2p_db(name: &str) -> TestDb {
     test_p2p_db_with_admission(name, TestP2pAdmission::default()).await
 }
@@ -472,30 +439,6 @@ async fn install_runtime_node(db: &TestDb) {
         })
         .await
         .expect("install runtime Node as its User");
-}
-
-pub fn test_p2p_config(admission: &TestP2pAdmission, data_path: &std::path::Path) -> P2PConfig {
-    P2PConfig {
-        port: Some(0),
-        bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
-        relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
-        discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
-        allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
-        max_concurrent_multipath_paths: None,
-        secret_key_path: Some(data_path.join("p2p.key")),
-        peer_key: defra_node::PeerKeySource::File,
-        load_persisted_collections: true,
-        sync: defra_node::SyncTuning {
-            max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
-            max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
-            rate_limit_burst: admission.rate_limit_burst,
-            rate_limit_rate: admission.rate_limit_rate,
-            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-            max_pending_dags: admission.max_pending_dags,
-            ..Default::default()
-        },
-        rebroadcast_on_merge: false,
-    }
 }
 
 pub async fn create_request(
@@ -1421,3 +1364,5 @@ pub async fn load_request_row_by_logical_id(
     );
     serde_json::from_value(rows[0].clone()).expect("decode exact AgentRequest row")
 }
+
+use gents_p2p::test_support::transport::{test_p2p_config, TestP2pAdmission};

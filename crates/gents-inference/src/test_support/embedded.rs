@@ -461,3 +461,23 @@ pub async fn signed_test_node_from_db(
     set_test_default_agent_as(&access, runtime.did(), &binding.agent_did).await;
     (db, user, access, binding)
 }
+
+pub async fn test_db_with_p2p<F>(
+    name: &str,
+    composition: gents_store::node_extension::Extensions,
+    p2p: F,
+) -> TestDb
+where
+    F: FnOnce(&Path) -> defra_node::P2PConfig,
+{
+    let tempdir = tempfile::Builder::new()
+        .prefix(&format!("gents-{name}-"))
+        .tempdir()
+        .expect("tempdir");
+    let config = p2p(&tempdir.path().join("data"));
+    let mut db = test_db_at(tempdir.path(), Some(config), composition)
+        .await
+        .expect("p2p test node");
+    db.tempdir = Some(tempdir);
+    db
+}

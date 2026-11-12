@@ -1,5 +1,5 @@
-use crate::support::enrollment::{signed_enrollment_offer, wait_for_peer_identity};
 use gents_loop::tool::Tool;
+use gents_p2p::test_support::enrollment::{signed_enrollment_offer, wait_for_peer_identity};
 use gents_tools::builtin::p2p::*;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -13,8 +13,8 @@ async fn call(tool: &P2pTool, value: Value) -> Value {
 
 #[tokio::test]
 async fn node_requested_enrollment_is_approved_by_the_offering_node() {
-    let server = crate::support::test_p2p_db("engineer-enroll-server").await;
-    let candidate = crate::support::test_p2p_db("engineer-enroll-candidate").await;
+    let server = gents_session::test_support::test_p2p_db("engineer-enroll-server").await;
+    let candidate = gents_session::test_support::test_p2p_db("engineer-enroll-candidate").await;
     let (server_peer, _) = wait_for_peer_identity(&server.node).await;
     let (candidate_peer, _) = wait_for_peer_identity(&candidate.node).await;
     signed_enrollment_offer(
@@ -168,7 +168,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
 
 #[tokio::test]
 async fn p2p_rejects_a_foreign_actor_and_malformed_peers() {
-    let db = crate::support::test_p2p_db("engineer-p2p-owned").await;
+    let db = gents_session::test_support::test_p2p_db("engineer-p2p-owned").await;
     let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), true);
     let malformed = Tool::call(
         &tool,
@@ -202,7 +202,7 @@ async fn p2p_rejects_a_foreign_actor_and_malformed_peers() {
 
 #[tokio::test]
 async fn help_and_scope_name_discovery_and_enrollment_as_the_only_capabilities() {
-    let db = crate::support::test_p2p_db("engineer-p2p-discovery").await;
+    let db = gents_session::test_support::test_p2p_db("engineer-p2p-discovery").await;
     let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), false);
     for argv in [
         json!(["help", "pairings"]),
@@ -248,7 +248,7 @@ async fn help_and_scope_name_discovery_and_enrollment_as_the_only_capabilities()
 
 #[tokio::test]
 async fn typed_actions_are_the_closed_schema_and_argv_remains_accepted() {
-    let db = crate::support::test_p2p_db("engineer-p2p-typed").await;
+    let db = gents_session::test_support::test_p2p_db("engineer-p2p-typed").await;
     let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), true);
     let schema = Tool::definition(&tool, String::new()).await.parameters;
     assert_eq!(schema["required"], json!(["action"]));
@@ -322,9 +322,9 @@ async fn typed_actions_are_the_closed_schema_and_argv_remains_accepted() {
 
 #[tokio::test]
 async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
-    let server = crate::support::test_p2p_db("engineer-deny-server").await;
-    let first = crate::support::test_p2p_db("engineer-deny-first").await;
-    let second = crate::support::test_p2p_db("engineer-deny-second").await;
+    let server = gents_session::test_support::test_p2p_db("engineer-deny-server").await;
+    let first = gents_session::test_support::test_p2p_db("engineer-deny-first").await;
+    let second = gents_session::test_support::test_p2p_db("engineer-deny-second").await;
     signed_enrollment_offer(
         &server.node,
         "engineer-deny",
@@ -333,7 +333,7 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
         "challenge-engineer-deny".into(),
     )
     .await;
-    let tool = |db: &crate::support::TestDb| {
+    let tool = |db: &gents_inference::test_support::TestDb| {
         P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), true)
     };
     let server_tool = tool(&server);

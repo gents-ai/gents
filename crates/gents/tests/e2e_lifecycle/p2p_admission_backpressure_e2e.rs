@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 use gents::defra_node::Node as EmbeddedNode;
 use gents_store::graphql::escape_graphql_string;
 
-use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
-use crate::support::{test_p2p_db_with_admission, TestP2pAdmission};
+use crate::support::test_p2p_db_with_admission;
+use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
 
 const OWNER_DID: &str = "did:test:admission-p2p-owner";
 
@@ -137,3 +137,5 @@ async fn single_push_worker_delivers_multi_wave_updates() {
         assert_eq!(on_peer["endpoint_address"], address.as_str());
     }
 }
+
+use gents_p2p::test_support::transport::TestP2pAdmission;

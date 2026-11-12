@@ -1,5 +1,3 @@
-mod support;
-
 use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
 use gents_session::session::mailbox::{
@@ -9,12 +7,9 @@ use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::{sync::Arc, time::Duration};
 
-async fn node(
-    identity: Arc<KeyIdentity>,
-    directory: &std::path::Path,
-) -> Arc<gents::defra_node::Node> {
+async fn node(identity: Arc<KeyIdentity>, directory: &std::path::Path) -> Arc<defra_node::Node> {
     let node = Arc::new(
-        gents::defra_node::Node::builder()
+        defra_node::Node::builder()
             .enable_signing()
             .data_path(directory)
             .with_node_identity_did(identity.did())
@@ -26,7 +21,10 @@ async fn node(
                 )
                 .unwrap(),
             )
-            .with_p2p(support::test_p2p_config(&Default::default(), directory))
+            .with_p2p(gents_p2p::test_support::transport::test_p2p_config(
+                &Default::default(),
+                directory,
+            ))
             .build()
             .await
             .unwrap(),
@@ -111,7 +109,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         .as_str()
         .unwrap();
     assert_eq!(
-        support::snapshots::verified_block_signer_as(&source, agent.did(), cid).await,
+        gents_store::test_support::verified_block_signer_as(&source, agent.did(), cid).await,
         agent.did()
     );
     let visible = ConfigAccess::local_as(source.clone(), recipient.did().parse().unwrap())
@@ -129,10 +127,12 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
     let public_id = gents_store::graphql::created_doc_id(&public, "PeerRegistry").unwrap();
     let source_admin = EmbeddedRemoteP2pAdmin::new(source.clone());
     let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());
-    let (_, source_address) = support::enrollment::wait_for_peer_identity(&source).await;
-    let (_, receiver_address) = support::enrollment::wait_for_peer_identity(&receiver).await;
+    let (_, source_address) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&source).await;
+    let (_, receiver_address) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&receiver).await;
     receiver_admin.connect(&[source_address]).await.unwrap();
-    support::p2p_waits::wait_for_connected_peer(&receiver).await;
+    gents_p2p::test_support::transport::wait_for_connected_peer(&receiver).await;
     source_admin
         .add_replicator(
             &[receiver_address],

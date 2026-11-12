@@ -23,8 +23,8 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
         .data_path(data_dir)
         .with_storage_backend(StorageBackend::Regolith)
         .with_http(HttpConfig::with_addr(address))
-        .with_p2p(crate::support::test_p2p_config(
-            &crate::support::TestP2pAdmission::default(),
+        .with_p2p(gents_p2p::test_support::transport::test_p2p_config(
+            &gents_p2p::test_support::transport::TestP2pAdmission::default(),
             data_dir,
         ))
         .with_node_identity_did(principal)

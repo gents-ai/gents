@@ -16,8 +16,8 @@ use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 
-use crate::support::p2p_waits::wait_for_connected_peer;
 use crate::support::{test_p2p_db, TestDb};
+use gents_p2p::test_support::transport::wait_for_connected_peer;
 
 /// The owner Node with its enrolled User and Agent; the User submits over the
 /// owner's HTTP endpoint with its client key, and `peer` is a second Node
@@ -262,9 +262,13 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
         .await.unwrap();
     let public_doc = gents_store::graphql::created_doc_id(&created, "PeerRegistry").unwrap();
     let (_, owner_address) =
-        crate::support::enrollment::wait_for_peer_identity(&fixture.node).await;
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&fixture.node)
+            .await;
     let (_, peer_address) =
-        crate::support::enrollment::wait_for_peer_identity(&fixture.peer.node).await;
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(
+            &fixture.peer.node,
+        )
+        .await;
     let owner_admin = EmbeddedRemoteP2pAdmin::new(fixture.node.clone());
     let peer_admin = EmbeddedRemoteP2pAdmin::new(fixture.peer.node.clone());
     peer_admin.connect(&[owner_address]).await.unwrap();

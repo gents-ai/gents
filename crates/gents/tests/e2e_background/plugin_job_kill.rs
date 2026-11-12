@@ -30,16 +30,18 @@ use crate::support::accepted_turn::{
     boot_managed_accepted_turn_with_backend_capacity, boot_prepared_accepted_turn,
     enqueue_managed_accepted_request, prepare_managed_accepted_turn, AcceptedTurnSpec,
 };
-use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 use crate::support::fixtures::{
     agent_target, bind_managed_agent_backend, configure_agent_tools_as,
 };
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
-use crate::support::p2p_waits::wait_for_connected_peer;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::{test_db, test_p2p_db, TestDb};
+use gents_p2p::test_support::enrollment::{
+    authorize_enrollment_peer, wait_for_peer_identity,
+};
+use gents_p2p::test_support::transport::wait_for_connected_peer;
 
 const STOP_PROMPT: &str = "plugin-job-stop-prompt";
 const TOOL_CALL: &str = "job-k";

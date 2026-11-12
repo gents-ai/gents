@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::defra_node::Node as EmbeddedNode;
-use gents_p2p::p2p_reconcile::GraphqlEnrollmentStore;
+use defra_node::Node as EmbeddedNode;
+use crate::p2p_reconcile::GraphqlEnrollmentStore;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
     EnrollmentOfferRecord, EnrollmentRequestRecord, DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
