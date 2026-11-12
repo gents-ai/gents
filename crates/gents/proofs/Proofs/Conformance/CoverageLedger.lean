@@ -1552,8 +1552,8 @@ def caseCoverage : List CoverageEntry :=
       "FileReviewSubscriptionCases")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "file_review_route_cases"
-      "FileReviewRouteCases")
+      "family"
+      "file_review_routes")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "scope_node_route_cases"
