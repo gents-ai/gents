@@ -766,7 +766,7 @@ async fn wrappers_read_the_stored_turn() {
     assert_eq!(turn.agents_on_profile, agents);
     assert_eq!(turn.resets_at, Utc.timestamp_opt(1_790_354_400, 0).single());
 
-    crate::goal::set_goal_from_access(
+    crate::goal::seed_goal_from_access(
         &access,
         node_did,
         "session-1",

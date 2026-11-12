@@ -109,7 +109,7 @@ async fn session_snapshot_goal_is_only_the_verified_observation() {
     assert_eq!(absent["observation"]["sessionId"], "chat", "{absent}");
     assert!(absent["observation"]["goal"].is_null(), "{absent}");
 
-    let goal = gents_automation::goal::set_goal_from_access(
+    let goal = gents_automation::goal::seed_goal_from_access(
         &agent_access,
         &node_did,
         "chat",
@@ -140,7 +140,7 @@ async fn session_snapshot_goal_is_only_the_verified_observation() {
     assert_eq!(shown["status"], "active", "{observed}");
     assert_eq!(shown["objective"], "Finish the hosted work", "{observed}");
 
-    gents_automation::goal::set_goal_from_access(
+    gents_automation::goal::seed_goal_from_access(
         &agent_access,
         &node_did,
         "chat",
@@ -235,7 +235,7 @@ async fn enrolled_user_observes_agent_goal_transitions_over_the_host_wire() {
         .unwrap()
     };
 
-    let goal = gents_automation::goal::set_goal_from_access(
+    let goal = gents_automation::goal::seed_goal_from_access(
         &agent_access,
         &node_did,
         "chat",
@@ -262,7 +262,7 @@ async fn enrolled_user_observes_agent_goal_transitions_over_the_host_wire() {
     };
     assert_observed(&read_goal().await, "active");
 
-    let paused = gents_automation::goal::set_goal_from_access(
+    let paused = gents_automation::goal::seed_goal_from_access(
         &agent_access,
         &node_did,
         "chat",

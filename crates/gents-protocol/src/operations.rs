@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod document;
+pub mod goal;
 pub mod inference;
 pub mod mailbox;
 pub mod mcp_service;

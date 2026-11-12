@@ -176,7 +176,7 @@ async fn auto_resume_access() -> (
 #[tokio::test]
 async fn auto_resume_field_round_trips_through_the_live_schema() {
     let (_db, access, owner) = auto_resume_access().await;
-    let goal = set_goal_from_access(&access, &owner, "session", Some("ship"), None, None, None)
+    let goal = seed_goal_from_access(&access, &owner, "session", Some("ship"), None, None, None)
         .await
         .unwrap();
     assert_eq!(goal.auto_resume_at_reset, None);
@@ -195,11 +195,11 @@ async fn auto_resume_field_round_trips_through_the_live_schema() {
 #[tokio::test]
 async fn auto_resume_operator_setter_stores_it() {
     let (_db, access, owner) = auto_resume_access().await;
-    let created = set_goal_from_access(&access, &owner, "s", Some("ship"), None, None, Some(true))
+    let created = seed_goal_from_access(&access, &owner, "s", Some("ship"), None, None, Some(true))
         .await
         .unwrap();
     assert_eq!(created.auto_resume_at_reset, Some(true));
-    let off = set_goal_from_access(&access, &owner, "s", None, None, None, Some(false))
+    let off = seed_goal_from_access(&access, &owner, "s", None, None, None, Some(false))
         .await
         .unwrap();
     assert_eq!(off.auto_resume_at_reset, Some(false));
@@ -208,10 +208,10 @@ async fn auto_resume_operator_setter_stores_it() {
 #[tokio::test]
 async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
     let (_db, access, owner) = auto_resume_access().await;
-    set_goal_from_access(&access, &owner, "s", Some("ship"), None, None, Some(true))
+    seed_goal_from_access(&access, &owner, "s", Some("ship"), None, None, Some(true))
         .await
         .unwrap();
-    let kept = set_goal_from_access(
+    let kept = seed_goal_from_access(
         &access,
         &owner,
         "s",
@@ -223,7 +223,7 @@ async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
     .await
     .unwrap();
     assert_eq!(kept.auto_resume_at_reset, Some(true));
-    let unchanged = set_goal_from_access(&access, &owner, "s", Some("ship more"), None, None, None)
+    let unchanged = seed_goal_from_access(&access, &owner, "s", Some("ship more"), None, None, None)
         .await
         .unwrap();
     assert_eq!(unchanged.auto_resume_at_reset, Some(true));
@@ -280,7 +280,7 @@ async fn session_goal_delete_uses_selected_agent_native_owner() {
         agent.as_ref(),
     )
     .unwrap();
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &agent_access,
         db.node_identity.did(),
         "delete-session",
@@ -809,112 +809,3 @@ async fn goal_and_claim_publication_links_match_lean() {
     }
 }
 
-#[tokio::test]
-async fn set_goal_runs_only_as_the_sessions_signed_agent() {
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-    };
-    use gents_store::identity::NodeIdentity;
-
-    let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("goal-set-signed-agent").await;
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "set-request",
-        db.node_identity.did(),
-        user.did(),
-        agent.did(),
-        "set-session",
-        "test",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        AgentRequestAdmissionRecord::client(user.did()),
-    );
-    let _lifecycle =
-        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-            &db.node,
-            &user_access,
-            db.node_identity.clone(),
-            &user,
-            agent.as_ref(),
-            create,
-        )
-        .await
-        .unwrap();
-    let owner = db.node_identity.did();
-    let no_goal = || async {
-        user_access
-            .transact_readonly("test.goal_set_observe", |txn| {
-                Box::pin(async move {
-                    Ok::<_, anyhow::Error>(
-                        load_canonical_goal_in_txn(txn, owner, "set-session")
-                            .await?
-                            .is_none(),
-                    )
-                })
-            })
-            .await
-            .unwrap()
-    };
-
-    // A key without a managed Agent signer is refused before any read.
-    let unmanaged = set_goal(
-        &db.node,
-        &user,
-        owner,
-        "set-session",
-        Some("ship"),
-        None,
-        None,
-    )
-    .await;
-    assert!(matches!(
-        unmanaged
-            .unwrap_err()
-            .downcast_ref::<gents_store::config_client::ConfigClientError>(),
-        Some(gents_store::config_client::ConfigClientError::ManagedAgentSignerRequired)
-    ));
-    assert!(no_goal().await);
-
-    // Another managed Agent of this runtime is not the session's working Agent.
-    let foreign_binding =
-        gents_store::identity::provision_agent_identity(db.node_identity.as_ref()).unwrap();
-    gents_inference::test_support::install_test_agent_binding(
-        &db.node,
-        owner,
-        "foreign goal Agent",
-        &foreign_binding,
-    )
-    .await;
-    let foreign =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &foreign_binding)
-            .unwrap();
-    assert!(set_goal(
-        &db.node,
-        foreign.as_ref(),
-        owner,
-        "set-session",
-        Some("ship"),
-        None,
-        None
-    )
-    .await
-    .is_err());
-    assert!(no_goal().await);
-
-    let goal = set_goal(
-        &db.node,
-        agent.as_ref(),
-        owner,
-        "set-session",
-        Some("ship"),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(goal.objective, "ship");
-    assert!(!no_goal().await);
-}

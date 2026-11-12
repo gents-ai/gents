@@ -134,7 +134,9 @@ pub(crate) struct JobWatchArgs {
 pub(crate) enum GoalCommand {
     #[command(about = "Show the durable goal for a session")]
     Show(GoalShowArgs),
-    #[command(about = "Create or update the durable goal for a session")]
+    #[command(about = "Start a session's goal with its first request")]
+    Start(GoalStartArgs),
+    #[command(about = "Update the durable goal for a session")]
     Set(GoalSetArgs),
     #[command(about = "Resume a goal and atomically enqueue its continuation")]
     ResumeRequest(GoalResumeArgs),
@@ -218,10 +220,22 @@ pub(crate) enum GoalStatusArg {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct GoalStartArgs {
+    #[command(flatten)]
+    pub(crate) scope: GoalScopeArgs,
+    #[arg(long, help = "Goal objective; also the first request's message")]
+    pub(crate) objective: String,
+    #[arg(long, value_name = "TOKENS", help = "Positive charged-token budget")]
+    pub(crate) token_budget: Option<i64>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct GoalSetArgs {
     #[command(flatten)]
     pub(crate) scope: GoalScopeArgs,
-    #[arg(long, help = "Goal objective; required when creating a goal")]
+    #[arg(long, help = "Goal objective")]
     pub(crate) objective: Option<String>,
     #[arg(long, value_enum)]
     pub(crate) status: Option<GoalStatusArg>,

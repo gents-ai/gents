@@ -420,7 +420,7 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
         .await
         .expect("upsert should persist description fields");
 
-    let loaded = load_agent(&db.node, agent_did)
+    let loaded = load_agent(&db.node, node_did, agent_did)
         .await
         .expect("load should succeed")
         .expect("agent should exist after upsert");

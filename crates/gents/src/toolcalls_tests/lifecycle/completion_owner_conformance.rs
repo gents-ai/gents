@@ -1,5 +1,5 @@
 use anyhow::Context;
-use gents_automation::goal::{load_canonical_goal_in_txn, set_goal_from_access};
+use gents_automation::goal::{load_canonical_goal_in_txn, seed_goal_from_access};
 use gents_lean_vocab::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
 };
@@ -134,7 +134,7 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
     .await;
     let session = admission.tool.session_id.as_str();
     if let Some(status) = goal_status(case) {
-        set_goal_from_access(
+        seed_goal_from_access(
             &admission.tool.access().unwrap(),
             &admission.node_did,
             session,

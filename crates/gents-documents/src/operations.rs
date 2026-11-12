@@ -7,6 +7,7 @@
 mod conformance;
 pub mod delete;
 pub mod mcp_service;
+pub mod owner;
 pub mod skill;
 pub mod write;
 

@@ -155,6 +155,7 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
+gents-automation = { workspace = true, features = ["test-fixtures"] }
 gents-eval = { workspace = true, features = ["test-fixtures"] }
 jsonschema = { version = "0.46.5", default-features = false }
 gents = { path = "../gents", features = ["test-home-guard"] }

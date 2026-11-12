@@ -26,7 +26,7 @@ fn reference(value: &Value, name: &str, roots: &[String; 2]) -> Option<GoalAssig
 async fn observe_goal(f: &Fixture, session: &str, assignment: Option<&GoalAssignmentInput>) {
     let Some(assignment) = assignment else { return };
     let access = f.agent_access();
-    let goal = crate::goal::set_goal_from_access(
+    let goal = crate::goal::seed_goal_from_access(
         &access,
         f.identity.did(),
         session,

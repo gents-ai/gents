@@ -1863,11 +1863,18 @@ impl Source {
         let principal = &self.principal;
         let submitted = async {
             let access = work.access();
-            let create = goal_request(&access, principal, &session, agent, &objective).await?;
-            gents_automation::goal::submit_goal_backed_request(
-                &access, principal, &session, &objective, None, &create,
+            let create = crate::request_helpers::goal_request(
+                &access, principal, &session, agent, &objective,
             )
-            .await
+            .await?;
+            let input = gents_protocol::operations::goal::GoalStartInput {
+                session_id: session.clone(),
+                objective: objective.clone(),
+                token_budget: None,
+            };
+            gents_automation::operations::goal::start(&access, principal, &input, &create)
+                .await
+                .map_err(anyhow::Error::from)
         };
         match submitted.await {
             Ok(_) => {
@@ -1935,50 +1942,6 @@ async fn submit(
 
 /// The goal's first request, signed by this CLI's User. The goal owner commits it with the goal
 /// and recognises a retried submission by its retry key, so it is built here rather than sent.
-pub(super) async fn goal_request(
-    access: &ConfigAccess,
-    node: &str,
-    session: &str,
-    agent: &str,
-    objective: &str,
-) -> anyhow::Result<gents_protocol::request_admission::AgentRequestCreate> {
-    use gents_session::request::lifecycle::{
-        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
-        RetryLink, DEFAULT_REQUEST_MAX_RETRIES,
-    };
-    let signer = crate::request_helpers::client_signer(access)?;
-    let actor = gents_store::identity::NodeIdentity::did(&signer).to_owned();
-    let requester =
-        gents_session::session::client_requester_scope(access, node, session, &actor).await?;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let spec = RequestSpec {
-        retry_key: Some(format!("goal-request:{request_id}")),
-        retry: Some(RetryLink {
-            parent_request_id: None,
-            parent_request_doc_id: None,
-            root_request_id: request_id.clone(),
-            retry_count: 0,
-            max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
-        }),
-        ..RequestSpec::new(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            RequestIdentity {
-                request_id,
-                node_did: node.to_owned(),
-                requester_did: Some(requester),
-                agent_did: agent.to_owned(),
-                session_id: session.to_owned(),
-                content: objective.to_owned(),
-                execution_origin: ExecutionOrigin::Interactive,
-                created_at,
-            },
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor),
-        )
-    };
-    build_signed_client_request(access, spec, RequestSigner::Identity(&signer)).await
-}
-
 /// The session's running request, unless the user stopped it.
 fn turn_of(
     store: &ClientStore,

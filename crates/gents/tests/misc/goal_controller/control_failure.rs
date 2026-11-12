@@ -12,7 +12,7 @@ async fn goal_control_failures_pause_after_two_retries_even_with_generated_text(
         .as_str()
         .unwrap()
         .to_owned();
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -141,7 +141,7 @@ async fn unrelated_or_foreign_tool_failures_do_not_consume_goal_control_retries(
             .as_str()
             .unwrap()
             .to_owned();
-        set_goal_from_access(
+        seed_goal_from_access(
             &access,
             db.node_identity.did(),
             SESSION,

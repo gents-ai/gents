@@ -34,7 +34,7 @@ async fn completed_turn_with_live_goal_hands_off_a_non_complete_reason() {
     gents_inference::test_support::install_test_agent(node, did, "general").await;
     // The caused session carries an active Goal: a finished turn with a
     // live assignment is not assignment success.
-    crate::goal::set_goal_from_access(
+    crate::goal::seed_goal_from_access(
         &admission.tool.access().unwrap(),
         did,
         &caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await,
@@ -208,7 +208,7 @@ async fn completed_turn_with_complete_goal_is_the_reasonless_success_form() {
     let did = &admission.node_did;
     let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
     gents_inference::test_support::install_test_agent(node, did, "general").await;
-    crate::goal::set_goal_from_access(
+    crate::goal::seed_goal_from_access(
         &admission.tool.access().unwrap(),
         did,
         &caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await,
@@ -301,7 +301,7 @@ async fn crash_before_notice_redrive_renders_the_persisted_assignment_reason() {
     gents_inference::test_support::install_test_agent(node, did, "general").await;
     let goal_session_id =
         caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await;
-    crate::goal::set_goal_from_access(
+    crate::goal::seed_goal_from_access(
         &admission.tool.access().unwrap(),
         did,
         &goal_session_id,
@@ -423,7 +423,7 @@ async fn crash_before_notice_redrive_renders_the_persisted_assignment_reason() {
     // The assignment changes under the replay (the Goal completes), but
     // the redrive must re-render the persisted suffix, never re-observe
     // live state.
-    crate::goal::set_goal_from_access(
+    crate::goal::seed_goal_from_access(
         &admission.tool.access().unwrap(),
         did,
         &goal_session_id,

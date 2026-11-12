@@ -297,15 +297,22 @@ pub async fn apply(
                     reason: "The Goal changed. Refresh its reset setting.".into(),
                 });
             }
-            gents_automation::goal::set_goal_auto_resume_from_access(
+            let input = gents_protocol::operations::goal::GoalSetInput {
+                auto_resume: Some(*enabled),
+                expected: Some(gents_protocol::operations::goal::GoalExpected::Goal(
+                    goal_id.clone(),
+                )),
+                ..Default::default()
+            };
+            gents_automation::operations::goal::set(
                 access,
                 &scope.node_did,
                 &scope.session_id,
-                goal_id,
-                *enabled,
+                &input,
             )
             .await
             .map(|_| ("Reset resume preference saved.".into(), None))
+            .map_err(anyhow::Error::from)
         }
     };
     Ok(match result {

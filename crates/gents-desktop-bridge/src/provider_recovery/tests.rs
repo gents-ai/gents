@@ -175,7 +175,7 @@ impl Fixture {
             .await
             .unwrap();
         crate::tests::support::reject_admission(&runtime, &engineer, &request_doc, reason).await;
-        gents_automation::goal::set_goal_from_access(
+        gents_automation::goal::seed_goal_from_access(
             &access,
             &owner,
             "session",
@@ -186,7 +186,7 @@ impl Fixture {
         )
         .await
         .unwrap();
-        gents_automation::goal::set_goal_from_access(
+        gents_automation::goal::seed_goal_from_access(
             &access,
             &owner,
             "session",

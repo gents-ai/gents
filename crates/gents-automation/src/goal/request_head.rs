@@ -618,7 +618,7 @@ pub(crate) async fn assignment_request_id_in_txn(
     Ok(Some(requests[0].request_id.clone()))
 }
 
-pub(super) async fn load_session_requests(
+pub(crate) async fn load_session_requests(
     txn: &impl gents_store::config_client::ConfigRead,
     node_did: &str,
     session_id: &str,

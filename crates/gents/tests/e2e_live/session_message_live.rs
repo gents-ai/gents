@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gents::{DocumentRuntimeOptions, Gents};
-use gents_automation::goal::set_goal_from_access;
+use gents_automation::goal::seed_goal_from_access;
 use gents_documents::{AgentTargetDocument, BashMode};
 use gents_documents::{AgentTools, BashTools, HostTools, Tools};
 use gents_observe::observe::run_timeline_fetch::load_run_timeline_rows;
@@ -2286,7 +2286,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     let session = "session-live-goal-parent";
     // The User reserves the session and assigns its Goal, as a client does.
     fx.live.reserve_session(&fx.orchestrator, session).await;
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &fx.live.access,
         &fx.did,
         session,
@@ -2363,7 +2363,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
         Duration::from_secs(180),
     )
     .await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &fx.live.access,
         &fx.did,
         session,

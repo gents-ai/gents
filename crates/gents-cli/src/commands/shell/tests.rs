@@ -2062,17 +2062,15 @@ async fn a_refused_goal_shows_the_owners_reason() {
     };
     let agent = did("a");
     let access = on.work.access();
-    let create = source::goal_request(&access, OWNER, "s1", &agent, "ship more");
+    let create = crate::request_helpers::goal_request(&access, OWNER, "s1", &agent, "ship more");
     let create = create.await.unwrap();
-    let owner = gents_automation::goal::submit_goal_backed_request(
-        &access,
-        OWNER,
-        "s1",
-        "ship more",
-        None,
-        &create,
-    );
-    let owner = owner.await.unwrap_err();
+    let input = gents_protocol::operations::goal::GoalStartInput {
+        session_id: "s1".to_owned(),
+        objective: "ship more".to_owned(),
+        token_budget: None,
+    };
+    let owner = gents_automation::operations::goal::start(&access, OWNER, &input, &create);
+    let owner = anyhow::Error::from(owner.await.unwrap_err());
     assert_eq!(*message, format!("Couldn’t set the goal: {owner:#}"));
     on.node.shutdown().await.expect("node shutdown");
 }

@@ -166,8 +166,14 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             .as_str()
             .unwrap()
             .to_owned();
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
         super::super::create_goal_for_session_from_access(
-            &access,
+            &agent_access,
             signer.did(),
             "session",
             "Start work",

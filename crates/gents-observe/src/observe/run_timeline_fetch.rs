@@ -947,7 +947,7 @@ mod tests {
             .unwrap();
         let request_doc = gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
         access.write("test.timeline_terminal", &format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{lifecycle_state: "completed"}}) {{_docID}} }}"#, gents_store::graphql::escape_graphql_string(&request_doc))).await.unwrap();
-        let active = gents_automation::goal::set_goal_from_access(
+        let active = gents_automation::goal::seed_goal_from_access(
             &access,
             root.did(),
             "session-goal-history",
@@ -961,7 +961,7 @@ mod tests {
         gents_automation::goal::refresh_goal_usage_from_access(&access, &active)
             .await
             .expect("refresh usage");
-        gents_automation::goal::set_goal_from_access(
+        gents_automation::goal::seed_goal_from_access(
             &access,
             root.did(),
             "session-goal-history",

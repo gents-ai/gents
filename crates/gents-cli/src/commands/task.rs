@@ -51,7 +51,7 @@ pub(crate) async fn task_show(args: TaskShowArgs) -> Result<()> {
 
 pub(crate) struct TaskInventory {
     pub(crate) tasks: Vec<Value>,
-    agents_by_id: BTreeMap<String, Value>,
+    agents_by_id: BTreeMap<(String, String), Value>,
     pub(crate) triggers: Vec<Value>,
     pub(crate) schedules_by_id: BTreeMap<String, Value>,
     pub(crate) event_sources_by_id: BTreeMap<String, Value>,
@@ -68,9 +68,7 @@ impl TaskInventory {
     fn task_summary(&self, task: &Value) -> Value {
         let task_id = string_field(task, "task_id").unwrap_or_default();
         let agent_did = string_field(task, "agent_did");
-        let agent = agent_did
-            .as_deref()
-            .and_then(|id| self.agents_by_id.get(id));
+        let agent = self.agent_for(task);
         let triggers = self.triggers_for_task(&task_id);
         let (runnable, unavailable_reason) = runnable_status(task, agent);
 
@@ -92,9 +90,7 @@ impl TaskInventory {
 
     fn task_detail(&self, task: &Value) -> Value {
         let task_id = string_field(task, "task_id").unwrap_or_default();
-        let agent = string_field(task, "agent_did")
-            .as_deref()
-            .and_then(|id| self.agents_by_id.get(id));
+        let agent = self.agent_for(task);
         let triggers = self.triggers_for_task(&task_id);
         let (runnable, unavailable_reason) = runnable_status(task, agent);
 
@@ -106,6 +102,11 @@ impl TaskInventory {
             "trigger_count": triggers.len(),
             "triggers": triggers,
         })
+    }
+
+    fn agent_for(&self, task: &Value) -> Option<&Value> {
+        let key = string_field(task, "node_did").zip(string_field(task, "agent_did"))?;
+        self.agents_by_id.get(&key)
     }
 
     fn triggers_for_task(&self, task_id: &str) -> Vec<Value> {
@@ -155,7 +156,10 @@ pub(crate) async fn load_task_inventory(
 
     let agents_by_id = rows(&response, "Agent")
         .into_iter()
-        .filter_map(|row| string_field(&row, "agent_did").map(|id| (id, row)))
+        .filter_map(|row| {
+            let key = string_field(&row, "node_did").zip(string_field(&row, "agent_did"))?;
+            Some((key, row))
+        })
         .collect::<BTreeMap<_, _>>();
 
     let mut triggers = rows(&response, "Trigger");

@@ -1331,7 +1331,7 @@ async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
 async fn revoked_user_is_answered_with_omitted_roots() {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let access = home.user_graphql_access();
-    let query = crate::client::query::snapshot_query(Some(home.node_did())).unwrap();
+    let query = crate::client::query::snapshot_query(home.node_did()).unwrap();
     let authorized = access.execute(&query).await.unwrap();
     assert!(authorized.get("errors").is_none(), "{authorized}");
     let mut answered: Vec<_> = authorized["data"]

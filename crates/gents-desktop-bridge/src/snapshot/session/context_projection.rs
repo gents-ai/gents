@@ -75,9 +75,11 @@ pub(super) fn build_session_context_view(
     transcript_totals_exact: bool,
 ) -> SessionContextView {
     let agent = agent_did.and_then(|agent_did| {
-        store.agents.iter().find(|row| {
+        let mut matching = store.agents.iter().filter(|row| {
             row.agent_did == agent_did && node_did.is_none_or(|node_did| row.node_did == node_did)
-        })
+        });
+        let agent = matching.next();
+        matching.next().is_none().then_some(agent).flatten()
     });
     let inference_profile = agent.and_then(|agent| {
         store.inference_profiles.iter().find(|row| {

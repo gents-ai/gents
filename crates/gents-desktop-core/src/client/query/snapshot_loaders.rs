@@ -3,22 +3,21 @@ use super::document_patches::load_rows;
 use super::*;
 use rapidhash::{HashSetExt, RapidHashSet};
 
-fn node_filter(node_did: Option<&str>) -> String {
-    node_did
-        .map(|did| format!("node_did: {{ _eq: \"{}\" }}", escape_graphql_string(did)))
-        .unwrap_or_default()
+fn node_filter(node_did: &str) -> String {
+    format!(
+        "node_did: {{ _eq: \"{}\" }}",
+        escape_graphql_string(node_did)
+    )
 }
 
-fn snapshot_request_args(node_did: Option<&str>) -> String {
+fn snapshot_request_args(node_did: &str) -> String {
     let node = node_filter(node_did);
     let live = gents_protocol::request_lifecycle::RequestLifecycleState::nonterminal_graphql_list();
     format!("(filter: {{ {node} lifecycle_state: {{ _in: {live} }} }})")
 }
 
-pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
-    let args = node_did
-        .map(|_| format!("(filter: {{ {} }})", node_filter(node_did)))
-        .unwrap_or_default();
+pub(crate) fn snapshot_query(node_did: &str) -> Result<String> {
+    let args = format!("(filter: {{ {} }})", node_filter(node_did));
     let request_args = snapshot_request_args(node_did);
     let mailbox_node = node_filter(node_did);
     let mailbox_args = format!("(filter: {{ {mailbox_node} status: {{ _eq: \"open\" }} }})");
@@ -56,14 +55,9 @@ pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
     }}"))
 }
 
-#[cfg(test)]
-pub(crate) fn snapshot_rows(data: &Value, source_node_did: Option<&str>) -> Result<ClientStore> {
-    snapshot_rows_with_requests(data, source_node_did, snapshot_request_rows(data)?)
-}
-
 pub(super) fn snapshot_rows_with_requests(
     data: &Value,
-    source_node_did: Option<&str>,
+    node_did: &str,
     requests: Vec<AgentRequestRow>,
 ) -> Result<ClientStore> {
     let (trigger_observations, trigger_observation_source_node_dids): (
@@ -98,11 +92,7 @@ pub(super) fn snapshot_rows_with_requests(
         .into_iter()
         .map(|metadata| metadata.into_backend().map_err(anyhow::Error::from))
         .collect::<Result<_>>()?;
-    let scope = |len: usize| {
-        source_node_did
-            .map(|did| vec![Some(did.to_owned()); len])
-            .unwrap_or_default()
-    };
+    let scope = |len: usize| vec![Some(node_did.to_owned()); len];
     let trigger_source_node_dids = scope(triggers.len());
     let inference_backend_source_node_dids = scope(inference_backends.len());
     macro_rules! rows {
@@ -259,7 +249,7 @@ fn missing_session_head_scopes(
         .collect()
 }
 
-pub(super) fn task_request_queries(data: &Value, node_did: Option<&str>) -> Vec<String> {
+pub(super) fn task_request_queries(data: &Value, node_did: &str) -> Vec<String> {
     let Some(triggers) = data.get("triggers").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -267,7 +257,7 @@ pub(super) fn task_request_queries(data: &Value, node_did: Option<&str>) -> Vec<
         .iter()
         .filter_map(|row| {
             let node = row.get("node_did")?.as_str()?;
-            if node_did.is_some_and(|expected| expected != node) {
+            if node != node_did {
                 return None;
             }
             let trigger = row.get("trigger_id")?.as_str()?;
@@ -427,7 +417,7 @@ fn parse_task_request_rows(data: &Value) -> Result<Vec<AgentRequestRow>> {
 pub(super) async fn complete_local_snapshot_requests(
     node: &EmbeddedNode,
     data: &Value,
-    node_did: Option<&str>,
+    node_did: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     let head_scopes = request_head_scopes(data)?;
     let mut seeds = snapshot_request_rows(data)?;
@@ -463,7 +453,7 @@ pub(super) async fn complete_local_snapshot_requests(
 async fn complete_access_snapshot_requests(
     access: &gents_store::config_client::ConfigAccess,
     data: &Value,
-    node_did: Option<&str>,
+    node_did: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     let head_scopes = request_head_scopes(data)?;
     let mut seeds = snapshot_request_rows(data)?;
@@ -675,14 +665,6 @@ where
     }
 }
 
-#[cfg(test)]
-pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
-    let query = snapshot_query(None)?;
-    let data = execute_local_graphql_query(node, &query, "desktop snapshot").await?;
-    let requests = complete_local_snapshot_requests(node, &data, None).await?;
-    snapshot_rows_with_requests(&data, None, requests)
-}
-
 /// Every reachable runtime's snapshot merged by node. A runtime that refuses
 /// the read is listed in `refused` and contributes no rows; it does not
 /// discard another runtime's snapshot.
@@ -803,15 +785,15 @@ pub async fn load_node_snapshot_on(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
 ) -> std::result::Result<ClientStore, SnapshotReadError> {
-    let query = snapshot_query(Some(node_did))?;
+    let query = snapshot_query(node_did)?;
     let data = omitted_roots_read_empty(
         execute_access_graphql_query(access, &query, "runtime desktop snapshot").await?,
     );
-    let requests = complete_access_snapshot_requests(access, &data, Some(node_did)).await?;
+    let requests = complete_access_snapshot_requests(access, &data, node_did).await?;
     Ok(if access.actor_did().is_some() {
         authenticated_node_snapshot_rows(&data, node_did, requests)?
     } else {
-        snapshot_rows_with_requests(&data, Some(node_did), requests)?
+        snapshot_rows_with_requests(&data, node_did, requests)?
     })
 }
 
@@ -820,23 +802,11 @@ pub(super) fn authenticated_node_snapshot_rows(
     node_did: &str,
     requests: Vec<AgentRequestRow>,
 ) -> Result<ClientStore> {
-    let mut snapshot = snapshot_rows_with_requests(data, Some(node_did), requests)?;
-    let config = operator_config_store_from_data_with_requests(
-        data,
-        node_did,
-        Vec::new(),
-        OperatorConfigScope::Inference,
-    )?;
+    let mut snapshot = snapshot_rows_with_requests(data, node_did, requests)?;
+    let config = operator_config_store_from_data(data, node_did)?;
     snapshot.operator_config_authoritative_node_dids =
         config.operator_config_authoritative_node_dids;
     Ok(snapshot)
-}
-
-#[derive(Clone, Copy)]
-enum OperatorConfigScope {
-    #[cfg(test)]
-    Full,
-    Inference,
 }
 
 pub async fn load_inference_configuration(
@@ -855,30 +825,10 @@ pub async fn load_inference_configuration(
             inference_profiles: InferenceProfile({did_filter}) {{ {INFERENCE_PROFILE_FIELDS} }} }}"
     );
     let data = execute_access_graphql_query(access, &query, "inference config").await?;
-    operator_config_store_from_data_with_requests(
-        &data,
-        node_did,
-        Vec::new(),
-        OperatorConfigScope::Inference,
-    )
+    operator_config_store_from_data(&data, node_did)
 }
 
-#[cfg(test)]
-pub(crate) fn operator_config_store_from_data(data: &Value, node_did: &str) -> Result<ClientStore> {
-    operator_config_store_from_data_with_requests(
-        data,
-        node_did,
-        snapshot_request_rows(data)?,
-        OperatorConfigScope::Full,
-    )
-}
-
-fn operator_config_store_from_data_with_requests(
-    data: &Value,
-    node_did: &str,
-    requests: Vec<AgentRequestRow>,
-    scope: OperatorConfigScope,
-) -> Result<ClientStore> {
+fn operator_config_store_from_data(data: &Value, node_did: &str) -> Result<ClientStore> {
     let (nodes, nodes_complete) = parse_query_rows_with_completeness(data, "nodes")?;
     let default_agent_selections = parse_query_rows(data, "default_agent_selections")?;
     let (agents, agents_complete) = parse_query_rows_with_completeness(data, "agents")?;
@@ -912,53 +862,7 @@ fn operator_config_store_from_data_with_requests(
             .operator_config_authoritative_node_dids
             .insert(node_did.to_owned());
     }
-    if matches!(scope, OperatorConfigScope::Inference) {
-        return Ok(ClientStore::from_rows(common));
-    }
-    let (schedule_observations, schedule_observation_source_node_dids) =
-        parse_observation_query_rows_with_source(
-            data,
-            "triggers",
-            SCHEDULE_OBSERVATION_FIELDS,
-            Some("node_did"),
-        )?;
-    let (trigger_observations, trigger_observation_source_node_dids) =
-        parse_observation_query_rows_with_source(
-            data,
-            "triggers",
-            TRIGGER_OBSERVATION_FIELDS,
-            Some("node_did"),
-        )?;
-    let rows = ClientStoreRows {
-        runtimes: parse_query_rows(data, "runtimes")?,
-        node_readiness: parse_query_rows(data, "node_readiness")?,
-        contexts: parse_query_rows(data, "contexts")?,
-        tools: parse_query_rows(data, "tools")?,
-        inference_sampling: parse_query_rows(data, "inference_sampling")?,
-        inference_execution: parse_query_rows(data, "inference_execution")?,
-        tasks: parse_query_rows(data, "tasks")?,
-        schedules: parse_query_rows(data, "schedules")?,
-        schedule_observations,
-        schedule_observation_source_node_dids,
-        triggers: parse_projected_query_rows(
-            data,
-            "triggers",
-            TRIGGER_FIELDS,
-            &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
-        )?,
-        trigger_observations,
-        trigger_observation_source_node_dids,
-        skills: parse_query_rows(data, "skills")?,
-        compactions: parse_query_rows(data, "compactions")?,
-        tool_service_registries: parse_query_rows(data, "tool_service_registries")?,
-        event_sources: parse_query_rows(data, "event_sources")?,
-        agent_targets: parse_query_rows(data, "agent_targets")?,
-        datastore_tool_surfaces: parse_query_rows(data, "datastore_tool_surfaces")?,
-        sessions: parse_query_rows(data, "sessions")?,
-        requests,
-        ..common
-    };
-    Ok(ClientStore::from_rows(rows))
+    Ok(ClientStore::from_rows(common))
 }
 
 pub async fn load_node_scoped_snapshot_with_peer_records(
@@ -1028,7 +932,7 @@ mod remote_failure_tests {
             .unwrap();
         let healthy_data = execute_local_graphql_query(
             &source,
-            &snapshot_query(Some(healthy_did)).unwrap(),
+            &snapshot_query(healthy_did).unwrap(),
             "test snapshot",
         )
         .await

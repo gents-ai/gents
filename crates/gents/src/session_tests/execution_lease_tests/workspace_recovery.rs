@@ -279,7 +279,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         std::fs::read_to_string(parent_overlay.cwd.join("unfinished.txt")).unwrap(),
         "existing durable work\n"
     );
-    gents_automation::goal::set_goal_from_access(
+    gents_automation::goal::seed_goal_from_access(
         &access,
         did,
         &parent.session_id,

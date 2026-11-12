@@ -376,7 +376,7 @@ pub(crate) async fn ensure_managed_fixture_session(
     if let Some(row) = rows.first() {
         assert_eq!(row["node_did"].as_str(), Some(root.did()));
         let did = row["agent_did"].as_str().unwrap();
-        let agent = gents_documents::load_agent(node, did)
+        let agent = gents_documents::load_agent(node, root.did(), did)
             .await
             .unwrap()
             .expect("fixture Agent binding");

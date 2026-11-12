@@ -38,6 +38,7 @@ fn prefix(resource: &str) -> String {
         "session" => "gents sessions".to_owned(),
         "mailbox" => "gents automation mailbox".to_owned(),
         "task" => "gents automation task".to_owned(),
+        "goal" => "gents automation goal".to_owned(),
         "mcp-service" => "gents config mcp".to_owned(),
         resource => format!("gents config {resource}"),
     }
@@ -51,7 +52,7 @@ fn spelling<'a>(resource: &str, verb: &'a str) -> &'a str {
         ("backend" | "profile", "create") => "set",
         ("workspace-root", "publish") => "set",
         ("workspace-root", "remove") => "rm",
-        ("request" | "session" | "mailbox" | "task", verb) => verb,
+        ("request" | "session" | "mailbox" | "task" | "goal", verb) => verb,
         (_, "delete") => "rm",
         (_, verb) => verb,
     }
@@ -81,9 +82,19 @@ fn inspect(resource: &str, target: Option<&str>) -> String {
         "agent" => "<AGENT_DID>",
         "mailbox" => "<DOC_ID>",
         "task" => "<TASK_ID>",
+        "goal" => {
+            return format!(
+                "gents automation goal show --session {}",
+                target.unwrap_or("<SESSION_ID>")
+            )
+        }
         _ => "<ID>",
     };
-    format!("{} show {}", prefix(resource), target.unwrap_or(placeholder))
+    format!(
+        "{} show {}",
+        prefix(resource),
+        target.unwrap_or(placeholder)
+    )
 }
 
 fn list(resource: &str) -> String {

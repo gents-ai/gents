@@ -1168,7 +1168,7 @@ async fn initialize_runtime_home(
     let existing_node = load_node(node, node_did).await?;
     let existing_default_id = gents_documents::load_default_agent_did(node, node_did).await?;
     let existing_default_agent = match existing_default_id.as_deref() {
-        Some(did) => load_agent(node, did).await?,
+        Some(did) => load_agent(node, node_did, did).await?,
         None => None,
     };
     let binding = match &existing_default_agent {

@@ -71,7 +71,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             },
         )
         .await;
-        crate::goal::set_goal_from_access(
+        crate::goal::seed_goal_from_access(
             &message.admission.tool.access().unwrap(),
             &caused.node_did,
             &caused.session_id,
@@ -471,7 +471,7 @@ async fn an_idle_same_node_interrupt_pauses_the_goal() {
     let (message, _, caused) = started("agent-interrupt-steer").await;
     let node = message.admission.node.clone();
     let scope = gents_protocol::session::SessionScope::of_request(&caused);
-    crate::goal::set_goal_from_access(
+    crate::goal::seed_goal_from_access(
         &message.admission.tool.access().unwrap(),
         &caused.node_did,
         &caused.session_id,
@@ -508,7 +508,7 @@ async fn an_idle_same_node_interrupt_pauses_the_goal() {
 async fn explicit_stop_pauses_the_goal() {
     let (message, _, caused) = started("agent-stop-drains").await;
     let node = message.admission.node.clone();
-    crate::goal::set_goal_from_access(
+    crate::goal::seed_goal_from_access(
         &message.admission.tool.access().unwrap(),
         &caused.node_did,
         &caused.session_id,

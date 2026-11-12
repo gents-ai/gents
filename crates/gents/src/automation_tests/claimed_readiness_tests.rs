@@ -9,7 +9,7 @@ use gents_automation::goal::readiness_gate::GoalClaimedDecision;
 use gents_automation::goal::readiness_gate::GoalReconcileSettled;
 use gents_automation::goal::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
-    gate_claimed_goal_continuation, set_goal_from_access,
+    gate_claimed_goal_continuation, seed_goal_from_access,
     stop_claimed_continuation_for_unavailable_agent_from_access,
     update_goal_fields_if_status_from_access, GoalAgentObservation, GoalDocument,
     MAX_INFRASTRUCTURE_RETRIES,
@@ -137,7 +137,7 @@ async fn selected_agent(db: &TestDb) -> String {
 
 async fn selected_identity(db: &TestDb) -> Arc<dyn gents_store::identity::NodeIdentity> {
     let agent_did = selected_agent(db).await;
-    let agent = gents_documents::load_agent(&db.node, &agent_did)
+    let agent = gents_documents::load_agent(&db.node, db.node_identity.did(), &agent_did)
         .await
         .unwrap()
         .unwrap();
@@ -235,7 +235,7 @@ async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str
         &format!(r#"mutation {{ update_AgentRequest(filter: {{request_id: {{_eq: "{}"}}, lifecycle_state: {{_eq: "pending"}}}}, input: {{lifecycle_state: "{}", terminalized_at: "2020-01-02T00:00:00Z"}}) {{_docID}} }}"#,
             escape_graphql_string(parent), escape_graphql_string(terminal)),
     ).await.unwrap();
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -709,7 +709,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
             Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &agent_access,
         db.node_identity.did(),
         SESSION,

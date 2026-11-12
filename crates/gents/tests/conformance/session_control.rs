@@ -160,7 +160,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     assert_eq!(interrupt_case["initial_pending_count"], 0);
     let (access, agent_doc, _) =
         seed_agent_session(&db, &fixture, &interrupted_session, "2026-10-20T10:00:00Z").await;
-    gents_automation::goal::set_goal_from_access(
+    gents_automation::goal::seed_goal_from_access(
         &access,
         node_did,
         &interrupted_session,
@@ -222,7 +222,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         pending_ids.push(pending_id);
         pending_docs.push(pending_doc);
     }
-    gents_automation::goal::set_goal_from_access(
+    gents_automation::goal::seed_goal_from_access(
         &access,
         node_did,
         &stopped_session,
@@ -282,7 +282,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
             .is_empty(),
         stop_case["pending_empty"].as_bool().unwrap()
     );
-    gents_automation::goal::set_goal_from_access(
+    gents_automation::goal::seed_goal_from_access(
         &access,
         node_did,
         &stopped_session,
@@ -361,7 +361,7 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
         "mutation {{ update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"processing\"}}) {{_docID}} }}",
         escape_graphql_string(&predecessor_doc),
     )).await.unwrap();
-    gents_automation::goal::set_goal_from_access(
+    gents_automation::goal::seed_goal_from_access(
         &access,
         node_did,
         &session_id,

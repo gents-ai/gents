@@ -190,7 +190,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     // actually-complete assignment, not by a missing Goal:
                     // those are different production paths.
                     "session_message_request_completed_to_completed" => {
-                        crate::goal::set_goal_from_access(
+                        crate::goal::seed_goal_from_access(
                             &admission.tool.access().unwrap(),
                             &admission.node_did,
                             &caused_session_id,
@@ -208,7 +208,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     // the canonical read resolves the document but cannot
                     // parse its status into the vocabulary.
                     "session_message_request_completed_unknown_goal_to_completed" => {
-                        let goal = crate::goal::set_goal_from_access(
+                        let goal = crate::goal::seed_goal_from_access(
                             &admission.tool.access().unwrap(),
                             &admission.node_did,
                             &caused_session_id,
@@ -227,7 +227,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         .await;
                     }
                     "session_message_request_completed_live_goal_to_completed" => {
-                        crate::goal::set_goal_from_access(
+                        crate::goal::seed_goal_from_access(
                             &admission.tool.access().unwrap(),
                             &admission.node_did,
                             &caused_session_id,
@@ -241,7 +241,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     }
                     "session_message_request_completed_blocked_goal_to_completed"
                     | "session_message_request_completed_stopped_goal_to_completed" => {
-                        crate::goal::set_goal_from_access(
+                        crate::goal::seed_goal_from_access(
                             &admission.tool.access().unwrap(),
                             &admission.node_did,
                             &caused_session_id,

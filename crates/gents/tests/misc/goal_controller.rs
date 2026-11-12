@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
 use gents_automation::goal::{
-    session_token_usage, set_goal_from_access, CreateGoalForSessionError,
+    seed_goal_from_access, session_token_usage, CreateGoalForSessionError,
     CreateGoalForSessionOutcome,
 };
 use gents_automation::{
@@ -579,7 +579,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     assert_eq!(wait_result["error"]["reason"], "wait_timeout");
     assert!(!release_path.exists());
 
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -801,7 +801,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         "durable progress",
     )
     .await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         did,
         SESSION,
@@ -907,7 +907,7 @@ async fn delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys() {
         .await;
         publish_owned_terminal_activity(&access, agent.as_ref(), &doc_id, "progress").await;
         assert!(!doc_id.is_empty());
-        set_goal_from_access(
+        seed_goal_from_access(
             &access,
             did,
             session,
@@ -948,7 +948,7 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
     )
     .unwrap();
     publish_owned_terminal_activity(&access, agent.as_ref(), &parent_doc, "durable progress").await;
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1005,7 +1005,7 @@ async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
     let db = test_db("goal-foreign-request-id-collision").await;
     let (_user, agent, access) =
         goal_recovery_actors(&db, "parent-owned-collision", "completed").await;
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1054,7 +1054,7 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
     let db = test_db("goal-foreign-retry-key-collision").await;
     let (_user, agent, access) =
         goal_recovery_actors(&db, "parent-owned-retry-collision", "completed").await;
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1096,7 +1096,7 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
 async fn restart_reconcile_does_not_duplicate_a_goal_continuation() {
     let db = test_db("goal-restart-no-duplicate").await;
     let (_user, agent, access) = goal_recovery_actors(&db, "parent-restart", "completed").await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1129,7 +1129,7 @@ async fn restart_reconcile_does_not_duplicate_a_goal_continuation() {
 async fn restart_materializes_a_claimed_continuation_after_crash() {
     let db = test_db("goal-restart-claimed").await;
     let (_user, agent, access) = goal_recovery_actors(&db, "parent-claimed", "completed").await;
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1162,7 +1162,7 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
     let db = test_db("goal-restart-claimed-wrapup-retry").await;
     let (_user, agent, access) =
         goal_recovery_actors(&db, "parent-claimed-wrapup-retry", "failed").await;
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1212,7 +1212,7 @@ async fn continuation_claim_rejects_a_stale_active_status_snapshot() {
         agent.as_ref(),
     )
     .unwrap();
-    let stale = set_goal_from_access(
+    let stale = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1223,7 +1223,7 @@ async fn continuation_claim_rejects_a_stale_active_status_snapshot() {
     )
     .await
     .expect("set goal");
-    set_goal_from_access(
+    seed_goal_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -1254,7 +1254,7 @@ async fn controller_status_cas_never_overwrites_a_newer_completion() {
         agent.as_ref(),
     )
     .unwrap();
-    let stale = set_goal_from_access(
+    let stale = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1265,7 +1265,7 @@ async fn controller_status_cas_never_overwrites_a_newer_completion() {
     )
     .await
     .expect("set goal");
-    set_goal_from_access(
+    seed_goal_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -1302,7 +1302,7 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
         agent.as_ref(),
     )
     .unwrap();
-    let stale = set_goal_from_access(
+    let stale = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1654,7 +1654,7 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
         agent.as_ref(),
     )
     .unwrap();
-    let replayed = set_goal_from_access(
+    let replayed = seed_goal_from_access(
         &agent_access,
         db.node_identity.did(),
         SESSION,
@@ -1751,7 +1751,7 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     let session_doc = request["data"]["AgentRequest"][0]["session_doc_id"]
         .as_str()
         .unwrap();
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         did,
         SESSION,
@@ -1892,12 +1892,14 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     )
     .unwrap();
     let create = signed_goal_backed_request(&db, &agent, "goal-backed-first").await;
-    let first = gents_automation::goal::submit_goal_backed_request(
+    let first = gents_automation::operations::goal::start(
         &access,
         db.node_identity.did(),
-        SESSION,
-        "Ship atomically",
-        Some(5_000),
+        &gents_protocol::operations::goal::GoalStartInput {
+            session_id: (SESSION).to_string(),
+            objective: ("Ship atomically").to_string(),
+            token_budget: Some(5_000),
+        },
         &create,
     )
     .await
@@ -1948,12 +1950,14 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["lifecycle_state"], "pending");
 
-    let retry = gents_automation::goal::submit_goal_backed_request(
+    let retry = gents_automation::operations::goal::start(
         &access,
         db.node_identity.did(),
-        SESSION,
-        "Ship atomically",
-        Some(5_000),
+        &gents_protocol::operations::goal::GoalStartInput {
+            session_id: (SESSION).to_string(),
+            objective: ("Ship atomically").to_string(),
+            token_budget: Some(5_000),
+        },
         &create,
     )
     .await
@@ -1978,12 +1982,14 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
         r#"mutation {{ update_Goal(docID: "{}", input: {{ status: "complete" }}) {{ _docID }} }}"#,
         escape_graphql_string(&committed_goal.doc_id),
     )).await.expect("simulate progress after an ambiguous commit acknowledgement");
-    let late_retry = gents_automation::goal::submit_goal_backed_request(
+    let late_retry = gents_automation::operations::goal::start(
         &access,
         db.node_identity.did(),
-        SESSION,
-        "Ship atomically",
-        Some(5_000),
+        &gents_protocol::operations::goal::GoalStartInput {
+            session_id: (SESSION).to_string(),
+            objective: ("Ship atomically").to_string(),
+            token_budget: Some(5_000),
+        },
         &create,
     )
     .await
@@ -2005,12 +2011,14 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
     )
     .unwrap();
     let create = signed_goal_backed_request(&db, &agent, "goal-backed-fingerprint").await;
-    gents_automation::goal::submit_goal_backed_request(
+    gents_automation::operations::goal::start(
         &access,
         db.node_identity.did(),
-        SESSION,
-        "Ship one exact request",
-        None,
+        &gents_protocol::operations::goal::GoalStartInput {
+            session_id: (SESSION).to_string(),
+            objective: ("Ship one exact request").to_string(),
+            token_budget: None,
+        },
         &create,
     )
     .await
@@ -2024,12 +2032,14 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
     gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut changed)
         .await
         .expect("re-sign changed request");
-    let error = gents_automation::goal::submit_goal_backed_request(
+    let error = gents_automation::operations::goal::start(
         &access,
         db.node_identity.did(),
-        SESSION,
-        "Ship one exact request",
-        None,
+        &gents_protocol::operations::goal::GoalStartInput {
+            session_id: (SESSION).to_string(),
+            objective: ("Ship one exact request").to_string(),
+            token_budget: None,
+        },
         &changed,
     )
     .await
@@ -2050,7 +2060,7 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
     )
     .unwrap();
     let create = signed_goal_backed_request(&db, &agent, "goal-backed-terminal").await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2061,12 +2071,14 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
     )
     .await
     .expect("set terminal goal");
-    let error = gents_automation::goal::submit_goal_backed_request(
+    let error = gents_automation::operations::goal::start(
         &access,
         db.node_identity.did(),
-        SESSION,
-        "Already terminal",
-        None,
+        &gents_protocol::operations::goal::GoalStartInput {
+            session_id: (SESSION).to_string(),
+            objective: ("Already terminal").to_string(),
+            token_budget: None,
+        },
         &create,
     )
     .await
@@ -2107,12 +2119,14 @@ async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
         .await
         .expect("load reserved session")["data"]["AgentSession"]
         .clone();
-    let error = gents_automation::goal::submit_goal_backed_request(
+    let error = gents_automation::operations::goal::start(
         &access,
         db.node_identity.did(),
-        SESSION,
-        "Never publish partially",
-        None,
+        &gents_protocol::operations::goal::GoalStartInput {
+            session_id: (SESSION).to_string(),
+            objective: ("Never publish partially").to_string(),
+            token_budget: None,
+        },
         &invalid,
     )
     .await
@@ -2186,7 +2200,7 @@ async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session
         "2026-11-04T00:01:00Z",
     )
     .await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2254,7 +2268,7 @@ async fn retired_queued_inputs_do_not_pause_completed_goal_execution() {
             )
             .await
             .unwrap();
-        set_goal_from_access(
+        seed_goal_from_access(
             &access,
             db.node_identity.did(),
             SESSION,
@@ -2282,7 +2296,7 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
     let db = test_db("goal-interrupted").await;
     let (_user, agent, access) =
         goal_recovery_actors(&db, "parent-interrupted", "interrupted").await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2325,7 +2339,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         )
         .unwrap();
         reserve_goal_session(&db, &fixture.user, &agent_identity, SESSION).await;
-        set_goal_from_access(
+        seed_goal_from_access(
             &access,
             db.node_identity.did(),
             SESSION,
@@ -2583,7 +2597,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     let parent_doc = access.execute("{AgentRequest(filter: {request_id: {_eq: \"parent-budget\"}}) {_docID session_doc_id}}").await.unwrap()["data"]["AgentRequest"][0].clone();
     let parent_doc_id = parent_doc["_docID"].as_str().unwrap();
     let session_doc_id = parent_doc["session_doc_id"].as_str().unwrap();
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2625,7 +2639,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     // The goal already existed when the usage was seeded: an idempotent
     // set_goal replay must leave the creation-time baseline and the charged
     // tokens untouched instead of resetting or re-deriving them.
-    let replayed = set_goal_from_access(
+    let replayed = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2801,7 +2815,7 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
         "provider insufficient_quota: credit balance exhausted",
     )
     .await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2837,7 +2851,7 @@ async fn usage_limited_goal_after_failed_request(
     agent: &Arc<dyn NodeIdentity>,
     access: &ConfigAccess,
 ) -> Option<String> {
-    set_goal_from_access(
+    seed_goal_from_access(
         access,
         db.node_identity.did(),
         SESSION,
@@ -2959,7 +2973,7 @@ async fn seed_a_passed_reset(
         RENDERED_LIMIT,
     )
     .await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2971,7 +2985,7 @@ async fn seed_a_passed_reset(
     .await
     .expect("set goal");
     if opted_in {
-        set_goal_from_access(
+        seed_goal_from_access(
             &db.client_access(&user),
             db.node_identity.did(),
             SESSION,
@@ -3103,7 +3117,7 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
         &reason,
     )
     .await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -3143,7 +3157,7 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
         .as_str()
         .unwrap()
         .to_owned();
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -3224,7 +3238,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
             agent.as_ref(),
         )
         .unwrap();
-        let initial = set_goal_from_access(
+        let initial = seed_goal_from_access(
             &access,
             db.node_identity.did(),
             SESSION,
@@ -3311,7 +3325,7 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
         agent.as_ref(),
     )
     .unwrap();
-    let initial = set_goal_from_access(
+    let initial = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -3329,7 +3343,7 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
     )
     .await;
     let stale = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-    set_goal_from_access(
+    seed_goal_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -3387,7 +3401,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
         "resume-seal",
     )
     .await;
-    let stale_active = set_goal_from_access(
+    let stale_active = seed_goal_from_access(
         &client,
         did,
         SESSION,
@@ -3398,7 +3412,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     )
     .await
     .unwrap();
-    set_goal_from_access(
+    seed_goal_from_access(
         &client,
         did,
         SESSION,
@@ -3487,7 +3501,7 @@ async fn resume_resets_blocked_audit_identity_and_count() {
     )
     .unwrap();
     seed_operator_resume_parent_with_actors(&db, &user, &agent, "request-3").await;
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &agent_access,
         did,
         SESSION,
@@ -3526,7 +3540,7 @@ async fn concurrent_operator_resumes_publish_one_child() {
     )
     .unwrap();
     seed_operator_resume_parent_with_actors(&db, &user, &agent, "concurrent-parent").await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         did,
         SESSION,
@@ -3579,7 +3593,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     )
     .unwrap();
     seed_operator_resume_parent_with_actors(&db, &user, &agent, "corrupt-parent").await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &client,
         did,
         SESSION,
@@ -3595,7 +3609,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
             .await
             .unwrap();
     set_request_state_as(&access, &first.doc_id, "interrupted").await;
-    let goal_before = set_goal_from_access(
+    let goal_before = seed_goal_from_access(
         &client,
         did,
         SESSION,
@@ -3738,7 +3752,7 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
                 .len(),
             1
         );
-        let before = set_goal_from_access(
+        let before = seed_goal_from_access(
             &client,
             did,
             SESSION,
@@ -3783,7 +3797,7 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     )
     .unwrap();
     seed_operator_resume_parent_with_actors(&db, &user, &agent, "wrapup-parent").await;
-    let paused = set_goal_from_access(
+    let paused = seed_goal_from_access(
         &client,
         did,
         SESSION,
@@ -3848,7 +3862,7 @@ async fn seed_same_second_canonical_goal_child(
         "2026-07-15T00:00:00Z",
     )
     .await;
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         access,
         did,
         SESSION,
@@ -4054,7 +4068,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
     let db = test_db("goal-readiness-wait").await;
     let (_user, agent, access) =
         goal_recovery_actors(&db, "parent-waits-for-readiness", "completed").await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -4153,7 +4167,7 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
     };
     let db = test_db("goal-readiness-race").await;
     let (_user, agent, access) = goal_recovery_actors(&db, "parent-before-race", "completed").await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -4268,7 +4282,7 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
     let db = test_db("goal-claimed-readiness").await;
     let (_user, agent, access) =
         goal_recovery_actors(&db, "parent-claimed-waits", "completed").await;
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -4352,7 +4366,7 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
     );
     let doc = goal_fixture_request(&db, &user, &agent, "completed-before-continuation").await;
     publish_owned_terminal_activity(&access, agent.as_ref(), &doc, "durable progress").await;
-    set_goal_from_access(
+    seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,

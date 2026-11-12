@@ -166,7 +166,8 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     .await
     .expect("write read-only Tools patch");
 
-    let behavior_doc_id = gents_documents::load_agent_record(node.as_ref(), &default_agent_did)
+    let behavior_doc_id =
+        gents_documents::load_agent_record(node.as_ref(), identity.did(), &default_agent_did)
         .await
         .unwrap()
         .expect("agent record")

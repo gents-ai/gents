@@ -402,7 +402,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     )
     .unwrap();
     let caller_agent = {
-        let agent = gents_documents::load_agent(&node, &caller.agent_did)
+        let agent = gents_documents::load_agent(&node, identity.did(), &caller.agent_did)
             .await
             .unwrap()
             .expect("calling Agent binding");
