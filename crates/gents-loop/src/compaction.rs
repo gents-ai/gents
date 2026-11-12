@@ -176,7 +176,7 @@ mod candidate_conformance {
                 input.left.as_ref().map(parse),
                 input.right.as_ref().map(parse),
             )
-            .map(|value| value.to_string())
+            .map(|value| gents_lean_vocab::compact_model_json(&value))
         });
     }
 }

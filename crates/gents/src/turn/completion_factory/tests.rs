@@ -1001,7 +1001,8 @@ fn generated_reasoning_profile_params_preserve_the_provider_wire_contract() {
                 .effort
                 .as_deref()
                 .map(|value| serde_json::from_value(serde_json::json!(value)).unwrap());
-            reasoning_profile_params(kind, wire, effort).map(|value| value.to_string())
+            reasoning_profile_params(kind, wire, effort)
+                .map(|value| gents_lean_vocab::compact_model_json(&value))
         },
     );
 }
@@ -1016,7 +1017,8 @@ fn generated_request_additional_params_keep_session_cache_affinity() {
             let mut request = request();
             request.session_id = input.session.clone();
             request.request_id = input.request.clone();
-            request_additional_params(&agent, &request).map(|value| value.to_string())
+            request_additional_params(&agent, &request)
+                .map(|value| gents_lean_vocab::compact_model_json(&value))
         },
     );
 }
@@ -1028,7 +1030,8 @@ fn generated_openai_cache_scope_params_use_the_session_before_the_request() {
             let mut request = request();
             request.session_id = input.session.clone();
             request.request_id = input.request.clone();
-            openai_cache_scope_params(&request).map(|value| value.to_string())
+            openai_cache_scope_params(&request)
+                .map(|value| gents_lean_vocab::compact_model_json(&value))
         },
     );
 }
@@ -1135,6 +1138,6 @@ fn generated_reasoning_capabilities_override_untrusted_provider_parameters() {
         let advertised = input.advertised.as_ref().map(|efforts| efforts.iter().map(|effort| {
             serde_json::from_value::<ReasoningEffort>(serde_json::json!(effort)).unwrap()
         }).collect::<Vec<_>>());
-        authoritative_reasoning_capabilities(params, kind, advertised.as_deref()).map(|params| params.to_string())
+        authoritative_reasoning_capabilities(params, kind, advertised.as_deref()).map(|params| gents_lean_vocab::compact_model_json(&params))
     });
 }
