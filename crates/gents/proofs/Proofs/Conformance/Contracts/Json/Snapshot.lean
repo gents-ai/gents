@@ -1,3 +1,4 @@
+import Proofs.Conformance.SessionOrigin
 import Proofs.Conformance.MailboxContent
 import Proofs.Conformance.ManualRequest
 import Proofs.Conformance.PendingRejection
