@@ -6,6 +6,7 @@ import Proofs.Conformance.EventDeliveryConvergence
 import Proofs.Automation.EventDelivery.Instances
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Triggers.Materializer
 
 namespace Conformance.EventDelivery
 
@@ -14,6 +15,30 @@ open Conformance.Contracts
 
 @[conformance_family] def sourceContracts : Conformance.Family SourceKind SourceContract :=
   ⟨[.watcher, .eventSource], sourceContract⟩
+
+structure GroupEvaluationInput where
+  members : Nat
+  expected : Nat
+  deriving Lean.ToJson
+
+structure GroupEvaluationOutput where
+  quiesced : Bool
+  reason : Option String
+  readsOnStart : Nat
+  readsAfterRestart : Nat
+  deriving Lean.ToJson
+
+def quiesceReasonWire : _root_.EventDelivery.Group.QuiesceReason → String
+  | .exceedsExpectedCount => "exceeds_expected_count"
+
+@[conformance_family] def groupEvaluation : Conformance.Family GroupEvaluationInput GroupEvaluationOutput :=
+  ⟨[⟨2, 1⟩, ⟨1, 2⟩, ⟨2, 2⟩], fun i =>
+    let key : Triggers.Groups.EventGroupKey := ⟨"node", .trigger "trigger", "config", "run"⟩
+    let after := (⟨key, 0, none⟩ : _root_.EventDelivery.Group.EventGroupState).evaluate i.members i.expected 1
+    ⟨after.quiescedAt.isSome,
+     (_root_.EventDelivery.Group.quiesceReason i.members i.expected).map quiesceReasonWire,
+     _root_.EventDelivery.Group.membershipReads none,
+     _root_.EventDelivery.Group.membershipReads (some after)⟩⟩
 
 structure GroupClockCase where
   name : String

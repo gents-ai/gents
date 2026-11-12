@@ -320,117 +320,94 @@ async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
 }
 
 #[tokio::test]
-async fn retained_signed_observation_refreshes_its_root_without_changing_goal_revision() {
-    let f = fixture().await;
-    let identity: Arc<dyn NodeIdentity> = f.identity.clone();
-    let access = f.agent_access();
-    access.write("test.goal_physical_root", &format!(
-        "mutation {{update_Goal(docID: \"{}\", input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
-        escape_graphql_string(&f.goal.doc_id), escape_graphql_string(&f.parent.doc_id))).await.unwrap();
-    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
-        .await
-        .unwrap();
-    let mut retained = load_session_goal_observation(
-        &access,
-        f.identity.as_ref(),
-        f.identity.did(),
-        SESSION,
-        Some(f.user.did()),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let revision = retained.goal.as_ref().unwrap().revision.clone();
-    assert_eq!(
-        retained
-            .goal
+async fn retained_goal_observation_roots_match_the_lean_projection_model() {
+    for case in gents_lean_vocab::families::goal_observation_contracts_retained_root::cases() {
+        let f = fixture().await;
+        let identity: Arc<dyn NodeIdentity> = f.identity.clone();
+        let access = f.agent_access();
+        access.write("test.goal_physical_root", &format!(
+            "mutation {{update_Goal(docID: \"{}\", input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
+            escape_graphql_string(&f.goal.doc_id), escape_graphql_string(&f.parent.doc_id))).await.unwrap();
+        let load = || {
+            load_session_goal_observation(
+                &access,
+                f.identity.as_ref(),
+                f.identity.did(),
+                SESSION,
+                Some(f.user.did()),
+            )
+        };
+        let root_view = |observation: Option<SessionGoalObservation>| {
+            observation.map(|observation| {
+                match observation.goal.unwrap().assignment_root_request_doc_id {
+                    None => "absent".to_string(),
+                    Some(root) if root == f.parent.doc_id => "goal_root".to_string(),
+                    Some(_) => "other".to_string(),
+                }
+            })
+        };
+        project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
+            .await
+            .unwrap();
+        let mut retained = load().await.unwrap().unwrap();
+        let revision = retained.goal.as_ref().unwrap().revision.clone();
+        if !case.input.retained_keeps_root {
+            retained
+                .goal
+                .as_mut()
+                .unwrap()
+                .assignment_root_request_doc_id = None;
+            assert!(serde_json::to_value(retained.goal.as_ref().unwrap())
+                .unwrap()
+                .get("assignment_root_request_doc_id")
+                .is_none());
+        }
+        retained.signature = f
+            .agent
+            .sign(&retained.signing_payload().unwrap())
+            .await
+            .unwrap();
+        let rows = durable_rows(&f).await;
+        let doc = rows[0]["_docID"].as_str().unwrap().to_owned();
+        access.write("test.retained_goal_observation", &format!(
+            "mutation {{update_GoalObservation(docID: \"{}\", input: {{observation_json: \"{}\"}}) {{_docID}}}}",
+            escape_graphql_string(&doc),escape_graphql_string(&serde_json::to_string(&retained).unwrap()))).await.unwrap();
+        let retained_load = root_view(load().await.unwrap());
+        let before_refresh = durable_rows(&f).await;
+        project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
+            .await
+            .unwrap();
+        let after_refresh = durable_rows(&f).await;
+        let refreshed = load().await.unwrap();
+        let revision_kept = refreshed
             .as_ref()
-            .unwrap()
-            .assignment_root_request_doc_id
-            .as_deref(),
-        Some(f.parent.doc_id.as_str())
-    );
-    retained
-        .goal
-        .as_mut()
-        .unwrap()
-        .assignment_root_request_doc_id = None;
-    retained.signature = f
-        .agent
-        .sign(&retained.signing_payload().unwrap())
-        .await
-        .unwrap();
-    assert!(serde_json::to_value(retained.goal.as_ref().unwrap())
-        .unwrap()
-        .get("assignment_root_request_doc_id")
-        .is_none());
-    let rows = durable_rows(&f).await;
-    let doc = rows[0]["_docID"].as_str().unwrap();
-    access.write("test.retained_goal_observation", &format!(
-        "mutation {{update_GoalObservation(docID: \"{}\", input: {{observation_json: \"{}\"}}) {{_docID}}}}",
-        escape_graphql_string(doc),escape_graphql_string(&serde_json::to_string(&retained).unwrap()))).await.unwrap();
-    assert!(load_session_goal_observation(
-        &access,
-        f.identity.as_ref(),
-        f.identity.did(),
-        SESSION,
-        Some(f.user.did())
-    )
-    .await
-    .unwrap()
-    .unwrap()
-    .goal
-    .unwrap()
-    .assignment_root_request_doc_id
-    .is_none());
-    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
-        .await
-        .unwrap();
-    let refreshed = load_session_goal_observation(
-        &access,
-        f.identity.as_ref(),
-        f.identity.did(),
-        SESSION,
-        Some(f.user.did()),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(refreshed.goal.as_ref().unwrap().revision, revision);
-    assert_eq!(
-        refreshed
-            .goal
-            .as_ref()
-            .unwrap()
-            .assignment_root_request_doc_id
-            .as_deref(),
-        Some(f.parent.doc_id.as_str())
-    );
-    let stable = durable_rows(&f).await;
-    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
-        .await
-        .unwrap();
-    assert_eq!(durable_rows(&f).await, stable);
-    let mut substituted = refreshed;
-    substituted
-        .goal
-        .as_mut()
-        .unwrap()
-        .assignment_root_request_doc_id = Some("another-physical-request".into());
-    access.write("test.substituted_goal_root", &format!(
-        "mutation {{update_GoalObservation(docID: \"{}\", input: {{observation_json: \"{}\"}}) {{_docID}}}}",
-        escape_graphql_string(doc),escape_graphql_string(&serde_json::to_string(&substituted).unwrap()))).await.unwrap();
-    assert!(load_session_goal_observation(
-        &access,
-        f.identity.as_ref(),
-        f.identity.did(),
-        SESSION,
-        Some(f.user.did())
-    )
-    .await
-    .unwrap()
-    .is_none());
-    f.node.shutdown().await.expect("node shutdown");
+            .is_some_and(|observation| observation.goal.as_ref().unwrap().revision == revision);
+        let refreshed_root = root_view(refreshed.clone());
+        project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
+            .await
+            .unwrap();
+        let rewrote_on_repeat = durable_rows(&f).await != after_refresh;
+        if case.input.substitute_root {
+            let mut substituted = refreshed.unwrap();
+            substituted
+                .goal
+                .as_mut()
+                .unwrap()
+                .assignment_root_request_doc_id = Some("another-physical-request".into());
+            access.write("test.substituted_goal_root", &format!(
+                "mutation {{update_GoalObservation(docID: \"{}\", input: {{observation_json: \"{}\"}}) {{_docID}}}}",
+                escape_graphql_string(&doc),escape_graphql_string(&serde_json::to_string(&substituted).unwrap()))).await.unwrap();
+        }
+        case.check(gents_lean_vocab::families::goal_observation_contracts_retained_root::RetainedRootOutput {
+            retained_load,
+            refresh_writes: after_refresh != before_refresh,
+            refreshed_root,
+            revision_kept,
+            rewrote_on_repeat,
+            final_loaded: load().await.unwrap().is_some(),
+        });
+        f.node.shutdown().await.expect("node shutdown");
+    }
 }
 
 fn modeled_reference(value: &Value) -> Option<gents_protocol::request_input::GoalAssignmentInput> {
