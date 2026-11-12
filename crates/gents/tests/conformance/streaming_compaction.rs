@@ -46,17 +46,23 @@ pub(super) fn compaction_reducers_follow_the_lean_model() {
             }
         }
         let turn_boundary = gents_inference::compaction::session_prefix_is_stable(&input);
+        let provider_fixpoint =
+            gents_inference::compaction::sanitize_association_with_sources(input.clone())
+                .into_iter()
+                .map(|sourced| sourced.message)
+                .eq(input.iter().cloned());
+        assert_eq!(
+            structurally_safe,
+            turn_boundary && provider_fixpoint,
+            "{label}: safe_to_reduce is the turn-boundary and sanitizer-fixpoint gate, \
+             published or not"
+        );
         case.check(
             gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionReducerGateOutput {
                 projected_prefix_ready: turn_boundary && case.input.publication_ready,
                 pre_message_count: input.len() as u64,
                 turn_boundary,
-                provider_fixpoint: gents_inference::compaction::sanitize_association_with_sources(
-                    input.clone(),
-                )
-                .into_iter()
-                .map(|sourced| sourced.message)
-                .eq(input.iter().cloned()),
+                provider_fixpoint,
                 safe_to_reduce: structurally_safe && case.input.publication_ready,
                 safe_boundary: gents_inference::compaction::pair_safe_boundary(
                     &input,
@@ -170,7 +176,6 @@ fn compaction_cursor_follows_the_lean_model() {
 
 fn apply_compaction_reducer(reducer: &str, input: Vec<Message>) -> Vec<Message> {
     match reducer {
-        "identity" => input,
         "strip" => gents_inference::compaction::strip_tool_results(input).0,
         "provider_view" => gents_inference::compaction::provider_view(GROUPED_PROFILE, input).0,
         other => panic!("unsupported compaction reducer {other:?}"),

@@ -637,17 +637,20 @@ def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReduce
 
 @[conformance_family]
 def compactionReducerApply : Family CompactionReducerInput CompactionReducerApplyOutput where
-  inputs := compactionReducerInputs.filter fun i => !compactionSummarizes i
+  inputs := compactionReducerInputs.filter fun i =>
+    !compactionSummarizes i && !compactionIdentity i
   model := compactionReducerApplyOutput
 
 /-- model-production-gap: production summarizes by a token budget
 (`split_for_summary`); no production reducer applies the model's fixed split
-index, so the message counts, pair and order preservation, identity and
-idempotence of a summarize step have no native observation. -/
+index, and the identity reducer exists only in the model. The message counts,
+pair and order preservation, identity and idempotence of a summarize or
+identity step have no native observation. -/
 @[conformance_family]
 def compactionReducerApplyUnreached :
     Family CompactionReducerInput CompactionReducerApplyOutput where
-  inputs := compactionReducerInputs.filter compactionSummarizes
+  inputs := compactionReducerInputs.filter fun i =>
+    compactionSummarizes i || compactionIdentity i
   model := compactionReducerApplyOutput
 
 @[conformance_family]

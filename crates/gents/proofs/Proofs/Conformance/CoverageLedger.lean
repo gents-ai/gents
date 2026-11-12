@@ -2262,7 +2262,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "family"
       "contracts_compaction_reducer_apply_unreached"
-      "model-production-gap: production summarizes by a token budget; no production reducer applies the model's fixed split index, so summarize message counts, pair and order preservation, identity and idempotence have no native observation.")
+      "model-production-gap: production summarizes by a token budget and no production reducer applies the model's fixed split index; the identity reducer exists only in the model. Summarize and identity message counts, pair and order preservation, identity and idempotence have no native observation.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "family"
