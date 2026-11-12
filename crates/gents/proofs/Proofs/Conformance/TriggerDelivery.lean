@@ -538,18 +538,22 @@ def selfSession : Family SelfSessionInput Bool where
       { callerOwner, callerSession, listedOwner, listedSession }
   model := fun i => isCurrent i.callerOwner i.callerSession i.listedOwner i.listedSession
 
-def deliveryOptionCases : List String := do
-  let kind ← [.manual, .schedule, .event]
-  let emit ← [false, true]
-  let concurrency ← [.parallel, .serial, .queuedSerial, .latestOnly]
-  let target ← [false, true]
-  pure <| object [
-    ("kind", jsonString kind.toDefraDB), ("emit_outcome", toString emit),
-    ("concurrency", jsonString (match concurrency with
-      | .parallel => "parallel" | .serial => "serial"
-      | .queuedSerial => "queued_serial" | .latestOnly => "latest_only")),
-    ("target_existing", toString target),
-    ("allowed", toString (Triggers.deliveryOptionsAllowed kind emit concurrency target))]
+deriving instance Lean.ToJson for TriggerKind, ConcurrencyMode
+
+structure DeliveryOptionInput where
+  kind : TriggerKind
+  emitOutcome : Bool
+  concurrency : ConcurrencyMode
+  targetExisting : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def deliveryOptions : Family DeliveryOptionInput Bool where
+  inputs := [TriggerKind.manual, .schedule, .event].flatMap fun kind =>
+    [false, true].flatMap fun emitOutcome =>
+    [ConcurrencyMode.parallel, .serial, .queuedSerial, .latestOnly].flatMap fun concurrency =>
+    [false, true].map fun targetExisting => { kind, emitOutcome, concurrency, targetExisting }
+  model := fun i => Triggers.deliveryOptionsAllowed i.kind i.emitOutcome i.concurrency i.targetExisting
 
 def latestAdmissionCases : List String :=
   let old := { fire "old" with emitOutcome := false, identity := { identity "owner-a" "old" with collection := "Schedule" } }
@@ -607,9 +611,6 @@ def triggerFireBudgetDefaultJson : String :=
 
 def triggerFireBudgetStatusJson : String :=
   jsonString Triggers.FireBudget.exhaustedStatus
-
-def triggerDeliveryOptionCasesJson : String :=
-  jsonArray deliveryOptionCases
 
 def triggerDeliveryLatestAdmissionCasesJson : String :=
   jsonArray latestAdmissionCases

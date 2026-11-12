@@ -104,25 +104,6 @@ fn request_mutation_as(receipt: &TriggerFire, agent_did: &str) -> String {
 #[test]
 fn durable_delivery_predicates_match_executable_lean_owners() {
     let cases = contract();
-    for case in cases["trigger_delivery_option_cases"].as_array().unwrap() {
-        let kind = match case["kind"].as_str().unwrap() {
-            "schedule" => TriggerKind::Schedule,
-            "event" => TriggerKind::Event,
-            "manual" => TriggerKind::Manual,
-            other => panic!("unknown modeled trigger kind {other}"),
-        };
-        assert_eq!(
-            gents_documents::task_delivery::validate_task_delivery_options(
-                kind,
-                case["emit_outcome"].as_bool().unwrap(),
-                decode(&case["concurrency"]),
-                case["target_existing"].as_bool().unwrap(),
-            )
-            .is_ok(),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
     for case in cases["trigger_delivery_identity_cases"].as_array().unwrap() {
         let id: FireIdentity = decode(&case["identity"]);
         let key = durable::fire_key(&id);

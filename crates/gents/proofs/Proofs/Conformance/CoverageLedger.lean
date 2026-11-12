@@ -594,8 +594,8 @@ def caseCoverage : List CoverageEntry :=
       "Triggers.Queue")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_option_cases"
-      "Triggers.Types")
+      "family"
+      "trigger_delivery_delivery_options")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
