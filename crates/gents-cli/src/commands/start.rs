@@ -38,6 +38,7 @@ pub(crate) struct StartArgs {
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
     pub(crate) agent: Option<String>,
     pub(crate) print: Option<String>,
+    pub(crate) steer: bool,
     pub(crate) prompt: Option<String>,
     pub(crate) continue_session: Option<String>,
     pub(crate) yolo: bool,
@@ -89,6 +90,7 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
         agent.as_deref(),
         args.continue_session.as_deref(),
         &message,
+        args.steer,
     )
     .await
 }
@@ -514,6 +516,7 @@ mod tests {
             store_key_custody: None,
             agent: None,
             print: None,
+            steer: false,
             prompt: prompt.then(|| "hello".to_string()),
             continue_session: continuing.then(|| "s1".to_string()),
             yolo: false,
