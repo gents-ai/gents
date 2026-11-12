@@ -128,15 +128,15 @@ fn runtime_owned_tool(node: &Arc<EmbeddedNode>) -> SchemaTool {
 #[tokio::test]
 async fn schema_publication_matches_executable_lean_contract() {
     for case in &gents_lean_vocab::lean_contract_snapshot().schema_publication_cases {
-        if !case["native_allowed"].as_bool().unwrap() {
+        if !case.native_allowed {
             continue;
         }
         let node = node().await;
         let tool = SchemaTool::new(node.clone());
         let access = ConfigAccess::local(node.clone());
-        let grant = case["grant"].as_bool().unwrap();
-        let compatible = case["compatible"].as_bool().unwrap();
-        let artifact = case["artifact"].as_bool().unwrap();
+        let grant = case.grant;
+        let compatible = case.compatible;
+        let artifact = case.artifact;
         if !compatible {
             access
                 .add_collection("type Probe { value: Int }")
@@ -179,12 +179,12 @@ async fn schema_publication_matches_executable_lean_contract() {
         } else {
             false
         };
-        assert_eq!(accepted, case["accepted"].as_bool().unwrap(), "{case}");
+        assert_eq!(accepted, case.accepted, "{case:?}");
         if !accepted {
             assert_eq!(
                 before,
                 access.collection_version("Probe").await.unwrap(),
-                "{case}"
+                "{case:?}"
             );
         }
         assert!(!surface.tool_names().contains(&"config".to_owned()));
@@ -197,7 +197,7 @@ async fn schema_publication_uses_agent_native_authority() {
     use gents_store::identity::{KeyIdentity, NodeIdentity};
 
     for case in &gents_lean_vocab::lean_contract_snapshot().schema_publication_cases {
-        if case["grant"] != true || case["artifact"] != true || case["compatible"] != true {
+        if !case.grant || !case.artifact || !case.compatible {
             continue;
         }
         let home = tempfile::tempdir().unwrap();
@@ -263,7 +263,7 @@ async fn schema_publication_uses_agent_native_authority() {
             .grant_node_permission(&agent_did, NodePermission::CollectionGet)
             .await
             .unwrap();
-        if case["native_allowed"] == true {
+        if case.native_allowed {
             admin
                 .grant_node_permission(&agent_did, NodePermission::CollectionPatch)
                 .await
@@ -271,17 +271,13 @@ async fn schema_publication_uses_agent_native_authority() {
         }
         let preview = call(&tool, json!({"argv":["collection","preview","create"],"options":{"sdl":"type AgentSchemaProbe { value: String }"}})).await;
         let result = tool.call(args(preview["next_call"]["args"].clone())).await;
-        assert_eq!(
-            result.is_ok(),
-            case["accepted"].as_bool().unwrap(),
-            "{case}: {result:?}"
-        );
+        assert_eq!(result.is_ok(), case.accepted, "{case:?}: {result:?}");
         let installed = ConfigAccess::local(node.clone())
             .collection_version("AgentSchemaProbe")
             .await
             .unwrap()
             .is_some();
-        assert_eq!(installed, case["accepted"].as_bool().unwrap(), "{case}");
+        assert_eq!(installed, case.accepted, "{case:?}");
         node.shutdown().await.unwrap();
     }
 }
