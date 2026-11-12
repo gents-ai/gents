@@ -277,10 +277,6 @@ pub fn lean_lifecycle_hook_goal_resume_cases() -> &'static [LeanLifecycleHookGoa
     &lean_contract_snapshot().lifecycle_hook_goal_resume_cases
 }
 
-pub fn lean_lifecycle_hook_grant_cases() -> &'static [LeanLifecycleHookGrantCase] {
-    &lean_contract_snapshot().lifecycle_hook_grant_cases
-}
-
 pub fn lean_lifecycle_hook_history_cases() -> &'static [LeanLifecycleHookHistoryCase] {
     &lean_contract_snapshot().lifecycle_hook_history_cases
 }
@@ -3361,7 +3357,6 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_goal_resume_cases: Vec<LeanLifecycleHookGoalResumeCase>,
     pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
     pub lifecycle_hook_queue_scope_cases: Vec<LeanLifecycleHookQueueScopeCase>,
-    pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
     pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
     pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
     pub lifecycle_hook_history_cases: Vec<LeanLifecycleHookHistoryCase>,
@@ -6761,15 +6756,6 @@ pub struct LeanLifecycleHookDenial {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookEffect {
-    Create { collection: String, doc: String, value: String },
-    Update { collection: String, doc: String, expected: u64, value: String },
-    Delete { collection: String, doc: String, expected: u64 },
-    Core { op: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookGateCase {
     pub name: String,
@@ -6805,38 +6791,6 @@ pub struct LeanLifecycleHookGoalResumeCase {
     pub restage: LeanGoalResumeDecision,
     pub bind: Option<LeanGoalResumeDecision>,
     pub result: LeanGoalResumeResult,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookGrant {
-    pub target: LeanLifecycleHookRef,
-    pub relation: String,
-    pub subject: LeanLifecycleHookSubject,
-}
-
-/// `Hooks.grantsValid` on one result: the declared grantable relations, the
-/// transaction's actor, what the event names and what core showed, the
-/// result's effects and grants.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookGrantCase {
-    pub name: String,
-    pub declared: Vec<LeanLifecycleHookGrantable>,
-    pub actor: String,
-    pub named_actors: Vec<String>,
-    pub named_docs: Vec<LeanLifecycleHookRef>,
-    pub effects: Vec<LeanLifecycleHookEffect>,
-    pub grants: Vec<LeanLifecycleHookGrant>,
-    pub valid: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookGrantable {
-    pub collection: String,
-    pub relation: String,
-    pub subject: LeanLifecycleHookSubjectKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -6964,20 +6918,6 @@ pub enum LeanLifecycleHookStageResult {
 pub struct LeanLifecycleHookState {
     pub core: Vec<String>,
     pub rows: Vec<LeanLifecycleHookRow>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookSubject {
-    Actor { did: String },
-    Document { collection: String, doc: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookSubjectKind {
-    Actor,
-    Document { resource: String, collection: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

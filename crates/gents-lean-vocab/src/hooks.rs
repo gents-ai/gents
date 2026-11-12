@@ -36,3 +36,27 @@ pub struct LeanLifecycleHookScript<V> {
     pub reads: Vec<String>,
     pub decision: LeanLifecycleHookDecision<V>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookEffect {
+    Create {
+        collection: String,
+        doc: String,
+        value: String,
+    },
+    Update {
+        collection: String,
+        doc: String,
+        expected: u64,
+        value: String,
+    },
+    Delete {
+        collection: String,
+        doc: String,
+        expected: u64,
+    },
+    Core {
+        op: String,
+    },
+}

@@ -1323,9 +1323,14 @@ def caseCoverage : List CoverageEntry :=
       "hooks_contracts_prepared_admission")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_grant_cases"
-      "LifecycleHookGrantCases"
-      "Production validate decides every representable case. A native grant rides on its create, so a grant on a document the result does not create cannot be expressed and is checked to be invalid in the model. The DefraDB host's relationship publication and the Goals listener (goal::lifecycle_hooks::TaskGoalAssignment) are not driven by these cases.")
+      "family"
+      "hooks_contracts_grant_validity"
+      "Production validate decides every case whose grants ride on creates. The DefraDB host's relationship publication and the Goals listener (goal::lifecycle_hooks::TaskGoalAssignment) are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "hooks_contracts_grant_validity_unreached"
+      "model-production-gap: a native grant is a field of the create that carries it, so a grant on a document the result does not create has no production form; the model finds every such case invalid.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "lifecycle_hook_supersede_cases"

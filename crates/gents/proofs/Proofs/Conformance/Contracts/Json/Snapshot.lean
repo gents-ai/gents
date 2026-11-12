@@ -594,8 +594,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.HooksContracts.gateCasesJson ++ ","
     ++ "\"lifecycle_hook_queue_scope_cases\":"
       ++ Conformance.HooksContracts.queueScopeCasesJson ++ ","
-    ++ "\"lifecycle_hook_grant_cases\":"
-      ++ Conformance.HooksContracts.grantCasesJson ++ ","
     ++ "\"lifecycle_hook_supersede_cases\":"
       ++ Conformance.HookDecisions.supersedeCasesJson ++ ","
     ++ "\"lifecycle_hook_goal_halt_cases\":"

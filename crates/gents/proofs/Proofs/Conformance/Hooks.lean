@@ -412,36 +412,112 @@ def grantCases : List GrantCase :=
     , effects := [create "Goal" "g1" "a", create "Goal" "g2" "b"]
     , grants := [agentGrant "g1" caller, parentGrant "g2" "s1"] } ]
 
-private def subjectKindJson : SubjectKind → String
-  | .actor => "{\"kind\":\"actor\"}"
-  | .document resource collection =>
-      "{\"kind\":\"document\",\"resource\":" ++ jsonString resource ++
-        ",\"collection\":" ++ jsonString collection ++ "}"
+structure RefWire where
+  collection : String
+  doc : String
+  deriving ToJson
 
-private def grantableJson (entry : Grantable) : String :=
-  "{\"collection\":" ++ jsonString entry.collection ++
-    ",\"relation\":" ++ jsonString entry.relation ++
-    ",\"subject\":" ++ subjectKindJson entry.subject ++ "}"
+def RefWire.ofModel (target : Ref String) : RefWire := ⟨target.collection, target.doc⟩
 
-private def subjectJson : Subject String → String
-  | .actor did => "{\"kind\":\"actor\",\"did\":" ++ jsonString did ++ "}"
-  | .document target => "{\"kind\":\"document\"," ++ refFields target ++ "}"
+def RefWire.toModel (wire : RefWire) : Ref String := ref wire.collection wire.doc
 
-private def grantJson (grant : Grant String) : String :=
-  "{\"target\":{" ++ refFields grant.target ++ "},\"relation\":" ++ jsonString grant.relation ++
-    ",\"subject\":" ++ subjectJson grant.subject ++ "}"
+structure SubjectKindWire where
+  kind : String
+  resource : Option String
+  collection : Option String
+  deriving ToJson
 
-private def grantCaseJson (c : GrantCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"declared\":" ++ jsonArray (c.declared.map grantableJson) ++
-    ",\"actor\":" ++ jsonString caller ++
-    ",\"named_actors\":" ++ jsonStringArray c.named.actors ++
-    ",\"named_docs\":" ++ jsonArray (c.named.docs.map fun target => "{" ++ refFields target ++ "}") ++
-    ",\"effects\":" ++ effectsJson c.effects ++
-    ",\"grants\":" ++ jsonArray (c.grants.map grantJson) ++
-    ",\"valid\":" ++ boolJson c.valid ++ "}"
+structure GrantableWire where
+  collection : String
+  relation : String
+  subject : SubjectKindWire
+  deriving ToJson
 
-def grantCasesJson : String := jsonArray (grantCases.map grantCaseJson)
+def GrantableWire.ofModel (entry : Grantable) : GrantableWire :=
+  { collection := entry.collection, relation := entry.relation
+  , subject := match entry.subject with
+      | .actor => ⟨"actor", none, none⟩
+      | .document resource collection => ⟨"document", some resource, some collection⟩ }
+
+def GrantableWire.toModel (wire : GrantableWire) : Grantable :=
+  { collection := wire.collection, relation := wire.relation
+  , subject := match wire.subject.kind, wire.subject.resource, wire.subject.collection with
+      | "document", some resource, some collection => .document resource collection
+      | _, _, _ => .actor }
+
+structure SubjectWire where
+  kind : String
+  did : Option String
+  collection : Option String
+  doc : Option String
+  deriving ToJson
+
+structure GrantWire where
+  target : RefWire
+  relation : String
+  subject : SubjectWire
+  deriving ToJson
+
+def GrantWire.ofModel (grant : Grant String) : GrantWire :=
+  { target := RefWire.ofModel grant.target, relation := grant.relation
+  , subject := match grant.subject with
+      | .actor did => ⟨"actor", some did, none, none⟩
+      | .document target => ⟨"document", none, some target.collection, some target.doc⟩ }
+
+def GrantWire.toModel (wire : GrantWire) : Grant String :=
+  { target := wire.target.toModel, relation := wire.relation
+  , subject := match wire.subject.kind with
+      | "document" =>
+          .document (ref (wire.subject.collection.getD "") (wire.subject.doc.getD ""))
+      | _ => .actor (wire.subject.did.getD "") }
+
+structure GrantInput where
+  name : String
+  declared : List GrantableWire
+  actor : String
+  namedActors : List String
+  namedDocs : List RefWire
+  effects : List EffectWire
+  grants : List GrantWire
+  deriving ToJson
+
+structure GrantOutput where
+  valid : Bool
+  deriving ToJson
+
+def GrantCase.input (c : GrantCase) : GrantInput :=
+  { name := c.name, declared := c.declared.map GrantableWire.ofModel, actor := caller
+  , namedActors := c.named.actors, namedDocs := c.named.docs.map RefWire.ofModel
+  , effects := c.effects.map EffectWire.ofModel, grants := c.grants.map GrantWire.ofModel }
+
+def grantModel (i : GrantInput) : GrantOutput :=
+  { valid := Hooks.grantsValid (i.declared.map GrantableWire.toModel) i.actor
+      ⟨i.namedActors, i.namedDocs.map RefWire.toModel⟩ (i.effects.map EffectWire.toModel)
+      (i.grants.map GrantWire.toModel) }
+
+/-- Whether every grant of the case targets a document its effects create. -/
+def GrantCase.placed (c : GrantCase) : Bool :=
+  c.grants.all fun grant => (created c.effects).contains grant.target
+
+/-- A native grant rides on the create of its target (`Write::Create.grants`),
+so only a result whose every grant targets a document it creates has a
+production form. -/
+@[conformance_family]
+def grantValidity : Family GrantInput GrantOutput where
+  inputs := (grantCases.filter GrantCase.placed).map GrantCase.input
+  model := grantModel
+
+/-- model-production-gap: production has no form for a grant on a document
+the result does not create (a grant is a field of the create that carries
+it), so these cases are invalid by construction there and are checked only
+in the model. -/
+@[conformance_family]
+def grantValidityUnreached : Family GrantInput GrantOutput where
+  inputs := (grantCases.filter fun c => !c.placed).map GrantCase.input
+  model := grantModel
+
+example : (grantCases.filter fun c => !c.placed).all (fun c => !c.valid) = true := by
+  native_decide
 
 /-! Staging at refusable points: `Hooks.stage` and `Hooks.settle`. -/
 

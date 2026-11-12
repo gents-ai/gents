@@ -17,6 +17,7 @@ use crate::request::hooks::stage::{
 };
 use gents_lean_vocab::families::hooks_contracts_delivery_step::{self as delivery_step};
 use gents_lean_vocab::families::hooks_contracts_effect_commit::{self as effect_commit};
+use gents_lean_vocab::families::hooks_contracts_grant_validity::{self as grant_validity};
 use gents_lean_vocab::families::hooks_contracts_owed_derive::{self as owed_derive};
 use gents_lean_vocab::families::hooks_contracts_owed_prune::{self as owed_prune};
 use gents_lean_vocab::families::hooks_contracts_owed_trace::{self as owed_trace};
@@ -24,17 +25,14 @@ use gents_lean_vocab::families::hooks_contracts_prepared_admission::{self as adm
 use gents_lean_vocab::families::hooks_contracts_verdict_combination::{self as combination};
 use gents_lean_vocab::{
     
-    lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_grant_cases,
-    lean_lifecycle_hook_must_commit_cases,
+    lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_must_commit_cases,
     lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
     LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
     LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
     LeanLifecycleHookPartition,
-    LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRef,
-    LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
+    LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
     LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookStageResult,
-    LeanLifecycleHookState, LeanLifecycleHookSubject,
-    LeanLifecycleHookSubjectKind, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
+    LeanLifecycleHookState, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
 use serde_json::Value;
 
@@ -565,103 +563,117 @@ async fn effect_validation_and_application_follow_the_lean_model() {
     }
 }
 
-fn lean_ref(lean: &LeanLifecycleHookRef) -> DocRef {
-    DocRef::new(&lean.collection, &lean.doc)
+fn grant_ref(wire: &grant_validity::RefWire) -> DocRef {
+    DocRef::new(&wire.collection, &wire.doc)
 }
 
-/// Lean `Hooks.grantsValid` decided by production `validate`. A native grant
-/// rides on the create of its target, so a case granting on a document the
-/// result does not create has no native form; the model must find it invalid.
+/// Lean `Hooks.grantsValid` decided by production `validate`, each grant
+/// riding on the create of its target.
 #[test]
-fn generated_lifecycle_hook_grant_cases_drive_create_grant_validation() {
-    let cases = lean_lifecycle_hook_grant_cases();
-    assert!(!cases.is_empty());
-    let mut representable = 0;
-    for case in cases {
-        let mut effects = effects(&case.effects);
-        let mut placed = 0;
-        for effect in &mut effects {
-            let Effect::Write(Write::Create { doc, grants, .. }) = effect else {
-                continue;
-            };
-            for grant in &case.grants {
-                if lean_ref(&grant.target) != *doc {
+fn create_grant_validation_follows_the_lean_model() {
+    gents_lean_vocab::families::hooks_contracts_grant_validity::replay(
+        |input: &grant_validity::GrantInput| {
+            let wires: Vec<effect_commit::EffectWire> =
+                gents_lean_vocab::family::recode(&input.effects);
+            let mut effects: Vec<Effect> = wires.iter().map(effect_of).collect();
+            let mut placed = 0;
+            for effect in &mut effects {
+                let Effect::Write(Write::Create { doc, grants, .. }) = effect else {
                     continue;
+                };
+                for grant in &input.grants {
+                    if grant_ref(&grant.target) != *doc {
+                        continue;
+                    }
+                    placed += 1;
+                    grants.push(Grant {
+                        relation: grant.relation.clone(),
+                        subject: match grant.subject.kind.as_str() {
+                            "actor" => Subject::Actor(
+                                grant.subject.did.clone().expect("an actor grant names its DID"),
+                            ),
+                            "document" => Subject::Document(DocRef::new(
+                                grant
+                                    .subject
+                                    .collection
+                                    .as_deref()
+                                    .expect("a document grant names its collection"),
+                                grant
+                                    .subject
+                                    .doc
+                                    .as_deref()
+                                    .expect("a document grant names its document"),
+                            )),
+                            other => panic!("the model has no grant subject {other}"),
+                        },
+                    });
                 }
-                placed += 1;
-                grants.push(Grant {
-                    relation: grant.relation.clone(),
-                    subject: match &grant.subject {
-                        LeanLifecycleHookSubject::Actor { did } => Subject::Actor(did.clone()),
-                        LeanLifecycleHookSubject::Document { collection, doc } => {
-                            Subject::Document(DocRef::new(collection, doc))
-                        }
-                    },
-                });
             }
-        }
-        if placed < case.grants.len() {
-            assert!(
-                !case.valid,
-                "{}: a grant off its create is valid",
-                case.name
+            assert_eq!(
+                placed,
+                input.grants.len(),
+                "{}: every grant rides on a create",
+                input.name
             );
-            continue;
-        }
-        representable += 1;
-        let mut owns: Vec<String> = case
-            .effects
-            .iter()
-            .filter_map(|effect| match effect {
-                LeanLifecycleHookEffect::Create { collection, .. }
-                | LeanLifecycleHookEffect::Update { collection, .. }
-                | LeanLifecycleHookEffect::Delete { collection, .. } => Some(collection.clone()),
-                LeanLifecycleHookEffect::Core { .. } => None,
-            })
-            .collect();
-        owns.sort();
-        owns.dedup();
-        let manifest = Manifest {
-            name: "grants",
-            owns: owns
+            let mut owns: Vec<String> = wires
                 .iter()
-                .map(|collection| OwnedCollection {
-                    name: leak(collection),
-                    schema: None,
-                    grants: Box::leak(
-                        case.declared
-                            .iter()
-                            .filter(|declared| &declared.collection == collection)
-                            .map(|declared| Grantable {
-                                relation: leak(&declared.relation),
-                                subject: match &declared.subject {
-                                    LeanLifecycleHookSubjectKind::Actor => SubjectKind::Actor,
-                                    LeanLifecycleHookSubjectKind::Document {
-                                        resource,
-                                        collection,
-                                    } => SubjectKind::Document {
-                                        resource: leak(resource),
-                                        collection: leak(collection),
+                .filter_map(|effect| effect.collection.clone())
+                .collect();
+            owns.sort();
+            owns.dedup();
+            let manifest = Manifest {
+                name: "grants",
+                owns: owns
+                    .iter()
+                    .map(|collection| OwnedCollection {
+                        name: leak(collection),
+                        schema: None,
+                        grants: Box::leak(
+                            input
+                                .declared
+                                .iter()
+                                .filter(|declared| &declared.collection == collection)
+                                .map(|declared| Grantable {
+                                    relation: leak(&declared.relation),
+                                    subject: match declared.subject.kind.as_str() {
+                                        "actor" => SubjectKind::Actor,
+                                        "document" => SubjectKind::Document {
+                                            resource: leak(
+                                                declared
+                                                    .subject
+                                                    .resource
+                                                    .as_deref()
+                                                    .expect("a document grant names its resource"),
+                                            ),
+                                            collection: leak(
+                                                declared
+                                                    .subject
+                                                    .collection
+                                                    .as_deref()
+                                                    .expect("a document grant names its collection"),
+                                            ),
+                                        },
+                                        other => panic!("the model has no subject kind {other}"),
                                     },
-                                },
-                            })
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice(),
-                    ),
-                })
-                .collect(),
-            bound: effects.len(),
-            history: Vec::new(),
-        };
-        let named = Named {
-            actor: Some(case.actor.clone()),
-            actors: case.named_actors.clone(),
-            docs: case.named_docs.iter().map(lean_ref).collect(),
-        };
-        let valid = validate(&manifest, &effects, |_, _| true, &named);
-        assert_eq!(valid.is_ok(), case.valid, "{}: {valid:?}", case.name);
-    }
-    assert!(representable > 0);
+                                })
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        ),
+                    })
+                    .collect(),
+                bound: effects.len(),
+                history: Vec::new(),
+            };
+            let named = Named {
+                actor: Some(input.actor.clone()),
+                actors: input.named_actors.clone(),
+                docs: input.named_docs.iter().map(grant_ref).collect(),
+            };
+            grant_validity::GrantOutput {
+                valid: validate(&manifest, &effects, |_, _| true, &named).is_ok(),
+            }
+        },
+    );
 }
 
 #[tokio::test]
