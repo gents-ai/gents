@@ -1,6 +1,5 @@
 use gents_protocol::tool_names::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
-    AGENT_SESSION_LIST_TOOL_NAME,
 };
 use rapidhash::{HashSetExt, RapidHashSet};
 use std::path::Path;
@@ -2399,7 +2398,6 @@ async fn live_randomized_soak() -> Result<()> {
                 .expect("GENTS_LIVE_SOAK_ITERS is a count")
         })
         .unwrap_or(20);
-    let _seed_guard = SoakSeed(seed);
     tracing::info!(
         seed,
         iterations,
@@ -2576,7 +2574,7 @@ async fn live_randomized_soak() -> Result<()> {
         fx.request(&request_id, root, &prompt).await;
         let state =
             wait_for_request_terminal(&fx.live, &request_id, Duration::from_secs(300)).await;
-        assert_eq!(state, "completed", "soak operation {step} failed");
+        assert_eq!(state, "completed", "soak seed={seed} operation {step} failed");
         tracing::info!(seed, step, %state, "[live-soak] op settled");
         for caused in fetch_caused_requests(&fx.live, &request_id).await {
             if started
