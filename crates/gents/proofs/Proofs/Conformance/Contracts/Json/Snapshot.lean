@@ -1,3 +1,4 @@
+import Proofs.Conformance.GraphqlName
 import Proofs.Conformance.ClaudeRefresh
 import Proofs.Conformance.Identity.BlockScope
 import Proofs.Conformance.AccountResolver

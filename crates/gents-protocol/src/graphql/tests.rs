@@ -78,3 +78,56 @@ fn graphql_input_literal_emits_null_for_empty_array_not_bracket_literal() {
     assert!(!rendered.contains("target_ids: []"), "rendered: {rendered}");
     assert!(!rendered.contains("skill_ids: []"), "rendered: {rendered}");
 }
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum NameOutcome {
+    Accepted,
+    Empty,
+    BadStart,
+    BadCharacter,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CollectionOutcome {
+    Accepted,
+    Empty,
+    BadStart,
+    BadCharacter,
+    ReservedPrefix,
+}
+
+fn name_outcome(name: &str) -> NameOutcome {
+    match validate_graphql_name(name) {
+        Ok(()) => NameOutcome::Accepted,
+        Err(GraphqlError::EmptyIdentifier) => NameOutcome::Empty,
+        Err(GraphqlError::IdentifierStart { .. }) => NameOutcome::BadStart,
+        Err(GraphqlError::IdentifierCharacter { .. }) => NameOutcome::BadCharacter,
+        Err(error) => panic!("validate_graphql_name({name:?}) returned {error}"),
+    }
+}
+
+fn collection_outcome(name: &str) -> CollectionOutcome {
+    match validate_collection_identifier(name) {
+        Ok(()) => CollectionOutcome::Accepted,
+        Err(GraphqlError::EmptyIdentifier) => CollectionOutcome::Empty,
+        Err(GraphqlError::IdentifierStart { .. }) => CollectionOutcome::BadStart,
+        Err(GraphqlError::IdentifierCharacter { .. }) => CollectionOutcome::BadCharacter,
+        Err(GraphqlError::ReservedCollectionPrefix { .. }) => CollectionOutcome::ReservedPrefix,
+        Err(error) => panic!("validate_collection_identifier({name:?}) returned {error}"),
+    }
+}
+
+#[test]
+fn graphql_name_rendering_matches_the_lean_model() {
+    gents_lean_vocab::families::graphql_name_names::replay::<NameOutcome>(|input| {
+        name_outcome(&input.value)
+    });
+    gents_lean_vocab::families::graphql_name_collections::replay::<CollectionOutcome>(|input| {
+        collection_outcome(&input.value)
+    });
+    gents_lean_vocab::families::graphql_name_escapes::replay(|input| {
+        escape_graphql_string(&input.value)
+    });
+}
