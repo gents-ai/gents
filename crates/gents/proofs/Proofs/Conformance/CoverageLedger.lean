@@ -991,6 +991,10 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigScopeCases")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "family"
+      "contracts_self_config_resource_read_exposure")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "agent_decision_cases"
       "AgentDecisionCases")
       "self-config" [Surface.agentFacing]

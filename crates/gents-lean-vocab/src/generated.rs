@@ -3172,9 +3172,6 @@ pub struct LeanContractSnapshot {
     pub goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
     pub lsp_action_cases: Vec<LeanLspActionCase>,
     pub self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
-    pub self_config_resource_read_exposure_cases: Vec<
-        LeanSelfConfigResourceReadExposureCase,
-    >,
     pub self_config_scope_cases: LeanSelfConfigScopeCases,
     pub policy_resource_exposure_cases: Vec<LeanPolicyResourceExposureCase>,
     pub policy_grant_bound_cases: Vec<LeanPolicyGrantBoundCase>,
@@ -10705,14 +10702,6 @@ pub struct LeanSelfConfigPatchEntry {
     pub field: String,
     pub action: String,
     pub value: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSelfConfigResourceReadExposureCase {
-    pub categories: Vec<String>,
-    pub exposed: bool,
-    pub resource: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

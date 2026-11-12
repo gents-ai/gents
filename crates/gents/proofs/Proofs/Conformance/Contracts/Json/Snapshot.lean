@@ -830,8 +830,6 @@ def snapshotClientCasesJson : String :=
       ++ lspActionCasesJson ++ ","
     ++ "\"self_config_field_tables\":"
       ++ selfConfigFieldTablesJson ++ ","
-    ++ "\"self_config_resource_read_exposure_cases\":"
-      ++ selfConfigResourceReadExposureCasesJson ++ ","
     ++ "\"self_config_scope_cases\":"
       ++ selfConfigScopeCasesJson ++ ","
     ++ "\"policy_resource_exposure_cases\":"

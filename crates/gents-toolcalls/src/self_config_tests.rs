@@ -3628,18 +3628,15 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
         })
         .await
         .unwrap();
-    let cases =
-        &gents_lean_vocab::lean_contract_snapshot().self_config_resource_read_exposure_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        let categories = case
+    for case in gents_lean_vocab::families::contracts_self_config_resource_read_exposure::cases() {
+        let case_input = &case.input;
+        let categories = case_input
             .categories
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let expected = case.exposed;
         let tools = fixture.tools(&categories);
-        let commands = match case.resource.as_str() {
+        let commands = match case_input.resource.as_str() {
             "backend" => vec![
                 vec!["backend".to_owned(), "list".to_owned()],
                 vec!["backend".to_owned(), "get".to_owned(), backend_id.clone()],
@@ -3669,18 +3666,20 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
             ],
             other => panic!("unexpected modeled read resource {other}"),
         };
+        let mut exposed = None;
         for command in commands {
             let result = call_config_tool(&tools, command.clone()).await;
+            let allowed = result.is_ok();
             assert_eq!(
-                result.is_ok(),
-                expected,
-                "{case:?}: {command:?}: {result:?}"
+                *exposed.get_or_insert(allowed),
+                allowed,
+                "{case_input:?}: {command:?}: {result:?}"
             );
-            if expected && case.resource == "effective" {
+            if allowed && case_input.resource == "effective" {
                 let value: Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
                 assert_eq!(value["agent_did"], fixture.agent_did());
             }
-            if expected
+            if allowed
                 && command.first().is_some_and(|part| part == "automation")
                 && command.get(1).is_some_and(|part| part == "get")
             {
@@ -3689,6 +3688,11 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
                 assert_eq!(value["document"]["task_id"], "read-exposure-task");
             }
         }
+        case.check(
+            gents_lean_vocab::families::contracts_self_config_resource_read_exposure::ResourceReadExposureOutput {
+                exposed: exposed.expect("each modeled resource has a read command"),
+            },
+        );
     }
 }
 
@@ -4277,7 +4281,10 @@ async fn config_backend_accounts_needs_the_backend_grant() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(error.contains("backend configuration is not granted"), "{error}");
+    assert!(
+        error.contains("backend configuration is not granted"),
+        "{error}"
+    );
     assert!(config
         .call(json!({"argv":["backend", "list"]}).to_string())
         .await
