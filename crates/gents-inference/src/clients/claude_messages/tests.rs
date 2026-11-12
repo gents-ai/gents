@@ -868,15 +868,36 @@ fn claude_sse_dispatch_cases_drive_the_stream_state() {
     }
 
     fn failure(error: &MessagesParseError) -> String {
+        // Rig carries these failures to the loop only as text, so each modeled
+        // cause must also be the one the loop's classifier reads from it.
+        let report = gents_loop::error::ProviderReport::classify_failure_text(&error.to_string());
+        let fail_closed_tool_use = || {
+            assert!(
+                report.fail_closed_tool_use && !report.refusal,
+                "the loop reads a fail-closed tool_use: {error}"
+            );
+        };
         match error {
-            MessagesParseError::ToolUse { .. } => "tool_use".into(),
+            MessagesParseError::ToolUse { .. } => {
+                fail_closed_tool_use();
+                "tool_use".into()
+            }
             MessagesParseError::DuplicateToolUseId { id } => {
+                fail_closed_tool_use();
                 format!("duplicate_tool_use_id:{}", tool_number(id))
             }
             MessagesParseError::OverlappingToolUse { id } => {
+                fail_closed_tool_use();
                 format!("overlapping_tool_use:{}", tool_number(id))
             }
-            MessagesParseError::MalformedToolUse { .. } => "malformed_tool_use".into(),
+            MessagesParseError::MalformedToolUse { .. } => {
+                fail_closed_tool_use();
+                assert!(
+                    error.to_string().contains("fail-closed: malformed tool_use"),
+                    "{error}"
+                );
+                "malformed_tool_use".into()
+            }
             MessagesParseError::MalformedThinking { cause } => format!(
                 "malformed_thinking:{}",
                 match cause {
@@ -888,7 +909,18 @@ fn claude_sse_dispatch_cases_drive_the_stream_state() {
                     ThinkingParseCause::Malformed(text) => panic!("unmodeled cause {text}"),
                 }
             ),
-            MessagesParseError::ProviderRefusal { request_id } => format!("refusal:{request_id}"),
+            MessagesParseError::ProviderRefusal { request_id } => {
+                let rendered = CompletionError::from(MessagesParseError::ProviderRefusal {
+                    request_id: request_id.clone(),
+                })
+                .to_string();
+                let report = gents_loop::error::ProviderReport::classify_failure_text(&rendered);
+                assert!(
+                    report.refusal && !report.fail_closed_tool_use,
+                    "the loop reads the refusal as permanent: {rendered}"
+                );
+                format!("refusal:{request_id}")
+            }
             other => panic!("unmodeled failure {other}"),
         }
     }
@@ -1311,10 +1343,26 @@ fn claude_agent_header_cases_drive_the_sent_request() {
             assert!(parent
                 .as_ref()
                 .is_none_or(|did| Some(did) == identity.parent_agent_did.as_ref()));
+            let agent_type = header_value(&request, "x-claude-code-agent-type");
+            let mut expected = MAIN_HEADER_NAMES.to_vec();
+            expected.extend(
+                [
+                    (agent_did.is_some(), "x-claude-code-agent-did"),
+                    (parent.is_some(), "x-claude-code-parent-agent-did"),
+                    (agent_type.is_some(), "x-claude-code-agent-type"),
+                ]
+                .into_iter()
+                .filter_map(|(present, name)| present.then_some(name)),
+            );
+            assert_eq!(
+                claude_code_header_names(&request),
+                sorted(expected),
+                "the agent headers are the only additions to the main set: {request}"
+            );
             headers::AgentHeaderObservation {
                 agent_did: agent_did.is_some(),
                 parent_agent_did: parent.is_some(),
-                agent_type: header_value(&request, "x-claude-code-agent-type"),
+                agent_type,
                 request_class: header_value(&request, "x-claude-code-request-class")
                     .expect("first-party request class"),
                 app: header_value(&request, "x-app").expect("x-app"),
