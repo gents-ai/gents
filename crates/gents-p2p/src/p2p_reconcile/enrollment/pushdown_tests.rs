@@ -1,5 +1,13 @@
-use super::{canonical_enrollment_digest, canonical_enrollment_payload, frame_enrollment_field, AuthorizationRevision, AuthorizationRevisionKind, DurableEnrollmentDocuments, EnrollmentAction, EnrollmentDecision, EnrollmentDecisionKind, EnrollmentOffer, EnrollmentRequest, EnrollmentRouteDirection, EnrollmentRouteReceipt, EnrollmentState, NetworkAdminPin};
-use gents_lean_vocab::{lean_enrollment_cases, lean_enrollment_digest_cases, lean_enrollment_durable_projection_cases, lean_enrollment_encoding_cases, LeanEnrollmentTraceStep};
+use super::{
+    canonical_enrollment_digest, canonical_enrollment_payload, frame_enrollment_field,
+    AuthorizationRevision, AuthorizationRevisionKind, DurableEnrollmentDocuments, EnrollmentAction,
+    EnrollmentDecision, EnrollmentDecisionKind, EnrollmentOffer, EnrollmentRequest,
+    EnrollmentRouteDirection, EnrollmentRouteReceipt, EnrollmentState, NetworkAdminPin,
+};
+use gents_lean_vocab::{
+    lean_enrollment_cases, lean_enrollment_digest_cases, lean_enrollment_durable_projection_cases,
+    lean_enrollment_encoding_cases, LeanEnrollmentTraceStep,
+};
 
 fn lower_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()

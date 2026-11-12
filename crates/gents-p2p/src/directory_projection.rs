@@ -614,7 +614,11 @@ mod tests {
         (did.to_string(), name.to_string(), String::new())
     }
 
-    fn node_with_default(did: &str, name: &str, default_agent_did: &str) -> (String, String, String) {
+    fn node_with_default(
+        did: &str,
+        name: &str,
+        default_agent_did: &str,
+    ) -> (String, String, String) {
         (
             did.to_string(),
             name.to_string(),

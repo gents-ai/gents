@@ -227,7 +227,7 @@ pub async fn observe_embedded_sync_status(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use super::{
         JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
         P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPendingPeerOccupancySnapshot,
@@ -238,7 +238,6 @@ mod tests {
     use p2p::sync::{DispatchSnapshot, PeerBacklogSnapshot, PushBacklogSnapshot, SyncStatus};
     use p2p::{InboundClassSnapshot, PeerFetchStats, PeerSummary};
     use storage::stores::PushRetryMarkerStats;
-
 
     #[test]
     fn incomplete_status_is_rejected() {

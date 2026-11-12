@@ -208,11 +208,13 @@ mod file_route_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
-    use std::sync::Arc;
+    use crate::p2p_reconcile::{
+        client_route_collections, resolve_template_filters, PairingDirection,
+    };
     use acp::{DocumentACP, DocumentPermission, Identity};
     use identity::Did;
-    use crate::p2p_reconcile::{client_route_collections, resolve_template_filters, PairingDirection};
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
 
     #[test]
     fn unsupported_acp_filter_is_rejected() {
@@ -335,15 +337,8 @@ mod tests {
                 let clause = &expected.clauses[0];
                 assert_eq!(expected.clauses.len(), 1);
                 assert_eq!(
-                    single_string_eq(
-                        filters
-                            .get(expected.collection.as_str())
-                            .unwrap()
-                    ),
-                    Some((
-                        clause.field.as_str(),
-                        clause.value.as_str()
-                    ))
+                    single_string_eq(filters.get(expected.collection.as_str()).unwrap()),
+                    Some((clause.field.as_str(), clause.value.as_str()))
                 );
             }
         }
@@ -356,14 +351,15 @@ mod tests {
         );
     }
 
-
     fn household_subject(
         subject: &gents_lean_vocab::LeanIdentitySubject,
     ) -> anyhow::Result<acp::Subject> {
         use gents_lean_vocab::LeanIdentitySubject;
         Ok(match subject {
             LeanIdentitySubject::Actor { actor } => acp::Subject::Entity(Did::new(actor)?),
-            LeanIdentitySubject::Object { resource, id } => acp::Subject::entity_set(resource, id, ""),
+            LeanIdentitySubject::Object { resource, id } => {
+                acp::Subject::entity_set(resource, id, "")
+            }
             LeanIdentitySubject::EntitySet {
                 resource,
                 id,
@@ -576,16 +572,20 @@ mod tests {
                         relation,
                         expected,
                     } => {
-                        household_relationship_as(&acp, &policy.id, actor, relation, true, *expected)
-                            .await?;
+                        household_relationship_as(
+                            &acp, &policy.id, actor, relation, true, *expected,
+                        )
+                        .await?;
                     }
                     LeanIdentityAction::RevokeAs {
                         actor,
                         relation,
                         expected,
                     } => {
-                        household_relationship_as(&acp, &policy.id, actor, relation, false, *expected)
-                            .await?;
+                        household_relationship_as(
+                            &acp, &policy.id, actor, relation, false, *expected,
+                        )
+                        .await?;
                     }
                     LeanIdentityAction::Check {
                         actor,
