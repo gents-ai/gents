@@ -17,7 +17,8 @@ use gents_pack::plugin::store::PluginData;
 const MAX_WRITES: usize = 100;
 
 /// Lean `PluginData.Invocation`: the context a plugin's writes run in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Invocation {
     ToolCall,
     JobStep,
@@ -217,7 +218,8 @@ pub fn admit_write_observation(observation: &WriteObservation) -> Result<(), Wri
 }
 
 /// Lean `PluginData.InsertOutcome`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InsertOutcome {
     Inserted,
     Unchanged,
@@ -617,11 +619,6 @@ impl Session {
 mod tests {
     use super::*;
     use crate::plugin::application_write::Observation as WriteFacts;
-    use gents_lean_vocab::{
-        lean_plugin_data_cases, LeanPluginDataInsertOutcome, LeanPluginDataInvocation,
-        LeanPluginDataOnConflict, LeanPluginDataOperation, LeanPluginDataRefusal,
-        LeanPluginDataStamp, LeanPluginDataWriteFacts,
-    };
     use gents_protocol::job::{DataOp, PluginDataDeclaration};
     use serde_json::{json, Map, Value};
     use std::collections::BTreeMap;
@@ -954,154 +951,123 @@ mod tests {
         );
     }
 
-    fn invocation(lean: LeanPluginDataInvocation) -> Invocation {
-        match lean {
-            LeanPluginDataInvocation::ToolCall => Invocation::ToolCall,
-            LeanPluginDataInvocation::JobStep => Invocation::JobStep,
-            LeanPluginDataInvocation::Callback => Invocation::Callback,
-            LeanPluginDataInvocation::Ux => Invocation::Ux,
-        }
-    }
-
-    fn stamp(lean: LeanPluginDataStamp) -> Stamp {
-        match lean {
-            LeanPluginDataStamp::CallerDid => Stamp::CallerDid,
-            LeanPluginDataStamp::SessionId => Stamp::SessionId,
-            LeanPluginDataStamp::RequestDocId => Stamp::RequestDocId,
-            LeanPluginDataStamp::ToolCallDocId => Stamp::ToolCallDocId,
-            LeanPluginDataStamp::JobRowDocId => Stamp::JobRowDocId,
-            LeanPluginDataStamp::ChainRootDocId => Stamp::ChainRootDocId,
-        }
-    }
-
-    fn stamps(lean: &[(String, LeanPluginDataStamp)]) -> Vec<(String, Stamp)> {
-        lean.iter()
-            .map(|(field, value)| (field.clone(), stamp(*value)))
-            .collect()
-    }
-
-    fn refusal(lean: LeanPluginDataRefusal) -> WriteRefusal {
-        match lean {
-            LeanPluginDataRefusal::StampUnavailable {
-                stamp: value,
-                invocation: kind,
-            } => WriteRefusal::StampUnavailable {
-                stamp: stamp(value),
-                invocation: invocation(kind),
-            },
-            LeanPluginDataRefusal::Other => WriteRefusal::Other,
-        }
-    }
-
     /// `ToolPolicy.ApplicationWrite.Observation` as the native write observation
     /// that `application_write` already owns; Lean's `blocked` is its `protected`.
-    fn write_facts(op: LeanPluginDataOperation, w: LeanPluginDataWriteFacts) -> WriteFacts {
+    fn write_facts(
+        op: &str,
+        w: &gents_lean_vocab::families::plugin_resources_data_writes::Observation,
+    ) -> WriteFacts {
         WriteFacts {
-            operation: match op {
-                LeanPluginDataOperation::Create => "create",
-                LeanPluginDataOperation::Update => "update",
-                LeanPluginDataOperation::Delete => "delete",
-            }
-            .to_owned(),
+            operation: op.to_owned(),
             granted: w.granted,
             application: w.application,
             protected: w.blocked,
             credential: w.credential,
             bounded: w.bounded,
-            targets: w.targets as usize,
-            limit: w.limit as usize,
+            targets: usize::try_from(w.targets).unwrap(),
+            limit: usize::try_from(w.limit).unwrap(),
             preview: w.preview,
             digest_matches: w.digest_matches,
         }
     }
 
-    /// Lean `PluginData.applicableStamps`, `admitted`, `refusal`, `queryAdmitted`,
-    /// `substituteCallerDid` and `insertNote` through the pure core
-    /// `plugin::data::admit_write_observation` beside the frozen owner
-    /// `plugin::data::admit_write`, and its siblings, which
-    /// `plugin::application_write::apply_plugin_writes_in_txn` calls inside the output's
-    /// transaction. Notes are checked here as the read-then-insert decision the
-    /// transaction applies to the row it read.
+    /// Lean `PluginData.applicableStamps`, `admitted` and `refusal` through the
+    /// pure core `plugin::data::admit_write_observation`, which
+    /// `plugin::application_write::apply_plugin_writes_in_txn` calls inside the
+    /// output's transaction.
     #[test]
-    fn generated_plugin_data_cases_drive_admit_write() {
-        let cases = lean_plugin_data_cases();
-        assert_eq!(
-            cases.writes.len(),
-            13,
-            "Lean plugin-data write rows drifted"
+    fn generated_plugin_data_writes_drive_admit_write() {
+        gents_lean_vocab::families::plugin_resources_data_writes::replay::<Invocation, String, Stamp>(
+            |i| {
+                let declared: Vec<(String, Stamp)> = i
+                    .declared_stamps
+                    .iter()
+                    .map(|entry| (entry.field.clone(), entry.stamp))
+                    .collect();
+                let applicable = applicable_stamps(&declared, &i.collection_fields);
+                let observation = WriteObservation {
+                    in_own_sdl: i.in_own_sdl,
+                    runtime_or_protected: i.runtime_or_protected,
+                    actor_is_invoker: i.actor_is_invoker,
+                    op_granted: i.op_granted,
+                    stamped_supplied_by_guest: i.stamped_supplied_by_guest,
+                    invocation: i.invocation,
+                    applicable: applicable.clone(),
+                    write: write_facts(&i.op, &i.write),
+                };
+                let verdict = admit_write_observation(&observation);
+                gents_lean_vocab::families::plugin_resources_data_writes::WriteOutput {
+                    applicable: applicable
+                        .into_iter()
+                        .map(|(field, stamp)| {
+                            gents_lean_vocab::families::plugin_resources_data_writes::StampField {
+                                field,
+                                stamp,
+                            }
+                        })
+                        .collect(),
+                    admitted: verdict.is_ok(),
+                    refusal: verdict.err().map(|refusal| match refusal {
+                        WriteRefusal::StampUnavailable { stamp, invocation } => {
+                            gents_lean_vocab::families::plugin_resources_data_writes::RefusalWire {
+                                kind: "stamp_unavailable".to_owned(),
+                                stamp: Some(stamp),
+                                invocation: Some(invocation),
+                            }
+                        }
+                        WriteRefusal::Other => {
+                            gents_lean_vocab::families::plugin_resources_data_writes::RefusalWire {
+                                kind: "other".to_owned(),
+                                stamp: None,
+                                invocation: None,
+                            }
+                        }
+                    }),
+                }
+            },
         );
-        assert_eq!(
-            cases.queries.len(),
-            7,
-            "Lean plugin-data query rows drifted"
+    }
+
+    #[test]
+    fn generated_plugin_data_queries_drive_query_admitted() {
+        gents_lean_vocab::families::plugin_resources_data_queries::replay(|i| {
+            query_admitted(
+                u32::try_from(i.limit).unwrap(),
+                i.in_own_sdl,
+                i.runtime_or_protected,
+                i.query_granted,
+            )
+        });
+    }
+
+    #[test]
+    fn generated_plugin_data_filters_drive_substitution() {
+        gents_lean_vocab::families::plugin_resources_data_filters::replay(|i| {
+            let filter: BTreeMap<String, String> = i
+                .filter
+                .iter()
+                .map(|entry| (entry.field.clone(), entry.value.clone()))
+                .collect();
+            assert_eq!(filter.len(), i.filter.len(), "filter fields are distinct");
+            let order: Vec<&str> = i.filter.iter().map(|entry| entry.field.as_str()).collect();
+            let mut substituted = substitute_caller_did(&filter, &i.caller_did);
+            order
+                .into_iter()
+                .map(|field| {
+                    gents_lean_vocab::families::plugin_resources_data_filters::FilterEntry {
+                        field: field.to_owned(),
+                        value: substituted.remove(field).unwrap(),
+                    }
+                })
+                .collect()
+        });
+    }
+
+    /// The read-then-insert decision the transaction applies to the row it read.
+    #[test]
+    fn generated_plugin_data_notes_drive_insert_note() {
+        gents_lean_vocab::families::plugin_resources_data_notes::replay::<InsertOutcome, OnConflict>(
+            |i| insert_note(i.existing.as_deref(), &i.new, i.on_conflict),
         );
-        assert_eq!(
-            cases.filters.len(),
-            3,
-            "Lean plugin-data filter rows drifted"
-        );
-        assert_eq!(cases.notes.len(), 8, "Lean plugin-data note rows drifted");
-
-        for (index, row) in cases.writes.iter().enumerate() {
-            let applicable =
-                applicable_stamps(&stamps(&row.declared_stamps), &row.collection_fields);
-            assert_eq!(
-                applicable,
-                stamps(&row.applicable),
-                "write {index}: applicable stamps"
-            );
-            let observation = WriteObservation {
-                in_own_sdl: row.in_own_sdl,
-                runtime_or_protected: row.runtime_or_protected,
-                actor_is_invoker: row.actor_is_invoker,
-                op_granted: row.op_granted,
-                stamped_supplied_by_guest: row.stamped_supplied_by_guest,
-                invocation: invocation(row.invocation),
-                applicable,
-                write: write_facts(row.op, row.write),
-            };
-            let verdict = admit_write_observation(&observation);
-            assert_eq!(verdict.is_ok(), row.admitted, "write {index}: admitted");
-            assert_eq!(
-                verdict.err(),
-                row.refusal.map(refusal),
-                "write {index}: refusal"
-            );
-        }
-
-        for (index, row) in cases.queries.iter().enumerate() {
-            assert_eq!(
-                query_admitted(
-                    row.limit,
-                    row.in_own_sdl,
-                    row.runtime_or_protected,
-                    row.query_granted,
-                ),
-                row.expected,
-                "query {index}"
-            );
-        }
-
-        for (index, row) in cases.filters.iter().enumerate() {
-            assert_eq!(
-                substitute_caller_did(&row.filter, &row.caller_did),
-                row.expected,
-                "filter {index}"
-            );
-        }
-
-        for (index, row) in cases.notes.iter().enumerate() {
-            let on_conflict = match row.on_conflict {
-                LeanPluginDataOnConflict::Ignore => OnConflict::Ignore,
-                LeanPluginDataOnConflict::Fail => OnConflict::Fail,
-            };
-            let outcome = insert_note(row.existing.as_deref(), &row.new, on_conflict);
-            let expected = match row.expected {
-                LeanPluginDataInsertOutcome::Inserted => InsertOutcome::Inserted,
-                LeanPluginDataInsertOutcome::Unchanged => InsertOutcome::Unchanged,
-                LeanPluginDataInsertOutcome::AbortStep => InsertOutcome::AbortStep,
-            };
-            assert_eq!(outcome, expected, "note {index}");
-        }
     }
 }

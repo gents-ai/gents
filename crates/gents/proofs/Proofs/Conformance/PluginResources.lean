@@ -455,62 +455,110 @@ def dataNoteCases : List (Option Fingerprint × Fingerprint × OnConflict) :=
 def dataNoteVerdict (c : Option Fingerprint × Fingerprint × OnConflict) : InsertOutcome :=
   insertNote c.1 c.2.1 c.2.2
 
-private def opSpelling : ApplicationWrite.Operation → String
-  | .create => "create" | .update => "update" | .delete => "delete"
+deriving instance ToJson for ApplicationWrite.Operation, ApplicationWrite.Observation, Invocation,
+  Stamp, OnConflict, InsertOutcome
 
-private def invocationSpelling : Invocation → String
-  | .toolCall => "tool_call" | .jobStep => "job_step" | .callback => "callback" | .ux => "ux"
+structure StampField where
+  field : String
+  stamp : Stamp
+  deriving ToJson
 
-private def stampSpelling : Stamp → String
-  | .callerDid => "caller_did" | .sessionId => "session_id" | .requestDocId => "request_doc_id"
-  | .toolCallDocId => "tool_call_doc_id" | .jobRowDocId => "job_row_doc_id"
-  | .chainRootDocId => "chain_root_doc_id"
+private def stampFields (stamps : List (String × Stamp)) : List StampField :=
+  stamps.map fun (field, stamp) => { field, stamp }
 
-private def stampsJson (stamps : List (String × Stamp)) : Json :=
-  Json.mkObj (stamps.map fun (field, s) => (field, toJson (stampSpelling s)))
+structure WriteInput where
+  op : ApplicationWrite.Operation
+  inOwnSdl : Bool
+  runtimeOrProtected : Bool
+  actorIsInvoker : Bool
+  opGranted : Bool
+  stampedSuppliedByGuest : Bool
+  invocation : Invocation
+  declaredStamps : List StampField
+  collectionFields : List String
+  write : ApplicationWrite.Observation
+  deriving ToJson
 
-private def refusalJson : Option Refusal → Json
-  | none => Json.null
-  | some (.stampUnavailable s inv) => Json.mkObj [("kind", toJson "stamp_unavailable"),
-      ("stamp", toJson (stampSpelling s)), ("invocation", toJson (invocationSpelling inv))]
-  | some .other => Json.mkObj [("kind", toJson "other")]
+/-- `kind` is `stamp_unavailable` (with its stamp and invocation) or `other`. -/
+structure RefusalWire where
+  kind : String
+  stamp : Option Stamp
+  invocation : Option Invocation
+  deriving ToJson
 
-private def writeJson (w : ApplicationWrite.Observation) : Json := Json.mkObj [
-  ("granted", toJson w.granted), ("application", toJson w.application),
-  ("blocked", toJson w.blocked), ("credential", toJson w.credential),
-  ("bounded", toJson w.bounded), ("targets", toJson w.targets), ("limit", toJson w.limit),
-  ("preview", toJson w.preview), ("digest_matches", toJson w.digestMatches)]
+private def refusalWire : Refusal → RefusalWire
+  | .stampUnavailable s inv => ⟨"stamp_unavailable", some s, some inv⟩
+  | .other => ⟨"other", none, none⟩
+
+structure WriteOutput where
+  applicable : List StampField
+  admitted : Bool
+  refusal : Option RefusalWire
+  deriving ToJson
+
+@[conformance_family]
+def dataWrites : Family WriteInput WriteOutput where
+  inputs := dataWriteCases.map fun c =>
+    { op := c.op, inOwnSdl := c.inOwnSdl, runtimeOrProtected := c.runtimeOrProtected,
+      actorIsInvoker := c.actorIsInvoker, opGranted := c.opGranted,
+      stampedSuppliedByGuest := c.stampedSuppliedByGuest, invocation := c.invocation,
+      declaredStamps := stampFields declaredStamps, collectionFields := c.collectionFields,
+      write := c.write }
+  model := fun i =>
+    let (applicable, ok, refused) := dataWriteVerdict
+      { op := i.op, inOwnSdl := i.inOwnSdl, runtimeOrProtected := i.runtimeOrProtected,
+        actorIsInvoker := i.actorIsInvoker, opGranted := i.opGranted,
+        stampedSuppliedByGuest := i.stampedSuppliedByGuest, invocation := i.invocation,
+        collectionFields := i.collectionFields, write := i.write }
+    { applicable := stampFields applicable, admitted := ok, refusal := refused.map refusalWire }
+
+structure QueryInput where
+  limit : Nat
+  inOwnSdl : Bool
+  runtimeOrProtected : Bool
+  queryGranted : Bool
+  deriving ToJson
+
+@[conformance_family]
+def dataQueries : Family QueryInput Bool where
+  inputs := dataQueryCases.map fun (limit, inOwnSdl, runtimeOrProtected, queryGranted) =>
+    { limit, inOwnSdl, runtimeOrProtected, queryGranted }
+  model := fun i => dataQueryVerdict (i.limit, i.inOwnSdl, i.runtimeOrProtected, i.queryGranted)
 
 /-- `$caller.did` is the placeholder's wire spelling. -/
-private def filterJson (f : Filter) : Json := Json.mkObj <| f.map fun (field, value) =>
-  (field, toJson (match value with | .literal v => v | .callerDid => "$caller.did"))
+structure FilterEntry where
+  field : String
+  value : String
+  deriving ToJson
 
-private def insertOutcomeSpelling : InsertOutcome → String
-  | .inserted => "inserted" | .unchanged => "unchanged" | .abortStep => "abort_step"
+private def filterEntries (f : Filter) : List FilterEntry :=
+  f.map fun (field, value) =>
+    { field, value := match value with | .literal v => v | .callerDid => "$caller.did" }
 
-def dataCasesJson : String := (Json.mkObj [
-  ("writes", toJson <| dataWriteCases.map fun c =>
-    let (applicable, ok, refused) := dataWriteVerdict c
-    Json.mkObj [("op", toJson (opSpelling c.op)), ("in_own_sdl", toJson c.inOwnSdl),
-      ("runtime_or_protected", toJson c.runtimeOrProtected),
-      ("actor_is_invoker", toJson c.actorIsInvoker), ("op_granted", toJson c.opGranted),
-      ("stamped_supplied_by_guest", toJson c.stampedSuppliedByGuest),
-      ("invocation", toJson (invocationSpelling c.invocation)),
-      ("declared_stamps", stampsJson declaredStamps),
-      ("collection_fields", toJson c.collectionFields), ("write", writeJson c.write),
-      ("applicable", stampsJson applicable), ("admitted", toJson ok),
-      ("refusal", refusalJson refused)]),
-  ("queries", toJson <| dataQueryCases.map fun c => Json.mkObj [
-    ("limit", toJson c.1), ("in_own_sdl", toJson c.2.1),
-    ("runtime_or_protected", toJson c.2.2.1), ("query_granted", toJson c.2.2.2),
-    ("expected", toJson (dataQueryVerdict c))]),
-  ("filters", toJson <| dataFilterCases.map fun f => Json.mkObj [
-    ("caller_did", toJson callerDid), ("filter", filterJson f),
-    ("expected", filterJson (dataFilterVerdict f))]),
-  ("notes", toJson <| dataNoteCases.map fun c => Json.mkObj [
-    ("existing", toJson c.1), ("new", toJson c.2.1),
-    ("on_conflict", toJson (match c.2.2 with | .ignore => "ignore" | .fail => "fail")),
-    ("expected", toJson (insertOutcomeSpelling (dataNoteVerdict c)))])]).compress
+private def filterOf (entries : List FilterEntry) : Filter :=
+  entries.map fun e =>
+    (e.field, if e.value == "$caller.did" then .callerDid else .literal e.value)
+
+structure FilterInput where
+  callerDid : String
+  filter : List FilterEntry
+  deriving ToJson
+
+@[conformance_family]
+def dataFilters : Family FilterInput (List FilterEntry) where
+  inputs := dataFilterCases.map fun f => { callerDid, filter := filterEntries f }
+  model := fun i => filterEntries (substituteCallerDid (filterOf i.filter) i.callerDid)
+
+structure NoteInput where
+  existing : Option String
+  new : String
+  onConflict : OnConflict
+  deriving ToJson
+
+@[conformance_family]
+def dataNotes : Family NoteInput InsertOutcome where
+  inputs := dataNoteCases.map fun (existing, new, onConflict) => { existing, new, onConflict }
+  model := fun i => dataNoteVerdict (i.existing, i.new, i.onConflict)
 
 private def noteStamps : List (String × Stamp) :=
   [("job_row_doc_id", .jobRowDocId), ("chain_root_doc_id", .chainRootDocId)]

@@ -1764,8 +1764,20 @@ def caseCoverage : List CoverageEntry :=
       "R6BackgroundingCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_data_cases"
-      "PluginDataCases")
+      "family"
+      "plugin_resources_data_writes")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_data_queries")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_data_filters")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_data_notes")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_scratch_cases"
