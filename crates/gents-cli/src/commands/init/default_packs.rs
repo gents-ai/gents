@@ -544,12 +544,16 @@ struct Resolved {
 }
 
 impl Resolved {
-    /// What an approval of this pack names back: the pack's own digest, or
-    /// with dependencies a digest over it and each dependency's, since what
-    /// the approval shows (`requested`, `turns_on`) is computed from all of
-    /// them. An approval of other archives is refused before any write.
+    /// What an approval of this pack names back: a digest over everything
+    /// the approval shows. That is the pack's archive and each dependency's,
+    /// from which `requested` and `turns_on` are computed, and the agents
+    /// listed for the Engineer's root (`host_tools`), which also depend on
+    /// how the archives render on this node. An approval that resolves other
+    /// archives, or the same archives to other agents, is refused before any
+    /// write. A pack with no dependency and no such agent names its own
+    /// archive digest.
     fn approval_digest(&self) -> String {
-        if self.dependencies.is_empty() {
+        if self.dependencies.is_empty() && self.host_tools.is_empty() {
             return self.source.digest().to_owned();
         }
         let mut dependencies: Vec<String> = self
@@ -565,10 +569,24 @@ impl Resolved {
             })
             .collect();
         dependencies.sort();
+        let mut agents: Vec<String> = self
+            .host_tools
+            .iter()
+            .map(|agent| {
+                serde_json::json!([agent.coordinate, agent.agent, agent.tools]).to_string()
+            })
+            .collect();
+        agents.sort();
         format!(
             "sha256:{}",
             gents::plugin::store::content_digest_hex(
-                format!("{}\n{}", self.source.digest(), dependencies.join("\n")).as_bytes()
+                format!(
+                    "{}\n{}\nroot agents\n{}",
+                    self.source.digest(),
+                    dependencies.join("\n"),
+                    agents.join("\n")
+                )
+                .as_bytes()
             )
         )
     }
@@ -2381,6 +2399,61 @@ mod tests {
         assert_eq!(roots.len(), 1, "{approved}");
         assert_eq!(roots[0]["root"], initialized["tool_root"], "{approved}");
         assert!(roots[0]["reader_on"].is_string(), "{approved}");
+    }
+
+    /// An approval covers the agents its review listed for the Engineer's
+    /// folder, not only the archives: the digest a status shows is over
+    /// those rows too, so an approval whose own resolve lists another agent
+    /// for the same archive is refused before any write and grants nothing.
+    #[tokio::test]
+    async fn an_approval_that_resolves_other_agents_than_it_showed_is_refused() {
+        let (home, initialized) = engineer_home().await;
+        let engineer = initialized["default_agent_did"].as_str().unwrap();
+        let files = json!({"files": {"mode": "ReadOnly"}});
+        store_host_tools_pack(home.path(), "fixture", "rebound", json!([]), files);
+        let names = ["fixture/rebound"];
+        let unreachable = Some("http://127.0.0.1:9");
+        let listed = status(home.path(), &names, unreachable).await.unwrap();
+        let shown = listed[0].digest.clone().unwrap();
+
+        let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
+            .await
+            .unwrap();
+        let on_node = packs_on_node(home.path(), &access, &owner).await.unwrap();
+        release(access).await;
+        // The approval's resolve as the status made it, and as it would be
+        // under bindings that put another agent on the rootless Tools.
+        let same = resolve(home.path(), names[0], unreachable, &on_node)
+            .await
+            .unwrap();
+        assert_eq!(same.approval_digest(), shown);
+        assert_ne!(
+            shown,
+            same.source.digest(),
+            "the approval digest covers the listed agents"
+        );
+        let mut other = resolve(home.path(), names[0], unreachable, &on_node)
+            .await
+            .unwrap();
+        other.host_tools[0].agent = "rebound-other".to_owned();
+        assert_ne!(other.approval_digest(), shown);
+
+        let refused = install_one(
+            home.path(),
+            engineer,
+            names[0],
+            Ok(other),
+            Approval::Approved,
+            Some(&shown),
+        )
+        .await;
+        let refused = format!("{:#}", refused.err().unwrap());
+        assert!(refused.contains("not the expected"), "{refused}");
+        assert_eq!(
+            gents::pack::read_home_install(home.path(), names[0]).unwrap(),
+            None,
+            "nothing is installed or granted"
+        );
     }
 
     /// Only a terminal is asked, and only when the caller may prompt; the
