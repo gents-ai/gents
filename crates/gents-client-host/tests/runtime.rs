@@ -699,6 +699,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         return live_runtime::exercise_editor(root, "live-workspace").await;
     }
     #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorDelivery) {
+        return live_runtime::exercise_editor(root, "live-delivery").await;
+    }
+    #[cfg(feature = "editor-e2e")]
     if matches!(journey, Journey::EditorHistory)
         && !editor_history::Options::from_env()?.profile
         && std::env::var_os("GENTS_PREVIOUS_CLIENT_HOST").is_none()

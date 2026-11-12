@@ -15,6 +15,9 @@ use tokio::process::Command;
 use super::super::{initialization::Initialization, ports, stop, support};
 use support::Attachment;
 
+#[path = "live_delivery.rs"]
+mod live_delivery;
+
 const WAIT: Duration = Duration::from_secs(30);
 
 pub async fn exercise(root: &Path, goal: bool) -> Result<()> {
@@ -216,7 +219,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
                 tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
             }
             super::super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), scenario).await?;
-            if scenario == "live-workspace" {
+            if scenario == "live-delivery" {
+                live_delivery::verify(&access, root, node, session, &client_did, opening).await?;
+                projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
+            } else if scenario == "live-workspace" {
                 let evidence = super::super::editor_workspace::verify(&access, root, node, session, &client_did).await?;
                 tokio::fs::write(root.join("editor-workspace-canonical.json"), serde_json::to_vec(&evidence)?).await?;
                 projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
