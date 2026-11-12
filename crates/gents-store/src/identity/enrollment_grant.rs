@@ -99,6 +99,22 @@ pub fn plan_withdrawal(
         .collect()
 }
 
+/// The tuples revoking `member`'s membership withdraws (Lean `revokeMember`):
+/// every tuple any of its live receipts recorded.
+pub fn plan_membership_withdrawal(
+    member: &str,
+    receipts: &[EnrollmentGrantReceipt],
+) -> Vec<EnrollmentGrantTuple> {
+    EnrollmentGrantTuple::derived()
+        .into_iter()
+        .filter(|tuple| {
+            receipts
+                .iter()
+                .any(|receipt| receipt.accounts(member, *tuple))
+        })
+        .collect()
+}
+
 fn decode_receipts(response: &Value) -> Result<Vec<EnrollmentGrantReceipt>, EnrollmentGrantError> {
     let malformed = |reason: String| EnrollmentGrantError::MalformedReceipt(reason);
     gents_protocol::graphql::graphql_rows_from_response(response, RECEIPT_COLLECTION)
@@ -347,7 +363,7 @@ async fn issue(
 /// retires and the tuples only that receipt accounted for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnrollmentGrantWithdrawal {
-    pub receipt_doc_id: String,
+    pub receipt_doc_ids: Vec<String>,
     pub member: identity::Did,
     pub tuples: Vec<EnrollmentGrantTuple>,
 }
@@ -365,10 +381,31 @@ impl EnrollmentGrantWithdrawal {
             return Ok(None);
         };
         Ok(Some(Self {
-            receipt_doc_id: revoked.doc_id.clone(),
+            receipt_doc_ids: vec![revoked.doc_id.clone()],
             member: identity::Did::new(&revoked.member_did)
                 .map_err(EnrollmentGrantError::MemberIdentity)?,
             tuples: plan_withdrawal(revoked, receipts),
+        }))
+    }
+
+    /// Plan the withdrawal a membership's revocation owes (Lean
+    /// `revokeMember`): every live receipt of `member`, whichever request or
+    /// renewal issued it, and every tuple they recorded.
+    pub fn plan_membership(
+        member: &str,
+        receipts: &[EnrollmentGrantReceipt],
+    ) -> Result<Option<Self>, EnrollmentGrantError> {
+        let live: Vec<_> = receipts
+            .iter()
+            .filter(|receipt| receipt.member_did == member && !receipt.withdrawn)
+            .collect();
+        if live.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            receipt_doc_ids: live.iter().map(|receipt| receipt.doc_id.clone()).collect(),
+            member: identity::Did::new(member).map_err(EnrollmentGrantError::MemberIdentity)?,
+            tuples: plan_membership_withdrawal(member, receipts),
         }))
     }
 
@@ -402,27 +439,29 @@ impl EnrollmentGrantWithdrawal {
         node_doc_id: &str,
     ) -> Result<(), EnrollmentGrantError> {
         let withdrawn_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let rendered = {
-            use gents_protocol::document_query::{
-                fields::network_enrollment_grant as fields, Input, Update,
+        for receipt_doc_id in &self.receipt_doc_ids {
+            let rendered = {
+                use gents_protocol::document_query::{
+                    fields::network_enrollment_grant as fields, Input, Update,
+                };
+                Update::doc(
+                    receipt_doc_id.as_str(),
+                    Input::new().set(fields::WITHDRAWN_AT, withdrawn_at.as_str()),
+                )
+                .render()
             };
-            Update::doc(
-                self.receipt_doc_id.as_str(),
-                Input::new().set(fields::WITHDRAWN_AT, withdrawn_at.as_str()),
-            )
-            .render()
-        };
-        let response = txn
-            .run(&rendered)
-            .await
-            .map_err(EnrollmentGrantError::Retire)?;
-        let updated = response
-            .pointer(&format!("/data/update_{RECEIPT_COLLECTION}"))
-            .or_else(|| response.pointer(&format!("/update_{RECEIPT_COLLECTION}")))
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len);
-        if updated != 1 {
-            return Err(EnrollmentGrantError::RetireUnconfirmed);
+            let response = txn
+                .run(&rendered)
+                .await
+                .map_err(EnrollmentGrantError::Retire)?;
+            let updated = response
+                .pointer(&format!("/data/update_{RECEIPT_COLLECTION}"))
+                .or_else(|| response.pointer(&format!("/update_{RECEIPT_COLLECTION}")))
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            if updated != 1 {
+                return Err(EnrollmentGrantError::RetireUnconfirmed);
+            }
         }
         if self
             .tuples
