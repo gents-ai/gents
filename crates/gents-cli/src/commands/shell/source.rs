@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use anyhow::Context;
 use chrono::{DateTime, Local, Utc};
 use gents_desktop_core::client::canonical_output::CanonicalLiveText;
 use gents_desktop_core::client::{
