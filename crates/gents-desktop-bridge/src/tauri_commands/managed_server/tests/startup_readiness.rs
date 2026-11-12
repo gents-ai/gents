@@ -134,12 +134,11 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
 async fn generated_fresh_startup_preserves_enrollment_authority() {
     use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
 
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let case = snapshot["enrollment_startup_cases"]
-        .as_array()
-        .unwrap()
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
+    let case = snapshot
+        .enrollment_startup_cases
         .iter()
-        .find(|case| case["name"] == "fresh_startup")
+        .find(|case| case.name == "fresh_startup")
         .unwrap();
     let (temp, state) = orchestration_state();
     let core = Arc::new(
@@ -170,7 +169,7 @@ async fn generated_fresh_startup_preserves_enrollment_authority() {
     let after = access.execute(query).await.unwrap();
     assert_eq!(
         before["data"] == after["data"],
-        case["expected_authority_unchanged"].as_bool().unwrap(),
+        case.expected_authority_unchanged,
     );
     drain_managed_runtime_pairing(&state).await;
     core.shutdown().await.unwrap();
