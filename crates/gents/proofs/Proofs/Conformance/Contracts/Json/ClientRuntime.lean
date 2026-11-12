@@ -7,6 +7,7 @@ import Proofs.Runtime.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Session.Compaction.Executable
 import Proofs.Conformance.Recovery.ContractCases
 import Proofs.Clients.QueuedSteering
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -36,29 +37,6 @@ def agentSteerDispositionCaseJson (input : Bool × Bool) : String :=
     | .refuse => "refuse"
   "{\"active\":" ++ boolString input.1 ++ ",\"compatible\":" ++ boolString input.2 ++
     ",\"expected\":" ++ jsonString result ++ "}"
-
-private def agentMessageOutcomeJson : QueuedSteering.AgentMessageOutcome → String
-  | .pending => jsonString "pending"
-  | .completed => jsonString "completed"
-  | .failed => jsonString "failed"
-  | .superseded => jsonString "superseded"
-
-def agentMessageOutcomeCaseJson (input : Bool × QueuedSteering.AgentMessageOutcome × QueuedSteering.AgentMessageOutcome) : String :=
-  "{\"folded\":" ++ boolString input.1 ++
-    ",\"caused\":" ++ agentMessageOutcomeJson input.2.1 ++
-    ",\"head\":" ++ agentMessageOutcomeJson input.2.2 ++
-    ",\"expected\":" ++ agentMessageOutcomeJson (QueuedSteering.agentMessageOutcome input.1 input.2.1 input.2.2) ++ "}"
-
-def foldedBindingCaseJson (input : QueuedSteering.FoldedBindingCase) : String :=
-  let caused : QueuedSteering.FoldedScope := ⟨1, 2, some input.causedRequester, input.causedAgent⟩
-  let head : QueuedSteering.FoldedScope := ⟨1, 2, some input.headRequester, input.headAgent⟩
-  "{\"caused_requester\":" ++ toString input.causedRequester ++
-    ",\"head_requester\":" ++ toString input.headRequester ++
-    ",\"caused_agent\":" ++ toString input.causedAgent ++
-    ",\"head_agent\":" ++ toString input.headAgent ++
-    ",\"named_head\":" ++ toString input.namedHead ++
-    ",\"actual_head\":" ++ toString input.actualHead ++
-    ",\"expected\":" ++ boolString (QueuedSteering.foldedBindingValid caused head input.namedHead input.actualHead) ++ "}"
 
 private def boundaryKindJson : QueuedSteering.BoundaryInputKind → String
   | .queued => jsonString "queued"
@@ -596,5 +574,17 @@ def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
       ++ jsonOptionalString witness.queueKeyPrefix ++ ","
     ++ "\"theorem\":" ++ jsonString witness.theoremName
     ++ "}"
+
+deriving instance Lean.ToJson for QueuedSteering.AgentMessageOutcome
+deriving instance Lean.ToJson for QueuedSteering.FoldedBindingCase
+
+attribute [conformance_function] QueuedSteering.agentMessageOutcome
+
+@[conformance_family]
+def agentFoldedBinding : Family QueuedSteering.FoldedBindingCase Bool where
+  inputs := QueuedSteering.foldedBindingCases
+  model := fun c =>
+    QueuedSteering.foldedBindingValid ⟨1, 2, some c.causedRequester, c.causedAgent⟩
+      ⟨1, 2, some c.headRequester, c.headAgent⟩ c.namedHead c.actualHead
 
 end Conformance.Contracts

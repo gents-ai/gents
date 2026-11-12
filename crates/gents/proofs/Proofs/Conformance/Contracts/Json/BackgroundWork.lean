@@ -2,6 +2,9 @@ import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.ContractCases
 import Proofs.Runtime.Background.ToolOutputCases
+import Proofs.Conformance.ContractCases.InterruptDisposition
+import Proofs.Conformance.Functions.ToolCalls
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -65,34 +68,6 @@ def r4cBackgroundWorkCasesJson : List String :=
   [ r4cReadToolOutputCanonicalSourceReconstructionJson
       r4cReadToolOutputCanonicalSourceReconstruction
   ]
-
-def interruptDispositionCaseJson (witness : InterruptDispositionCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"state\":" ++ jsonString witness.state ++ ","
-    ++ "\"await_mode\":" ++ jsonString witness.awaitMode ++ ","
-    ++ "\"disposition\":" ++ jsonString witness.disposition ++ ","
-    ++ "\"post_state\":" ++ jsonString witness.postState ++ ","
-    ++ "\"post_await_mode\":" ++ jsonString witness.postAwaitMode
-    ++ "}"
-
-def toolOutputPagingCaseJson (witness : ToolOutputPagingCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"first_offset\":" ++ toString witness.firstOffset ++ ","
-    ++ "\"retained_len\":" ++ toString witness.retainedLen ++ ","
-    ++ "\"total_bytes\":" ++ toString witness.totalBytes ++ ","
-    ++ "\"offset\":" ++ toString witness.offset ++ ","
-    ++ "\"max_bytes\":" ++ toString witness.maxBytes ++ ","
-    ++ "\"start\":" ++ toString witness.start ++ ","
-    ++ "\"slice_len\":" ++ toString witness.sliceLen ++ ","
-    ++ "\"next_offset\":" ++ toString witness.nextOffset ++ ","
-    ++ "\"first_available_offset\":"
-      ++ toString witness.firstAvailableOffset ++ ","
-    ++ "\"total_bytes_out\":" ++ toString witness.totalBytesOut ++ ","
-    ++ "\"has_more\":" ++ boolString witness.hasMore ++ ","
-    ++ "\"theorem\":" ++ jsonString witness.theoremName
-    ++ "}"
 
 def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
   "{"
@@ -169,5 +144,84 @@ def transcriptCaseJson (witness : TranscriptCase) : String :=
       ++ boolString witness.expectedDuplicateReusedSequence ++ ","
     ++ "\"expected_strong_drain\":" ++ boolString witness.expectedStrongDrain
     ++ "}"
+
+deriving instance Lean.ToJson for ToolExecution.AwaitMode
+deriving instance Lean.ToJson for Background.Interrupt.Disposition
+
+namespace ToolOutputPaging
+
+structure Input where
+  firstOffset : Nat
+  retainedLen : Nat
+  totalBytes : Nat
+  offset : Nat
+  maxBytes : Nat
+  deriving Lean.ToJson
+
+structure Output where
+  start : Nat
+  sliceLen : Nat
+  nextOffset : Nat
+  firstAvailableOffset : Nat
+  totalBytesOut : Nat
+  hasMore : Bool
+  deriving Lean.ToJson
+
+end ToolOutputPaging
+
+@[conformance_family]
+def toolOutputPaging : Family ToolOutputPaging.Input ToolOutputPaging.Output where
+  inputs := toolOutputPagingCases.map fun c =>
+    { firstOffset := c.firstOffset, retainedLen := c.retainedLen, totalBytes := c.totalBytes
+      offset := c.offset, maxBytes := c.maxBytes }
+  model := fun i =>
+    let slice := Background.ToolOutput.readSlice
+      { firstOffset := i.firstOffset, retainedLen := i.retainedLen, totalBytes := i.totalBytes }
+      i.offset i.maxBytes
+    { start := slice.start, sliceLen := slice.sliceLen, nextOffset := slice.nextOffset
+      firstAvailableOffset := slice.firstAvailableOffset, totalBytesOut := slice.totalBytes
+      hasMore := slice.hasMore }
+
+namespace InterruptDisposition
+
+structure Input where
+  state : ToolExecution.ToolCallState
+  awaitMode : ToolExecution.AwaitMode
+  deriving Lean.ToJson
+
+structure Output where
+  disposition : Background.Interrupt.Disposition
+  deriving Lean.ToJson
+
+structure Interrupted where
+  disposition : Background.Interrupt.Disposition
+  postState : ToolExecution.ToolCallState
+  postAwaitMode : ToolExecution.AwaitMode
+  deriving Lean.ToJson
+
+def every : List Input :=
+  ToolExecution.ToolCallState.all.flatMap fun state =>
+    ToolExecution.AwaitMode.all.map fun awaitMode => { state, awaitMode }
+
+end InterruptDisposition
+
+@[conformance_family]
+def interruptDisposition : Family InterruptDisposition.Input InterruptDisposition.Output where
+  inputs := InterruptDisposition.every
+  model := fun i =>
+    { disposition := Background.Interrupt.disposition (interruptDispositionTool i.state i.awaitMode) }
+
+/-- The in-flight interrupt scenario holds a running lifecycle in the hook's
+in-flight table; only running rows can be placed there, so only the running
+cases are driven through it. `interruptDisposition` replays every case. -/
+@[conformance_family]
+def interruptInFlight : Family InterruptDisposition.Input InterruptDisposition.Interrupted where
+  inputs := InterruptDisposition.every.filter fun i => i.state == .running
+  model := fun i =>
+    let tool := interruptDispositionTool i.state i.awaitMode
+    let post := Background.Interrupt.interruptTool tool
+    { disposition := Background.Interrupt.disposition tool
+      postState := post.state
+      postAwaitMode := post.awaitMode }
 
 end Conformance.Contracts

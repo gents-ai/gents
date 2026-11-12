@@ -257,10 +257,6 @@ pub fn lean_inference_slot_accounting_cases() -> &'static [LeanInferenceSlotAcco
     &lean_contract_snapshot().inference_slot_accounting_cases
 }
 
-pub fn lean_interrupt_disposition_cases() -> &'static [LeanInterruptDispositionCase] {
-    &lean_contract_snapshot().interrupt_disposition_cases
-}
-
 pub fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] {
     &lean_contract_snapshot().interrupt_queue_cases
 }
@@ -709,10 +705,6 @@ pub fn lean_title_usage_cases() -> &'static [LeanTitleUsageCase] {
     &lean_contract_snapshot().title_usage_cases
 }
 
-pub fn lean_tool_output_paging_cases() -> &'static [LeanToolOutputPagingCase] {
-    &lean_contract_snapshot().tool_output_paging_cases
-}
-
 pub fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {
     &lean_contract_snapshot().tool_policy_cases
 }
@@ -881,17 +873,6 @@ pub struct LeanAgentDeliveryCase {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanAgentFoldedBindingCase {
-    pub caused_requester: u64,
-    pub head_requester: u64,
-    pub caused_agent: u64,
-    pub head_agent: u64,
-    pub named_head: u64,
-    pub actual_head: u64,
-    pub expected: bool,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanAgentInterruptCase {
     pub name: String,
@@ -909,14 +890,6 @@ pub struct LeanAgentMaterializationCase {
     pub inputs: LeanAgentDecisionInputs,
     pub candidate: LeanAgentCandidate,
     pub session: Option<LeanAgentResolvedSession>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanAgentMessageOutcomeCase {
-    pub folded: bool,
-    pub caused: String,
-    pub head: String,
-    pub expected: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3244,16 +3217,12 @@ pub struct LeanContractSnapshot {
     pub agent_steer_target_cases: Vec<LeanAgentSteerTargetCase>,
     pub agent_steering_boundary_cases: Vec<LeanAgentSteeringBoundaryCase>,
     pub agent_steer_reachability_cases: Vec<LeanAgentSteerReachabilityCase>,
-    pub agent_message_outcome_cases: Vec<LeanAgentMessageOutcomeCase>,
-    pub agent_folded_binding_cases: Vec<LeanAgentFoldedBindingCase>,
     pub queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub session_message_kill_cases: Vec<LeanKillCase>,
     pub session_message_kill_observation_cases: Vec<LeanKillObservationCase>,
     pub restart_disposition_cases: Vec<LeanRestartDispositionCase>,
     pub r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
-    pub tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
-    pub interrupt_disposition_cases: Vec<LeanInterruptDispositionCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
@@ -6603,16 +6572,6 @@ pub struct LeanInterruptDeliveryCase {
     pub planned: Option<u64>,
     pub active: Option<u64>,
     pub expected: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanInterruptDispositionCase {
-    pub name: String,
-    pub state: String,
-    pub await_mode: String,
-    pub disposition: String,
-    pub post_state: String,
-    pub post_await_mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -11835,24 +11794,6 @@ pub struct LeanToolIdentity {
     pub id: String,
     pub call_id: Option<String>,
     pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanToolOutputPagingCase {
-    pub name: String,
-    pub first_offset: u64,
-    pub retained_len: u64,
-    pub total_bytes: u64,
-    pub offset: u64,
-    pub max_bytes: u64,
-    pub start: u64,
-    pub slice_len: u64,
-    pub next_offset: u64,
-    pub first_available_offset: u64,
-    pub total_bytes_out: u64,
-    pub has_more: bool,
-    #[allow(dead_code)]
-    pub theorem: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

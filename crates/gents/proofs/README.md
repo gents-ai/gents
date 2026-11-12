@@ -1251,8 +1251,9 @@ Model → conformance → Rust bindings:
 - **Foreground interrupt scope** — `Proofs/ToolCalls/Background/Interrupt.lean` cancels a
   pending intent or running foreground call and leaves background work,
   including every started session's row, untouched (`interruptTool_refines`,
-  `interrupt_retains_running_background`). `interrupt_disposition_cases` drive
-  the hook's in-flight interrupt path.
+  `interrupt_retains_running_background`). The families
+  `contracts_interrupt_disposition` and `contracts_interrupt_in_flight` drive
+  `InterruptDisposition::of` and the hook's in-flight interrupt path.
 - **Recovery sweeps** — `Proofs/ToolCalls/Recovery/Sweeps/*`, `Proofs/Session/Recovery/Sweeps/Requests.lean`, `Proofs/Inference/Recovery/Sweeps/Inference.lean` (tool calls, session-message
   rows, terminal-parent foreground tools #837, and orphaned native-background
   ownership repair, including retryable completion-notification/wake

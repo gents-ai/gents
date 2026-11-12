@@ -791,13 +791,13 @@ def caseCoverage : List CoverageEntry :=
       "Binds the physical target selected in the message publication transaction; cross-node replication remains a separate boundary.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_folded_binding_cases"
-      "AgentFoldedBindingCases"
+      "family"
+      "contracts_agent_folded_binding"
       "Binds requester and physical-head outcome checks; cross-node replication races remain to be exercised.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_message_outcome_cases"
-      "AgentMessageOutcomeCases"
+      "family"
+      "queued_steering_agent_message_outcome"
       "Binds outcome selection; physical-head binding and notification replay need native flow coverage.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage
@@ -2015,12 +2015,16 @@ def caseCoverage : List CoverageEntry :=
       "#1571: replace the retired state/registry dispatch consumer with canonical_source_reconstruction over physical tool segments; migrate the generated witness schema. Generic paging coverage below is unchanged.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "tool_output_paging_cases"
-      "ToolOutputPagingCases")
+      "family"
+      "contracts_tool_output_paging")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "interrupt_disposition_cases"
-      "InterruptDispositionCases")
+      "family"
+      "contracts_interrupt_disposition")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_interrupt_in_flight")
       "background-tools" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "transcript_conformance_cases"

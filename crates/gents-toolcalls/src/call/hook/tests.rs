@@ -1114,13 +1114,26 @@ async fn interruption_leaves_background_workers_running() {
     ));
 }
 
-#[tokio::test]
-async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
+#[test]
+fn generated_interrupt_dispositions_follow_the_lean_model() {
     use crate::call::lifecycle::InterruptDisposition;
     use gents_protocol::tool_call::AwaitMode;
     use gents_session::session::tool_call_state::ToolCallState;
-    let cases = gents_lean_vocab::lean_interrupt_disposition_cases();
-    assert!(!cases.is_empty());
+    gents_lean_vocab::families::contracts_interrupt_disposition::replay::<String, String, String>(
+        |case| {
+            let state = ToolCallState::from_persisted(&case.state).expect("modeled state");
+            let await_mode =
+                AwaitMode::from_persisted(&case.await_mode).expect("modeled mode");
+            gents_lean_vocab::families::contracts_interrupt_disposition::Output {
+                disposition: InterruptDisposition::of(state, await_mode).as_str().to_owned(),
+            }
+        },
+    );
+}
+
+#[tokio::test]
+async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
+    use gents_protocol::tool_call::AwaitMode;
     let node_db = gents_inference::test_support::test_db(
         "generated-interrupt-dispositions-drive-i",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -1128,66 +1141,43 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     .await;
     let node = node_db.node.clone();
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    let mut driven = 0;
-    for case in cases {
-        let state = ToolCallState::from_persisted(&case.state).expect("modeled state");
-        let await_mode = AwaitMode::from_persisted(&case.await_mode).expect("modeled mode");
-        assert_eq!(
-            InterruptDisposition::of(state, await_mode).as_str(),
-            case.disposition,
-            "{}",
-            case.name
-        );
-        if state != ToolCallState::Running {
-            continue;
-        }
+    for case in gents_lean_vocab::families::contracts_interrupt_in_flight::cases::<
+        String,
+        String,
+        String,
+    >() {
+        let await_mode =
+            AwaitMode::from_persisted(&case.input.await_mode).expect("modeled mode");
+        let name = format!("interrupt_{}_{}", case.input.state, case.input.await_mode);
         let hook = signed_hook(&node, FailurePolicy::default()).await;
-        hook.on_completion_call(&user_text_message(&case.name), &[])
+        hook.on_completion_call(&user_text_message(&name), &[])
             .await;
         let session_id = hook.session_id().await.unwrap();
-        let parent_id = format!("parent-{}", case.name);
+        let parent_id = format!("parent-{name}");
         bind_interruptible_request(&hook, &parent_id, &session_id, deadline).await;
-        let mut lifecycle = accepted_hook_tool_lifecycle(
-            &hook,
-            &case.name,
-            "test_tool",
-            "{}",
-            deadline,
-            await_mode,
-        )
-        .await;
+        let mut lifecycle =
+            accepted_hook_tool_lifecycle(&hook, &name, "test_tool", "{}", deadline, await_mode)
+                .await;
         lifecycle.start_running().await.unwrap();
         hook.in_flight_lifecycles
             .lock()
             .await
-            .insert(case.name.clone(), lifecycle);
+            .insert(name.clone(), lifecycle);
 
-        let cancelled = hook.cancel_in_flight_tool_calls().await.unwrap();
-        assert_eq!(
-            cancelled,
-            usize::from(case.disposition == "cancel"),
-            "{}",
-            case.name
+        let disposition = match hook.cancel_in_flight_tool_calls().await.unwrap() {
+            0 => "retain",
+            1 => "cancel",
+            other => panic!("{name}: one in-flight call cancelled {other} calls"),
+        };
+        let row = fetch_tool_call_row(&hook, &session_id, &name).await;
+        case.check(
+            gents_lean_vocab::families::contracts_interrupt_in_flight::Interrupted {
+                disposition: disposition.to_owned(),
+                post_state: row["lifecycle_state"].as_str().unwrap().to_owned(),
+                post_await_mode: row["await_mode"].as_str().unwrap().to_owned(),
+            },
         );
-        let row = fetch_tool_call_row(&hook, &session_id, &case.name).await;
-        assert_eq!(
-            row["lifecycle_state"],
-            case.post_state.as_str(),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            row["await_mode"],
-            case.post_await_mode.as_str(),
-            "{}",
-            case.name
-        );
-        driven += 1;
     }
-    assert_eq!(
-        driven,
-        cases.iter().filter(|case| case.state == "running").count()
-    );
 }
 
 #[tokio::test]

@@ -943,10 +943,6 @@ def snapshotRecoveryCasesJson : String :=
       ++ jsonArray (QueuedSteering.boundaryCases.map boundaryCaseJson) ++ ","
     ++ "\"agent_steer_reachability_cases\":"
       ++ jsonArray (QueuedSteering.agentSteerReachabilityCases.map agentSteerReachabilityCaseJson) ++ ","
-    ++ "\"agent_folded_binding_cases\":"
-      ++ jsonArray (QueuedSteering.foldedBindingCases.map foldedBindingCaseJson) ++ ","
-    ++ "\"agent_message_outcome_cases\":"
-      ++ jsonArray (QueuedSteering.agentMessageOutcomeCases.map agentMessageOutcomeCaseJson) ++ ","
     ++ "\"queue_deadline_conformance_cases\":"
       ++ jsonArray
         (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
@@ -971,12 +967,6 @@ def snapshotRecoveryCasesJson : String :=
         (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
     ++ "\"r4c_background_work_cases\":"
       ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
-    ++ "\"tool_output_paging_cases\":"
-      ++ jsonArray
-        (toolOutputPagingCases.map toolOutputPagingCaseJson) ++ ","
-    ++ "\"interrupt_disposition_cases\":"
-      ++ jsonArray
-        (interruptDispositionCases.map interruptDispositionCaseJson) ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
