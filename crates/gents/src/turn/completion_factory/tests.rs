@@ -1057,15 +1057,30 @@ fn generated_request_loop_configuration_preserves_retry_policy_and_deadline() {
     use chrono::TimeZone;
     use gents_lean_vocab::families::runtime_completion_config_loop_config_for_request as family;
     family::replay(|input| {
-        let agent = agent_with_retry(CompletionRetryProfileFields {
+        let mut agent = agent_with_retry(CompletionRetryProfileFields {
             retry_max_transport: input.transport,
             retry_interactive_max: input.interactive,
             retry_max_resample: input.resample,
             retry_allow_repair: input.repair,
             retry_backoff_ms: input.delays.clone(),
         });
+        agent.backend_provider_kind =
+            BackendProviderKind::parse_optional(Some(&input.provider)).unwrap();
+        agent.openai_wire_api = if input.responses {
+            OpenAiWireApi::Responses
+        } else {
+            OpenAiWireApi::ChatCompletions
+        };
+        agent.sampling = SamplingConfig {
+            temperature: input.temperature.map(|value| value as f64),
+            top_k: input.top_k.map(|value| i64::try_from(value).unwrap()),
+            max_tokens: input.max_tokens,
+            ..Default::default()
+        };
         let mut request = request();
         request.execution_origin = Some(input.origin.clone());
+        request.session_id = input.session.clone();
+        request.request_id = input.request.clone();
         request.deadline = input.deadline.map(|timestamp| {
             chrono::Utc
                 .timestamp_opt(timestamp, 0)
@@ -1076,7 +1091,7 @@ fn generated_request_loop_configuration_preserves_retry_policy_and_deadline() {
             &agent,
             "preamble".into(),
             &request,
-            None,
+            input.budget.map(AggregateTokenBudget::new),
             0,
             input.hops as u32,
         )
@@ -1093,6 +1108,12 @@ fn generated_request_loop_configuration_preserves_retry_policy_and_deadline() {
             repair: config.retry_policy.allow_repair,
             hops: u64::from(config.retry_policy.account_hops),
             deadline: config.deadline.map(|deadline| deadline.timestamp()),
+            budget: config
+                .aggregate_token_budget
+                .map(|budget| budget.snapshot().unwrap().limit),
+            params: config
+                .additional_params
+                .map(|value| gents_lean_vocab::compact_model_json(&value)),
         })
     });
 }
