@@ -1,5 +1,4 @@
 import Proofs.Conformance.ContractTypes
-import Proofs.Conformance.Boundaries
 
 namespace Conformance.Contracts
 
@@ -318,12 +317,11 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "vocabulary"
       "PersistenceState"
-      boundaryPersistenceAbstractLifecycleId)
+      "The database schema has no per-token PersistenceState document; committed/uncommitted is the model abstraction.")
       "persistence-failure-policy" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
+  , tagged (consumerCoverage
       "vocabulary"
-      "PersistenceFailurePolicy"
-      boundaryStorageHookFailurePolicyId)
+      "PersistenceFailurePolicy")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -332,7 +330,7 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "vocabulary"
       "StorageObservation"
-      boundaryStorageObservationDaemonVisibleId)
+      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
       "storage-observation" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "vocabulary"
@@ -432,25 +430,23 @@ def stateMachineCoverage : List CoverageEntry :=
       "state_machine"
       "Process")
       "process-lifecycle" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
+  , tagged (consumerCoverage
       "state_machine"
-      "Persistence.failClosed"
-      boundaryStorageHookFailurePolicyId)
+      "Persistence.failClosed")
       "persistence-failure-policy" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
+  , tagged (consumerCoverage
       "state_machine"
-      "Persistence.failOpen"
-      boundaryStorageHookFailurePolicyId)
+      "Persistence.failOpen")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
       "StorageObservation.failClosed"
-      boundaryStorageObservationDaemonVisibleId)
+      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
       "storage-observation" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
       "StorageObservation.failOpen"
-      boundaryStorageObservationDaemonVisibleId)
+      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
       "storage-observation" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "state_machine"
@@ -1037,7 +1033,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "fleet_slot_accounting_cases"
       "FleetSlotAccounting"
-      boundaryFleetSlotAccountingDerivedViewId)
+      "The database persists InferenceCall rows, not a FleetState aggregate; the scheduler reconstruction assumes those rows can be observed.")
       "fleet-slot-accounting" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "fleet_slot_accounting_cases"
@@ -1047,20 +1043,19 @@ def caseCoverage : List CoverageEntry :=
       "fleet_slot_accounting_cases"
       "FleetSlotAccounting")
       "fleet-slot-accounting" [Surface.api]
-  , tagged (boundaryCoverage
+  , tagged (consumerCoverage
       "persistence_failure_policy_cases"
-      "PersistenceFailurePolicyCases"
-      boundaryStorageHookFailurePolicyId)
+      "PersistenceFailurePolicyCases")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "storage_observation_runtime_cases"
       "StorageObservationRuntimeCases"
-      boundaryStorageObservationDaemonVisibleId)
+      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
       "storage-observation" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "backend_health_cases"
       "BackendHealthAdmissionCases"
-      boundaryBackendHealthAdmissionFreshnessId)
+      "A provider models-endpoint probe does not establish completion health, remote-node reachability or fleet-wide document freshness.")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_health_cases"
@@ -1404,12 +1399,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "artifact_admission_cases"
       "ArtifactAdmissionCases"
-      boundaryCommandPolicyHostExecutionAssumptionsId)
+      "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox.")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "artifact_spawn_cases"
       "ArtifactSpawnCases"
-      boundaryCommandPolicyHostExecutionAssumptionsId)
+      "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox.")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "operator_base_freeze_cases"
@@ -2563,15 +2558,14 @@ def caseCoverage : List CoverageEntry :=
   ]
 
 def followUpHookCoverage : List CoverageEntry :=
-  [ tagged (boundaryCoverage
+  [ tagged (consumerCoverage
       "follow_up_hook"
-      "PromptAssembly.providerInput.sanitizeLoadedHistory"
-      boundaryPromptAssemblyProviderInputSanitizationId)
+      "PromptAssembly.providerInput.sanitizeLoadedHistory")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (boundaryCoverage
       "follow_up_hook"
       "Compaction.providerViewAppend.uniqueCallIdsChecked"
-      boundaryCompactionUniqueCallIdsCheckedId)
+      "Native provider transport codecs must preserve the content and physical-document identity represented by the checked per-turn row projection.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "follow_up_hook"
@@ -2586,8 +2580,47 @@ def followUpHookIds : List String :=
 def followUpHooksJson : String :=
   jsonArray (followUpHookIds.map jsonString)
 
+def externalPremiseCoverage : List CoverageEntry :=
+  [ tagged (boundaryCoverage "premise" "boundary.inference-slots.running-row-derived"
+      "The database schema stores running InferenceCall rows rather than a denormalized held-slot document.") "inference-call" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.fleet-slot-accounting.derived-view"
+      "FleetState is an abstract scheduler view; there is no persisted FleetState aggregate.") "fleet-slot-accounting" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.command-policy.host-execution-assumptions"
+      "External binaries obey declared effects; the host kernel enforces the configured sandbox.") "command-policy" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.trigger.dispatch-source-delivery"
+      "Database change notifications and host schedule ticks may be delayed or lost; eventual rescans depend on the host running them.") "triggers" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.persistence.abstract-lifecycle"
+      "The database has no per-token PersistenceState document. Local commit acknowledgements are supplied by the store adapter.") "persistence-failure-policy" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.storage.observation-daemon-visible"
+      "Store acknowledgements and read visibility are external observations; their model does not verify DefraDB internals.") "storage-observation" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.storage.minimum-visibility-path"
+      "After a successful mutation acknowledgement, the database eventually supplies read-your-writes or a later visible observation; stale reads and missing events may intervene.") "storage-observation" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.backend-health.admission-freshness"
+      "A successful models-endpoint probe does not establish all provider operations, remote reachability or freshness of every replica.") "backend-health" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.event-delivery.fair-substrate"
+      "The database and host scheduler eventually permit rescans and handling. Finite constructed fair traces do not prove substrate scheduling fairness.") "event-delivery" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.compaction.unique-call-ids-checked"
+      "The native-message and provider transport codecs must preserve the content-bearing row projection and distinguish physical tool documents from provider-native call metadata.") "compaction" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.model.nat-typed-ids-time"
+      "Nat identity and time abstractions assume faithful native identifiers and ordering; they do not establish UUID uniqueness, parse correctness or cross-node clock agreement.") "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.p2p-backpressure.obligation-model"
+      "The bounded one-wave model does not verify the upstream database multi-wave queue, durable retry ladder, store-before-ack or restart mechanics.") "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.rendered-capture.assembled-request-artifact"
+      "Transport capture parses and canonicalizes the final HTTP JSON body. Canonical JSON equality does not retain original byte ordering or whitespace.") "rendered-capture" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.rendered-capture.key-encoding-injectivity"
+      "The native durable capture-key encoder must distinguish every modeled tuple; tuple equality alone does not verify an external string codec.") "rendered-capture" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.plugin-job.guest-determinism"
+      "The WASM guest supplies its step function, output schema and resume bookkeeping; core proofs do not establish guest determinism.") "tool-call" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.plugin-job.single-step-driver"
+      "One active runtime per node is an operating premise. Host-local job control and in-memory step coalescing do not enforce that premise across processes.") "tool-call" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.plugin-data.transaction"
+      "DefraDB provides transaction serializability and its unique index as a backstop for read-then-insert plugin data writes.") "tool-policy" [Surface.runtimeInternal]
+  ]
+
 def coverageLedger : List CoverageEntry :=
-  vocabularyCoverage ++ stateMachineCoverage ++ caseCoverage ++ followUpHookCoverage
+  vocabularyCoverage ++ stateMachineCoverage ++ caseCoverage ++ followUpHookCoverage ++ externalPremiseCoverage ++
+    [tagged (consumerCoverage "family" "event_delivery_cooldown_pruning")
+      "event-delivery" [Surface.runtimeInternal]]
 
 structure FeatureMatrixCell where
   feature : String
@@ -2729,8 +2762,12 @@ def CoverageEntry.toJson (entry : CoverageEntry) : String :=
 def coverageLedgerJson : String :=
   jsonArray (coverageLedger.map CoverageEntry.toJson)
 
-example : coverageLedger.all (fun entry =>
+theorem coverage_uses_declared_features : coverageLedger.all (fun entry =>
     featureSurfaceRequirements.any (fun requirement => requirement.feature == entry.feature))
     = true := by native_decide
+
+theorem coverage_entries_have_evidence :
+    coverageLedger.all (fun entry => entry.consumed ||
+      !entry.acceptedBoundary.isEmpty || !entry.acceptedFollowUp.isEmpty) = true := by native_decide
 
 end Conformance.Contracts

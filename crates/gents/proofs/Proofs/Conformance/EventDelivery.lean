@@ -1,5 +1,6 @@
 import Proofs.Automation.EventDelivery
 import Proofs.Conformance.Family
+import Proofs.Conformance.EventDeliveryCooldown
 import Proofs.Conformance.EventDeliveryTransitions
 import Proofs.Conformance.EventDeliveryConvergence
 import Proofs.Automation.EventDelivery.Instances

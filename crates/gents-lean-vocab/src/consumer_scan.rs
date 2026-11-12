@@ -5,7 +5,6 @@ use std::path::Path;
 use serde_json::Value;
 
 const CONTRACT_METADATA: &[&str] = &[
-    "boundaries",
     "coverage_ledger",
     "deviations",
     "feature_matrix",

@@ -902,8 +902,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"backend_resumed_turn_cases\":" ++ Conformance.BackendWake.resumedTurnCasesJson ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
-    ++ "\"boundaries\":"
-      ++ boundariesJson ++ ","
     ++ "\"deviations\":"
       ++ deviationsJson ++ ","
     ++ "\"artifact_mode_meet_cases\":" ++ artifactModeMeetCasesJson ++ ","

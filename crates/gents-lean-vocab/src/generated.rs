@@ -1311,16 +1311,6 @@ pub struct LeanBackgroundTheoremWitness {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBoundary {
-    pub id: String,
-    pub domain: String,
-    pub subject: String,
-    pub statement: String,
-    pub accepted_failure_mode: Option<String>,
-    pub accepted_follow_up: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanBudgetRehydrationCase {
     pub name: String,
@@ -3246,7 +3236,6 @@ pub struct LeanContractSnapshot {
     pub mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub backend_health_cases: Vec<LeanBackendHealthCase>,
     pub backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
-    pub boundaries: Vec<LeanBoundary>,
     pub deviations: Vec<LeanDeviation>,
     pub command_policy_cases: Vec<LeanCommandPolicyCase>,
     pub command_isolation_cases: Vec<LeanCommandIsolationCase>,
