@@ -2186,9 +2186,21 @@ mod native_route_tests {
         let cases = &gents_lean_vocab::lean_contract_snapshot().native_route_cases;
         assert_eq!(cases.len(), 6);
         for case in cases {
-            let name = case["name"].as_str().unwrap();
-            let stamped = HandoffRoute::from_fields(&case["input"]);
-            assert_eq!(route_json(&stamped), case["stamped"], "{name}");
+            let name = case.name.as_str();
+            let input = serde_json::json!({
+                "handoff_id": &case.input.handoff_id,
+                "reply_session_id": &case.input.reply_session_id,
+                "attempt": &case.input.attempt,
+            });
+            let stamped = HandoffRoute::from_fields(&input);
+            assert_eq!(
+                serde_json::from_value::<gents_lean_vocab::LeanNativeRouteCaseStamped>(
+                    route_json(&stamped)
+                )
+                .unwrap(),
+                case.stamped,
+                "{name}"
+            );
             let receipt = gents_session::workspace::WorkspaceReceiptDoc {
                 path_capability_digest: "digest".into(),
                 receipt_id: "receipt".into(),
@@ -2214,11 +2226,18 @@ mod native_route_tests {
             );
             let observed = route_json(&stamped);
             let delivered = HandoffRoute::from_fields(&observed);
-            assert_eq!(route_json(&delivered), case["delivered"], "{name}");
-            let emit = case["emit_outcome"].as_bool().unwrap();
+            assert_eq!(
+                serde_json::from_value::<gents_lean_vocab::LeanNativeRouteCaseDelivered>(
+                    route_json(&delivered)
+                )
+                .unwrap(),
+                case.delivered,
+                "{name}"
+            );
+            let emit = case.emit_outcome;
             assert_eq!(
                 !emit || delivered.handoff_id.is_some(),
-                case["admitted"].as_bool().unwrap(),
+                case.admitted,
                 "{name}"
             );
         }
