@@ -18,6 +18,8 @@ import {
   problemOf,
   useDraft,
 } from "./draft";
+import { NEW_ITEM } from "./draftItems";
+import { NewItemPage } from "./NewItemPage";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group, Unfold } from "./rows";
 import { ToolsSummary, ToolsUsedBy } from "./ToolsSummary";
@@ -202,7 +204,7 @@ export function ToolsEditor({
   const { changeConfig } = useApp().actions;
   const [invalidLimits, setInvalidLimits] = useState<Record<string, string>>({});
   const [controlsGeneration, setControlsGeneration] = useState(0);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(draftMode !== undefined);
   const reportInvalidLimit = useCallback((id: string, label: string | null) => {
     setInvalidLimits((current) => {
       if ((current[id] ?? null) === label) return current;
@@ -491,6 +493,10 @@ export function ToolsPanel({
     nodeDid: deployment.nodeDid,
     section: "tools",
   };
+  if (item === NEW_ITEM && !deployment.tools.some((t) => t.tools_id === NEW_ITEM))
+    return (
+      <NewToolsPage key={deployment.nodeDid} deployment={deployment} base={base} />
+    );
   return (
     <ListDetail
       base={base}
@@ -528,24 +534,7 @@ export function ToolsPanel({
       }))}
       createLabel="New tools"
       empty="No Tools documents. An agent reaches tools only through its context."
-      onCreate={async () => {
-        const tools_id = newId("tools");
-        await changeConfig("saveToolsConfig", {
-          document: {
-            tools_id,
-            node_did: deployment.nodeDid,
-            display_name: "New tools",
-            host: { files: { mode: "ReadOnly" }, bash: { mode: "Off" } },
-            tags: null,
-          },
-        });
-        navigate({
-          name: "agent",
-          nodeDid: deployment.nodeDid,
-          section: "tools",
-          item: tools_id,
-        });
-      }}
+      onCreate={() => navigate({ ...base, item: NEW_ITEM })}
       detail={(id) => {
         const tools = deployment.tools.find((t) => t.tools_id === id)!;
         return (
@@ -558,5 +547,26 @@ export function ToolsPanel({
         );
       }}
     />
+  );
+}
+
+function NewToolsPage({
+  deployment,
+  base,
+}: {
+  deployment: NodeView;
+  base: { name: "agent"; nodeDid: string; section: string };
+}) {
+  const [tools] = useState<Tools>(() => ({
+    tools_id: newId("tools"),
+    node_did: deployment.nodeDid,
+    display_name: null,
+    host: { files: { mode: "ReadOnly" }, bash: { mode: "Off" } },
+    tags: null,
+  }));
+  return (
+    <NewItemPage base={base} back="Tools">
+      {(draft) => <ToolsEditor deployment={deployment} tools={tools} draft={draft} />}
+    </NewItemPage>
   );
 }
