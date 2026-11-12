@@ -1,9 +1,11 @@
+use super::slot_accounting::{
+    reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
+};
+use crate::test_support::test_db;
 use defra_node::Node as EmbeddedNode;
 use gents_lean_vocab::{lean_contract_snapshot, lean_inference_slot_accounting_cases};
 use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
-use super::slot_accounting::{reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow};
-use crate::test_support::test_db;
 
 const NODE_DID: &str = "did:test:test";
 const AGENT_NAME: &str = "test";
@@ -24,7 +26,11 @@ async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstructio
         "Lean should emit the finite InferenceCall slot-accounting cases"
     );
 
-    let db = test_db("inference-slot-accounting", gents_store::node_extension::Extensions::none()).await;
+    let db = test_db(
+        "inference-slot-accounting",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
 
     for case in cases {
         assert_eq!(
@@ -159,8 +165,6 @@ async fn fetch_persisted_slot_rows_for_case(
         .filter(|row| row.call_id.starts_with(&prefix))
         .collect()
 }
-
-
 
 fn slot_rows_from_contract<'a>(
     backend_ids: &'a [String],

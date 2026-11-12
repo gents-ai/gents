@@ -6,8 +6,8 @@ async fn oauth_account_scope_matches_lean() {
         resolve_oauth_credential, resolve_oauth_pool, upsert_oauth_credential_on, AccountPick,
     };
     use crate::backends::provider::BackendProviderOauthExt;
-    use gents_loop::backend_provider::BackendProviderKind;
     use gents_lean_vocab::families::configuration_scope_oauth_account as family;
+    use gents_loop::backend_provider::BackendProviderKind;
     let kind_of = |value: &str| -> BackendProviderKind {
         serde_json::from_value(serde_json::Value::String(value.to_owned())).unwrap()
     };
@@ -36,10 +36,17 @@ async fn oauth_account_scope_matches_lean() {
     };
     let rows = rows_of(&cases[0].input.rows);
 
-    let (local_db, _local_user, access, _local_agent) =
-        crate::test_support::signed_test_node("oauth-model-local", gents_store::node_extension::Extensions::none()).await;
+    let (local_db, _local_user, access, _local_agent) = crate::test_support::signed_test_node(
+        "oauth-model-local",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let (foreign_db, _foreign_user, foreign_access, _foreign_agent) =
-        crate::test_support::signed_test_node("oauth-model-foreign", gents_store::node_extension::Extensions::none()).await;
+        crate::test_support::signed_test_node(
+            "oauth-model-foreign",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
     let local_node = local_db.node_identity.did();
     let foreign_node = foreign_db.node_identity.did();
     assert_ne!(local_node, foreign_node);
@@ -112,9 +119,7 @@ async fn oauth_account_scope_matches_lean() {
                     .unwrap();
                 let mut pool: Vec<_> = pool_rows
                     .iter()
-                    .map(|row| {
-                        resolved_row(model_owner(&row.node_did), row.account_ref.as_deref())
-                    })
+                    .map(|row| resolved_row(model_owner(&row.node_did), row.account_ref.as_deref()))
                     .collect();
                 pool.sort_by_key(|row| (row.owner.clone(), row.account.clone()));
                 pool

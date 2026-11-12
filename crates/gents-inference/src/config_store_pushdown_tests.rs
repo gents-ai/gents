@@ -13,8 +13,11 @@ use serde_json::json;
 #[tokio::test]
 async fn authored_application_document_is_signed_by_the_held_user() -> anyhow::Result<()> {
     const SDL: &str = "type AuthoredDocumentFixture { name: String }";
-    let (db, user, access, _) =
-        crate::test_support::signed_test_node("authored-document", gents_store::node_extension::Extensions::none()).await;
+    let (db, user, access, _) = crate::test_support::signed_test_node(
+        "authored-document",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     // Schema installation is node administration; the held User authors documents only.
     let admin = ConfigAccess::local_as(
         db.node.clone(),
@@ -78,12 +81,7 @@ async fn set_node_hop_cap(owner: &ConfigAccess, node_did: &str, cap: u32) -> any
                     add: node.clone(),
                     update: node,
                 }])?;
-                apply_desired_state_plan(
-                    txn,
-                    &plan,
-                    &crate::resolved::ProviderProfilePolicy,
-                )
-                .await
+                apply_desired_state_plan(txn, &plan, &crate::resolved::ProviderProfilePolicy).await
             })
         })
         .await?;
@@ -93,8 +91,11 @@ async fn set_node_hop_cap(owner: &ConfigAccess, node_did: &str, cap: u32) -> any
 #[tokio::test]
 async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed() -> anyhow::Result<()>
 {
-    let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("runtime-hop-cap", gents_store::node_extension::Extensions::none()).await;
+    let (db, user, user_access, binding) = crate::test_support::signed_test_node(
+        "runtime-hop-cap",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let runtime = db.node_identity.as_ref();
     let signer = gents_store::identity::resolve_agent_identity(runtime, &binding)?;
     let agent = ConfigAccess::local_managed_agent(
@@ -215,8 +216,11 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().identity_agent_baseline_cases;
     assert!(!cases.is_empty());
     for case in cases {
-        let (db, owner, owner_access) =
-            crate::test_support::signed_test_node_without_agent(&case.name, gents_store::node_extension::Extensions::none()).await;
+        let (db, owner, owner_access) = crate::test_support::signed_test_node_without_agent(
+            &case.name,
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
         let runtime = db.node_identity.clone();
         let runtime_did = runtime.did().to_owned();
         let admin =

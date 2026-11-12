@@ -319,9 +319,8 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
                 case.name
             );
             if origin == "provider_stream_malformed" {
-                let mut parser = crate::clients::claude_messages::MessagesSseState::new(
-                    Default::default(),
-                );
+                let mut parser =
+                    crate::clients::claude_messages::MessagesSseState::new(Default::default());
                 let preview_sse = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"partial\"}}\n\n";
                 let mut saw_preview = false;
                 for line in preview_sse.lines() {

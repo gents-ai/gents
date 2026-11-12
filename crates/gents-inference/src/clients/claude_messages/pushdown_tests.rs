@@ -1,29 +1,28 @@
-use rapidhash::{HashSetExt, RapidHashSet};
-use rig::completion::CompletionError;
-use rig::streaming::RawStreamingChoice;
-use crate::clients::claude_subscription::ClaudeStreamResponse;
 use crate::clients::claude_messages::parse_messages_sse;
 use crate::clients::claude_messages::parse_messages_sse_typed;
-use gents_claude::body::ModelFacts;
-use gents_claude::body::Effort;
+use crate::clients::claude_subscription::ClaudeStreamResponse;
+use crate::llm::message::AssistantContent;
+use crate::llm::message::Message;
+use crate::llm::message::Reasoning;
 use gents_claude::attribution;
+use gents_claude::body::Effort;
+use gents_claude::body::ModelFacts;
 use gents_claude::catalog;
 use gents_claude::profile;
-use crate::llm::message::Message;
-use crate::llm::message::AssistantContent;
-use crate::llm::message::Reasoning;
-use gents_loop::provider_input::ProviderInputProfile;
-use gents_loop::claude_messages_body::ClaudeAccountContext;
-use gents_loop::claude_messages_body::ClaudeRequestContext;
-use gents_loop::claude_messages_body::ClaudeRequestIds;
-use gents_loop::claude_messages_body::plan_with_ids;
-use gents_lean_vocab::LeanClaudeReasoningPart;
-use gents_lean_vocab::LeanClaudeStreamBlock;
-use gents_lean_vocab::LeanClaudeStreamEvent;
 use gents_lean_vocab::lean_prompt_assembly_claude_body_cases;
 use gents_lean_vocab::lean_prompt_assembly_claude_map_cases;
 use gents_lean_vocab::lean_prompt_assembly_claude_stream_cases;
 use gents_lean_vocab::lean_prompt_assembly_claude_thinking_stream_cases;
+use gents_lean_vocab::LeanClaudeReasoningPart;
+use gents_lean_vocab::LeanClaudeStreamBlock;
+use gents_lean_vocab::LeanClaudeStreamEvent;
+use gents_loop::claude_messages_body::plan_with_ids;
+use gents_loop::claude_messages_body::ClaudeAccountContext;
+use gents_loop::claude_messages_body::ClaudeRequestContext;
+use gents_loop::claude_messages_body::ClaudeRequestIds;
+use rapidhash::{HashSetExt, RapidHashSet};
+use rig::completion::CompletionError;
+use rig::streaming::RawStreamingChoice;
 
 fn assert_fail_closed(
     case_name: &str,
@@ -222,10 +221,8 @@ fn claude_request(
     rig::completion::CompletionRequest {
         model: None,
         preamble: preamble.map(str::to_string),
-        chat_history: rig::OneOrMany::many(crate::llm::rig_compat::to_rig_messages(
-            history,
-        ))
-        .expect("at least one history row"),
+        chat_history: rig::OneOrMany::many(crate::llm::rig_compat::to_rig_messages(history))
+            .expect("at least one history row"),
         documents: Vec::new(),
         tools,
         temperature: None,
@@ -326,9 +323,7 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
         let parsed =
             parse_messages_sse_typed(&claude_thinking_events_as_sse(&case.events), &surface);
         if case.outcome != "ok" {
-            use crate::clients::claude_messages::{
-                MessagesParseError, ThinkingParseCause,
-            };
+            use crate::clients::claude_messages::{MessagesParseError, ThinkingParseCause};
             let error = parsed.expect_err("modeled malformed block must fail closed");
             let MessagesParseError::MalformedThinking { cause } = error else {
                 panic!("{}: expected malformed thinking: {error}", case.name);
@@ -350,8 +345,7 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
         }
         let parsed = parsed.unwrap_or_else(|error| panic!("{}: {error}", case.name));
         assert_eq!(case.steps.len(), case.events.len(), "{}", case.name);
-        let mut state =
-            crate::clients::claude_messages::MessagesSseState::new(surface.clone());
+        let mut state = crate::clients::claude_messages::MessagesSseState::new(surface.clone());
         let mut live_preview = String::new();
         for (event, (sse, step)) in case.events.iter().zip(
             claude_thinking_sse_events(&case.events)
