@@ -195,79 +195,31 @@ impl ConfigCommandTool {
             actor: self.identity.clone(),
             home: Some(home),
         };
-        // The builder is who selected node/NAME, so its pinned selections
-        // follow the rebuild: each pin moves to the new digest through the
-        // Tools edit path, with that path's authority, before the install's
-        // pin check (Lean `Configuration.pluginReplacementSafe`) reads them.
-        // A moved pin names a digest that is installed only once the install
-        // commits, so a refused move or a failed install puts every moved pin
-        // back: a Tools pinned to a digest that is not installed fails to
-        // build its tool surface.
-        let mut followed = Vec::new();
-        let mut moved: Vec<gents_pack::pack::node_packs::PluginPinConflict> = Vec::new();
-        let installed = async {
-            for conflict in installer.pin_conflicts(&distribution).await? {
-                if moved.iter().any(|done| done.tools == conflict.tools) {
-                    continue;
-                }
-                let call = pin_move_call(&conflict);
-                Box::pin(self.dispatch(&pin_edit(&conflict, &conflict.integrations)))
-                    .await
-                    .map_err(|error| CommandGuidance {
-                        message: format!(
-                            "plugin {coordinate} built and passed its cases, but nothing was installed: Tools {:?} of agent {} pins the previous build ({}) and could not be moved to {}: {error:#}. Move the pin with the tools update below, then repeat [\"plugin\",\"build\",{id:?}] with no set: the saved source builds to that same digest.",
-                            conflict.tools, conflict.agent, conflict.pin, conflict.replacement
-                        ),
-                        next_call: call,
-                    })?;
-                followed.push(json!({"tools": conflict.tools, "agent": conflict.agent, "from": conflict.pin, "to": conflict.replacement}));
-                moved.push(conflict);
-            }
-            installer
-                .plugins_pack(
-                    if prepared.installed {
-                        "update"
-                    } else {
-                        "install"
-                    },
-                    &PackChangeInput {
-                        expected_digest: Some(distribution.digest().to_owned()),
-                        ..PackChangeInput::of(&coordinate)
-                    },
-                    &distribution,
-                    true,
+        // A dropped request (an interrupt cancels the tool call's future)
+        // must not stop between a pin move and the install it waits for, so
+        // the moves, the install and their compensation run as one owned
+        // task that finishes whether or not this call is still awaited.
+        let owned = self.clone();
+        let update = prepared.installed;
+        let (owned_coordinate, owned_id) = (coordinate.clone(), id.clone());
+        let (receipt, followed) = tokio::spawn(async move {
+            let outcome = owned
+                .install_following_pins(
+                    installer,
+                    distribution,
+                    &owned_coordinate,
+                    &owned_id,
+                    update,
                 )
-                .await
-        }
-        .await;
-        let receipt = match installed {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                let mut stranded = Vec::new();
-                for conflict in moved.iter().rev() {
-                    if let Err(restore) = Box::pin(
-                        self.dispatch(&pin_edit(conflict, &conflict.previous_integrations)),
-                    )
-                    .await
-                    {
-                        stranded.push(format!(
-                            "Tools {:?} of agent {} still pins {}, which is not installed ({restore:#}); set its pin back to {} with tools update",
-                            conflict.tools, conflict.agent, conflict.replacement, conflict.pin
-                        ));
-                    }
-                }
-                return Err(error.context(if moved.is_empty() {
-                    "no selection's pin was moved".to_owned()
-                } else if stranded.is_empty() {
-                    format!(
-                        "the {} pin(s) this build had moved were put back to the installed build",
-                        moved.len()
-                    )
-                } else {
-                    stranded.join("; ")
-                }));
+                .await;
+            #[cfg(any(test, feature = "test-fixtures"))]
+            if let Some(pause) = REBUILD_TEST_PAUSE.lock().unwrap().clone() {
+                pause.finished.notify_one();
             }
-        };
+            outcome
+        })
+        .await
+        .context("the plugin install task did not finish")??;
         let receipt: Value =
             serde_json::from_str(&receipt).context("reading the install receipt")?;
         let digest = receipt["plugins"][0]["digest"].clone();
@@ -286,4 +238,127 @@ impl ConfigCommandTool {
         }
         .pretty()
     }
+
+    /// A pin edit through the Tools edit path. The declared `Send` future is
+    /// what lets the owned install task hold a call back into `dispatch`.
+    fn pin_edit_call(&self, argv: Vec<String>) -> futures::future::BoxFuture<'_, Result<String>> {
+        Box::pin(async move { self.dispatch(&argv).await })
+    }
+
+    /// Installs the built `distribution` of `coordinate`, moving the pins of
+    /// the Tools that select it. Returns the install receipt and the moves.
+    ///
+    /// The builder is who selected node/NAME, so its pinned selections follow
+    /// the rebuild: each pin moves to the new digest through the Tools edit
+    /// path, with that path's authority, before the install's pin check (Lean
+    /// `Configuration.pluginReplacementSafe`) reads them. The plugin store
+    /// holds one build of a plugin, and that check refuses a replacement
+    /// while a pin names another digest, so the pins move first. A moved pin
+    /// names a digest that is installed only once the install publishes it,
+    /// so a refused move or an install whose publication was rolled back
+    /// puts every moved pin back: a Tools pinned to a digest that is not
+    /// installed fails to build its tool surface. An install that failed
+    /// after its publication became final
+    /// ([`node_packs::InstallError::Retained`]) keeps the moved pins, which
+    /// name the build that is installed.
+    async fn install_following_pins(
+        &self,
+        installer: PackInstaller,
+        distribution: Distribution,
+        coordinate: &str,
+        id: &str,
+        update: bool,
+    ) -> Result<(String, Vec<Value>)> {
+        let mut followed = Vec::new();
+        let mut moved: Vec<gents_pack::pack::node_packs::PluginPinConflict> = Vec::new();
+        let installed = async {
+            for conflict in installer.pin_conflicts(&distribution).await? {
+                if moved.iter().any(|done| done.tools == conflict.tools) {
+                    continue;
+                }
+                let call = pin_move_call(&conflict);
+                self.pin_edit_call(pin_edit(&conflict, &conflict.integrations))
+                    .await
+                    .map_err(|error| anyhow::Error::from(CommandGuidance {
+                        message: format!(
+                            "plugin {coordinate} built and passed its cases, but nothing was installed: Tools {:?} of agent {} pins the previous build ({}) and could not be moved to {}: {error:#}. Move the pin with the tools update below, then repeat [\"plugin\",\"build\",{id:?}] with no set: the saved source builds to that same digest.",
+                            conflict.tools, conflict.agent, conflict.pin, conflict.replacement
+                        ),
+                        next_call: call,
+                    }))?;
+                followed.push(json!({"tools": conflict.tools, "agent": conflict.agent, "from": conflict.pin, "to": conflict.replacement}));
+                moved.push(conflict);
+                #[cfg(any(test, feature = "test-fixtures"))]
+                {
+                    let pause = REBUILD_TEST_PAUSE.lock().unwrap().clone();
+                    if let Some(pause) = pause {
+                        pause.moved.notify_one();
+                        pause.release.notified().await;
+                    }
+                }
+            }
+            installer
+                .plugins_pack_final(
+                    if update { "update" } else { "install" },
+                    &PackChangeInput {
+                        expected_digest: Some(distribution.digest().to_owned()),
+                        ..PackChangeInput::of(coordinate)
+                    },
+                    &distribution,
+                    true,
+                )
+                .await
+        }
+        .await;
+        match installed {
+            Ok(receipt) => Ok((receipt, followed)),
+            Err(retained @ node_packs::InstallError::Retained(_)) => {
+                Err(anyhow::Error::new(retained).context(if moved.is_empty() {
+                    "the new build is installed; no selection's pin was moved".to_owned()
+                } else {
+                    format!(
+                        "the new build is installed and the {} pin(s) this build moved name it; repeat [\"plugin\",\"build\",{id:?}] with no set to reconcile the node record",
+                        moved.len()
+                    )
+                }))
+            }
+            Err(node_packs::InstallError::NotInstalled(error)) => {
+                let error = error.into_anyhow();
+                let mut stranded = Vec::new();
+                for conflict in moved.iter().rev() {
+                    if let Err(restore) = self
+                        .pin_edit_call(pin_edit(conflict, &conflict.previous_integrations))
+                        .await
+                    {
+                        stranded.push(format!(
+                            "Tools {:?} of agent {} still pins {}, which is not installed ({restore:#}); set its pin back to {} with tools update",
+                            conflict.tools, conflict.agent, conflict.replacement, conflict.pin
+                        ));
+                    }
+                }
+                Err(error.context(if moved.is_empty() {
+                    "no selection's pin was moved".to_owned()
+                } else if stranded.is_empty() {
+                    format!(
+                        "the {} pin(s) this build had moved were put back to the installed build",
+                        moved.len()
+                    )
+                } else {
+                    stranded.join("; ")
+                }))
+            }
+        }
+    }
 }
+
+/// A test's hold on a rebuild between a pin move and the install.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub struct RebuildTestPause {
+    pub moved: tokio::sync::Notify,
+    pub release: tokio::sync::Notify,
+    pub finished: tokio::sync::Notify,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub static REBUILD_TEST_PAUSE: std::sync::Mutex<Option<Arc<RebuildTestPause>>> =
+    std::sync::Mutex::new(None);

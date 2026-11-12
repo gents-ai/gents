@@ -3,6 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use gents_service::native_service::{
@@ -17,19 +18,38 @@ mod supervision;
 #[derive(Clone, Default)]
 struct ScriptedRunner {
     outputs: Arc<Mutex<VecDeque<CommandOutput>>>,
+    repeating: Arc<Mutex<Option<CommandOutput>>>,
     calls: Arc<Mutex<Vec<Vec<String>>>>,
+    elapsed: Arc<Mutex<Vec<Duration>>>,
 }
 
 impl ScriptedRunner {
     fn with_outputs(outputs: impl IntoIterator<Item = CommandOutput>) -> Self {
         Self {
             outputs: Arc::new(Mutex::new(outputs.into_iter().collect())),
+            repeating: Arc::new(Mutex::new(None)),
             calls: Arc::new(Mutex::new(Vec::new())),
+            elapsed: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Answer every command after the script with `output`, so a test can pin
+    /// a bound without writing out its probes.
+    fn then_repeat(self, output: CommandOutput) -> Self {
+        *self.repeating.lock().expect("repeating mutex") = Some(output);
+        self
     }
 
     fn calls(&self) -> Vec<Vec<String>> {
         self.calls.lock().expect("calls mutex").clone()
+    }
+
+    fn elapsed(&self) -> Vec<Duration> {
+        self.elapsed.lock().expect("elapsed mutex").clone()
+    }
+
+    fn total_elapsed(&self) -> Duration {
+        self.elapsed().into_iter().sum()
     }
 }
 
@@ -38,11 +58,22 @@ impl CommandRunner for ScriptedRunner {
         let mut call = vec![program.to_string_lossy().into_owned()];
         call.extend(args.iter().map(|arg| arg.to_string_lossy().into_owned()));
         self.calls.lock().expect("calls mutex").push(call);
-        self.outputs
-            .lock()
-            .expect("outputs mutex")
-            .pop_front()
-            .ok_or_else(|| anyhow!("unexpected native supervisor command"))
+        if let Some(output) = self.outputs.lock().expect("outputs mutex").pop_front() {
+            return Ok(output);
+        }
+        match self.repeating.lock().expect("repeating mutex").as_ref() {
+            Some(repeating) => Ok(output(
+                repeating.success,
+                &repeating.stdout,
+                &repeating.stderr,
+            )),
+            None => Err(anyhow!("unexpected native supervisor command")),
+        }
+    }
+
+    fn elapse(&self, delay: Duration) -> Duration {
+        self.elapsed.lock().expect("elapsed mutex").push(delay);
+        delay
     }
 }
 
@@ -475,3 +506,178 @@ fn generated_launchd_definition_passes_plutil_lint_without_loading_it() -> Resul
 
 #[path = "native_service/environment.rs"]
 mod environment;
+
+#[test]
+fn mac_stop_confirms_an_unload_that_takes_longer_than_a_second() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    manager(
+        config.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let mut script = vec![
+        output(true, "501", ""),
+        output(true, "state = running", ""),
+        ok(),
+        output(true, "501", ""),
+    ];
+    script.extend((0..30).map(|_| output(true, "state = running", "")));
+    script.push(output(false, "Could not find service", ""));
+    let runner = ScriptedRunner::with_outputs(script);
+    manager(config, NativeServicePlatform::Macos, runner.clone()).stop(false)?;
+    let calls = runner.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| call.iter().any(|arg| arg == "bootout"))
+            .count(),
+        1,
+        "{calls:?}"
+    );
+    assert_eq!(
+        calls.iter().filter(|call| call[0] == "/usr/bin/id").count(),
+        2,
+        "the job target is resolved once per stop, not once per probe: {calls:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn stop_waits_the_whole_supervisor_stop_budget_before_failing() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    manager(
+        config.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let runner = ScriptedRunner::with_outputs([
+        output(true, "501", ""),
+        output(true, "state = running", ""),
+        ok(),
+        output(true, "501", ""),
+    ])
+    .then_repeat(output(true, "state = running", ""));
+    let error = manager(config, NativeServicePlatform::Macos, runner.clone())
+        .stop(false)
+        .expect_err("a job that never unloads must still fail");
+    let message = format!("{error:#}");
+    assert!(message.contains("did not confirm"), "{message}");
+    assert!(message.contains("unloaded or became inactive"), "{message}");
+    assert!(
+        runner.total_elapsed() >= Duration::from_secs(120)
+            && runner.total_elapsed() <= Duration::from_secs(121),
+        "the wait must spend the supervisor stop budget, spent {:?}",
+        runner.total_elapsed()
+    );
+    Ok(())
+}
+
+#[test]
+fn linux_stop_confirms_a_unit_that_is_still_deactivating() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    manager(
+        config.clone(),
+        NativeServicePlatform::Linux,
+        ScriptedRunner::with_outputs([ok(), ok()]),
+    )
+    .install()?;
+    let mut script = vec![ok()];
+    script.extend((0..25).map(|_| output(true, "deactivating", "")));
+    script.push(output(true, "inactive", ""));
+    script.push(ok());
+    let runner = ScriptedRunner::with_outputs(script);
+    manager(config, NativeServicePlatform::Linux, runner.clone()).stop(false)?;
+    assert!(
+        runner
+            .calls()
+            .iter()
+            .any(|call| call.iter().any(|arg| arg == "reset-failed")),
+        "{:?}",
+        runner.calls()
+    );
+    Ok(())
+}
+
+#[test]
+fn stop_returns_on_the_first_probe_when_the_job_is_already_gone() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    manager(
+        config.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let runner = ScriptedRunner::with_outputs([
+        output(true, "501", ""),
+        output(true, "state = running", ""),
+        ok(),
+        output(true, "501", ""),
+        output(false, "Could not find service", ""),
+    ]);
+    manager(config, NativeServicePlatform::Macos, runner.clone()).stop(false)?;
+    assert!(
+        runner.elapsed().is_empty(),
+        "a job that is already gone must not wait: {:?}",
+        runner.elapsed()
+    );
+    assert_eq!(
+        runner
+            .calls()
+            .iter()
+            .filter(|call| call.iter().any(|arg| arg == "print"))
+            .count(),
+        2,
+        "{:?}",
+        runner.calls()
+    );
+    Ok(())
+}
+
+#[test]
+fn mac_bootout_already_in_progress_is_settled_by_the_wait() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    manager(
+        config.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let runner = ScriptedRunner::with_outputs([
+        output(true, "501", ""),
+        output(true, "state = running", ""),
+        output(false, "", "Boot-out failed: 36: Operation now in progress"),
+        output(true, "501", ""),
+        output(true, "state = running", ""),
+        output(false, "Could not find service", ""),
+    ]);
+    manager(config.clone(), NativeServicePlatform::Macos, runner).stop(false)?;
+
+    let refused = ScriptedRunner::with_outputs([
+        output(true, "501", ""),
+        output(true, "state = running", ""),
+        output(false, "", "Boot-out failed: 5: Input/output error"),
+    ]);
+    let error = manager(config, NativeServicePlatform::Macos, refused.clone())
+        .stop(false)
+        .expect_err("any other boot-out refusal must still fail");
+    assert!(
+        format!("{error:#}").contains("launchctl failed"),
+        "{error:#}"
+    );
+    assert!(
+        !refused
+            .calls()
+            .iter()
+            .any(|call| call.iter().any(|arg| arg == "disable")),
+        "{:?}",
+        refused.calls()
+    );
+    Ok(())
+}

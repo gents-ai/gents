@@ -7,6 +7,8 @@ use crate::sample::Tone;
 use crate::source::{Answer, Connection, Intent, Prompt};
 
 const MUST_ANSWER: &str = "this question needs an answer; it cannot be dismissed";
+/// The message box while no agent can run: enter opens Setup.
+const NO_AGENT: &str = "No agent can answer yet. Press enter to connect a model.";
 
 /// How `prompt` is answered with `set`'s keys, or in a Sidebar layer, which takes enter and `d`
 /// and no typed text.
@@ -162,7 +164,16 @@ impl App {
         match answers {
             Some(_) if !tab.prompts.is_empty() => "answer the prompt above".to_string(),
             Some(shown) => format!("answer {}'s question", shown.agent),
+            None if self.no_agent().is_some() => NO_AGENT.to_string(),
             None => format!("Message {}", tab.agent),
+        }
+    }
+
+    /// Why no agent can run, while the source says none can.
+    pub fn no_agent(&self) -> Option<&str> {
+        match &self.connection {
+            Connection::NoAgent(why) => Some(why),
+            _ => None,
         }
     }
 

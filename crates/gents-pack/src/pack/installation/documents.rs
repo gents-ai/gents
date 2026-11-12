@@ -208,6 +208,7 @@ pub struct PreparedDependency {
     pub(super) snapshot: Option<super::InstalledDependencySnapshot>,
     variables: BTreeMap<String, Option<String>>,
     reconfigure: bool,
+    installer_root_tools: Vec<String>,
 }
 
 pub struct PreparedDocumentPackInstall {
@@ -221,6 +222,98 @@ pub struct PreparedDocumentPackInstall {
     pub sources: BTreeMap<String, super::PackSource>,
     pub(super) root_snapshot: Option<super::InstalledDependencySnapshot>,
     pub(super) variables: BTreeMap<String, Option<String>>,
+    /// The root pack's Tools this install gives its installer's root.
+    pub(super) installer_root_tools: Vec<String>,
+}
+
+/// One agent an install runs under its installer's root: an agent of the
+/// pack `coordinate` whose Context selects Tools of that same pack that the
+/// install gives the root. A preview lists these from the install's own
+/// plan, and the installed record yields the same rows
+/// ([`super::pack_root_record`]), so a consent and a grant name one thing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallerRootAgent {
+    pub coordinate: String,
+    /// The slot the pack authored the agent under, which names it before
+    /// and after its install binds it; its DID when it has no slot.
+    pub agent: String,
+    pub name: Option<String>,
+    pub tools: String,
+}
+
+fn installer_root_agents_of(
+    coordinate: &str,
+    config: &PackConfig,
+    bindings: &super::super::PackAgentBindings,
+    installer_root_tools: &[String],
+) -> Vec<InstallerRootAgent> {
+    config
+        .agents
+        .iter()
+        .filter_map(|agent| {
+            let context = agent.context_id.as_ref()?;
+            let context = config
+                .contexts
+                .iter()
+                .find(|candidate| candidate.context_id == *context)?;
+            let tools = context.tools_id.as_ref()?;
+            installer_root_tools
+                .contains(tools)
+                .then(|| InstallerRootAgent {
+                    coordinate: coordinate.to_owned(),
+                    agent: agent_slot_or_did(bindings, &agent.agent_did),
+                    name: agent.display_name.clone(),
+                    tools: tools.clone(),
+                })
+        })
+        .collect()
+}
+
+/// The slot `bindings` binds to `agent_did`, or the DID itself.
+pub(super) fn agent_slot_or_did(
+    bindings: &super::super::PackAgentBindings,
+    agent_did: &str,
+) -> String {
+    bindings
+        .iter()
+        .find(|(_, binding)| binding.agent_did == agent_did)
+        .map_or_else(|| agent_did.to_owned(), |(slot, _)| slot.clone())
+}
+
+impl PreparedDocumentPackInstall {
+    /// The agents this install runs under its installer's root, of the root
+    /// pack `root` and of each dependency it renders. A dependency it keeps
+    /// as installed is not among them: its record holds its own
+    /// ([`Self::kept_dependencies`]).
+    pub fn installer_root_agents(
+        &self,
+        root: &super::super::PackManifest,
+    ) -> Vec<InstallerRootAgent> {
+        let mut agents = installer_root_agents_of(
+            &format!("{}/{}", root.metadata.namespace, root.name),
+            &self.config,
+            &self.agent_bindings,
+            &self.installer_root_tools,
+        );
+        for dependency in &self.dependencies {
+            agents.extend(installer_root_agents_of(
+                &dependency.coordinate,
+                &dependency.config,
+                &dependency.agent_bindings,
+                &dependency.installer_root_tools,
+            ));
+        }
+        agents
+    }
+
+    /// The dependencies this install keeps as the node has them.
+    pub fn kept_dependencies(&self) -> Vec<&str> {
+        self.dependencies
+            .iter()
+            .filter(|dependency| dependency.snapshot.is_some() && !dependency.reconfigure)
+            .map(|dependency| dependency.coordinate.as_str())
+            .collect()
+    }
 }
 
 /// Public facts from the staged host, checked against the reviewed archives.
@@ -663,6 +756,9 @@ async fn prepare_document_pack_archive_inputs(
     hosted: Option<&HostedPackPreparation>,
     overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall, PackChangeError> {
+    for archive in std::iter::once(archive).chain(dependencies.iter().copied()) {
+        refuse_authored_host_roots(archive)?;
+    }
     let declared = super::super::agent_bindings::declared_dependencies(archive.manifest());
     validate_dependency_overrides(dependencies, overrides)?;
     let mut preloaded = BTreeMap::new();
@@ -720,9 +816,9 @@ async fn prepare_document_pack_archive_inputs(
         },
     )
     .await?;
-    let root = root.with_variables(captured.into_inner().unwrap_or_else(|e| e.into_inner()));
+    let mut root = root.with_variables(captured.into_inner().unwrap_or_else(|e| e.into_inner()));
     let mut config = loaded.config;
-    default_host_tool_roots(
+    root.installer_root_tools = default_host_tool_roots(
         access,
         owner,
         provisioner.and_then(|context| context.selected_agent_did),
@@ -752,22 +848,12 @@ async fn prepare_document_pack_archive_inputs(
     .await
 }
 
-/// A pack cannot name a folder on the node it will be installed on, so a pack
-/// Tools document that selects host tools without a root takes its
-/// installer's: the tool root of the installing agent, or of the node's
-/// default agent when the node's User installs. The root is still admitted by
-/// the node's WorkspaceRoot policy when the agent runs, and the agent still
-/// needs the User's reader grant on the published root that covers it
-/// (`tools::surface::agents_tool_root_readers`). With no such root to
-/// take, the document is left as the pack wrote it.
-async fn default_host_tool_roots(
-    access: &ConfigAccess,
-    owner: &str,
-    installer: Option<&str>,
-    config: &mut PackConfig,
-) -> Result<()> {
+/// The Tools of `tools` that select host tools and name no root: the ones an
+/// install runs under its installer's root ([`installer_tool_root`]), by
+/// position.
+fn host_tools_without_root(tools: &[gents_documents::Tools]) -> Result<Vec<usize>> {
     let mut rootless = Vec::new();
-    for (index, tools) in config.tools.iter().enumerate() {
+    for (index, tools) in tools.iter().enumerate() {
         let unset = tools.host.as_ref().is_some_and(|host| {
             host.root
                 .as_deref()
@@ -780,10 +866,64 @@ async fn default_host_tool_roots(
             rootless.push(index);
         }
     }
-    if rootless.is_empty() {
+    Ok(rootless)
+}
+
+/// The Tools documents an install of the authored `tools` would run under
+/// its installer's root, by `tools_id`: what an install preview lists and
+/// an approval covers before anything is written.
+pub fn tools_taking_installer_root(tools: &[gents_documents::Tools]) -> Result<Vec<String>> {
+    Ok(host_tools_without_root(tools)?
+        .into_iter()
+        .map(|index| tools[index].tools_id.clone())
+        .collect())
+}
+
+/// Refuses an archive whose Tools author a literal `host.root`, as
+/// `pack export` refuses to write one: a pack cannot know a folder of the
+/// node it is installed on, so a literal names one its author chose, and the
+/// agent it ships would ask for the User's reader grant there. A root given
+/// only through an install variable is the installer's to set, is listed with
+/// the preview's install variables, and is never granted automatically.
+fn refuse_authored_host_roots(archive: &PackArchive) -> Result<()> {
+    let Some(path) = archive.manifest().config.as_deref() else {
         return Ok(());
-    }
-    let root = access
+    };
+    let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
+    let literal: Vec<String> = authored["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tools| {
+            let root = tools["host"]["root"].as_str()?.trim();
+            (!root.is_empty() && !root.contains("${")).then(|| {
+                format!(
+                    "Tools {} (host.root {root})",
+                    tools["tools_id"].as_str().unwrap_or("without a tools_id")
+                )
+            })
+        })
+        .collect();
+    anyhow::ensure!(
+        literal.is_empty(),
+        "pack {}/{} ships a host tool root, a path on the node it was written on, which a pack cannot carry: {}. Nothing was installed. Its author leaves host.root unset, so the Tools run under the installer's own root",
+        archive.manifest().metadata.namespace,
+        archive.manifest().name,
+        literal.join(", ")
+    );
+    Ok(())
+}
+
+/// The root an install supplies to pack Tools that select host tools without
+/// one: the tool root of the installing agent `installer`, or of the node's
+/// default agent when the node's User installs. `None` when that agent has no
+/// root.
+pub async fn installer_tool_root(
+    access: &ConfigAccess,
+    owner: &str,
+    installer: Option<&str>,
+) -> Result<Option<String>> {
+    access
         .transact_readonly("pack.default_tool_root", |txn| {
             Box::pin(async move {
                 let agent = match installer {
@@ -800,15 +940,47 @@ async fn default_host_tool_roots(
                     .filter(|root| !root.trim().is_empty()))
             })
         })
-        .await?;
-    if let Some(root) = root {
+        .await
+}
+
+/// A pack cannot name a folder on the node it will be installed on, so a pack
+/// Tools document that selects host tools without a root takes its
+/// installer's ([`installer_tool_root`]). The root is still admitted by the
+/// node's WorkspaceRoot policy when the agent runs, and the agent still needs
+/// the User's reader grant on the published root that covers it
+/// (`tools::surface::agents_tool_root_readers`), which an approved install
+/// makes for this root alone. With no such root to take, the document is left
+/// as the pack wrote it.
+///
+/// Returns the `tools_id` of each Tools it gave the root. This is the one
+/// place that knows a root was supplied rather than authored, so the fact is
+/// carried from here into the pack's installation record
+/// (`RecordedDocument::installer_root`) and the grant reads it there. A
+/// Tools whose root the pack names, by literal or variable, is never among
+/// them once that root renders to a path, including the installer's own. A
+/// root that renders empty (`${ROOT:-}` with no value) names nothing: the
+/// document is rootless as installed, takes the installer's root like one
+/// that authors none, and is among them.
+async fn default_host_tool_roots(
+    access: &ConfigAccess,
+    owner: &str,
+    installer: Option<&str>,
+    config: &mut PackConfig,
+) -> Result<Vec<String>> {
+    let rootless = host_tools_without_root(&config.tools)?;
+    if rootless.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut supplied = Vec::new();
+    if let Some(root) = installer_tool_root(access, owner, installer).await? {
         for index in rootless {
             if let Some(host) = config.tools[index].host.as_mut() {
                 host.root = Some(root.clone());
+                supplied.push(config.tools[index].tools_id.clone());
             }
         }
     }
-    Ok(())
+    Ok(supplied)
 }
 
 /// The installed root's live configuration, read before an upgrade so the
@@ -818,6 +990,8 @@ async fn default_host_tool_roots(
 pub(super) struct RootInstallVariables {
     snapshot: Option<super::InstalledDependencySnapshot>,
     variables: BTreeMap<String, Option<String>>,
+    /// The root pack's Tools this install gave its installer's root.
+    installer_root_tools: Vec<String>,
 }
 
 impl RootInstallVariables {
@@ -839,6 +1013,7 @@ impl RootInstallVariables {
         Self {
             snapshot: self.snapshot,
             variables,
+            installer_root_tools: self.installer_root_tools,
         }
     }
 }
@@ -860,6 +1035,7 @@ async fn root_install_variables(
     Ok(RootInstallVariables {
         snapshot,
         variables: BTreeMap::new(),
+        installer_root_tools: Vec::new(),
     })
 }
 
@@ -907,6 +1083,9 @@ pub(super) struct LoadedDependency {
     snapshot: Option<super::InstalledDependencySnapshot>,
     variables: BTreeMap<String, Option<String>>,
     reconfigure: bool,
+    /// The Tools this install gave its installer's root: none for an
+    /// installed dependency it keeps, whose record already says.
+    installer_root_tools: Vec<String>,
 }
 
 async fn load_dependency(
@@ -948,13 +1127,18 @@ async fn load_dependency(
             variables: snapshot.record.variables.clone(),
             snapshot: Some(snapshot.clone()),
             reconfigure: false,
+            installer_root_tools: Vec::new(),
         });
     }
+    let installer = bindings
+        .provisioner
+        .and_then(|context| context.selected_agent_did);
+    let environment = super::super::agent_bindings::without_agent_bindings(environment);
     let resolver = super::super::loader::DependencyVariableResolver::new(
         record.doc_id.is_some(),
         &record.variables,
         selected,
-        environment,
+        &environment,
     );
     let bound = super::super::agent_bindings::load_pack_install_config_with_dependencies(
         access,
@@ -971,8 +1155,13 @@ async fn load_dependency(
     let variables = resolver
         .finish()
         .with_context(|| format!("preparing dependency {coordinate}"))?;
-    let bound = bound?;
+    let mut bound = bound?;
+    // A dependency rendered from its archive is installed by this install,
+    // so its rootless host tools take the installer's root as the root's do.
+    let installer_root_tools =
+        default_host_tool_roots(access, owner, installer, &mut bound.config).await?;
     Ok(LoadedDependency {
+        installer_root_tools,
         bound,
         reconfigure: selected.is_some() && snapshot.is_some(),
         snapshot,
@@ -1160,6 +1349,7 @@ async fn prepare_document_pack_install_inner(
                 snapshot,
                 variables,
                 reconfigure,
+                installer_root_tools,
             } = loaded;
             let config = if snapshot.is_some() && !reconfigure {
                 bound.config
@@ -1211,6 +1401,7 @@ async fn prepare_document_pack_install_inner(
                 snapshot,
                 variables,
                 reconfigure,
+                installer_root_tools,
             }
         };
         dependency_inference.insert(archive.manifest().name.clone(), preview);
@@ -1300,6 +1491,7 @@ async fn prepare_document_pack_install_inner(
         sources: BTreeMap::new(),
         root_snapshot: root.snapshot,
         variables: root.variables,
+        installer_root_tools: root.installer_root_tools,
     })
 }
 
@@ -1699,6 +1891,7 @@ pub(super) fn document_graph_stages(
             variables: Some(dependency.variables.clone()),
             reconfigure: dependency.reconfigure,
             reuse_plugins: dependency.snapshot.is_some(),
+            installer_root_tools: dependency.installer_root_tools.clone(),
         });
     }
     let mut assets = BTreeMap::new();
@@ -1731,6 +1924,7 @@ pub(super) fn document_graph_stages(
         variables: Some(prepared.variables.clone()),
         reconfigure: prepared.root_snapshot.is_some(),
         reuse_plugins: false,
+        installer_root_tools: prepared.installer_root_tools.clone(),
     });
     Ok(stages)
 }
@@ -1751,6 +1945,7 @@ pub(super) struct DocumentPackStage {
     pub(super) variables: Option<BTreeMap<String, Option<String>>>,
     pub(super) reconfigure: bool,
     pub(super) reuse_plugins: bool,
+    pub(super) installer_root_tools: Vec<String>,
 }
 
 impl DocumentPackStage {
@@ -1760,6 +1955,7 @@ impl DocumentPackStage {
             snapshot: self.snapshot.clone(),
             variables: self.variables.clone(),
             reconfigure: self.reconfigure,
+            installer_root_tools: self.installer_root_tools.clone(),
         }
     }
 }
@@ -1773,6 +1969,9 @@ pub(super) struct StageRecord {
     snapshot: Option<super::InstalledDependencySnapshot>,
     variables: Option<BTreeMap<String, Option<String>>>,
     reconfigure: bool,
+    /// The stage's Tools this install gave its installer's root, which its
+    /// record marks.
+    installer_root_tools: Vec<String>,
 }
 
 /// The same document graph reconstructed by the host and the client.
@@ -2000,6 +2199,7 @@ pub(super) async fn apply_document_graph_in_txn(
                 record.source.as_ref(),
                 record.variables.as_ref(),
                 profile_policy,
+                &record.installer_root_tools,
             )
             .await?,
         );
@@ -2254,6 +2454,7 @@ pub async fn install_documents_with_plugins(
         variables: None,
         reconfigure: false,
         reuse_plugins: false,
+        installer_root_tools: Vec::new(),
     };
     let (mut reports, plugins) = install_document_graph(
         access,

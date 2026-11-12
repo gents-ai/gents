@@ -430,20 +430,52 @@ pub(crate) async fn wait_job(
     until: impl Fn(&JobView) -> bool,
     timeout: Duration,
 ) -> JobView {
+    wait_job_observation(h, tool_call_id, |view, _| until(view), timeout).await
+}
+
+/// Waits on the job row as its client sees it, with the `status` that carries
+/// the completion owner's side-effect progress offered to the predicate.
+pub(crate) async fn wait_job_observation(
+    h: &JobHarness,
+    tool_call_id: &str,
+    until: impl Fn(&JobView, &str) -> bool,
+    timeout: Duration,
+) -> JobView {
     let access = h.actors.fixture.access.clone();
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let last = load_job_view(&access, None, address(h, tool_call_id)).await;
-        match &last {
-            Ok(view) if until(view) => return last.unwrap(),
-            Ok(_) | Err(JobReadError::NotYetObservable | JobReadError::NotAJob) => {}
+        let report = format!("{last:?}");
+        match last {
+            Ok(view) => {
+                let status = row_status(&access, &view.row_doc_id).await;
+                if until(&view, &status) {
+                    return view;
+                }
+            }
+            Err(JobReadError::NotYetObservable | JobReadError::NotAJob) => {}
             Err(error) => panic!("job {tool_call_id} is unreadable: {error:?}"),
         }
         if tokio::time::Instant::now() >= deadline {
-            panic!("job {tool_call_id} did not reach the awaited state; last read: {last:?}");
+            panic!("job {tool_call_id} did not reach the awaited state; last read: {report}");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn row_status(access: &ConfigAccess, row_doc_id: &str) -> String {
+    let response = access
+        .clone()
+        .execute(&format!(
+            r#"{{ AgentToolCall(docID: "{}") {{ status }} }}"#,
+            gents_store::graphql::escape_graphql_string(row_doc_id),
+        ))
+        .await
+        .expect("read the job row status");
+    response["data"]["AgentToolCall"][0]["status"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

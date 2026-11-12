@@ -777,6 +777,21 @@ def wireTargetAllowed (localTarget preview remove : Bool) : Bool :=
 
 theorem graphql_wire_cannot_publish_pin : wireTargetAllowed false false false = false := by decide
 
+/-- A served wire request reaches the embedded writer only after operator authentication,
+and only while the owning runtime and its plugin home are available. -/
+def operatorWireAvailable (operatorAuthenticated runtimeReady homeAvailable : Bool) : Bool :=
+  operatorAuthenticated && runtimeReady && homeAvailable
+
+theorem anonymous_operator_wire_refused (runtimeReady homeAvailable : Bool) :
+    operatorWireAvailable false runtimeReady homeAvailable = false := by
+  simp [operatorWireAvailable]
+
+theorem operator_wire_needs_live_local_owner (operatorAuthenticated runtimeReady homeAvailable : Bool)
+    (h : operatorWireAvailable operatorAuthenticated runtimeReady homeAvailable = true) :
+    operatorAuthenticated = true ∧ runtimeReady = true ∧ homeAvailable = true := by
+  simp [operatorWireAvailable, Bool.and_eq_true] at h
+  exact ⟨h.1.1, h.1.2, h.2⟩
+
 /-- Untagged documents retain the existing adoption behavior. A tagged document
 can be written only by the same full pack coordinate; an old unqualified tag
 does not establish a publisher identity. -/

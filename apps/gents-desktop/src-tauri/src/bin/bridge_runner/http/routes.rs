@@ -184,6 +184,7 @@ pub(super) async fn handle_request(
                         request.grant_authority,
                         request.preview,
                         request.expect_digest,
+                        request.root_agents,
                     )
                     .await
                     .map_err(gents_pack::pack::PackChangeError::into_anyhow)

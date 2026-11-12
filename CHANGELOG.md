@@ -54,10 +54,13 @@ source consistency checks, not a separate runtime compatibility version.
   and the call that unwires it (`pack wire PACKAGE --remove`).
 - Breaking: a pack's agent slot no longer binds to an existing agent because
   their names match. It binds only when the installer names the agent's DID in
-  the install variable `GENTS_PACK_BIND_AGENT_<SLOT>` (`options.var` in the
-  config tool, the environment for `gents config pack install`); otherwise
-  the pack provisions its own agent. `pack export` returns the variables that
-  bind each slot to the agent it was exported from (`bind_agents`).
+  that install's own arguments: `--bind-agent SLOT=AGENT_DID` on
+  `gents config pack install`, or the install variable
+  `GENTS_PACK_BIND_AGENT_<SLOT>` in the config tool's `options.var`. The
+  process environment never binds a slot, and a dependency's same-named slot
+  does not inherit the binding; otherwise the pack provisions its own agent.
+  `pack export` returns both forms for the agents it was exported from
+  (`bind_agents`), and the install preview lists the bindings.
 - A Trigger can open one session per rendered key (`create_session`), and has
   a fire budget, `max_fires_per_hour` (default 1000): exhausting it disables
   the Trigger and records why in `last_status` and `last_error`.
@@ -83,12 +86,14 @@ source consistency checks, not a separate runtime compatibility version.
   from the home's pack store and then the registry (nothing is bundled).
   `gents/script` runs a short script over the Engineer's own tools (waiting,
   trying logic, bulk changes); approving it wires it with `tool_calls: true`,
-  and unapproved its scripts only compute and sleep. Init names them,
+  and unapproved it is wired without that until the Engineer's own Tools
+  turn it on. Init names them,
   asks per pack, with yes as the default, before granting the permissions
   its plugins request, wires
   plugins into the Engineer's Tools and attaches skills to its Context.
   Without a terminal, `--approve-default-packs` approves; otherwise a pack
-  that requests permissions is left uninstalled. `--no-default-packs` skips
+  that requests permissions, or whose agents would be granted the
+  Engineer's folder, is left uninstalled. `--no-default-packs` skips
   them. A pack that cannot be resolved or approved never fails init: it is
   listed under `default_packs.not_installed` with the command that installs
   it later: `gents config pack starter --approve <pack>`, which installs it
@@ -103,6 +108,12 @@ source consistency checks, not a separate runtime compatibility version.
   `truncate-collection` node permission. `config pack remove PACKAGE
   --with-collections` also removes the pack's collections that nothing else
   uses; the default still keeps them (#3572).
+- A `gents` invocation and the desktop app that first touch one home at the
+  same moment no longer fail with `persisting .../principal.json: No such
+  file or directory`. Client identity metadata is staged under a name no
+  other writer can pick and installed in one rename, so concurrent first-run
+  writers cannot consume each other's staging file and no reader observes
+  the metadata file missing (#3659).
 - Rendered request captures cut the stable request fields (model, tool
   schemas, settings) apart from the message list, and close shared manifest
   groups after four entries at every second content key instead of eight at
@@ -219,6 +230,10 @@ source consistency checks, not a separate runtime compatibility version.
   notice. Codex as a model provider, including `accounts login codex`, is
   unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
+- Stopping the native service waits for the runtime's own shutdown instead of
+  about a second, so a stop that succeeds no longer reports `native supervisor
+  did not confirm that the Gents job unloaded or became inactive`. Stop node in
+  the desktop stops showing that error on macOS (#3652).
 
 ## 1.0.0-rc1 - 2026-11-03
 

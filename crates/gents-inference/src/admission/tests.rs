@@ -1005,7 +1005,7 @@ async fn cancelling_queued_call_terminalizes_without_holding_slot() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    registry.drop_cleanup_idle().await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_reconstructed_slot_count(&rows, "backend-a", 0);
     assert_eq!(state_count_for_backend(&rows, "backend-a", "completed"), 1);
@@ -1242,7 +1242,7 @@ async fn dropped_permit_outcomes_match_lean_model() {
             .await
         })
         .await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        registry.drop_cleanup_idle().await;
         let rows = call_rows(&node, &registry.signer).await;
         assert_eq!(rows.len(), 1);
         if let Some(observed) = &case.input.observed {
@@ -1347,6 +1347,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
             node.clone(),
             pending_call(&node, "req-leak-a", "backend-queue-leak", &signer).await,
             "backend-queue-leak:connection",
+            gents_store::drop_cleanup::DropCleanup::current(),
             None,
             None,
         )
@@ -1358,6 +1359,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
             schemaless,
             pending_call(&node, "req-leak-b", "backend-queue-leak", &signer).await,
             "backend-queue-leak:connection",
+            gents_store::drop_cleanup::DropCleanup::current(),
             None,
             None,
         )
@@ -1381,6 +1383,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         node.clone(),
         pending_call(&node, "req-leak-c", "backend-queue-leak", &signer).await,
         "backend-queue-leak:connection",
+        gents_store::drop_cleanup::DropCleanup::current(),
         None,
         None,
     ));

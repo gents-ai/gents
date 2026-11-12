@@ -14,9 +14,13 @@ async fn archive(host: &ClientHost, node: &str, archived: bool, revision: &str) 
     }))
     .unwrap();
     assert!(!command.is_cancellable());
-    host.execute(command, CancellationToken::new())
-        .await
-        .unwrap()
+    host.execute(
+        command,
+        &crate::host::approvals::AttachmentApprovals::default(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap()
 }
 
 fn check_receipt(
@@ -136,7 +140,11 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     }))
     .unwrap();
     assert!(second
-        .execute(invalid, CancellationToken::new())
+        .execute(
+            invalid,
+            &crate::host::approvals::AttachmentApprovals::default(),
+            CancellationToken::new()
+        )
         .await
         .is_err());
     let history: protocol::ClientCommand = serde_json::from_value(json!({

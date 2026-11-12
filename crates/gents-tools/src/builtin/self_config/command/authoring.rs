@@ -9,6 +9,8 @@ use gents_pack::pack::authoring::{
 use gents_session::session::output_render::ordered;
 
 mod plugin_source;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use plugin_source::{RebuildTestPause, REBUILD_TEST_PAUSE};
 
 const PACK_PARTS: &str = "agent, task, trigger, schema, skill, plugin, page";
 
@@ -359,7 +361,8 @@ impl ConfigCommandTool {
             "agents": report.agents,
             "bind_agents": (!report.agents.is_empty()).then(|| json!({
                 "var": report.agents.iter().map(|(slot, agent)| format!("{}={agent}", node_packs::agent_binding_variable(slot))).collect::<Vec<_>>(),
-                "note": "Installing this pack makes a new agent for each slot. To install it on this node onto the agents it was exported from, pass these as options.var to pack preview install and pack install.",
+                "cli": report.agents.iter().map(|(slot, agent)| format!("--bind-agent {slot}={agent}")).collect::<Vec<_>>(),
+                "note": "Installing this pack makes a new agent for each slot. To install it on this node onto the agents it was exported from, pass var as options.var to pack preview install and pack install, or cli to gents config pack install. A binding is read only from the install it is given to: never from the environment, and not by a dependency's slot of the same name.",
             })),
             "inference_slots": report.inference_slots,
             "schemas": report.schemas,

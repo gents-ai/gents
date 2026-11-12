@@ -1,7 +1,6 @@
 pub mod accounts;
 #[cfg(feature = "tauri-host")]
 mod app_exit;
-#[cfg(feature = "tauri-host")]
 pub mod approvals_watch;
 pub mod cause_derivation;
 pub mod commands;

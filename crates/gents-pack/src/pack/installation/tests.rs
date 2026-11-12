@@ -1814,6 +1814,7 @@ fn prepared() -> PreparedDocumentPackInstall {
         sources: BTreeMap::new(),
         root_snapshot: None,
         variables: BTreeMap::new(),
+        installer_root_tools: Vec::new(),
     }
 }
 
@@ -3800,6 +3801,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         variables: None,
         reconfigure: false,
         reuse_plugins: false,
+        installer_root_tools: Vec::new(),
     };
     let initial = vec![
         stage(&dependency, "1", empty.clone(), Some(old_bytes), vec![]),
@@ -4586,4 +4588,93 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
     assert!(record.documents.contains_key("Tools/retained"));
     assert_eq!(record.plugins.len(), 1);
     Ok(())
+}
+
+/// A plugin pack's bytes go only after the node recorded the retirement: a
+/// retirement the node did not record keeps the bytes it still lists. The
+/// home record is gone by then, so a repeated removal has no pack to remove.
+#[tokio::test]
+async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    let (_dir, _, archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    let (record, plugins) = crate::pack::plugin_lifecycle::install(
+        home.path(),
+        &archive,
+        false,
+        None,
+        &BTreeMap::new(),
+        InstalledVia::Operator,
+        crate::pack::PackSource::Local { file_name: None },
+        |_, _| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    let digests: std::collections::BTreeSet<String> =
+        plugins.iter().map(|plugin| plugin.digest.clone()).collect();
+    let packs = crate::pack::node_packs::NodePacks {
+        access: &access,
+        node_did: OWNER,
+        home: Some(home.path()),
+        grants_authority: false,
+    };
+    // An actor that is not the node's cannot write its record.
+    let stranger =
+        identity::Did::new("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+    let coordinate = record.coordinate.clone();
+    let failed = packs
+        .remove_home_pack(
+            &coordinate,
+            record,
+            Some(stranger),
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await;
+    assert!(failed.is_err(), "the retirement was recorded");
+    assert_eq!(
+        crate::pack::read_home_install(home.path(), &coordinate).unwrap(),
+        None,
+        "the home record a repeated removal would need was kept"
+    );
+    assert_eq!(
+        crate::plugin::store::release_unreferenced_bytes(home.path(), &digests)
+            .unwrap()
+            .len(),
+        digests.len(),
+        "the bytes were still in the store after the failed retirement"
+    );
+}
+
+/// The installation record marks the Tools whose root its install supplied,
+/// omits the mark otherwise, and reads a record written before the mark
+/// existed as unmarked.
+#[test]
+fn a_recorded_document_carries_the_installer_root_mark_only_when_set() {
+    let plain = super::RecordedDocument {
+        collection: "Tools".to_owned(),
+        id: "own-root".to_owned(),
+        digest: "sha256:1".to_owned(),
+        created: true,
+        installer_root: false,
+    };
+    let written = serde_json::to_value(&plain).unwrap();
+    assert_eq!(
+        written,
+        json!({"collection": "Tools", "id": "own-root", "digest": "sha256:1", "created": true}),
+        "an unmarked document is written as records were before the mark"
+    );
+    assert_eq!(
+        serde_json::from_value::<super::RecordedDocument>(written).unwrap(),
+        plain
+    );
+    let marked = super::RecordedDocument {
+        installer_root: true,
+        ..plain
+    };
+    let written = serde_json::to_value(&marked).unwrap();
+    assert_eq!(written["installer_root"], true);
+    assert_eq!(
+        serde_json::from_value::<super::RecordedDocument>(written).unwrap(),
+        marked
+    );
 }

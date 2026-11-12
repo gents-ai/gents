@@ -188,6 +188,13 @@ fn export_all(dir: &Path) -> Result<(), String> {
     export_types!(
         crate::accounts::BackendAuthenticationView,
         ConfiguredActionView,
+        crate::host::settings::ConfigEditorEntry,
+        gents_desktop_core::client::ConfigEditorDocument,
+        crate::accounts::ProviderSignInRequest,
+        crate::host::permissions::WorkspacePermissionsRequest,
+        crate::host::permissions::WorkspacePermissionsSaveRequest,
+        crate::host::permissions::WorkspacePermissionsForgetCommandsRequest,
+        crate::host::permissions::WorkspacePermissionsState,
         RequestOutputView,
         gents_protocol::file_changes::ToolFileChanges,
         gents_protocol::file_inventory::FileInventoryObservation,

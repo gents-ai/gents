@@ -360,7 +360,12 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
         InstalledVia::Operator,
         false,
         None,
-        &|_| None,
+        // A binding given to this install names a slot of the root pack: the
+        // dependency's same-named slot does not inherit it, so this DID,
+        // which is no Agent of the node, is never looked up.
+        &|name| {
+            (name == agent_binding_variable("worker")).then(|| "did:key:not-an-agent".to_owned())
+        },
         Some(&provisioner),
         &Default::default(),
     )
@@ -453,4 +458,36 @@ fn workspace_callback_agent_slots_bind_writer_integrator_and_readers() {
     );
     let mut invalid = json!({"unknown":"gents:agent-slot:writer"});
     assert!(rewrite_references(&mut invalid, &bindings).is_err());
+}
+
+/// An agent binding is an argument of one install: the process environment
+/// never supplies it, while it still supplies an ordinary install variable.
+#[test]
+fn an_agent_binding_is_never_read_from_the_process_environment() {
+    let variable = agent_binding_variable("ambient-worker");
+    assert_eq!(variable, "GENTS_PACK_BIND_AGENT_AMBIENT_WORKER");
+    let _binding = gents_store::test_support::EnvVarGuard::set(
+        "GENTS_PACK_BIND_AGENT_AMBIENT_WORKER",
+        "did:key:ambient",
+    );
+    let _plain = gents_store::test_support::EnvVarGuard::set("GENTS_FIXTURE_INSTALL_PLAIN", "plain");
+    let value = |variables: &gents_protocol::operations::pack::PackVariables, name: &str| {
+        crate::operations::pack::install_value(
+            gents_protocol::operations::pack::PackActor::User,
+            variables,
+            name,
+        )
+    };
+    let none = Default::default();
+    assert_eq!(value(&none, &variable), None);
+    assert_eq!(
+        value(&none, "GENTS_FIXTURE_INSTALL_PLAIN").as_deref(),
+        Some("plain")
+    );
+    let given = crate::pack::install_flow::supplied_variables(
+        &[],
+        &["ambient-worker=did:key:given".to_owned()],
+    )
+    .unwrap();
+    assert_eq!(value(&given, &variable).as_deref(), Some("did:key:given"));
 }

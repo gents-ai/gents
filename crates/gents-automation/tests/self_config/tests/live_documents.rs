@@ -105,13 +105,20 @@ async fn a_fileless_agent_creates_edits_lints_disables_and_removes_a_page() {
 
     let lint = ok(&tools, json!({"argv":["page","lint"],"target_id":"notes"})).await;
     assert_eq!(lint["admitted"], true, "{lint}");
-    if gents_tools::ux_preview::renderer_available() {
+    // A build without a page renderer has nothing to preview, and says so
+    // instead of naming a call that would render nothing.
+    if lint["next_call"].is_null() {
+        assert!(
+            lint["note"]
+                .as_str()
+                .is_some_and(|note| note.contains("no page renderer")),
+            "{lint}"
+        );
+    } else {
         assert_eq!(
             lint["next_call"]["argv"],
             json!(["ux", "preview", "page/notes"])
         );
-    } else {
-        assert_eq!(lint["next_call"]["argv"], json!(null));
     }
     assert_eq!(
         ok(&tools, json!({"argv":["ux","lint","page/notes"]})).await["admitted"],
@@ -497,6 +504,37 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     let again = ok(&tools, json!({"argv":["plugin","build","probe"]})).await;
     assert_eq!(again["digest"], second["digest"], "{again}");
     assert_eq!(again["selections_moved"], Value::Null, "{again}");
+    // An interrupted request drops the call between a pin move and the
+    // install. The owned task still finishes both, so the pin names the
+    // build that is installed rather than one that never was.
+    write_artifact(br#"{"build":3}"#);
+    let pause = std::sync::Arc::new(gents_tools::builtin::self_config::command::RebuildTestPause {
+        moved: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        finished: tokio::sync::Notify::new(),
+    });
+    *gents_tools::builtin::self_config::command::REBUILD_TEST_PAUSE.lock().unwrap() = Some(pause.clone());
+    {
+        let interrupted = call(&tools, json!({"argv":["plugin","build","probe"]}));
+        tokio::pin!(interrupted);
+        tokio::select! {
+            outcome = &mut interrupted => panic!("the rebuild ended before its pin moved: {outcome:?}"),
+            () = pause.moved.notified() => {}
+        }
+    }
+    pause.release.notify_one();
+    pause.finished.notified().await;
+    *gents_tools::builtin::self_config::command::REBUILD_TEST_PAUSE.lock().unwrap() = None;
+    let after = ok(&tools, json!({"argv":["tools","get"]})).await;
+    let pinned = after["document"]["integrations"]["plugins"][0]["digest"].clone();
+    assert_ne!(pinned, second["digest"], "{after}");
+    let third = ok(&tools, json!({"argv":["plugin","build","probe"]})).await;
+    assert_eq!(
+        third["digest"], pinned,
+        "the moved pin names the installed build: {third}"
+    );
+    assert_eq!(third["selections_moved"], Value::Null, "{third}");
+    let second = third;
     // Deselecting the plugin is still a drop.
     let dropped = call(
         &tools,

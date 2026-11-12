@@ -79,10 +79,10 @@ fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) ->
             continue;
         }
         let entry = counts.entry(node_did).or_default();
+        // A request parked for its backend, or resuming from it, still holds
+        // its session's head: it is active work, not an idle node.
         match request.lifecycle_state {
-            Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing) => {
-                entry.0 += 1
-            }
+            Some(state) if state.is_unsettled_execution() => entry.0 += 1,
             Some(RequestLifecycleState::Pending) => entry.1 += 1,
             _ => {}
         }
@@ -113,5 +113,41 @@ fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) ->
     FleetSnapshot {
         generated_at: generated_at.to_rfc3339(),
         agents,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Every unsettled execution is active work: a node whose only request
+    /// is parked for its backend does not report zero.
+    #[test]
+    fn parked_and_resuming_requests_count_as_active() {
+        let request = |id: &str, node: &str, state: &str| json!({"request_id": id, "node_did": node, "lifecycle_state": state});
+        let readiness = |node: &str| json!({"node_did": node, "snapshot_json": "{}", "updated_at": "2026-11-11T00:00:00Z"});
+        let envelope = decode_fleet_response(json!({"data": {
+            "NodeReadiness": [readiness("did:key:parked"), readiness("did:key:busy")],
+            "AgentRequest": [
+                request("r1", "did:key:parked", "waitingForBackend"),
+                request("r2", "did:key:busy", "claimed"),
+                request("r3", "did:key:busy", "processing"),
+                request("r4", "did:key:busy", "resumingBackend"),
+                request("r5", "did:key:busy", "pending"),
+            ],
+        }}))
+        .unwrap();
+        let snapshot = build_fleet_snapshot(Utc::now(), envelope);
+        let counts: Vec<_> = snapshot
+            .agents
+            .iter()
+            .map(|agent| (agent.node_did.as_str(), agent.active, agent.pending))
+            .collect();
+        assert_eq!(
+            counts,
+            [("did:key:parked", 1, 0), ("did:key:busy", 3, 1)],
+            "{snapshot:?}"
+        );
     }
 }

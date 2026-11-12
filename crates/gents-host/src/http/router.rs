@@ -162,6 +162,12 @@ pub fn runtime_contract_router(
 
     let operator_routes = Router::new()
         .route("/packs/ux/watch", post(crate::http::pack_watch::watch))
+        .route(
+            "/packs/wire",
+            post(crate::http::pack_wire::wire_handler).layer(axum::extract::DefaultBodyLimit::max(
+                crate::http::pack_wire::MAX_BODY,
+            )),
+        )
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
         .route("/activation", get(activation_handler))

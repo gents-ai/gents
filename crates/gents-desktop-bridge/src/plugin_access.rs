@@ -4,7 +4,6 @@ use gents_tools::plugin::approval;
 use serde::Serialize;
 use ts_rs::TS;
 
-#[cfg(feature = "tauri-host")]
 use crate::error::{BridgeError, BridgeErrorCode};
 
 #[derive(Debug, Serialize, TS)]
@@ -82,7 +81,6 @@ impl From<&approval::Request> for PluginApprovalView {
     }
 }
 
-#[cfg(feature = "tauri-host")]
 pub(crate) fn answer(value: &str) -> Result<approval::Answer, BridgeError> {
     match value {
         "once" => Ok(approval::Answer::Once),

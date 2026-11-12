@@ -102,7 +102,7 @@ pub(super) fn agents(views: &[AgentView], ready: &[String]) -> Vec<Agent> {
         .collect()
 }
 
-fn agent_name(view: &AgentView) -> String {
+pub(super) fn agent_name(view: &AgentView) -> String {
     match clean(&view.display_name).trim() {
         "" => did_tail(&view.agent_did).to_string(),
         name => name.to_string(),
@@ -118,14 +118,13 @@ pub(super) fn subagent(child: &CausedSession, agents: &[AgentView]) -> Running {
     let agent = agents.iter().find(|view| view.agent_did == child.agent_did);
     let name = agent.map_or_else(|| did_tail(&child.agent_did).to_string(), agent_name);
     use gents_protocol::request_lifecycle::RequestLifecycleState as Request;
+    // A request parked on its backend resumes when the model answers again, so it has not ended.
     let (status, state) = match child.latest.lifecycle_state {
-        Some(
-            Request::WorkspaceBindingPending
-            | Request::Pending
-            | Request::Claimed
-            | Request::Processing,
-        ) => ("working", RunState::Working),
+        Some(Request::WaitingForBackend | Request::ResumingBackend) => {
+            ("waiting for its model", RunState::Working)
+        }
         Some(Request::Failed | Request::Dead) => ("error", RunState::Failed),
+        Some(state) if !state.is_terminal() => ("working", RunState::Working),
         _ => ("finished", RunState::Done),
     };
     Running {
@@ -725,10 +724,22 @@ mod tests {
         let named = [agent("did:key:z:researcher", "Researcher", true, false)];
         for (state, expected) in [
             ("pending", row("working", RunState::Working)),
+            ("workspaceBindingPending", row("working", RunState::Working)),
+            ("claimed", row("working", RunState::Working)),
             ("processing", row("working", RunState::Working)),
+            (
+                "waitingForBackend",
+                row("waiting for its model", RunState::Working),
+            ),
+            (
+                "resumingBackend",
+                row("waiting for its model", RunState::Working),
+            ),
             ("completed", row("finished", RunState::Done)),
             ("interrupted", row("finished", RunState::Done)),
+            ("superseded", row("finished", RunState::Done)),
             ("failed", row("error", RunState::Failed)),
+            ("dead", row("error", RunState::Failed)),
         ] {
             assert_eq!(subagent(&child(state), &named), expected, "{state}");
         }

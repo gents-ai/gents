@@ -141,6 +141,12 @@ pub struct PackInstallRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub expect_digest: Option<String>,
+    /// The folder access the review showed, as `PACK=AGENT` for each of its
+    /// rows: an allowed install lets only these agents into the folder. An
+    /// install from a review always sends it, empty when none was shown.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub root_agents: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -160,6 +166,7 @@ pub async fn desktop_pack_install(
                 request.grant_authority,
                 request.preview,
                 request.expect_digest,
+                request.root_agents,
             )
             .map_err(PackChangeError::into_anyhow)
         })
@@ -434,6 +441,45 @@ mod tests {
         assert_eq!(view.collections, Some(None));
         assert_eq!(view.authority.as_ref().map(Vec::len), Some(1));
         assert_eq!(serde_json::to_value(view).unwrap(), report);
+    }
+
+    /// A preview's folder access reaches the review typed, so the consent
+    /// can name it; an install's per-agent steps pass through as reported.
+    #[test]
+    fn preview_reports_carry_the_folder_its_agents_would_read() {
+        use crate::types::PackHostToolRootsView;
+        let report = serde_json::json!({
+            "pack":"hands", "digest":"sha256:digest", "source":"local", "would_write": false,
+            "host_tool_roots": {
+                "tools": ["hands-tools"], "agents": ["Hands worker"],
+                "rows": [{"pack": "acme/hands", "agent": "hands-worker",
+                    "name": "Hands worker", "tools": "hands-tools"}],
+                "root": "/home/me/work", "reader_on": "/home/me",
+                "granted_with": "--grant-authority",
+            },
+        });
+        let view: PackInstallView = serde_json::from_value(report.clone()).unwrap();
+        let Some(PackHostToolRootsView::Review(review)) = &view.host_tool_roots else {
+            panic!("the preview's folder access was not typed: {view:?}")
+        };
+        assert_eq!(review.agents, ["Hands worker"]);
+        assert_eq!(review.rows[0].pack, "acme/hands");
+        assert_eq!(review.rows[0].agent, "hands-worker");
+        assert_eq!(review.reader_on.as_deref(), Some("/home/me"));
+        assert_eq!(serde_json::to_value(view).unwrap(), report);
+
+        let installed = serde_json::json!({
+            "pack":"hands", "digest":"sha256:digest", "source":"local",
+            "host_tool_roots": [
+                {"agent": "did:key:worker", "root": "/home/me/work", "reader_on": "/home/me"},
+            ],
+        });
+        let view: PackInstallView = serde_json::from_value(installed.clone()).unwrap();
+        assert!(matches!(
+            view.host_tool_roots,
+            Some(PackHostToolRootsView::Steps(_))
+        ));
+        assert_eq!(serde_json::to_value(view).unwrap(), installed);
     }
 
     #[test]

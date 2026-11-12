@@ -182,6 +182,11 @@ async fn resolved_identity_permission_cases_drive_defra_acp() -> anyhow::Result<
 }
 
 #[test]
+fn pack_operator_wire_contract_cases_parse_through_typed_snapshot() {
+    assert!(!lean_contract_snapshot().pack_operator_wire_cases.is_empty());
+}
+
+#[test]
 fn generated_root_admission_case_inventory_is_complete() {
     let cases = &crate::lean_contract_snapshot().root_admission_cases;
     assert!(!cases.is_empty());
