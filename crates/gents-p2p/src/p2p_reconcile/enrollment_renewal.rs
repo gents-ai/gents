@@ -187,15 +187,13 @@ mod tests {
     #[test]
     fn generated_intent_cases_match_current_generation_projection() {
         use chrono::{SecondsFormat, TimeZone};
-        let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_renewal_intent_cases;
         let timestamp = |seconds: i64| {
             Utc.timestamp_opt(1_800_000_000 + seconds, 0)
                 .single()
                 .unwrap()
                 .to_rfc3339_opts(SecondsFormat::Secs, true)
         };
-        let mut checked = 0;
-        for case in cases {
+        gents_lean_vocab::families::enrollment_auto_renewal_intent_projection::replay(|case| {
             let current = &case.current;
             let input = &case.intent;
             let model_now = case.now as i64;
@@ -236,33 +234,25 @@ mod tests {
                 nonce: "generated".into(),
                 member_sig: vec![1; 64],
             };
-            assert_eq!(
-                state.current_for_renewal_intent(&intent, now).is_ok(),
-                case.projection_allowed,
-                "{}",
-                case.name
-            );
-            checked += 1;
-        }
-        assert_eq!(checked, cases.len());
+            gents_lean_vocab::families::enrollment_auto_renewal_intent_projection::IntentProjection {
+                projection_allowed: state.current_for_renewal_intent(&intent, now).is_ok(),
+            }
+        });
     }
 
     #[test]
     fn generated_approval_cases_match_renewal_projection() {
         use chrono::{SecondsFormat, TimeZone};
-        let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_auto_renewal_cases;
         let timestamp = |seconds: i64| {
             Utc.timestamp_opt(1_800_000_000 + seconds, 0)
                 .single()
                 .unwrap()
                 .to_rfc3339_opts(SecondsFormat::Secs, true)
         };
-        let mut checked = 0;
-        for case in cases {
+        gents_lean_vocab::families::enrollment_auto_renewal_approval::replay(|case| {
             let current = &case.current;
             let proposed = &case.proposal;
             let limit = current.renewal_limit;
-            let selected = limit.unwrap_or(current.lease_seconds);
             let model_now = case.now as i64;
             let now_seconds = model_now * 30;
             let now = Utc
@@ -321,18 +311,14 @@ mod tests {
                 limit.map(|n| n * 86_400),
                 now,
             );
-            assert_eq!(
-                actual.is_ok(),
-                case.projection_allowed,
-                "{}",
-                case.name
-            );
-            if let Ok(lease) = actual {
-                assert_eq!(lease.as_secs(), selected * 86_400);
+            gents_lean_vocab::families::enrollment_auto_renewal_approval::Approval {
+                projection_allowed: actual.is_ok(),
+                lease: actual.ok().map(|lease| {
+                    assert_eq!(lease.as_secs() % 86_400, 0, "{}", case.name);
+                    lease.as_secs() / 86_400
+                }),
             }
-            checked += 1;
-        }
-        assert_eq!(checked, cases.len());
+        });
     }
 
     #[test]

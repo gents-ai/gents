@@ -677,6 +677,11 @@ def caseCoverage : List CoverageEntry :=
       "enrollment_cases"
       "EnrollmentCases")
       "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "enrollment_auto_renewal_offer_unreached"
+      "model-production-gap: issue_renewal_offer is reached only through a served two-node offer exchange holding one enabled current generation; conflicted, revoked or expired generations, transport mismatch and re-signed intents with another scope or window are not built per case. enrollment_auto_renewal_intent_projection replays their generation and window checks.")
+      "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "enrollment_encoding_cases"
       "EnrollmentEncodingCases")

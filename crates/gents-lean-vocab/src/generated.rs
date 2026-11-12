@@ -3149,8 +3149,6 @@ pub struct LeanContractSnapshot {
     pub enrollment_startup_cases: Vec<LeanEnrollmentStartupCase>,
     pub enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
-    pub enrollment_auto_renewal_cases: Vec<LeanEnrollmentAutoRenewalCase>,
-    pub enrollment_renewal_intent_cases: Vec<LeanEnrollmentRenewalIntentCase>,
     pub agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub causal_hop_cap_observation_cases: Vec<LeanCapObservationCase>,
@@ -3703,51 +3701,6 @@ pub struct LeanEnrollmentAbsentPeerCase {
     pub managed: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentAutoRenewalCase {
-    pub allowed: bool,
-    pub current: LeanEnrollmentAutoRenewalCaseCurrent,
-    pub name: String,
-    pub now: u64,
-    pub projection_allowed: bool,
-    pub proposal: LeanEnrollmentAutoRenewalCaseProposal,
-    pub protocol_max: u64,
-    pub window: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentAutoRenewalCaseCurrent {
-    pub authority_conflict: bool,
-    pub enabled: bool,
-    pub expires_at: u64,
-    pub lease_seconds: u64,
-    pub member: String,
-    pub network: String,
-    pub next_sequence: u64,
-    pub owner: String,
-    pub peer: String,
-    pub profile: String,
-    pub renewal_limit: Option<u64>,
-    pub revoked: bool,
-    pub sequence: u64,
-    pub verified: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentAutoRenewalCaseProposal {
-    pub member: String,
-    pub member_signed: bool,
-    pub network: String,
-    pub offer_fresh: bool,
-    pub owner: String,
-    pub peer: String,
-    pub predecessor_sequence: u64,
-    pub profile: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanEnrollmentCase {
     pub name: String,
@@ -3819,47 +3772,6 @@ pub struct LeanEnrollmentPendingRequestCaseRequested {
     pub owner_node: String,
     pub profile: String,
     pub server_peer: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentRenewalIntentCase {
-    pub allowed: bool,
-    pub current: LeanEnrollmentRenewalIntentCaseCurrent,
-    pub intent: LeanEnrollmentRenewalIntentCaseIntent,
-    pub max_validity: u64,
-    pub name: String,
-    pub now: u64,
-    pub projection_allowed: bool,
-    pub window: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentRenewalIntentCaseCurrent {
-    pub conflict: bool,
-    pub enabled: bool,
-    pub expires_at: u64,
-    pub member: String,
-    pub network: String,
-    pub next_sequence: u64,
-    pub peer: String,
-    pub revoked: bool,
-    pub sequence: u64,
-    pub verified: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentRenewalIntentCaseIntent {
-    pub expires_at: u64,
-    pub issued_at: u64,
-    pub member: String,
-    pub member_signed: bool,
-    pub network: String,
-    pub peer: String,
-    pub predecessor_sequence: u64,
-    pub transport_authenticated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
