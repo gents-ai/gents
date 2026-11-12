@@ -679,8 +679,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"client_telemetry_cases\":" ++ Conformance.ClientTelemetry.casesJson ++ ","
-    ++ "\"inference_observation_cases\":"
-      ++ Conformance.InferenceObservation.casesJson ++ ","
     ++ "\"inference_visibility_cases\":"
       ++ Conformance.InferenceObservation.visibilityCasesJson ++ ","
     ++ "\"inference_route_cases\":"

@@ -188,19 +188,6 @@ mod tests {
     }
 
     #[test]
-    fn initial_observation_matches_modeled_awaiting_provider() {
-        let registry = InferenceObservationRegistry::default();
-        let _guard = registry.begin(key()).unwrap();
-        let snapshot = registry.snapshot(&key()).unwrap();
-        let expected = &gents_lean_vocab::lean_contract_snapshot().inference_observation_cases[0]
-            .expected[0];
-        assert_eq!(
-            serde_json::to_value(snapshot.activity).unwrap(),
-            serde_json::to_value(expected).unwrap()
-        );
-    }
-
-    #[test]
     fn retry_and_turn_observations_are_fenced_and_removed_on_drop() {
         let registry = InferenceObservationRegistry::default();
         let guard = registry.begin(key()).unwrap();

@@ -29,16 +29,8 @@ pub fn lean_auxiliary_output_cases() -> &'static [LeanAuxiliaryOutputCase] {
     &lean_contract_snapshot().auxiliary_output_cases
 }
 
-pub fn lean_backend_health_admission_cases() -> &'static [LeanBackendHealthAdmissionCase] {
-    &lean_contract_snapshot().backend_health_admission_cases
-}
-
 pub fn lean_backend_health_cases() -> &'static [LeanBackendHealthCase] {
     &lean_contract_snapshot().backend_health_cases
-}
-
-pub fn lean_backend_probe_schedule_cases() -> &'static [LeanBackendProbeScheduleCase] {
-    &lean_contract_snapshot().backend_probe_schedule_cases
 }
 
 pub fn lean_budget_rehydration_cases() -> &'static [LeanBudgetRehydrationCase] {
@@ -83,10 +75,6 @@ pub fn lean_canonical_worker_capacity_cases() -> &'static [LeanWorkerCapacityCas
 
 pub fn lean_capture_order_cases() -> &'static [LeanCaptureOrderCase] {
     &lean_contract_snapshot().capture_order_cases
-}
-
-pub fn lean_capture_scope_cases() -> &'static [LeanCaptureScopeCase] {
-    &lean_contract_snapshot().capture_scope_cases
 }
 
 pub fn lean_client_agent_readiness_cases() -> &'static [LeanClientAgentReadinessCase] {
@@ -251,10 +239,6 @@ pub fn lean_identity_household_cases() -> &'static [LeanIdentityHouseholdCase] {
 
 pub fn lean_identity_permission_cases() -> &'static [LeanIdentityPermissionCase] {
     &lean_contract_snapshot().identity_permission_cases
-}
-
-pub fn lean_inference_slot_accounting_cases() -> &'static [LeanInferenceSlotAccountingCase] {
-    &lean_contract_snapshot().inference_slot_accounting_cases
 }
 
 pub fn lean_interrupt_disposition_cases() -> &'static [LeanInterruptDispositionCase] {
@@ -793,22 +777,6 @@ pub struct LeanAgentActor {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanAgentBaselineCase {
-    pub name: String,
-    pub actor: String,
-    pub steps: Vec<LeanAgentBaselineStep>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAgentBaselineStep {
-    pub action: String,
-    pub committed: bool,
-    pub installed: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanAgentBlockSigningCase {
     pub name: String,
     pub managed: bool,
@@ -1206,17 +1174,6 @@ pub struct LeanBackendGenerationMarkCase {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBackendHealthAdmissionCase {
-    pub name: String,
-    pub enabled: bool,
-    pub probe_status: String,
-    pub expected_available: bool,
-    pub admission_decision: String,
-    pub observed_document_only: bool,
-    pub external_endpoint_freshness_claimed: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanBackendHealthCase {
     pub name: String,
     pub start_state: String,
@@ -1242,23 +1199,6 @@ pub struct LeanBackendParkedFinalizeCase {
     pub request: gents_protocol::request_lifecycle::RequestLifecycleState,
     pub outcome: gents_protocol::request_lifecycle::RequestLifecycleState,
     pub allowed: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendProbeConfiguration {
-    pub backend_id: u32,
-    pub revision: u32,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendProbeScheduleCase {
-    pub name: String,
-    pub known: Vec<LeanBackendProbeConfiguration>,
-    pub current: Vec<LeanBackendProbeConfiguration>,
-    pub periodic: bool,
-    pub due: Vec<u32>,
-    pub observed: Vec<LeanBackendProbeConfiguration>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1948,14 +1888,6 @@ pub struct LeanCaptureOrderCase {
     pub left_before_right: bool,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanCaptureScopeCase {
-    pub label: String,
-    pub kind: String,
-    pub seq: u64,
-    pub valid: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanCasePairs {
     pub pairs: u64,
@@ -2475,37 +2407,6 @@ pub struct LeanClientLiveDeltaCase {
     pub base: Option<u64>,
     pub current: Option<u64>,
     pub terminal: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -3035,14 +2936,11 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
-    pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
     pub identity_publication_cases: Vec<LeanIdentityPublicationCase>,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub identity_delegation_cases: Vec<LeanDelegationCase>,
-    pub identity_agent_baseline_cases: Vec<LeanAgentBaselineCase>,
     pub identity_agent_creator_cases: Vec<serde_json::Value>,
     pub identity_agent_block_signing_cases: Vec<LeanAgentBlockSigningCase>,
     pub identity_private_journal_policy: LeanPrivateJournalPolicy,
@@ -3207,7 +3105,6 @@ pub struct LeanContractSnapshot {
     pub title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
     pub title_text_cases: LeanTitleTextCases,
     pub title_usage_cases: Vec<LeanTitleUsageCase>,
-    pub provider_usage_cases: Vec<serde_json::Value>,
     pub title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub frontend_client_shell_case_count: usize,
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
@@ -3255,11 +3152,8 @@ pub struct LeanContractSnapshot {
     pub sibling_tools_cases: Vec<LeanSiblingToolsCase>,
     pub self_config_selection_cases: LeanSelfConfigSelectionCases,
     pub session_recovery_cases: Vec<LeanSessionRecoveryCase>,
-    pub inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
-    pub fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
     pub persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
     pub storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
-    pub backend_health_admission_cases: Vec<LeanBackendHealthAdmissionCase>,
     pub native_filesystem_boundary_cases: Vec<LeanNativeFilesystemBoundaryCase>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
     pub pairing_reconcile_shutdown_boundary_cases: Vec<
@@ -3286,7 +3180,6 @@ pub struct LeanContractSnapshot {
     pub backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
     pub mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub backend_health_cases: Vec<LeanBackendHealthCase>,
-    pub backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
     pub boundaries: Vec<LeanBoundary>,
     pub deviations: Vec<LeanDeviation>,
     pub command_policy_cases: Vec<LeanCommandPolicyCase>,
@@ -3397,7 +3290,6 @@ pub struct LeanContractSnapshot {
     pub rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     pub auxiliary_session_child_binding_cases: Vec<LeanAuxiliarySessionChildBindingCase>,
     pub client_request_publication_cases: Vec<serde_json::Value>,
-    pub capture_scope_cases: Vec<LeanCaptureScopeCase>,
     pub capture_order_cases: Vec<LeanCaptureOrderCase>,
     pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
     pub task_hook_admission_cases: Vec<LeanTaskHookAdmissionCase>,
@@ -4180,26 +4072,6 @@ pub struct LeanFileReviewRouteCase {
 pub struct LeanFileReviewSubscriptionCase {
     pub collection: String,
     pub replicated: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanFleetSlotAccountingCase {
-    pub name: String,
-    pub property: String,
-    pub backend_id: String,
-    pub request_state: String,
-    pub admission_state: String,
-    pub contribution: usize,
-    pub expected_contribution: usize,
-    pub active_count: usize,
-    pub scheduler_running: usize,
-    pub slot_count: usize,
-    pub row_states: Vec<String>,
-    pub row_backend_ids: Vec<String>,
-    pub reconstructed_running_count: usize,
-    pub max_concurrent: usize,
-    pub bounded_by_max_concurrent: bool,
-    pub aggregate_reconstructed_not_persisted: bool,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -6588,80 +6460,12 @@ pub enum LeanIdentitySubject {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanInferenceObservationCase {
-    pub actions: Vec<LeanInferenceObservationCaseActionsItem>,
-    pub expected: Vec<Option<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInferenceObservationCaseActionsItem {
-    pub epoch: Option<u64>,
-    pub kind: String,
-    pub max_age: Option<u64>,
-    pub now: Option<u64>,
-    pub observation: Option<LeanInferenceObservationCaseActionsItemObservation>,
-    pub target: Option<LeanInferenceObservationCaseActionsItemTarget>,
-    pub terminal: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInferenceObservationCaseActionsItemObservation {
-    pub activity: String,
-    pub attempt: u64,
-    pub observed_at: u64,
-    pub sequence: u64,
-    pub target: LeanInferenceObservationCaseActionsItemObservationTarget,
-    pub turn: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInferenceObservationCaseActionsItemObservationTarget {
-    pub generation: String,
-    pub node: String,
-    pub request: String,
-    pub session: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInferenceObservationCaseActionsItemTarget {
-    pub generation: String,
-    pub node: String,
-    pub request: String,
-    pub session: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanInferenceRouteCase {
     pub active: bool,
     pub expected: String,
     pub holds_node_read: bool,
     pub requests: u64,
     pub sessions: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanInferenceSlotAccountingCase {
-    pub name: String,
-    pub property: String,
-    pub backend_id: String,
-    pub pre_state: String,
-    pub post_state: String,
-    pub contribution: usize,
-    pub expected_contribution: usize,
-    pub pre_contribution: usize,
-    pub post_contribution: usize,
-    pub released_slot: bool,
-    pub permit_drop_terminalization: bool,
-    pub row_states: Vec<String>,
-    pub row_backend_ids: Vec<String>,
-    pub reconstructed_running_count: usize,
-    pub max_concurrent: usize,
-    pub bounded_by_max_concurrent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

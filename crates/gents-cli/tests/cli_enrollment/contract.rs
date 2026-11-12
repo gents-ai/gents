@@ -1135,8 +1135,7 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         let operator_response = call(&operator, key.clone()).await?;
         anyhow::ensure!(operator_response.status().is_success(),
             "runtime operator could not observe enrolled request activity: {}", operator_response.status());
-        let cases = &gents_lean_vocab::lean_contract_snapshot().inference_observation_cases;
-        let expected_waiting = cases[1].expected[0].as_deref();
+        let expected_waiting = Some("waiting");
         timeout(Duration::from_secs(7), async {
             loop {
                 let response = call(owner.node_identity(), key.clone()).await?;
