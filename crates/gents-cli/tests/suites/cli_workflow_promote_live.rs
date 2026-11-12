@@ -99,21 +99,6 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
     )?;
     write_json_file(&evidence.join("install.json"), &install)?;
 
-    let port = allocate_port()?;
-    let graphql = graphql_url(port);
-    let (serve, readiness) = crate::support::process::spawn_server_with_ready_json(
-        &home_dir,
-        port,
-        &["--home", home],
-        &[("RUST_LOG", "warn")],
-    )?;
-    artifacts.attach_server(serve);
-    anyhow::ensure!(
-        readiness.get("status").and_then(Value::as_str) == Some("serving"),
-        "server did not become ready: {readiness}"
-    );
-    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-
     let wire = run_cli_text(
         &home_dir,
         &[
@@ -132,8 +117,8 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
         ],
     )?;
     fs::write(evidence.join("wire.txt"), &wire)?;
-    allow_dynamic_runs(&home_dir, &graphql, &tools_id, &evidence)?;
-    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
+    allow_dynamic_runs(&home_dir, &tools_id, &evidence)?;
+    let graphql = start_runtime(artifacts, &home_dir, &node_did).await?;
 
     let script = serde_json::to_string(PONG_SCRIPT)?;
     let first_session = Uuid::new_v4().to_string();
@@ -157,6 +142,19 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
         dynamic.result
     );
 
+    let server = artifacts.take_server().context("runtime was not started")?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || {
+            let output = server.captured_output();
+            drop(server);
+            output
+        }),
+    )
+    .await
+    .context("runtime did not stop before promotion")???;
+    fs::write(evidence.join("dynamic-runtime.stdout"), output.0)?;
+    fs::write(evidence.join("dynamic-runtime.stderr"), output.1)?;
     let promote = run_cli_json(
         &home_dir,
         &[
@@ -168,8 +166,6 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
             "pong_flow",
             "--home",
             home,
-            "--graphql",
-            &graphql,
             "--output",
             "json",
         ],
@@ -181,7 +177,7 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
         record.pointer("/declaration/job").and_then(Value::as_bool) == Some(true),
         "the installed pong_flow record does not declare a job: {record}"
     );
-    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
+    let graphql = start_runtime(artifacts, &home_dir, &node_did).await?;
 
     let second_session = Uuid::new_v4().to_string();
     let reply = chat(
@@ -209,29 +205,36 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
     Ok(())
 }
 
+async fn start_runtime(
+    artifacts: &mut FailureArtifacts,
+    home: &Path,
+    node_did: &str,
+) -> Result<String> {
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let home = home.to_owned();
+    let (serve, readiness) = tokio::task::spawn_blocking(move || {
+        let home_arg = home.to_str().context("home path is not UTF-8")?;
+        spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[("RUST_LOG", "warn")])
+    })
+    .await??;
+    artifacts.attach_server(serve);
+    anyhow::ensure!(
+        readiness["status"] == "serving",
+        "server did not become ready: {readiness}"
+    );
+    wait_for_runtime_ready(&graphql, node_did, Duration::from_secs(30)).await?;
+    Ok(graphql)
+}
+
 /// The dynamic_workflows pack ships `policy.dynamic = "check"`, which refuses
 /// every dynamic spawn; this run needs `run`.
-fn allow_dynamic_runs(
-    home_dir: &Path,
-    graphql: &str,
-    tools_id: &str,
-    evidence: &Path,
-) -> Result<()> {
+fn allow_dynamic_runs(home_dir: &Path, tools_id: &str, evidence: &Path) -> Result<()> {
     let home = home_dir.to_str().context("home path is not UTF-8")?;
     let mut tools = run_cli_json(
         home_dir,
         &[
-            "config",
-            "tools",
-            "show",
-            "--id",
-            tools_id,
-            "--graphql",
-            graphql,
-            "--home",
-            home,
-            "--output",
-            "json",
+            "config", "tools", "show", "--id", tools_id, "--home", home, "--output", "json",
         ],
     )?;
     let object = tools
@@ -261,8 +264,6 @@ fn allow_dynamic_runs(
             "set",
             "--file",
             file.to_str().context("tools file path is not UTF-8")?,
-            "--graphql",
-            graphql,
             "--home",
             home,
         ],
