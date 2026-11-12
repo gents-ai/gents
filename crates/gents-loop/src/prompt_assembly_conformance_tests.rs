@@ -376,3 +376,50 @@ fn generated_mode_sanitize_cases_bind_composed_provider_view() {
         }
     });
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct FlatItem {
+    kind: String,
+    bytes: Vec<u64>,
+}
+
+fn native_flat_items(items: &[FlatItem]) -> Vec<crate::provider_input::replay_frontier::FlatItem> {
+    use crate::provider_input::replay_frontier::FlatItem as Native;
+    items
+        .iter()
+        .map(|item| {
+            let bytes = item
+                .bytes
+                .iter()
+                .map(|byte| u8::try_from(*byte).expect("modeled byte"))
+                .collect();
+            match item.kind.as_str() {
+                "ordinary" => Native::Ordinary(bytes),
+                "reasoning" => Native::Reasoning(bytes),
+                other => panic!("unmodeled flat item kind {other}"),
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn generated_replay_prefix_cases_bind_acceptance_checks() {
+    use crate::provider_input::replay_frontier::{anchored, drop_leading_reasoning, ords};
+    gents_lean_vocab::families::contracts_prompt_assembly_replay_prefix::replay::<String>(|case| {
+        let captured = native_flat_items(&recode::<_, Vec<FlatItem>>(&case.captured));
+        let current = native_flat_items(&recode::<_, Vec<FlatItem>>(&case.current));
+        let captured_anchored = anchored(&captured);
+        let current_anchored = anchored(&current);
+        gents_lean_vocab::families::contracts_prompt_assembly_replay_prefix::ReplayPrefixOutput {
+            ordinary_equal: ords(&current) == ords(&captured),
+            reasoning_suffix: captured_anchored.ends_with(&current_anchored),
+            leading_removal: current
+                == drop_leading_reasoning(
+                    captured_anchored
+                        .len()
+                        .saturating_sub(current_anchored.len()),
+                    &captured,
+                ),
+        }
+    });
+}

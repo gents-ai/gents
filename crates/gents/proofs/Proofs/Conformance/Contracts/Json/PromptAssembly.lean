@@ -730,17 +730,49 @@ def promptAssemblyReplayShapeCaseJson (witness : PromptAssemblyReplayShapeCase) 
 def promptAssemblyReplayShapeCasesJson : String :=
   jsonArray (promptAssemblyReplayShapeCases.map promptAssemblyReplayShapeCaseJson)
 
-def promptAssemblyReplayPrefixCaseJson
-    (witness : PromptAssemblyReplayPrefixCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"captured\":" ++ replayFlatItemsJson witness.captured ++
-    ",\"current\":" ++ replayFlatItemsJson witness.current ++
-    ",\"ordinary_equal\":" ++ (if witness.ordinaryEqual then "true" else "false") ++
-    ",\"reasoning_suffix\":" ++ (if witness.reasoningSuffix then "true" else "false") ++
-    ",\"leading_removal\":" ++ (if witness.leadingRemoval then "true" else "false") ++ "}"
+inductive ReplayFlatKind where
+  | ordinary
+  | reasoning
+  deriving Lean.ToJson
 
-def promptAssemblyReplayPrefixCasesJson : String :=
-  jsonArray (promptAssemblyReplayPrefixCases.map promptAssemblyReplayPrefixCaseJson)
+structure ReplayFlatItemWire where
+  kind : ReplayFlatKind
+  bytes : List Nat
+  deriving Lean.ToJson
+
+def ReplayFlatItemWire.ofModel : PromptAssembly.ClaudeMap.ReplayFlatItem → ReplayFlatItemWire
+  | .ordinary bytes => { kind := .ordinary, bytes := bytes.map UInt8.toNat }
+  | .reasoning bytes => { kind := .reasoning, bytes := bytes.map UInt8.toNat }
+
+def ReplayFlatItemWire.toModel (item : ReplayFlatItemWire) : PromptAssembly.ClaudeMap.ReplayFlatItem :=
+  match item.kind with
+  | .ordinary => .ordinary (item.bytes.map Nat.toUInt8)
+  | .reasoning => .reasoning (item.bytes.map Nat.toUInt8)
+
+structure ReplayPrefixInput where
+  name : String
+  captured : List ReplayFlatItemWire
+  current : List ReplayFlatItemWire
+  deriving Lean.ToJson
+
+structure ReplayPrefixOutput where
+  ordinaryEqual : Bool
+  reasoningSuffix : Bool
+  leadingRemoval : Bool
+  deriving Lean.ToJson
+
+/-- The three acceptance checks a captured replay prefix passes against the
+current flattened request: production `ords`, `anchored` and
+`drop_leading_reasoning`. -/
+@[conformance_family]
+def promptAssemblyReplayPrefix : Family ReplayPrefixInput ReplayPrefixOutput where
+  inputs := promptAssemblyReplayPrefixCases.map fun c =>
+    { name := c.name, captured := c.captured.map .ofModel, current := c.current.map .ofModel }
+  model := fun i =>
+    let row := replayPrefixCase i.name (i.captured.map (·.toModel)) (i.current.map (·.toModel))
+    { ordinaryEqual := row.ordinaryEqual
+      reasoningSuffix := row.reasoningSuffix
+      leadingRemoval := row.leadingRemoval }
 
 def protectedReplayCompactionCaseJson
     (witness : Compaction.ProtectedReplayCompactionCase) : String :=

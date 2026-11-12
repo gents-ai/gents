@@ -481,10 +481,6 @@ pub fn lean_prompt_assembly_repair_cases() -> &'static [LeanPromptAssemblyRepair
     &lean_contract_snapshot().prompt_assembly_repair_cases
 }
 
-pub fn lean_prompt_assembly_replay_prefix_cases() -> &'static [LeanPromptAssemblyReplayPrefixCase] {
-    &lean_contract_snapshot().prompt_assembly_replay_prefix_cases
-}
-
 pub fn lean_prompt_assembly_replay_shape_cases() -> &'static [LeanPromptAssemblyReplayShapeCase] {
     &lean_contract_snapshot().prompt_assembly_replay_shape_cases
 }
@@ -3316,7 +3312,6 @@ pub struct LeanContractSnapshot {
         LeanPromptAssemblyReasoningSuffixCase,
     >,
     pub prompt_assembly_replay_shape_cases: Vec<LeanPromptAssemblyReplayShapeCase>,
-    pub prompt_assembly_replay_prefix_cases: Vec<LeanPromptAssemblyReplayPrefixCase>,
     pub protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub durable_reduction_cases: Vec<LeanDurableReductionCase>,
@@ -9478,17 +9473,6 @@ pub struct LeanPromptAssemblyRepairCase {
     pub expected: String,
     pub expected_twice: String,
     pub payload_only: bool,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyReplayPrefixCase {
-    pub name: String,
-    pub captured: Vec<LeanReplayFlatItem>,
-    pub current: Vec<LeanReplayFlatItem>,
-    pub ordinary_equal: bool,
-    pub reasoning_suffix: bool,
-    pub leading_removal: bool,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

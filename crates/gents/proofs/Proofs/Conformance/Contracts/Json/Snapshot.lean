@@ -291,8 +291,6 @@ def snapshotPromptTailJson : String :=
     ++ promptAssemblyReasoningSuffixCasesJson ++ ","
     ++ "\"prompt_assembly_replay_shape_cases\":"
     ++ promptAssemblyReplayShapeCasesJson ++ ","
-    ++ "\"prompt_assembly_replay_prefix_cases\":"
-    ++ promptAssemblyReplayPrefixCasesJson ++ ","
     ++ "\"protected_replay_compaction_cases\":"
     ++ protectedReplayCompactionCasesJson ++ ","
 

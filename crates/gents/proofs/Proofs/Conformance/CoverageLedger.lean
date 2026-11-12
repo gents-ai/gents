@@ -2365,8 +2365,7 @@ def caseCoverage : List CoverageEntry :=
       "Binds original-index block shaping and misaligned-sidecar rejection. Complete compaction-history carriage is exercised through native request assembly tests.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_replay_prefix_cases"
-      "PromptAssemblyReplayPrefixCases"
+      "family" "contracts_prompt_assembly_replay_prefix"
       "Binds the two capture checks and their agreement with leading-reasoning removal on flat items. Provider acceptance itself is an external premise documented on ReplayFrontier.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

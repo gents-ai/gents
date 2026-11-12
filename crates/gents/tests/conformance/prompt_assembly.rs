@@ -245,45 +245,6 @@ fn generated_replay_shape_cases_bind_source_index_projection() {
 }
 
 #[test]
-fn generated_replay_prefix_cases_bind_acceptance_checks() {
-    use gents_lean_vocab::lean_prompt_assembly_replay_prefix_cases;
-    use gents_loop::provider_input::replay_frontier::{anchored, drop_leading_reasoning, ords};
-
-    let cases = lean_prompt_assembly_replay_prefix_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let captured = native_flat_items(&case.captured);
-        let current = native_flat_items(&case.current);
-        let captured_anchored = anchored(&captured);
-        let current_anchored = anchored(&current);
-        assert_eq!(
-            ords(&current) == ords(&captured),
-            case.ordinary_equal,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            captured_anchored.ends_with(&current_anchored),
-            case.reasoning_suffix,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            current
-                == drop_leading_reasoning(
-                    captured_anchored
-                        .len()
-                        .saturating_sub(current_anchored.len()),
-                    &captured
-                ),
-            case.leading_removal,
-            "{}",
-            case.name
-        );
-    }
-}
-
-#[test]
 fn generated_reasoning_suffix_cases_bind_native_selection() {
     use gents_lean_vocab::lean_prompt_assembly_reasoning_suffix_cases;
     use gents_loop::claude_messages_body::{replay_stage, select_replay, ReplayIssuer};

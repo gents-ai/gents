@@ -1908,7 +1908,7 @@ structure PromptAssemblyReplayPrefixCase where
   leadingRemoval : Bool
   deriving Repr
 
-private def replayPrefixCase (name : String)
+def replayPrefixCase (name : String)
     (captured current : List PromptAssembly.ClaudeMap.ReplayFlatItem) :
     PromptAssemblyReplayPrefixCase :=
   let anchoredCaptured := PromptAssembly.ReplayFrontier.anchored captured
