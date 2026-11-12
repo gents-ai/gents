@@ -6,15 +6,23 @@ import { UserMessageItem } from "./MessageItems.js";
 import { MessageList } from "../Transcript.js";
 
 afterEach(cleanup);
+/* The body deliberately contradicts the origin: a reader that parses `status=`
+   out of the envelope cannot satisfy these expectations. */
 const envelope =
-  '<tool-completion tool_call_id="spawned:fixture" status="failed"><result>failure</result></tool-completion>';
+  '<tool-completion tool_call_id="spawned:fixture" status="completed"><result>failure</result></tool-completion>';
 const background: Extract<RenderedTimelineItem, { kind: "automatedInput" }> = {
   kind: "automatedInput",
   itemKey: "background",
   requestId: "request",
   inputRequestId: null,
   sequence: 1,
-  origin: { kind: "backgroundCompletion", notification: true },
+  origin: {
+    kind: "backgroundCompletion",
+    notification: true,
+    toolCallDocId: "tool-doc",
+    toolName: "bash",
+    statusKind: "error",
+  },
   content: envelope,
   timestamp: null,
   reconstruction: { state: "ready" },
@@ -35,7 +43,7 @@ it("does not expose stale output when reconstruction is denied", async () => {
       item={{ ...background, reconstruction: { state: "denied" } }}
     />,
   );
-  fireEvent.click(screen.getByText("Background activity"));
+  fireEvent.click(screen.getByText("Background action failed"));
   expect(screen.queryByText(envelope)).toBeNull();
   expect(
     await screen.findByText("Background details are unavailable."),
@@ -48,7 +56,7 @@ it("keeps expanded background details open while they load", async () => {
       item={{ ...background, reconstruction: { state: "loading" } }}
     />,
   );
-  fireEvent.click(screen.getByText("Background activity"));
+  fireEvent.click(screen.getByText("Background action failed"));
   expect((await screen.findByRole("status")).textContent).toBe(
     "Loading background details…",
   );
@@ -142,8 +150,9 @@ it("keeps internal pending input out of the chat through its durable handoff and
 it("labels successful completions and suppresses persisted wake prompts", () => {
   const completed = {
     ...background,
+    origin: { ...background.origin, statusKind: "success" },
     content:
-      '<tool-completion status="completed"><result>done</result></tool-completion>',
+      '<tool-completion status="failed"><result>done</result></tool-completion>',
   };
   const wake = {
     ...background,

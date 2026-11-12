@@ -138,7 +138,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
                 .zip([(success, true), (failure, true), (wake, false)])
         {
             assert!(matches!(item, RenderedTimelineItem::AutomatedInput {
-                origin: RequestOriginView::BackgroundCompletion { notification: observed },
+                origin: RequestOriginView::BackgroundCompletion { notification: observed, .. },
                 content: Some(content),
                 ..
             } if content == expected && *observed == notification));
