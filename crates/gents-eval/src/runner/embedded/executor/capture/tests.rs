@@ -9,7 +9,12 @@ use serde_json::json;
 
 #[tokio::test]
 async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "schema-capture-reads-active-indexes-and-",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     ConfigAccess::local(node.clone())
         .add_collection("type SearchNote { body: String @fulltext(language: \"english\") }")
         .await
@@ -112,7 +117,12 @@ async fn delegation_case_capture_excludes_session_title_requests() {
 
 #[tokio::test]
 async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "document-capture-excludes-other-sessions",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let access = ConfigAccess::local(node.clone());
     access
         .add_collection("type CaptureHeader { session_id: String sequence: Int }")

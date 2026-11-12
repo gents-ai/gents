@@ -1,7 +1,11 @@
 #[tokio::test]
 async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder() {
-    let node = Arc::new(gents_store::test_support::node_builder().build().await.unwrap());
-    gents_store::schema::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = gents_inference::test_support::test_db(
+        "unmet-output-obligation",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
     let actor =
         identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76").unwrap();
     let model = ScriptedModel::new_turns(vec![
@@ -106,7 +110,7 @@ async fn exceeding_max_turns_terminates_with_error() {
 
 #[tokio::test]
 async fn managed_terminal_tool_result_terminates_loop() {
-    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("run the slow tool");
 
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(FixedTool {
@@ -152,7 +156,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
 
 #[tokio::test]
 async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
-    let (_node, hook, writer, mut lifecycle) = owned_test_hook_with_unattributable_request().await;
+    let (_db, hook, writer, mut lifecycle) = owned_test_hook_with_unattributable_request().await;
     let hook = hook
         .with_goal_tool_authority(true, true)
         .with_goal_tools(std::sync::Arc::new(

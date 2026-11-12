@@ -13,7 +13,6 @@ use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompleti
 use tokio::sync::Mutex;
 
 use super::*;
-use gents_store::schema::ensure_runtime_schemas;
 use gents_store::test_support::first_content;
 use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
 

@@ -230,7 +230,10 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         data["RenderedRequest"][0]["session_id"],
         data["AgentRequest"][0]["session_id"]
     );
-    assert_eq!(data["RenderedRequest"][0]["agent_did"], behavior.agent.agent_did);
+    assert_eq!(
+        data["RenderedRequest"][0]["agent_did"],
+        behavior.agent.agent_did
+    );
     assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "failed");
     use gents_protocol::output::TerminalOutput;
     let request = &data["AgentRequest"][0];
@@ -453,8 +456,9 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             1,
             "configured writer contract must survive surface resolution"
         );
-        let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.agent.node_did())
-            .for_agent(&behavior.agent);
+        let runtime =
+            ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.agent.node_did())
+                .for_agent(&behavior.agent);
         let tools = Arc::new(surface.build_tools(&runtime).await.unwrap());
         let prompt = LayeredPromptBuilder::new(&behavior.agent, &surface, &[]);
         let mut config = loop_config(

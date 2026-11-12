@@ -525,8 +525,6 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         ("compacted prompt".to_string(), 1_000, "dispatch"),
     ] {
         let expected_rows = committed(rebuilt_result);
-        let data_path =
-            std::env::temp_dir().join(format!("staged-turn-reduction-{}", uuid::Uuid::new_v4()));
         let identity_home = tempfile::tempdir().unwrap();
         let root = gents_store::identity::KeyIdentity::load_or_create(
             identity_home.path().join("node.key"),
@@ -535,15 +533,13 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         .unwrap();
         let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
-        let node = Arc::new(
-            gents_store::test_support::node_builder()
-                .data_path(&data_path)
-                .with_node_identity_did(root.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "staged-turn-reduction-commits-its-row-on",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let root_did = gents_store::graphql::escape_graphql_string(root.did());
         let agent_did = gents_store::graphql::escape_graphql_string(agent.did());
         gents_store::config_client::ConfigAccess::local_managed_agent(node.clone(), agent.did().parse().unwrap(), agent.as_ref()).unwrap()

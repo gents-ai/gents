@@ -4,10 +4,8 @@ use gents_session::request::lifecycle::materialize::{
     pending_agent_request_spec,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
-use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use gents_session::request::lifecycle::{build_signed_request, ExecutionOrigin, TriggerLineage};
 use gents_store::graphql::escape_graphql_string;
-use std::sync::Arc;
 
 async fn keyed_delivery(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -83,7 +81,7 @@ async fn keyed_delivery(
 #[tokio::test]
 async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
     let (db, _user, _user_access, binding) =
-        gents_inference::test_support::signed_test_node("keyed-session-fires").await;
+        crate::test_support::signed_test_node("keyed-session-fires").await;
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let owner = db.node_identity.did().to_owned();
@@ -206,22 +204,19 @@ fn task_fire_requires_its_canonical_identity_and_exact_session() {
 async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     use gents_store::identity::NodeIdentity;
     let identity_dir = tempfile::tempdir().unwrap();
-    let runtime = pin_fixed_signing_identity(identity_dir.path());
+    let db = gents_inference::test_support::test_db(
+        "task-admission-atomic",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did();
+    let runtime = gents_store::test_support::held_runtime_identity(node_did);
     let user = gents_store::identity::KeyIdentity::load_or_create(
         identity_dir.path().join("user.key"),
         None,
     )
     .unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(PIN_FIXED_DID)
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     let binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
     let user_access = gents_store::config_client::ConfigAccess::local_as(
@@ -234,12 +229,12 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         Box::pin(async move {
             let created = txn.execute_with_variables(
                 "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                &serde_json::json!({"input": {"node_did": PIN_FIXED_DID}}),
+                &serde_json::json!({"input": {"node_did": node_did}}),
             ).await?;
             let node_doc = gents_store::graphql::created_doc_id(&created, "Node")?;
             let created = txn.execute_with_variables(
                 "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                &serde_json::json!({"input": {"node_did": PIN_FIXED_DID,
+                &serde_json::json!({"input": {"node_did": node_did,
                     "agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce,
                     "inference_profile_id": "test-profile"}}),
             ).await?;
@@ -281,7 +276,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     )
     .unwrap();
     let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: PIN_FIXED_DID.into(),
+        owner_did: node_did.into(),
         trigger_id: "manual:task:invocation-key".into(),
         source_collection: "Task".into(),
         source_doc_id: "invocation-key".into(),
@@ -295,7 +290,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         request_id: format!("trigger-request:{key}"),
         session_id: session_id.clone(),
         goal_id: Some(gents_protocol::goal::deterministic_goal_id(
-            PIN_FIXED_DID,
+            node_did,
             &session_id,
         )),
         goal_objective: Some("complete assignment".into()),
@@ -310,7 +305,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         created_at: "2026-01-01T00:00:00Z".into(),
     };
     let spec = pending_agent_request_spec(
-        PIN_FIXED_DID,
+        node_did,
         agent.did(),
         "complete assignment",
         ExecutionOrigin::Interactive,
@@ -588,9 +583,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     let actor = identity::Did::new(agent.did()).unwrap();
     assert_eq!(
         gents_session::session::recover_agent_session_relationships_with_access(
-            &access,
-            PIN_FIXED_DID,
-            &actor
+            &access, node_did, &actor
         )
         .await
         .unwrap(),
@@ -717,20 +710,16 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
 
 #[tokio::test]
 async fn reserved_trigger_cause_is_refused() {
-    let identity_dir = tempfile::tempdir().unwrap();
-    let identity = pin_fixed_signing_identity(identity_dir.path());
+    let db = gents_inference::test_support::test_db(
+        "reserved-trigger-cause-refused",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did();
+    let identity = gents_store::test_support::held_runtime_identity(node_did);
     let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(PIN_FIXED_DID)
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     let access = gents_store::config_client::ConfigAccess::local(node.clone());
     let message =
         "trigger graph-trigger-retired belongs to a retired graph revision; it no longer runs";
@@ -746,7 +735,7 @@ async fn reserved_trigger_cause_is_refused() {
     let err = write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         &node,
         actor,
-        PIN_FIXED_DID,
+        node_did,
         agent.did(),
         "work",
         ExecutionOrigin::Interactive,
@@ -764,7 +753,7 @@ async fn reserved_trigger_cause_is_refused() {
     assert_eq!(err.to_string(), message);
 
     let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: PIN_FIXED_DID.into(),
+        owner_did: node_did.into(),
         trigger_id: "manual:task".into(),
         source_collection: "Task".into(),
         source_doc_id: "invocation-key".into(),
@@ -790,7 +779,7 @@ async fn reserved_trigger_cause_is_refused() {
         created_at: "2026-01-01T00:00:00Z".into(),
     };
     let spec = pending_agent_request_spec(
-        PIN_FIXED_DID,
+        node_did,
         agent.did(),
         "work",
         ExecutionOrigin::Interactive,

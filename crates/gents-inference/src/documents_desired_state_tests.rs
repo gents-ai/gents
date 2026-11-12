@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use gents_documents::test_support::desired_state_fixtures::{
-    config, document, backend, register_config_schemas, runtime_access, apply,
+    apply, backend, config, document, register_config_schemas, runtime_access,
 };
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_store::collection::Collection;
@@ -27,7 +27,8 @@ async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Resu
         vec![document(backend(owner, "backend")), profile(Value::Null)],
     )
     .await?;
-    let typed: gents_documents::InferenceBackend = serde_json::from_value(backend(owner, "backend"))?;
+    let typed: gents_documents::InferenceBackend =
+        serde_json::from_value(backend(owner, "backend"))?;
     crate::backends::registry::record_model_catalog(
         &node,
         &typed,
@@ -71,4 +72,3 @@ async fn preview_window(
         })
         .await
 }
-

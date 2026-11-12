@@ -100,19 +100,16 @@ where
 
 #[tokio::test]
 async fn enrollment_authority_reloads_each_generation_and_cross_actor_claims_stay_blocked() {
-    let target_dir = tempfile::tempdir().unwrap();
     let member_dir = tempfile::tempdir().unwrap();
-    let target: Arc<dyn NodeIdentity> =
-        Arc::new(KeyIdentity::load_or_create(target_dir.path().join("target.key"), None).unwrap());
     let member: Arc<dyn NodeIdentity> =
         Arc::new(KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap());
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(target.did())
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "enrollment-authority-reloads-each-genera",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let target: Arc<dyn NodeIdentity> = node_db.node_identity.clone();
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();

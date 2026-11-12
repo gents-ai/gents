@@ -276,6 +276,14 @@ impl GraphqlEndpoint {
         Ok(self)
     }
 
+    pub fn with_extensions(
+        mut self,
+        extensions: &crate::node_extension::Extensions,
+    ) -> std::result::Result<Self, crate::node_extension::ExtensionError> {
+        self.extensions.attach_all(extensions)?;
+        Ok(self)
+    }
+
     pub fn extension<T>(&self) -> Option<Arc<T>>
     where
         T: std::any::Any + Send + Sync,

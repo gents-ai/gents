@@ -3,7 +3,9 @@ use std::sync::Arc;
 use acp::{NodePermission, Subject, ZanzibarStore};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
-use gents_store::local::tool_permission_projection::{decode_source_for_tests, ToolPermissionProjection};
+use gents_store::local::tool_permission_projection::{
+    decode_source_for_tests, ToolPermissionProjection,
+};
 use storage::namespace::Namespace;
 
 async fn projection_node() -> anyhow::Result<(
@@ -1071,7 +1073,8 @@ async fn non_admin_tools_writer_cannot_project_schema_authority() -> anyhow::Res
             } if resource == acp::NODE_RESOURCE_NAME
                 && relation == NodePermission::CollectionPatch.as_str() =>
             {
-                decode_source_for_tests(&object_id).filter(|source| source.starts_with("gents-tool-v1:"))
+                decode_source_for_tests(&object_id)
+                    .filter(|source| source.starts_with("gents-tool-v1:"))
             }
             _ => None,
         })

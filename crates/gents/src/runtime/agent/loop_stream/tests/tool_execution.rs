@@ -1,7 +1,6 @@
 #[tokio::test]
 async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
-    let cases =
-        &gents_lean_vocab::lean_contract_snapshot().canonical_dispatch_observation_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().canonical_dispatch_observation_cases;
     let cases: Vec<_> = cases
         .iter()
         .filter(|case| case.inputs[0].policy_allows)
@@ -12,7 +11,8 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
         let input = &case.inputs[0];
         let expected = &case.expected[0];
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
-            let (node, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
+            let (db, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
+            let node = db.node.clone();
             let calls = Arc::new(AtomicUsize::new(0));
             let model = ScriptedModel::new_turns(vec![
                 vec![
@@ -80,7 +80,9 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                     "lost authority must stop the loop"
                 );
                 assert!(collected.tool_results.is_empty());
-                let rows = lifecycle.access().unwrap()
+                let rows = lifecycle
+                    .access()
+                    .unwrap()
                     .execute("query { AgentToolCall { lifecycle_state } }")
                     .await
                     .unwrap();
@@ -163,14 +165,22 @@ impl PolicyDeniedOwner {
                 tools: vec![Box::new(gents_tools::mcp::meta::CallToolTool::new(
                     gents_tools::mcp::meta::MetaToolContext {
                         configuration: gents_inference::resolved::ResolvedConfiguration::Static,
-                        actor: identity::Did::new(gents_automation::triggers::callback::test_agent_did()).unwrap(),
+                        actor: identity::Did::new(
+                            gents_automation::triggers::callback::test_agent_did(),
+                        )
+                        .unwrap(),
                         node: node.clone(),
-                        mcp_pool: gents_tools::mcp::pool::McpPool::new()
-                            .for_agent(node.node_identity_did().expect("fixture node has an identity")),
+                        mcp_pool: gents_tools::mcp::pool::McpPool::new().for_agent(
+                            node.node_identity_did()
+                                .expect("fixture node has an identity"),
+                        ),
                         health: gents_tools::mcp::health::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
-                        node_did: node.node_identity_did().expect("fixture node has an identity").into(),
+                        node_did: node
+                            .node_identity_did()
+                            .expect("fixture node has an identity")
+                            .into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
                         remote_tools: gents_documents::RemoteTools {
                             services: vec![gents_documents::RemoteServiceTools {
@@ -205,7 +215,8 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
             .all(|input| input.acknowledged && !input.policy_allows));
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
             for owner in PolicyDeniedOwner::ALL {
-                let (node, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
+                let (db, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
+                let node = db.node.clone();
                 let root = tempfile::tempdir().unwrap();
                 let denied = owner.denied_call(&node, root.path());
                 let model = ScriptedModel::new_turns(vec![
@@ -241,7 +252,9 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                         Some("tool_call.start_running_canonical"), collect,
                     ).await;
 
-                let rows = lifecycle.access().unwrap()
+                let rows = lifecycle
+                    .access()
+                    .unwrap()
                     .execute(
                         "query { AgentToolCall { lifecycle_state started_at tool_failure_class } }",
                     )
@@ -301,7 +314,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
 
 #[tokio::test]
 async fn tool_call_turn_executes_threads_result_and_completes() {
-    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("use the echo tool");
 
     let model = ScriptedModel::new_turns(vec![
@@ -391,7 +404,11 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     assert!(durable_stub.contains("\"call_id\":\"call-1\""));
     assert!(!durable_stub.contains("ECHOED"));
 
-    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { _docID tool_name lifecycle_state } }").await;
+    let resp = agent_response(
+        &lifecycle.access().unwrap(),
+        "query { AgentToolCall { _docID tool_name lifecycle_state } }",
+    )
+    .await;
     assert!(
         !resp.has_errors(),
         "AgentToolCall query failed: {:?}",
@@ -497,7 +514,8 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
 async fn oversized_tool_result_is_bounded_before_threading() {
     let prompt = Message::user("read the big thing");
 
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
 
     let big_line = "x".repeat(200);
     let big_output = std::iter::repeat_n(big_line, 10_000)
@@ -556,9 +574,9 @@ fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>
         &gents_pack::plugin::test_fixtures::filled_output_wat(PREFIX, image_bytes, SUFFIX),
         None,
     );
-    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-        home.path().to_owned(),
-    )));
+    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(home.path().to_owned()),
+    ));
     let tool = gents_toolcalls::plugin::tool::PluginTool::resolve(
         executor,
         &gents_documents::PluginToolRef {
@@ -639,8 +657,11 @@ async fn plugin_image_result_seen_by(
 #[tokio::test]
 async fn plugin_image_parts_reach_the_provider_whole() {
     const IMAGE_BYTES: usize = 900_000;
-    let result =
-        plugin_image_result_seen_by(gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey, IMAGE_BYTES).await;
+    let result = plugin_image_result_seen_by(
+        gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey,
+        IMAGE_BYTES,
+    )
+    .await;
     assert_eq!(result.len(), 2, "one text part and one image part");
     assert_eq!(tool_result_text(&result[0]), r#"{"height":2,"width":2}"#);
     let ToolResultContent::Image(image) = &result[1] else {
@@ -669,7 +690,8 @@ async fn persisted_plugin_image_result_replays_text_parts_and_a_note() {
 
 async fn persisted_plugin_image_result_replay(image_bytes: usize) {
     let (_home, tool) = plugin_image_tool(image_bytes);
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let stream = run_loop_stream(
         ScriptedModel::new_turns(plugin_call_then_text_turns()),
         Some(hook.clone()),
@@ -696,8 +718,8 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
         &lifecycle.request().node_did,
         lifecycle.request().requester_did.as_deref(),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     let replayed: Vec<String> = history
         .iter()
         .flat_map(|message| match message {
@@ -725,8 +747,11 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
 
 #[tokio::test]
 async fn plugin_image_parts_become_a_note_where_the_provider_refuses_them() {
-    let result =
-        plugin_image_result_seen_by(gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible, 64).await;
+    let result = plugin_image_result_seen_by(
+        gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
+        64,
+    )
+    .await;
     assert_eq!(
         result.iter().map(tool_result_text).collect::<Vec<_>>(),
         vec![
@@ -848,7 +873,7 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         }
     }
 
-    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     let model = ScriptedModel::new_turns(vec![
         vec![
@@ -898,7 +923,11 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         "the internal marker must never leak to the model, got: {tool_results:?}"
     );
 
-    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }").await;
+    let resp = agent_response(
+        &lifecycle.access().unwrap(),
+        "query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }",
+    )
+    .await;
     assert!(
         !resp.has_errors(),
         "AgentToolCall query failed: {:?}",
@@ -924,7 +953,8 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
 #[tokio::test]
 async fn completed_terminalization_scans_request_output_once_for_many_tools() {
     const TOOL_TURNS: usize = 6;
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let mut script = (0..TOOL_TURNS)
         .map(|turn| {
             vec![
@@ -964,12 +994,13 @@ async fn completed_terminalization_scans_request_output_once_for_many_tools() {
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.tool_results.len(), TOOL_TURNS);
     let selection = writer.terminal_output(&lifecycle.request().doc_id).await;
-    let (result, scans) = gents_session::session::count_request_output_scans(lifecycle.terminalize_owned(
-        gents_session::request::lifecycle::RequestTerminalOutcome::Completed,
-        selection,
-        None,
-    ))
-    .await;
+    let (result, scans) =
+        gents_session::session::count_request_output_scans(lifecycle.terminalize_owned(
+            gents_session::request::lifecycle::RequestTerminalOutcome::Completed,
+            selection,
+            None,
+        ))
+        .await;
     assert_eq!(
         result.unwrap(),
         gents_session::request::lifecycle::TerminalizeResult::Won
@@ -983,7 +1014,8 @@ async fn terminalization_with_principal_output(
     output_bytes: usize,
     noise: usize,
 ) -> std::time::Duration {
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let mut script = (0..turns)
         .map(|turn| {
             vec![
@@ -1131,7 +1163,8 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
     use gents_protocol::output::{OutputSource, OutputWriter};
-    let (node, _hook, _writer, lifecycle) = owned_test_hook().await;
+    let (db, _hook, _writer, lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let request_id = lifecycle.request().doc_id.clone();
     let template = gents_protocol::output::OutputSegment {
         node_did: lifecycle.request().node_did.clone(),
@@ -1162,10 +1195,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         }),
         created_at: "2026-10-02T00:00:00Z".into(),
     };
-    async fn create(
-        node: &defra_node::Node,
-        segment: &gents_protocol::output::OutputSegment,
-    ) {
+    async fn create(node: &defra_node::Node, segment: &gents_protocol::output::OutputSegment) {
         let response = node
             .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
@@ -1260,7 +1290,9 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             )
             .await
             .unwrap(),
-            gents_session::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output)
+            gents_session::session::tool_output_rows::CanonicalToolOutputObservation::Closed(
+                output
+            )
         );
     }
     assert_eq!(
@@ -1313,7 +1345,8 @@ impl ToolDyn for ComposedChild {
 
 #[tokio::test]
 async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_parent() {
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let request = serde_json::json!({"tool_calls": {"requests": [
         {"id": "slow", "tool_name": "slow", "arguments": {}},
         {"id": "late", "tool_name": "late", "arguments": {}}]}});
@@ -1327,9 +1360,9 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         None,
     );
     let plugin = gents_toolcalls::plugin::tool::PluginTool::resolve(
-        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-            home.path().to_owned(),
-        ))),
+        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+            Some(home.path().to_owned()),
+        )),
         &gents_documents::PluginToolRef {
             tool_calls: true,
             plugin: "team/plugin".into(),
@@ -1368,12 +1401,19 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.final_text.as_deref(), Some("seen"));
     let output: serde_json::Value = serde_json::from_str(&collected.tool_results[0]).unwrap();
-    assert_eq!(output["tool_results"]["slow"]["result"], "slow done", "{output}");
+    assert_eq!(
+        output["tool_results"]["slow"]["result"], "slow done",
+        "{output}"
+    );
     assert_eq!(
         output["tool_results"]["late"]["error"],
         "late timed out after 50ms"
     );
-    let rows = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { tool_name lifecycle_state } }").await;
+    let rows = agent_response(
+        &lifecycle.access().unwrap(),
+        "query { AgentToolCall { tool_name lifecycle_state } }",
+    )
+    .await;
     let rows = rows.data.unwrap()["AgentToolCall"].clone();
     for (name, state) in [
         ("plugin", "completed"),
@@ -1433,7 +1473,8 @@ impl ToolDyn for ComposingParent {
                     ),
                     "{name} #{ordinal} ended the parent: {outcome:?}"
                 );
-                if let Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Completed(receipt)) = &outcome
+                if let Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Completed(receipt)) =
+                    &outcome
                 {
                     let receipt: serde_json::Value =
                         serde_json::from_str(receipt).unwrap_or_default();
@@ -1511,7 +1552,11 @@ fn hook_owned_children() -> Vec<(&'static str, serde_json::Value, &'static str)>
     use gents_protocol::tool_names as names;
     let process = serde_json::json!({"tool_call_id": SPAWNED_PROCESS});
     vec![
-        (gents_protocol::goal_names::GET_GOAL_TOOL_NAME, serde_json::json!({}), "completed"),
+        (
+            gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
+            serde_json::json!({}),
+            "completed",
+        ),
         (
             gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
             serde_json::json!({"objective": "drive every route"}),
@@ -1522,20 +1567,56 @@ fn hook_owned_children() -> Vec<(&'static str, serde_json::Value, &'static str)>
             serde_json::json!({"objective": "drive every hook-owned route"}),
             "completed",
         ),
-        (names::AGENT_LIST_TOOL_NAME, serde_json::json!({}), "completed"),
-        (names::AGENT_SESSION_LIST_TOOL_NAME, serde_json::json!({}), "completed"),
-        (names::AGENT_SESSION_READ_TOOL_NAME, serde_json::json!({"session_id": "absent"}), "completed"),
-        (names::AGENT_INTERRUPT_TOOL_NAME, serde_json::json!({"session_id": "absent"}), "completed"),
-        (names::AGENT_STOP_TOOL_NAME, serde_json::json!({"session_id": "absent"}), "completed"),
-        (names::AGENT_RESUME_TOOL_NAME, serde_json::json!({"session_id": "absent"}), "completed"),
-        (names::AGENT_NEW_TOOL_NAME, serde_json::json!({"agent": "general", "prompt": "work"}), "running"),
-        (names::AGENT_MESSAGE_TOOL_NAME, serde_json::json!({"session_id": NEW_SESSION, "message": "more"}), "running"),
+        (
+            names::AGENT_LIST_TOOL_NAME,
+            serde_json::json!({}),
+            "completed",
+        ),
+        (
+            names::AGENT_SESSION_LIST_TOOL_NAME,
+            serde_json::json!({}),
+            "completed",
+        ),
+        (
+            names::AGENT_SESSION_READ_TOOL_NAME,
+            serde_json::json!({"session_id": "absent"}),
+            "completed",
+        ),
+        (
+            names::AGENT_INTERRUPT_TOOL_NAME,
+            serde_json::json!({"session_id": "absent"}),
+            "completed",
+        ),
+        (
+            names::AGENT_STOP_TOOL_NAME,
+            serde_json::json!({"session_id": "absent"}),
+            "completed",
+        ),
+        (
+            names::AGENT_RESUME_TOOL_NAME,
+            serde_json::json!({"session_id": "absent"}),
+            "completed",
+        ),
+        (
+            names::AGENT_NEW_TOOL_NAME,
+            serde_json::json!({"agent": "general", "prompt": "work"}),
+            "running",
+        ),
+        (
+            names::AGENT_MESSAGE_TOOL_NAME,
+            serde_json::json!({"session_id": NEW_SESSION, "message": "more"}),
+            "running",
+        ),
         (
             names::SPAWN_PROCESS_TOOL_NAME,
             serde_json::json!({"tool_name": "child", "args": {"ordinal": SPAWNED_ORDINAL}}),
             "completed",
         ),
-        (names::LIST_PROCESSES_TOOL_NAME, serde_json::json!({}), "completed"),
+        (
+            names::LIST_PROCESSES_TOOL_NAME,
+            serde_json::json!({}),
+            "completed",
+        ),
         (names::WAIT_PROCESS_TOOL_NAME, process.clone(), "completed"),
         (names::READ_PROCESS_TOOL_NAME, process.clone(), "completed"),
         (names::CANCEL_PROCESS_TOOL_NAME, process, "completed"),
@@ -1576,28 +1657,41 @@ async fn allow_general_agent_target(
     let plan = gents_documents::DesiredStateApplyPlan::new(
         documents
             .into_iter()
-            .map(|(collection, value)| gents_documents::DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            })
+            .map(
+                |(collection, value)| gents_documents::DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                },
+            )
             .collect(),
     )
     .unwrap();
-    let actor = node.node_identity_did().expect("fixture node has an identity");
-    gents_store::config_client::ConfigAccess::local_as(node.clone(), ::identity::Did::new(actor).unwrap())
-        .transact_write("test.allow_general_agent_target", |txn| {
-            let plan = &plan;
-            Box::pin(async move { gents_documents::apply_desired_state_plan(txn, plan, &gents_inference::resolved::ProviderProfilePolicy).await })
+    let actor = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
+    gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        ::identity::Did::new(actor).unwrap(),
+    )
+    .transact_write("test.allow_general_agent_target", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            gents_documents::apply_desired_state_plan(
+                txn,
+                plan,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await
         })
-        .await
-        .unwrap();
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
 async fn generated_child_admission_cases_drive_real_dispatcher() {
-    let cases = gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases
-        ["child_admission"]
+    let cases = gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["child_admission"]
         .as_array()
         .unwrap();
     let hook_owned = hook_owned_children();
@@ -1608,19 +1702,24 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         .collect();
     driven.sort_unstable();
     routes.sort_unstable();
-    assert_eq!(driven, routes, "every hook-owned route is driven exactly once");
+    assert_eq!(
+        driven, routes,
+        "every hook-owned route is driven exactly once"
+    );
     for selected in [false, true] {
         let mut children = Vec::new();
         let mut expected = std::collections::BTreeMap::new();
         for case in cases.iter().filter(|case| case["selected"] == selected) {
             let admitted = case["admitted"] == true;
             let refused = |ordinal: u32| serde_json::json!({"admit": false, "ordinal": ordinal});
-            let calls: Vec<(&'static str, serde_json::Value, &'static str)> =
-                match case["route"].as_str().unwrap() {
-                    "ordinary" => vec![("child", serde_json::json!({"admit": admitted}), "completed")],
-                    "hook_owned" => hook_owned.clone(),
-                    route => panic!("unknown route {route}"),
-                };
+            let calls: Vec<(&'static str, serde_json::Value, &'static str)> = match case["route"]
+                .as_str()
+                .unwrap()
+            {
+                "ordinary" => vec![("child", serde_json::json!({"admit": admitted}), "completed")],
+                "hook_owned" => hook_owned.clone(),
+                route => panic!("unknown route {route}"),
+            };
             for (name, mut arguments, settled) in calls {
                 let ordinal = children.len() as u32 + 1;
                 if !admitted {
@@ -1629,7 +1728,10 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
                     arguments["ordinal"] = ordinal.into();
                 }
                 children.push((ordinal, name, arguments.to_string()));
-                expected.insert(ordinal, (case.clone(), name, case["expected"] == true, settled));
+                expected.insert(
+                    ordinal,
+                    (case.clone(), name, case["expected"] == true, settled),
+                );
             }
         }
         let completed = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1646,7 +1748,8 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
                 }));
             }
         }
-        let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let node = db.node.clone();
         let hook = hook
             .with_goal_tool_authority(true, true)
             .with_goal_tools(std::sync::Arc::new(
@@ -1686,7 +1789,9 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         let completed = completed.lock().unwrap().clone();
         let invoked = invoked.lock().unwrap().clone();
         assert_eq!(completed.len(), expected.len());
-        let rows = lifecycle.access().unwrap()
+        let rows = lifecycle
+            .access()
+            .unwrap()
             .execute("query { AgentToolCall { plugin_effect_ordinal lifecycle_state } }")
             .await
             .unwrap();
@@ -1707,8 +1812,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             if observed != *admissible {
                 mismatches.push(format!("dispatcher result {observed} for {name} {case}"));
             }
-            if invoked.contains(&u64::from(ordinal))
-                != (*admissible && case["route"] == "ordinary")
+            if invoked.contains(&u64::from(ordinal)) != (*admissible && case["route"] == "ordinary")
             {
                 mismatches.push(format!("invocation of {name} {case}"));
             }
@@ -1787,7 +1891,8 @@ impl ToolDyn for Stall {
 
 #[tokio::test]
 async fn a_script_that_stops_mid_child_settles_the_child_and_the_request_finishes() {
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StoppingParent), Box::new(Stall)];
     let stream = run_loop_stream(
         ScriptedModel::new_turns(plugin_call_then_text_turns()),
@@ -1960,12 +2065,9 @@ async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
 
 #[tokio::test]
 async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
-    let identity_dir = tempfile::tempdir().unwrap();
-    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
-        gents_store::identity::KeyIdentity::load_or_create(identity_dir.path().join("native-read.key"), None)
-            .unwrap(),
-    );
-    let (node, hook, writer, mut lifecycle) = owned_test_hook_with_identity(identity.clone()).await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook_with_identity().await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     assert_eq!(node.node_identity_did(), Some(identity.did()));
     assert_eq!(lifecycle.request().node_did, identity.did());
     let root = tempfile::tempdir().unwrap();

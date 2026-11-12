@@ -1,13 +1,13 @@
-use std::sync::Arc;
 use anyhow::Result;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
-use serde_json::Value;
 use gents_session::workspace::WorkspaceBindingDoc;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use serde_json::Value;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
 enum RejectionOwner {
@@ -87,9 +87,11 @@ impl Fixture {
                 let placement = &placement;
                 Box::pin(async move {
                     let response = txn
-                        .execute(&gents_session::workspace::isolated_workspace_upsert_mutation(
-                            workspace,
-                        ))
+                        .execute(
+                            &gents_session::workspace::isolated_workspace_upsert_mutation(
+                                workspace,
+                            ),
+                        )
                         .await?;
                     let doc = gents_store::graphql::mutation_documents(
                         &response,
@@ -109,10 +111,12 @@ impl Fixture {
                     )
                     .await?;
                     let response = txn
-                        .execute(&gents_session::workspace::workspace_placement_upsert_mutation(
-                            placement,
-                            "2026-09-01T00:00:00Z",
-                        ))
+                        .execute(
+                            &gents_session::workspace::workspace_placement_upsert_mutation(
+                                placement,
+                                "2026-09-01T00:00:00Z",
+                            ),
+                        )
                         .await?;
                     let placement_doc = gents_store::graphql::mutation_documents(
                         &response,
@@ -198,9 +202,9 @@ impl Fixture {
                         .as_deref()
                         .expect("fixture workspace binding");
                     let response = txn
-                        .execute(&gents_session::workspace::workspace_binding_upsert_mutation(
-                            binding,
-                        ))
+                        .execute(
+                            &gents_session::workspace::workspace_binding_upsert_mutation(binding),
+                        )
                         .await?;
                     let rows = gents_store::graphql::mutation_documents(
                         &response,
@@ -225,44 +229,52 @@ impl Fixture {
     }
 
     pub(crate) fn lifecycle(&self) -> gents_session::request::lifecycle::RequestLifecycle {
-        let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-            self.node.clone(),
-            self.request.clone(),
-            60,
-            gents_session::request::lifecycle::ExecutionOrigin::Interactive,
-            "backend",
-        );
+        let mut lifecycle =
+            gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                self.node.clone(),
+                self.request.clone(),
+                60,
+                gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+                "backend",
+            );
         lifecycle.bind_managed_agent(self.agent.as_ref()).unwrap();
         lifecycle
     }
 
-    async fn rejection_outcome(&self, doc_id: &str) -> Result<gents_session::request::admission::PendingRejectionOutcome> {
-        Ok(gents_session::request::admission::terminalize_pending_request_rejection(
-            &self.node,
-            doc_id,
-            &self.request.node_did,
-            &self.request.agent_did,
-            self.agent.as_ref(),
-            "workspace placement is unavailable",
-            "test.workspace_rejection_outcome",
-        )
-        .await?)
-    }
-
-    async fn reject(&self, owner: RejectionOwner) -> Result<()> {
-        match owner {
-            RejectionOwner::FreshAdmission => gents_session::request::admission::terminalize_pending_request_rejection(
+    async fn rejection_outcome(
+        &self,
+        doc_id: &str,
+    ) -> Result<gents_session::request::admission::PendingRejectionOutcome> {
+        Ok(
+            gents_session::request::admission::terminalize_pending_request_rejection(
                 &self.node,
-                &self.request.doc_id,
+                doc_id,
                 &self.request.node_did,
                 &self.request.agent_did,
                 self.agent.as_ref(),
                 "workspace placement is unavailable",
-                "test.workspace_rejection",
+                "test.workspace_rejection_outcome",
             )
-            .await
-            .map(|_| ())
-            .map_err(Into::into),
+            .await?,
+        )
+    }
+
+    async fn reject(&self, owner: RejectionOwner) -> Result<()> {
+        match owner {
+            RejectionOwner::FreshAdmission => {
+                gents_session::request::admission::terminalize_pending_request_rejection(
+                    &self.node,
+                    &self.request.doc_id,
+                    &self.request.node_did,
+                    &self.request.agent_did,
+                    self.agent.as_ref(),
+                    "workspace placement is unavailable",
+                    "test.workspace_rejection",
+                )
+                .await
+                .map(|_| ())
+                .map_err(Into::into)
+            }
             RejectionOwner::ClaimAdmission => {
                 self.lifecycle()
                     .reject_admission("workspace placement is unavailable")

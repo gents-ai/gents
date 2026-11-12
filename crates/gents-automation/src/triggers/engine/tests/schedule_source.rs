@@ -186,12 +186,12 @@ fn interval_cadence_json() -> serde_json::Value {
 
 #[tokio::test]
 async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_errors() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "schedule-cursor-batch-matches-exact-owne",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner_a = schedule_test_behavior().node_did().to_owned();
     let owner_b = "did:test:schedule-cursor-other-owner";
@@ -242,21 +242,22 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
 
 #[tokio::test]
 async fn schedule_cursor_batches_more_than_one_chunk() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "schedule-cursor-batches-more-than-one-ch",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner = schedule_test_behavior().node_did().to_owned();
     let scopes = (0..128)
         .map(|index| (owner.clone(), format!("missing-schedule-trigger-{index}")))
         .collect::<Vec<_>>();
-    let (cursors, query_count) = gents_documents::event_trigger::count_trigger_cursor_batch_queries(
-        gents_documents::load_trigger_next_run_at_batch(node.as_ref(), &scopes),
-    )
-    .await;
+    let (cursors, query_count) =
+        gents_documents::event_trigger::count_trigger_cursor_batch_queries(
+            gents_documents::load_trigger_next_run_at_batch(node.as_ref(), &scopes),
+        )
+        .await;
 
     assert_eq!(cursors.len(), 128);
     assert!(cursors.iter().all(|cursor| matches!(cursor, Ok(None))));
@@ -267,14 +268,12 @@ async fn schedule_cursor_batches_more_than_one_chunk() {
 #[tokio::test]
 async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     let behavior = schedule_test_behavior();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(behavior.node_did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "schedule-source-stops-loading-chunks",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let mut task = resolved_task("due schedule");
     task.agent_did = behavior.agent_did.clone();
     let mut schedules = (0..128)
@@ -317,7 +316,8 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     let mut source = ScheduleSource::new(snapshot_rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(1));
     let (intent, query_count) =
-        gents_documents::event_trigger::count_trigger_cursor_batch_queries(source.next_fire()).await;
+        gents_documents::event_trigger::count_trigger_cursor_batch_queries(source.next_fire())
+            .await;
 
     let intent = intent.expect("first active schedule is due");
     assert_eq!(
@@ -336,14 +336,12 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
 #[tokio::test]
 async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     let behavior = schedule_test_behavior();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(behavior.node_did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "schedule-source-next-fire-emits-intent",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let owner_did = behavior.node_did().to_string();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
@@ -434,14 +432,12 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
 #[tokio::test]
 async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() {
     let behavior = schedule_test_behavior();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(behavior.node_did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "schedule-source-on-result-writes-fields",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let owner_did = behavior.node_did().to_string();
 
     let initial_next_run_at = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
@@ -619,12 +615,12 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
 
 #[tokio::test]
 async fn schedule_source_next_fire_honors_cancellation_token() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "schedule-source-next-fire-honors-cancell",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let snapshot = snapshot_with_schedules(RapidHashMap::new());
@@ -903,14 +899,12 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
 #[tokio::test]
 async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     let behavior = schedule_test_behavior();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(behavior.node_did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "schedule-source-seeds-null-next-run-at",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let owner_did = behavior.node_did().to_string();
     let trigger_doc_id = create_schedule_with_next_run_at(
         &node,
@@ -991,14 +985,12 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
 #[tokio::test]
 async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     let behavior = schedule_test_behavior();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(behavior.node_did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "schedule-source-seeds-cron-next-run-at",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let owner_did = behavior.node_did().to_string();
 
     let trigger_doc_id = create_schedule_with_next_run_at(
@@ -1106,12 +1098,12 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
 
 #[tokio::test]
 async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "schedule-source-next-fire-survives-idle-",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let snapshot = snapshot_with_schedules(RapidHashMap::new());

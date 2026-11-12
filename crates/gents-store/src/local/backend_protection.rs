@@ -198,7 +198,10 @@ impl PreflightProtectedBackendStore<'_> {
     /// Construct the served node from the same locked data directory whose
     /// provenance was checked. Callers cannot substitute another native node.
     /// The caller reads `plugins` from its plugin store while it holds that
-    /// store's lease, and keeps the lease until this returns.
+    /// store's lease, and keeps the lease until this returns. The node is
+    /// returned already carrying `composition`, so no caller can serve
+    /// requests from a node its lifecycle points cannot find.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_node_with_projection(
         self,
         key: &StoreKey,
@@ -207,12 +210,19 @@ impl PreflightProtectedBackendStore<'_> {
         p2p: Option<defra_node::P2PConfig>,
         policy: Arc<dyn super::ToolSourcePolicy>,
         plugins: Vec<super::ProjectedPlugin>,
+        composition: &crate::node_extension::Extensions,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
         if runtime.did() != self.node_did {
             return Err(BackendProtectionError::WrongNode);
         }
-        self.start_node_with_plugins(key, runtime, http, p2p, policy, plugins)
-            .await
+        let started = self
+            .start_node_with_plugins(key, runtime, http, p2p, policy, plugins)
+            .await?;
+        if let Err(error) = crate::node_extension::attach_all(&started.0, composition) {
+            let _ = started.0.shutdown().await;
+            return Err(error.into());
+        }
+        Ok(started)
     }
 
     async fn start_node_with_plugins(

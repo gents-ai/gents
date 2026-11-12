@@ -485,7 +485,8 @@ mod tests {
 
     #[tokio::test]
     async fn disallowed_service_returns_before_argument_validation() {
-        let (node, _runtime) = super::super::tests::test_node().await;
+        let (db, _runtime) = super::super::tests::test_node().await;
+        let node = db.node.clone();
         let node_did = node.node_identity_did().unwrap().to_owned();
         let tool = CallToolTool::new(MetaToolContext {
             configuration: gents_inference::resolved::ResolvedConfiguration::Static,

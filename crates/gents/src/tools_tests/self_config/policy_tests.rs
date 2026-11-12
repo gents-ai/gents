@@ -8,12 +8,12 @@ use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 
 use std::sync::Arc;
 
-use gents_tools::builtin::self_config::build_self_config_tools_with_runtime;
-use gents_tools::surface::SelfConfigToolConfig;
 use gents_documents::ConfigurationNodeBinding;
 use gents_loop::tool::{ToolDyn, ToolError};
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::identity::NodeIdentity;
+use gents_tools::builtin::self_config::build_self_config_tools_with_runtime;
+use gents_tools::surface::SelfConfigToolConfig;
 
 /// A signed node whose Engineer is the fixture Agent, reached through the
 /// managed-Agent signer the config tool uses. The Agent's own baseline grants
@@ -74,12 +74,7 @@ impl PolicyFixture {
     /// Grants the Engineer its modeled default-Agent sets, as init does, then
     /// each extra permission as the runtime owner.
     async fn grant_engineer_sets(&self, extra: &[NodePermission]) {
-        super::tests::grant_modeled_direct_sets(
-            &self.db,
-            "default-agent",
-            &self.agent_did,
-        )
-        .await;
+        super::tests::grant_modeled_direct_sets(&self.db, "default-agent", &self.agent_did).await;
         self.grant_engineer(extra).await;
     }
 

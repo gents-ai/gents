@@ -50,8 +50,13 @@ async fn signed_claude_tool_round_trip_with_scope(
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
     let request_doc_id = lifecycle.request().doc_id.clone();
-    let sends =
-        captured_claude_sends(&lifecycle.access().unwrap(), &request_doc_id, &request_commit_cid, scope_kind).await;
+    let sends = captured_claude_sends(
+        &lifecycle.access().unwrap(),
+        &request_doc_id,
+        &request_commit_cid,
+        scope_kind,
+    )
+    .await;
     let captured_body = &sends[1];
     let messages = captured_body["messages"].as_array().expect("Messages body");
     let assistant = messages
@@ -86,7 +91,11 @@ async fn signed_claude_tool_round_trip_with_scope(
         "second send must include the accepted tool result"
     );
 
-    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { _docID tool_name lifecycle_state } }").await;
+    let resp = agent_response(
+        &lifecycle.access().unwrap(),
+        "query { AgentToolCall { _docID tool_name lifecycle_state } }",
+    )
+    .await;
     assert!(
         !resp.has_errors(),
         "AgentToolCall query failed: {:?}",
@@ -218,7 +227,7 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
         .expect("assistant headers");
     assert_eq!(headers.len(), 2, "both provider turns were persisted");
     let (_, stored) = gents_session::session::load_canonical_message(
-                    &lifecycle.access().unwrap(),
+        &lifecycle.access().unwrap(),
         headers[0]["_docID"]
             .as_str()
             .expect("provider message document"),
@@ -333,7 +342,8 @@ async fn run_claude_fixture_turns(
 
     let _guard = lock_fixtures_for_test().await;
     install_messages_sse_fixtures(vec![first_turn, sse_fixture_final_text("done")]);
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
 
     let model =
         ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")))
@@ -367,7 +377,9 @@ async fn run_claude_fixture_turns(
     let capture_factory =
         gents_inference::rendered_request::defra_rendered_request_capture_factory_for_signer(
             node.clone(),
-            lifecycle.managed_agent_signer().expect("claimed Agent signer"),
+            lifecycle
+                .managed_agent_signer()
+                .expect("claimed Agent signer"),
         )
         .unwrap();
     let capture_scope = gents_inference::rendered_request::scope_from_factory(
@@ -425,7 +437,8 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
         .expect("runtime")
         .block_on(async {
             install_messages_sse_fixtures(vec![sse_fixture_final_text("done")]);
-            let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+            let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+            let node = db.node.clone();
 
             let identity = gents_store::identity::KeyIdentity::load_or_create(
                 std::env::temp_dir()

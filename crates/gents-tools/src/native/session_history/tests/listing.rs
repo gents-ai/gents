@@ -11,13 +11,13 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
     let owner = pin_fixed_signing_identity(identities.path());
     let other = KeyIdentity::load_or_create(identities.path().join("other.key"), None).unwrap();
     // The fixture writes as the runtime, so the caller is that runtime.
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(owner.did())
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db_as(
+        "sessions-marks-only-the-callers-own-sess",
+        owner.did(),
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();
@@ -134,7 +134,8 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
 
 #[tokio::test]
 async fn session_history_snapshot_reports_recent_agent_sessions() {
-    let node = seeded_node().await;
+    let db = seeded_node().await;
+    let node = db.node.clone();
     let tool = SessionHistoryTool::new(
         node,
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",

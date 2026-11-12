@@ -1,4 +1,3 @@
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{OutputSource, OutputWriter};
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use gents_protocol::request_admission::{
@@ -9,7 +8,6 @@ use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::{json, Value};
-use std::sync::Arc;
 
 async fn create_document(access: &ConfigAccess, collection: &str, input: Value) -> String {
     let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
@@ -54,20 +52,14 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
         }
         exercised.insert(case.name.clone());
         let temp = tempfile::tempdir().unwrap();
-        let root = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "auxiliary-repair-node",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let reader = KeyIdentity::load_or_create(temp.path().join("reader.key"), None).unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(root.did())
-                .with_node_acp_enabled()
-                .with_node_acp_owner(root.did().to_owned())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
         let root_access = ConfigAccess::local_as(node.clone(), root.did().parse().unwrap());
         let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();

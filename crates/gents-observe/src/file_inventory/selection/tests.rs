@@ -207,8 +207,12 @@ async fn hydration_segment_selection_uses_the_session_index() {
 
 #[tokio::test]
 async fn generated_terminal_selections_preserve_superseded_requests() -> Result<()> {
-    let node = Arc::new(gents_store::test_support::node_builder().build().await?);
-    gents_store::schema::ensure_runtime_schemas(&node).await?;
+    let db = gents_inference::test_support::test_db(
+        "generated-terminal-selections",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
     let did = node.node_identity_did().unwrap().to_owned();
     let access = ConfigAccess::local(node.clone());
     let cases = gents_lean_vocab::lean_request_terminal_selection_cases();

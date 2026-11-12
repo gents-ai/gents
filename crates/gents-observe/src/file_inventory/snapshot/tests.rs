@@ -71,6 +71,7 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
     let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "inventory-source-unknown".into(),
         real_identity: true,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -193,6 +194,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             published_admission_with_owner(PublishedAdmissionOptions {
                 name: format!("inventory-projection-{name}"),
                 real_identity: true,
+                composition: gents_automation::lifecycle_hooks::composition(),
                 ..Default::default()
             })
             .await
@@ -571,6 +573,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             published_admission_with_owner(PublishedAdmissionOptions {
                 name: "inventory-native-fork".into(),
                 real_identity: true,
+                composition: gents_automation::lifecycle_hooks::composition(),
                 ..Default::default()
             })
             .await
@@ -1036,6 +1039,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         } else {
             gents_protocol::tool_call::AwaitMode::Foreground
         },
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await

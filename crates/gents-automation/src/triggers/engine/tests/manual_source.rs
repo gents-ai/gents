@@ -351,7 +351,12 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
 
 #[tokio::test]
 async fn production_materializer_rejects_incoherent_source_document_lineage() {
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "production-materializer-rejects-incohere",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let agent = integration_test_agent("general");
     let task = resolved_task_for_test("task-lineage-input", &agent.agent_did, "body");
     let snapshot = snapshot_with_agent_and_schedules(agent, RapidHashMap::new());
@@ -405,7 +410,12 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
 
 #[tokio::test]
 async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "production-materializer-rejects-manual-l",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let snapshot = snapshot_with_schedules(RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node, rx);

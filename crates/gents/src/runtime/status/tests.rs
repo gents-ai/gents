@@ -11,7 +11,6 @@ use gents_lean_vocab::{
     assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
     lean_process_transition_cases, lean_runtime_reconcile_case, LeanLifecycleTransitionCase,
 };
-use gents_store::schema::ensure_runtime_schemas;
 
 #[derive(Debug, Deserialize)]
 struct NodeRuntimeRow {
@@ -29,17 +28,15 @@ struct NodeReadinessRow {
     updated_at: String,
 }
 
-async fn test_node() -> Arc<defra_node::Node> {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let did = node.node_identity_did().unwrap();
+async fn test_node() -> gents_inference::test_support::TestDb {
+    let db = gents_inference::test_support::test_db(
+        "status",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let did = db.node_identity.did();
     let access = gents_store::config_client::ConfigAccess::local_as(
-        node.clone(),
+        db.node.clone(),
         identity::Did::new(did).unwrap(),
     );
     access
@@ -52,7 +49,7 @@ async fn test_node() -> Arc<defra_node::Node> {
         )
         .await
         .unwrap();
-    node
+    db
 }
 
 #[tokio::test]
@@ -347,8 +344,8 @@ async fn fetch_node_readiness_row(
 
 #[tokio::test]
 async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap();
 
     let (first_owner, first) = RuntimeStatusHandle::start(node.clone(), node_did);
@@ -408,8 +405,8 @@ fn process_state_from_contract(state: &str) -> ProcessLifecycleState {
 }
 
 async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap().to_owned();
     let (owner, status) = RuntimeStatusHandle::start(node.clone(), node_did.clone());
     status.readiness().initialize("general").await.unwrap();
@@ -530,8 +527,8 @@ fn runtime_reconcile_state_machine_contract_is_complete() {
 
 #[tokio::test]
 async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
 
     let (tx, _rx) = mpsc::channel(4);
     tx.try_send(status_test_request("queued-1")).unwrap();
@@ -581,8 +578,8 @@ async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
 
 #[tokio::test]
 async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
 
     let (tx, _rx) = mpsc::channel(2);
     let snapshot = ActiveRuntimeSnapshot {
@@ -623,8 +620,8 @@ async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
 
 #[tokio::test]
 async fn runtime_status_serializes_persisted_generation_updates() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
 
     let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     let startup = ActiveRuntimeSnapshot {
@@ -701,8 +698,8 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     assert!(publish.legal);
     assert!(router.legal);
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
 
     let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     let startup = ActiveRuntimeSnapshot {
@@ -793,8 +790,9 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
 
 #[tokio::test]
 async fn goal_settled_uses_live_runtime_status_cases() {
-    let node = test_node().await;
-    let node_did = node.node_identity_did().unwrap().to_owned();
+    let db = test_node().await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did().to_owned();
     let status = RuntimeStatusHandle::new(node, node_did);
     for case in &gents_lean_vocab::lean_contract_snapshot().identity_readiness_settled_cases {
         {

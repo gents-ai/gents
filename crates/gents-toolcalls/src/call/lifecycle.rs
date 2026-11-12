@@ -42,12 +42,12 @@ pub use gents_session::tool_call::query::result::{
 };
 pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
-mod recovery;
-mod session_message_call;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 #[allow(dead_code)]
 pub mod admission_fixture;
+mod recovery;
+mod session_message_call;
 mod transition;
 
 use gents_loop::tool_call_lifecycle::FailureClass;
@@ -616,7 +616,12 @@ mod tests {
 
     #[tokio::test]
     async fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
-        let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+        let node_db = gents_inference::test_support::test_db(
+            "tool-row-kind-is-session-message-for-age",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
         let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
         let kind_of = |tool_name: &str| {
             ToolCallLifecycle::new(
@@ -645,7 +650,9 @@ mod tests {
         node.shutdown().await.expect("shut down test node");
     }
 
-    use gents_lean_vocab::{assert_state_machine_contract_is_complete, lean_state_machine_contract};
+    use gents_lean_vocab::{
+        assert_state_machine_contract_is_complete, lean_state_machine_contract,
+    };
 
     #[test]
     fn tool_call_state_machine_contract_is_complete() {

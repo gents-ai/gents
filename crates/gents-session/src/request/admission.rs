@@ -1656,7 +1656,6 @@ mod tests {
     use gents_p2p::p2p_reconcile::enrollment_authority_channel;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
     use gents_store::identity::{KeyIdentity, NodeIdentity};
-    use gents_store::schema::ensure_runtime_schemas;
 
     #[test]
     fn generated_client_claim_queue_candidates_match_the_model() {
@@ -1690,22 +1689,19 @@ mod tests {
     #[tokio::test]
     async fn pending_rejection_requires_the_selected_managed_agent() {
         let dir = tempfile::tempdir().unwrap();
-        let root = KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "pending-rejection-requires-selected-agen",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let other_root = KeyIdentity::load_or_create(dir.path().join("other.key"), None).unwrap();
         let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let other_binding = gents_store::identity::provision_agent_identity(&other_root).unwrap();
         let other_agent =
             gents_store::identity::resolve_agent_identity(&other_root, &other_binding).unwrap();
-        let node = std::sync::Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(root.did())
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
         gents_store::identity::GrantSet::AgentBaseline
             .grant(
                 &gents_store::config_client::ConfigAccess::local_as(
@@ -1751,14 +1747,14 @@ mod tests {
         let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
         let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-        let node = std::sync::Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "runtime-receipt-authenticates-terminal-e",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let identity =
+            gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         // A runtime-local-control receipt is issued and signed by the target Agent itself.
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -1851,13 +1847,12 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_trigger_source_requires_current_trigger_and_target_policy() {
-        let node = std::sync::Arc::new(
-            gents_store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "runtime-trigger-source-requires-current-",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
         let response = node
             .execute(
                 r#"mutation {
@@ -1969,7 +1964,11 @@ mod tests {
 
     impl AdmissionFixture {
         async fn new(name: &str) -> Self {
-            let db = gents_inference::test_support::test_db(name).await;
+            let db = gents_inference::test_support::test_db(
+                name,
+                crate::test_support::no_lifecycle_plugins(),
+            )
+            .await;
             let (db, _user, user, binding) =
                 gents_inference::test_support::signed_test_node_from_db(db, name).await;
             let runtime = db.node_identity.clone();

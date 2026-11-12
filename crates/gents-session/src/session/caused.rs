@@ -170,25 +170,15 @@ fn row_scope(row: &AgentRequestRow) -> Result<SessionScope> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::lineage_fixtures::{node_builder, seed_lineage_case, FIXTURE_DID};
-    use std::sync::Arc;
+    use crate::test_support::lineage_fixtures::{seed_lineage_case, started_node, FIXTURE_DID};
 
     #[tokio::test]
     async fn generated_plugin_job_lineage_cases_drive_caused_session_readers() {
         let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
         let did = FIXTURE_DID;
         for case in snapshot["plugin_job_lineage_cases"].as_array().unwrap() {
-            let dir = tempfile::tempdir().unwrap();
-            let node = Arc::new(
-                node_builder()
-                    .data_path(dir.path().join("node"))
-                    .build()
-                    .await
-                    .unwrap(),
-            );
-            gents_store::schema::ensure_runtime_schemas(node.as_ref())
-                .await
-                .unwrap();
+            let db = started_node("plugin-job-lineage").await;
+            let node = db.node.clone();
             let ids = seed_lineage_case(&node, case, did).await;
             let access = ConfigAccess::local(node.clone());
             for query in case["queries"].as_array().unwrap() {

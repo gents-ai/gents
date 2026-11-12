@@ -2,16 +2,20 @@ use super::*;
 
 const ARGS: &str = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
 
-async fn fixture(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String, String) {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+async fn fixture(
+    name: &str,
+) -> (
+    gents_inference::test_support::TestDb,
+    DefraSessionHook,
+    String,
+    String,
+) {
+    let db = gents_inference::test_support::test_db(
+        "native-transcript",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
     let request = format!("native-transcript-{name}");
@@ -22,7 +26,7 @@ async fn fixture(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String
         chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
-    (node, hook, session, request)
+    (db, hook, session, request)
 }
 
 fn tool_turn(ids: &[String]) -> Message {
@@ -117,9 +121,15 @@ fn results(messages: &[Message]) -> Vec<&str> {
         .collect()
 }
 
-async fn completed(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String) {
+async fn completed(
+    name: &str,
+) -> (
+    gents_inference::test_support::TestDb,
+    DefraSessionHook,
+    String,
+) {
     let case = gents_lean_vocab::lean_transcript_case(name);
-    let (node, hook, session, request) = fixture(name).await;
+    let (db, hook, session, request) = fixture(name).await;
     publish_claimed_authored_input(
         &hook,
         &request,
@@ -144,13 +154,14 @@ async fn completed(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, Stri
         &format!("payload-{}", case.action_payload_hashes[0]),
     )
     .await;
-    (node, hook, session)
+    (db, hook, session)
 }
 
 #[tokio::test]
 async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     let ordering = gents_lean_vocab::lean_transcript_case("ordering_user_assistant_tool_result");
-    let (node, hook, session) = completed(&ordering.name).await;
+    let (db, hook, session) = completed(&ordering.name).await;
+    let node = db.node.clone();
     let rows = history(&hook, &session).await;
     assert_eq!(rows.len(), ordering.post_message_count);
     assert!(matches!(
@@ -205,7 +216,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
         parallel.action,
         "publish_once_dispatch_in_order_then_complete_each_parallel_result"
     );
-    let (_node, hook, session, request) = fixture(&parallel.name).await;
+    let (_db, hook, session, request) = fixture(&parallel.name).await;
     publish_claimed_authored_input(
         &hook,
         &request,
@@ -251,7 +262,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     }
 
     let pair = gents_lean_vocab::lean_transcript_case("completed_tool_pair_closed");
-    let (_node, hook, session) = completed(&pair.name).await;
+    let (_db, hook, session) = completed(&pair.name).await;
     let id = format!("result-{}", pair.logical_result_id);
     assert_eq!(
         fetch_tool_call_row(&hook, &session, &id).await["lifecycle_state"].as_str(),
@@ -264,7 +275,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     );
 
     let abandon = gents_lean_vocab::lean_transcript_case("drop_abandon_not_strong_drain");
-    let (_node, hook, session, _) = fixture(&abandon.name).await;
+    let (_db, hook, session, _) = fixture(&abandon.name).await;
     let (_, ids) = accept_turn(
         &hook,
         &abandon.action_call_ids,

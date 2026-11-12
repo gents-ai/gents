@@ -603,10 +603,10 @@ async fn read_step_row_in_txn_sees_the_transactions_own_writes() {
 }
 
 use crate::background::job::input::tests::{agent_did, insert_as, node_did, Job};
-use gents_pack::plugin::test_fixtures::installed_plugin;
 use gents_pack::pack::{write_home_install, HomePackInstall, PackKind};
 use gents_pack::plugin::store;
 use gents_pack::plugin::test_fixtures::constant_output_wat;
+use gents_pack::plugin::test_fixtures::installed_plugin;
 use gents_protocol::job::{
     DynamicMode, JobChildState, JobOrigin, PluginJobDeclaration, PluginJobSettings,
 };

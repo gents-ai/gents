@@ -55,21 +55,13 @@ impl Stream for ObservedChanges {
 
 #[tokio::test]
 async fn notifications_without_a_held_agent_do_not_enter_the_command_retry_queue() {
-    let temp = tempfile::tempdir().unwrap();
-    let identity: Arc<dyn NodeIdentity> = Arc::new(
-        gents_store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
-            .unwrap(),
-    );
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "notifications-without-a-held-agent-do-no",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let identity: Arc<dyn NodeIdentity> = node_db.node_identity.clone();
     let changes = CommandKind::ALL
         .into_iter()
         .flat_map(|kind| {

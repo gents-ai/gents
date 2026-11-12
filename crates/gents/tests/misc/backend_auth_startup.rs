@@ -82,7 +82,10 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
         .iter()
         .find(|behavior| behavior.agent.agent_did == agent.default_agent_did())
         .expect("document runtime should load the default behavior");
-    assert_eq!(default_agent.agent.completion_client_api_key()?, "backend-key");
+    assert_eq!(
+        default_agent.agent.completion_client_api_key()?,
+        "backend-key"
+    );
 
     Ok(())
 }

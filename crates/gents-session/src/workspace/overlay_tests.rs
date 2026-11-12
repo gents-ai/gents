@@ -488,13 +488,14 @@ pub struct ArtifactTestFixture {
     pub grant: crate::workspace::ArtifactGrant,
     pub owner: crate::request::lifecycle::RequestLifecycle,
     pub node: std::sync::Arc<defra_node::Node>,
+    pub _db: gents_inference::test_support::TestDb,
     pub _dir: tempfile::TempDir,
 }
 
 pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixture {
     use crate::workspace::*;
     use gents_store::identity::NodeIdentity;
-    use std::{collections::BTreeSet, sync::Arc};
+    use std::collections::BTreeSet;
     fn git(root: &std::path::Path, args: &[&str]) -> String {
         let output = crate::exec::native_spawn::output_std(
             std::process::Command::new("git")
@@ -533,25 +534,19 @@ pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixtur
     }
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "fixture"]);
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(root.join("agent.key"), None).unwrap();
+    let db = gents_inference::test_support::test_db(
+        "overlay-artifact-workspace",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let did = identity.did().to_owned();
     let workspace_identity =
         gents_store::identity::KeyIdentity::load_or_create(root.join("workspace-owner.key"), None)
             .unwrap();
     let workspace_owner = workspace_identity.did().to_owned();
     assert_ne!(workspace_owner, did);
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .data_path(root.join("db"))
-            .with_node_identity_did(&did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
     let mut documents = MemoryWorkspaceDocuments::default();
     let mut context = HostExecutorContext {
         owner_node_did: workspace_owner.clone(),
@@ -680,6 +675,7 @@ pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixtur
         grant,
         owner,
         node,
+        _db: db,
         _dir: dir,
     }
 }
@@ -815,6 +811,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         grant,
         mut owner,
         node,
+        _db,
         _dir,
     } = artifact_test_fixture(&[]).await;
     let artifact_root = grant.root().to_owned();

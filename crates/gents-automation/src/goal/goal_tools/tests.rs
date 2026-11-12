@@ -1,10 +1,8 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use defra_node::Node as EmbeddedNode;
 use gents_inference::llm::{HookAction, ToolCallHookAction};
-use gents_store::identity::{KeyIdentity, NodeIdentity};
-use gents_store::schema::ensure_runtime_schemas;
+use gents_store::identity::NodeIdentity;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
 use serde_json::json;
@@ -15,23 +13,13 @@ mod goal_context;
 
 #[tokio::test]
 async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifecycle() {
-    let identity_dir = tempfile::tempdir().unwrap();
-    let identity =
-        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-goal-create-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    crate::lifecycle_hooks::attach(&node).unwrap();
+    let db = gents_inference::test_support::test_db(
+        "goal-hook-create",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, true)
@@ -260,14 +248,10 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     );
 
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(data_path);
 }
 
 #[tokio::test]
 async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
-    let identity_dir = tempfile::tempdir().unwrap();
-    let identity =
-        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let goal_case = gents_lean_vocab::lean_goal_create_cases()
         .iter()
         .find(|case| case.expected == "fresh" && case.token_budget.is_none())
@@ -280,15 +264,13 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
     for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
         let mut completion_mutation = None;
         for inject in [false, true] {
-            let node = Arc::new(
-                gents_store::test_support::node_builder()
-                    .with_node_identity_did(identity.did())
-                    .build()
-                    .await
-                    .unwrap(),
-            );
-            ensure_runtime_schemas(&node).await.unwrap();
-            crate::lifecycle_hooks::attach(&node).unwrap();
+            let db = gents_inference::test_support::test_db(
+                "goal-dispatch-replay",
+                crate::lifecycle_hooks::composition(),
+            )
+            .await;
+            let node = db.node.clone();
+            let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
             let mut hook = DefraSessionHook::with_identity(node.clone(), identity.did(), policy)
                 .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create)
                 .with_goal_tools(Arc::new(crate::goal::goal_tools::GoalToolAnswers));
@@ -394,21 +376,13 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
 
 #[tokio::test]
 async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
-    let identity_dir = tempfile::tempdir().unwrap();
-    let identity =
-        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-goal-guard-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .expect("embedded node"),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    crate::lifecycle_hooks::attach(&node).unwrap();
+    let db = gents_inference::test_support::test_db(
+        "goal-hook-guard",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
 
     let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
@@ -503,29 +477,18 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     assert_eq!(goal.wrapup_completed, Some(false));
 
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
-    let identity_dir = tempfile::tempdir().unwrap();
-    let identity =
-        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-goal-update-{}", uuid::Uuid::new_v4()));
     // The hook's session is signed by the runtime it runs as.
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .data_path(&data_path)
-            .build()
-            .await
-            .expect("embedded node"),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    crate::lifecycle_hooks::attach(&node).unwrap();
+    let db = gents_inference::test_support::test_db(
+        "goal-hook-update",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false)
@@ -725,5 +688,4 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     }
 
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(&data_path);
 }

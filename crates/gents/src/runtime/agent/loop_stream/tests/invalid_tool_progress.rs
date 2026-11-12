@@ -50,7 +50,8 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().invalid_tool_progress_cases;
     assert_eq!(cases.len(), 11);
     for case in cases {
-        let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let node = db.node.clone();
         let outcomes = &case.outcomes;
         let mut turns = outcomes
             .iter()
@@ -156,7 +157,8 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
 #[tokio::test]
 async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
     for batched in [false, true] {
-        let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let node = db.node.clone();
         let mut chunks = (0..8)
             .map(|index| invalid_progress_call(index, "policyDenied"))
             .collect::<Vec<_>>();
@@ -202,7 +204,12 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
             )
             .await
             .expect("terminal owner settles every published undispatched call");
-        let data = agent_query(&lifecycle.access().unwrap(), "{ AgentToolCall { _docID tool_call_id lifecycle_state } }").await["data"].clone();
+        let data = agent_query(
+            &lifecycle.access().unwrap(),
+            "{ AgentToolCall { _docID tool_call_id lifecycle_state } }",
+        )
+        .await["data"]
+            .clone();
         let rows = data["AgentToolCall"].as_array().unwrap();
         assert_eq!(
             rows.len(),
@@ -234,7 +241,8 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
 
 #[tokio::test]
 async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeeds() {
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("crates")).unwrap();
     std::fs::write(root.path().join("crates/visible-proof.txt"), "fixture").unwrap();
@@ -323,7 +331,12 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         .as_str()
         .unwrap()
         .contains("executable"));
-    let data = agent_query(&lifecycle.access().unwrap(), "{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }").await["data"].clone();
+    let data = agent_query(
+        &lifecycle.access().unwrap(),
+        "{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }",
+    )
+    .await["data"]
+        .clone();
     let rows = data["AgentToolCall"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     assert!(rows
@@ -346,7 +359,8 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
 #[tokio::test]
 async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
     for arguments in [serde_json::json!({}), serde_json::json!("")] {
-        let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let node = db.node.clone();
         let root = tempfile::tempdir().unwrap();
         let mut turns = (0..9)
             .map(|index| {
@@ -395,7 +409,12 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
             "unexpected owned loop error: {error}"
         );
         assert_eq!(model.seen_requests().await.len(), 8);
-        let data = agent_query(&lifecycle.access().unwrap(), "{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }").await["data"].clone();
+        let data = agent_query(
+            &lifecycle.access().unwrap(),
+            "{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }",
+        )
+        .await["data"]
+            .clone();
         let rows = data["AgentToolCall"].as_array().unwrap();
         assert_eq!(rows.len(), 8);
         assert!(rows.iter().all(|row| row["lifecycle_state"] == "failed"

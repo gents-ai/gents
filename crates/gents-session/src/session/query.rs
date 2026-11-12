@@ -268,9 +268,6 @@ pub async fn client_requester_scope(
 async fn stop_latch_reads_as_the_selected_actor() {
     use gents_store::identity::NodeIdentity as _;
     let home = tempfile::tempdir().unwrap();
-    let runtime =
-        gents_store::identity::KeyIdentity::load_or_create(home.path().join("runtime.key"), None)
-            .unwrap();
     let user =
         gents_store::identity::KeyIdentity::load_or_create(home.path().join("user.key"), None)
             .unwrap();
@@ -280,16 +277,13 @@ async fn stop_latch_reads_as_the_selected_actor() {
     let other =
         gents_store::identity::KeyIdentity::load_or_create(home.path().join("other.key"), None)
             .unwrap();
-    let node = std::sync::Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(runtime.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "stop-latch-reads-as-the-selected-actor",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let runtime = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
     // Embedded writes need the node identity or a managed Agent; the requester
     // user is recorded as data on the session, not used as the writer.
     let access = gents_store::config_client::ConfigAccess::local_as(

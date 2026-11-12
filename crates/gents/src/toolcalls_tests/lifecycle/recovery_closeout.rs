@@ -14,6 +14,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         name: "session-message-wake-at-bound".to_owned(),
         real_identity: true,
         await_mode: AwaitMode::Background,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -204,6 +205,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         real_identity: true,
         await_mode: AwaitMode::Background,
         paired_client: true,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -335,4 +337,3 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
-

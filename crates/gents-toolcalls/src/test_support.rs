@@ -249,7 +249,6 @@ pub fn asking_plugin_wat(
     )
 }
 
-
 /// Inserts a document through `access` and returns its doc id. Rows owned
 /// by an Agent must be written through that Agent's access.
 pub async fn insert_as(
@@ -273,7 +272,6 @@ pub async fn insert_as(
         .await
         .unwrap()
 }
-
 
 pub fn live_settings(
     policy: gents_protocol::job::JobPolicy,

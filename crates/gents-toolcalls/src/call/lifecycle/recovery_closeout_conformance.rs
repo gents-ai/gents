@@ -1,6 +1,4 @@
-use crate::call::lifecycle::admission_fixture::{
-    published_admission, PublishedAdmissionOptions,
-};
+use crate::call::lifecycle::admission_fixture::{published_admission, PublishedAdmissionOptions};
 use crate::call::lifecycle::ToolCallLifecycle;
 use gents_protocol::tool_call::AwaitMode;
 
@@ -71,10 +69,6 @@ async fn generated_native_missing_parent_restart_cases_defer() {
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
     }
 }
-
-
-
-
 
 #[cfg(unix)]
 #[tokio::test]

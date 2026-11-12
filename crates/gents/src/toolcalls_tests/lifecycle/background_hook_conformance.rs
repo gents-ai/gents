@@ -96,13 +96,13 @@ async fn publish_hook_call(
 
 #[tokio::test]
 async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
-    use gents_toolcalls::background::status::ProcessControlScope;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
     use gents_session::request::lifecycle::{
         ClaimOutcome, RequestTerminalOutcome, TerminalizeResult,
     };
+    use gents_toolcalls::background::status::ProcessControlScope;
 
     let originating = gents_lean_vocab::lean_r6_backgrounding_case(
         "originating_request_without_matching_requester_is_denied",
@@ -145,16 +145,17 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
             AgentRequestAdmissionRecord::client(user.did()),
         )
     };
-    let mut origin = gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-        &node,
-        &client,
-        runtime.clone(),
-        &user,
-        agent.as_ref(),
-        make_request("scope-origin"),
-    )
-    .await
-    .unwrap();
+    let mut origin =
+        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &client,
+            runtime.clone(),
+            &user,
+            agent.as_ref(),
+            make_request("scope-origin"),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         origin.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
@@ -265,16 +266,17 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         TerminalizeResult::Won
     );
 
-    let mut next = gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-        &node,
-        &client,
-        runtime.clone(),
-        &user,
-        agent.as_ref(),
-        make_request("scope-next"),
-    )
-    .await
-    .unwrap();
+    let mut next =
+        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &client,
+            runtime.clone(),
+            &user,
+            agent.as_ref(),
+            make_request("scope-next"),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         next.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed

@@ -2,7 +2,7 @@ use super::*;
 use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::{created_doc_id, escape_graphql_string};
-use gents_store::identity::NodeIdentity;
+use gents_store::identity::NodeIdentity as _;
 use serde_json::Value;
 
 #[tokio::test]
@@ -40,17 +40,13 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
             _ => None,
         })
         .expect("modeled sibling");
-    let directory = tempfile::tempdir()?;
-    let owner =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
-    let user = owner.did();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(user)
-            .with_node_acp_enabled()
-            .build()
-            .await?,
-    );
+    let db = gents_inference::test_support::test_db(
+        "modeled-explicit-grants-read",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let user = db.node_identity.did();
     let user_access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
     let actor = identity::Did::new(agent)?;
     // The sibling is also a managed Agent holding the baseline, so its refusal is
@@ -190,17 +186,13 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
             _ => None,
         })
         .expect("modeled sibling");
-    let directory = tempfile::tempdir()?;
-    let owner =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
-    let user = owner.did();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(user)
-            .with_node_acp_enabled()
-            .build()
-            .await?,
-    );
+    let db = gents_inference::test_support::test_db(
+        "modeled-sibling-grants-read",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let user = db.node_identity.did();
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
     for agent_did in [agent, sibling] {
         gents_store::identity::GrantSet::AgentBaseline
@@ -381,7 +373,7 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
 
 #[tokio::test]
 async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::Result<()> {
-    use gents_store::config_client::{GraphqlEndpoint, NodePermission};
+    use gents_store::config_client::NodePermission;
 
     let case = lean_identity_household_cases()
         .iter()
@@ -395,26 +387,20 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
         .owner;
     let directory = tempfile::tempdir()?;
     let key_path = directory.path().to_owned();
-    let (runtime, user) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        Ok((
-            gents_store::identity::KeyIdentity::load_or_create(key_path.join("runtime"), None)?,
-            gents_store::identity::KeyIdentity::load_or_create(key_path.join("user"), None)?,
-        ))
+    let user = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        Ok(gents_store::identity::KeyIdentity::load_or_create(
+            key_path.join("user"),
+            None,
+        )?)
     })
     .await??;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await?
-        .into_std()?;
-    let address = listener.local_addr()?;
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .enable_signing()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener)?)
-            .build()
-            .await?,
-    );
+    let db = gents_inference::test_support::test_db(
+        "modeled-http-provider-inputs",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     let actor = identity::Did::new(agent)?;
     for (subject, permissions) in [
@@ -437,11 +423,7 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
             admin.grant_node_permission(&subject, permission).await?;
         }
     }
-    let access = ConfigAccess::Graphql(
-        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
-            .with_client_signing_capability(user.client_signing_capability()?)?
-            .with_client_signed_agent_creates(),
-    );
+    let access = db.client_access(&user);
     let context =
         defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
     let policy = node

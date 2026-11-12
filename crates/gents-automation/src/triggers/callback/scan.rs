@@ -1026,16 +1026,9 @@ mod grouped_tests {
 
     #[tokio::test]
     async fn group_invocation_freezes_projected_array_once_and_surfaces_planner_error() {
-        let node = Arc::new(
-            crate::triggers::callback::test_node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        let owner = gents_store::test_support::PIN_FIXED_DID;
+        let db = crate::triggers::callback::test_node_builder("callback-grouped").await;
+        let node = db.node.clone();
+        let owner = db.node_identity.did();
         crate::triggers::callback::seed_test_agent(&node, owner).await;
 
         node.add_collection("type CallbackMember { batch:String value:String hidden:String }")

@@ -14,15 +14,12 @@ async fn insert(node: &Arc<EmbeddedNode>, collection: &str, value: Value) -> Str
 
 #[tokio::test]
 async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_requests() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "physical-interrupt-preserves-exact-scope",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"same-session","agent_did":"configured","lifecycle_state":"processing"})).await;
     let foreign = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"foreign","requester_did":null,"session_id":"same-session","agent_did":"configured","lifecycle_state":"processing"})).await;
     let bridge = insert(&node, "AgentToolCall", json!({"request_id":"parent","request_doc_id":parent,"node_did":"owner","requester_did":null,"session_id":"same-session","tool_call_id":"spawn","tool_name":"agent_new","lifecycle_state":"running","await_mode":"background"})).await;
@@ -79,15 +76,12 @@ async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_reque
 
 #[tokio::test]
 async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_physical() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "colliding-logical-interrupt-fetch-reject",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let owner = insert(
         &node,
         "AgentRequest",

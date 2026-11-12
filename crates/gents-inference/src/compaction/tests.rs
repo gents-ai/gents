@@ -14,18 +14,12 @@ use super::*;
 use gents_loop::provider_input::budget::can_dispatch;
 use gents_store::test_support::first_content;
 
-
-
 fn test_message_tokens(messages: &[Message]) -> usize {
     gate_test_loop_config()
         .provider_input_counter
         .estimate_message_request(messages)
         .expect("test messages project to the provider wire shape")
 }
-
-
-
-
 
 fn tool_call_msg(name: &str, args: &str) -> Message {
     Message::Assistant {
@@ -499,9 +493,6 @@ fn assert_checkpoint_markers(summary: &str, markers: &[&str]) {
         );
     }
 }
-
-
-
 
 #[derive(Clone, Default)]
 struct SentinelCheckpointModel {
@@ -1184,7 +1175,6 @@ async fn transient_compaction_failures_follow_the_internal_immediate_policy() {
     );
 }
 
-
 #[test]
 fn protected_split_does_not_treat_retention_target_as_context_ceiling() {
     let messages = summary_worthy_messages();
@@ -1231,11 +1221,6 @@ async fn protected_zero_prefix_rejects_before_summary_provider_call() {
     ));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
-
-
-
-
-
 
 #[tokio::test(start_paused = true)]
 async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
@@ -1379,7 +1364,6 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
         "schema-invalid JSON must consume exactly one retry"
     );
 }
-
 
 #[tokio::test(start_paused = true)]
 async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback() {
@@ -1938,7 +1922,6 @@ fn safe_to_reduce_requires_a_sanitizer_fixed_point_and_turn_boundary() {
     ];
     assert!(!safe_to_reduce(&orphaned_result));
 }
-
 
 fn scoped_call(id: &str) -> AssistantContent {
     AssistantContent::ToolCall(ToolCall {

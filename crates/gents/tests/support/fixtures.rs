@@ -154,7 +154,12 @@ pub fn default_tool_configs(
 ) -> rapidhash::RapidHashMap<String, Arc<AgentToolSurfaceConfig>> {
     agents
         .keys()
-        .map(|agent_did| (agent_did.clone(), Arc::new(AgentToolSurfaceConfig::default())))
+        .map(|agent_did| {
+            (
+                agent_did.clone(),
+                Arc::new(AgentToolSurfaceConfig::default()),
+            )
+        })
         .collect()
 }
 

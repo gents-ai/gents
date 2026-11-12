@@ -273,29 +273,28 @@ async fn saturated_command_queue_cannot_block_owner_close_forever() {
     );
 }
 
-async fn test_publisher() -> (NodeReadinessPublisherOwner, NodeReadinessPublisherHandle) {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(node.as_ref())
-        .await
-        .unwrap();
-    let node_did = node
-        .node_identity_did()
-        .expect("fixture node has an identity")
-        .to_owned();
+async fn test_publisher() -> (
+    gents_inference::test_support::TestDb,
+    NodeReadinessPublisherOwner,
+    NodeReadinessPublisherHandle,
+) {
+    let db = gents_inference::test_support::test_db(
+        "node-readiness-publisher",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did().to_owned();
     // Readiness is published under the Node document; production creates it
     // through the runtime owner's signed access before the publisher starts.
     gents_documents::test_support::ensure_test_node(&node, &node_did).await;
-    NodeReadinessPublisherHandle::start(node, node_did)
+    let (owner, publisher) = NodeReadinessPublisherHandle::start(node, node_did);
+    (db, owner, publisher)
 }
 
 #[tokio::test]
 async fn replacement_ready_cannot_clear_demotion_until_source_generation_advances() {
-    let (owner, publisher) = test_publisher().await;
+    let (_db, owner, publisher) = test_publisher().await;
     publisher.initialize("general").await.unwrap();
     publisher.register_slot("general", 1).await.unwrap();
     publisher
@@ -364,7 +363,7 @@ async fn replacement_ready_cannot_clear_demotion_until_source_generation_advance
 
 #[tokio::test]
 async fn invalid_source_leaves_committed_standing_and_observation_usable() {
-    let (owner, publisher) = test_publisher().await;
+    let (_db, owner, publisher) = test_publisher().await;
     publisher.initialize("general").await.unwrap();
     publisher.register_slot("general", 1).await.unwrap();
     publisher
@@ -446,7 +445,7 @@ async fn invalid_source_leaves_committed_standing_and_observation_usable() {
 
 #[tokio::test]
 async fn unchanged_demoted_slot_stays_demoted_across_unrelated_global_generation() {
-    let (owner, publisher) = test_publisher().await;
+    let (_db, owner, publisher) = test_publisher().await;
     publisher.initialize("general").await.unwrap();
     publisher.register_slot("general", 1).await.unwrap();
 
@@ -491,7 +490,7 @@ async fn unchanged_demoted_slot_stays_demoted_across_unrelated_global_generation
 
 #[tokio::test]
 async fn semantic_noop_and_stale_commands_do_not_emit_watch_revisions() {
-    let (owner, publisher) = test_publisher().await;
+    let (_db, owner, publisher) = test_publisher().await;
     publisher.initialize("general").await.unwrap();
     publisher.register_slot("general", 2).await.unwrap();
     let mut observation = publisher.observation.clone();

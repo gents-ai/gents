@@ -7,7 +7,7 @@ use gents_inference::llm::message::{
     UserContent,
 };
 use gents_inference::llm::{HookAction, ToolCallHookAction};
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
 use super::fixtures::*;
@@ -32,24 +32,14 @@ mod session_message_commit;
 #[cfg(all(test, unix))]
 pub(crate) mod process_records;
 
-
-
-
-
-
 #[tokio::test]
 async fn client_output_snapshot_reads_full_retained_window_without_widening_model_budget() {
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "client-output-snapshot-reads-full-retain",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let registry = BackgroundExecutionRegistry::default();
     let hook = signed_hook(&node, FailurePolicy::default())
         .await
@@ -170,7 +160,12 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
 
 #[tokio::test]
 async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capability() {
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "goal-tool-interception-defaults-deny-and",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let denied =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let denied_update = denied
@@ -206,9 +201,7 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
 use gents_lean_vocab::{
     lean_persistence_failure_policy_cases, lean_storage_observation_runtime_cases,
 };
-use gents_store::schema::ensure_runtime_schemas;
 use gents_store::test_support::first_content;
-
 
 fn hook_counters_for_test() -> HookCounters {
     HookCounters {
@@ -219,13 +212,12 @@ fn hook_counters_for_test() -> HookCounters {
 
 #[tokio::test]
 async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .expect("embedded node"),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "request-lineage-preserves-previous-bindi",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:host", FailurePolicy::default());
 
@@ -257,12 +249,12 @@ async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
 
 #[tokio::test]
 async fn active_request_binding_rejects_a_half_bound_pair() {
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .build()
-            .await
-            .expect("embedded node"),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "active-request-binding-rejects-a-half-bo",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:host", FailurePolicy::default());
 
@@ -288,8 +280,6 @@ fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
         other => panic!("unknown Lean persistence failure policy {other:?}"),
     }
 }
-
-
 
 #[test]
 fn generated_persistence_failure_policy_cases_match_hook_decisions() {
@@ -349,7 +339,12 @@ fn generated_persistence_failure_policy_cases_match_hook_decisions() {
 async fn generated_storage_observation_cases_match_hook_runtime_classification() {
     let cases = lean_storage_observation_runtime_cases();
     assert_eq!(cases.len(), 8);
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "generated-storage-observation-cases-matc",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     for case in cases {
         if case.mutation_result == "notApplicable" {
@@ -400,37 +395,14 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[tokio::test]
 async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "control-tool-lost-terminal-compare-repla",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("race control completion"), &[])
         .await;
@@ -523,19 +495,16 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
     assert_eq!(presentation.result.as_deref(), Some("durable winner"));
 }
 
-
 #[tokio::test]
 async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-deadline-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "hook-attaches-active-request-deadline-to",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Run a tool");
@@ -576,22 +545,16 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-
-
-
-
 #[tokio::test]
 async fn claimed_authored_input_persists_context_once_before_prompt() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "claimed-authored-input-persists-context-",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
@@ -632,14 +595,12 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
 #[tokio::test]
 async fn context_and_prompt_deduped_across_retry_attempts() {
     let data_path = std::env::temp_dir().join(format!("agent-hook-retry-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "context-and-prompt-deduped-across-retry-",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
     let prompt = user_text_message("Do the thing");
@@ -718,14 +679,12 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
         "agent-hook-steering-dedup-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "steering-input-is-published-once-when-cl",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
     let prompt = user_text_message("also check the staging config");
@@ -777,14 +736,12 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
 async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-timeout-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "hook-maps-managed-timeout-result-to-time",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
@@ -837,14 +794,12 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
 async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-unknown-tool-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "hook-maps-unknown-tool-dispatch-to-faile",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
@@ -903,14 +858,12 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
 async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-full-spill-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "hook-persists-exact-canonical-output-str",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
@@ -965,14 +918,12 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
 async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-cancel-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "cancelling-one-hook-does-not-cancel-unre",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook_a = signed_hook(&node, FailurePolicy::default()).await;
     let hook_b = signed_hook(&node, FailurePolicy::default()).await;
@@ -1029,15 +980,12 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
 #[cfg(unix)]
 async fn interruption_leaves_background_workers_running() {
     use std::time::Duration;
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "interruption-leaves-background-workers-r",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("background work"), &[])
         .await;
@@ -1167,15 +1115,12 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     use gents_session::session::tool_call_state::ToolCallState;
     let cases = gents_lean_vocab::lean_interrupt_disposition_cases();
     assert!(!cases.is_empty());
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(dir.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "generated-interrupt-dispositions-drive-i",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     let mut driven = 0;
     for case in cases {
@@ -1243,14 +1188,12 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
 async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-mixed-cancel-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "interrupt-cancels-native-tools-and-keeps",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.unwrap();
@@ -1378,14 +1321,12 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
 #[tokio::test]
 async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
     let data_path = std::env::temp_dir().join(format!("agent-hook-fail-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "hook-can-fail-live-tool-call-without-con",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
@@ -1433,14 +1374,12 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
 #[tokio::test]
 async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let data_path = std::env::temp_dir().join(format!("gents-hook-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "streaming-turn-persists-full-assistant-h",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Inspect /tmp/main.rs");
@@ -1564,14 +1503,12 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
         "agent-hook-durable-reasoning-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "assistant-turn-materializes-durable-reas",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Explain the plan");
@@ -1628,14 +1565,12 @@ async fn read_file_result_persists_raw_output() {
         "agent-hook-read-file-model-observation-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "read-file-result-persists-raw-output",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
@@ -1720,14 +1655,12 @@ async fn owned_tool_result_materializes_one_transcript_row() {
         "agent-hook-tool-result-message-dedupe-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "owned-tool-result-materializes-one-trans",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
@@ -1864,14 +1797,12 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         "agent-hook-tool-result-distinct-message-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "tool-result-message-dedupe-preserves-dis",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
@@ -1932,14 +1863,12 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
 async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-tool-turn-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "accepted-tool-turns-keep-results-bound-t",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Inspect mini-1");
@@ -2012,15 +1941,12 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
 #[tokio::test]
 async fn remote_presentations_persist_the_same_selected_identity() {
     use gents_documents::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
-    let temp = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(temp.path().join("data"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "remote-presentations-persist-the-same-se",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let mut rows = Vec::new();
     for (index, style) in [RemoteToolStyle::Flat, RemoteToolStyle::Discovery]
         .into_iter()
@@ -2200,14 +2126,12 @@ async fn background_execution_completion_wait_observes_task_abort_guard_drop() {
 async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-forgery-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "forged-lifecycle-sentinel-in-tool-output",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
@@ -2276,14 +2200,12 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
         "agent-hook-reported-failure-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "trusted-reported-failure-persists-typed-",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
@@ -2340,19 +2262,16 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-
 #[tokio::test]
 async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-cancelled-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "cancelled-tool-result-persists-cancelled",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
@@ -2417,14 +2336,12 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
 async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-real-denial-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "real-bash-policy-denial-persists-typed-c",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
@@ -2511,14 +2428,12 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
 
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-hook-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "plugin-child-requires-durable-completion",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::FailOpen).await;
     hook.on_completion_call(&user_text_message("compose tools"), &[])
         .await;
@@ -2583,14 +2498,12 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
 
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-timeout-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "plugin-child-timeout-is-child-terminal-a",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::FailClosed).await;
     hook.on_completion_call(&user_text_message("compose tools"), &[])
         .await;
@@ -2674,14 +2587,12 @@ async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
 
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-job-tool-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "plugin-child-naming-a-job-tool-reaches-i",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let binding = crate::background::job::JobBinding {
         tool_name: "workflow_run".into(),
         plugin: gents_documents::PluginToolRef {

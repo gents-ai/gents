@@ -4,7 +4,6 @@ use gents_session::request::lifecycle::test_support::{pin_fixed_signing_identity
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::sync::Arc;
 
-
 async fn seed(
     node: &Arc<defra_node::Node>,
     agent: &str,
@@ -33,13 +32,13 @@ async fn sessions_reads_cross_agent_documents_only_when_acp_allows_the_caller() 
     let denied = KeyIdentity::load_or_create(identities.path().join("denied.key"), None).unwrap();
     // The owner is the runtime: a document it creates is signed by its real
     // actor, and ACP alone decides who else may read it.
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(owner.did())
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db_as(
+        "sessions-reads-cross-agent-documents-onl",
+        owner.did(),
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let policy = node
         .add_dac_policy_as(
             &defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned())),
@@ -134,16 +133,13 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     let owner = pin_fixed_signing_identity(identities.path());
     let foreign = KeyIdentity::load_or_create(identities.path().join("foreign.key"), None).unwrap();
     // The fixture writes as the runtime, so the caller is that runtime.
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(owner.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db_as(
+        "discovery-counts-and-pages-canonical-ses",
+        owner.did(),
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     seed(&node, owner.did(), None, "atlas-a", "Atlas original", true).await;
     seed(&node, owner.did(), None, "atlas-b", "Atlas followup", true).await;
     seed(&node, owner.did(), None, "support", "Support", false).await;
@@ -242,16 +238,13 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
     let identities = tempfile::tempdir().unwrap();
     let owner = pin_fixed_signing_identity(identities.path());
     // The fixture writes as the runtime, so the caller is that runtime.
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(owner.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db_as(
+        "transcript-search-reconstructs-canonical",
+        owner.did(),
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     seed(&node, owner.did(), None, "work", "Investigation", false).await;
     for (sequence, text) in [
         (1, "The retry decision was retain state."),

@@ -781,17 +781,14 @@ pub(crate) mod tests {
     use gents_store::config_client::ConfigAccess;
 
     pub(crate) async fn open() -> Arc<EmbeddedNode> {
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(node_did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        node
+        gents_inference::test_support::test_db_as(
+            "job-input",
+            node_did(),
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await
+        .node
+        .clone()
     }
 
     /// `open()` plus the runtime Node document and the fixture Agent installed

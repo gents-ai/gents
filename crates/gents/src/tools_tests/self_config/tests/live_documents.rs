@@ -45,9 +45,9 @@ async fn fileless_tool_under(
     assert!(tool_config.process_ceiling.root.is_none());
     let tools = fixture.tools_with_plugins(
         &tool_config,
-        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-            home.to_owned(),
-        ))),
+        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+            Some(home.to_owned()),
+        )),
     );
     (fixture, tools)
 }

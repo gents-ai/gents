@@ -13,15 +13,12 @@ fn tools_document(mut value: serde_json::Value) -> gents_documents::Tools {
 
 #[tokio::test]
 async fn only_a_host_call_plugin_adds_the_process_tools() {
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "only-a-host-call-plugin-adds-the-process",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let node_did = node.node_identity_did().unwrap().to_owned();
     let without = tools_document(serde_json::json!({}));
     let with_plugin = tools_document(serde_json::json!({
@@ -52,11 +49,12 @@ async fn only_a_host_call_plugin_adds_the_process_tools() {
         }
         let mut expected = names[0].clone();
         expected.push("plugin".to_owned());
-        let process_tools =
-            gents_tools::native::background_tool_names(&gents_tools::surface::BackgroundToolConfig {
+        let process_tools = gents_tools::native::background_tool_names(
+            &gents_tools::surface::BackgroundToolConfig {
                 allowlist: vec!["plugin".to_owned()],
                 timeouts: Default::default(),
-            });
+            },
+        );
         if host_call {
             expected.extend(process_tools);
             assert_eq!(background[1], ["plugin".to_owned()]);

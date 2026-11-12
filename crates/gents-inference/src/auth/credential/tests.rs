@@ -232,8 +232,11 @@ fn oauth_credential_from_value_rejects_a_blank_refresh_token() {
 
 #[tokio::test]
 async fn account_fields_are_kept_when_a_row_is_stored_again() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-fields").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-fields",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let access = super::rows::runtime_credential_access(&node, db.node_identity.did()).unwrap();
     let connected_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();

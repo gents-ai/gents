@@ -1,9 +1,9 @@
-use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use gents_inference::llm::ToolCallHookAction;
 use gents_loop::tool::BoxFuture;
 use gents_loop::tool::ToolDefinition;
 use gents_loop::tool::{ToolDyn, ToolError};
 use gents_store::graphql::escape_graphql_string;
+use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use serde_json::{json, Value};
 
 use super::r4c_private_support::{accepted_call, assert_accepted_control_rows, setup_private_hook};

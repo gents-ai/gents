@@ -49,10 +49,17 @@ mod tests {
         use gents_protocol::session::{SessionProvenance, SessionTitle, SessionTitleSource};
         use gents_store::identity::NodeIdentity;
 
-        let (first, user_a, access_a, binding_a) =
-            gents_inference::test_support::signed_test_node("timeline-scope-a").await;
+        let (first, user_a, access_a, binding_a) = gents_inference::test_support::signed_test_node(
+            "timeline-scope-a",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
         let (second, user_b, access_b, binding_b) =
-            gents_inference::test_support::signed_test_node("timeline-scope-b").await;
+            gents_inference::test_support::signed_test_node(
+                "timeline-scope-b",
+                gents_automation::lifecycle_hooks::composition(),
+            )
+            .await;
         let owner_a = first.node_identity.did();
         let owner_b = second.node_identity.did();
         assert_ne!(owner_a, owner_b);

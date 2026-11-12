@@ -33,7 +33,7 @@ pub async fn start_node(
     })
     .await?
     .map_err(|error| BackendProtectionError::Schema(error.into()))?;
-    let started = preflight
+    preflight
         .start_node_with_projection(
             key,
             runtime,
@@ -41,10 +41,9 @@ pub async fn start_node(
             p2p,
             Arc::new(ceiling),
             projected_plugins(&plugins),
+            &gents_automation::lifecycle_hooks::composition(),
         )
-        .await?;
-    super::lifecycle_hooks::compose(&started.0)?;
-    Ok(started)
+        .await
 }
 
 /// Starts the node for a caller that already holds the home's exclusive
@@ -66,7 +65,7 @@ pub async fn start_node_under_plugin_store(
         .map_err(|error| {
             BackendProtectionError::Schema(PublishedPluginReadError::Read(error).into())
         })?;
-    let started = preflight
+    preflight
         .start_node_with_projection(
             key,
             runtime,
@@ -74,8 +73,7 @@ pub async fn start_node_under_plugin_store(
             p2p,
             Arc::new(ceiling),
             projected_plugins(&plugins),
+            &gents_automation::lifecycle_hooks::composition(),
         )
-        .await?;
-    super::lifecycle_hooks::compose(&started.0)?;
-    Ok(started)
+        .await
 }

@@ -1,11 +1,9 @@
 use super::*;
-use gents_session::request::admission::AgentRequestAdmissionVerifier;
-use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::row::AgentRequest;
-use gents_session::test_support::{
-    client_access, grant_operator_user, seed_owned_agent, serve_client_node,
-};
+use gents_session::request::admission::AgentRequestAdmissionVerifier;
+use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
+use gents_session::test_support::{grant_operator_user, seed_owned_agent, serve_client_node};
 use gents_store::config_client::{ConfigAccess, NodePermission};
 
 #[tokio::test]
@@ -28,10 +26,14 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         })
         .collect();
     let home = tempfile::tempdir().unwrap();
-    let runtime: Arc<dyn NodeIdentity> =
-        Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-    let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
+    let (db, runtime) = serve_client_node(
+        "watcher-routes-native-private-requests-a",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let runtime: Arc<dyn NodeIdentity> = Arc::new(runtime);
+    let node = db.node.clone();
     grant_operator_user(&node, runtime.as_ref(), &user).await;
     let first = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let second = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
@@ -52,7 +54,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
                 .unwrap();
         }
     }
-    let owner = client_access(&endpoint, &user);
+    let owner = db.client_access(&user);
     seed_owned_agent(&owner, runtime.did(), &first).await;
     let parent = owner.execute("{ Node { _docID } }").await.unwrap()["data"]["Node"][0]["_docID"]
         .as_str()
@@ -373,12 +375,12 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
 
 #[tokio::test]
 async fn client_tool_control_claim_rechecks_native_authority_and_retains_committed_claim() {
+    use gents_protocol::tool_call::AwaitMode;
     use gents_toolcalls::call::control::client::{
         claim, claim_paused, claim_unavailable, execute_claimed, prepare, read_receipt,
         recover_claim, submit, ClaimPause,
     };
     use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use gents_protocol::tool_call::AwaitMode;
 
     let model = &gents_lean_vocab::lean_contract_snapshot().client_process_claim_cases;
     let grant_model = &gents_lean_vocab::lean_contract_snapshot().client_control_grant_cases;
@@ -427,14 +429,18 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
             .unwrap()
     };
     let home = tempfile::tempdir().unwrap();
-    let runtime: Arc<dyn NodeIdentity> =
-        Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let foreign =
         KeyIdentity::load_or_create(home.path().join("foreign-control.key"), None).unwrap();
     let collaborator =
         KeyIdentity::load_or_create(home.path().join("collaborator.key"), None).unwrap();
-    let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
+    let (db, runtime) = serve_client_node(
+        "client-tool-control-claim-rechecks-nativ",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let runtime: Arc<dyn NodeIdentity> = Arc::new(runtime);
+    let node = db.node.clone();
     grant_operator_user(&node, runtime.as_ref(), &user).await;
     let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
@@ -455,7 +461,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
                 .unwrap();
         }
     }
-    let user_access = client_access(&endpoint, &user);
+    let user_access = db.client_access(&user);
     seed_owned_agent(&user_access, runtime.did(), &binding).await;
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
@@ -552,7 +558,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .unwrap();
     let tool_doc = tool.doc_id().unwrap();
     agent_access.write("test.control.background_mode", &format!(r#"mutation {{ update_AgentToolCall(docID: "{}", input: {{ await_mode: "background" }}) {{ _docID }} }}"#, tool_doc)).await.unwrap();
-    let collaborator_access = client_access(&endpoint, &collaborator);
+    let collaborator_access = db.client_access(&collaborator);
     let collaborator_intent = prepare(
         &collaborator_access,
         &collaborator,
@@ -837,7 +843,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let third = publish(&user_access, &user, runtime.did(), tool_doc).await;
     let fourth = publish(&user_access, &user, runtime.did(), tool_doc).await;
     let fifth = publish(&user_access, &user, runtime.did(), tool_doc).await;
-    let foreign_access = client_access(&endpoint, &foreign);
+    let foreign_access = db.client_access(&foreign);
     let fake = foreign_access.transact_write("test.control.foreign_claim", |txn| {
         let first = &first; let binding = &binding;
         Box::pin(async move {

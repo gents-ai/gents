@@ -4,17 +4,12 @@ use gents_store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 
 #[tokio::test]
 async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
-    let temp = tempfile::tempdir().unwrap();
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(temp.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "request-head-uses-exact-scope-and-timest",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     ConfigAccess::transact_local_idempotent(
         &node, None, IdempotentTransactionRetry::Standard, "test.session.request_head",
         |txn| Box::pin(async move {
@@ -45,17 +40,12 @@ async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
 
 #[tokio::test]
 async fn batched_request_heads_preserve_scope_order_and_bound_query_count() {
-    let temp = tempfile::tempdir().unwrap();
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(temp.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "batched-request-heads-preserve-scope-ord",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let session_ids = (0..REQUEST_FACT_SESSION_BATCH_SIZE + 1)
         .map(|index| format!("batch-session-{index:02}"))
         .collect::<Vec<_>>();
@@ -148,17 +138,12 @@ async fn batched_request_heads_preserve_scope_order_and_bound_query_count() {
 
 #[tokio::test]
 async fn refresh_accepts_null_requester_and_rejects_changed_session_scope() {
-    let temp = tempfile::tempdir().unwrap();
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(temp.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "refresh-accepts-null-requester-and-rejec",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let response = node
         .execute(
             r#"mutation {
@@ -298,17 +283,12 @@ async fn tie_fact(
 /// predecessor, and a reopened client never projected the completed reply.
 #[tokio::test]
 async fn same_second_claim_after_completion_becomes_the_observed_head() {
-    let temp = tempfile::tempdir().unwrap();
-    let node = std::sync::Arc::new(
-        gents_store::test_support::node_builder()
-            .data_path(temp.path())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let node_db = gents_inference::test_support::test_db(
+        "same-second-claim-after-completion-becom",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     ConfigAccess::transact_local_idempotent(
         &node, None, IdempotentTransactionRetry::Standard, "test.session.same_second_head",
         |txn| Box::pin(async move {
@@ -386,17 +366,12 @@ async fn generated_selection_cases_drive_the_native_request_head() {
     };
     let request_id = |value: &serde_json::Value| format!("{:08}", value.as_u64().unwrap());
     for (index, case) in cases.iter().enumerate() {
-        let temp = tempfile::tempdir().unwrap();
-        let node = std::sync::Arc::new(
-            gents_store::test_support::node_builder()
-                .data_path(temp.path())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "generated-selection-cases-drive-the-nati",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
         let case = case.clone();
         let expected = case["selected"].get("request_id").map(request_id);
         let selected = ConfigAccess::transact_local_idempotent(

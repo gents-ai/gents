@@ -22,11 +22,15 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             .find(|case| case.name == name)
             .unwrap();
         let home = tempfile::tempdir().unwrap();
-        let runtime: Arc<dyn NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let owner = KeyIdentity::load_or_create(home.path().join("owner.key"), None).unwrap();
-        let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
+        let (db, runtime) = serve_client_node(
+            "signed-client-claim-uses-transaction-bou",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let runtime: Arc<dyn NodeIdentity> = Arc::new(runtime);
+        let node = db.node.clone();
         grant_operator_user(&node, runtime.as_ref(), &user).await;
         grant_operator_user(&node, runtime.as_ref(), &owner).await;
         let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
@@ -42,9 +46,9 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 .await
                 .unwrap();
         }
-        let user_access = client_access(&endpoint, &user);
+        let user_access = db.client_access(&user);
         if name == "invoke_denied_at_check" {
-            let owner_access = client_access(&endpoint, &owner);
+            let owner_access = db.client_access(&owner);
             seed_owned_agent(&owner_access, runtime.did(), &binding).await;
             let agent = owner_access.execute("{ Agent { _docID } }").await.unwrap();
             let doc = agent["data"]["Agent"][0]["_docID"].as_str().unwrap();
@@ -354,12 +358,16 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         gents_lean_vocab::LeanCrossActorDecision::Denied
     );
     let home = tempfile::tempdir().unwrap();
-    let runtime: Arc<dyn NodeIdentity> =
-        Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let collaborator =
         KeyIdentity::load_or_create(home.path().join("collaborator.key"), None).unwrap();
-    let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
+    let (db, runtime) = serve_client_node(
+        "active-client-steer-rechecks-its-own-aut",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let runtime: Arc<dyn NodeIdentity> = Arc::new(runtime);
+    let node = db.node.clone();
     grant_operator_user(&node, runtime.as_ref(), &user).await;
     let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
@@ -376,7 +384,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
                 .unwrap();
         }
     }
-    let client = |identity: &KeyIdentity| client_access(&endpoint, identity);
+    let client = |identity: &KeyIdentity| db.client_access(identity);
     let owner = client(&user);
     seed_owned_agent(&owner, runtime.did(), &binding).await;
     let agent_doc = owner.execute("{ Agent { _docID } }").await.unwrap()["data"]["Agent"][0]

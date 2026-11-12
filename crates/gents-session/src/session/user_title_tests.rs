@@ -7,12 +7,12 @@ use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
 #[tokio::test]
 async fn title_transitions_preserve_session_and_request_observation() {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "title-transitions-preserve-session-and-r",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
     gents_store::test_support::acp_policies::install_identity_acp_policies(&node)
         .await
         .unwrap();
@@ -196,12 +196,12 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
     for case in cases {
         let before = model_session(&case["before"]);
         let expected = model_session(&case["after"]);
-        let node = Arc::new(
-            gents_store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node_db = gents_inference::test_support::test_db(
+            "generated-user-title-cases-drive-the-sha",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
         gents_store::test_support::acp_policies::install_identity_acp_policies(&node)
             .await
             .unwrap();
@@ -280,8 +280,11 @@ async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<(
         .find(|case| case["operation"] == "rename" && case["title"]["text"].is_string())
         .expect("modeled user rename");
     let title = case["title"]["text"].as_str().unwrap();
-    let (db, user, access, binding) =
-        gents_inference::test_support::signed_test_node("http-user-title").await;
+    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+        "http-user-title",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node_did = db.node_identity.did();
     crate::request::lifecycle::build_signed_client_request(
         &access,
@@ -344,8 +347,11 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
     };
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, access, binding) =
-        gents_inference::test_support::signed_test_node("http-user-title-conflict").await;
+    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+        "http-user-title-conflict",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node_did = db.node_identity.did();
     let session_id = "http-title-conflict-session";
     crate::request::lifecycle::build_signed_client_request(
@@ -532,8 +538,11 @@ async fn title_observation_uses_selected_agent_session_access() {
         .unwrap();
     }
 
-    let (db, user, owner, first) =
-        gents_inference::test_support::signed_test_node("title-observation").await;
+    let (db, user, owner, first) = gents_inference::test_support::signed_test_node(
+        "title-observation",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let user_did = user.did().to_owned();
     let second = gents_store::identity::provision_agent_identity_authorized(
         &db.node,

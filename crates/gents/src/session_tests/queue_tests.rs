@@ -1,28 +1,28 @@
 use anyhow::Context;
 use defra_node::Node as EmbeddedNode;
-use serde::Deserialize;
 use gents_automation::goal::continuation::prepare_goal_continuation;
-use gents_protocol::row::AgentRequest;
-use gents_session::request::lifecycle::ExecutionOrigin;
-use gents_session::request::lifecycle::queue::mutation::{
-    session_request_create_mutation, SessionRequestFields,
-};
-use gents_session::request::lifecycle::test_support::{test_db, TestDb};
-use gents_store::graphql::escape_graphql_string;
-use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
-use gents_session::request::lifecycle::test_support::{hints, parent_request, wake_queue_input};
-use gents_session::request::lifecycle::queue::*;
-use gents_session::request::lifecycle::{
-    extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
-};
-use gents_session::request::streaming::DefraStreamWriter;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequest;
 use gents_protocol::tool_call::AwaitMode;
 use gents_protocol::{
     message::{AssistantContent, Message, ToolCall, ToolFunction},
     output::PresentationPart,
 };
+use gents_session::request::lifecycle::queue::mutation::{
+    session_request_create_mutation, SessionRequestFields,
+};
+use gents_session::request::lifecycle::queue::*;
+use gents_session::request::lifecycle::test_support::{hints, parent_request, wake_queue_input};
+use gents_session::request::lifecycle::test_support::{test_db, TestDb};
+use gents_session::request::lifecycle::ExecutionOrigin;
+use gents_session::request::lifecycle::{
+    extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
+};
+use gents_session::request::streaming::DefraStreamWriter;
+use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
+use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -328,8 +328,11 @@ impl CanonicalBackgroundFixture {
         let binding = tool
             .tool_output_binding()
             .context("accepted fixture tool has output binding")?;
-        gents_toolcalls::call::lifecycle::delivery::append_tool_output(&binding, notification_content)
-            .await?;
+        gents_toolcalls::call::lifecycle::delivery::append_tool_output(
+            &binding,
+            notification_content,
+        )
+        .await?;
         anyhow::ensure!(
             tool.complete_owned(notification_content, None).await?,
             "fixture tool terminal CAS lost"
@@ -380,7 +383,8 @@ mod coalescing;
 #[tokio::test]
 async fn pin_goal_continuation_preparation() {
     let tempdir = tempfile::tempdir().unwrap();
-    let _identity = gents_session::request::lifecycle::test_support::pin_fixed_signing_identity(tempdir.path());
+    let _identity =
+        gents_session::request::lifecycle::test_support::pin_fixed_signing_identity(tempdir.path());
 
     let mut parent = gents_session::request::lifecycle::test_support::pin_parent_request();
     parent.workspace_id = Some("ws-goal-1".to_string());

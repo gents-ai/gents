@@ -2,7 +2,6 @@ use anyhow::Result;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use serde_json::json;
-use std::sync::Arc;
 
 fn claude_sign_in(did: &str, who: &str) -> gents_inference::auth::credential::OAuthCredential {
     gents_inference::auth::claude::credential_from_login_tokens(
@@ -28,8 +27,12 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
         AccountPick,
     };
     let did = "did:key:z6MkTestProfileEvents";
-    let node = Arc::new(gents_store::test_support::node_builder().build().await?);
-    gents_store::schema::ensure_runtime_schemas(&node).await?;
+    let db = gents_inference::test_support::test_db(
+        "account-events",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
     let access = ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(
@@ -120,9 +123,7 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
             access
                 .transact_write("test.remove", |txn| {
                     let credential_id = credential_id.clone();
-                    Box::pin(
-                        async move { remove_account_in_txn(txn, did, &credential_id).await },
-                    )
+                    Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
                 })
                 .await
                 .unwrap()
@@ -165,14 +166,16 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
 
     let backends = access
         .transact_write("test.backends", |txn| {
-            Box::pin(
-                async move { gents_documents::list_inference_backends_in_txn(txn, did).await },
-            )
+            Box::pin(async move { gents_documents::list_inference_backends_in_txn(txn, did).await })
         })
         .await?;
     for backend in &backends {
-        gents_inference::backends::registry::record_discovered_catalog_on(&access, backend, Vec::new())
-            .await?;
+        gents_inference::backends::registry::record_discovered_catalog_on(
+            &access,
+            backend,
+            Vec::new(),
+        )
+        .await?;
     }
     assert_eq!(profiles().await, before, "catalog refresh");
     let ConfigAccess::Local(local) = &access else {

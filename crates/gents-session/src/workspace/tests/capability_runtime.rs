@@ -10,25 +10,22 @@ use std::time::Duration;
 
 #[tokio::test]
 async fn workspace_completion_requires_selected_managed_agent() {
-    let directory = tempfile::tempdir().unwrap();
-    let runtime = gents_store::identity::KeyIdentity::load_or_create(
-        directory.path().join("runtime.key"),
-        None,
+    let db = gents_inference::test_support::test_db(
+        "workspace-completion-selected-agent",
+        crate::test_support::no_lifecycle_plugins(),
     )
-    .unwrap();
+    .await;
+    let node = db.node.clone();
+    let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
     let cases = gents_lean_vocab::families::workspace_and_file_requests_completion_actor::cases();
     for case in cases {
-        let selected = if case.input.selected.is_empty() { "" } else { agent.did() };
+        let selected = if case.input.selected.is_empty() {
+            ""
+        } else {
+            agent.did()
+        };
         let held: &dyn NodeIdentity = if case.input.held == "agent" {
             agent.as_ref()
         } else {
@@ -144,9 +141,8 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
             "other" => &other_access,
             actor => panic!("unknown modeled actor {actor}"),
         };
-        let docs =
-            super::super::runtime::load_docs_with_access(access, "workspace", runtime.did())
-                .await?;
+        let docs = super::super::runtime::load_docs_with_access(access, "workspace", runtime.did())
+            .await?;
         case.check(
             gents_lean_vocab::families::workspace_completion_access::CompletionAccessOutput {
                 read: docs.load_isolated_workspace("workspace")?.is_some(),

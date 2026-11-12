@@ -93,9 +93,11 @@ async fn fixture(case: &LeanInterruptQueueCase) -> QueueFixture {
         Some(case.node_id),
         "modeled requester scope"
     );
-    let (db, user, client, binding) =
-        gents_inference::test_support::signed_test_node(&format!("interrupt-queue-{}", case.name))
-            .await;
+    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        &format!("interrupt-queue-{}", case.name),
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let agent_access = ConfigAccess::local_managed_agent(

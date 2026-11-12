@@ -1,4 +1,10 @@
-use gents_session::workspace::{bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture};
+use anyhow::Context;
+use gents_session::request::lifecycle::{
+    RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage,
+};
+use gents_session::workspace::{
+    bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture,
+};
 use gents_session::workspace::{
     isolated_workspace_upsert_mutation, materialize_workspace_binding,
     workspace_binding_upsert_mutation, workspace_host_path, CreateWorkspaceAction, CreationPolicy,
@@ -6,8 +12,6 @@ use gents_session::workspace::{
     WorkspaceBindingDoc, WorkspaceDocuments, WorkspacePathCapability, WorkspacePlacementDoc,
     WorkspaceReaderBinding,
 };
-use gents_session::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
-use anyhow::Context;
 use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
 use std::time::Duration;
@@ -264,7 +268,8 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             .workspace_publication_cases
             .aborted_document_visible
     );
-    gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action).await?;
+    gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+        .await?;
     let workspace_rows = writer_access
         .execute("{ IsolatedWorkspace { _docID } }")
         .await?;
@@ -280,7 +285,8 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &writer.did().parse()?,
         )
         .await?;
-    gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action).await?;
+    gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+        .await?;
     let visible_after_retry = !writer_access
         .execute("{ IsolatedWorkspace { _docID } }")
         .await?["data"]["IsolatedWorkspace"]
@@ -310,7 +316,8 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &reader.did().parse()?,
         )
         .await?;
-    gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action).await?;
+    gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+        .await?;
     let reader_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         reader.did().parse()?,
@@ -368,9 +375,9 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         "only one concurrent exclusive admission may commit"
     );
     let result = writer_access
-        .execute(&gents_session::workspace::overlay::workspace_bindings_for_parent_query(
-            &workspace_doc,
-        ))
+        .execute(
+            &gents_session::workspace::overlay::workspace_bindings_for_parent_query(&workspace_doc),
+        )
         .await?;
     let rows = result["data"]["WorkspaceBinding"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
@@ -456,8 +463,12 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         } else {
             &writer_access
         };
-        let result =
-            gents_session::workspace::runtime::claim_workspace_cleanup(access, "workspace", user.did()).await;
+        let result = gents_session::workspace::runtime::claim_workspace_cleanup(
+            access,
+            "workspace",
+            user.did(),
+        )
+        .await;
         assert_eq!(result.is_ok(), case.begins, "{case:?}: {result:?}");
     }
     let state = writer_access
@@ -467,9 +478,13 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         state["data"]["IsolatedWorkspace"][0]["lifecycle_state"],
         "cleaning"
     );
-    let stale =
-        gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
-            .await;
+    let stale = gents_session::workspace::flush_workspace_docs(
+        &creator_access,
+        &docs,
+        creator.did(),
+        &action,
+    )
+    .await;
     assert_eq!(
         stale.is_ok(),
         gents_lean_vocab::lean_contract_snapshot()
@@ -523,7 +538,8 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         integrator.did().parse()?,
         integrator.as_ref(),
     )?;
-    let query = gents_session::workspace::overlay::workspace_bindings_for_parent_query(&workspace_doc);
+    let query =
+        gents_session::workspace::overlay::workspace_bindings_for_parent_query(&workspace_doc);
     let writer_rows = writer_access.execute(&query).await?;
     let integrator_rows = integrator_access.execute(&query).await?;
     assert!(writer_rows["data"]["WorkspaceBinding"]
@@ -609,7 +625,8 @@ async fn overlapping_native_workspace_fences_conflict(
     let second = node.begin_transaction(false).await?;
     let context =
         defra_core::RequestContext::default().with_identity(Some(writer.did().to_owned()));
-    let query = gents_session::workspace::overlay::workspace_bindings_for_parent_query(workspace_doc);
+    let query =
+        gents_session::workspace::overlay::workspace_bindings_for_parent_query(workspace_doc);
     for handle in [&first, &second] {
         let response = node
             .execute_request_in_txn_with_signer(

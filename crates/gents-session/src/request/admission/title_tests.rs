@@ -12,7 +12,6 @@ use gents_lean_vocab::{
 };
 use gents_p2p::p2p_reconcile::enrollment_authority_channel;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use gents_store::schema::ensure_runtime_schemas;
 
 fn native_purpose(purpose: LeanRequestPurpose) -> RequestPurpose {
     purpose.into()
@@ -144,21 +143,17 @@ fn modeled_agent_did(label: &str) -> String {
 
 async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     let temp = tempfile::tempdir().expect("temporary identity directory");
-    let identity = Arc::new(
-        KeyIdentity::load_or_create(temp.path().join("target.key"), None).expect("target identity"),
-    );
+    let node_db = gents_inference::test_support::test_db(
+        "title-generated-case-node",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let identity = Arc::new(gents_store::test_support::held_runtime_identity(
+        node_db.node_identity.did(),
+    ));
     let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None)
         .expect("foreign identity");
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .expect("embedded node"),
-    );
-    ensure_runtime_schemas(node.as_ref())
-        .await
-        .expect("canonical schema baseline");
 
     let evidence = case
         .runtime_evidence

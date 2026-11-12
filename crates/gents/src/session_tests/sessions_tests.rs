@@ -6,11 +6,14 @@ use gents_store::test_support::first_content;
 
 #[tokio::test]
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
-    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
     use gents_protocol::tool_call::AwaitMode;
     use gents_store::identity::NodeIdentity;
-    let (db, user, client, binding) =
-        gents_inference::test_support::signed_test_node("provider-history").await;
+    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        "provider-history",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let session_id = "session-steering-provider-history";
     publish_signed_history(
         &db,
@@ -220,11 +223,14 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
 
 #[tokio::test]
 async fn retry_frontier_matches_lean_admission() {
-    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
     use gents_protocol::tool_call::AwaitMode;
     use gents_store::identity::NodeIdentity;
-    let (db, user, client, binding) =
-        gents_inference::test_support::signed_test_node("retry-frontier").await;
+    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        "retry-frontier",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
     let node = &db.node;
     let node_did = db.node_identity.did();
     let other = tokio::task::spawn_blocking(|| {
@@ -356,12 +362,13 @@ async fn retry_frontier_matches_lean_admission() {
                 Some(retry),
             )
             .await;
-            let second_writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
-                node.clone(),
-                &second,
-                std::time::Duration::ZERO,
-            )
-            .unwrap();
+            let second_writer =
+                gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
+                    node.clone(),
+                    &second,
+                    std::time::Duration::ZERO,
+                )
+                .unwrap();
             second.begin_owned_execution(&second_writer).await.unwrap();
             second
                 .terminalize_owned(

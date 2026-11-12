@@ -195,7 +195,6 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let f = Fixture::new(&before).await;
-        crate::lifecycle_hooks::attach(&f.node).unwrap();
         let identity = FireIdentity {
             owner_did: f.identity.did().into(),
             trigger_id: "manual:delivery".into(),
@@ -403,7 +402,6 @@ async fn staging_into_another_runtime_is_refused_before_any_write() {
         "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     let f = Fixture::new(&before).await;
-    crate::lifecycle_hooks::attach(&f.node).unwrap();
     let cause = SessionMessageCause {
         caller_node_did: f.identity.did().into(),
         caller_agent_did: f.agent.did().to_owned(),

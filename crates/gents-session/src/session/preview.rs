@@ -175,17 +175,12 @@ mod tests {
     #[tokio::test]
     async fn received_preview_uses_only_the_exact_readable_parent_envelope() {
         use gents_store::config_client::ConfigAccess;
-        let temp = tempfile::tempdir().unwrap();
-        let node = std::sync::Arc::new(
-            gents_store::test_support::node_builder()
-                .data_path(temp.path())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let node_db = gents_inference::test_support::test_db(
+            "received-preview-uses-only-the-exact-rea",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
         let response = ConfigAccess::write_local(&node, "test.session.preview.parent", r#"mutation {
             create_AgentRequest(input: { request_id: "parent", purpose: "normal", node_did: "did:test:sender",
                 agent_did: "did:test:sender:engineer", session_id: "source", content: "Parent request",

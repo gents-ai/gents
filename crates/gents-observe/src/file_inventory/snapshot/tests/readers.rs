@@ -45,6 +45,7 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
     let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "inventory-independent-reader".into(),
         real_identity: true,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await

@@ -12,7 +12,12 @@ use gents_tools::surface::ToolCeiling;
 
 #[tokio::test]
 async fn document_constructor_rejects_node_without_signing_did_before_migrations() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "document-constructor-rejects-node-withou",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let identity = Arc::new(test_identity("document-constructor-unsigned-node"));
 
     let error = match Gents::from_default_agent_documents(
@@ -160,7 +165,10 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
         ),
         "the explicit execution setting must override the shorter default lease",
     );
-    assert_eq!(behavior.agent.stream_liveness_timeout, Duration::from_secs(45));
+    assert_eq!(
+        behavior.agent.stream_liveness_timeout,
+        Duration::from_secs(45)
+    );
     assert_eq!(behavior.agent.deadline_duration, Duration::from_secs(120));
 
     assert_eq!(behavior.agent.sampling.temperature, Some(0.2));
@@ -176,7 +184,8 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     );
 
     let params = behavior
-        .agent.sampling
+        .agent
+        .sampling
         .additional_params()
         .expect("pinned sampling knobs must produce provider body params");
     assert_eq!(params["top_p"], 0.95);
