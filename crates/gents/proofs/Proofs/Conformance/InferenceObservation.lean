@@ -1,4 +1,5 @@
 import Proofs.Clients.ClientShell.InferenceObservation
+import Proofs.Conformance.Family
 
 namespace Conformance.InferenceObservation
 open ClientInferenceObservation
@@ -60,32 +61,32 @@ private def traceJson (actions : List Action) : String := Id.run do
 private def obs (attempt sequence time : Nat) (activity : Activity) : Observation :=
   ⟨target, 0, attempt, sequence, time, activity⟩
 
-def visibilityCasesJson : String :=
-  let cases : List (Nat × Nat × Bool) := [
-    (0, 0, false), (0, 1, true), (1, 0, true), (1, 1, false),
-    (1, 1, true), (2, 1, true), (1, 2, true)]
-  let render (c : Nat × Nat × Bool) : String :=
-    let (sessions, requests, active) := c
-    "{\"sessions\":" ++ toString sessions ++ ",\"requests\":" ++ toString requests ++
-      ",\"active\":" ++ (if active then "true" else "false") ++
-      ",\"expected\":" ++ (if sourceVisible sessions requests active then "true" else "false") ++ "}"
-  "[" ++ String.intercalate "," (cases.map render) ++ "]"
+structure VisibilityInput where
+  sessions : Nat
+  requests : Nat
+  active : Bool
+  deriving Lean.ToJson
 
-def routeCasesJson : String :=
-  let cases : List (Bool × Nat × Nat × Bool) := [
-    (false, 1, 1, true), (false, 0, 0, false), (true, 1, 1, true), (true, 0, 1, true),
-    (true, 1, 1, false)]
-  let name : ActivityResponse → String
-    | .forbidden => "forbidden"
-    | .unavailable => "unavailable"
-    | .visible => "visible"
-  let render (c : Bool × Nat × Nat × Bool) : String :=
-    let (holds, sessions, requests, active) := c
-    "{\"holds_node_read\":" ++ (if holds then "true" else "false") ++
-      ",\"sessions\":" ++ toString sessions ++ ",\"requests\":" ++ toString requests ++
-      ",\"active\":" ++ (if active then "true" else "false") ++
-      ",\"expected\":\"" ++ name (activityResponse holds sessions requests active) ++ "\"}"
-  "[" ++ String.intercalate "," (cases.map render) ++ "]"
+@[conformance_family]
+def sourceVisibility : Family VisibilityInput Bool where
+  inputs := [⟨0, 0, false⟩, ⟨0, 1, true⟩, ⟨1, 0, true⟩, ⟨1, 1, false⟩,
+    ⟨1, 1, true⟩, ⟨2, 1, true⟩, ⟨1, 2, true⟩]
+  model := fun i => sourceVisible i.sessions i.requests i.active
+
+deriving instance Lean.ToJson for ActivityResponse
+
+structure RouteInput where
+  holdsNodeRead : Bool
+  sessions : Nat
+  requests : Nat
+  active : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def activityRoute : Family RouteInput ActivityResponse where
+  inputs := [⟨false, 1, 1, true⟩, ⟨false, 0, 0, false⟩, ⟨true, 1, 1, true⟩, ⟨true, 0, 1, true⟩,
+    ⟨true, 1, 1, false⟩]
+  model := fun i => activityResponse i.holdsNodeRead i.sessions i.requests i.active
 
 def casesJson : String :=
   let traces : List (List Action) := [

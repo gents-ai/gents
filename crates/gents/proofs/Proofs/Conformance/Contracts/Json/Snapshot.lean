@@ -682,10 +682,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"client_telemetry_cases\":" ++ Conformance.ClientTelemetry.casesJson ++ ","
     ++ "\"inference_observation_cases\":"
       ++ Conformance.InferenceObservation.casesJson ++ ","
-    ++ "\"inference_visibility_cases\":"
-      ++ Conformance.InferenceObservation.visibilityCasesJson ++ ","
-    ++ "\"inference_route_cases\":"
-      ++ Conformance.InferenceObservation.routeCasesJson ++ ","
 
 def snapshotIdentityCasesJson : String :=
   ""

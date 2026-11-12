@@ -3002,8 +3002,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
-    pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
-    pub inference_route_cases: Vec<LeanInferenceRouteCase>,
     pub identity_publication_cases: Vec<LeanIdentityPublicationCase>,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub identity_delegation_cases: Vec<LeanDelegationCase>,
@@ -6599,16 +6597,6 @@ pub struct LeanInferenceObservationCaseActionsItemTarget {
     pub session: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInferenceRouteCase {
-    pub active: bool,
-    pub expected: String,
-    pub holds_node_read: bool,
-    pub requests: u64,
-    pub sessions: u64,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct LeanInferenceSlotAccountingCase {
     pub name: String,
@@ -6627,15 +6615,6 @@ pub struct LeanInferenceSlotAccountingCase {
     pub reconstructed_running_count: usize,
     pub max_concurrent: usize,
     pub bounded_by_max_concurrent: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanInferenceVisibilityCase {
-    pub active: bool,
-    pub expected: bool,
-    pub requests: u64,
-    pub sessions: u64,
 }
 
 #[derive(Debug, Deserialize)]

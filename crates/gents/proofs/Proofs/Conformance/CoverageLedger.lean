@@ -1135,8 +1135,12 @@ def caseCoverage : List CoverageEntry :=
       "InferenceObservationCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "inference_visibility_cases"
-      "InferenceVisibilityCases")
+      "family"
+      "inference_observation_source_visibility")
+      "client-shell" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "inference_observation_activity_route")
       "client-shell" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "client_optimistic_send_cases"
