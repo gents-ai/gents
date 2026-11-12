@@ -520,7 +520,6 @@ pub(crate) fn wants_a_model(reason: AgentReadinessUnavailableReason) -> bool {
 mod tests {
     use super::*;
     use gents_protocol::node_readiness::{AgentReadinessEntry, NodeReadinessProcessState};
-    use gents_service::repair::reason::no_service_manager_message;
 
     fn readiness(default: &str, ready: &[&str]) -> NodeReadinessSnapshot {
         NodeReadinessSnapshot {
@@ -543,16 +542,10 @@ mod tests {
     #[test]
     fn printed_commands_quote_a_home_with_spaces() {
         let home = Path::new("/srv/my home");
-        for (message, command) in [
-            (
-                no_service_manager_message(home),
-                "gents runtime server --home '/srv/my home'",
-            ),
-            (
-                ignored_client_setting_notice(&home.join("client.json")),
-                "'/srv/my home/client.json'",
-            ),
-        ] {
+        for (message, command) in [(
+            ignored_client_setting_notice(&home.join("client.json")),
+            "'/srv/my home/client.json'",
+        )] {
             assert!(message.contains(command), "{message}");
         }
     }
@@ -597,11 +590,11 @@ mod tests {
     }
 
     #[test]
-    fn no_service_manager_says_run_gents_server_then_gents() {
-        assert_eq!(
-            no_service_manager_message(Path::new("/srv/home")),
-            "run `gents runtime server --home /srv/home` in another terminal, then `gents`"
-        );
+    fn no_service_manager_names_the_server_help() {
+        let message = blocked_line(&Blocker::NoServiceManager {
+            home: PathBuf::from("/srv/home"),
+        });
+        assert!(message.contains("gents runtime server --help"), "{message}");
     }
 
     #[test]
