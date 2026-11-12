@@ -265,6 +265,7 @@ desktop-native-build: desktop-native-stage-sidecar
 
 .PHONY: live-eval live-cli live-enrollment live-onboarding live-agent live-triggers live-client live-editor live-desktop-smoke
 live-cli:
+	@if [ -z "$$GENTS_LIVE_DESKTOP_BIN" ]; then $(CARGO) build -p gents-desktop --bin gents-desktop $(CARGO_PROFILE_FLAG); elif [ ! -x "$$GENTS_LIVE_DESKTOP_BIN" ]; then echo "GENTS_LIVE_DESKTOP_BIN must name an executable desktop binary" >&2; exit 2; fi
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --skip cli_onboarding_live:: --nocapture --test-threads=1
 
 LIVE_FILTER ?=
