@@ -54,3 +54,5 @@ gents-automation = { workspace = true, features = ["test-fixtures"] }
 axum = { version = "0.8", features = ["ws"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
+gents-tools.workspace = true
+tokio-util.workspace = true

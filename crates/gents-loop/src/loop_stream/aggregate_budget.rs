@@ -330,4 +330,116 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
+        let cases = gents_lean_vocab::lean_aggregate_token_budget_cases();
+        assert!(
+            !cases.is_empty(),
+            "Lean emitted no aggregate token-budget cases"
+        );
+
+        for name in [
+            "restart-zero-usage-adds-no-spend",
+            "restart-mixed-rows-preserve-accounted-spend",
+        ] {
+            assert!(
+                cases.iter().any(|case| case.name == name),
+                "Lean must include restart accounting scenario {name}"
+            );
+        }
+
+        for case in cases.iter().filter(|case| {
+            case.prior_request_doc_ids
+                .iter()
+                .all(|id| id == &case.request_doc_id)
+        }) {
+            assert_eq!(
+                case.prior_prompt_tokens.len(),
+                case.prior_completion_tokens.len(),
+                "{}: each prior usage row needs both durable components",
+                case.name
+            );
+            let used = crate::provider_usage::sum_charged_from_persisted_parts(
+                case.prior_prompt_tokens
+                    .iter()
+                    .zip(&case.prior_completion_tokens)
+                    .map(|(&prompt, &completion)| {
+                        (
+                            Some(i64::try_from(prompt).expect("fixture prompt tokens fit i64")),
+                            Some(
+                                i64::try_from(completion)
+                                    .expect("fixture completion tokens fit i64"),
+                            ),
+                        )
+                    }),
+            )
+            .expect("decoded Lean usage rows must rehydrate");
+            assert_eq!(
+                used, case.used,
+                "{}: durable usage rehydration drifted from Lean",
+                case.name
+            );
+            let mut ledger = AggregateTokenBudget::with_prior_usage(case.limit, used)
+                .snapshot()
+                .expect("rehydrated ledger is available");
+            assert_eq!(
+                ledger
+                    .effective_output_tokens(case.input_tokens, case.configured_max_output_tokens,),
+                case.effective_output_tokens,
+                "{}: dispatch clamp drifted from Lean",
+                case.name
+            );
+            assert_eq!(
+                ledger.can_dispatch(case.input_tokens, case.configured_max_output_tokens),
+                case.can_dispatch,
+                "{}: dispatch decision drifted from Lean",
+                case.name
+            );
+
+            let usage = case.usage_present.then_some(Usage {
+                input_tokens: case.reported_input_tokens,
+                output_tokens: case.reported_output_tokens,
+                total_tokens: case.reported_total_tokens,
+                cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            });
+            assert_eq!(
+                usage
+                    .map(crate::provider_usage::charged_usage_total)
+                    .unwrap_or_default(),
+                case.charged_tokens,
+                "{}: charged total drifted from Lean",
+                case.name
+            );
+            let actual = ledger.charge_reported(usage);
+            let actual_name = match actual {
+                AggregateTokenCharge::Missing => "missing",
+                AggregateTokenCharge::Within => "within",
+                AggregateTokenCharge::Exhausted => "exhausted",
+                AggregateTokenCharge::Overrun => "overrun",
+            };
+            assert_eq!(
+                actual_name, case.charge_result,
+                "{}: charge classification drifted from Lean",
+                case.name
+            );
+            assert_eq!(
+                (actual != AggregateTokenCharge::Missing).then_some(ledger.used),
+                case.next_used,
+                "{}: post-charge ledger drifted from Lean",
+                case.name
+            );
+            let actual_action = match aggregate_post_charge_action(actual, case.terminal_valid) {
+                AggregatePostChargeAction::Continue => "continue",
+                AggregatePostChargeAction::Succeed => "succeed",
+                AggregatePostChargeAction::Fail => "fail",
+            };
+            assert_eq!(
+                actual_action, case.post_charge_action,
+                "{}: post-charge terminal legality drifted from Lean",
+                case.name
+            );
+        }
+    }
 }

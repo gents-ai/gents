@@ -2,8 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents_inference::llm::message::{
-    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
-    UserContent,
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResultContent, UserContent,
 };
 use gents_inference::llm::HookAction;
 use gents_loop::provider_input::ProviderInputProfile;
@@ -17,139 +16,6 @@ use gents_toolcalls::call::hook::FailurePolicy;
 
 #[path = "stream_cadence_tests.rs"]
 mod cadence;
-
-#[test]
-fn claude_signed_final_seals_preview_without_duplicating_bytes() {
-    use gents_inference::llm::message::ReasoningContent;
-
-    let mut accumulator = AssistantTurnAccumulator::default();
-    accumulator.push_reasoning_delta(None, "考");
-    accumulator.push_reasoning_delta(None, "慮");
-    accumulator
-        .push_provider_reasoning(
-            ProviderInputProfile::ClaudeMessages,
-            Reasoning {
-                id: None,
-                content: vec![ReasoningContent::Text {
-                    text: "考慮".into(),
-                    signature: Some("署名".into()),
-                }],
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        accumulator.take_message(),
-        Some(Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![AssistantContent::Reasoning(Reasoning {
-                id: None,
-                content: vec![ReasoningContent::Text {
-                    text: "考慮".into(),
-                    signature: Some("署名".into()),
-                }],
-            })],
-        })
-    );
-
-    let mut mismatch = AssistantTurnAccumulator::default();
-    mismatch.push_reasoning_delta(None, "prefix");
-    assert!(mismatch
-        .push_provider_reasoning(
-            ProviderInputProfile::ClaudeMessages,
-            Reasoning {
-                id: None,
-                content: vec![ReasoningContent::Text {
-                    text: "rewritten".into(),
-                    signature: Some("sig".into()),
-                }],
-            }
-        )
-        .is_err());
-
-    let mut other = AssistantTurnAccumulator::default();
-    other.push_reasoning_delta(None, "first");
-    other
-        .push_provider_reasoning(
-            ProviderInputProfile::OpenAiChatCompletions,
-            Reasoning {
-                id: None,
-                content: vec![ReasoningContent::Text {
-                    text: "last".into(),
-                    signature: None,
-                }],
-            },
-        )
-        .unwrap();
-    let Some(Message::Assistant { content, .. }) = other.take_message() else {
-        panic!("other provider reasoning turn");
-    };
-    let AssistantContent::Reasoning(reasoning) = &content[0] else {
-        panic!("reasoning content");
-    };
-    assert_eq!(
-        reasoning.content.len(),
-        2,
-        "non-Claude final remains append-only"
-    );
-}
-
-#[test]
-fn generated_reasoning_delta_cases_coalesce_native_parts() {
-    use gents_inference::llm::message::ReasoningContent;
-    use gents_lean_vocab::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
-
-    for case in lean_reasoning_delta_cases() {
-        let mut accumulator = AssistantTurnAccumulator::default();
-        for part in &case.before {
-            match part {
-                Part::Reasoning {
-                    id,
-                    signature,
-                    bytes,
-                } => accumulator.push_reasoning(Reasoning {
-                    id: id.map(|id| id.to_string()),
-                    content: vec![ReasoningContent::Text {
-                        text: String::from_utf8(bytes.clone()).unwrap(),
-                        signature: signature.map(|signature| signature.to_string()),
-                    }],
-                }),
-                Part::Text { bytes } => accumulator.push_text(std::str::from_utf8(bytes).unwrap()),
-            }
-        }
-        accumulator.push_reasoning_delta(
-            case.id.map(|id| id.to_string()),
-            std::str::from_utf8(&case.fragment).unwrap(),
-        );
-        let Some(Message::Assistant { content, .. }) = accumulator.take_message() else {
-            panic!("{}: missing assistant message", case.name);
-        };
-        let actual = content
-            .into_iter()
-            .flat_map(|part| match part {
-                AssistantContent::Text(text) => vec![Part::Text {
-                    bytes: text.text.into_bytes(),
-                }],
-                AssistantContent::Reasoning(reasoning) => reasoning
-                    .content
-                    .into_iter()
-                    .map(|part| {
-                        let ReasoningContent::Text { text, signature } = part else {
-                            panic!("{}: unexpected reasoning type", case.name);
-                        };
-                        Part::Reasoning {
-                            id: reasoning.id.as_ref().map(|id| id.parse().unwrap()),
-                            signature: signature.map(|signature| signature.parse().unwrap()),
-                            bytes: text.into_bytes(),
-                        }
-                    })
-                    .collect(),
-                _ => panic!("{}: unexpected content type", case.name),
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(actual, case.expected, "{}", case.name);
-    }
-}
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
@@ -1774,40 +1640,4 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     );
 
     node.shutdown().await.expect("node shutdown");
-}
-
-#[test]
-fn coalesced_reasoning_fragments_encode_as_one_native_stream() {
-    use gents_inference::llm::message::ReasoningContent;
-    use gents_session::request::streaming::native_encoding::encode_native_message;
-
-    let mut accumulator = AssistantTurnAccumulator::default();
-    for _ in 0..128 {
-        accumulator.push_reasoning_delta(Some("reasoning".into()), "fragment 🦀 ");
-    }
-    let fragmented = Message::Assistant {
-        request_id: None,
-        id: None,
-        content: vec![AssistantContent::Reasoning(Reasoning {
-            id: Some("reasoning".into()),
-            content: (0..128)
-                .map(|_| ReasoningContent::Text {
-                    text: "fragment 🦀 ".into(),
-                    signature: None,
-                })
-                .collect(),
-        })],
-    };
-    let before = encode_native_message(&fragmented).unwrap();
-    let after = encode_native_message(&accumulator.take_message().unwrap()).unwrap();
-    assert_eq!((before.streams.len(), after.streams.len()), (128, 1));
-    let before =
-        serde_json::to_vec(&before.build_blocks("closing-document", &[]).unwrap()).unwrap();
-    let after = serde_json::to_vec(&after.build_blocks("closing-document", &[]).unwrap()).unwrap();
-    assert!(
-        after.len() * 32 < before.len(),
-        "{} vs {}",
-        after.len(),
-        before.len()
-    );
 }

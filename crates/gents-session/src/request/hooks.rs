@@ -11,6 +11,8 @@ pub mod operations;
 pub mod owed;
 pub mod points;
 pub mod prepared;
+#[cfg(test)]
+mod pushdown_tests;
 pub mod queue_scope;
 pub mod registry;
 mod revisions;

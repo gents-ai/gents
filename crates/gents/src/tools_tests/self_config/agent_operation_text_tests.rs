@@ -1,5 +1,5 @@
-use super::tests::SelfConfigFixture;
 use super::*;
+use crate::tools_tests::self_config::fixture::SelfConfigFixture;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 
 /// Everything the model reads for `agent create` and `agent clone`: verb

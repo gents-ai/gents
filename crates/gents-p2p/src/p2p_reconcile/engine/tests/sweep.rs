@@ -245,3 +245,22 @@ async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
         .await
         .expect("cancellation must stop the reconciler");
 }
+
+#[test]
+fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {
+    let cases = gents_lean_vocab::lean_pairing_reconcile_sweep_scheduling_cases();
+    assert_eq!(cases.len(), 1);
+    let case = &cases[0];
+    assert_eq!(case.name, "stale_peer_dial_does_not_block_ready_peer");
+    assert_eq!(case.supervisor, "pairingReconciler");
+    assert_eq!(case.work_class, "p2pReconcileSweep");
+    assert_eq!(case.boundary, "pairingReconcilePeerPreparationBoundary");
+    assert_eq!(
+        case.max_concurrent_peer_preparations,
+        MAX_CONCURRENT_PEER_PREPARATIONS
+    );
+    assert!(case.peer_preparation_bounded);
+    assert!(case.topology_mutation_serialized);
+    assert!(!case.stale_peer_blocks_ready_peer);
+    assert!(case.every_peer_result_accounted);
+}

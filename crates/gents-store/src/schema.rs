@@ -1,5 +1,8 @@
 pub mod migration;
 
+#[cfg(test)]
+mod pushdown_tests;
+
 use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 

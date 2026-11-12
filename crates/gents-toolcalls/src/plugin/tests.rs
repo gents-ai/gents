@@ -92,6 +92,7 @@ fn plugin_job_keys_reexports_the_encoders_and_the_decoder() {
 }
 
 pub mod executor;
+mod policy_tests;
 
 #[tokio::test]
 async fn generated_plugin_call_access_cases_drive_bind_admission() {

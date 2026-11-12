@@ -1397,7 +1397,7 @@ fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
 const STD_HASH_ALLOWLIST: &[&str] = &[
     "crates/gents-lenses/fixture_add_label/src/lib.rs",
     "crates/gents-tools/src/mcp/pool.rs",
-    "crates/gents/src/turn/provider_input/tests.rs",
+    "crates/gents-inference/src/clients/pushdown_tests.rs",
 ];
 
 const STD_HASH_NAMES: &[&str] = &["HashMap", "HashSet", "DefaultHasher"];

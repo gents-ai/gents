@@ -3107,43 +3107,6 @@ async fn every_generated_native_execution_script_runs_to_completion() {
     );
 }
 
-#[test]
-fn generated_title_execution_inventory_keeps_external_premises_explicit() {
-    use gents_lean_vocab::LeanCanonicalExecutionCase;
-    let mut native = 0;
-    let mut gaps = Vec::new();
-    for case in &gents_lean_vocab::lean_contract_snapshot().canonical_execution_gate_cases {
-        match case {
-            LeanCanonicalExecutionCase::NativeExecution { name, seed, .. }
-                if name.starts_with("title_") || name == "normal_request_rejects_title_source" =>
-            {
-                native += 1;
-                assert_eq!(
-                    seed.title_binding.is_some(),
-                    seed.purpose == LeanRequestPurpose::TitleAudit
-                );
-            }
-            LeanCanonicalExecutionCase::ModelExecution {
-                name, native_gap, ..
-            } if name.starts_with("title_") => {
-                assert!(!native_gap.trim().is_empty(), "{name}");
-                gaps.push(name.as_str());
-            }
-            _ => {}
-        }
-    }
-    assert_eq!(native, 11);
-    assert_eq!(
-        gaps,
-        [
-            "title_recovery_accepts_closed_partial_before_future_dated_raw",
-            "title_closed_extent_allows_terminal_after_late_raw",
-            "title_terminal_replay_ignores_late_raw",
-            "title_rejects_publication_and_tool_dispatch",
-        ]
-    );
-}
-
 /// Negative controls outside Lean's valid Time domain: a missing durable
 /// deadline fails in the append owner, malformed input is rejected by
 /// DefraDB's DateTime scalar.

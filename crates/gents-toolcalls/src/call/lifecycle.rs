@@ -61,6 +61,8 @@ mod composed_conformance;
 #[cfg(test)]
 mod file_contents_store_tests;
 #[cfg(test)]
+mod pushdown_tests;
+#[cfg(test)]
 mod recovery_closeout_conformance;
 #[cfg(test)]
 mod recovery_conformance;
@@ -678,3 +680,7 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+mod pushdown_tests_toolcalls_19;
+#[cfg(test)]
+mod pushdown_tests_toolcalls_24;

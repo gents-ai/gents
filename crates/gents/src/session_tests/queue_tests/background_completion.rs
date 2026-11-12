@@ -2,6 +2,9 @@ use super::*;
 use gents_automation::goal::continuation::{goal_continuation_identity, prepare_goal_continuation};
 use gents_session::request::lifecycle::RequestTerminalOutcome;
 use gents_session::session;
+use gents_toolcalls::test_support::background_completion::{
+    admission_verifier, background_hints, desktop_owned_session,
+};
 
 async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
     db.agent_access.execute(query).await.unwrap()["data"].clone()
@@ -65,90 +68,6 @@ async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
     )
     .unwrap();
     assert_eq!(goal.input.cwd.as_deref(), Some(cwd.as_str()));
-}
-
-#[tokio::test]
-async fn a_returned_result_is_admitted_into_a_paired_client_session() {
-    let db = test_db("paired-client-completion").await;
-    let session_id = "desktop-owned-session";
-    let (desktop, _, parent, _) = desktop_owned_session(&db, session_id).await;
-    let wake = persist_background_completion_with_message_waking_with_access(
-        &db.agent_access,
-        &db.node,
-        &parent,
-        "gatekeeper answer",
-        "background-completion-notification:agent-new:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Return,
-    )
-    .await
-    .unwrap()
-    .request
-    .expect("completion wake");
-    let wake = gents_session::request::admission::load_request_for_admission_test_as(
-        &db.node,
-        &wake.doc_id,
-        db.agent_did(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(wake.requester_did.as_deref(), Some(desktop.did()));
-    assert_eq!(wake.request_hop, parent.request_hop);
-    let verified = admission_verifier(&db)
-        .verify_fresh(&wake, db.agent_did())
-        .await
-        .unwrap();
-    let mut lifecycle =
-        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-            db.node.clone(),
-            verified.clone(),
-            60,
-            ExecutionOrigin::Scheduled,
-            "backend-test",
-        );
-    lifecycle
-        .bind_managed_agent(db.agent_identity.as_ref())
-        .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        gents_session::request::lifecycle::ClaimOutcome::Claimed
-    );
-    gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
-        db.node.clone(),
-        session_id,
-        db.node_did(),
-        verified.requester_did.as_deref(),
-        ::identity::Did::new(db.agent_did()).unwrap(),
-        gents_toolcalls::call::hook::FailurePolicy::FailClosed,
-    )
-    .await
-    .expect("the completion resumes the desktop-owned session");
-    let sessions = db
-        .agent_access
-        .execute(&format!(
-            "{{ AgentSession {{ {} }} }}",
-            gents_protocol::session::AGENT_SESSION_FIELDS
-        ))
-        .await
-        .unwrap()["data"]
-        .clone();
-    assert_eq!(sessions["AgentSession"].as_array().unwrap().len(), 1);
-    assert_eq!(sessions["AgentSession"][0]["requester_did"], desktop.did());
-}
-
-fn background_hints(parent: &AgentRequest) -> RequestQueue {
-    RequestQueue {
-        delivery: Default::default(),
-        position: None,
-        source: QueueSource::BackgroundCompletion,
-        policy: QueuePolicy::Coalesce,
-        key: Some(format!("background_completion:{}", parent.session_id)),
-        queued_after_request_id: Some(parent.request_id.clone()),
-        interrupted_request_id: None,
-        background_completion_wake_version: None,
-    }
 }
 
 #[tokio::test]
@@ -997,94 +916,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
     assert_eq!(later_row["request_hop"], bound + 1);
 }
 
-async fn desktop_owned_session(
-    db: &TestDb,
-    session_id: &str,
-) -> (
-    gents_store::identity::KeyIdentity,
-    gents_protocol::request_admission::AgentRequestCreate,
-    AgentRequest,
-    gents_session::request::streaming::DefraStreamWriter,
-) {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
-    let desktop = gents_store::identity::KeyIdentity::load_or_create(
-        db._tempdir.path().join("desktop.key"),
-        None,
-    )
-    .unwrap();
-    let mut create = AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        "desktop-parent",
-        db.node_did(),
-        desktop.did(),
-        db.agent_did(),
-        session_id,
-        "run work",
-        "interactive",
-        "2030-01-01T00:00:00Z",
-        AgentRequestAdmissionRecord::enrollment(
-            desktop.did(),
-            "enrollment",
-            "digest",
-            db.node_did(),
-            1,
-            "2099-01-01T00:00:00Z",
-        ),
-    );
-    gents_session::request::admission::sign_agent_request_create(&desktop, &mut create)
-        .await
-        .unwrap();
-    let desktop_mutation = create.graphql_mutation().unwrap();
-    db.agent_access
-        .transact_write("test.desktop_parent", |txn| {
-            let desktop_mutation = &desktop_mutation;
-            Box::pin(async move { Ok::<_, anyhow::Error>(txn.execute(desktop_mutation).await?) })
-        })
-        .await
-        .unwrap();
-    let parent = gents_session::request::binding::load_agent_request_with_access(
-        &db.agent_access,
-        "desktop-parent",
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
-        db.node.clone(),
-        db.agent_identity.as_ref(),
-        std::time::Duration::ZERO,
-    )
-    .unwrap();
-    let mut parent_lifecycle =
-        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-            db.node.clone(),
-            parent.clone(),
-            60,
-            ExecutionOrigin::Interactive,
-            "backend-test",
-        );
-    parent_lifecycle
-        .bind_managed_agent(db.agent_identity.as_ref())
-        .unwrap();
-    assert_eq!(
-        parent_lifecycle.claim_with_identity().await.unwrap(),
-        gents_session::request::lifecycle::ClaimOutcome::Claimed
-    );
-    parent_lifecycle
-        .begin_owned_execution(&writer)
-        .await
-        .unwrap();
-    parent_lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Completed,
-            gents_protocol::output::TerminalOutput::NoMessage,
-            None,
-        )
-        .await
-        .unwrap();
-    (desktop, create, parent, writer)
-}
-
 #[tokio::test]
 async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestry() {
     for source in [
@@ -1408,15 +1239,4 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             "{error:#}"
         );
     }
-}
-
-fn admission_verifier(
-    db: &TestDb,
-) -> gents_session::request::admission::AgentRequestAdmissionVerifier {
-    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    gents_session::request::admission::AgentRequestAdmissionVerifier::new(
-        db.node.clone(),
-        db.identity.clone(),
-        authority,
-    )
 }

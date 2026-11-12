@@ -842,18 +842,6 @@ async fn create_event_trigger(
     event_source_id
 }
 
-#[test]
-fn retired_reserved_id_predicate_matches_both_namespaces() {
-    let graph_trigger = format!("graph-trigger-{}-{}", "a".repeat(64), "b".repeat(16));
-    assert!(gents_protocol::canonical::is_retired_reserved_id(
-        &graph_trigger
-    ));
-    assert!(gents_protocol::canonical::is_retired_reserved_id("pkg-x"));
-    assert!(!gents_protocol::canonical::is_retired_reserved_id(
-        "ordinary"
-    ));
-}
-
 #[tokio::test]
 async fn retired_reserved_ids_are_never_visible() {
     let (db, _user, access, _binding) =

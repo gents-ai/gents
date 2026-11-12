@@ -17,6 +17,8 @@ mod notification_delivery;
 pub mod session_message;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use session_message::turn_assignment_handoff;
+#[cfg(test)]
+mod pushdown_tests;
 mod side_effects;
 
 pub use notification_delivery::append_background_tool_completion;

@@ -7,7 +7,6 @@ use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_protocol::row::AgentRequest;
 use gents_session::request::aggregate_token_limit::parse_aggregate_token_limit;
 use gents_store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
-use gents_tools::surface::AgentToolSurfaceConfig;
 
 fn request() -> AgentRequest {
     AgentRequest {
@@ -473,45 +472,6 @@ fn loop_config_for_request_rejects_unknown_retry_origin() {
     assert!(error.to_string().contains("unknown execution_origin"));
 }
 
-#[test]
-fn profile_seed_rejects_provider_paths_without_seed_support() {
-    let sampling = SamplingConfig {
-        seed: Some(1234),
-        ..Default::default()
-    };
-
-    sampling
-        .validate_for_provider(
-            BackendProviderKind::OpenAiCompatible,
-            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        )
-        .unwrap();
-    sampling
-        .validate_for_provider(
-            BackendProviderKind::OpenRouter,
-            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        )
-        .unwrap();
-    assert!(sampling
-        .validate_for_provider(
-            BackendProviderKind::ChatGptCodex,
-            gents_loop::openai_wire::OpenAiWireApi::Responses,
-        )
-        .is_err());
-    assert!(sampling
-        .validate_for_provider(
-            BackendProviderKind::XaiGrokOAuth,
-            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        )
-        .is_err());
-    assert!(sampling
-        .validate_for_provider(
-            BackendProviderKind::ClaudeCliSubscription,
-            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        )
-        .is_err());
-}
-
 fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedAgent {
     let identity = Arc::new(
         KeyIdentity::load_or_create(
@@ -869,49 +829,6 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         }
         node.shutdown().await.expect("node shutdown");
     }
-}
-
-#[test]
-fn every_profile_sampling_knob_reaches_the_provider_body() {
-    let sampling = SamplingConfig {
-        temperature: Some(0.7),
-        top_p: Some(0.95),
-        top_k: Some(40),
-        seed: Some(1234),
-        min_p: Some(0.05),
-        frequency_penalty: Some(0.5),
-        presence_penalty: Some(-0.25),
-        repetition_penalty: Some(1.1),
-        max_tokens: Some(1024),
-        reasoning_effort: None,
-    };
-
-    let value = sampling
-        .additional_params()
-        .expect("pinned sampling knobs must produce provider params");
-
-    assert_eq!(value["top_p"], 0.95);
-    assert_eq!(value["top_k"], 40);
-    assert_eq!(value["seed"], 1234);
-    assert_eq!(value["min_p"], 0.05);
-    assert_eq!(value["frequency_penalty"], 0.5);
-    assert_eq!(value["presence_penalty"], -0.25);
-    assert_eq!(value["repetition_penalty"], 1.1);
-    assert!(value.get("temperature").is_none());
-    assert!(value.get("max_tokens").is_none());
-}
-
-#[test]
-fn unpinned_sampling_knobs_emit_no_provider_params() {
-    let sampling = SamplingConfig {
-        temperature: Some(0.0),
-        max_tokens: Some(256),
-        ..Default::default()
-    };
-    assert!(
-        sampling.additional_params().is_none(),
-        "a profile that pins no body-param knob must not send any"
-    );
 }
 
 #[tokio::test]

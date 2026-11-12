@@ -127,3 +127,8 @@ pub(crate) async fn goal_continuation_agent(
 ) -> Result<String> {
     parent_agent_did(parent)
 }
+
+#[cfg(test)]
+mod pushdown_tests;
+#[cfg(test)]
+mod pushdown_tests_automation_2;

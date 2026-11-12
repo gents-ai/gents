@@ -1406,3 +1406,6 @@ pub async fn decode_capture_json_embedded(
 ) -> Result<Value> {
     decode_capture_json_from(node, capture_version, stored, kind).await
 }
+
+#[cfg(test)]
+mod pushdown_tests;

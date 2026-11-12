@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod pushdown_tests;
 mod recovery;
 #[cfg(test)]
 mod retained_tests;

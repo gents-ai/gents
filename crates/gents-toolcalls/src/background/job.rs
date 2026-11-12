@@ -11,6 +11,9 @@ pub mod records;
 pub mod recovery;
 pub mod view;
 
+#[cfg(test)]
+mod pushdown_tests;
+
 use rapidhash::RapidHashMap;
 
 pub use gents_protocol::job;

@@ -1,10 +1,5 @@
 use super::*;
-use gents_lean_vocab::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_toolcalls::background::job::admit::{is_stalled, Refusal};
-use gents_toolcalls::background::job::recovery::{
-    step_invocation_allowed, tick_action, RecoveryFacts, TickAction,
-};
 use std::collections::BTreeMap;
 use support::agent_requests::{RequestActors, RequestSeed};
 
@@ -51,109 +46,6 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     {
         assert_recovery_case_metadata(case);
         drive_recovery_sweep_case(case).await;
-    }
-}
-
-/// One tick of the row: the owner's `tick_action` is the first application of
-/// Lean's `pluginJobRecover`; a `Step` receives every terminal, and the stall
-/// rule over that step's output (`is_stalled`, the admission owner) is the
-/// second. Returns the owner action and the row after it.
-pub(super) fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPluginJobRecoveryRow) {
-    let facts = RecoveryFacts {
-        running: row.running,
-        session_stopped: row.session_stopped,
-        terminal_children: row.terminal_children,
-        observed: row.observed,
-        live: row.live,
-        step_new: row.step_new,
-        deadline_expired: row.deadline_expired,
-        available: if row.available {
-            Ok(())
-        } else {
-            Err(Refusal::NotAvailable)
-        },
-        stepped: row.stepped,
-        in_flight: row.step_in_flight,
-    };
-    let action = tick_action(&facts);
-    let after = match action {
-        TickAction::Untouched => row,
-        TickAction::Kill(_) => LeanPluginJobRecoveryRow {
-            running: false,
-            ..row
-        },
-        TickAction::Step => {
-            let observed = row.terminal_children;
-            let stalled = is_stalled(row.live, observed, row.terminal_children, row.step_new);
-            LeanPluginJobRecoveryRow {
-                running: !stalled,
-                observed,
-                stepped: true,
-                ..row
-            }
-        }
-    };
-    (action, after)
-}
-
-/// Lean `pluginJobRecoverySweep` ticks (`pluginJobStale`, then
-/// `pluginJobRecover ∘ pluginJobRecover`) through the owner's first-application
-/// decision `plugin_job::recovery::tick_action`, which
-/// `redrive_running_jobs` applies to each running job row: a stale row is
-/// killed or re-driven one step, and a row that is not stale is untouched.
-/// Lean's measures stay with its own `recovery_regressions`.
-#[tokio::test]
-async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
-    let cases = lean_plugin_job_recovery_cases();
-    assert_eq!(
-        cases.len(),
-        13,
-        "Lean should emit the plugin-job recovery rows"
-    );
-    let sweep_cases = lean_recovery_sweep_cases()
-        .iter()
-        .filter(|case| case.sweep_id == PLUGIN_JOB_SWEEP_ID)
-        .map(|case| case.name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        sweep_cases,
-        cases
-            .iter()
-            .map(|case| case.name.as_str())
-            .collect::<Vec<_>>(),
-        "the registered sweep's witnesses are the plugin-job tick rows"
-    );
-    for case in cases {
-        let name = case.name.as_str();
-        assert_eq!(case.sweep_id, PLUGIN_JOB_SWEEP_ID, "{name}");
-        assert_eq!(
-            case.rust_function, "plugin_job::recovery::redrive_running_jobs",
-            "{name}"
-        );
-        let (action, after) = tick_row(case.row);
-        assert_eq!(
-            matches!(action, TickAction::Untouched),
-            !case.stale,
-            "{name}: stale flag"
-        );
-        assert_eq!(after, case.expected_row, "{name}: row after one tick");
-        assert_eq!(
-            case.step_commit_allowed,
-            step_invocation_allowed(true, case.row.session_stopped),
-            "{name}: model-driven step commit gate"
-        );
-        assert_eq!(
-            case.step_invocation_allowed,
-            step_invocation_allowed(case.row.running, case.row.session_stopped),
-            "{name}: model-driven guest invocation gate"
-        );
-        if case.row.session_stopped {
-            assert_eq!(
-                action,
-                TickAction::Kill(gents_toolcalls::background::job::control::KillCause::Stop),
-                "{name}"
-            );
-        }
     }
 }
 

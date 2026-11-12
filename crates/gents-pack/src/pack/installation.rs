@@ -1864,3 +1864,6 @@ pub(crate) fn installable_documents(config: &PackConfig) -> Result<Vec<DesiredSt
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod pushdown_tests;

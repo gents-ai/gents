@@ -852,16 +852,7 @@ mod tests {
 mod node_release_tests;
 
 #[cfg(test)]
-mod runtime_hop_cap_tests;
-
-#[cfg(test)]
 mod deferred_enrollment_tests;
 
 #[cfg(test)]
-mod grant_sets_tests;
-
-#[cfg(test)]
 mod agent_provisioning_tests;
-
-#[cfg(test)]
-mod authored_document_tests;

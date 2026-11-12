@@ -2,7 +2,6 @@ use super::*;
 use gents_automation::triggers::engine::goal_source::GoalSource;
 use gents_automation::triggers::engine::TriggerSource as _;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
-use gents_documents::TriggerSource;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequest, AgentRequestRow};
 use gents_session::request::lifecycle::test_support::{
@@ -10,6 +9,7 @@ use gents_session::request::lifecycle::test_support::{
 };
 use gents_session::request::lifecycle::RequestLifecycle;
 use gents_store::identity::NodeIdentity;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_workspace_changes() {

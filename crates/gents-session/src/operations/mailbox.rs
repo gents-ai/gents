@@ -302,9 +302,8 @@ fn item_query(doc_id: &str) -> gents_protocol::document_query::Rendered {
 }
 
 fn decode_items(response: &serde_json::Value) -> Result<Vec<MailboxItem>> {
-    let response = defra_node::QueryResponse::success(
-        response.get("data").cloned().unwrap_or_default(),
-    );
+    let response =
+        defra_node::QueryResponse::success(response.get("data").cloned().unwrap_or_default());
     rows(&response, MAILBOX_COLLECTION).map_err(passthrough)
 }
 
@@ -334,7 +333,9 @@ enum ApplyError {
 impl From<MailboxOperationError> for ApplyError {
     fn from(error: MailboxOperationError) -> Self {
         match error {
-            MailboxOperationError::Passthrough(error) => Self::Other(anyhow::Error::from_boxed(error)),
+            MailboxOperationError::Passthrough(error) => {
+                Self::Other(anyhow::Error::from_boxed(error))
+            }
             error => Self::Operation(error),
         }
     }
@@ -414,3 +415,6 @@ mod conformance {
         });
     }
 }
+
+#[cfg(test)]
+mod pushdown_tests;

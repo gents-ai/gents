@@ -156,4 +156,8 @@ fn optional_string_graphql_field(name: &str, value: Option<&str>) -> String {
 
 pub mod goal_tools;
 #[cfg(test)]
+mod pushdown_runtime_tests;
+#[cfg(test)]
+mod pushdown_tests;
+#[cfg(test)]
 mod tests;

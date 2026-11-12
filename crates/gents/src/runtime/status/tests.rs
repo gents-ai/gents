@@ -8,7 +8,6 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use super::*;
 use gents_lean_vocab::{
-    assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
     lean_process_transition_cases, lean_runtime_reconcile_case, LeanLifecycleTransitionCase,
 };
 
@@ -517,12 +516,6 @@ async fn generated_process_transition_cases_match_runtime_status_policy() {
 
     assert_eq!(legal_count, 5);
     assert_eq!(illegal_count, 20);
-}
-
-#[test]
-fn runtime_reconcile_state_machine_contract_is_complete() {
-    assert_state_machine_contract_is_complete("RuntimeReconcile");
-    assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
 }
 
 #[tokio::test]

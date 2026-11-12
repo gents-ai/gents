@@ -4392,6 +4392,7 @@ dependencies = [
  "identity",
  "query",
  "rapidhash",
+ "reqwest 0.12.28",
  "schema",
  "serde",
  "serde_json",
@@ -5043,10 +5044,12 @@ dependencies = [
 name = "gents-lean-vocab"
 version = "1.0.0-rc2"
 dependencies = [
+ "acp",
  "anyhow",
  "chrono",
  "gents-lean-contract",
  "gents-protocol",
+ "identity",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -5161,6 +5164,7 @@ dependencies = [
  "gents-session",
  "gents-store",
  "gents-toolcalls",
+ "gents-tools",
  "identity",
  "jsonschema",
  "query",
@@ -5172,6 +5176,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -5276,6 +5281,7 @@ dependencies = [
  "gents-lean-vocab",
  "gents-schemas",
  "graphql-parser",
+ "query",
  "rapidhash",
  "regex",
  "reqwest 0.12.28",
@@ -5444,6 +5450,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.26.2",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "uuid",

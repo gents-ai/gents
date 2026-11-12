@@ -926,3 +926,6 @@ fn write_scope_from_selection(
     }
     scope
 }
+
+#[cfg(test)]
+mod pushdown_tests;
