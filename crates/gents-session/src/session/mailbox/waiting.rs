@@ -91,11 +91,11 @@ mod tests {
         let now = "2030-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
         for case in cases {
             let payload = json!({
-                "version": case["version"], "prompt": "Choose a plan", "optional": case["optional"],
-                "allow_free_text": case["free_text"], "options": (0..case["option_count"].as_u64().unwrap())
+                "version": case.version, "prompt": "Choose a plan", "optional": case.optional,
+                "allow_free_text": case.free_text, "options": (0..case.option_count)
                     .map(|index| json!({"id":index.to_string(), "label":index.to_string()})).collect::<Vec<_>>(),
             }).to_string();
-            for wait in case["waits"].as_array().unwrap() {
+            for wait in &case.waits {
                 let parent = AgentRequestRow {
                     doc_id: Some("physical-parent".into()),
                     request_id: "parent".into(),
@@ -103,7 +103,7 @@ mod tests {
                     requester_did: Some("person".into()),
                     agent_did: Some("worker".into()),
                     session_id: Some("chat".into()),
-                    lifecycle_state: Some(if wait["completed"] == true {
+                    lifecycle_state: Some(if wait.completed {
                         RequestLifecycleState::Completed
                     } else {
                         RequestLifecycleState::Interrupted
@@ -112,7 +112,7 @@ mod tests {
                 };
                 let base = json!({
                     "_docID":"question", "item_key":"question", "requester_did":"person", "node_did":"node",
-                    "status":if wait["open"] == true {"open"} else {"acted"}, "kind":"ask", "action":"start_request",
+                    "status":if wait.open {"open"} else {"acted"}, "kind":"ask", "action":"start_request",
                     "title":"Plan", "payload":payload, "source_kind":"agent", "source_id":"source",
                     "session_id":"chat", "request_id":"parent", "target_node_did":"node", "target_agent_did":"worker",
                     "created_at":"2030-01-01T00:00:00Z"
@@ -126,14 +126,14 @@ mod tests {
                     "target_agent_did",
                 ] {
                     let mut value = base.clone();
-                    if wait["same_parent"] != true {
+                    if !wait.same_parent {
                         value[field] = Value::String("other".into());
                     }
                     let item: MailboxItemRow = serde_json::from_value(value).unwrap();
                     assert_eq!(
                         !awaiting_question_ids(&[item], &parent, now).is_empty(),
-                        wait["waiting"] == true,
-                        "{case}: {wait}: {field}"
+                        wait.waiting,
+                        "{case:?}: {wait:?}: {field}"
                     );
                 }
                 let mut expired = base;

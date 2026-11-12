@@ -1,56 +1,7 @@
 use gents_protocol::mailbox_question::{
     question_requires_reply_receipt, MailboxQuestion, MailboxQuestionAnswer,
 };
-use serde::Deserialize;
 use serde_json::json;
-
-#[derive(Debug, Deserialize)]
-struct Case {
-    version: u32,
-    optional: bool,
-    option_count: usize,
-    free_text: bool,
-    skip: bool,
-    selected: bool,
-    text: bool,
-    valid: bool,
-    accepted: bool,
-    dismissible: bool,
-    waits: Vec<WaitCase>,
-    presentations: Vec<PresentationCase>,
-    receipt_versions: Vec<ReceiptVersionCase>,
-    runtimes: Vec<RuntimeCase>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WaitCase {
-    open: bool,
-    same_parent: bool,
-    completed: bool,
-    waiting: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct PresentationCase {
-    multi_select: bool,
-    has_prompt: bool,
-    nonempty_prompt: bool,
-    order: Option<Vec<usize>>,
-    valid: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReceiptVersionCase {
-    version: Option<u32>,
-    current: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct RuntimeCase {
-    version: Option<u64>,
-    reply_version: Option<u32>,
-    supported: bool,
-}
 
 #[test]
 fn existing_question_and_answer_wire_shapes_remain_readable() {
@@ -180,10 +131,7 @@ fn signed_question_evidence_rejects_retargeting_and_changed_decisions() {
 
 #[test]
 fn question_policy_follows_the_executable_model() {
-    let snapshot: serde_json::Value =
-        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
-    let cases: Vec<Case> =
-        serde_json::from_value(snapshot["mailbox_question_cases"].clone()).unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_question_cases;
     assert_eq!(cases.len(), 640);
     for case in cases {
         let payload = json!({
@@ -267,7 +215,7 @@ fn question_policy_follows_the_executable_model() {
         for version in &case.receipt_versions {
             let current = receipt.as_ref().ok().is_some_and(|original| {
                 let mut evidence = original.clone();
-                evidence.question_version = version.version;
+                evidence.question_version = version.version.map(|version| version as u32);
                 let content = MailboxQuestion::from_payload(&payload)
                     .unwrap()
                     .reply_content("Plan", &valid_answer)
@@ -288,7 +236,7 @@ fn question_policy_follows_the_executable_model() {
         for runtime in &case.runtimes {
             let input = gents_protocol::request_input::RequestInput {
                 question_reply: Some(gents_protocol::mailbox_question::MailboxQuestionReply {
-                    question_version: runtime.reply_version,
+                    question_version: runtime.reply_version.map(|version| version as u32),
                     source_doc_id: "question".into(),
                     question_hash: "source".into(),
                     answer: Default::default(),
