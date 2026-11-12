@@ -62,14 +62,7 @@ mod tests {
 
     #[test]
     fn generated_file_review_rules_exclude_whole_collection_delivery() {
-        #[derive(serde::Deserialize)]
-        struct Case {
-            collection: String,
-            replicated: bool,
-        }
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases: Vec<Case> =
-            serde_json::from_value(snapshot["file_review_subscription_cases"].clone()).unwrap();
+        let cases = &gents_lean_vocab::lean_contract_snapshot().file_review_subscription_cases;
         assert!(!cases.is_empty());
         let subscriptions = subscribed_collection_names();
         for case in cases {
