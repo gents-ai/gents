@@ -22,7 +22,8 @@ use serde_json::{json, Value};
 use super::split_namespace;
 use crate::cli::PackWireArgs;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct WireRequest {
     pub(crate) plugin: String,
     pub(crate) agent: String,
@@ -83,6 +84,11 @@ pub(crate) async fn wire_in(
     home: &Path,
     request: &WireRequest,
 ) -> Result<Value> {
+    if let ConfigAccess::Graphql(endpoint) = access {
+        if !request.preview && !request.remove {
+            return crate::http::pack_wire::wire_remote(endpoint, owner, request).await;
+        }
+    }
     let access = access.clone();
     let owner = owner.to_owned();
     let home = home.to_owned();
@@ -90,7 +96,7 @@ pub(crate) async fn wire_in(
     tokio::spawn(async move { wire_in_owned(&access, &owner, &home, &request).await }).await?
 }
 
-async fn wire_in_owned(
+pub(super) async fn wire_in_owned(
     access: &ConfigAccess,
     owner: &str,
     home: &Path,
