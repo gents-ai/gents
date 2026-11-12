@@ -827,7 +827,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         .unwrap();
     for case in &gents_lean_vocab::lean_contract_snapshot().agent_steer_target_cases {
         let mut head = caused.clone();
-        if case["planned_head"] != case["active_head"] {
+        if case.planned_head != case.active_head {
             head.request_id = "a-later-turn".to_owned();
         }
         assert_eq!(
@@ -836,8 +836,8 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
                 candidate,
                 chrono::Utc::now()
             ),
-            case["expected"].as_bool().unwrap(),
-            "{case}"
+            case.expected,
+            "{case:?}"
         );
     }
     for (name, head) in contexts {
