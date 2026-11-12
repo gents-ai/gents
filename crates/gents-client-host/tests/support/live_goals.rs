@@ -13,7 +13,7 @@ pub async fn gates(root: &Path, scenario: Option<&str>) -> Result<Vec<HeldTool>>
     let count = match scenario {
         Some("live-goal-removal") => 2,
         Some("live-goal-replacement") => 3,
-        Some("live-goal-delivery" | "live-steering") => 1,
+        Some("live-goal-delivery" | "live-steering" | "live-questions") => 1,
         Some("live-goal-steering") => 2,
         _ => 0,
     };
