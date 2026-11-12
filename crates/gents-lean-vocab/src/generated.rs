@@ -3040,7 +3040,6 @@ pub struct LeanContractSnapshot {
     pub watcher_actor_cases: Vec<LeanWatcherActorCase>,
     pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
     pub identity_bootstrap_cases: Vec<LeanIdentityBootstrapCase>,
-    pub identity_bootstrap_reservation_cases: Vec<LeanIdentityBootstrapReservationCase>,
     pub identity_runtime_nac_cases: Vec<LeanIdentityRuntimeNacCase>,
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub identity_callback_parent_actor_cases: Vec<serde_json::Value>,
@@ -6008,16 +6007,6 @@ pub struct LeanIdentityBootstrapCase {
     pub node_absent_observed: bool,
     pub reservation_durable: bool,
     pub store_empty_observed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityBootstrapReservationCase {
-    pub created: bool,
-    pub directory_synced: bool,
-    pub expected: bool,
-    pub file_synced: bool,
-    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]

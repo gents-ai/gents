@@ -729,8 +729,6 @@ def snapshotIdentityCasesJson : String :=
       ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
     ++ "\"identity_bootstrap_cases\":"
       ++ Identity.NodeProvisioningConformance.bootstrapCasesJson ++ ","
-    ++ "\"identity_bootstrap_reservation_cases\":"
-      ++ Identity.NodeProvisioningConformance.reservationCasesJson ++ ","
     ++ "\"identity_runtime_nac_cases\":"
       ++ Identity.NodeProvisioningConformance.runtimeNacCasesJson ++ ","
     ++ "\"identity_parent_publication_cases\":"

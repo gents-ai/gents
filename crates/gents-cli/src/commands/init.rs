@@ -2880,21 +2880,33 @@ mod tests {
         node.shutdown().await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn consumed_bootstrap_reservation_is_not_replayed() {
-        let case = gents_lean_vocab::lean_contract_snapshot()
-            .identity_bootstrap_reservation_cases
-            .iter()
-            .find(|case| case.name == "exists-or-create-failed")
-            .unwrap();
-        assert_eq!(case.expected, false);
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        fs::create_dir_all(&home).unwrap();
-        fs::write(home.join(".node-bootstrap-consumed"), b"").unwrap();
-        let error = initialize_disposable_home(&home, false).await.unwrap_err();
-        assert!(format!("{error:#}").contains("bootstrap was already attempted"));
-        assert!(!default_data_dir(&home).join("MANIFEST").exists());
+        use std::os::unix::fs::PermissionsExt;
+        for case in gents_lean_vocab::families::node_provisioning_reservation::cases() {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path().join("home");
+            fs::create_dir_all(&home).unwrap();
+            if !case.input.created {
+                fs::write(home.join(".node-bootstrap-consumed"), b"").unwrap();
+            }
+            if !case.input.directory_synced {
+                fs::set_permissions(&home, fs::Permissions::from_mode(0o300)).unwrap();
+            }
+            let confirmed = reserve_fresh_bootstrap(&home).await.is_ok();
+            fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+            if !confirmed {
+                let error = initialize_disposable_home(&home, false).await.unwrap_err();
+                assert!(
+                    format!("{error:#}").contains("bootstrap was already attempted"),
+                    "{}: {error:#}",
+                    case.input.name
+                );
+                assert!(!default_data_dir(&home).join("MANIFEST").exists());
+            }
+            case.check(confirmed);
+        }
     }
 
     #[tokio::test]

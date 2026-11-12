@@ -45,14 +45,6 @@ def bootstrapCaseJson (name : String) (o : BootstrapObservation) : Json := Json.
 def bootstrapCasesJson : String := (toJson (bootstrapCases.map fun (name, observation) =>
   bootstrapCaseJson name observation)).compress
 
-def reservationCasesJson : String := (toJson ([
-  ("confirmed", true, true, true), ("exists-or-create-failed", false, false, false),
-  ("file-sync-failed", true, false, false), ("directory-sync-failed", true, true, false)].map
-  fun (name, created, fileSynced, directorySynced) =>
-    Json.mkObj [("name", toJson name), ("created", toJson created), ("file_synced", toJson fileSynced),
-      ("directory_synced", toJson directorySynced),
-      ("expected", toJson (reservationConfirmed created fileSynced directorySynced))])).compress
-
 def runtimeNacCasesJson : String := (toJson ([NacStatus.notConfigured, .enabled,
   .disabledTemporarily].map fun status =>
     Json.mkObj [("status", toJson status.name),

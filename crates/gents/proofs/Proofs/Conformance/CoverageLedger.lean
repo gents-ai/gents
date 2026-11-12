@@ -2562,6 +2562,9 @@ def caseCoverage : List CoverageEntry :=
 
   , tagged (consumerCoverage "discovery_guidance_cases" "DiscoveryGuidanceCases")
       "prompt-assembly" [Surface.agentFacing]
+  , tagged (followUpCoverage "family" "node_provisioning_reservation_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (file-sync-failed: no production path makes the file sync of a newly created bootstrap marker fail)")
+      "identity-permission" [Surface.runtimeInternal]
   ]
 
 def followUpHookCoverage : List CoverageEntry :=
