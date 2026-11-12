@@ -113,10 +113,6 @@ pub fn lean_compaction_cursor_cases() -> &'static [LeanCompactionCursorCase] {
     &lean_contract_snapshot().compaction_cursor_cases
 }
 
-pub fn lean_compaction_projection_join_cases() -> &'static [LeanCompactionProjectionJoinCase] {
-    &lean_contract_snapshot().compaction_projection_join_cases
-}
-
 pub fn lean_compaction_reducer_cases() -> &'static [LeanCompactionReducerCase] {
     &lean_contract_snapshot().compaction_reducer_cases
 }
@@ -2754,28 +2750,6 @@ pub enum LeanCompactionInputRow {
     Ordinary { role: String, text: String },
     AssistantToolCalls { role: String, call_ids: Vec<String> },
     ToolResult { role: String, call_id: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCompactionProjectionJoinCase {
-    pub name: String,
-    pub source: Vec<usize>,
-    pub context_window: usize,
-    pub threshold_basis_points: usize,
-    pub configured_max_output_tokens: usize,
-    pub can_fit: bool,
-    pub prefix_length: usize,
-    pub checkpoint: usize,
-    pub initial_projection_succeeds: bool,
-    pub initial_estimate_tokens: Option<usize>,
-    pub rebuild_succeeds: bool,
-    pub rebuilt_estimate_tokens: Option<usize>,
-    pub initial_projection_input: Vec<usize>,
-    pub rebuilt_projection_input: Option<LeanRebuiltProjectionInput>,
-    pub result: String,
-    pub output_tokens: Option<usize>,
-    pub committed_reductions: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -9910,13 +9884,6 @@ pub struct LeanReasoningSignatureCase {
     pub payload: LeanPayloadSpec,
     pub signature: Option<String>,
     pub accepted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRebuiltProjectionInput {
-    pub checkpoint: usize,
-    pub retained_suffix: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -171,7 +171,7 @@ import Proofs.Conformance.Contracts.Json.AggregateBudget
 import Proofs.Conformance.ContractCases.RollingCompaction
 import Proofs.Conformance.ContractCases.ReductionEngine
 import Proofs.Conformance.ContractCases.RenderedCapture
-import Proofs.Conformance.Contracts.Json.CompactionProjectionJoin
+import Proofs.Conformance.ContractCases.CompactionProjectionJoin
 import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
 import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Conformance.AccountRotation.Contracts

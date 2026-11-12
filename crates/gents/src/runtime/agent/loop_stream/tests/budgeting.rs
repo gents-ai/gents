@@ -282,25 +282,17 @@ async fn provider_view_repair_is_not_reported_as_a_durable_compaction() {
 }
 
 /// A staged per-turn reduction writes its row only once the rebuilt request
-/// fits (#3283). Each expected row count is the model's
-/// `commitRequestLocalAfterRebuild` for the matching rebuilt result.
+/// fits (#3283).
 #[tokio::test]
 async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fits() {
     use gents_store::identity::NodeIdentity as _;
-    let cases = gents_lean_vocab::lean_compaction_projection_join_cases();
-    let committed = |result: &str| {
-        cases
-            .iter()
-            .find(|case| case.result == result)
-            .unwrap_or_else(|| panic!("Lean emitted no {result} projection-join case"))
-            .committed_reductions
-    };
-    for (retained, max_tokens, rebuilt_result) in [
-        ("x".repeat(8_000), 1_000, "rebuilt_still_over"),
-        ("compacted prompt".to_string(), 0, "zero_output_capacity"),
-        ("compacted prompt".to_string(), 1_000, "dispatch"),
-    ] {
-        let expected_rows = committed(rebuilt_result);
+    for case in gents_lean_vocab::families::contract_cases_compaction_projection_join_staged_turn_reduction::cases() {
+        let (retained, max_tokens) = match case.input.name.as_str() {
+            "rebuilt_still_over" => ("x".repeat(8_000), 1_000),
+            "zero_output_capacity" => ("compacted prompt".to_string(), 0),
+            "threshold_plus_one" => ("compacted prompt".to_string(), 1_000),
+            other => panic!("no staged-turn fixture builds {other}"),
+        };
         let (node_db, _user, _user_access, binding) =
             gents_inference::test_support::signed_test_node(
                 "staged-turn-reduction-commits-its-row-on",
@@ -421,26 +413,18 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         )
         .await
         .unwrap();
-        assert_eq!(
-            rows.len(),
-            expected_rows,
-            "{rebuilt_result}: durable reduction rows after the request (error: {error:?})"
+        let result = match error.as_deref() {
+            None if text == "done" => "dispatch",
+            Some(error) if error.contains("NoOutputCapacity") => "zero_output_capacity",
+            Some(error) if error.contains("CannotFit") => "rebuilt_still_over",
+            _ => panic!("{}: unexpected terminal state: {error:?} after {text:?}", case.input.name),
+        };
+        case.check(
+            gents_lean_vocab::families::contract_cases_compaction_projection_join_staged_turn_reduction::StagedTurnOutput {
+                result: result.to_owned(),
+                committed_reductions: rows.len() as u64,
+            },
         );
-        if expected_rows == 0 {
-            assert!(
-                error.as_deref().is_some_and(|error| error.contains(
-                    if rebuilt_result == "zero_output_capacity" {
-                        "NoOutputCapacity"
-                    } else {
-                        "CannotFit"
-                    }
-                )),
-                "{rebuilt_result}: unexpected terminal state: {error:?}"
-            );
-        } else {
-            assert_eq!(error, None, "{rebuilt_result}");
-            assert_eq!(text, "done", "{rebuilt_result}");
-        }
     }
 }
 
