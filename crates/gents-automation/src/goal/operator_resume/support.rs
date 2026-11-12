@@ -23,8 +23,85 @@ pub(crate) struct ClaudeAccounts {
     pub b_credential: String,
 }
 
+/// One protected node and enrolled User shared by the fixtures of a
+/// generated family; each fixture on it gets its own Agent, session and
+/// parent request, so cases stay independent without a node per case.
+#[derive(Clone)]
+pub struct FixtureNode {
+    db: Arc<gents_inference::test_support::TestDb>,
+    user: Arc<KeyIdentity>,
+    user_access: ConfigAccess,
+    next: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl FixtureNode {
+    pub async fn start() -> Self {
+        let (db, user, user_access) =
+            gents_inference::test_support::signed_test_node_without_agent(
+                "goal-operator",
+                crate::lifecycle_hooks::composition(),
+            )
+            .await;
+        let admin = ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did()).unwrap(),
+        );
+        for permission in [
+            gents_store::config_client::NodePermission::DacRelationDelete,
+            gents_store::config_client::NodePermission::DocumentDelete,
+        ] {
+            admin
+                .grant_node_permission(&::identity::Did::new(user.did()).unwrap(), permission)
+                .await
+                .unwrap();
+        }
+        Self {
+            db: Arc::new(db),
+            user: Arc::new(user),
+            user_access,
+            next: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    pub async fn shutdown(&self) {
+        self.db.node.shutdown().await.expect("node shutdown");
+    }
+
+    pub async fn fixture(&self, before: &Value) -> Fixture {
+        Fixture::on(self, before, true, None, false).await
+    }
+
+    pub async fn fixture_with_parent_state(
+        &self,
+        before: &Value,
+        terminal_parent: bool,
+    ) -> Fixture {
+        Fixture::on(self, before, terminal_parent, None, false).await
+    }
+
+    pub async fn fixture_with_earlier_request(
+        &self,
+        before: &Value,
+        terminal_parent: bool,
+        earlier: Option<&str>,
+    ) -> Fixture {
+        Fixture::on(self, before, terminal_parent, earlier, false).await
+    }
+
+    pub async fn fixture_with_goal_author(
+        &self,
+        before: &Value,
+        terminal_parent: bool,
+        earlier: Option<&str>,
+        user_owned_goal: bool,
+    ) -> Fixture {
+        Fixture::on(self, before, terminal_parent, earlier, user_owned_goal).await
+    }
+}
+
 pub struct Fixture {
     pub node: Arc<EmbeddedNode>,
+    pub session: String,
     pub identity: Arc<dyn NodeIdentity>,
     pub user: Arc<KeyIdentity>,
     pub agent: Arc<dyn NodeIdentity>,
@@ -33,7 +110,7 @@ pub struct Fixture {
     pub goal: GoalDocument,
     pub parent: gents_protocol::row::AgentRequest,
     user_access: ConfigAccess,
-    _db: gents_inference::test_support::TestDb,
+    _db: Arc<gents_inference::test_support::TestDb>,
 }
 impl Fixture {
     pub async fn new(before: &Value) -> Self {
@@ -58,24 +135,54 @@ impl Fixture {
         earlier: Option<&str>,
         user_owned_goal: bool,
     ) -> Self {
-        let (db, user, user_access, binding) =
-            crate::test_support::signed_test_node("goal-operator").await;
+        let shared = FixtureNode::start().await;
+        Self::on(&shared, before, terminal_parent, earlier, user_owned_goal).await
+    }
+
+    async fn on(
+        shared: &FixtureNode,
+        before: &Value,
+        terminal_parent: bool,
+        earlier: Option<&str>,
+        user_owned_goal: bool,
+    ) -> Self {
+        let ordinal = shared
+            .next
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (session, parent_id) = match ordinal {
+            0 => (SESSION.to_owned(), PARENT.to_owned()),
+            n => (format!("{SESSION}-{n}"), format!("{PARENT}-{n}")),
+        };
+        let db = shared.db.clone();
+        let user = shared.user.clone();
+        let user_access = shared.user_access.clone();
         let node = db.node.clone();
         let identity = db.node_identity.clone();
-        let user = Arc::new(user);
+        let user_did = ::identity::Did::new(user.did()).unwrap();
+        let binding = gents_store::identity::provision_agent_identity_authorized(
+            &node,
+            identity.as_ref(),
+            &user_did,
+        )
+        .await
+        .unwrap();
+        gents_inference::test_support::install_test_agent_binding_with_access(
+            identity.did(),
+            "Default fixture agent",
+            &binding,
+            &user_access,
+        )
+        .await;
+        gents_documents::test_support::set_test_default_agent_as(
+            &user_access,
+            identity.did(),
+            &binding.agent_did,
+        )
+        .await;
         let agent =
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let admin =
             ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap());
-        for permission in [
-            gents_store::config_client::NodePermission::DacRelationDelete,
-            gents_store::config_client::NodePermission::DocumentDelete,
-        ] {
-            admin
-                .grant_node_permission(&::identity::Did::new(user.did()).unwrap(), permission)
-                .await
-                .unwrap();
-        }
         let actor = ::identity::Did::new(agent.did()).unwrap();
         for permission in [
             gents_store::config_client::NodePermission::CollectionGet,
@@ -131,10 +238,11 @@ impl Fixture {
                 let binding = &binding;
                 let identity = &identity;
                 let user = &user;
+                let session = &session;
                 Box::pin(async move {
                     gents_session::session::ensure_session_in_txn(
                         txn,
-                        SESSION,
+                        session,
                         identity.did(),
                         &binding.agent_did,
                         Some(user.did()),
@@ -154,7 +262,7 @@ impl Fixture {
                     gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn,
                         identity.did(),
-                        SESSION,
+                        &session,
                     )
                     .await
                 })
@@ -190,7 +298,7 @@ impl Fixture {
                 &agent_access
             },
             identity.did(),
-            SESSION,
+            &session,
             Some("Finish the original work"),
             Some(GoalStatus::parse(before["status"].as_str().unwrap()).unwrap()),
             Some(Some(1000)),
@@ -205,7 +313,7 @@ impl Fixture {
                 identity.did(),
                 user.did(),
                 &binding.agent_did,
-                SESSION,
+                &session,
                 "Earlier work",
                 "interactive",
                 "2010-01-01T00:00:00Z",
@@ -225,11 +333,11 @@ impl Fixture {
         }
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
-            PARENT,
+            &parent_id,
             identity.did(),
             user.did(),
             &binding.agent_did,
-            SESSION,
+            &session,
             "Original context",
             "interactive",
             "2020-01-01T00:00:00Z",
@@ -251,7 +359,7 @@ impl Fixture {
                 fields::agent_request as fields, Filter, Input, Selection, Update,
             };
             let update = Update::matching(
-                Filter::eq(fields::REQUEST_ID, PARENT),
+                Filter::eq(fields::REQUEST_ID, &parent_id),
                 Input::new().set(fields::LIFECYCLE_STATE, "completed"),
             )
             .returning(Selection::doc_id())
@@ -263,11 +371,14 @@ impl Fixture {
         }
         let rows = request_rows(&user_access).await;
         let parent = gents_protocol::row::AgentRequest::try_from(
-            rows.into_iter().find(|r| r.request_id == PARENT).unwrap(),
+            rows.into_iter()
+                .find(|r| r.request_id == parent_id)
+                .unwrap(),
         )
         .unwrap();
         let f = Self {
             node,
+            session,
             identity,
             user,
             agent,
@@ -316,7 +427,7 @@ impl Fixture {
             "null".to_owned()
         } else {
             let request = match before["last_continued_from"].as_u64().unwrap() {
-                10 => PARENT,
+                10 => self.parent.request_id.as_str(),
                 30 => "watermark-parent",
                 value => panic!("unmapped predecessor watermark {value}"),
             };
@@ -456,7 +567,7 @@ impl Fixture {
             self.identity.did(),
             self.user.did(),
             &self.parent.agent_did,
-            SESSION,
+            &self.session,
             "Other work",
             "interactive",
             date,
@@ -629,7 +740,7 @@ impl Fixture {
                 Box::pin(load_canonical_goal_in_txn(
                     txn,
                     self.identity.did(),
-                    SESSION,
+                    &self.session,
                 ))
             })
             .await
@@ -641,8 +752,16 @@ impl Fixture {
         self.current_goal().await.status
     }
 
+    pub async fn session_rows(&self, access: &ConfigAccess) -> Vec<AgentRequestRow> {
+        request_rows(access)
+            .await
+            .into_iter()
+            .filter(|row| row.session_id.as_deref() == Some(self.session.as_str()))
+            .collect()
+    }
+
     pub async fn children(&self) -> Vec<String> {
-        request_rows(&self.agent_access())
+        self.session_rows(&self.agent_access())
             .await
             .into_iter()
             .filter(|row| {
@@ -666,7 +785,7 @@ impl Fixture {
             fields::agent_request as fields, Input, Selection, Update,
         };
         let access = self.agent_access();
-        let rows = request_rows(&access).await;
+        let rows = self.session_rows(&access).await;
         let matches = rows
             .iter()
             .filter(|row| row.request_id == request_id)
@@ -685,7 +804,7 @@ impl Fixture {
         .render();
         let input = json!({
             "call_id": format!("call-{request_id}"), "request_id": request_id,
-            "request_doc_id": request_doc, "session_id": SESSION,
+            "request_doc_id": request_doc, "session_id": self.session,
             "call_seq": 1, "backend_id": backend, "agent_did": self.agent.did(),
             "node_did": self.identity.did(), "call_kind": kind, "attempt": 1,
             "call_state": "failed", "failure_reason": failure,
@@ -731,13 +850,13 @@ impl Fixture {
                 Box::pin(load_canonical_goal_in_txn(
                     txn,
                     self.identity.did(),
-                    SESSION,
+                    &self.session,
                 ))
             })
             .await
             .unwrap()
             .unwrap();
-        let rows = request_rows(&self.agent_access()).await;
+        let rows = self.session_rows(&self.agent_access()).await;
         let mut children = Vec::new();
         for child in rows.iter().filter(|r| {
             r.retry_key
@@ -760,13 +879,16 @@ impl Fixture {
             let continuation = input.goal_continuation.as_ref().unwrap();
             assert_eq!(child.node_did.as_deref(), Some(self.identity.did()));
             assert_eq!(child.requester_did.as_deref(), Some(self.user.did()));
-            assert_eq!(child.session_id.as_deref(), Some(SESSION));
+            assert_eq!(child.session_id.as_deref(), Some(self.session.as_str()));
             assert_eq!(
                 child.agent_did.as_deref(),
                 Some(self.parent.agent_did.as_str())
             );
             assert_eq!(child.execution_origin.as_deref(), Some("scheduled"));
-            assert_eq!(child.caused_by_parent_request_id.as_deref(), Some(PARENT));
+            assert_eq!(
+                child.caused_by_parent_request_id.as_deref(),
+                Some(self.parent.request_id.as_str())
+            );
             assert_eq!(
                 child.caused_by_parent_request_doc_id.as_deref(),
                 Some(self.parent.doc_id.as_str())
@@ -799,10 +921,14 @@ impl Fixture {
                 queue.policy,
                 gents_protocol::request_input::QueuePolicy::Coalesce
             );
-            assert_eq!(queue.queued_after_request_id.as_deref(), Some(PARENT));
+            assert_eq!(
+                queue.queued_after_request_id.as_deref(),
+                Some(self.parent.request_id.as_str())
+            );
             let seq = continuation.sequence;
             assert_eq!(seq, 1);
-            let identity = goal_continuation_identity(&self.goal.goal_id, PARENT, 1).unwrap();
+            let identity =
+                goal_continuation_identity(&self.goal.goal_id, &self.parent.request_id, 1).unwrap();
             assert_eq!(child.request_id, identity.request_id);
             assert_eq!(
                 child.retry_key.as_deref(),
@@ -858,7 +984,7 @@ impl Fixture {
         let latest = rows
             .first()
             .map(|r| match r.request_id.as_str() {
-                PARENT => 10,
+                id if id == self.parent.request_id => 10,
                 "later-request" => 30,
                 "older-active" | "claimed-later-request" => 40,
                 id if id.starts_with("goal-cont-") => 20,
@@ -869,7 +995,7 @@ impl Fixture {
             .last_continued_from_request_id
             .as_deref()
             .map(|id| match id {
-                PARENT => 10,
+                id if id == self.parent.request_id => 10,
                 "watermark-parent" => 30,
                 other => panic!("unmapped predecessor watermark {other}"),
             });
