@@ -891,14 +891,14 @@ async fn workspace_reads_keep_the_held_agent_actor() {
         "",
     );
     for case in &gents_lean_vocab::lean_contract_snapshot().callback_workspace_actor_cases {
-        let access = match case["actor"].as_str().unwrap() {
+        let gents_lean_vocab::LeanCallbackWorkspaceActorCase { actor, expected } = case;
+        let access = match actor.as_str() {
             "agent" => &agent_access,
             "node" => &node_access,
             "empty" => &empty_access,
             actor => panic!("unknown modeled actor {actor}"),
         };
-        let expected = case["expected"].as_bool().unwrap();
-        let selected = if case["actor"] == "empty" {
+        let selected = if actor == "empty" {
             ""
         } else {
             &agent_did
@@ -910,7 +910,7 @@ async fn workspace_reads_keep_the_held_agent_actor() {
             selected,
         )
         .await;
-        assert_eq!(documents.is_ok(), expected, "workspace actor: {case}");
+        assert_eq!(documents.is_ok(), *expected, "workspace actor: {case:?}");
         let repository = super::documents::load_repository_placement(
             access,
             "missing-repository",
@@ -918,7 +918,7 @@ async fn workspace_reads_keep_the_held_agent_actor() {
             selected,
         )
         .await;
-        assert_eq!(repository.is_ok(), expected, "repository actor: {case}");
+        assert_eq!(repository.is_ok(), *expected, "repository actor: {case:?}");
     }
     node.shutdown().await.expect("node shutdown");
 }
