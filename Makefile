@@ -78,6 +78,9 @@ help:
 	@echo "  make live-eval             Run live inference eval-driver tests"
 	@echo "  make live-agent            Run live inference runtime tests"
 	@echo "  make live-delivery         Run live delivery stress tests"
+	@echo "  make live-triggers         Run live workspace trigger cycles"
+	@echo "  make live-client           Run live native client conversations and goals"
+	@echo "  make live-editor           Run a live installed-editor journey"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
 	@echo "Packs (published from gents-ai/packs):"
@@ -260,7 +263,7 @@ desktop-native-dev: build-cli
 desktop-native-build: desktop-native-stage-sidecar
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json --config $(DESKTOP_LOCAL_TAURI_CONFIG)
 
-.PHONY: live-eval live-cli live-enrollment live-onboarding live-agent live-desktop-smoke
+.PHONY: live-eval live-cli live-enrollment live-onboarding live-agent live-triggers live-client live-editor live-desktop-smoke
 live-cli:
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --skip cli_onboarding_live:: --nocapture --test-threads=1
 
@@ -273,6 +276,19 @@ live-onboarding:
 
 live-agent:
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+
+live-triggers:
+	$(CARGO) build -p gents-fs-runner $(CARGO_PROFILE_FLAG)
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_triggers $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),workspace_change_unit_cycle::change_unit_pack_) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+
+live-client:
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime native_client_submits_signed_input_and_observes_live_and_durable_output $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime enrolled_client_resumes_a_durable_goal_and_observes_completion $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
+
+live-editor:
+	@test -d "$$GENTS_VSCODE_ROOT" || { echo "Set GENTS_VSCODE_ROOT to the installed-editor extension checkout" >&2; exit 2; }
+	@test -f "$$GENTS_VSCODE_VSIX" || { echo "Set GENTS_VSCODE_VSIX to the built editor extension package" >&2; exit 2; }
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features editor-e2e --test runtime $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),editor_preserves_live_session_and_draft_across_window_reload) $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
 
 live-desktop-smoke:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:chat
