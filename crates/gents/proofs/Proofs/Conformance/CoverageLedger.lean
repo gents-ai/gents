@@ -1494,8 +1494,8 @@ def caseCoverage : List CoverageEntry :=
       "Exercises selected-Agent reads using a test-only native binding; product workspace relationships and remaining readers require separate coverage.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_completion_actor_cases"
-      "WorkspaceCompletionActorCases"
+      "family"
+      "workspace_and_file_requests_completion_actor"
       "Tests selection of the held completion writer; workspace read isolation and cross-Agent relationship publication remain separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

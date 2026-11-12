@@ -406,8 +406,4 @@ theorem completion_requires_selected_agent :
     completionActorMatches "agent" "agent" = true ∧
     completionActorMatches "node" "agent" = false := by decide
 
-def completionActorCasesJson : String :=
-  (Lean.toJson ([("agent", "agent", "agent"), ("node", "node", "agent"), ("empty", "", "")].map fun (role, held, selected) => Lean.Json.mkObj
-    [("actor", Lean.toJson role), ("expected", Lean.toJson (completionActorMatches held selected))])).compress
-
 end Identity.WorkspaceAndFileRequests

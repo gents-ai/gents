@@ -26,19 +26,15 @@ async fn workspace_completion_requires_selected_managed_agent() {
             .await
             .unwrap(),
     );
-    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_completion_actor_cases {
-        let actor = case["actor"].as_str().unwrap();
-        let selected = if actor == "empty" { "" } else { agent.did() };
-        let held: &dyn NodeIdentity = if actor == "agent" {
+    let cases = gents_lean_vocab::families::workspace_and_file_requests_completion_actor::cases();
+    for case in cases {
+        let selected = if case.input.selected.is_empty() { "" } else { agent.did() };
+        let held: &dyn NodeIdentity = if case.input.held == "agent" {
             agent.as_ref()
         } else {
             &runtime
         };
-        assert_eq!(
-            super::super::runtime::completion_access(&node, held, selected).is_ok(),
-            case["expected"].as_bool().unwrap(),
-            "{case}"
-        );
+        case.check(super::super::runtime::completion_access(&node, held, selected).is_ok());
     }
     node.shutdown().await.unwrap();
 }

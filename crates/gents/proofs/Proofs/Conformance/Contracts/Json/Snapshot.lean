@@ -1,3 +1,4 @@
+import Proofs.Conformance.Identity.WorkspaceAndFileRequests
 import Proofs.Conformance.Identity.MailboxAccess
 import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
 import Proofs.Conformance.Identity.NodeProvisioning
@@ -667,7 +668,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"mailbox_runtime_notice_case\":" ++ Identity.MailboxAccess.runtimeNoticeCasesJson ++ ","
     ++ "\"mailbox_claimed_recipient_cases\":" ++ Identity.MailboxAccess.claimedRecipientCasesJson ++ ","
     ++ "\"workspace_root_completeness_cases\":" ++ Identity.WorkspaceAndFileRequests.rootCompletenessCasesJson ++ ","
-    ++ "\"workspace_completion_actor_cases\":" ++ Identity.WorkspaceAndFileRequests.completionActorCasesJson ++ ","
     ++ "\"workspace_completion_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceCompletionAccessCasesJson ++ ","
     ++ "\"workspace_agent_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAgentSelectionCasesJson ++ ","
     ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
