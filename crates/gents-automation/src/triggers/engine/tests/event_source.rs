@@ -1302,127 +1302,117 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
 
 #[tokio::test]
 async fn generated_sibling_delivery_case_preserves_pending_correlation() {
-    use gents_lean_vocab::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
-
-    let cases = lean_event_delivery_transition_cases();
-    let case = cases
-        .iter()
-        .find(|case| case.name == "handle_ready_trigger_preserves_pending_sibling")
-        .expect("Lean sibling delivery case");
-    let LeanEventDeliveryAction::Handle { doc: ready_key } = &case.action else {
-        panic!("sibling case must observe a handled delivery");
-    };
-    let pending_key = case
-        .pre
-        .subscription_queue
-        .iter()
-        .find(|key| *key != ready_key)
-        .expect("pending sibling input");
-    let (ready_id, logical_doc) = ready_key.split_once(':').expect("ready delivery identity");
-    let (pending_id, pending_doc) = pending_key
-        .split_once(':')
-        .expect("pending delivery identity");
-    assert_eq!(
-        logical_doc, pending_doc,
-        "siblings must share one physical source row"
-    );
-    let node_db = configured_event_node().await;
-    let node = node_db.node.clone();
-    node.add_collection(
-        r#"type MixedCorrelationMember {
+    use gents_lean_vocab::families::event_delivery_event_source_siblings as family;
+    for case in family::cases::<String>() {
+        let input = &case.input;
+        let ready_key = &input.document;
+        let pending_key = input
+            .pre
+            .subscription_queue
+            .iter()
+            .find(|key| &key.raw != ready_key)
+            .expect("pending sibling input");
+        let (ready_id, logical_doc) = ready_key.split_once(':').expect("ready delivery identity");
+        let (pending_id, pending_doc) = pending_key
+            .raw
+            .split_once(':')
+            .expect("pending delivery identity");
+        assert_eq!(
+            logical_doc, pending_doc,
+            "siblings must share one physical source row"
+        );
+        let node_db = configured_event_node().await;
+        let node = node_db.node.clone();
+        node.add_collection(
+            r#"type MixedCorrelationMember {
             run_id: String @index
             value: String
         }"#,
-    )
-    .await
-    .expect("mixed correlation source schema");
-
-    let ready = resolved_event_trigger(ready_id, "MixedCorrelationMember", resolved_task("ready"));
-    let pending = ResolvedEventTrigger {
-        correlation_field: Some("run_id".into()),
-        ..resolved_event_trigger(
-            pending_id,
-            "MixedCorrelationMember",
-            resolved_task("{{ event.correlation }}"),
         )
-    };
-    let snapshot = configured_event_snapshot(
-        &node,
-        1,
-        RapidHashMap::from_iter([
-            (ready.trigger_id.clone(), ready),
-            (pending.trigger_id.clone(), pending),
-        ]),
-    )
-    .await;
-    let (_tx, rx) = watch::channel(snapshot.clone());
-    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
-    source.reconcile_subscriptions(snapshot.as_ref()).await;
+        .await
+        .expect("mixed correlation source schema");
 
-    let response = node
-        .execute(
-            r#"mutation {
+        let ready =
+            resolved_event_trigger(ready_id, "MixedCorrelationMember", resolved_task("ready"));
+        let pending = ResolvedEventTrigger {
+            correlation_field: Some("run_id".into()),
+            ..resolved_event_trigger(
+                pending_id,
+                "MixedCorrelationMember",
+                resolved_task("{{ event.correlation }}"),
+            )
+        };
+        let snapshot = configured_event_snapshot(
+            &node,
+            1,
+            RapidHashMap::from_iter([
+                (ready.trigger_id.clone(), ready),
+                (pending.trigger_id.clone(), pending),
+            ]),
+        )
+        .await;
+        let (_tx, rx) = watch::channel(snapshot.clone());
+        let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+        source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+        let response = node
+            .execute(
+                r#"mutation {
                 create_MixedCorrelationMember(input: { value: "created-first" }) {
                     _docID
                 }
             }"#,
-        )
-        .await;
-    assert!(!response.has_errors(), "{:#?}", response.errors);
-    let lookup = node
-        .execute(r#"query { MixedCorrelationMember { _docID } }"#)
-        .await;
-    assert!(!lookup.has_errors(), "{:#?}", lookup.errors);
-    let doc_id = lookup.data.as_ref().unwrap()["MixedCorrelationMember"][0]["_docID"]
-        .as_str()
-        .expect("created document id")
-        .to_string();
+            )
+            .await;
+        assert!(!response.has_errors(), "{:#?}", response.errors);
+        let lookup = node
+            .execute(r#"query { MixedCorrelationMember { _docID } }"#)
+            .await;
+        assert!(!lookup.has_errors(), "{:#?}", lookup.errors);
+        let doc_id = lookup.data.as_ref().unwrap()["MixedCorrelationMember"][0]["_docID"]
+            .as_str()
+            .expect("created document id")
+            .to_string();
 
-    let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("ready sibling delivery timed out")
-        .expect("ready sibling must not be blocked by missing correlation");
-    assert_eq!(first.event_vars["source_doc_id"], doc_id);
-    let observed_ready = format!(
-        "{}:{logical_doc}",
-        first.trigger_id.as_deref().expect("ready trigger")
-    );
-    assert_eq!(
-        vec![observed_ready],
-        case.post.handled,
-        "observed ready delivery"
-    );
+        let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+            .await
+            .expect("ready sibling delivery timed out")
+            .expect("ready sibling must not be blocked by missing correlation");
+        assert_eq!(first.event_vars["source_doc_id"], doc_id);
+        let observed_ready = format!(
+            "{}:{logical_doc}",
+            first.trigger_id.as_deref().expect("ready trigger")
+        );
+        let result = admit_observed_event(&node, &first).await;
+        (first.on_result)(result);
 
-    let result = admit_observed_event(&node, &first).await;
-    (first.on_result)(result);
-
-    let mutation = format!(
-        r#"mutation {{
+        let mutation = format!(
+            r#"mutation {{
             update_MixedCorrelationMember(
                 docID: "{}",
                 input: {{ run_id: "run-late" }}
             ) {{ _docID }}
         }}"#,
-        escape_graphql_string(&doc_id),
-    );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:#?}", response.errors);
+            escape_graphql_string(&doc_id),
+        );
+        let response = node.execute(&mutation).await;
+        assert!(!response.has_errors(), "{:#?}", response.errors);
 
-    let second = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("deferred sibling delivery timed out")
-        .expect("deferred sibling must become eligible when correlation arrives");
-    assert_eq!(second.event_vars["source_doc_id"], doc_id);
-    let observed_pending = format!(
-        "{}:{logical_doc}",
-        second.trigger_id.as_deref().expect("pending trigger")
-    );
-    assert_eq!(
-        vec![observed_pending],
-        case.post.subscription_queue,
-        "pending sibling remains deliverable after its correlation arrives"
-    );
-    assert_eq!(second.correlation.as_deref(), Some("run-late"));
+        let second = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+            .await
+            .expect("deferred sibling delivery timed out")
+            .expect("deferred sibling must become eligible when correlation arrives");
+        assert_eq!(second.event_vars["source_doc_id"], doc_id);
+        let observed_pending = format!(
+            "{}:{logical_doc}",
+            second.trigger_id.as_deref().expect("pending trigger")
+        );
+        case.check(family::SiblingObservation {
+            handled: vec![observed_ready],
+            pending: vec![observed_pending],
+        });
+        assert_eq!(second.correlation.as_deref(), Some("run-late"));
+    }
 }
 
 #[tokio::test]
@@ -2591,3 +2581,106 @@ mod resumed_goal;
 
 #[path = "event_source/unacknowledged.rs"]
 mod unacknowledged;
+
+#[tokio::test]
+async fn generated_event_source_convergence_reaches_fixed_point() {
+    use gents_lean_vocab::families::event_delivery_event_source_convergence as family;
+    for case in family::cases::<String>() {
+        assert!(case.input.initial_world.persistent_set.is_empty());
+        assert!(case.input.initial_world.subscription_queue.is_empty());
+        assert!(case.input.initial_world.processed_set.is_empty());
+        assert!(case.input.initial_world.handled.is_empty());
+        let db = configured_event_node().await;
+        let node = db.node.clone();
+        node.add_collection("type ConvergenceDocument { external_id: String }")
+            .await
+            .unwrap();
+        let trigger = resolved_event_trigger(
+            "convergence-trigger",
+            "ConvergenceDocument",
+            resolved_task("handle"),
+        );
+        let snapshot = configured_event_snapshot(
+            &node,
+            1,
+            RapidHashMap::from_iter([("convergence-trigger".into(), trigger)]),
+        )
+        .await;
+        let (_tx, rx) = watch::channel(snapshot.clone());
+        let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+        source.reconcile_subscriptions(snapshot.as_ref()).await;
+        let mut physical = RapidHashMap::default();
+        let mut offered = Vec::new();
+        let mut attempts = Vec::new();
+        let mut handled = Vec::new();
+        for action in &case.input.actions {
+            match action.kind.as_str() {
+                "persist" => {
+                    let result = crate::triggers::callback::test_agent_access(&node)
+                        .write("test.convergence.persist", &format!(
+                            "mutation {{ create_ConvergenceDocument(input: {{ external_id: \"{}\" }}) {{ _docID }} }}",
+                            escape_graphql_string(&action.document))).await.unwrap();
+                    let id = gents_store::graphql::created_doc_id(&result, "ConvergenceDocument")
+                        .unwrap();
+                    physical.insert(id, action.document.clone());
+                }
+                "rescan" => {
+                    if let Some(intent) = source.conformance_rescan().await {
+                        attempts.push(
+                            physical
+                                .get(intent.event_vars["source_doc_id"].as_str().unwrap())
+                                .unwrap()
+                                .clone(),
+                        );
+                        offered.push(intent);
+                    }
+                }
+                "deliver" => {
+                    let intent = offered.remove(0);
+                    assert_eq!(
+                        physical
+                            .get(intent.event_vars["source_doc_id"].as_str().unwrap())
+                            .unwrap(),
+                        &action.document
+                    );
+                    drop(intent);
+                    drop(source);
+                    let (_replacement_tx, replacement_rx) = watch::channel(snapshot.clone());
+                    source =
+                        EventSource::new(replacement_rx, node.clone(), CancellationToken::new());
+                    source.reconcile_subscriptions(snapshot.as_ref()).await;
+                }
+                "handle" => {
+                    let intent = offered.remove(0);
+                    let id = intent.event_vars["source_doc_id"].as_str().unwrap();
+                    let observed = physical.get(id).unwrap().clone();
+                    assert_eq!(observed, action.document);
+                    handled.insert(0, observed);
+                    let result = admit_observed_event(&node, &intent).await;
+                    (intent.on_result)(result);
+                }
+                other => panic!("unsupported trace action {other}"),
+            }
+        }
+        let repeated = source.conformance_rescan().await;
+        let fixed = repeated.is_none();
+        if let Some(intent) = repeated {
+            offered.push(intent);
+        }
+        let offered_after = offered
+            .iter()
+            .map(|intent| {
+                physical
+                    .get(intent.event_vars["source_doc_id"].as_str().unwrap())
+                    .unwrap()
+                    .clone()
+            })
+            .collect();
+        case.check(Some(family::ConvergenceObservation {
+            offered: attempts,
+            handled,
+            offered_after,
+            status: if fixed { "fixed_point" } else { "pending" }.into(),
+        }));
+    }
+}
