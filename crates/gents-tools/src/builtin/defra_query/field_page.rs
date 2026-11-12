@@ -121,11 +121,10 @@ mod tests {
         let cases = &gents_lean_vocab::lean_contract_snapshot().field_read_cases;
         assert!(!cases.is_empty());
         for case in cases {
-            let text: String = case["widths"]
-                .as_array()
-                .unwrap()
+            let text: String = case
+                .widths
                 .iter()
-                .map(|w| match w.as_u64().unwrap() {
+                .map(|w| match w {
                     1 => 'a',
                     2 => 'é',
                     3 => '€',
@@ -133,14 +132,14 @@ mod tests {
                     _ => panic!(),
                 })
                 .collect();
-            let granted = case["granted"].as_bool().unwrap();
-            let present = case["present"].as_bool().unwrap();
-            let matching = case["hashOk"].as_bool().unwrap();
+            let granted = case.granted;
+            let present = case.present;
+            let matching = case.hash_ok;
             let hash = format!("sha256:{:x}", Sha256::digest(text.as_bytes()));
             let page = FieldPage {
                 doc_id: "doc".into(),
                 field: "value".into(),
-                offset_bytes: case["offset"].as_u64().unwrap() as usize,
+                offset_bytes: case.offset as usize,
                 expected_hash: present.then(|| if matching { hash } else { "changed".into() }),
             };
             let fields = if granted {
@@ -149,8 +148,8 @@ mod tests {
                 vec![]
             };
             let result = page.read(&json!({"_docID":"doc","value":text}), &fields);
-            match case["next"].as_u64() {
-                None => assert!(result.is_err(), "{case}"),
+            match case.next {
+                None => assert!(result.is_err(), "{case:?}"),
                 Some(next) => {
                     let result = result.unwrap();
                     assert_eq!(result["next_offset_bytes"], next);
