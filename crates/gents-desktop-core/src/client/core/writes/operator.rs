@@ -126,7 +126,12 @@ impl ClientCore {
                     )
                     .with_client_signing_capability(capability)
                     .ok()
-                    .map(|endpoint| endpoint.with_client_signed_agent_creates())
+                    .and_then(|endpoint| {
+                        gents::runtime::lifecycle_hooks::compose_endpoint(
+                            endpoint.with_client_signed_agent_creates(),
+                        )
+                        .ok()
+                    })
                 })
             })
     }
