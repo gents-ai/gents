@@ -528,8 +528,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "root_admission_cases"
-      "RootAdmissionCases")
+      "family"
+      "root_admission_contracts_admission")
       "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "pairing_reconcile_cases"

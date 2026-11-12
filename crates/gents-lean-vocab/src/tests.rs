@@ -187,32 +187,6 @@ fn pack_operator_wire_contract_cases_parse_through_typed_snapshot() {
 }
 
 #[test]
-fn generated_root_admission_case_inventory_is_complete() {
-    let cases = &crate::lean_contract_snapshot().root_admission_cases;
-    assert!(!cases.is_empty());
-    let mut names = BTreeSet::new();
-    for case in cases {
-        assert!(
-            names.insert(case.name.as_str()),
-            "duplicate case {}",
-            case.name
-        );
-        assert_eq!(case.blank, case.authored.trim().is_empty(), "{}", case.name);
-        assert!(
-            matches!(case.operation.as_str(), "create" | "meet"),
-            "unknown operation {} in {}",
-            case.operation,
-            case.name
-        );
-        assert!(
-            !case.observation.trim().is_empty(),
-            "{} omitted its filesystem observation",
-            case.name
-        );
-    }
-}
-
-#[test]
 fn lean_executable_contracts_cover_initial_domains() {
     for domain in [
         "Request",
@@ -326,7 +300,6 @@ fn lean_executable_contracts_cover_initial_domains() {
         "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
-    assert!(!lean_contract_snapshot().root_admission_cases.is_empty());
     assert_eq!(
         lean_contract_snapshot().request_transition_cases.len(),
         lean_vocabulary_values("RequestState").len().pow(2)

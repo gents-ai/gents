@@ -1,10 +1,10 @@
 import Proofs.Tools.PeerRegistryDiscovery.RootAdmission
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.RootAdmissionContracts
 
 open PeerRegistryDiscovery.RootAdmission
-open Conformance.Contracts
+open Lean
 
 structure Case where
   name : String
@@ -108,31 +108,67 @@ def evaluates (c : Case) : Bool :=
 
 theorem cases_replay : ∀ c ∈ cases, evaluates c = c.expected := by native_decide
 
-private def pathJson (value : CanonicalPath) : String :=
-  "{\"anchor\":" ++ jsonString value.anchor ++
-    ",\"components\":" ++ jsonArray (value.components.map jsonString) ++ "}"
+example : (cases.map (·.name)).Nodup ∧ cases.all (fun c =>
+    (c.operation == "create" || c.operation == "meet") && !c.observation.trim.isEmpty &&
+      c.blank == (c.authored.trim == "")) = true := by native_decide
 
-private def candidateJson : Option CanonicalPath → String
-  | none => "null"
-  | some value => pathJson value
+deriving instance ToJson for CanonicalPath
 
-private def boolJson (value : Bool) : String := if value then "true" else "false"
+structure AdmissionInput where
+  name : String
+  operation : String
+  authored : String
+  stored : Bool
+  observation : String
+  configured : Bool
+  ceiling : Option CanonicalPath
+  enabled : List CanonicalPath
+  candidate : Option CanonicalPath
+  deriving ToJson
 
-private def caseJson (c : Case) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"operation\":" ++ jsonString c.operation ++
-  ",\"authored\":" ++ jsonString c.authored ++
-  ",\"blank\":" ++ boolJson c.blank ++
-  ",\"stored\":" ++ boolJson c.stored ++
-  ",\"observation\":" ++ jsonString c.observation ++
-  ",\"configured\":" ++ boolJson c.configured ++
-  ",\"ceiling\":" ++ candidateJson c.ceiling ++
-  ",\"enabled\":" ++ jsonArray (c.enabled.map pathJson) ++
-  ",\"published\":" ++ jsonArray (c.published.map pathJson) ++
-  ",\"candidate\":" ++ candidateJson c.candidate ++
-  ",\"expected\":" ++ boolJson c.expected ++
-  ",\"effective\":" ++ candidateJson c.effective ++ "}"
+structure AdmissionOutput where
+  blank : Bool
+  published : List CanonicalPath
+  expected : Bool
+  effective : Option CanonicalPath
+  deriving ToJson
 
-def casesJson : String := jsonArray (cases.map caseJson)
+private def publishedList (configured : Bool) (ceiling : Option CanonicalPath)
+    (enabled : List CanonicalPath) : List CanonicalPath :=
+  if configured then enabled.filter (fun root => decide (withinCeiling ceiling root))
+  else ceiling.toList
+
+theorem publishedList_publishedRoots (configured : Bool) (ceiling : Option CanonicalPath)
+    (enabled : List CanonicalPath) :
+    (publishedList configured ceiling enabled).toFinset =
+      publishedRoots ⟨configured, enabled.toFinset, ceiling⟩ := by
+  cases configured
+  · cases ceiling <;> simp [publishedList, publishedRoots, defaultRoots]
+  · simp [publishedList, publishedRoots, List.toFinset_filter]
+
+/-- Publication is a set; the family carries it in one canonical order. -/
+private def canonicalOrder (roots : List CanonicalPath) : List CanonicalPath :=
+  roots.mergeSort fun a b => decide (a.anchor < b.anchor ∨
+    (a.anchor = b.anchor ∧ ¬ b.components < a.components))
+
+private def asCase (i : AdmissionInput) : Case :=
+  ⟨i.name, i.operation, i.authored, i.authored.trim == "", i.stored, i.observation,
+    i.configured, i.ceiling, i.enabled, [], i.candidate, false, none⟩
+
+@[conformance_family]
+def admission : Family AdmissionInput AdmissionOutput where
+  inputs := cases.map fun c =>
+    { name := c.name, operation := c.operation, authored := c.authored, stored := c.stored
+      observation := c.observation, configured := c.configured, ceiling := c.ceiling
+      enabled := c.enabled, candidate := c.candidate }
+  model := fun i =>
+    let meet := effectiveSelection i.configured i.ceiling i.candidate
+    { blank := i.authored.trim == ""
+      published := canonicalOrder (publishedList i.configured i.ceiling i.enabled)
+      expected := match i.operation with
+        | "create" => decide (createSelectionOk (asCase i))
+        | "meet" => meet.isSome
+        | _ => false
+      effective := if i.operation == "meet" then meet.join else none }
 
 end Conformance.RootAdmissionContracts

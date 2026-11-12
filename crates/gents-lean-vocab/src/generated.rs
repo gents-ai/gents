@@ -1815,13 +1815,6 @@ pub enum LeanCanonicalOutputView {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalPath {
-    pub anchor: String,
-    pub components: Vec<String>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanCanonicalRecoveryItem {
@@ -2856,7 +2849,6 @@ pub struct LeanContractSnapshot {
     pub delegated_finality_cases: Vec<LeanDelegatedFinalityCase>,
     pub generated_by: String,
     pub schema_publication_cases: Vec<LeanSchemaPublicationCase>,
-    pub root_admission_cases: Vec<LeanRootAdmissionCase>,
     pub vocabularies: Vec<LeanVocabularyContract>,
     pub state_machines: Vec<LeanStateMachineContract>,
     pub pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
@@ -10405,24 +10397,6 @@ pub struct LeanRetrySelectionCase {
     pub selected: Vec<u64>,
     pub resume: bool,
     pub answered: Vec<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRootAdmissionCase {
-    pub name: String,
-    pub operation: String,
-    pub authored: String,
-    pub blank: bool,
-    pub stored: bool,
-    pub observation: String,
-    pub configured: bool,
-    pub ceiling: Option<LeanCanonicalPath>,
-    pub enabled: Vec<LeanCanonicalPath>,
-    pub published: Vec<LeanCanonicalPath>,
-    pub candidate: Option<LeanCanonicalPath>,
-    pub expected: bool,
-    pub effective: Option<LeanCanonicalPath>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

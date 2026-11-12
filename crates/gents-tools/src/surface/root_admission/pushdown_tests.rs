@@ -1,35 +1,36 @@
-use std::collections::BTreeSet;
-
 #[cfg(unix)]
 #[test]
 fn generated_root_admission_cases_drive_production_root_policy() {
-    let mut names = BTreeSet::new();
-    for case in &gents_lean_vocab::lean_contract_snapshot().root_admission_cases {
-        assert!(
-            names.insert(case.name.as_str()),
-            "duplicate case {}",
-            case.name
-        );
-        assert_eq!(
-            case.authored.trim().is_empty(),
-            case.blank,
-            "Lean blank observation drifted for {}",
-            case.name
-        );
+    use gents_lean_vocab::families::root_admission_contracts_admission::{AdmissionOutput, CanonicalPath};
+    for case in gents_lean_vocab::families::root_admission_contracts_admission::cases() {
+        let input = &case.input;
+        let blank = input.authored.trim().is_empty();
         let sandbox = tempfile::tempdir().expect("case sandbox");
+        let canonical_sandbox = std::fs::canonicalize(sandbox.path()).expect("canonical sandbox");
+        let modeled = |path: &std::path::Path| {
+            let mut parts = path
+                .strip_prefix(&canonical_sandbox)
+                .expect("production root stays in the case sandbox")
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned());
+            CanonicalPath {
+                anchor: parts.next().expect("modeled anchor"),
+                components: parts.collect(),
+            }
+        };
         let materialize = |anchor: &str, components: &[String]| {
             let mut path = sandbox.path().join(anchor);
             path.extend(components);
             path
         };
-        let ceiling = case
+        let ceiling = input
             .ceiling
             .as_ref()
             .map(|path| materialize(&path.anchor, &path.components));
         if let Some(ceiling) = &ceiling {
             std::fs::create_dir_all(ceiling).expect("policy ceiling");
         }
-        let invalid_ceiling = if case.observation == "invalid_ceiling" {
+        let invalid_ceiling = if input.observation == "invalid_ceiling" {
             let link = sandbox.path().join("invalid-ceiling");
             std::os::unix::fs::symlink(sandbox.path().join("absent-ceiling-target"), &link)
                 .expect("broken ceiling symlink");
@@ -37,7 +38,7 @@ fn generated_root_admission_cases_drive_production_root_policy() {
         } else {
             None
         };
-        let enabled = case
+        let enabled = input
             .enabled
             .iter()
             .map(|path| materialize(&path.anchor, &path.components))
@@ -52,7 +53,7 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                 enabled: Some(true),
             })
             .collect::<Vec<_>>();
-        if case.configured && documents.is_empty() && case.observation != "invalid_ceiling" {
+        if input.configured && documents.is_empty() && input.observation != "invalid_ceiling" {
             documents.push(crate::surface::WorkspaceRootDocument {
                 root_path: ceiling
                     .as_ref()
@@ -64,30 +65,17 @@ fn generated_root_admission_cases_drive_production_root_policy() {
             documents,
             invalid_ceiling.as_deref().or(ceiling.as_deref()),
         );
-        assert_eq!(policy.configured, case.configured, "{}", case.name);
-        let roots = case
-            .published
-            .iter()
-            .map(|path| materialize(&path.anchor, &path.components))
-            .collect::<Vec<_>>();
-        for root in &roots {
-            std::fs::create_dir_all(root).expect("published root");
-        }
-        let roots = roots
-            .into_iter()
-            .map(|root| std::fs::canonicalize(root).expect("canonical published root"))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            policy.published.iter().cloned().collect::<BTreeSet<_>>(),
-            roots.iter().cloned().collect::<BTreeSet<_>>(),
-            "production publication disagrees with modeled publication for {}",
-            case.name
-        );
-        let resolved_candidate = case
+        assert_eq!(policy.configured, input.configured, "{}", input.name);
+        let roots = &policy.published;
+        let mut published = roots.iter().map(|root| modeled(root)).collect::<Vec<_>>();
+        published.sort_by(|left, right| {
+            (&left.anchor, &left.components).cmp(&(&right.anchor, &right.components))
+        });
+        let resolved_candidate = input
             .candidate
             .as_ref()
             .map(|path| materialize(&path.anchor, &path.components));
-        let candidate = match case.observation.as_str() {
+        let candidate = match input.observation.as_str() {
             "blank" => None,
             "existing" | "explicit_restriction" | "invalid_ceiling" => {
                 let path = resolved_candidate.clone().expect("modeled candidate");
@@ -96,7 +84,7 @@ fn generated_root_admission_cases_drive_production_root_policy() {
             }
             "nonexistent" => Some(resolved_candidate.clone().expect("modeled candidate")),
             "unresolved" => {
-                let link = roots[0].join(format!("broken-{}", case.name));
+                let link = roots[0].join(format!("broken-{}", input.name));
                 std::os::unix::fs::symlink(roots[0].join("absent-target"), &link)
                     .expect("broken symlink");
                 Some(link)
@@ -104,10 +92,10 @@ fn generated_root_admission_cases_drive_production_root_policy() {
             "symlink" => {
                 let target = resolved_candidate.clone().expect("modeled target");
                 std::fs::create_dir_all(&target).expect("symlink target");
-                let link = if case.expected {
-                    sandbox.path().join("links").join(&case.name)
+                let link = if input.name == "symlink_target_inside" {
+                    sandbox.path().join("links").join(&input.name)
                 } else {
-                    roots[0].join(format!("link-{}", case.name))
+                    roots[0].join(format!("link-{}", input.name))
                 };
                 std::fs::create_dir_all(link.parent().expect("link parent")).expect("link parent");
                 std::os::unix::fs::symlink(&target, &link).expect("symlink");
@@ -142,8 +130,8 @@ fn generated_root_admission_cases_drive_production_root_policy() {
             }
             other => panic!("unhandled Lean filesystem observation {other}"),
         };
-        let authored_root = if case.blank {
-            case.authored.clone()
+        let authored_root = if blank {
+            input.authored.clone()
         } else {
             candidate
                 .clone()
@@ -151,17 +139,11 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                 .to_string_lossy()
                 .into_owned()
         };
-        match case.operation.as_str() {
-            "create" => {
-                let admitted =
-                    crate::surface::admit_authored_root(&policy, &authored_root, case.stored)
-                        .is_ok();
-                assert_eq!(
-                    admitted, case.expected,
-                    "production root admission disagrees with generated case {} ({})",
-                    case.name, case.observation
-                );
-            }
+        let (expected, effective) = match input.operation.as_str() {
+            "create" => (
+                crate::surface::admit_authored_root(&policy, &authored_root, input.stored).is_ok(),
+                None,
+            ),
             "meet" => {
                 let ceiling = ceiling
                     .as_deref()
@@ -175,7 +157,7 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                     None => {
                         let mut tools = gents_documents::Tools {
                             host: Some(gents_documents::HostTools {
-                                root: Some(case.authored.clone()),
+                                root: Some(input.authored.clone()),
                                 files: Some(gents_documents::FileTools {
                                     mode: gents_documents::FileToolMode::ReadOnly,
                                     ..Default::default()
@@ -199,30 +181,23 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                         )
                     }
                 };
-                let modeled_effective = case.effective.as_ref().map(|path| {
-                    std::fs::canonicalize(materialize(&path.anchor, &path.components))
-                        .expect("canonical modeled effective root")
-                });
-                match (meet, modeled_effective) {
-                    (Ok(effective), Some(modeled)) => assert_eq!(
-                        effective,
-                        Some(modeled),
-                        "production meet disagrees with the modeled effective root for {}",
-                        case.name
+                match meet {
+                    Ok(effective) => (
+                        true,
+                        effective.map(|root| {
+                            modeled(&std::fs::canonicalize(root).expect("canonical effective root"))
+                        }),
                     ),
-                    (Ok(effective), None) => panic!(
-                        "meet case {} produced an effective root {effective:?} the model refuses",
-                        case.name
-                    ),
-                    (Err(error), Some(modeled)) => panic!(
-                        "meet case {} refused a selection the model admits at {}: {error:#}",
-                        case.name,
-                        modeled.display()
-                    ),
-                    (Err(_), None) => {}
+                    Err(_) => (false, None),
                 }
             }
             other => panic!("unhandled Lean root operation {other}"),
-        }
+        };
+        case.check(AdmissionOutput {
+            blank,
+            published,
+            expected,
+            effective,
+        });
     }
 }

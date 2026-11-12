@@ -203,6 +203,51 @@ instance (policyConfigured : Bool) (ceiling selection effective : Option Canonic
   unfold effectiveSelectionOk
   cases ceiling <;> cases selection <;> infer_instance
 
+/-- The effective tool root `effectiveSelectionOk` admits, as a function:
+`none` when the meet refuses every root. -/
+def effectiveSelection (policyConfigured : Bool) (ceiling selection : Option CanonicalPath) :
+    Option (Option CanonicalPath) :=
+  match ceiling, selection with
+  | _, none => if policyConfigured then none else some ceiling
+  | none, some sel => some (some sel)
+  | some c, some sel =>
+      if contains c sel then some (some sel)
+      else if contains sel c then some (some c)
+      else none
+
+theorem contains_antisymm (a b : CanonicalPath) (hab : contains a b) (hba : contains b a) :
+    a = b := by
+  obtain ⟨hanchor, hab⟩ := hab
+  obtain ⟨_, hba⟩ := hba
+  cases a; cases b
+  simp only at hanchor hab hba
+  subst hanchor
+  rw [hab.eq_of_length (Nat.le_antisymm hab.length_le hba.length_le)]
+
+theorem effectiveSelection_iff (policyConfigured : Bool)
+    (ceiling selection effective : Option CanonicalPath) :
+    effectiveSelection policyConfigured ceiling selection = some effective ↔
+      effectiveSelectionOk policyConfigured ceiling selection effective := by
+  cases ceiling with
+  | none =>
+    cases selection with
+    | none => cases policyConfigured <;> simp [effectiveSelection, effectiveSelectionOk, eq_comm]
+    | some sel => simp [effectiveSelection, effectiveSelectionOk, eq_comm]
+  | some c =>
+    cases selection with
+    | none => cases policyConfigured <;> simp [effectiveSelection, effectiveSelectionOk, eq_comm]
+    | some sel =>
+      simp only [effectiveSelection, effectiveSelectionOk]
+      by_cases h₁ : contains c sel
+      · by_cases h₂ : contains sel c
+        · have := contains_antisymm c sel h₁ h₂
+          subst this
+          simp [h₁, eq_comm]
+        · simp [h₁, h₂, eq_comm]
+      · by_cases h₂ : contains sel c
+        · simp [h₁, h₂, eq_comm]
+        · simp [h₁, h₂]
+
 theorem effective_selection_never_widens (policyConfigured : Bool)
     (ceiling : CanonicalPath) (selection : Option CanonicalPath)
     (effective : Option CanonicalPath)
