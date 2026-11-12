@@ -511,40 +511,61 @@ def taskGoalRecoveryCases : List TaskGoalRecoveryCase :=
       durableGoalPresent := false, creationClaimPresent := false }
   ]
 
-def taskFireRecoveryDispositionName : GoalAutomation.TaskFireRecoveryDisposition → String
-  | .absent => "absent"
-  | .recovered => "recovered"
-  | .conflict => "conflict"
+structure TaskGoalRecoveryInput where
+  name : String
+  nodeDid : String
+  agentDid : String
+  taskId : String
+  fireKey : String
+  requestPresent : Bool
+  observedNodeDid : Option String
+  observedAgentDid : Option String
+  observedSessionId : Option String
+  observedRequestId : Option String
+  observedRetryKey : Option String
+  durableGoalPresent : Bool
+  creationClaimPresent : Bool
+  deriving Lean.ToJson
 
-def taskGoalRecoveryCaseJson (w : TaskGoalRecoveryCase) : String :=
-  let expected := GoalAutomation.expectedTaskGoalRequestBinding
-    w.nodeDid w.agentDid w.taskId w.fireKey
-  let decision := GoalAutomation.decideTaskFireRecovery expected
-    ⟨w.request, w.durableGoalPresent, w.creationClaimPresent⟩
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"node_did\":" ++ jsonString w.nodeDid ++ ","
-    ++ "\"agent_did\":" ++ jsonString w.agentDid ++ ","
-    ++ "\"task_id\":" ++ jsonString w.taskId ++ ","
-    ++ "\"fire_key\":" ++ jsonString w.fireKey ++ ","
-    ++ "\"request_present\":" ++ boolString w.request.isSome ++ ","
-    ++ "\"request_binding_matches\":" ++ boolString (w.request == some expected) ++ ","
-    ++ "\"observed_node_did\":" ++ goalOptionalStringJson (w.request.map (·.nodeDid)) ++ ","
-    ++ "\"observed_agent_did\":" ++ goalOptionalStringJson (w.request.map (·.agentDid)) ++ ","
-    ++ "\"observed_session_id\":" ++ goalOptionalStringJson (w.request.map (·.sessionId)) ++ ","
-    ++ "\"observed_request_id\":" ++ goalOptionalStringJson (w.request.map (·.requestId)) ++ ","
-    ++ "\"observed_retry_key\":" ++ goalOptionalStringJson (w.request.map (·.retryKey)) ++ ","
-    ++ "\"durable_goal_present\":" ++ boolString w.durableGoalPresent ++ ","
-    ++ "\"creation_claim_present\":" ++ boolString w.creationClaimPresent ++ ","
-    ++ "\"expected_disposition\":" ++ jsonString
-      (taskFireRecoveryDispositionName decision.disposition) ++ ","
-    ++ "\"expected_recovered_request_id\":" ++
-      goalOptionalStringJson decision.recoveredRequestId ++ ","
-    ++ "\"expected_checkpointable\":" ++ boolString decision.checkpointable
-    ++ "}"
+def TaskGoalRecoveryInput.ofCase (w : TaskGoalRecoveryCase) : TaskGoalRecoveryInput :=
+  { name := w.name, nodeDid := w.nodeDid, agentDid := w.agentDid, taskId := w.taskId
+  , fireKey := w.fireKey, requestPresent := w.request.isSome
+  , observedNodeDid := w.request.map (·.nodeDid)
+  , observedAgentDid := w.request.map (·.agentDid)
+  , observedSessionId := w.request.map (·.sessionId)
+  , observedRequestId := w.request.map (·.requestId)
+  , observedRetryKey := w.request.map (·.retryKey)
+  , durableGoalPresent := w.durableGoalPresent, creationClaimPresent := w.creationClaimPresent }
 
-def taskGoalRecoveryCasesJson : String :=
-  jsonArray (taskGoalRecoveryCases.map taskGoalRecoveryCaseJson)
+def TaskGoalRecoveryInput.request (i : TaskGoalRecoveryInput) :
+    Option GoalAutomation.TaskGoalRequestBinding :=
+  if i.requestPresent then
+    some { nodeDid := i.observedNodeDid.getD "", agentDid := i.observedAgentDid.getD ""
+         , sessionId := i.observedSessionId.getD "", requestId := i.observedRequestId.getD ""
+         , retryKey := i.observedRetryKey.getD "" }
+  else none
+
+deriving instance Lean.ToJson for GoalAutomation.TaskFireRecoveryDisposition
+
+structure TaskGoalRecoveryOutput where
+  requestBindingMatches : Bool
+  disposition : GoalAutomation.TaskFireRecoveryDisposition
+  recoveredRequestId : Option String
+  checkpointable : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def taskGoalRecovery : Family TaskGoalRecoveryInput TaskGoalRecoveryOutput where
+  inputs := taskGoalRecoveryCases.map TaskGoalRecoveryInput.ofCase
+  model := fun i =>
+    let expected := GoalAutomation.expectedTaskGoalRequestBinding
+      i.nodeDid i.agentDid i.taskId i.fireKey
+    let decision := GoalAutomation.decideTaskFireRecovery expected
+      ⟨i.request, i.durableGoalPresent, i.creationClaimPresent⟩
+    { requestBindingMatches := i.request == some expected
+    , disposition := decision.disposition
+    , recoveredRequestId := decision.recoveredRequestId
+    , checkpointable := decision.checkpointable }
 
 structure GoalSubmissionCase where
   name : String

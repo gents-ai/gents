@@ -7,9 +7,7 @@ use crate::goal::{
     GoalCreationFingerprint, GoalDecision, GoalFailureCause, GoalGatedDecision,
     GoalRequestTerminal, GoalState, GoalSubmissionState,
 };
-use gents_lean_vocab::{
-    lean_goal_create_cases, lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
-};
+use gents_lean_vocab::{lean_goal_create_cases, lean_task_goal_publication_cases};
 use gents_protocol::goal_status::GoalStatus;
 
 #[test]
@@ -225,9 +223,7 @@ fn generated_task_goal_cases_fence_declaration_and_identity() {
 
 #[test]
 fn generated_task_goal_recovery_cases_fence_request_witness() {
-    let cases = lean_task_goal_recovery_cases();
-    assert_eq!(cases.len(), 10, "the Task goal recovery matrix drifted");
-    for case in cases {
+    gents_lean_vocab::families::contracts_task_goal_recovery::replay(|case| {
         let identity =
             crate::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
         let expected = crate::goal::TaskGoalRequestBinding {
@@ -261,51 +257,14 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
                     .clone()
                     .expect("present request must emit retry_key"),
             });
-        assert_eq!(
-            observed.as_ref() == Some(&expected),
-            case.request_binding_matches,
-            "Lean case {} binding classification",
-            case.name
-        );
         let actual = crate::goal::decide_task_goal_fire_recovery(&expected, observed.as_ref());
-        let disposition = match actual.disposition {
-            crate::goal::TaskGoalFireRecoveryDisposition::Absent => "absent",
-            crate::goal::TaskGoalFireRecoveryDisposition::Recovered => "recovered",
-            crate::goal::TaskGoalFireRecoveryDisposition::Conflict => "conflict",
-        };
-        assert_eq!(
-            disposition, case.expected_disposition,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.recovered_request_id, case.expected_recovered_request_id,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.checkpointable, case.expected_checkpointable,
-            "Lean case {}",
-            case.name
-        );
-        if !case.durable_goal_present
-            && !case.creation_claim_present
-            && case.request_binding_matches
-        {
-            assert!(
-                actual.checkpointable,
-                "Lean case {} lost a matching request when goal metadata was deleted",
-                case.name
-            );
+        gents_lean_vocab::families::contracts_task_goal_recovery::TaskGoalRecoveryOutput {
+            request_binding_matches: observed.as_ref() == Some(&expected),
+            disposition: actual.disposition,
+            recovered_request_id: actual.recovered_request_id,
+            checkpointable: actual.checkpointable,
         }
-        if case.request_present && !case.request_binding_matches {
-            assert_eq!(
-                disposition, "conflict",
-                "Lean case {} accepted a mismatched binding",
-                case.name
-            );
-        }
-    }
+    });
 }
 
 #[test]

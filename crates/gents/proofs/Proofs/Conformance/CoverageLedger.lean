@@ -661,8 +661,8 @@ def caseCoverage : List CoverageEntry :=
       "The consumer checks the production declaration validator and fire identity. Atomic task/goal/request publication needs the shared publication owner; fixture-only booleans are not an implementation check.")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "task_goal_recovery_cases"
-      "TaskGoalRecoveryCases")
+      "family"
+      "contracts_task_goal_recovery")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

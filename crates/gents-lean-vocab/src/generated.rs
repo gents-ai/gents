@@ -649,10 +649,6 @@ pub fn lean_task_goal_publication_cases() -> &'static [LeanTaskGoalPublicationCa
     &lean_contract_snapshot().task_goal_publication_cases
 }
 
-pub fn lean_task_goal_recovery_cases() -> &'static [LeanTaskGoalRecoveryCase] {
-    &lean_contract_snapshot().task_goal_recovery_cases
-}
-
 pub fn lean_task_hook_admission_cases() -> &'static [LeanTaskHookAdmissionCase] {
     &lean_contract_snapshot().task_hook_admission_cases
 }
@@ -3108,7 +3104,6 @@ pub struct LeanContractSnapshot {
     pub plugin_approval_cases: Vec<LeanPluginApprovalCase>,
     pub goal_objective_whitespace_codepoints: Vec<u32>,
     pub task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
-    pub task_goal_recovery_cases: Vec<LeanTaskGoalRecoveryCase>,
     pub file_inventory_closure_cases: Vec<LeanSessionClosureCase>,
     pub enrollment_cases: Vec<LeanEnrollmentCase>,
     pub enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
@@ -11281,27 +11276,6 @@ pub struct LeanTaskGoalPublicationCase {
     pub expected_session_id: Option<String>,
     pub expected_request_id: Option<String>,
     pub expected_retry_key: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanTaskGoalRecoveryCase {
-    pub name: String,
-    pub node_did: String,
-    pub agent_did: String,
-    pub task_id: String,
-    pub fire_key: String,
-    pub request_present: bool,
-    pub request_binding_matches: bool,
-    pub observed_node_did: Option<String>,
-    pub observed_agent_did: Option<String>,
-    pub observed_session_id: Option<String>,
-    pub observed_request_id: Option<String>,
-    pub observed_retry_key: Option<String>,
-    pub durable_goal_present: bool,
-    pub creation_claim_present: bool,
-    pub expected_disposition: String,
-    pub expected_recovered_request_id: Option<String>,
-    pub expected_checkpointable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
