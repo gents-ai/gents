@@ -1096,7 +1096,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn version_selects_manifest_format_before_any_reads() {
+    fn capture_versions_select_the_manifest_format_before_any_reads() {
         let entry = ManifestEntry {
             doc_id: "block".into(),
             content_key: "hash".into(),
@@ -1112,15 +1112,21 @@ mod tests {
         .unwrap();
         let flat = encode_container(&flat, &flat).unwrap();
         let tree = encode_container(&tree, &tree).unwrap();
-        for kind in [
-            CapturePayloadKind::RequestBody,
-            CapturePayloadKind::ProvenancePayload,
-        ] {
-            assert!(decode_capture_record(3, &flat, kind).is_ok());
-            assert!(decode_capture_record(4, &tree, kind).is_ok());
-            assert!(decode_capture_record(3, &tree, kind).is_err());
-            assert!(decode_capture_record(4, &flat, kind).is_err());
-        }
+        gents_lean_vocab::families::contract_cases_rendered_capture_manifest_version::replay::<
+            String,
+        >(|i| {
+            let stored = match i.format.as_str() {
+                "flat" => &flat,
+                "tree" => &tree,
+                other => panic!("unknown manifest format {other}"),
+            };
+            let kind = match i.kind.as_str() {
+                "request_body" => CapturePayloadKind::RequestBody,
+                "provenance_payload" => CapturePayloadKind::ProvenancePayload,
+                other => panic!("unknown payload kind {other}"),
+            };
+            decode_capture_record(u32::try_from(i.capture_version).unwrap(), stored, kind).is_ok()
+        });
     }
 
     #[test]
@@ -1377,12 +1383,16 @@ mod tests {
                         )
                     } else {
                         let manifest = encode_manifest(&entries).unwrap();
-                        resolve_manifest_with_limit(case.max_depth as usize + 1, &manifest.stored, |entry| {
-                            store
-                                .get(&entry.doc_id)
-                                .cloned()
-                                .context("block document is missing")
-                        })
+                        resolve_manifest_with_limit(
+                            case.max_depth as usize + 1,
+                            &manifest.stored,
+                            |entry| {
+                                store
+                                    .get(&entry.doc_id)
+                                    .cloned()
+                                    .context("block document is missing")
+                            },
+                        )
                     }
                 }
                 other => panic!("unknown Lean encoding {other}"),
@@ -2237,14 +2247,28 @@ mod tests {
     }
 
     #[test]
-    fn capture_version_strictly_selects_the_storage_format() {
-        let colliding_legacy = json!({"gents_lossless_json": 1, "kind": "provider_payload"});
-        assert_eq!(
-            decode_inline_value(1, &colliding_legacy.to_string()).unwrap(),
-            colliding_legacy
-        );
-        assert!(decode_inline_value(2, r#"{"provider":"body"}"#).is_err());
-        assert!(decode_inline_value(3, r#"{"provider":"body"}"#).is_err());
+    fn inline_capture_versions_keep_or_refuse_unenveloped_values() {
+        gents_lean_vocab::families::contract_cases_rendered_capture_inline_version::replay::<
+            String,
+            String,
+        >(|i| {
+            let stored = match i.value.as_str() {
+                "colliding_legacy" => {
+                    json!({"gents_lossless_json": 1, "kind": "provider_payload"})
+                }
+                "bare_json" => json!({"provider": "body"}),
+                other => panic!("unknown inline value {other}"),
+            };
+            match decode_inline_value(
+                u32::try_from(i.capture_version).unwrap(),
+                &stored.to_string(),
+            ) {
+                Ok(decoded) if decoded == stored => "verbatim",
+                Ok(_) => "altered",
+                Err(_) => "refused",
+            }
+            .to_owned()
+        });
     }
 
     #[test]
