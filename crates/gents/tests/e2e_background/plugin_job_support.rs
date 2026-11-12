@@ -151,8 +151,38 @@ pub(crate) async fn install_job_fixture(
     let did = db.node_identity.did().to_string();
     let parent_did = fixture.binding.agent_did.clone();
     let child_did = child.agent_did;
-    let (bytes, _) = pack_dir(&fixture_dir()).expect("pack the job fixture");
-    let archive = PackArchive::from_bytes(&bytes).expect("read the job fixture archive");
+    let archive = tokio::task::spawn_blocking(|| {
+        let source = fixture_dir();
+        let staged = tempfile::tempdir().expect("stage the job fixture");
+        let bytes = std::fs::read(source.join("manifest.json")).expect("read job manifest");
+        let descriptor =
+            gents_pack::pack::PackManifest::from_slice(&bytes).expect("decode job manifest");
+        for relative in gents_pack::pack::declared_paths(&descriptor) {
+            if relative == "manifest.json" {
+                continue;
+            }
+            let destination = staged.path().join(&relative);
+            std::fs::create_dir_all(destination.parent().unwrap()).expect("stage asset folder");
+            std::fs::copy(source.join(&relative), destination).expect("stage job asset");
+        }
+        let mut manifest: Value = serde_json::from_slice(&bytes).expect("read job metadata");
+        let args = manifest["plugins"][0]["input_schema"].take();
+        manifest["plugins"][0]["input_schema"] = json!({
+            "type": "object",
+            "properties": {"args": args},
+            "required": ["args"],
+            "additionalProperties": false,
+        });
+        std::fs::write(
+            staged.path().join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .expect("stage model-facing job schema");
+        let (bytes, _) = pack_dir(staged.path()).expect("pack the job fixture");
+        PackArchive::from_bytes(&bytes).expect("read the job fixture archive")
+    })
+    .await
+    .expect("prepare the model-facing job fixture");
     let config = load_pack_config(
         archive.manifest(),
         &PackInstallOptions {
