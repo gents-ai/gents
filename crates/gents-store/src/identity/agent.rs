@@ -26,6 +26,11 @@ pub enum AgentProvisionError {
     NodeMismatch,
     #[error("the selected agent signer is missing, mismatched, or not locally provisioned")]
     InvalidAgentSigner,
+    #[error("Agent {agent_did:?} exists under more than one node ({}); name the node", nodes.join(", "))]
+    AmbiguousAgent {
+        agent_did: String,
+        nodes: Vec<String>,
+    },
     #[error("the caller cannot administer this node")]
     Unauthorized,
     #[error("node authorization is unavailable")]
@@ -263,7 +268,7 @@ pub async fn provision_agent_identity_for_agent(
     let caller = identity::Did::new(actor.did()).map_err(IdentityError::from)?;
     let access = ConfigAccess::local_managed_agent(node.clone(), caller, actor)
         .map_err(|_| AgentProvisionError::InvalidAgentSigner)?;
-    let binding = access
+    let rows = access
         .transact_readonly("agent.creator_binding", |txn| {
             Box::pin(async move {
                 use gents_protocol::document_query::{
@@ -271,28 +276,42 @@ pub async fn provision_agent_identity_for_agent(
                 };
                 let rendered = Query::select(
                     Selection::new()
+                        .field(fields::NODE_DID)
                         .field(fields::AGENT_DID)
                         .field(fields::CREATION_NONCE),
                 )
                 .filter(Filter::eq(fields::AGENT_DID, selected_agent_did))
-                .limit(2)
                 .render();
                 let response = txn.run(&rendered).await?;
-                let binding =
-                    response["data"]["Agent"]
-                        .as_array()
-                        .and_then(|rows| match rows.as_slice() {
-                            [row] => Some(AgentIdentityBinding {
-                                agent_did: row["agent_did"].as_str()?.to_owned(),
-                                creation_nonce: row["creation_nonce"].as_str()?.to_owned(),
-                            }),
-                            _ => None,
-                        });
-                Ok::<_, crate::config_client::ConfigClientError>(binding)
+                Ok::<_, crate::config_client::ConfigClientError>(
+                    response["data"]["Agent"].as_array().cloned().unwrap_or_default(),
+                )
             })
         })
-        .await?
-        .ok_or(AgentProvisionError::InvalidAgentSigner)?;
+        .await?;
+    let mut nodes = rows
+        .iter()
+        .filter_map(|row| row["node_did"].as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    nodes.sort();
+    nodes.dedup();
+    if nodes.len() > 1 {
+        return Err(AgentProvisionError::AmbiguousAgent {
+            agent_did: selected_agent_did.to_owned(),
+            nodes,
+        });
+    }
+    let binding = match rows.as_slice() {
+        [row] => row["agent_did"]
+            .as_str()
+            .zip(row["creation_nonce"].as_str())
+            .map(|(agent_did, creation_nonce)| AgentIdentityBinding {
+                agent_did: agent_did.to_owned(),
+                creation_nonce: creation_nonce.to_owned(),
+            }),
+        _ => None,
+    }
+    .ok_or(AgentProvisionError::InvalidAgentSigner)?;
     let expected = resolve_agent_identity(runtime, &binding)
         .map_err(|_| AgentProvisionError::InvalidAgentSigner)?;
     let challenge = b"gents/agent-provision/selected-signer/v1";
