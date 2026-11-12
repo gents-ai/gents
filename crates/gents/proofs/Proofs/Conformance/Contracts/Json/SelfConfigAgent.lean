@@ -24,7 +24,7 @@ private def agentCreateInputJson (i : AgentCreateInput) : String :=
   ++ "}"
 
 /-- The edit as patch entries in `agentEditKeys` order. `enabled` is the JSON
-text `true` or `false`, and `tags` a JSON array text, as in `self_config_cases`. -/
+text `true` or `false`, and `tags` a JSON array text, as in the `contracts_self_config_case` family. -/
 private def agentEditPatchJson (f : AgentEditFields) : String :=
   let entries : List (FieldKey × Option PatchOp) :=
     [("display_name", f.name), ("description", f.description),

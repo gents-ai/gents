@@ -14,159 +14,174 @@ use crate::native::CommandNetworkMode;
 use gents_documents::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
 };
+use gents_lean_vocab::families::contracts_self_config_case::{
+    BackendWire, FieldValueWire, SelfConfigCaseInput, SelfConfigCaseOutput,
+};
 use gents_lean_vocab::{
-    lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_cases,
-    lean_self_config_selection_cases, lean_sibling_tools_cases,
-    LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
+    lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_selection_cases,
+    lean_sibling_tools_cases, LeanAgentCandidate, LeanAgentDecisionInputs,
 };
 use gents_protocol::operations::inference::InferenceActor;
 use gents_protocol::tool_names::{CONFIG_TOOL_NAME, SELF_CONFIG_TOOL_NAMES};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-fn doc_map(entries: &[gents_lean_vocab::LeanSelfConfigFieldValue]) -> Map<String, Value> {
+fn doc_map(entries: &[FieldValueWire]) -> Map<String, Value> {
     entries
         .iter()
         .map(|entry| (entry.field.clone(), Value::String(entry.value.clone())))
         .collect()
 }
 
-fn entries_patch(entries: &[LeanSelfConfigPatchEntry]) -> SelfConfigPatch {
-    entries
+fn entry_value(action: &str, value: Option<&String>) -> Option<Value> {
+    match action {
+        "set" => Some(Value::String(
+            value.expect("set patch entry must carry a value").clone(),
+        )),
+        "clear" => None,
+        other => panic!("unknown patch action {other}"),
+    }
+}
+
+fn case_patch(case: &SelfConfigCaseInput) -> SelfConfigPatch {
+    case.patch
         .iter()
         .map(|entry| {
-            let value = match entry.action.as_str() {
-                "set" => Some(Value::String(
-                    entry
-                        .value
-                        .clone()
-                        .expect("set patch entry must carry a value"),
-                )),
-                "clear" => None,
-                other => panic!("unknown patch action {other}"),
-            };
-            (entry.field.clone(), value)
+            (
+                entry.field.clone(),
+                entry_value(&entry.action, entry.value.as_ref()),
+            )
         })
         .collect()
 }
 
-#[test]
-fn generated_self_config_cases_fence_patch_merge() {
-    let cases = lean_self_config_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let target =
-            SelfConfigTarget::from_collection_name(&case.collection).expect("runtime target");
-        let stored = doc_map(&case.doc);
-        let patch = entries_patch(&case.patch);
-        assert_eq!(
-            ensure_admissible(target, &patch).is_ok(),
-            case.admissible,
-            "{}: runtime patch admissibility",
-            case.name
-        );
-        if case.accepted {
-            assert_eq!(
-                apply_patch(target, &stored, &patch),
-                doc_map(&case.result),
-                "{}: runtime patch merge",
-                case.name
-            );
+fn case_guards(
+    target: SelfConfigTarget,
+    case: &SelfConfigCaseInput,
+    patch: &SelfConfigPatch,
+) -> anyhow::Result<()> {
+    let held = OperatorGrants {
+        pack_install: case.held_grants.pack_install,
+        policy: case.held_grants.policy,
+        pack_authority: case.held_grants.pack_authority,
+    };
+    let typed = || typed_merge(target, case, patch);
+    let grants = match target {
+        SelfConfigTarget::Tools => {
+            let (stored, candidate) = typed();
+            guard_tools_keep_grants(&held, Some(&stored), &candidate)
         }
-        let grant_guarded = matches!(
-            target,
-            SelfConfigTarget::Tools | SelfConfigTarget::AgentContext | SelfConfigTarget::Agent
-        );
-        if (case.guarded || grant_guarded) && case.admissible && case.validates {
-            let held = OperatorGrants {
-                pack_install: case.held_grants.pack_install,
-                policy: case.held_grants.policy,
-                pack_authority: case.held_grants.pack_authority,
+        SelfConfigTarget::AgentContext | SelfConfigTarget::Agent => {
+            let selected = |doc: &Option<Vec<FieldValueWire>>| {
+                doc.as_deref()
+                    .map(|doc| typed_doc(SelfConfigTarget::Tools, doc))
             };
-            let typed = || typed_merge(target, case, &patch);
-            let grants = match target {
-                SelfConfigTarget::Tools => {
-                    let (stored, candidate) = typed();
-                    guard_tools_keep_grants(&held, Some(&stored), &candidate)
-                }
-                SelfConfigTarget::AgentContext | SelfConfigTarget::Agent => {
-                    let selected =
-                        |doc: &Option<Vec<gents_lean_vocab::LeanSelfConfigFieldValue>>| {
-                            doc.as_deref()
-                                .map(|doc| typed_doc(SelfConfigTarget::Tools, doc))
-                        };
-                    reselection_keeps_grants(
-                        &held,
-                        selected(&case.selected_before).as_ref(),
-                        selected(&case.selected_after).as_ref(),
+            reselection_keeps_grants(
+                &held,
+                selected(&case.selected_before).as_ref(),
+                selected(&case.selected_after).as_ref(),
+            )
+        }
+        _ => Ok(()),
+    };
+    let guard = if case.guarded {
+        let (stored, candidate) = typed();
+        match target {
+            SelfConfigTarget::Tools => guard_tools_keep_control(&stored, &candidate),
+            SelfConfigTarget::Agent => guard_agent_keeps_reach(&stored, &candidate),
+            SelfConfigTarget::InferenceBackend => {
+                let auth = |doc: &Map<String, Value>| {
+                    serde_json::from_value::<gents_documents::BackendAuth>(
+                        doc.get("auth").cloned().unwrap_or(Value::Null),
                     )
-                }
-                _ => Ok(()),
-            };
-            let guard = if case.guarded {
-                let (stored, candidate) = typed();
-                match target {
-                    SelfConfigTarget::Tools => guard_tools_keep_control(&stored, &candidate),
-                    SelfConfigTarget::Agent => guard_agent_keeps_reach(&stored, &candidate),
-                    SelfConfigTarget::InferenceBackend => {
-                        let auth = |doc: &Map<String, Value>| {
-                            serde_json::from_value::<gents_documents::BackendAuth>(
-                                doc.get("auth").cloned().unwrap_or(Value::Null),
-                            )
-                        };
-                        match (auth(&stored), auth(&candidate)) {
-                            (Ok(stored), Ok(candidate)) => {
-                                gents_inference::operations::backend_update_decision(
-                                    InferenceActor::Agent,
-                                    &stored,
-                                    &candidate,
-                                )
-                                .admit()
-                                .map_err(anyhow::Error::from)
-                            }
-                            _ => Err(anyhow::anyhow!("{}: backend auth is not valid", case.name)),
-                        }
+                };
+                match (auth(&stored), auth(&candidate)) {
+                    (Ok(stored), Ok(candidate)) => {
+                        gents_inference::operations::backend_update_decision(
+                            InferenceActor::Agent,
+                            &stored,
+                            &candidate,
+                        )
+                        .admit()
+                        .map_err(anyhow::Error::from)
                     }
-                    SelfConfigTarget::InferenceProfile => {
-                        let backend = |doc: &Map<String, Value>| {
-                            let id = doc.get("backend_id")?;
-                            case.backends
-                                .iter()
-                                .find(|backend| {
-                                    &parse_nested(backend.backend_id.clone().into()) == id
-                                })
-                                .map(typed_backend)
-                        };
-                        match backend(&candidate) {
-                            Some(next) => gents_inference::operations::profile_choice_decision(
-                                InferenceActor::Agent,
-                                backend(&stored).as_ref(),
-                                &next,
-                                None,
-                            )
-                            .admit(&next.backend_id, &next.provider_kind.to_string())
-                            .map_err(anyhow::Error::from),
-                            None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
-                        }
-                    }
-                    other => panic!("{}: no runtime guard for {other:?}", case.name),
+                    _ => Err(anyhow::anyhow!("{}: backend auth is not valid", case.name)),
                 }
-            } else {
-                Ok(())
-            };
-            assert_eq!(
-                grants.and(guard).is_ok(),
-                case.accepted,
-                "{}: runtime guard",
-                case.name
-            );
+            }
+            SelfConfigTarget::InferenceProfile => {
+                let backend = |doc: &Map<String, Value>| {
+                    let id = doc.get("backend_id")?;
+                    case.backends
+                        .iter()
+                        .find(|backend| &parse_nested(backend.backend_id.clone().into()) == id)
+                        .map(typed_backend)
+                };
+                match backend(&candidate) {
+                    Some(next) => gents_inference::operations::profile_choice_decision(
+                        InferenceActor::Agent,
+                        backend(&stored).as_ref(),
+                        &next,
+                        None,
+                    )
+                    .admit(&next.backend_id, &next.provider_kind.to_string())
+                    .map_err(anyhow::Error::from),
+                    None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
+                }
+            }
+            other => panic!("{}: no runtime guard for {other:?}", case.name),
         }
+    } else {
+        Ok(())
+    };
+    grants.and(guard)
+}
+
+fn projected(target: SelfConfigTarget, doc: &Map<String, Value>) -> Vec<FieldValueWire> {
+    let value = |field: &str, value: &Value| FieldValueWire {
+        field: field.to_owned(),
+        value: value
+            .as_str()
+            .unwrap_or_else(|| panic!("{field}: merged value is not text: {value}"))
+            .to_owned(),
+    };
+    target
+        .all_fields()
+        .iter()
+        .filter_map(|field| doc.get(*field).map(|v| value(field, v)))
+        .chain(
+            doc.iter()
+                .filter(|(field, _)| !target.all_fields().contains(&field.as_str()))
+                .map(|(field, v)| value(field, v)),
+        )
+        .collect()
+}
+
+#[test]
+fn contracts_self_config_case_matches_lean() {
+    for case in gents_lean_vocab::families::contracts_self_config_case::cases() {
+        let input = &case.input;
+        let observed = SelfConfigTarget::from_collection_name(&input.collection).map(|target| {
+            let stored = doc_map(&input.doc);
+            let patch = case_patch(input);
+            let admissible = ensure_admissible(target, &patch).is_ok();
+            let accepted =
+                admissible && input.validates && case_guards(target, input, &patch).is_ok();
+            let result = if accepted {
+                apply_patch(target, &stored, &patch)
+            } else {
+                stored
+            };
+            SelfConfigCaseOutput {
+                admissible,
+                accepted,
+                result: projected(target, &result),
+            }
+        });
+        case.check(observed);
     }
 }
 
-fn typed_backend(
-    backend: &gents_lean_vocab::LeanSelfConfigBackend,
-) -> gents_documents::InferenceBackend {
+fn typed_backend(backend: &BackendWire) -> gents_documents::InferenceBackend {
     let id = parse_nested(backend.backend_id.clone().into());
     serde_json::from_value(serde_json::json!({
         "node_did": "did:key:node-a",
@@ -186,7 +201,7 @@ fn parse_nested(value: Value) -> Value {
 
 fn typed_merge(
     target: SelfConfigTarget,
-    case: &LeanSelfConfigCase,
+    case: &SelfConfigCaseInput,
     patch: &SelfConfigPatch,
 ) -> (Map<String, Value>, Map<String, Value>) {
     let stored = typed_doc(target, &case.doc);
@@ -198,10 +213,7 @@ fn typed_merge(
     (stored, candidate)
 }
 
-fn typed_doc(
-    target: SelfConfigTarget,
-    entries: &[gents_lean_vocab::LeanSelfConfigFieldValue],
-) -> Map<String, Value> {
+fn typed_doc(target: SelfConfigTarget, entries: &[FieldValueWire]) -> Map<String, Value> {
     let mut doc: Map<String, Value> = entries
         .iter()
         .map(|entry| {
@@ -255,21 +267,25 @@ fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
             })
         }
         "edit" => AgentOperation::Edit(
-            entries_patch(
-                inputs
-                    .edit_patch
-                    .as_ref()
-                    .unwrap_or_else(|| panic!("{}: edit without edit_patch", inputs.name)),
-            )
-            .into_iter()
-            .map(|(field, value)| match field.as_str() {
-                "enabled" | "tags" => {
-                    let value = value.map(parse_nested);
-                    (field, value)
-                }
-                _ => (field, value),
-            })
-            .collect(),
+            inputs
+                .edit_patch
+                .as_ref()
+                .unwrap_or_else(|| panic!("{}: edit without edit_patch", inputs.name))
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.field.clone(),
+                        entry_value(&entry.action, entry.value.as_ref()),
+                    )
+                })
+                .map(|(field, value)| match field.as_str() {
+                    "enabled" | "tags" => {
+                        let value = value.map(parse_nested);
+                        (field, value)
+                    }
+                    _ => (field, value),
+                })
+                .collect(),
         ),
         "disable" => AgentOperation::Disable,
         other => panic!("{}: unknown agent operation {other}", inputs.name),

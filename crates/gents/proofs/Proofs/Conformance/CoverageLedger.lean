@@ -974,8 +974,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_self_config_field_table")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "self_config_cases"
-      "SelfConfigCases"
+      "family"
+      "contracts_self_config_case"
       "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Agent row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Agent no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -1744,8 +1744,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginCallsRouteCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "self_config_cases"
-      "SelfConfigCases")
+      "family"
+      "contracts_self_config_case")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "tool_timeout_cases"

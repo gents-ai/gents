@@ -625,10 +625,6 @@ pub fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCase] {
     &lean_contract_snapshot().runtime_reconcile_cases
 }
 
-pub fn lean_self_config_cases() -> &'static [LeanSelfConfigCase] {
-    &lean_contract_snapshot().self_config_cases
-}
-
 pub fn lean_self_config_selection_cases() -> &'static LeanSelfConfigSelectionCases {
     &lean_contract_snapshot().self_config_selection_cases
 }
@@ -3155,7 +3151,6 @@ pub struct LeanContractSnapshot {
     pub self_config_resource_read_exposure_cases: Vec<
         LeanSelfConfigResourceReadExposureCase,
     >,
-    pub self_config_cases: Vec<LeanSelfConfigCase>,
     pub agent_decision_cases: Vec<LeanAgentDecisionCase>,
     pub agent_materialization_cases: Vec<LeanAgentMaterializationCase>,
     pub sibling_tools_cases: Vec<LeanSiblingToolsCase>,
@@ -10575,51 +10570,6 @@ pub struct LeanSeedTrigger {
     pub task_id: String,
     pub event_source_id: Option<String>,
     pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanSelfConfigBackend {
-    pub backend_id: String,
-    pub provider_kind: String,
-    pub auth: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanSelfConfigCase {
-    pub name: String,
-    pub collection: String,
-    pub category: String,
-    pub guarded: bool,
-    pub validates: bool,
-    pub held_grants: LeanSelfConfigGrants,
-    #[serde(deserialize_with = "super::required_nullable")]
-    pub selected_before: Option<Vec<LeanSelfConfigFieldValue>>,
-    #[serde(deserialize_with = "super::required_nullable")]
-    pub selected_after: Option<Vec<LeanSelfConfigFieldValue>>,
-    pub doc: Vec<LeanSelfConfigFieldValue>,
-    pub patch: Vec<LeanSelfConfigPatchEntry>,
-    pub admissible: bool,
-    pub accepted: bool,
-    pub result: Vec<LeanSelfConfigFieldValue>,
-    pub protected_preserved: bool,
-    pub containment_holds: bool,
-    pub unchanged_on_reject: bool,
-    pub control_kept_after_accept: bool,
-    #[serde(default)]
-    pub backends: Vec<LeanSelfConfigBackend>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanSelfConfigFieldValue {
-    pub field: String,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanSelfConfigGrants {
-    pub pack_install: bool,
-    pub policy: bool,
-    pub pack_authority: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

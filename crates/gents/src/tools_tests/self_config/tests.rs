@@ -687,6 +687,15 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
 #[tokio::test]
 async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
+    for case in gents_lean_vocab::families::contracts_self_config_case_raw_key_scenario::cases() {
+        raw_key_scenario(&case.input, |accepted| case.check(Some(accepted))).await;
+    }
+}
+
+async fn raw_key_scenario(
+    model: &gents_lean_vocab::families::contracts_self_config_case_raw_key_scenario::SelfConfigCaseInput,
+    report: impl FnOnce(bool),
+) {
     let fixture = gents_automation::test_support::self_config_fixture("self-config-secret").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_selected_backend_writer().await;
@@ -697,10 +706,6 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     )];
     assert!(core.preview(backend_request(raw.clone())).await.is_err());
     assert!(core.apply(backend_request(raw)).await.is_err());
-    let model = gents_lean_vocab::lean_self_config_cases()
-        .iter()
-        .find(|case| case.name == "backend_credential_to_raw_key_rejected")
-        .unwrap();
     let stored: Value = serde_json::from_str(
         &model
             .doc
@@ -755,20 +760,24 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     )
     .await
     .unwrap();
-    for result in [
-        core.preview(backend_request(vec![(
+    let previewed = core
+        .preview(backend_request(vec![(
             "auth".into(),
             Some(raw_key.clone()),
         )]))
-        .await,
-        core.apply(backend_request(vec![(
+        .await
+        .is_ok();
+    let applied = core
+        .apply(backend_request(vec![(
             "auth".into(),
             Some(raw_key.clone()),
         )]))
-        .await,
-    ] {
-        assert_eq!(result.is_ok(), model.accepted);
-    }
+        .await
+        .is_ok();
+    assert_eq!(
+        previewed, applied,
+        "preview and apply decide the same patch"
+    );
     assert!(core
         .apply(backend_request(vec![(
             "auth".into(),
@@ -789,6 +798,7 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     assert!(!serde_json::to_string(&preview)
         .unwrap()
         .contains("operator-secret"));
+    report(applied);
 }
 
 #[tokio::test]

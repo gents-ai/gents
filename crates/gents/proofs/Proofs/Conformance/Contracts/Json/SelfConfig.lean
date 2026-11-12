@@ -64,12 +64,6 @@ def policyResourceExposure : Family PolicyResourceExposureInput Bool where
       fun categories => { categories }
   model := fun i => policyResourceExposed i.categories
 
-def fieldValuePairJson (entry : FieldKey × FieldValue) : String :=
-  "{"
-    ++ "\"field\":" ++ jsonString entry.1 ++ ","
-    ++ "\"value\":" ++ jsonString entry.2
-  ++ "}"
-
 def selfConfigPatchEntryJson (entry : FieldKey × Option FieldValue) : String :=
   "{"
     ++ "\"field\":" ++ jsonString entry.1 ++ ","
@@ -82,17 +76,6 @@ def selfConfigPatchEntryJson (entry : FieldKey × Option FieldValue) : String :=
           | some v => jsonString v
           | none => "null")
   ++ "}"
-
-def selfConfigBackendJson (entry : String × String × String) : String :=
-  "{"
-    ++ "\"backend_id\":" ++ jsonString entry.1 ++ ","
-    ++ "\"provider_kind\":" ++ jsonString entry.2.1 ++ ","
-    ++ "\"auth\":" ++ jsonString entry.2.2
-  ++ "}"
-
-def selfConfigGrantsJson (g : Grants) : String :=
-  "{\"pack_install\":" ++ scBool g.packInstall ++ ",\"policy\":" ++ scBool g.policy
-    ++ ",\"pack_authority\":" ++ scBool g.packAuthority ++ "}"
 
 structure PolicyGrantBoundInput where
   candidatePolicy : Bool
@@ -143,35 +126,84 @@ def policyLockout : Family LockoutInput LockoutOutput where
         Identity.GrantSets.selfChangeKeepsLockout row.noLockout row.isSelf
           ⟨.permission row.permission, row.delete, true, false⟩ }
 
-def selfConfigSelectionJson : Option (List (FieldKey × FieldValue)) → String
-  | none => "null"
-  | some doc => jsonArray (doc.map fieldValuePairJson)
+structure FieldValueWire where
+  field : String
+  value : String
+  deriving Lean.ToJson
 
-def selfConfigCaseJson (w : CaseWitness) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString w.row.name ++ ","
-    ++ "\"collection\":" ++ jsonString w.row.target.collectionName ++ ","
-    ++ "\"category\":" ++ jsonString w.row.target.category ++ ","
-    ++ "\"guarded\":" ++ scBool w.row.guarded ++ ","
-    ++ "\"validates\":" ++ scBool w.row.validates ++ ","
-    ++ "\"held_grants\":" ++ selfConfigGrantsJson w.row.held ++ ","
-    ++ "\"selected_before\":" ++ selfConfigSelectionJson w.selectedBefore ++ ","
-    ++ "\"selected_after\":" ++ selfConfigSelectionJson w.selectedAfter ++ ","
-    ++ "\"doc\":" ++ jsonArray (w.row.doc.map fieldValuePairJson) ++ ","
-    ++ "\"patch\":"
-      ++ jsonArray (w.row.patch.map selfConfigPatchEntryJson) ++ ","
-    ++ "\"admissible\":" ++ scBool w.admissiblePatch ++ ","
-    ++ "\"accepted\":" ++ scBool w.accepted ++ ","
-    ++ "\"result\":" ++ jsonArray (w.result.map fieldValuePairJson) ++ ","
-    ++ "\"protected_preserved\":" ++ scBool w.protectedPreserved ++ ","
-    ++ "\"containment_holds\":" ++ scBool w.containmentHolds ++ ","
-    ++ "\"unchanged_on_reject\":" ++ scBool w.unchangedOnReject ++ ","
-    ++ "\"control_kept_after_accept\":" ++ scBool w.controlKeptAfterAccept ++ ","
-    ++ "\"backends\":" ++ jsonArray (w.row.backends.map selfConfigBackendJson)
-  ++ "}"
+structure PatchEntryWire where
+  field : String
+  action : String
+  value : Option String
+  deriving Lean.ToJson
 
-def selfConfigCasesJson : String :=
-  jsonArray (selfConfigCases.map selfConfigCaseJson)
+structure BackendWire where
+  backendId : String
+  providerKind : String
+  auth : String
+  deriving Lean.ToJson
+
+structure GrantsWire where
+  packInstall : Bool
+  policy : Bool
+  packAuthority : Bool
+  deriving Lean.ToJson
+
+structure SelfConfigCaseInput where
+  name : String
+  collection : String
+  guarded : Bool
+  validates : Bool
+  heldGrants : GrantsWire
+  selectedBefore : Option (List FieldValueWire)
+  selectedAfter : Option (List FieldValueWire)
+  doc : List FieldValueWire
+  patch : List PatchEntryWire
+  backends : List BackendWire
+  deriving Lean.ToJson
+
+structure SelfConfigCaseOutput where
+  admissible : Bool
+  accepted : Bool
+  result : List FieldValueWire
+  deriving Lean.ToJson
+
+private def fieldValues (doc : List (FieldKey × FieldValue)) : List FieldValueWire :=
+  doc.map fun (field, value) => { field, value }
+
+def selfConfigCaseInput (w : CaseWitness) : SelfConfigCaseInput :=
+  { name := w.row.name, collection := w.row.target.collectionName
+    guarded := w.row.guarded, validates := w.row.validates
+    heldGrants := ⟨w.row.held.packInstall, w.row.held.policy, w.row.held.packAuthority⟩
+    selectedBefore := w.selectedBefore.map fieldValues
+    selectedAfter := w.selectedAfter.map fieldValues
+    doc := fieldValues w.row.doc
+    patch := w.row.patch.map fun (field, value) =>
+      { field, action := if value.isSome then "set" else "clear", value }
+    backends := w.row.backends.map fun (backendId, providerKind, auth) =>
+      { backendId, providerKind, auth } }
+
+/-- The witness of the named scenario row: the row's target, documents, guard
+fixtures and held grants are all fixed by the row, and the input carries their
+native projection. -/
+def selfConfigCaseOutcome (i : SelfConfigCaseInput) : Option SelfConfigCaseOutput :=
+  (selfConfigCases.find? (·.row.name == i.name)).map fun w =>
+    { admissible := w.admissiblePatch, accepted := w.accepted, result := fieldValues w.result }
+
+@[conformance_family]
+def selfConfigCase : Family SelfConfigCaseInput (Option SelfConfigCaseOutput) where
+  inputs := selfConfigCases.map selfConfigCaseInput
+  model := selfConfigCaseOutcome
+
+/-- The served-node scenario stores a Backend whose auth is a credential
+reference with its credential document and then attempts the raw-key patch;
+the self-config fixture provisions only that credential, so only this row can
+be built there. -/
+@[conformance_family]
+def selfConfigCaseRawKeyScenario : Family SelfConfigCaseInput (Option Bool) where
+  inputs := (selfConfigCases.filter (·.row.name == "backend_credential_to_raw_key_rejected")).map
+    selfConfigCaseInput
+  model := fun i => (selfConfigCaseOutcome i).map (·.accepted)
 
 structure SchemaPublicationInput where
   grant : Bool

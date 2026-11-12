@@ -832,8 +832,6 @@ def snapshotClientCasesJson : String :=
       ++ lspActionCasesJson ++ ","
     ++ "\"self_config_resource_read_exposure_cases\":"
       ++ selfConfigResourceReadExposureCasesJson ++ ","
-    ++ "\"self_config_cases\":"
-      ++ selfConfigCasesJson ++ ","
     ++ "\"agent_decision_cases\":"
       ++ agentDecisionCasesJson ++ ","
     ++ "\"agent_materialization_cases\":"
