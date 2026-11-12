@@ -1,3 +1,4 @@
+import { href } from "@/lib/router";
 import { useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { toast } from "sonner";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -78,6 +79,16 @@ export function OpenSession() {
     },
     [loadSessionContextDetails, session?.nodeDid, session?.sessionId],
   );
+  /* compaction is chosen on the agent the session runs */
+  const compactionSettings =
+    session?.agentDid && session.nodeDid
+      ? href({
+          name: "agent",
+          nodeDid: session.nodeDid,
+          section: "agents",
+          item: session.agentDid,
+        })
+      : undefined;
   const openCompaction = useCallback(
     (compaction: DesktopSessionSnapshot["context"]["compactions"][number]) => {
       if (!session || compaction.messageSequence == null) return;
@@ -253,6 +264,7 @@ export function OpenSession() {
                         context={session.context}
                         loadDetails={loadContextDetails}
                         onOpenCompaction={openCompaction}
+                        compactionSettings={compactionSettings}
                         compact
                       />
                     </div>
@@ -337,6 +349,7 @@ export function OpenSession() {
                         context={session.context}
                         loadDetails={loadContextDetails}
                         onOpenCompaction={openCompaction}
+                        compactionSettings={compactionSettings}
                       />
                     )}
                   </div>

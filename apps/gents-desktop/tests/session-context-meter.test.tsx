@@ -255,6 +255,47 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-ring")).toHaveAttribute("data-share", "1.00");
   });
 
+  it.each([
+    [100_000, ""],
+    [300_000, "text-warning"],
+    [379_000, "text-warning"],
+    [380_000, "text-destructive"],
+    [500_000, "text-destructive"],
+  ])("colours the ring and percentage at %i of 400k tokens as %s", (tokens, tone) => {
+    render(
+      <SessionContext
+        context={context({
+          lastRequest: lastRequest({ estimatedInputTokens: tokens }),
+        })}
+      />,
+    );
+    const arc = screen.getByTestId("context-ring").querySelectorAll("circle")[1]!;
+    const percentage = screen.getByTestId("context-percentage");
+    for (const el of [arc, percentage])
+      for (const each of ["text-warning", "text-destructive"])
+        if (each === tone) expect(el).toHaveClass(each);
+        else expect(el).not.toHaveClass(each);
+  });
+
+  it("links to the compaction settings, and closes on the way there", async () => {
+    render(
+      <SessionContext
+        context={context({ lastRequest: lastRequest() })}
+        compactionSettings="/agents/node/agents/agent-1"
+      />,
+    );
+    await userEvent.setup().click(screen.getByTestId("context-meter"));
+    const link = await screen.findByTestId("compaction-settings");
+    expect(link).toHaveAttribute("href", "/agents/node/agents/agent-1");
+    expect(link).toHaveTextContent("Compaction settings");
+  });
+
+  it("offers no compaction settings without a place to choose them", async () => {
+    render(<SessionContext context={context({ lastRequest: lastRequest() })} />);
+    await userEvent.setup().click(screen.getByTestId("context-meter"));
+    expect(screen.queryByTestId("compaction-settings")).toBeNull();
+  });
+
   it("identifies partial history and does not claim it is a full model input", () => {
     render(<SessionContext context={context({ transcriptTotalsExact: false })} />);
     fireEvent.click(screen.getByTestId("context-meter"));
