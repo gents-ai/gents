@@ -11,9 +11,9 @@ use serde::Deserialize;
 
 use crate::support::{first_optional_row, test_db, TestDb};
 
-use super::invariants::ObservedSnapshot;
+use gents_p2p::test_support::pairing_invariants::ObservedSnapshot;
 use super::scenario::{Action, NodeId, Scenario};
-use super::PairingActual;
+use gents_p2p::test_support::pairing_invariants::PairingActual;
 use gents_p2p::{p2p_reconcile::PairingApplied, p2p_reconcile::PairingDesired};
 
 pub struct HarnessNode {
@@ -167,7 +167,7 @@ impl Harness {
 
     async fn wait_for_convergence(&mut self) -> Result<()> {
         let snapshot = self.current_snapshot().await?;
-        if crate::support::pairing_conformance::invariants::check_liveness(&snapshot) {
+        if gents_p2p::test_support::pairing_invariants::check_liveness(&snapshot) {
             self.history.push(snapshot);
             return Ok(());
         }
@@ -177,7 +177,7 @@ impl Harness {
         self.record_observation().await?;
 
         let snapshot = self.current_snapshot().await?;
-        if crate::support::pairing_conformance::invariants::check_liveness(&snapshot) {
+        if gents_p2p::test_support::pairing_invariants::check_liveness(&snapshot) {
             Ok(())
         } else {
             bail!(

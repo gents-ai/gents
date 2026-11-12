@@ -1,11 +1,15 @@
 use std::collections::BTreeSet;
 
-use gents_p2p::p2p_reconcile::{
+use crate::p2p_reconcile::{
     compute_owned_pairing_diff, to_replication_filters, PairingActual as RuntimePairingActual,
+    PairingApplied, PairingDesired,
 };
 
-use super::PairingActual;
-use gents_p2p::{p2p_reconcile::PairingApplied, p2p_reconcile::PairingDesired};
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PairingActual {
+    pub replicator_addresses: BTreeSet<String>,
+    pub connected: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedSnapshot {
@@ -80,7 +84,7 @@ pub fn check_safety(history: &[ObservedSnapshot]) -> Result<(), SafetyViolation>
     Ok(())
 }
 
-fn pending_owned_ops(snapshot: &ObservedSnapshot) -> Vec<gents_p2p::p2p_reconcile::DiffOp> {
+fn pending_owned_ops(snapshot: &ObservedSnapshot) -> Vec<crate::p2p_reconcile::DiffOp> {
     // Mirror the live filter observation so the runtime diff sees the same
     // route the harness installed instead of an artificial unfiltered route.
     let live_filter = to_replication_filters(&snapshot.applied.replicator_filter)
@@ -125,4 +129,57 @@ pub fn check_liveness(final_snapshot: &ObservedSnapshot) -> bool {
         && (final_snapshot.applied.replicator_addresses.is_empty()
             || final_snapshot.applied.replicator_filter == final_snapshot.desired.replicator_filter)
         && (!final_snapshot.desired.has_wiring() || final_snapshot.actual.connected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snap(desired: &[&str], actual: &[&str], applied: &[&str]) -> ObservedSnapshot {
+        ObservedSnapshot {
+            desired: PairingDesired {
+                replicator_addresses: desired.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+            actual: PairingActual {
+                replicator_addresses: actual.iter().map(|s| s.to_string()).collect(),
+                connected: !desired.is_empty(),
+            },
+            applied: PairingApplied {
+                replicator_addresses: applied.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+            read_failed: false,
+        }
+    }
+
+    #[test]
+    fn safety_fails_on_phantom_applied() {
+        let history = vec![snap(&[], &["c1"], &["c1"])];
+        assert!(matches!(
+            check_safety(&history),
+            Err(SafetyViolation::AppliedReplicatorWithoutPriorDesired { .. })
+        ));
+    }
+
+    #[test]
+    fn unmanaged_actual_survives_remove() {
+        let history = vec![
+            snap(&[], &["manual"], &[]),
+            snap(&["managed"], &["manual", "managed"], &["managed"]),
+            snap(&[], &["manual"], &[]),
+        ];
+        assert_eq!(check_safety(&history), Ok(()));
+        assert!(check_liveness(history.last().unwrap()));
+    }
+
+    #[test]
+    fn stable_desired_does_not_flap_after_convergence() {
+        let before = snap(&["c1"], &["c1"], &["c1"]);
+        let after = snap(&["c1"], &[], &[]);
+        assert!(matches!(
+            check_safety(&[before, after]),
+            Err(SafetyViolation::ConvergedStableDesiredFlapped)
+        ));
+    }
 }

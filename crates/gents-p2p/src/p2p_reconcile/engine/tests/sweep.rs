@@ -245,3 +245,60 @@ async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
         .await
         .expect("cancellation must stop the reconciler");
 }
+
+#[test]
+fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
+    let cases = gents_lean_vocab::lean_pairing_reconcile_shutdown_boundary_cases();
+    assert_eq!(cases.len(), 1);
+    let case = &cases[0];
+    assert_eq!(
+        case.name,
+        "shutdown_preempts_in_flight_pairing_reconcile_sweep"
+    );
+    assert_eq!(case.supervisor, "pairingReconciler");
+    assert_eq!(case.work_class, "p2pReconcileSweep");
+    assert_eq!(case.boundary, "pairingReconcileSupervisorBoundary");
+    assert_eq!(case.per_admin_call_timeout_ms, 10_000);
+    assert!(case.cancellation_observed_inside_sweep);
+    assert!(case.current_admin_future_dropped);
+    assert!(case.remaining_peers_skipped);
+    assert!(case.shutdown_join_bounded);
+}
+
+#[test]
+fn pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried() {
+    let cases = gents_lean_vocab::lean_pairing_reconcile_sweep_retry_boundary_cases();
+    assert_eq!(cases.len(), 1);
+    let case = &cases[0];
+    assert_eq!(
+        case.name,
+        "initial_top_level_sweep_failure_retries_without_terminating_reconciler"
+    );
+    assert_eq!(case.supervisor, "pairingReconciler");
+    assert_eq!(case.work_class, "p2pReconcileSweep");
+    assert_eq!(case.boundary, "pairingReconcileSupervisorBoundary");
+    assert_eq!(case.failure_scope, "topLevelSweepEnumeration");
+    assert!(!case.failure_terminal);
+    assert_eq!(case.retry_trigger, "immediateFirstIntervalTick");
+    assert!(case.cancellation_prioritized);
+    assert!(case.convergence_retried);
+}
+
+#[test]
+fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {
+    let cases = gents_lean_vocab::lean_pairing_reconcile_sweep_scheduling_cases();
+    assert_eq!(cases.len(), 1);
+    let case = &cases[0];
+    assert_eq!(case.name, "stale_peer_dial_does_not_block_ready_peer");
+    assert_eq!(case.supervisor, "pairingReconciler");
+    assert_eq!(case.work_class, "p2pReconcileSweep");
+    assert_eq!(case.boundary, "pairingReconcilePeerPreparationBoundary");
+    assert_eq!(
+        case.max_concurrent_peer_preparations,
+        MAX_CONCURRENT_PEER_PREPARATIONS
+    );
+    assert!(case.peer_preparation_bounded);
+    assert!(case.topology_mutation_serialized);
+    assert!(!case.stale_peer_blocks_ready_peer);
+    assert!(case.every_peer_result_accounted);
+}

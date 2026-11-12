@@ -223,6 +223,7 @@ fn transport_addresses_equivalent(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use gents_lean_vocab::families::pairing_owned_diff_cases as family;
+    use gents_lean_vocab::{lean_pairing_reconcile_cases, LeanPairingReconcileSnapshot};
 
     use super::super::templates::{equality_filter, filter_conditions};
     use super::*;
@@ -331,5 +332,148 @@ mod tests {
                 live_matches: owned_pairing_live_matches(&desired, &actual, &applied),
             }
         });
+    }
+
+    fn pairing_desired(snapshot: &LeanPairingReconcileSnapshot) -> PairingDesired {
+        PairingDesired {
+            replicator_addresses: snapshot.desired_replicators.iter().cloned().collect(),
+            ..Default::default()
+        }
+    }
+
+    fn pairing_actual(snapshot: &LeanPairingReconcileSnapshot) -> PairingActual {
+        PairingActual {
+            replicator_addresses: snapshot.actual_replicators.iter().cloned().collect(),
+            ..Default::default()
+        }
+    }
+
+    fn owned_ops(snapshot: &LeanPairingReconcileSnapshot) -> Vec<DiffOp> {
+        compute_owned_pairing_diff(
+            &pairing_desired(snapshot),
+            &pairing_actual(snapshot),
+            &PairingApplied::default(),
+        )
+    }
+
+    #[test]
+    fn generated_pairing_reconcile_cases_drive_production_projector() {
+        let cases = lean_pairing_reconcile_cases();
+        assert!(
+            !cases.is_empty(),
+            "Lean must emit pairing reconcile samples"
+        );
+
+        let mut names = BTreeSet::new();
+        for case in cases {
+            assert!(
+                names.insert(case.name.as_str()),
+                "duplicate generated pairing case {:?}",
+                case.name
+            );
+            assert!(
+                case.before.desired_replicators.len() >= 2,
+                "{}: samples must be multi-resource, got {:?}",
+                case.name,
+                case.before.desired_replicators
+            );
+            assert_eq!(
+                case.before.desired_replicators, case.after.desired_replicators,
+                "{}: sampled actions never rewrite desired state",
+                case.name
+            );
+            for state in [&case.before, &case.after] {
+                if state.connected {
+                    assert_eq!(
+                        owned_ops(state).is_empty(),
+                        state.converged,
+                        "{}: resource completion",
+                        case.name
+                    );
+                }
+            }
+
+            let before_ops = owned_ops(&case.before);
+            let after_ops = owned_ops(&case.after);
+            match case.action.as_str() {
+                "dial" | "dialFailed" => {
+                    assert!(
+                        !case.before.connected,
+                        "{}: dial premises require a disconnected transport",
+                        case.name
+                    );
+                    assert_eq!(
+                        case.before.actual_replicators, case.after.actual_replicators,
+                        "{}: dial must not change observed resources",
+                        case.name
+                    );
+                    assert_eq!(
+                        before_ops, after_ops,
+                        "{}: dial must not change pending owned ops",
+                        case.name
+                    );
+                    if case.action == "dial" {
+                        assert!(
+                            case.after.connected,
+                            "{}: dial must establish transport readiness",
+                            case.name
+                        );
+                    } else {
+                        assert!(
+                            !case.after.connected,
+                            "{}: dialFailed must leave the transport disconnected",
+                            case.name
+                        );
+                    }
+                }
+                "reconcileInstallReplicator" => {
+                    let installed: Vec<String> = case
+                        .after
+                        .actual_replicators
+                        .iter()
+                        .filter(|collection| !case.before.actual_replicators.contains(*collection))
+                        .cloned()
+                        .collect();
+                    assert_eq!(
+                        installed.len(),
+                        1,
+                        "{}: one install must add exactly one replicator, got {installed:?}",
+                        case.name
+                    );
+                    let (first, rest) = before_ops.split_first().unwrap_or_else(|| {
+                        panic!(
+                            "{}: the projector must still have pending work before an install, got {before_ops:?}",
+                            case.name
+                        )
+                    });
+                    assert_eq!(
+                        first,
+                        &DiffOp::InstallReplicator(installed[0].clone()),
+                        "{}: the projector's first op must be the modeled install; ops {before_ops:?}",
+                        case.name
+                    );
+                    assert_eq!(
+                        rest, after_ops,
+                        "{}: the remaining projector ops must survive the install; \
+                         before {before_ops:?} after {after_ops:?}",
+                        case.name
+                    );
+                }
+                other => panic!("unmapped Lean pairing reconcile action {other}"),
+            }
+        }
+
+        assert!(
+            cases
+                .iter()
+                .any(|case| case.after.connected && !case.after.converged),
+            "samples must include a connected-but-unconverged state (readiness != convergence)"
+        );
+        assert!(
+            cases
+                .iter()
+                .any(|case| case.after.converged && owned_ops(&case.after).is_empty()),
+            "samples must include a state converged on every desired resource"
+        );
     }
 }

@@ -209,6 +209,10 @@ mod file_route_tests;
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::sync::Arc;
+    use acp::DocumentACP;
+    use identity::Did;
+    use crate::p2p_reconcile::{client_route_collections, resolve_template_filters, PairingDirection};
 
     #[test]
     fn unsupported_acp_filter_is_rejected() {
@@ -269,5 +273,360 @@ mod tests {
             schema.keys().map(String::as_str).collect::<BTreeSet<_>>(),
             CLIENT_COLLECTIONS.iter().copied().collect::<BTreeSet<_>>()
         );
+    }
+
+    #[test]
+    fn node_replication_matches_executable_scope_model() {
+        let snapshot = gents_lean_vocab::lean_contract_snapshot();
+        let template = resolve_template(CLIENT_TEMPLATE).expect("client template");
+        for case in &snapshot.scope_node_route_cases {
+            let direction = PairingDirection::parse(case.direction.as_str()).unwrap();
+            assert_eq!(
+                client_route_collections(direction).contains(&"Node"),
+                case.allowed,
+            );
+            let filters = resolve_template_filters(
+                template,
+                direction,
+                "did:key:reader",
+                case.owner.as_str(),
+            );
+            assert_eq!(
+                filters
+                    .get("Node")
+                    .and_then(single_string_eq)
+                    .map(|(_, value)| value),
+                case.node_did.as_ref().and_then(|value| value.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_routes_match_model_actions() {
+        let snapshot = gents_lean_vocab::lean_contract_snapshot();
+        let mut modeled = BTreeSet::new();
+        for case in &snapshot.scope_template_cases {
+            let id = case.id.as_str();
+            modeled.insert(id);
+            let template = resolve_template(id).expect("modeled protocol route");
+            assert_eq!(
+                template
+                    .collections
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>(),
+                case.collections
+                    .iter()
+                    .map(|value| value.as_str())
+                    .collect()
+            );
+            assert_eq!(
+                match template.delivery {
+                    Delivery::Push => "push",
+                },
+                case.delivery.as_str()
+            );
+            let direction = PairingDirection::parse(case.direction.as_str()).unwrap();
+            let filters =
+                resolve_template_filters(template, direction, "did:key:reader", "did:key:owner");
+            let expected = &case.filters;
+            assert_eq!(filters.len(), expected.len());
+            for expected in expected {
+                let clause = &expected.clauses[0];
+                assert_eq!(expected.clauses.len(), 1);
+                assert_eq!(
+                    single_string_eq(
+                        filters
+                            .get(expected.collection.as_str())
+                            .unwrap()
+                    ),
+                    Some((
+                        clause.field.as_str(),
+                        clause.value.as_str()
+                    ))
+                );
+            }
+        }
+        assert_eq!(
+            builtin_templates()
+                .iter()
+                .map(|template| template.id)
+                .collect::<BTreeSet<_>>(),
+            modeled
+        );
+    }
+
+
+    fn household_subject(
+        subject: &gents_lean_vocab::LeanIdentitySubject,
+    ) -> anyhow::Result<acp::Subject> {
+        use gents_lean_vocab::LeanIdentitySubject;
+        Ok(match subject {
+            LeanIdentitySubject::Actor { actor } => acp::Subject::Entity(Did::new(actor)?),
+            LeanIdentitySubject::Object { resource, id } => acp::Subject::entity_set(resource, id, ""),
+            LeanIdentitySubject::EntitySet {
+                resource,
+                id,
+                target_relation,
+            } => acp::Subject::entity_set(resource, id, target_relation),
+        })
+    }
+
+    async fn household_relationship(
+        acp: &acp::ZanzibarDocumentACP<acp::MemoryZanzibarStore>,
+        policy_id: &str,
+        case: &gents_lean_vocab::LeanIdentityHouseholdCase,
+        relation: &gents_lean_vocab::LeanIdentityRelation,
+        grant: bool,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+        let object = case
+            .objects
+            .iter()
+            .find(|object| object.resource == relation.resource && object.id == relation.id)
+            .context("modeled relationship has no registered object")?;
+        let owner = Did::new(&object.owner)?;
+        let subject = household_subject(&relation.subject)?;
+        let changed = if grant {
+            acp.add_relationship(
+                &owner,
+                subject,
+                policy_id,
+                &relation.resource,
+                &relation.id,
+                &relation.relation,
+                &[],
+            )
+            .await?
+        } else {
+            acp.delete_relationship(
+                &owner,
+                subject,
+                policy_id,
+                &relation.resource,
+                &relation.id,
+                &relation.relation,
+                &[],
+            )
+            .await?
+        };
+        anyhow::ensure!(
+            changed,
+            "{}: modeled relationship action was not applied",
+            case.name
+        );
+        Ok(())
+    }
+
+    async fn household_relationship_as(
+        acp: &acp::ZanzibarDocumentACP<acp::MemoryZanzibarStore>,
+        policy_id: &str,
+        actor: &str,
+        relation: &gents_lean_vocab::LeanIdentityRelation,
+        grant: bool,
+        expected: bool,
+    ) -> anyhow::Result<()> {
+        let actor = Did::new(actor)?;
+        let subject = household_subject(&relation.subject)?;
+        let result = if grant {
+            acp.add_relationship(
+                &actor,
+                subject,
+                policy_id,
+                &relation.resource,
+                &relation.id,
+                &relation.relation,
+                &[],
+            )
+            .await
+        } else {
+            acp.delete_relationship(
+                &actor,
+                subject,
+                policy_id,
+                &relation.resource,
+                &relation.id,
+                &relation.relation,
+                &[],
+            )
+            .await
+        };
+        match result {
+            Ok(changed) => {
+                anyhow::ensure!(
+                    expected && changed,
+                    "unexpected relationship mutation by {actor}"
+                );
+            }
+            Err(acp::Error::NotOwner { .. } | acp::Error::NotManager { .. }) if !expected => (),
+            Err(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn household_policy_actions_drive_native_acp() -> anyhow::Result<()> {
+        use acp::{
+            policy_yaml::{build_policy, parse_policy_yaml},
+            MemoryZanzibarStore, ZanzibarDocumentACP, ZanzibarStore,
+        };
+        use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
+        for contract in gents_lean_vocab::lean_identity_contracts() {
+            assert_eq!(
+                contract.schema_actor, contract.runtime_actor,
+                "schema installation and updates use the modeled runtime actor"
+            );
+            for collection in &contract.node_local_collections {
+                let schema = match collection.as_str() {
+                    "Agent" => gents_protocol::schemas::AGENT,
+                    "CallbackBinding" => gents_protocol::schemas::CALLBACK_BINDING,
+                    "CallbackInvocation" => gents_protocol::schemas::CALLBACK_INVOCATION,
+                    "CallbackResult" => gents_protocol::schemas::CALLBACK_RESULT,
+                    other => anyhow::bail!("unknown modeled local collection {other}"),
+                };
+                assert!(
+                    !schema.contains("@branchable"),
+                    "{collection} must remain local"
+                );
+                assert!(gents_protocol::schemas::is_local_only_collection(
+                    collection
+                ));
+                for template in builtin_templates() {
+                    assert!(
+                        !template.collections.contains(&collection.as_str()),
+                        "{} must not replicate {collection}",
+                        template.id
+                    );
+                }
+            }
+        }
+        let cases = lean_identity_household_cases();
+        assert!(!cases.is_empty());
+        for case in cases {
+            assert_eq!(
+                case.policy_yaml,
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+                "the policy wired to AgentSession must match the executable household model"
+            );
+            let parsed = parse_policy_yaml(&case.policy_yaml).map_err(anyhow::Error::msg)?;
+            let policy = build_policy(&parsed, 0)?;
+            for registration in &case.policy_registrations {
+                let candidate = build_policy(
+                    &parse_policy_yaml(&registration.candidate_yaml).map_err(anyhow::Error::msg)?,
+                    0,
+                )?;
+                assert_eq!(
+                    policy.id == candidate.id,
+                    registration.same_id,
+                    "{}: policy ID",
+                    registration.name
+                );
+                let registry = acp::PersistentZanzibarStore::from_store(Arc::new(
+                    storage::RegolithStore::in_memory()?,
+                ));
+                registry.store_policy(&policy).await?;
+                let result = registry.store_policy(&candidate).await;
+                assert_eq!(
+                    result.is_ok(),
+                    registration.accepted,
+                    "{}: {result:?}",
+                    registration.name
+                );
+                let retained = registry
+                    .get_policy(&policy.id)
+                    .await?
+                    .expect("registered policy");
+                assert_eq!(
+                    serde_json::to_value(retained)?,
+                    serde_json::to_value(&policy)?,
+                    "{}: registration must retain the original definition",
+                    registration.name
+                );
+            }
+            let store = Arc::new(MemoryZanzibarStore::new());
+            store.store_policy(&policy).await?;
+            let acp = ZanzibarDocumentACP::new(Arc::clone(&store));
+            let mut engine = acp::PermissionEngine::new(store);
+            engine.add_policy(&policy);
+            for object in &case.objects {
+                acp.register_doc_object(
+                    &Did::new(&object.owner)?,
+                    &policy.id,
+                    &object.resource,
+                    &object.id,
+                )
+                .await?;
+            }
+            for relation in &case.relations {
+                household_relationship(&acp, &policy.id, case, relation, true).await?;
+            }
+            for enrolled in &case.enrolled {
+                Did::new(enrolled)?;
+            }
+            for (step, action) in case.actions.iter().enumerate() {
+                match action {
+                    LeanIdentityAction::Grant { relation } => {
+                        household_relationship(&acp, &policy.id, case, relation, true).await?;
+                    }
+                    LeanIdentityAction::Revoke { relation } => {
+                        household_relationship(&acp, &policy.id, case, relation, false).await?;
+                    }
+                    LeanIdentityAction::GrantAs {
+                        actor,
+                        relation,
+                        expected,
+                    } => {
+                        household_relationship_as(&acp, &policy.id, actor, relation, true, *expected)
+                            .await?;
+                    }
+                    LeanIdentityAction::RevokeAs {
+                        actor,
+                        relation,
+                        expected,
+                    } => {
+                        household_relationship_as(&acp, &policy.id, actor, relation, false, *expected)
+                            .await?;
+                    }
+                    LeanIdentityAction::Check {
+                        actor,
+                        resource,
+                        id,
+                        permission,
+                        expected,
+                    } => {
+                        let actor = Did::new(actor)?;
+                        let allowed = match permission.as_str() {
+                            "read" | "update" | "delete" => {
+                                let native = match permission.as_str() {
+                                    "read" => DocumentPermission::Read,
+                                    "update" => DocumentPermission::Update,
+                                    _ => DocumentPermission::Delete,
+                                };
+                                acp.check_doc_access(
+                                    &Identity::Authenticated(actor),
+                                    native,
+                                    &policy.id,
+                                    resource,
+                                    id,
+                                )
+                                .await?
+                            }
+                            "invoke" => {
+                                engine
+                                    .check(&policy.id, resource, id, permission, &actor)
+                                    .await?
+                            }
+                            other => anyhow::bail!("unknown modeled native permission {other}"),
+                        };
+                        assert_eq!(
+                            allowed, *expected,
+                            "{} step {step}: document ACP",
+                            case.name
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
