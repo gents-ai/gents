@@ -708,8 +708,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
     ++ "\"session_input_edit_native_discovery_cases\":" ++ Identity.SessionInputEdit.discoveryCasesJson ++ ","
-    ++ "\"identity_private_journal_policy\":"
-      ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
     ++ "\"client_optimistic_send_cases\":"
       ++ ClientOptimisticSend.casesJson ++ ","
     ++ "\"identity_client_agent_recovery_cases\":"

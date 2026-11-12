@@ -42,14 +42,6 @@ def privateAccessCases : List (String × String × Bool) :=
     ["read", "update", "delete"].map fun action =>
       (role, action, Household.allowedIn privatePolicy 5 privateFixture actor "journals" "record" action)
 
-def privatePolicyCasesJson : String :=
-  (Json.mkObj [("policy_yaml", toJson (Household.policyYamlOf privatePolicy)),
-    ("checks", toJson (privateAccessCases.map fun (role, action, expected) =>
-      Json.mkObj [("role", toJson role), ("action", toJson action), ("expected", toJson expected)])),
-    ("signer_checks", toJson (["client", "other", "empty"].map fun role =>
-      let actor := if role == "client" then "user" else if role == "other" then "other" else ""
-      Json.mkObj [("role", toJson role), ("expected", toJson (localSignerMatches actor "user"))]))]).compress
-
 /-- Client-only publication records are not pack or agent datastore data. -/
 def protectedCollection : String := "PendingChatSubmission"
 

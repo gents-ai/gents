@@ -66,4 +66,34 @@ def publicationTraces : Family Input (List Step) where
     { name, initial := Identity.ClientAgentJournal.initial, actions := actions.map stepOf }
   model := fun i => run i.initial (i.actions.map actionOf)
 
+structure PrivateAccessInput where
+  role : String
+  action : String
+  deriving ToJson
+
+structure PrivateAccess where
+  allowed : Bool
+  policyYaml : String
+  deriving ToJson
+
+@[conformance_family]
+def privateAccess : Family PrivateAccessInput PrivateAccess where
+  inputs := privateAccessCases.map fun (role, action, _) => { role, action }
+  model := fun i =>
+    let actor := match i.role with
+      | "owner" => "user" | "anonymous" => "" | role => role
+    { allowed := Identity.Household.allowedIn privatePolicy 5 privateFixture actor "journals" "record" i.action
+      policyYaml := Identity.Household.policyYamlOf privatePolicy }
+
+structure SignerInput where
+  role : String
+  deriving ToJson
+
+@[conformance_family]
+def localSigner : Family SignerInput Bool where
+  inputs := ["client", "other", "empty"].map fun role => { role }
+  model := fun i =>
+    let actor := if i.role == "client" then "user" else if i.role == "other" then "other" else ""
+    localSignerMatches actor "user"
+
 end Conformance.ClientAgentJournal

@@ -1416,8 +1416,8 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathCapabilityCases")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "identity_private_journal_policy"
-      "PrivateJournalPolicy")
+      "family"
+      "client_agent_journal_private_access")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "workspace_liveness_cases"
@@ -1561,8 +1561,8 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: the session-message commit keeps no caller-side knowledge state for a pending read, a foreign receipt or an invalid abort proof, and no attempt counter or retry and failure-report permission, so pending-is-unconfirmed, foreign-receipt, no-proof-of-abort and failure-proof-cannot-undo-child have no production form.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "identity_private_journal_policy"
-      "PrivateJournalSigner")
+      "family"
+      "client_agent_journal_local_signer")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "file_review_subscription_cases"

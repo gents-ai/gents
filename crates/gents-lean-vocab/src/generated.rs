@@ -2987,7 +2987,6 @@ pub struct LeanContractSnapshot {
     pub identity_delegation_cases: Vec<LeanDelegationCase>,
     pub identity_agent_baseline_cases: Vec<LeanAgentBaselineCase>,
     pub identity_agent_block_signing_cases: Vec<LeanAgentBlockSigningCase>,
-    pub identity_private_journal_policy: LeanPrivateJournalPolicy,
     pub mailbox_runtime_notice_case: serde_json::Value,
     pub mailbox_claimed_recipient_cases: Vec<LeanMailboxClaimedRecipientCase>,
     pub workspace_agent_selection_cases: Vec<serde_json::Value>,
@@ -9114,29 +9113,6 @@ pub enum LeanPresentation {
 pub enum LeanPresentationPart {
     Range { start: u64, end: u64 },
     Literal { bytes: Vec<u8> },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPrivateJournalCheck {
-    pub role: String,
-    pub action: String,
-    pub expected: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPrivateJournalPolicy {
-    pub policy_yaml: String,
-    pub checks: Vec<LeanPrivateJournalCheck>,
-    pub signer_checks: Vec<LeanPrivateJournalSignerCheck>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPrivateJournalSignerCheck {
-    pub role: String,
-    pub expected: bool,
 }
 
 #[derive(Debug, Deserialize)]
