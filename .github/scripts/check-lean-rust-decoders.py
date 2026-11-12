@@ -35,7 +35,6 @@ GROUPS = {
     "repaired_projection_admission_cases": "LeanRepairedProjectionCase",
     "protected_replay_compaction_cases": "LeanProtectedReplayCompactionCase",
     "request_execution_lease_cases": "LeanRequestExecutionLeaseCase",
-    "request_execution_lease_trace_cases": "LeanRequestExecutionLeaseTraceCase",
     "queued_steering_trace_cases": "LeanQueuedSteeringTraceCase",
     "queued_steering_guard_cases": "LeanQueuedSteeringGuardCase",
 }

@@ -597,10 +597,6 @@ pub fn lean_request_execution_lease_observed_cases() -> &'static [LeanRequestExe
     &lean_contract_snapshot().request_execution_lease_observed_cases
 }
 
-pub fn lean_request_execution_lease_trace_cases() -> &'static [LeanRequestExecutionLeaseTraceCase] {
-    &lean_contract_snapshot().request_execution_lease_trace_cases
-}
-
 pub fn lean_request_lifecycle_operator_ui_cases() -> &'static [LeanClientShellCase] {
     &lean_contract_snapshot().request_lifecycle_operator_ui_cases
 }
@@ -3074,7 +3070,6 @@ pub struct LeanContractSnapshot {
     pub provider_eof_cases: Vec<LeanProviderEofCase>,
     pub request_execution_lease_cases: Vec<LeanRequestExecutionLeaseCase>,
     pub request_execution_lease_observed_cases: Vec<LeanRequestExecutionObservedCase>,
-    pub request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
     pub trigger_dispatch_case_count: usize,
     pub trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
     pub event_group_case_count: usize,
@@ -10267,15 +10262,6 @@ pub enum LeanRequestExecutionLeaseStatus {
     Active,
     Recoverable,
     Terminal,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRequestExecutionLeaseTraceCase {
-    pub name: String,
-    pub pre: LeanRequestExecutionWorld,
-    pub actions: Vec<LeanRequestExecutionAction>,
-    pub expected: Option<LeanRequestExecutionWorld>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

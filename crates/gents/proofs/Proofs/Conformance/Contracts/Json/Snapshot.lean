@@ -514,8 +514,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.RequestExecutionLeaseContracts.leaseCasesJson ++ ","
     ++ "\"request_execution_lease_observed_cases\":"
       ++ Conformance.RequestExecutionLeaseContracts.observedLeaseCasesJson ++ ","
-    ++ "\"request_execution_lease_trace_cases\":"
-      ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"interrupt_queue_cases\":"

@@ -567,10 +567,10 @@ def caseCoverage : List CoverageEntry :=
       "RequestExecutionLeaseCases"
       "#1571 explicit-renewal input/expected-state cases supersede the retired response/progress policy adapter. Bind the generated actions to native claim, due-only deadline CAS, producer admission and terminal/recovery owners; decoding fixtures is not native coverage.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "request_execution_lease_trace_cases"
-      "RequestExecutionLeaseTraceCases"
-      "#1571 generated bounded-renewal, expiry/drop, stale-owner and terminal-effect traces require native execution, including independent timer polling and suspend/resume. No scheduler fairness or wall-clock continuity is proved.")
+  , tagged (boundaryCoverage
+      "family"
+      "request_execution_lease_contracts_lease_trace_unreached"
+      "model-production-gap: native lease owners take one database-backed action at a time under the wall clock; no production path replays a multi-action renewal, expiry, recovery or stale-owner trace over a logical clock. No scheduler fairness or wall-clock continuity is proved.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "process_transition_cases"
