@@ -20,25 +20,34 @@ fn requests(ids: &[&str]) -> ClientStore {
 
 #[test]
 fn generated_notice_delivery_never_regresses_watchers() {
-    let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>()
-        .expect("executed Lean publication contract");
-    let fixture = &contract["client_data_publication_cases"];
-    let case = &fixture["notice_delivery"];
-    let decode = |value: &serde_json::Value| StoreUpdateNotice {
+    let case = &gents_lean_vocab::lean_contract_snapshot()
+        .client_data_publication_cases
+        .notice_delivery;
+    let decode = |version: u64, provenance: u64, request_event: u64| StoreUpdateNotice {
         revision: StoreProjectionRevision {
-            store_version: value["version"].as_u64().expect("store version"),
-            provenance_version: value["provenance"].as_u64().expect("provenance version"),
-            request_event_version: value["request_event"]
-                .as_u64()
-                .expect("request event version"),
+            store_version: version,
+            provenance_version: provenance,
+            request_event_version: request_event,
         },
     };
     let (store, versions) = ObservedStore::new(ClientStore::default());
     let changes = store.change_tx.subscribe();
-    store.publish_notice(decode(&case["initial"]));
-    for delivery in case["deliveries"].as_array().expect("notice deliveries") {
-        store.publish_notice(decode(&delivery["incoming"]));
-        let expected = decode(&delivery["expected"]);
+    store.publish_notice(decode(
+        case.initial.version,
+        case.initial.provenance,
+        case.initial.request_event,
+    ));
+    for delivery in &case.deliveries {
+        store.publish_notice(decode(
+            delivery.incoming.version,
+            delivery.incoming.provenance,
+            delivery.incoming.request_event,
+        ));
+        let expected = decode(
+            delivery.expected.version,
+            delivery.expected.provenance,
+            delivery.expected.request_event,
+        );
         assert_eq!(*versions.borrow(), expected.revision.store_version);
         assert_eq!(*changes.borrow(), expected);
     }
