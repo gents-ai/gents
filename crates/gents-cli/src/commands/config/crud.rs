@@ -68,11 +68,6 @@ pub(crate) const CONTEXT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     collection: Collection::AgentContext,
 };
 
-pub(crate) const NODE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
-    noun: "node",
-    collection: Collection::Node,
-};
-
 const DOCUMENT_SPECS: [ConfigDocumentSpec; 10] = [
     BACKEND_SPEC,
     AGENT_SPEC,

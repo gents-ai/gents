@@ -29,8 +29,8 @@ use super::source::{self, Opening};
 use super::testing::{question, shown_rows, text_message, At};
 use super::work::{self, Work};
 use crate::commands::config::crud::{
-    load_one, query_collection, query_collection_sorted, MCP_SPEC, NODE_SPEC, SCHEDULE_SPEC,
-    SKILL_SPEC, TRIGGER_SPEC,
+    load_one, query_collection, query_collection_sorted, MCP_SPEC, SCHEDULE_SPEC, SKILL_SPEC,
+    TRIGGER_SPEC,
 };
 use crate::commands::eval::testing::test_runtime_handle;
 
@@ -4454,8 +4454,11 @@ async fn a_node_save_keeps_what_the_form_does_not_show() {
     let (node, work, home) = served(config).await;
     let access = work.access();
     let stored = || async {
-        let nodes = query_collection(&access, NODE_SPEC, OWNER, None).await;
-        nodes.unwrap().remove(0)
+        let mut nodes = access
+            .read_view(&gents_documents::views::config::NodeList::new(OWNER))
+            .await
+            .unwrap();
+        serde_json::to_value(nodes.remove(0)).unwrap()
     };
     let before = stored().await;
 
