@@ -59,29 +59,73 @@ def visibilityCases : List Case :=
 
 def cases : List Case := satisfactionCases ++ visibilityCases
 
-private def authorityJson (value : RequestAuthority) : String :=
-  "{\"network_id\":" ++ jsonString value.networkId ++
-  ",\"admin_did\":" ++ jsonString value.adminDid ++
-  ",\"server_peer\":" ++ jsonString value.serverPeer ++
-  ",\"candidate_did\":" ++ jsonString value.candidateDid ++
-  ",\"candidate_peer\":" ++ jsonString value.candidatePeer ++
-  ",\"owner_node\":" ++ jsonString value.ownerNode ++
-  ",\"profile\":" ++ jsonString value.profile ++ "}"
-
 private def boolJson (value : Bool) : String := if value then "true" else "false"
 
-private def caseJson (value : Case) : String :=
-  "{\"name\":" ++ jsonString value.name ++
-  ",\"requested\":" ++ authorityJson value.requested ++
-  ",\"current\":" ++ authorityJson value.current ++
-  ",\"has_decision\":" ++ boolJson value.hasDecision ++
-  ",\"current_approval\":" ++ boolJson value.currentApproval ++
-  ",\"route_applied\":" ++ boolJson value.routeApplied ++
-  ",\"request_fresh\":" ++ boolJson value.requestFresh ++
-  ",\"expected_visible\":" ++ boolJson (visibilityExpected value) ++
-  ",\"expected_satisfied\":" ++ boolJson (expected value) ++ "}"
+deriving instance Lean.ToJson for RequestAuthority
 
-def casesJson : String := jsonArray (cases.map caseJson)
+structure PendingInput where
+  name : String
+  requested : RequestAuthority
+  current : RequestAuthority
+  hasDecision : Bool
+  currentApproval : Bool
+  routeApplied : Bool
+  requestFresh : Bool
+  deriving Lean.ToJson
+
+private def pendingInput (value : Case) : PendingInput :=
+  { name := value.name, requested := value.requested, current := value.current,
+    hasDecision := value.hasDecision, currentApproval := value.currentApproval,
+    routeApplied := value.routeApplied, requestFresh := value.requestFresh }
+
+structure SatisfactionOutput where
+  satisfied : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def satisfaction : Family PendingInput SatisfactionOutput where
+  inputs := cases.map pendingInput
+  model := fun i =>
+    let satisfied := pendingRequestSatisfied i.requested i.current i.hasDecision
+      i.currentApproval i.routeApplied
+    { satisfied }
+
+structure VisibilityOutput where
+  visible : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def visibility : Family PendingInput VisibilityOutput where
+  inputs := cases.map pendingInput
+  model := fun i =>
+    let visible := activeRequestVisible i.requestFresh i.hasDecision i.currentApproval
+      i.routeApplied
+    { visible }
+
+example : activeRequestVisible false true true false = true := rfl
+example : activeRequestVisible false false false false = false := rfl
+example : activeRequestVisible false true false false = false := rfl
+
+structure ListingOutput where
+  listed : Bool
+  deriving Lean.ToJson
+
+/-- The cases a served desktop reaches with one signed authority: its pending
+request while the route reconnects, after the exact route applies, and after a
+later revision revokes the authorization. The other cases change the requested
+or current authority itself, which the admin's signed decision fixes, so a
+served desktop cannot persist them. -/
+def listingCases : List Case :=
+  cases.filter fun c => c.name ∈ ["route_still_reconnecting",
+    "reconnected_route_satisfies_pending_request", "revoked_or_expired_authorization"]
+
+@[conformance_family]
+def listing : Family PendingInput ListingOutput where
+  inputs := listingCases.map pendingInput
+  model := fun i =>
+    let listed := !pendingRequestSatisfied i.requested i.current i.hasDecision
+      i.currentApproval i.routeApplied
+    { listed }
 
 structure AbsentPeerInput where
   managed : Bool

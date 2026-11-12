@@ -621,8 +621,6 @@ def snapshotSessionCasesJson : String :=
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
       ++ enrollmentDurableProjectionCasesJson ++ ","
-    ++ "\"enrollment_pending_request_cases\":"
-      ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
     ++ "\"enrollment_startup_cases\":"
       ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"

@@ -2958,7 +2958,6 @@ pub struct LeanContractSnapshot {
     pub file_inventory_closure_cases: Vec<LeanSessionClosureCase>,
     pub enrollment_cases: Vec<LeanEnrollmentCase>,
     pub enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
-    pub enrollment_pending_request_cases: Vec<LeanEnrollmentPendingRequestCase>,
     pub enrollment_startup_cases: Vec<LeanEnrollmentStartupCase>,
     pub enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
@@ -3118,9 +3117,6 @@ pub struct LeanContractSnapshot {
     pub steering_publication_cases: Vec<LeanFoldPublicationCase>,
     pub queue_management_cases: Vec<LeanQueueManagementCase>,
     pub session_input_edit_cases: Vec<LeanSessionInputEditCase>,
-    pub session_input_edit_client_observation_cases: Vec<
-        LeanSessionInputEditClientObservationCase,
-    >,
     pub retry_selection_cases: Vec<LeanRetrySelectionCase>,
     pub canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
@@ -3226,6 +3222,9 @@ pub struct LeanContractSnapshot {
     pub event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
     pub pack_operator_wire_cases: Vec<LeanPackOperatorWireCase>,
     pub recovery_sweep_ids: Vec<String>,
+    pub session_input_edit_client_observation_cases: Vec<
+        LeanSessionInputEditClientObservationCase,
+    >,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -3587,44 +3586,6 @@ pub struct LeanEnrollmentEncodingCase {
     pub expected_frame: String,
     pub actual_frame: String,
     pub frame_matches: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentPendingRequestCase {
-    pub current: LeanEnrollmentPendingRequestCaseCurrent,
-    pub current_approval: bool,
-    pub expected_satisfied: bool,
-    pub expected_visible: bool,
-    pub has_decision: bool,
-    pub name: String,
-    pub request_fresh: bool,
-    pub requested: LeanEnrollmentPendingRequestCaseRequested,
-    pub route_applied: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentPendingRequestCaseCurrent {
-    pub admin_did: String,
-    pub candidate_did: String,
-    pub candidate_peer: String,
-    pub network_id: String,
-    pub owner_node: String,
-    pub profile: String,
-    pub server_peer: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentPendingRequestCaseRequested {
-    pub admin_did: String,
-    pub candidate_did: String,
-    pub candidate_peer: String,
-    pub network_id: String,
-    pub owner_node: String,
-    pub profile: String,
-    pub server_peer: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

@@ -695,8 +695,16 @@ def caseCoverage : List CoverageEntry :=
       "EnrollmentDurableProjectionCases")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_pending_request_cases"
-      "EnrollmentPendingRequests")
+      "family"
+      "enrollment_pending_requests_satisfaction")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "enrollment_pending_requests_visibility")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "enrollment_pending_requests_listing")
       "authenticated-enrollment" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
