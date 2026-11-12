@@ -776,11 +776,12 @@ async fn crud_documents_share_verbs_and_preserve_reference_and_identity_checks()
             json!({"argv":[resource,"preview","delete"],"target_id":id}),
         )
         .await;
-        ok(
-            &tools,
-            json!({"argv":[resource,"update"],"target_id":id,"set":{"tags":["changed"]}}),
-        )
-        .await;
+        let mut retag =
+            json!({"argv":[resource,"update"],"target_id":id,"set":{"tags":["changed"]}});
+        if resource == "tools" {
+            retag["options"] = json!({"allow-drop":"tags"});
+        }
+        ok(&tools, retag).await;
         assert!(refused(&tools,json!({"argv":[resource,"delete"],"target_id":id,"options":{"digest":preview["plan_digest"]}})).await.contains("changed"));
         let preview = ok(
             &tools,

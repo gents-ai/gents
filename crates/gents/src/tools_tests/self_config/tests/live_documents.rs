@@ -499,7 +499,7 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     .await
     .unwrap_err();
     assert!(
-        dropped.contains("drop existing settings from your own Tools: integrations.plugins item"),
+        dropped.contains("drop existing settings from these Tools: integrations.plugins item"),
         "{dropped}"
     );
 

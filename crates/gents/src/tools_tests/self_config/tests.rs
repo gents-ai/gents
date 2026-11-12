@@ -4005,6 +4005,8 @@ async fn agent_create_commits_and_resolves_after_restart() {
             r#"integrations={"lsp":{}}"#.into(),
             "--set".into(),
             format!(r#"host={{"root":{root:?},"files":{{"mode":"ReadOnly"}},"bash":{{"mode":"ReadOnly","network_mode":"disabled"}}}}"#),
+            "--allow-drop".into(),
+            "host".into(),
         ],
     )
     .await
@@ -6163,6 +6165,8 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             &caller,
             "--set",
             r#"agents={"enabled":true}"#,
+            "--allow-drop",
+            "agents",
         ]),
     )
     .await);
@@ -6425,7 +6429,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     .await
     .unwrap_err();
     assert!(
-        refused.contains("drop existing settings from your own Tools: agents.target_ids")
+        refused.contains("drop existing settings from these Tools: agents.target_ids")
             && refused.contains("allow-drop"),
         "{refused}"
     );

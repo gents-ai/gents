@@ -188,7 +188,8 @@ pub fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequ
 /// `SelfConfig.ToolsSave.outcome`), for every agent the write targets. The
 /// refusals are the ones `tools_operation::admit_tools_save` raises for any
 /// client; here they are spelled as the config tool's calls. The sharing rule
-/// is admitted by `protect_working_agent` from the anchored agent's referrers.
+/// is admitted by `protect_working_agent` from the anchored agent's referrers,
+/// and the no-lockout rule by the patch engine, which runs this after it.
 pub(super) fn refuse_unadmitted_tools_save<F>(
     mut request: ApplyRequest<'static>,
     held: OperatorGrants,
@@ -205,9 +206,7 @@ where
         .iter()
         .map(|(field, _)| field.clone())
         .collect::<Vec<_>>();
-    let validate = request.validate;
-    request.validate = Box::new(move |txn, anchor, stored, merged| {
-        let validation = validate(txn, anchor, stored, merged);
+    request.admit = Box::new(move |stored, merged| {
         let admitted = tools_operation::admit_tools_save(
             &tools_operation::ToolsActor {
                 actor: OperationActor::Agent,
@@ -224,28 +223,25 @@ where
                 agents: &[],
                 own_control: Ok(()),
             },
-        );
-        Box::pin(async move {
-            validation.await?;
-            match admitted? {
-                Ok(()) => Ok(()),
-                Err(ToolsOperationError::DropsSettings { dropped, groups }) => bail!(
-                    "this would drop existing settings from your own Tools: {}. Send them back in set (see [\"tools\",\"get\"]), or to drop them on purpose add options.allow-drop = {:?}",
-                    dropped.join(", "),
-                    groups.join(",")
-                ),
-                Err(ToolsOperationError::PluginNotInstalled { plugin, reason }) => {
-                    Err(command::CommandGuidance {
-                        message: format!(
-                            "nothing was changed: these Tools would select plugin {plugin}, which is not installed on this node ({reason}). An agent whose Tools select a plugin that is not installed cannot load its tools and fails its next request. Install the pack that ships {plugin}, then select it with pack wire, which pins the installed digest and writes its job block"
-                        ),
-                        next_call: json!({"argv":["pack","preview","install","<PACK>"]}),
-                    }
-                    .into())
+        )?;
+        match admitted {
+            Ok(()) => Ok(()),
+            Err(ToolsOperationError::DropsSettings { dropped, groups }) => bail!(
+                "this would drop existing settings from these Tools: {}. Send them back in set (see [\"tools\",\"get\"]), or to drop them on purpose add options.allow-drop = {:?}",
+                dropped.join(", "),
+                groups.join(",")
+            ),
+            Err(ToolsOperationError::PluginNotInstalled { plugin, reason }) => {
+                Err(command::CommandGuidance {
+                    message: format!(
+                        "nothing was changed: these Tools would select plugin {plugin}, which is not installed on this node ({reason}). An agent whose Tools select a plugin that is not installed cannot load its tools and fails its next request. Install the pack that ships {plugin}, then select it with pack wire, which pins the installed digest and writes its job block"
+                    ),
+                    next_call: json!({"argv":["pack","preview","install","<PACK>"]}),
                 }
-                Err(other) => Err(other.into()),
+                .into())
             }
-        })
+            Err(other) => Err(other.into()),
+        }
     });
     request
 }

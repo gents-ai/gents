@@ -19,6 +19,9 @@ pub struct ApplyRequest<'a> {
     pub(crate) normalize: NormalizeFn<'a>,
     pub(crate) validate: ValidateFn<'a>,
     pub(crate) guard: GuardFn<'a>,
+    /// Checks every write of this request passes after the no-lockout guard,
+    /// whoever its target belongs to.
+    pub(crate) admit: AdmitFn<'a>,
 }
 
 pub(crate) type ResolveUniqueFn<'a> =
@@ -28,6 +31,9 @@ pub(crate) type OnCreateFn<'a> =
 pub(crate) type GuardFn<'a> = Box<
     dyn Fn(&AgentAnchor, &Map<String, Value>, &Map<String, Value>) -> Result<()> + Send + Sync + 'a,
 >;
+
+pub(crate) type AdmitFn<'a> =
+    Box<dyn Fn(&Map<String, Value>, &Map<String, Value>) -> Result<()> + Send + Sync + 'a>;
 
 pub(crate) type ValidateFn<'a> = Box<
     dyn for<'b> Fn(
@@ -67,6 +73,7 @@ impl<'a> ApplyRequest<'a> {
             normalize: Box::new(|_, _, _, _| Box::pin(async { Ok(()) })),
             validate: Box::new(|_, _, _, _| Box::pin(async { Ok(()) })),
             guard: Box::new(|_, _, _| Ok(())),
+            admit: Box::new(|_, _| Ok(())),
         }
     }
 }

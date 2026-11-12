@@ -51,12 +51,12 @@ pub fn decide_tools_save(
         ToolsSaveOutcome::RefusedShared
     } else if !grants_held {
         ToolsSaveOutcome::RefusedGrantNotHeld
+    } else if !keeps_own_control {
+        ToolsSaveOutcome::RefusedLosesOwnControl
     } else if !drops_allowed {
         ToolsSaveOutcome::RefusedDropsSettings
     } else if !plugins_installed {
         ToolsSaveOutcome::RefusedPluginNotInstalled
-    } else if !keeps_own_control {
-        ToolsSaveOutcome::RefusedLosesOwnControl
     } else {
         ToolsSaveOutcome::Saved
     }
@@ -142,6 +142,23 @@ fn selected_plugins(document: &Map<String, Value>) -> BTreeSet<&str> {
         .collect()
 }
 
+/// Whether this node has a plugin installed, for a caller that can observe
+/// the node's plugin home.
+pub type InstalledPlugins<'a> = &'a (dyn Fn(&str) -> anyhow::Result<()> + Send + Sync);
+
+/// The top-level groups a whole Tools document sets and clears, for a client
+/// that saves one.
+pub fn document_patch(
+    document: &gents_documents::Tools,
+) -> anyhow::Result<gents_protocol::operations::document::DocumentPatch> {
+    let value = serde_json::to_value(document)?;
+    Ok(SelfConfigTarget::Tools
+        .writable_fields()
+        .into_iter()
+        .map(|field| (field.to_owned(), value.get(field).cloned()))
+        .collect())
+}
+
 /// Who saves, as the admission reads it.
 pub struct ToolsActor<'a> {
     pub actor: OperationActor,
@@ -151,7 +168,7 @@ pub struct ToolsActor<'a> {
     pub holds_catalog: bool,
     /// Whether this node has `plugin` installed. `None` when the caller
     /// cannot observe the node's plugin home.
-    pub installed: Option<&'a (dyn Fn(&str) -> anyhow::Result<()> + Send + Sync)>,
+    pub installed: Option<InstalledPlugins<'a>>,
 }
 
 impl ToolsActor<'_> {

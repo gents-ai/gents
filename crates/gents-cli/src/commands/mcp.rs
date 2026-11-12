@@ -61,8 +61,15 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     let receipt = gents::operations::mcp_service::register(&access, &node_did, &input)
         .await
         .map_err(|error| {
+            use crate::commands::config::refusal::{command, Refusal};
+            use gents_protocol::operations::mcp_service::McpServiceOperationError;
             let next = error.recovery();
-            crate::commands::config::refusal::Refusal::new(error, next)
+            match error {
+                McpServiceOperationError::Endpoint { source } => {
+                    anyhow::anyhow!("--endpoint: {source}\nNext: {}", command(next))
+                }
+                other => Refusal::new(other, next).into(),
+            }
         })
         .context("registering MCP service")?;
     println!("registered {} -> {}", receipt.id, args.endpoint.trim());

@@ -89,9 +89,9 @@ def outcome (shared : SharedOutcome)
     (grantsHeld dropsAllowed pluginsInstalled keepsOwnControl : Bool) : Outcome :=
   if shared ≠ .proceed then .refusedShared
   else if !grantsHeld then .refusedGrantNotHeld
+  else if !keepsOwnControl then .refusedLosesOwnControl
   else if !dropsAllowed then .refusedDropsSettings
   else if !pluginsInstalled then .refusedPluginNotInstalled
-  else if !keepsOwnControl then .refusedLosesOwnControl
   else .saved
 
 theorem saved_tools_pass_every_check (shared : SharedOutcome)
