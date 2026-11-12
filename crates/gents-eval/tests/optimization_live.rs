@@ -178,7 +178,7 @@ impl Fixture {
             std::fs::write(baseline_pack.join(&sidecar), THIN_PROMPT).unwrap();
         }
 
-        let target = support::live_inference::live_target();
+        let target = support::live_inference::live_target().await;
         install(
             &access,
             vec![

@@ -3,8 +3,6 @@
 pub mod fs;
 pub(crate) use gents_pack::pack::authoring::export::document_handle;
 pub mod graphql;
-#[path = "../../../gents/tests/support/inference_target.rs"]
-pub mod inference_target;
 pub mod mocks;
 pub mod pack_preview;
 pub mod ports;

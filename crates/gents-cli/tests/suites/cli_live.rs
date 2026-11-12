@@ -1,5 +1,5 @@
-use crate::support::inference_target::{InferenceTarget, EVAL_TARGET_VARIABLE};
 use crate::support::*;
+use gents::support::live_inference::{live_target, InferenceTarget};
 
 use std::fs;
 use std::time::Duration;
@@ -186,23 +186,9 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
-    let target = std::env::var_os(EVAL_TARGET_VARIABLE)
-        .map(|_| InferenceTarget::selected())
-        .transpose()?;
-    let model_endpoint = target
-        .as_ref()
-        .map(|target| target.endpoint().to_owned())
-        .unwrap_or_else(|| {
-            std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-                .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string())
-        });
-    let model_name = target
-        .as_ref()
-        .map(|target| target.model().to_owned())
-        .unwrap_or_else(|| {
-            std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-                .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string())
-        });
+    let target = Some(live_target().await);
+    let model_endpoint = target.as_ref().unwrap().endpoint().to_owned();
+    let model_name = target.as_ref().unwrap().model().to_owned();
 
     let init_args = vec![
         "--home".to_string(),
@@ -420,10 +406,9 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-projection-{}", Uuid::new_v4().simple());
-    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    let target = live_target().await;
+    let model_endpoint = target.endpoint().to_owned();
+    let model_name = target.model().to_owned();
     let mut init_args = vec![
         "--home".to_string(),
         home_arg.to_string(),
@@ -436,10 +421,6 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         "--max-queue-depth".to_string(),
         "2".to_string(),
     ];
-    if std::env::var_os("GENTS_CLI_E2E_API_KEY").is_some() {
-        init_args.push("--api-key-env-var".to_string());
-        init_args.push("GENTS_CLI_E2E_API_KEY".to_string());
-    }
     init_args.push("--inference-url".to_string());
     init_args.push(model_endpoint);
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
@@ -838,10 +819,9 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    let target = live_target().await;
+    let model_endpoint = target.endpoint().to_owned();
+    let model_name = target.model().to_owned();
     let mut init_args = vec![
         "--home".to_string(),
         home_arg.to_string(),
@@ -854,10 +834,6 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         "--max-queue-depth".to_string(),
         "8".to_string(),
     ];
-    if std::env::var_os("GENTS_CLI_E2E_API_KEY").is_some() {
-        init_args.push("--api-key-env-var".to_string());
-        init_args.push("GENTS_CLI_E2E_API_KEY".to_string());
-    }
     init_args.push("--inference-url".to_string());
     init_args.push(model_endpoint.clone());
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
@@ -1004,35 +980,20 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     Ok(())
 }
 
-fn live_eval_target() -> Result<(String, String, Option<String>)> {
-    let name = std::env::var("GENTS_EVAL_TARGET").context("set GENTS_EVAL_TARGET")?;
-    let target = read_json_file(
-        &workspace_root()?
-            .join("scripts/evals/targets")
-            .join(format!("{name}.json")),
-    )?;
-    let backend = &target["inference_backends"][0];
-    let endpoint = backend["endpoint"]
-        .as_str()
-        .context("target lacks an endpoint")?;
-    let model = target["inference_profiles"][0]["model_name"]
-        .as_str()
-        .context("target lacks a model")?;
-    let api_key_env = (backend["auth"]["kind"] == "environment")
-        .then(|| backend["auth"]["variable"].as_str().map(str::to_owned))
-        .flatten();
-    Ok((endpoint.to_owned(), model.to_owned(), api_key_env))
+async fn live_eval_target() -> Result<(String, String, Option<String>)> {
+    let target = live_target().await;
+    Ok((
+        target.endpoint().to_owned(),
+        target.model().to_owned(),
+        None,
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live: requires GENTS_LIVE_OPENAI=1 and GENTS_EVAL_TARGET"]
+#[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Result<()> {
     use std::process::Child;
 
-    anyhow::ensure!(
-        std::env::var("GENTS_LIVE_OPENAI").as_deref() == Ok("1"),
-        "set GENTS_LIVE_OPENAI=1"
-    );
     struct ChildGuard(Option<Child>);
     impl Drop for ChildGuard {
         fn drop(&mut self) {
@@ -1147,7 +1108,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         ),
     )?;
 
-    let (endpoint, model, api_key_env) = live_eval_target()?;
+    let (endpoint, model, api_key_env) = live_eval_target().await?;
     let home_arg = home.to_str().context("home is not UTF-8")?;
     let mut init_args = vec![
         "--home".to_owned(),

@@ -2,12 +2,16 @@
 mod contract;
 #[path = "cli_enrollment/household.rs"]
 mod household;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_delegation.rs"]
 mod live_delegation;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_goal.rs"]
 mod live_goal;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_plugin_denial.rs"]
 mod live_plugin_denial;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_two_agent.rs"]
 mod live_two_agent;
 mod support;
@@ -137,6 +141,7 @@ async fn grant_configured_workspace_root_readers(
     Ok(())
 }
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
@@ -421,50 +426,8 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
 }
 
 async fn resolve_live_inference() -> Result<(String, String)> {
-    let endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let models_url = format!("{}/models", endpoint.trim_end_matches('/'));
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()?
-        .get(&models_url)
-        .send()
-        .await
-        .with_context(|| {
-            format!("live inference at {endpoint} is unreachable; set GENTS_CLI_E2E_MODEL_ENDPOINT")
-        })?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "live inference GET {models_url} returned {}",
-        response.status()
-    );
-    let body: Value = response
-        .json()
-        .await
-        .context("decoding live inference /models")?;
-    let advertised = body
-        .pointer("/data")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.get("id").and_then(Value::as_str).map(str::to_owned))
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        !advertised.is_empty(),
-        "live inference at {endpoint} advertised no models: {body}"
-    );
-    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME").unwrap_or_else(|_| {
-        advertised
-            .iter()
-            .find(|name| name.as_str() == "GLM-5.3-Flash-NVFP4")
-            .cloned()
-            .unwrap_or_else(|| advertised[0].clone())
-    });
-    anyhow::ensure!(
-        advertised.iter().any(|name| name == &model_name),
-        "live inference at {endpoint} does not serve {model_name}; advertised {advertised:?}"
-    );
-    Ok((endpoint, model_name))
+    let target = gents::support::live_inference::live_target().await;
+    Ok((target.endpoint().to_owned(), target.model().to_owned()))
 }
 
 async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> {

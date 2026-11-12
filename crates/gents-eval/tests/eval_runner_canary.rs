@@ -30,9 +30,9 @@ const SEED_ITEM_SDL: &str = "type SeedItem {\n  label: String\n}\n";
 const QUIET_ITEM_SDL: &str = "type QuietItem {\n  label: String\n}\n";
 
 #[tokio::test]
-async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripted_model() {
-    let backend = MockStreamingBackend::start_with_plans(MODEL, answering_plans()).unwrap();
-    let (canary, request) = canary_request(backend.endpoint(), "run-canary").await;
+async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_live_inference() {
+    let target = support::live_inference::live_target().await;
+    let (canary, request) = live_canary_request(&target, "run-canary").await;
     let executor = canary.executor();
 
     let outcome = run(
@@ -85,7 +85,7 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
     assert_eq!(completion.anchor.requests, 2, "{completion:#?}");
     assert!(
         completion.usage.output_tokens.is_some(),
-        "the scripted backend reports usage in its final chunk: {:?}",
+        "the live provider reports output usage: {:?}",
         completion.usage
     );
     let recollected = executor
@@ -132,7 +132,7 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         .expect("the loop leaves its view beside the run");
     assert_eq!(view.trials.len(), 2);
     assert_eq!(view.report.cells[0].counts.pass, 2);
-    let (again, repeat) = canary_request(backend.endpoint(), "run-canary").await;
+    let (again, repeat) = live_canary_request(&target, "run-canary").await;
     let repeat_executor = again.executor();
     run(
         &again.access,
@@ -172,10 +172,10 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
 }
 #[tokio::test]
 async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_trial() {
-    let backend = MockStreamingBackend::start_with_plans(MODEL, answering_plans()).unwrap();
-    let (canary, request) = canary_request(backend.endpoint(), "run-init-profile").await;
+    let target = support::live_inference::live_target().await;
+    let (canary, request) = live_canary_request(&target, "run-init-profile").await;
     let owner = canary.owner.clone();
-    let mut profile = profile_document(&owner, "canary", "canary-backend", MODEL);
+    let mut profile = profile_document(&owner, "canary", "canary-backend", target.model());
     profile["execution_id"] = json!("canary-execution");
     canary
         .install(vec![
@@ -240,15 +240,8 @@ async fn a_seed_stage_routes_to_the_session_supplied_by_the_fixture() {
 }
 
 async fn seed_stage_routes_to_session(existing_session: bool) {
-    let backend = MockStreamingBackend::start_with_plans(
-        MODEL,
-        vec![StreamPlan::new(
-            SEED_MARKER,
-            vec![StreamResponse::completes(SEED_MARKER, ["noted"])],
-        )],
-    )
-    .unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-seed").await;
+    let target = support::live_inference::live_target().await;
+    let (canary, mut request) = live_canary_request(&target, "run-seed").await;
     let mut definition = seed_definition_document(&canary.owner);
     if existing_session {
         definition["fixtures"]["documents"] = json!([{
@@ -310,10 +303,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
             "{ Trigger { trigger_id last_status last_error } AgentRequest { request_id lifecycle_state failure_reason session_id requester_did } AgentSession { session_id node_did requester_did agent_did } }",
             "failed routing canary",
         ).await.unwrap();
-        panic!(
-            "routing produced no evidence: {state:#?}; provider requests: {:?}",
-            backend.observed_completion_bodies()
-        );
+        panic!("routing produced no evidence: {state:#?}");
     }
     assert_eq!(outcome.completed, 1);
     let completion = trial(&trials, "seeded").completion.clone().unwrap();
@@ -322,12 +312,6 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         completion.anchor.terminal_states,
         vec![gents_protocol::request_lifecycle::RequestLifecycleState::Completed],
         "{completion:#?}"
-    );
-    assert_eq!(
-        backend.observed_requests(SEED_MARKER),
-        1,
-        "the fired task's rendered prompt reached the provider: {:?}",
-        backend.observed_completion_bodies()
     );
     let verdicts = load_verdicts(&canary.access, &request.owner, &request.run_id)
         .await
@@ -656,7 +640,7 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
     }
 }
 #[tokio::test]
-#[ignore = "needs GENTS_EVAL_TARGET and a real backend"]
+#[ignore = "select GENTS_LIVE_TARGET and run the live eval target"]
 async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honoured() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -666,7 +650,7 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
         ))
         .try_init();
 
-    let target = support::live_inference::live_target();
+    let target = support::live_inference::live_target().await;
     let (canary, mut request) = canary_request(target.endpoint(), "run-live").await;
     canary
         .install(vec![
@@ -816,6 +800,37 @@ impl Canary {
             .unwrap();
     }
 }
+async fn live_canary_request(
+    target: &support::live_inference::InferenceTarget,
+    run_id: &str,
+) -> (Canary, RunRequest) {
+    let (canary, request) = canary_request(target.endpoint(), run_id).await;
+    canary
+        .install(vec![
+            (
+                Collection::InferenceBackend,
+                serde_json::to_value(InferenceBackend {
+                    backend_id: "canary-backend".into(),
+                    ..target.backend(&canary.owner)
+                })
+                .unwrap(),
+            ),
+            (
+                Collection::InferenceProfile,
+                serde_json::to_value(InferenceProfile {
+                    profile_id: "canary".into(),
+                    backend_id: "canary-backend".into(),
+                    sampling_id: Some("canary-sampling".into()),
+                    execution_id: None,
+                    ..target.profile(&canary.owner)
+                })
+                .unwrap(),
+            ),
+        ])
+        .await;
+    (canary, request)
+}
+
 async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     use gents_store::identity::NodeIdentity;
 
