@@ -215,6 +215,31 @@ fn admit_tool_effect(tools: &[Box<dyn ToolDyn>], name: &str, args: &str) -> Opti
     admit_tool(tools, name, args)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ReadySettlement {
+    TimedOut,
+    ReceiptFailure,
+    EarlyFailure,
+    Completed,
+}
+
+pub(super) fn settle_ready(
+    expired: bool,
+    receipt_failed: bool,
+    early_failure: bool,
+) -> ReadySettlement {
+    if expired {
+        ReadySettlement::TimedOut
+    } else if receipt_failed {
+        ReadySettlement::ReceiptFailure
+    } else if early_failure {
+        ReadySettlement::EarlyFailure
+    } else {
+        ReadySettlement::Completed
+    }
+}
+
 pub async fn dispatch_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
@@ -317,12 +342,14 @@ pub(super) async fn dispatch_provider_tool(
                 Err(error) => (None, Some(outcome(Err(error)))),
             };
             if let (Some(check), Some(failure)) = (&cleanup, &early_failure) { check(Some(failure)); }
-            let receipt = crate::tool_call_lifecycle::runtime::record_dispatch_receipt(dispatched, receipt_writer).await;
-            let decided = if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
-                ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
-            } else if let Err(error) = receipt { outcome(Err(error)) }
-            else if let Some(failure) = early_failure { failure }
-            else { ToolOutcome::Completed(successful.expect("dispatch result")) };
+            let receipt = crate::tool_call_lifecycle::runtime::record_dispatch_receipt(dispatched, receipt_writer).await.err();
+            let expired = deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero());
+            let decided = match settle_ready(expired, receipt.is_some(), early_failure.is_some()) {
+                ReadySettlement::TimedOut => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
+                ReadySettlement::ReceiptFailure => outcome(Err(receipt.expect("receipt failure"))),
+                ReadySettlement::EarlyFailure => early_failure.expect("early failure"),
+                ReadySettlement::Completed => ToolOutcome::Completed(successful.expect("dispatch result")),
+            };
             if let Some(check) = &cleanup { check(Some(&decided)); }
             decided
         },
@@ -805,6 +832,13 @@ mod tests {
                 Ok("late success".into())
             })
         }
+    }
+
+    #[test]
+    fn ready_settlement_matches_the_lean_model() {
+        gents_lean_vocab::families::tool_dispatch_settle_ready::replay::<ReadySettlement>(|i| {
+            settle_ready(i.expired, i.receipt_failed, i.early_failure)
+        });
     }
 
     #[tokio::test(flavor = "current_thread")]
