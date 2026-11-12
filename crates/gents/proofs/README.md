@@ -1354,8 +1354,8 @@ representable; provider-input sanitation owns the stricter boundary.
 
 A selected-session read is a direct runtime read (`directSessionRead`): an
 absent or hidden session is an ordinary empty result, and only a duplicate or
-out-of-scope row is an integrity fault. `client_direct_session_read_cases`
-emits it for the desktop-core selected-session reader.
+out-of-scope row is an integrity fault. `Conformance.ClientSessionDelivery.directRead`
+replays it for the desktop-core selected-session reader.
 
 `client-state-machine.md` and external fixtures still need migration to this
 target contract.

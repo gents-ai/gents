@@ -774,8 +774,6 @@ def snapshotClientCasesJson : String :=
       ++ Conformance.ClientDataPublication.casesJson ++ ","
     ++ "\"client_request_patch_publication_cases\":"
       ++ Conformance.RequestPatchPublicationCases.casesJson ++ ","
-    ++ "\"client_direct_session_read_cases\":"
-      ++ Conformance.ClientSessionDelivery.directCasesJson ++ ","
     ++ "\"client_request_closure_cases\":"
       ++ Conformance.ClientRequestClosure.casesJson ++ ","
     ++ "\"client_request_cache_identity_cases\":"

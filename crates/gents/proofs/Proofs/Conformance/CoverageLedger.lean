@@ -1158,8 +1158,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientRequestPatchPublicationCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_direct_session_read_cases"
-      "ClientDirectSessionReadCases")
+      "family"
+      "client_session_delivery_direct_read")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "storage_failure_cases"
