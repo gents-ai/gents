@@ -855,41 +855,15 @@ private def retentionCase (witness : RetentionWitness) : PromptAssemblyRetention
 def promptAssemblyRetentionCases : List PromptAssemblyRetentionCase :=
   retentionWitnesses.map retentionCase
 
-structure PromptAssemblyClaudeMapCase where
-  name : String
-  surface : List String
-  blocks : List String
-  outcome : String
-  ids : List Nat
-  deriving Repr
-
 private def surfaceOf (names : List String) : PromptAssembly.ClaudeMap.Surface :=
   names.toFinset
 
-private def claudeMapCase (name : String) (surface : List String)
-    (blocks : List PromptAssembly.ClaudeMap.Block) : PromptAssemblyClaudeMapCase :=
-  let tagged := blocks.map PromptAssembly.ClaudeMap.blockTag
-  match PromptAssembly.ClaudeMap.mapTurn (surfaceOf surface) blocks with
-  | .ok _ =>
-    { name := name
-    , surface := surface
-    , blocks := tagged
-    , outcome := "ok"
-    , ids := (PromptAssembly.ClaudeMap.toolUsePairs blocks).map (·.1) }
-  | .error e =>
-    { name := name
-    , surface := surface
-    , blocks := tagged
-    , outcome := PromptAssembly.ClaudeMap.errorName e
-    , ids := [] }
-
-def promptAssemblyClaudeMapCases : List PromptAssemblyClaudeMapCase :=
-  [ claudeMapCase "text-only-empty-surface" [] [.text]
-  , claudeMapCase "mapped-echo" ["echo"] [.toolUse 1 "echo"]
-  , claudeMapCase "bash-is-not-bash" ["bash"] [.toolUse 1 "Bash"]
-  , claudeMapCase "empty-surface-tool-use" [] [.toolUse 1 "echo"]
-  , claudeMapCase "duplicate-id" ["echo"]
-      [.toolUse 1 "echo", .toolUse 1 "echo"]
+def promptAssemblyClaudeMapWitnesses : List (List String × List PromptAssembly.ClaudeMap.Block) :=
+  [ ([], [.text])
+  , (["echo"], [.toolUse 1 "echo"])
+  , (["bash"], [.toolUse 1 "Bash"])
+  , ([], [.toolUse 1 "echo"])
+  , (["echo"], [.toolUse 1 "echo", .toolUse 1 "echo"])
   ]
 
 structure PromptAssemblyClaudeBodyCase where
@@ -1247,51 +1221,20 @@ def promptAssemblyClaudeCacheCases : List PromptAssemblyClaudeCacheCase :=
       (skipWrite := true)
   ]
 
-structure PromptAssemblyClaudeStreamCase where
-  name : String
-  surface : List String
-  events : List String
-  outcome : String
-  calls : List String
-  deriving Repr
-
-private def streamEventTag : PromptAssembly.ClaudeMap.StreamEvent → String
-  | .text t => "text:" ++ t
-  | .start id name input => s!"start:{id}:{name}:{input.getD ""}"
-  | .delta fragment => "delta:" ++ fragment
-  | .stop => "stop"
-  | .thinkingStart index initialText => s!"thinking-start:{index}:{initialText}"
-  | .thinkingDelta index fragment => s!"thinking-delta:{index}:{fragment}"
-  | .signatureDelta index fragment => s!"signature-delta:{index}:{fragment}"
-  | .redactedStart index data => s!"redacted-start:{index}:{data}"
-  | .contentStop index => s!"content-stop:{index}"
-
-private def claudeStreamCase (name : String) (surface : List String)
-    (events : List PromptAssembly.ClaudeMap.StreamEvent) : PromptAssemblyClaudeStreamCase :=
-  match PromptAssembly.ClaudeMap.runStream (surfaceOf surface) events with
-  | .ok calls =>
-    { name := name, surface := surface, events := events.map streamEventTag
-    , outcome := "ok", calls := calls.map (fun (id, args) => s!"{id}={args}") }
-  | .error e =>
-    { name := name, surface := surface, events := events.map streamEventTag
-    , outcome := PromptAssembly.ClaudeMap.errorName e, calls := [] }
-
-def promptAssemblyClaudeStreamCases : List PromptAssemblyClaudeStreamCase :=
-  [ claudeStreamCase "text-only" [] [.text "hi"]
-  , claudeStreamCase "deltas-win-over-start" ["echo"]
-      [.start 1 "echo" (some "{}"), .delta "{\"text\":", .delta " \"hi\"}", .stop]
-  , claudeStreamCase "start-input-without-deltas" ["echo"]
-      [.start 1 "echo" (some "{\"a\":1}"), .stop]
-  , claudeStreamCase "no-input-is-empty-object" ["echo"] [.start 1 "echo" none, .stop]
-  , claudeStreamCase "overlapping-block" ["echo"]
-      [.start 1 "echo" none, .start 2 "echo" none, .stop]
-  , claudeStreamCase "duplicate-id" ["echo"]
-      [.start 1 "echo" none, .stop, .start 1 "echo" none, .stop]
-  , claudeStreamCase "unmapped-name" ["bash"] [.start 1 "Bash" none, .stop]
-  , claudeStreamCase "empty-surface-tool-use" [] [.start 1 "echo" none, .stop]
-  , claudeStreamCase "unterminated-flushes" ["echo"] [.start 1 "echo" none, .delta "{}"]
-  , claudeStreamCase "two-blocks-in-order" ["echo", "list_files"]
-      [.start 1 "echo" none, .delta "{}", .stop, .text "then", .start 2 "list_files" none, .delta "{\"path\":\".\"}", .stop]
+def promptAssemblyClaudeStreamWitnesses :
+    List (List String × List PromptAssembly.ClaudeMap.StreamEvent) :=
+  [ ([], [.text "hi"])
+  , (["echo"], [.start 1 "echo" (some "{}"), .delta "{\"text\":", .delta " \"hi\"}", .stop])
+  , (["echo"], [.start 1 "echo" (some "{\"a\":1}"), .stop])
+  , (["echo"], [.start 1 "echo" none, .stop])
+  , (["echo"], [.start 1 "echo" none, .start 2 "echo" none, .stop])
+  , (["echo"], [.start 1 "echo" none, .stop, .start 1 "echo" none, .stop])
+  , (["bash"], [.start 1 "Bash" none, .stop])
+  , ([], [.start 1 "echo" none, .stop])
+  , (["echo"], [.start 1 "echo" none, .delta "{}"])
+  , (["echo", "list_files"],
+      [.start 1 "echo" none, .delta "{}", .stop, .text "then", .start 2 "list_files" none,
+       .delta "{\"path\":\".\"}", .stop])
   ]
 
 structure PromptAssemblyClaudeThinkingStreamCase where

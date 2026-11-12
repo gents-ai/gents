@@ -79,6 +79,8 @@ pub enum ThinkingParseCause {
 pub enum MessagesParseError {
     #[error("fail-closed: tool_use observed ({names})")]
     ToolUse { names: String },
+    #[error("fail-closed: tool_use observed ({names}) with no tool surface")]
+    EmptyToolSurface { names: String },
     #[error("fail-closed: duplicate tool_use id {id}")]
     DuplicateToolUseId { id: String },
     #[error("fail-closed: malformed tool_use: {message}")]

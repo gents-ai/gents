@@ -1,4 +1,5 @@
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 import Proofs.Conformance.Contracts.Json.FileInventoryClosure
 import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Session.Compaction.Executable
@@ -9,12 +10,50 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-def routingAffinityCasesJson : String := jsonArray (routingAffinityCases.map fun row =>
-  "{\"name\":" ++ jsonString row.name ++ ",\"codex\":" ++ toString row.codex ++
-  ",\"main\":" ++ toString row.main ++ ",\"session\":" ++ jsonOptionalString row.session ++
-  ",\"responses\":" ++ jsonArray (row.responses.map (jsonOptionalString)) ++
-  ",\"expected_session\":" ++ jsonOptionalString row.expected.session ++
-  ",\"expected_token\":" ++ jsonOptionalString row.expected.token ++ "}")
+structure RoutingAffinityInput where
+  codex : Bool
+  main : Bool
+  executionSession : Option String
+  responses : List (Option String)
+  deriving Lean.ToJson
+
+structure RoutingAffinityOutput where
+  expectedSession : Option String
+  expectedToken : Option String
+  deriving Lean.ToJson
+
+def RoutingAffinityInput.state (i : RoutingAffinityInput) : PromptAssembly.Provider.RoutingAffinity :=
+  i.responses.foldl PromptAssembly.Provider.RoutingAffinity.observe
+    (PromptAssembly.Provider.RoutingAffinity.start i.codex i.main i.executionSession)
+
+@[conformance_family]
+def routingAffinity : Family RoutingAffinityInput RoutingAffinityOutput where
+  inputs := routingAffinityCases.map fun row =>
+    { codex := row.codex, main := row.main, executionSession := row.session
+      responses := row.responses }
+  model := fun i => { expectedSession := i.state.session, expectedToken := i.state.token }
+
+def routingAffinityDispatchTokens (state : PromptAssembly.Provider.RoutingAffinity) :
+    List (Option String) → List (Option String)
+  | [] => []
+  | response :: rest =>
+      state.token :: routingAffinityDispatchTokens (state.observe response) rest
+
+/-- The owned loop's main Codex execution in one session: each provider dispatch
+reads the execution's token, then observes the server token that response
+carries. A failed stream, a tool continuation and a nested compaction all stay
+in that one execution. -/
+structure RoutingAffinityTrace where
+  responses : List (Option String)
+  deriving Lean.ToJson
+
+@[conformance_family]
+def routingAffinityDispatches : Family RoutingAffinityTrace (List (Option String)) where
+  inputs := [{ responses := [some "first", some "first", some "first"] },
+    { responses := [some "first", some "later", none] }]
+  model := fun i =>
+    routingAffinityDispatchTokens
+      (PromptAssembly.Provider.RoutingAffinity.start true true (some "session")) i.responses
 
 def retryFrontierCasesJson : String := jsonArray (
   [("before-input", true, true, true, false, false, false),
@@ -262,18 +301,119 @@ def promptAssemblyRetentionCaseJson
 def promptAssemblyRetentionCasesJson : String :=
   jsonArray (promptAssemblyRetentionCases.map promptAssemblyRetentionCaseJson)
 
-def promptAssemblyClaudeMapCaseJson
-    (witness : PromptAssemblyClaudeMapCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"surface\":" ++ jsonStringArray witness.surface ++ ","
-    ++ "\"blocks\":" ++ jsonStringArray witness.blocks ++ ","
-    ++ "\"outcome\":" ++ jsonString witness.outcome ++ ","
-    ++ "\"ids\":" ++ jsonNatArray witness.ids
-    ++ "}"
+structure ClaudeBlockWire where
+  kind : String
+  id : Option Nat
+  name : Option String
+  deriving Lean.ToJson, BEq
 
-def promptAssemblyClaudeMapCasesJson : String :=
-  jsonArray (promptAssemblyClaudeMapCases.map promptAssemblyClaudeMapCaseJson)
+def ClaudeBlockWire.ofBlock : PromptAssembly.ClaudeMap.Block → ClaudeBlockWire
+  | .text => { kind := "text", id := none, name := none }
+  | .toolUse id name => { kind := "toolUse", id := some id, name := some name }
+  | .toolResult id => { kind := "toolResult", id := some id, name := none }
+
+structure ClaudeMapInput where
+  surface : List String
+  blocks : List ClaudeBlockWire
+  deriving Lean.ToJson, BEq
+
+structure ClaudeMapOutput where
+  outcome : String
+  ids : List Nat
+  deriving Lean.ToJson
+
+def ClaudeMapInput.ofWitness (w : List String × List PromptAssembly.ClaudeMap.Block) :
+    ClaudeMapInput :=
+  { surface := w.1, blocks := w.2.map ClaudeBlockWire.ofBlock }
+
+def claudeMapOutput (surface : List String) (blocks : List PromptAssembly.ClaudeMap.Block) :
+    ClaudeMapOutput :=
+  match PromptAssembly.ClaudeMap.mapTurn surface.toFinset blocks with
+  | .ok _ => { outcome := "ok", ids := (PromptAssembly.ClaudeMap.toolUsePairs blocks).map (·.1) }
+  | .error e => { outcome := PromptAssembly.ClaudeMap.errorName e, ids := [] }
+
+@[conformance_family]
+def claudeMap : Family ClaudeMapInput ClaudeMapOutput where
+  inputs := promptAssemblyClaudeMapWitnesses.map ClaudeMapInput.ofWitness
+  model := fun i =>
+    match promptAssemblyClaudeMapWitnesses.find? (fun w => ClaudeMapInput.ofWitness w == i) with
+    | some w => claudeMapOutput w.1 w.2
+    | none => { outcome := "unknown", ids := [] }
+
+structure ClaudeStreamEventWire where
+  kind : String
+  id : Option Nat
+  name : Option String
+  input : Option String
+  fragment : Option String
+  index : Option Nat
+  value : Option String
+  data : Option String
+  deriving Lean.ToJson, BEq
+
+def ClaudeStreamEventWire.ofEvent : PromptAssembly.ClaudeMap.StreamEvent → ClaudeStreamEventWire
+  | .text value =>
+      { kind := "text", id := none, name := none, input := none, fragment := none
+        index := none, value := some value, data := none }
+  | .start id name input =>
+      { kind := "toolStart", id := some id, name := some name, input := input, fragment := none
+        index := none, value := none, data := none }
+  | .delta fragment =>
+      { kind := "toolDelta", id := none, name := none, input := none, fragment := some fragment
+        index := none, value := none, data := none }
+  | .stop =>
+      { kind := "toolStop", id := none, name := none, input := none, fragment := none
+        index := none, value := none, data := none }
+  | .thinkingStart index initialText =>
+      { kind := "thinkingStart", id := none, name := none, input := none, fragment := none
+        index := some index, value := some initialText, data := none }
+  | .thinkingDelta index fragment =>
+      { kind := "thinkingDelta", id := none, name := none, input := none
+        fragment := some fragment, index := some index, value := none, data := none }
+  | .signatureDelta index fragment =>
+      { kind := "signatureDelta", id := none, name := none, input := none
+        fragment := some fragment, index := some index, value := none, data := none }
+  | .redactedStart index data =>
+      { kind := "redactedStart", id := none, name := none, input := none, fragment := none
+        index := some index, value := none, data := some data }
+  | .contentStop index =>
+      { kind := "contentStop", id := none, name := none, input := none, fragment := none
+        index := some index, value := none, data := none }
+
+structure ClaudeStreamInput where
+  surface : List String
+  events : List ClaudeStreamEventWire
+  deriving Lean.ToJson, BEq
+
+def ClaudeStreamInput.ofWitness (w : List String × List PromptAssembly.ClaudeMap.StreamEvent) :
+    ClaudeStreamInput :=
+  { surface := w.1, events := w.2.map ClaudeStreamEventWire.ofEvent }
+
+structure ClaudeStreamCall where
+  id : Nat
+  arguments : String
+  deriving Lean.ToJson
+
+structure ClaudeStreamOutput where
+  outcome : String
+  calls : List ClaudeStreamCall
+  deriving Lean.ToJson
+
+def claudeStreamOutput (surface : List String)
+    (events : List PromptAssembly.ClaudeMap.StreamEvent) : ClaudeStreamOutput :=
+  match PromptAssembly.ClaudeMap.runStream surface.toFinset events with
+  | .ok calls =>
+      { outcome := "ok", calls := calls.map fun (id, arguments) => { id, arguments } }
+  | .error e => { outcome := PromptAssembly.ClaudeMap.errorName e, calls := [] }
+
+@[conformance_family]
+def claudeStream : Family ClaudeStreamInput ClaudeStreamOutput where
+  inputs := promptAssemblyClaudeStreamWitnesses.map ClaudeStreamInput.ofWitness
+  model := fun i =>
+    match promptAssemblyClaudeStreamWitnesses.find?
+        (fun w => ClaudeStreamInput.ofWitness w == i) with
+    | some w => claudeStreamOutput w.1 w.2
+    | none => { outcome := "unknown", calls := [] }
 
 def claudeFieldFactsJson (f : PromptAssembly.ClaudeBody.ModelFacts) : String :=
   "{"
@@ -359,18 +499,6 @@ def promptAssemblyClaudeBodyCaseJson (witness : PromptAssemblyClaudeBodyCase) : 
 
 def promptAssemblyClaudeBodyCasesJson : String :=
   jsonArray (promptAssemblyClaudeBodyCases.map promptAssemblyClaudeBodyCaseJson)
-
-def promptAssemblyClaudeStreamCaseJson (witness : PromptAssemblyClaudeStreamCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"surface\":" ++ jsonStringArray witness.surface ++ ","
-    ++ "\"events\":" ++ jsonStringArray witness.events ++ ","
-    ++ "\"outcome\":" ++ jsonString witness.outcome ++ ","
-    ++ "\"calls\":" ++ jsonStringArray witness.calls
-    ++ "}"
-
-def promptAssemblyClaudeStreamCasesJson : String :=
-  jsonArray (promptAssemblyClaudeStreamCases.map promptAssemblyClaudeStreamCaseJson)
 
 private def claudeBytesJson (bytes : List UInt8) : String :=
   jsonArray (bytes.map fun byte => toString byte.toNat)
@@ -657,14 +785,57 @@ def protectedReplayCompactionCaseJson
 def protectedReplayCompactionCasesJson : String :=
   jsonArray (Compaction.protectedReplayCompactionCases.map protectedReplayCompactionCaseJson)
 
-def promptAssemblyServiceTierCasesJson : String :=
-  jsonArray (PromptAssembly.ServiceTier.cases.map fun witness =>
-    let expected := PromptAssembly.ServiceTier.decide witness.family witness.requested
-    "{\"family\":" ++ jsonString witness.family.wireName ++
-    ",\"requested\":" ++ jsonOptionalString (witness.requested.map (·.configName)) ++
-    ",\"allowed\":" ++ boolString expected.allowed ++
-    ",\"wire\":" ++ jsonOptionalString expected.wire ++ "}")
+structure ServiceTierInput where
+  family : String
+  requested : Option String
+  deriving Lean.ToJson, BEq
 
+def ServiceTierInput.ofCase (c : PromptAssembly.ServiceTier.Case) : ServiceTierInput :=
+  { family := c.family.wireName, requested := c.requested.map (·.configName) }
+
+def ServiceTierInput.decision (i : ServiceTierInput) : PromptAssembly.ServiceTier.Decision :=
+  match PromptAssembly.ServiceTier.cases.find? (fun c => ServiceTierInput.ofCase c == i) with
+  | some c => PromptAssembly.ServiceTier.decide c.family c.requested
+  | none => { allowed := false, wire := none }
+
+structure ServiceTierAllowed where
+  allowed : Bool
+  deriving Lean.ToJson
+
+structure ServiceTierWire where
+  wire : Option String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def serviceTierValidation : Family ServiceTierInput ServiceTierAllowed where
+  inputs := PromptAssembly.ServiceTier.cases.map ServiceTierInput.ofCase
+  model := fun i => { allowed := i.decision.allowed }
+
+structure ServiceTierLoopInput where
+  family : String
+  requested : Option String
+  openaiWireApi : String
+  deriving Lean.ToJson
+
+/-- Every allowed selection on each OpenAI wire its family can carry: the ChatGPT
+subscription speaks only the Codex Responses transport. -/
+@[conformance_family]
+def serviceTierLoopConfig : Family ServiceTierLoopInput ServiceTierWire where
+  inputs := (PromptAssembly.ServiceTier.cases.filter fun c =>
+      (PromptAssembly.ServiceTier.decide c.family c.requested).allowed).flatMap fun c =>
+    ((if c.family = .chatGptCodex then ["responses"] else ["responses", "chat_completions"]).map
+      fun wire =>
+        { family := c.family.wireName, requested := c.requested.map (·.configName)
+          openaiWireApi := wire })
+  model := fun i =>
+    { wire := (ServiceTierInput.decision { family := i.family, requested := i.requested }).wire }
+
+/-- The families whose Responses transport carries the selection to the provider. -/
+@[conformance_family]
+def serviceTierTransport : Family ServiceTierInput ServiceTierWire where
+  inputs := (PromptAssembly.ServiceTier.cases.filter fun c =>
+      PromptAssembly.ServiceTier.supports c.family).map ServiceTierInput.ofCase
+  model := fun i => { wire := i.decision.wire }
 
 def providerToolIdentityJson (identity : PromptAssembly.ToolCallIdentity.Identity) : String :=
   "{\"id\":" ++ jsonString identity.nativeId ++

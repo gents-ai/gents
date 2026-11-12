@@ -1,6 +1,6 @@
 use crate::clients::claude_messages::parse_messages_sse;
 use crate::clients::claude_messages::parse_messages_sse_typed;
-use crate::clients::claude_subscription::ClaudeStreamResponse;
+use crate::clients::claude_messages::MessagesParseError;
 use crate::llm::message::AssistantContent;
 use crate::llm::message::Message;
 use crate::llm::message::Reasoning;
@@ -10,8 +10,6 @@ use gents_claude::body::ModelFacts;
 use gents_claude::catalog;
 use gents_claude::profile;
 use gents_lean_vocab::lean_prompt_assembly_claude_body_cases;
-use gents_lean_vocab::lean_prompt_assembly_claude_map_cases;
-use gents_lean_vocab::lean_prompt_assembly_claude_stream_cases;
 use gents_lean_vocab::lean_prompt_assembly_claude_thinking_stream_cases;
 use gents_lean_vocab::LeanClaudeReasoningPart;
 use gents_lean_vocab::LeanClaudeStreamBlock;
@@ -21,37 +19,16 @@ use gents_loop::claude_messages_body::ClaudeAccountContext;
 use gents_loop::claude_messages_body::ClaudeRequestContext;
 use gents_loop::claude_messages_body::ClaudeRequestIds;
 use rapidhash::{HashSetExt, RapidHashSet};
-use rig::completion::CompletionError;
 use rig::streaming::RawStreamingChoice;
 
-fn assert_fail_closed(
-    case_name: &str,
-    outcome: &str,
-    parsed: Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError>,
-) {
-    let err = parsed
-        .expect_err("witness outcome is an error; parser must fail closed")
-        .to_string();
-    let ok = match outcome {
-        "emptySurface" => err.contains("fail-closed: tool_use observed"),
-        o if o.starts_with("unmappedName:") => {
-            let name = o.strip_prefix("unmappedName:").expect("prefix");
-            err.contains("fail-closed: tool_use observed") && err.contains(name)
-        }
-        o if o.starts_with("duplicateId:") => err.contains(&format!(
-            "fail-closed: duplicate tool_use id {}",
-            o.strip_prefix("duplicateId:").expect("prefix")
-        )),
-        o if o.starts_with("overlappingBlock:") => err.contains(&format!(
-            "fail-closed: overlapping tool_use block {}",
-            o.strip_prefix("overlappingBlock:").expect("prefix")
-        )),
-        other => panic!("case {case_name} unknown outcome {other}"),
-    };
-    assert!(
-        ok,
-        "case {case_name}: outcome {outcome} but error was: {err}"
-    );
+fn fail_closed_outcome(error: MessagesParseError) -> String {
+    match error {
+        MessagesParseError::EmptyToolSurface { .. } => "emptySurface".to_owned(),
+        MessagesParseError::ToolUse { names } => format!("unmappedName:{names}"),
+        MessagesParseError::DuplicateToolUseId { id } => format!("duplicateId:{id}"),
+        MessagesParseError::OverlappingToolUse { id } => format!("overlappingBlock:{id}"),
+        other => panic!("not a modeled fail-closed tool_use outcome: {other}"),
+    }
 }
 
 fn sse_event(payload: serde_json::Value) -> String {
@@ -59,74 +36,76 @@ fn sse_event(payload: serde_json::Value) -> String {
     format!("event: {kind}\ndata: {payload}\n\n")
 }
 
-fn claude_map_blocks_as_sse(blocks: &[String]) -> String {
+fn claude_map_blocks_as_sse(
+    blocks: &[gents_lean_vocab::families::contracts_claude_map::ClaudeBlockWire],
+) -> String {
     let mut sse = String::new();
     for (index, block) in blocks.iter().enumerate() {
-        if block == "text" {
-            sse.push_str(&sse_event(serde_json::json!({
-                "type": "content_block_start", "index": index,
-                "content_block": {"type": "text", "text": ""}
-            })));
-            sse.push_str(&sse_event(serde_json::json!({
-                "type": "content_block_delta", "index": index,
-                "delta": {"type": "text_delta", "text": "hi"}
-            })));
-            sse.push_str(&sse_event(serde_json::json!({
-                "type": "content_block_stop", "index": index
-            })));
-        } else if let Some(rest) = block.strip_prefix("toolUse:") {
-            let (id, name) = rest
-                .split_once(':')
-                .unwrap_or_else(|| panic!("toolUse tag must be toolUse:id:name, got {block}"));
-            sse.push_str(&sse_event(serde_json::json!({
-                "type": "content_block_start", "index": index,
-                "content_block": {"type": "tool_use", "id": id, "name": name, "input": {}}
-            })));
-            sse.push_str(&sse_event(serde_json::json!({
-                "type": "content_block_stop", "index": index
-            })));
-        } else if block.starts_with("toolResult:") {
-            continue;
-        } else {
-            panic!("unknown Claude map block tag {block}");
+        match block.kind.as_str() {
+            "text" => {
+                sse.push_str(&sse_event(serde_json::json!({
+                    "type": "content_block_start", "index": index,
+                    "content_block": {"type": "text", "text": ""}
+                })));
+                sse.push_str(&sse_event(serde_json::json!({
+                    "type": "content_block_delta", "index": index,
+                    "delta": {"type": "text_delta", "text": "hi"}
+                })));
+                sse.push_str(&sse_event(serde_json::json!({
+                    "type": "content_block_stop", "index": index
+                })));
+            }
+            "toolUse" => {
+                let id = block.id.expect("modeled tool id").to_string();
+                let name = block.name.as_deref().expect("modeled tool name");
+                sse.push_str(&sse_event(serde_json::json!({
+                    "type": "content_block_start", "index": index,
+                    "content_block": {"type": "tool_use", "id": id, "name": name, "input": {}}
+                })));
+                sse.push_str(&sse_event(serde_json::json!({
+                    "type": "content_block_stop", "index": index
+                })));
+            }
+            "toolResult" => {}
+            other => panic!("unknown Claude map block {other}"),
         }
     }
     sse.push_str(&sse_event(serde_json::json!({"type": "message_stop"})));
     sse
 }
 
-fn claude_stream_events_as_sse(events: &[String]) -> String {
+fn claude_stream_events_as_sse(
+    events: &[gents_lean_vocab::families::contracts_claude_stream::ClaudeStreamEventWire],
+) -> String {
     let mut sse = String::new();
-    for tag in events {
-        if let Some(text) = tag.strip_prefix("text:") {
-            sse.push_str(&sse_event(serde_json::json!({
+    for event in events {
+        match event.kind.as_str() {
+            "text" => sse.push_str(&sse_event(serde_json::json!({
                 "type": "content_block_delta", "index": 0,
-                "delta": {"type": "text_delta", "text": text}
-            })));
-        } else if let Some(rest) = tag.strip_prefix("start:") {
-            let mut parts = rest.splitn(3, ':');
-            let id = parts.next().expect("id");
-            let name = parts.next().expect("name");
-            let input = parts.next().unwrap_or("");
-            let mut block = serde_json::json!({"type": "tool_use", "id": id, "name": name});
-            if !input.is_empty() {
-                block["input"] = serde_json::from_str(input)
-                    .unwrap_or_else(|err| panic!("witness start input {input}: {err}"));
+                "delta": {"type": "text_delta", "text": event.value.as_deref().expect("text")}
+            }))),
+            "toolStart" => {
+                let mut block = serde_json::json!({
+                    "type": "tool_use",
+                    "id": event.id.expect("modeled tool id").to_string(),
+                    "name": event.name.as_deref().expect("modeled tool name")
+                });
+                if let Some(input) = &event.input {
+                    block["input"] = serde_json::from_str(input).expect("modeled tool input JSON");
+                }
+                sse.push_str(&sse_event(serde_json::json!({
+                    "type": "content_block_start", "index": 0, "content_block": block
+                })));
             }
-            sse.push_str(&sse_event(serde_json::json!({
-                "type": "content_block_start", "index": 0, "content_block": block
-            })));
-        } else if let Some(partial) = tag.strip_prefix("delta:") {
-            sse.push_str(&sse_event(serde_json::json!({
+            "toolDelta" => sse.push_str(&sse_event(serde_json::json!({
                 "type": "content_block_delta", "index": 0,
-                "delta": {"type": "input_json_delta", "partial_json": partial}
-            })));
-        } else if tag == "stop" {
-            sse.push_str(&sse_event(serde_json::json!({
+                "delta": {"type": "input_json_delta",
+                    "partial_json": event.fragment.as_deref().expect("tool fragment")}
+            }))),
+            "toolStop" => sse.push_str(&sse_event(serde_json::json!({
                 "type": "content_block_stop", "index": 0
-            })));
-        } else {
-            panic!("unknown Claude stream event tag {tag}");
+            }))),
+            other => panic!("unknown Claude stream event {other}"),
         }
     }
     sse
@@ -234,79 +213,73 @@ fn claude_request(
 }
 
 #[test]
-fn generated_claude_map_cases_drive_the_messages_parser() {
-    let cases = lean_prompt_assembly_claude_map_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no PromptAssembly Claude map cases"
-    );
-    for case in cases {
-        let surface: RapidHashSet<String> = case.surface.iter().cloned().collect();
-        let sse = claude_map_blocks_as_sse(&case.blocks);
-        let parsed = parse_messages_sse(&sse, &surface);
-        match case.outcome.as_str() {
-            "ok" => {
-                let events =
-                    parsed.unwrap_or_else(|err| panic!("case {} should map: {err}", case.name));
-                let got_ids: Vec<u64> = events
+fn claude_map_follows_the_lean_model() {
+    gents_lean_vocab::families::contracts_claude_map::replay(|input| {
+        let surface: RapidHashSet<String> = input.surface.iter().cloned().collect();
+        match parse_messages_sse_typed(&claude_map_blocks_as_sse(&input.blocks), &surface) {
+            Ok(events) => gents_lean_vocab::families::contracts_claude_map::ClaudeMapOutput {
+                outcome: "ok".to_owned(),
+                ids: events
                     .iter()
                     .filter_map(|event| match event {
                         RawStreamingChoice::ToolCall(call) => {
-                            Some(call.id.parse::<u64>().unwrap_or_else(|_| {
-                                panic!("case {} mapped id {} is not a Nat", case.name, call.id)
-                            }))
+                            Some(call.id.parse::<u64>().expect("modeled Nat tool id"))
                         }
                         _ => None,
                     })
-                    .collect();
-                assert_eq!(got_ids, case.ids, "mapped ids ({})", case.name);
-            }
-            outcome => assert_fail_closed(&case.name, outcome, parsed),
+                    .collect(),
+            },
+            Err(error) => gents_lean_vocab::families::contracts_claude_map::ClaudeMapOutput {
+                outcome: fail_closed_outcome(error),
+                ids: Vec::new(),
+            },
         }
-    }
+    });
 }
 
 #[test]
-fn generated_claude_stream_cases_drive_the_messages_parser() {
-    let cases = lean_prompt_assembly_claude_stream_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no PromptAssembly Claude stream cases"
-    );
-    for case in cases {
-        let surface: RapidHashSet<String> = case.surface.iter().cloned().collect();
-        let sse = claude_stream_events_as_sse(&case.events);
-        let parsed = parse_messages_sse(&sse, &surface);
-        match case.outcome.as_str() {
-            "ok" => {
-                let events =
-                    parsed.unwrap_or_else(|err| panic!("case {} should parse: {err}", case.name));
-                let got: Vec<String> = events
+fn claude_stream_follows_the_lean_model() {
+    use gents_lean_vocab::families::contracts_claude_stream::{
+        ClaudeStreamCall, ClaudeStreamOutput,
+    };
+    gents_lean_vocab::families::contracts_claude_stream::replay(|input| {
+        let surface: RapidHashSet<String> = input.surface.iter().cloned().collect();
+        match parse_messages_sse_typed(&claude_stream_events_as_sse(&input.events), &surface) {
+            Ok(events) => ClaudeStreamOutput {
+                outcome: "ok".to_owned(),
+                calls: events
                     .iter()
                     .filter_map(|event| match event {
                         RawStreamingChoice::ToolCall(call) => {
-                            Some(format!("{}={}", call.id, call.arguments))
+                            let raw = call
+                                .additional_params
+                                .as_ref()
+                                .and_then(|params| {
+                                    params[gents_loop::rig_compat::RAW_TOOL_ARGUMENTS_PARAM]
+                                        .as_str()
+                                })
+                                .expect("streamed tool arguments")
+                                .to_owned();
+                            assert_eq!(
+                                call.arguments,
+                                serde_json::from_str::<serde_json::Value>(&raw)
+                                    .expect("streamed arguments are JSON")
+                            );
+                            Some(ClaudeStreamCall {
+                                id: call.id.parse().expect("modeled Nat tool id"),
+                                arguments: raw,
+                            })
                         }
                         _ => None,
                     })
-                    .collect();
-                let want: Vec<String> = case
-                    .calls
-                    .iter()
-                    .map(|entry| {
-                        let (id, args) = entry.split_once('=').expect("id=args");
-                        let value: serde_json::Value =
-                            serde_json::from_str(args).unwrap_or_else(|err| {
-                                panic!("case {} witness args {args}: {err}", case.name)
-                            });
-                        format!("{id}={value}")
-                    })
-                    .collect();
-                assert_eq!(got, want, "calls ({})", case.name);
-            }
-            outcome => assert_fail_closed(&case.name, outcome, parsed),
+                    .collect(),
+            },
+            Err(error) => ClaudeStreamOutput {
+                outcome: fail_closed_outcome(error),
+                calls: Vec::new(),
+            },
         }
-    }
+    });
 }
 
 #[test]

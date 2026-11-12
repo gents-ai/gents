@@ -275,12 +275,8 @@ def snapshotPromptTailJson : String :=
       ++ promptAssemblyRetentionCasesJson ++ ","
     ++ "\"prompt_assembly_compaction_trigger_cases\":"
       ++ promptAssemblyCompactionTriggerCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_map_cases\":"
-      ++ promptAssemblyClaudeMapCasesJson ++ ","
     ++ "\"prompt_assembly_claude_body_cases\":"
       ++ promptAssemblyClaudeBodyCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_stream_cases\":"
-      ++ promptAssemblyClaudeStreamCasesJson ++ ","
     ++ "\"prompt_assembly_claude_thinking_stream_cases\":"
       ++ promptAssemblyClaudeThinkingStreamCasesJson ++ ","
     ++ "\"prompt_assembly_claude_replay_cases\":"
@@ -1139,9 +1135,6 @@ def snapshotFileCasesJson : String :=
       (StreamingResponse.ReasoningDeltas.cases.map reasoningDeltaCaseJson) ++ ","
     ++ "\"auxiliary_output_cases\":" ++ jsonArray
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
-    ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","
-    ++ "\"prompt_assembly_service_tier_cases\":" ++
-      promptAssemblyServiceTierCasesJson ++ ","
     ++ "\"prompt_assembly_responses_storage_cases\":" ++
       promptAssemblyResponsesStorageCasesJson ++ ","
     ++ "\"prompt_assembly_responses_effort_cases\":" ++

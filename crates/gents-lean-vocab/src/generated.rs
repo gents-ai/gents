@@ -445,16 +445,8 @@ pub fn lean_prompt_assembly_claude_checkpoint_cases() -> &'static [LeanPromptAss
     &lean_contract_snapshot().prompt_assembly_claude_checkpoint_cases
 }
 
-pub fn lean_prompt_assembly_claude_map_cases() -> &'static [LeanPromptAssemblyClaudeMapCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_map_cases
-}
-
 pub fn lean_prompt_assembly_claude_replay_cases() -> &'static [LeanPromptAssemblyClaudeReplayCase] {
     &lean_contract_snapshot().prompt_assembly_claude_replay_cases
-}
-
-pub fn lean_prompt_assembly_claude_stream_cases() -> &'static [LeanPromptAssemblyClaudeStreamCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_stream_cases
 }
 
 pub fn lean_prompt_assembly_claude_thinking_stream_cases() -> &'static [LeanPromptAssemblyClaudeThinkingStreamCase] {
@@ -503,10 +495,6 @@ pub fn lean_prompt_assembly_retention_cases() -> &'static [LeanPromptAssemblyRet
 
 pub fn lean_prompt_assembly_sanitize_cases() -> &'static [LeanPromptAssemblySanitizeCase] {
     &lean_contract_snapshot().prompt_assembly_sanitize_cases
-}
-
-pub fn lean_prompt_assembly_service_tier_cases() -> &'static [LeanPromptAssemblyServiceTierCase] {
-    &lean_contract_snapshot().prompt_assembly_service_tier_cases
 }
 
 pub fn lean_prompt_assembly_turn_budget_cases() -> &'static [LeanPromptAssemblyTurnBudgetCase] {
@@ -3279,7 +3267,6 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
     pub provider_tool_identity_cases: Vec<serde_json::Value>,
     pub prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
-    pub routing_affinity_cases: Vec<LeanRoutingAffinityCase>,
     pub retry_frontier_cases: Vec<LeanRetryFrontierCase>,
     pub retry_entry_cases: Vec<LeanRetryEntryCase>,
     pub current_input_cases: Vec<LeanCurrentInputCase>,
@@ -3292,13 +3279,10 @@ pub struct LeanContractSnapshot {
     pub prompt_assembly_compaction_trigger_cases: Vec<
         LeanPromptAssemblyCompactionTriggerCase,
     >,
-    pub prompt_assembly_claude_map_cases: Vec<LeanPromptAssemblyClaudeMapCase>,
     pub prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
-    pub prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
     pub prompt_assembly_claude_thinking_stream_cases: Vec<
         LeanPromptAssemblyClaudeThinkingStreamCase,
     >,
-    pub prompt_assembly_service_tier_cases: Vec<LeanPromptAssemblyServiceTierCase>,
     pub prompt_assembly_responses_storage_cases: Vec<
         LeanPromptAssemblyResponsesStorageCase,
     >,
@@ -9406,29 +9390,11 @@ pub struct LeanPromptAssemblyClaudeFieldThinkingConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyClaudeMapCase {
-    pub name: String,
-    pub surface: Vec<String>,
-    pub blocks: Vec<String>,
-    pub outcome: String,
-    pub ids: Vec<u64>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct LeanPromptAssemblyClaudeReplayCase {
     pub name: String,
     pub blocks: Vec<LeanClaudeReplayInputBlock>,
     pub outcome: String,
     pub replay: Vec<LeanClaudeReplayBlock>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyClaudeStreamCase {
-    pub name: String,
-    pub surface: Vec<String>,
-    pub events: Vec<String>,
-    pub outcome: String,
-    pub calls: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -9583,16 +9549,6 @@ pub struct LeanPromptAssemblySanitizeCase {
     pub expected: Vec<LeanPromptAssemblyRow>,
     pub expected_twice: Vec<LeanPromptAssemblyRow>,
     pub splits: Vec<LeanPromptAssemblySplit>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyServiceTierCase {
-    pub family: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub requested: Option<String>,
-    pub allowed: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub wire: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -10387,18 +10343,6 @@ pub struct LeanRootAdmissionCase {
     pub candidate: Option<LeanCanonicalPath>,
     pub expected: bool,
     pub effective: Option<LeanCanonicalPath>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRoutingAffinityCase {
-    pub codex: bool,
-    pub expected_session: Option<String>,
-    pub expected_token: Option<String>,
-    pub main: bool,
-    pub name: String,
-    pub responses: Vec<Option<String>>,
-    pub session: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

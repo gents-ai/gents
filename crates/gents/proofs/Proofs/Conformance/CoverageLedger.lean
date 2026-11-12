@@ -2233,9 +2233,17 @@ def caseCoverage : List CoverageEntry :=
       "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_service_tier_cases"
-      "PromptAssemblyServiceTierCases"
-      "Generated decisions cover every provider family with unset, Standard and Fast selections. Native validation rejects unsupported carriers; supported cases compare the actual provider request body. Provider account/model eligibility and delivered speed are external.")
+      "family"
+      "contracts_service_tier_validation"
+      "Generated decisions cover every provider family with unset, Standard and Fast selections; native validation rejects unsupported carriers. Provider account/model eligibility and delivered speed are external.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_service_tier_loop_config")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_service_tier_transport")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_responses_storage_cases"
@@ -2263,8 +2271,12 @@ def caseCoverage : List CoverageEntry :=
       "The cursor fixtures share the migrated immutable compaction contract; the native bridge has not yet been regenerated.")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "routing_affinity_cases"
-      "RoutingAffinityCases")
+      "family"
+      "contracts_routing_affinity")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_routing_affinity_dispatches")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "current_input_cases"
@@ -2304,8 +2316,8 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyRetentionCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_map_cases"
-      "PromptAssemblyClaudeMapCases")
+      "family"
+      "contracts_claude_map")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_claude_body_cases"
@@ -2332,8 +2344,8 @@ def caseCoverage : List CoverageEntry :=
       "claude_prompt_assembly_field_row")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_stream_cases"
-      "PromptAssemblyClaudeStreamCases")
+      "family"
+      "contracts_claude_stream")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_claude_thinking_stream_cases"
