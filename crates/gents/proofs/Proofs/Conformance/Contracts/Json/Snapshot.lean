@@ -5,6 +5,7 @@ import Proofs.Conformance.InferenceViews
 import Proofs.Conformance.PluginGrantDeclaration
 import Proofs.Conformance.EnrollmentRenewalNotices
 import Proofs.Conformance.ToolDispatch
+import Proofs.Conformance.RequestAssembly
 import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.InferenceObservationRegistry
 import Proofs.Conformance.EagerStreaming

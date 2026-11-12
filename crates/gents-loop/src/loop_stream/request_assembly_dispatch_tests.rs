@@ -11,9 +11,7 @@ use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::budget::ContextCalibration;
 use crate::provider_input::ProviderInputCounter;
 
-const WINDOW: usize = 4_000;
-
-fn request(text: &str) -> CompletionRequest {
+fn request(text: &str, max_tokens: u64) -> CompletionRequest {
     CompletionRequest {
         model: None,
         preamble: None,
@@ -21,14 +19,18 @@ fn request(text: &str) -> CompletionRequest {
         documents: Vec::new(),
         tools: Vec::new(),
         temperature: None,
-        max_tokens: Some(2_048),
+        max_tokens: Some(max_tokens),
         tool_choice: None,
         additional_params: None,
         output_schema: None,
     }
 }
 
-fn claude_config_without_compactor(calibration: ContextCalibration) -> LoopConfig {
+fn claude_config_without_compactor(
+    calibration: ContextCalibration,
+    context_window: usize,
+    max_tokens: u64,
+) -> LoopConfig {
     LoopConfig {
         replay: crate::loop_stream::LoopReplayInput::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
@@ -39,7 +41,7 @@ fn claude_config_without_compactor(calibration: ContextCalibration) -> LoopConfi
         preamble: None,
         context_message: None,
         temperature: None,
-        max_tokens: Some(2_048),
+        max_tokens: Some(max_tokens),
         aggregate_token_budget: None,
         additional_params: None,
         structured_output: None,
@@ -51,7 +53,7 @@ fn claude_config_without_compactor(calibration: ContextCalibration) -> LoopConfi
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
         resume_from_history: false,
-        context_window: WINDOW,
+        context_window,
         compaction_threshold: 0.75,
         context_calibration: calibration,
         retry_policy: CompletionRetryPolicy::no_retry(),
@@ -64,31 +66,48 @@ fn claude_config_without_compactor(calibration: ContextCalibration) -> LoopConfi
     }
 }
 
-#[test]
-fn a_calibrated_overestimate_never_refuses_a_request_the_raw_count_fits() {
-    let request = request(&"tool output ".repeat(400));
-    let config = claude_config_without_compactor(ContextCalibration::with_ratio(40_000));
-    let raw = config
+fn sized_request(config: &LoopConfig, raw: usize, max_tokens: u64) -> CompletionRequest {
+    let base = config
         .provider_input_counter
-        .estimate_request(&request)
+        .estimate_request(&request("x", max_tokens))
         .expect("estimate");
-    assert!(raw < WINDOW, "raw {raw} must fit the window");
-    assert!(
-        config.context_calibration.calibrated(raw) > WINDOW,
-        "the calibrated count must exceed the window"
+    let request = request(&"x".repeat(1 + (raw - base) * 4), max_tokens);
+    assert_eq!(
+        config
+            .provider_input_counter
+            .estimate_request(&request)
+            .expect("estimate"),
+        raw
     );
-
-    let prepared = prepare_dispatch_attempt(&request, &config, None).expect("dispatches");
-    let max_tokens = usize::try_from(prepared.request().max_tokens.expect("output cap"))
-        .expect("usize output cap");
-    assert!(max_tokens > 0);
-    assert!(raw + max_tokens <= WINDOW);
-    assert_eq!(prepared.context().raw, raw);
+    request
 }
 
 #[test]
-fn the_raw_count_still_refuses_a_request_that_cannot_fit() {
-    let request = request(&"tool output ".repeat(4_000));
-    let config = claude_config_without_compactor(ContextCalibration::with_ratio(10_000));
-    assert!(prepare_dispatch_attempt(&request, &config, None).is_err());
+fn dispatch_capacity_matches_the_lean_model() {
+    gents_lean_vocab::families::request_assembly_dispatch_capacity::replay(|i| {
+        let config = claude_config_without_compactor(
+            ContextCalibration::with_ratio(i.ratio),
+            i.context_window as usize,
+            i.max_output_tokens,
+        );
+        let request = sized_request(&config, i.raw as usize, i.max_output_tokens);
+        match prepare_dispatch_attempt(&request, &config, None) {
+            Ok(prepared) => Some(
+                gents_lean_vocab::families::request_assembly_dispatch_capacity::Dispatched {
+                    max_output_tokens: prepared.request().max_tokens.expect("output cap"),
+                    context_tokens: prepared.context().tokens as u64,
+                },
+            ),
+            Err(error) => {
+                assert!(
+                    gents_protocol::error_chain::find_source::<
+                        crate::provider_input::budget::ContextBudgetError,
+                    >(&error)
+                    .is_some(),
+                    "{i:?}: {error:?}"
+                );
+                None
+            }
+        }
+    });
 }
