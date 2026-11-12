@@ -114,12 +114,7 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
     let modeled = gents_lean_vocab::lean_contract_snapshot()
         .identity_runtime_nac_cases
         .iter()
-        .map(|case| {
-            (
-                case["status"].as_str().unwrap().to_owned(),
-                case["may_start"].as_bool().unwrap(),
-            )
-        })
+        .map(|case| (case.status.to_owned(), case.may_start))
         .collect::<std::collections::BTreeMap<_, _>>();
     assert_eq!(modeled.len(), 3);
     let directory = tempfile::tempdir()?;
