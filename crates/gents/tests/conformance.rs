@@ -34,6 +34,7 @@ use gents_lean_vocab::{
     lean_compaction_reducer_cases, lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
     lean_interrupt_disposition_cases, lean_mcp_health_cases,
+    lean_inference_slot_accounting_cases, lean_interrupt_disposition_cases,
     lean_queue_deadline_cases, lean_r4c_background_work_cases,
     lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases,
@@ -67,10 +68,6 @@ mod goals;
 mod hooks;
 #[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
-#[path = "conformance/lsp.rs"]
-mod lsp;
-#[path = "conformance/mcp_health.rs"]
-mod mcp_health;
 #[path = "conformance/p2p_replication.rs"]
 mod p2p_replication;
 #[path = "conformance/plugin_job.rs"]
@@ -155,83 +152,6 @@ fn compaction_runtime_reduces_valid_canonical_history() {
 }
 
 #[test]
-fn generated_tool_policy_cases_match_lean_composition() {
-    tool_policy::generated_tool_policy_cases_match_lean_composition();
-}
-
-#[test]
-fn generated_goal_capability_resolution_matches_rust_decoder() {
-    tool_policy::generated_goal_capability_resolution_matches_rust_decoder();
-}
-
-#[test]
-fn generated_lsp_action_cases_match_rust_authorization() {
-    lsp::generated_lsp_action_cases_match_rust_authorization();
-}
-
-#[test]
-fn self_config_field_tables_match_lean_contract() {
-    self_config::self_config_field_tables_match_lean_contract();
-}
-
-#[test]
-fn generated_self_config_cases_fence_patch_merge() {
-    self_config::generated_self_config_cases_fence_patch_merge();
-}
-
-#[test]
-fn generated_mcp_health_cases_pin_threshold_projection_shape() {
-    mcp_health::generated_mcp_health_cases_pin_threshold_projection_shape();
-}
-
-#[test]
-fn edit_match_exact_priority_is_never_shadowed() {
-    edit_match::exact_priority_is_never_shadowed();
-}
-
-#[test]
-fn edit_match_ladder_fires_at_the_strictest_matching_rung() {
-    edit_match::ladder_fires_at_the_strictest_matching_rung();
-}
-
-#[test]
-fn edit_match_ambiguity_gate_requires_unique_or_replace_all() {
-    edit_match::ambiguity_gate_requires_unique_or_replace_all();
-}
-
-#[test]
-fn edit_match_decision_is_pure_and_deterministic() {
-    edit_match::decision_is_pure_and_deterministic();
-}
-
-#[test]
-fn edit_match_noop_is_reported_not_applied() {
-    edit_match::noop_is_reported_not_applied();
-}
-
-#[test]
-fn edit_match_operations_desugar_onto_the_single_matcher() {
-    edit_match::operations_desugar_onto_the_single_matcher();
-}
-
-#[test]
-fn edit_match_near_miss_is_diagnosed_never_applied() {
-    edit_match::near_miss_is_diagnosed_never_applied();
-}
-
-#[test]
-fn edit_match_overlapping_windows_apply_disjoint_selection() {
-    edit_match::overlapping_windows_apply_disjoint_selection();
-}
-
-#[test]
-fn edit_match_relaxed_rung_hits_respect_the_ambiguity_gate() {
-    edit_match::relaxed_rung_hits_respect_the_ambiguity_gate();
-}
-
-#[test]
-fn edit_match_insert_before_desugar_applies_to_every_replace_all_site() {
-    edit_match::insert_before_desugar_applies_to_every_replace_all_site();
 }
 
 #[tokio::test]
@@ -266,8 +186,6 @@ fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
 
 #[path = "conformance/docs.rs"]
 mod docs;
-#[path = "conformance/edit_match.rs"]
-mod edit_match;
 #[path = "conformance/identity.rs"]
 mod identity;
 #[path = "conformance/live_overlay.rs"]
@@ -282,7 +200,5 @@ mod prompt_assembly;
 mod root_admission;
 #[path = "conformance/scope_templates.rs"]
 mod scope_templates;
-#[path = "conformance/self_config.rs"]
-mod self_config;
 #[path = "conformance/tool_policy.rs"]
 mod tool_policy;

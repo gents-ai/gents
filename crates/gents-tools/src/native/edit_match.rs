@@ -539,3 +539,6 @@ fn closest_match(content_lines: &[&str], pattern_lines: &[&str]) -> Option<Close
         first_diff,
     })
 }
+
+#[cfg(test)]
+mod pushdown_tests;

@@ -1,11 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gents_documents::{BashMode, FileToolMode};
-use gents_tools::native::{CommandExecutionMode, CommandNetworkMode};
-use gents_tools::surface::ToolPolicySurface;
-use gents_tools::surface::{EndpointScope, ToolPolicyBash};
+use crate::native::{CommandExecutionMode, CommandNetworkMode};
+use crate::surface::ToolPolicySurface;
+use crate::surface::{EndpointScope, ToolPolicyBash};
 
-use gents_lean_vocab::{LeanToolPolicySurfaceView as View, LeanToolPolicyWriteGrant as WriteGrant};
+use gents_lean_vocab::{
+    lean_tool_policy_cases, LeanToolPolicySurfaceView as View,
+    LeanToolPolicyWriteGrant as WriteGrant,
+};
 
 fn file_from_rank(rank: u8) -> FileToolMode {
     match rank {
@@ -300,4 +303,22 @@ pub(super) fn compose(agent: &View, ceiling: &View, runtime: &View) -> View {
         agent.write_probe_tool.clone(),
         agent.write_probe_collection.clone(),
     )
+}
+
+#[test]
+fn generated_tool_policy_cases_match_lean_composition() {
+    let cases = lean_tool_policy_cases();
+    assert_eq!(
+        cases.len(),
+        30,
+        "Lean tool-policy composition matrix drifted"
+    );
+    for case in cases {
+        let actual = compose(&case.agent, &case.ceiling, &case.runtime);
+        assert_eq!(
+            actual, case.expected,
+            "{}: production permission composition",
+            case.name
+        );
+    }
 }
