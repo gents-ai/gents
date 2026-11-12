@@ -3,24 +3,24 @@ use std::sync::Arc;
 
 #[test]
 fn admission_matches_executable_lean_owner() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().application_write_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
+    gents_lean_vocab::families::contracts_application_write::replay::<String>(|i| {
         let observation = Observation {
-            operation: case.operation.clone(),
-            granted: case.granted,
-            application: case.application,
-            protected: case.protected,
-            credential: case.credential,
-            bounded: case.bounded,
-            targets: case.targets as usize,
-            limit: case.limit as usize,
-            preview: case.preview,
-            digest_matches: case.digest_matches,
+            operation: i.operation.clone(),
+            granted: i.granted,
+            application: i.application,
+            protected: i.is_protected,
+            credential: i.credential,
+            bounded: i.bounded,
+            targets: i.targets as usize,
+            limit: i.limit as usize,
+            preview: i.preview,
+            digest_matches: i.digest_matches,
         };
-        assert_eq!(observation.admitted(), case.admitted, "{case:?}");
-        assert_eq!(observation.may_apply(), case.may_apply, "{case:?}");
-    }
+        gents_lean_vocab::families::contracts_application_write::ApplicationWriteOutput {
+            admitted: observation.admitted(),
+            may_apply: observation.may_apply(),
+        }
+    });
 }
 
 fn call(operation: &str, input: Value, filter: Option<Value>) -> WriteParams {

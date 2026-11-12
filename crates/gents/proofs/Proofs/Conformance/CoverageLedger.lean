@@ -950,8 +950,8 @@ def caseCoverage : List CoverageEntry :=
       "ToolPolicyCases")
       "tool-policy" [Surface.operatorUi, Surface.agentFacing]
   , tagged (consumerCoverage
-      "application_write_cases"
-      "ApplicationWriteCases")
+      "family"
+      "contracts_application_write")
       "tool-policy" [Surface.agentFacing, Surface.operatorCli]
   , tagged (consumerCoverage
       "field_read_cases"

@@ -21,10 +21,6 @@ pub fn lean_aggregate_token_budget_cases() -> &'static [LeanAggregateTokenBudget
     &lean_contract_snapshot().aggregate_token_budget_cases
 }
 
-pub fn lean_application_write_cases() -> &'static [LeanApplicationWriteCase] {
-    &lean_contract_snapshot().application_write_cases
-}
-
 pub fn lean_auxiliary_output_cases() -> &'static [LeanAuxiliaryOutputCase] {
     &lean_contract_snapshot().auxiliary_output_cases
 }
@@ -1023,23 +1019,6 @@ pub struct LeanAggregateTokenBudgetCase {
     pub charge_result: String,
     pub next_used: Option<u64>,
     pub post_charge_action: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanApplicationWriteCase {
-    pub admitted: bool,
-    pub application: bool,
-    pub bounded: bool,
-    pub credential: bool,
-    pub digest_matches: bool,
-    pub granted: bool,
-    pub limit: u64,
-    pub may_apply: bool,
-    pub operation: String,
-    pub preview: bool,
-    pub protected: bool,
-    pub targets: u64,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -2479,37 +2458,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +2983,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3235,7 +3182,6 @@ pub struct LeanContractSnapshot {
     pub eval_document_capture_cases: Vec<LeanEvalDocumentCaptureCase>,
     pub optimization_cases: LeanOptimizationCases,
     pub tool_policy_cases: Vec<LeanToolPolicyCase>,
-    pub application_write_cases: Vec<LeanApplicationWriteCase>,
     pub field_read_cases: Vec<LeanFieldReadCase>,
     pub write_input_cases: Vec<serde_json::Value>,
     pub invocation_correlation_cases: Vec<LeanInvocationCorrelationCase>,

@@ -825,7 +825,6 @@ def snapshotClientCasesJson : String :=
       ++ Conformance.Optimization.optimizationCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
-    ++ "\"application_write_cases\":" ++ applicationWriteCasesJson ++ ","
     ++ "\"field_read_cases\":" ++ fieldReadCasesJson ++ ","
     ++ "\"write_input_cases\":" ++ writeInputCasesJson ++ ","
     ++ "\"invocation_correlation_cases\":" ++ invocationCorrelationCasesJson ++ ","
