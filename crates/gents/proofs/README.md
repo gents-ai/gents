@@ -1679,8 +1679,8 @@ and are not authority ranks. Workspace ordinary attenuation reuses the same meet
 verified sealed ReadOnly binding. No ordinary WorkspaceWrite request converts
 into artifact authority. Missing, unsupported or invalid artifact context denies.
 
-Generated families (`command_policy_execution_mode_meet`, `artifact_admission_cases`,
-`artifact_spawn_cases`) drive the actual command meet, signed request admission,
+Generated families (`command_policy_execution_mode_meet`, `contracts_artifact_admission`,
+`contracts_artifact_spawn_launch`, `contracts_artifact_spawn_lsp`) drive the actual command meet, signed request admission,
 workspace binding, managed launch and pre-pool LSP denial. The ledger records the
 injected unavailable-host observation and explicitly scoped background task as
 bounded coverage, separately from durable background-bridge and OS behavior.

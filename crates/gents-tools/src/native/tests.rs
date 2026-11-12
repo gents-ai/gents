@@ -2408,27 +2408,22 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().artifact_spawn_cases;
     let fx = gents_session::workspace::artifact_test_fixture(&[]).await;
-    assert_eq!(cases.len(), 5);
-    let mut exercised = 0;
-    for case in cases {
-        exercised += 1;
-        if case["kind"] == "persistent_lsp" {
-            super::lsp::tests::assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch(
-                case,
-            )
-            .await;
-            continue;
-        }
-        let name = case["name"].as_str().unwrap();
-        let background = case["kind"] == "background";
-        let grant = if case["binding"].is_null() {
-            None
-        } else {
-            Some(fx.grant.clone())
+    for case in gents_lean_vocab::families::contracts_artifact_spawn_launch::cases() {
+        assert_eq!(case.input.requested_mode, "artifact_write");
+        let name = case.input.name.as_str();
+        let background = match case.input.kind.as_str() {
+            "background" => true,
+            "foreground" => false,
+            other => panic!("{name}: launch family holds no {other} spawn"),
         };
-        if case["binding"]["incarnation_matches"] == false {
+        let grant = case.input.binding.as_ref().map(|_| fx.grant.clone());
+        if case
+            .input
+            .binding
+            .as_ref()
+            .is_some_and(|binding| !binding.incarnation_matches)
+        {
             let doc = gents_store::graphql::escape_graphql_string(fx.grant.request_doc_id());
             let mutation = format!(
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#
@@ -2483,16 +2478,19 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
         } else {
             operation.await
         };
-        let expected = case["expected_mode"] == "artifact_write";
-        assert_eq!(result.is_ok(), expected, "{name}: {result:?}");
+        let dispatched = result.is_ok();
         assert_eq!(
             output.exists(),
-            expected,
-            "{name}: unexpected dispatch effect"
+            dispatched,
+            "{name}: dispatch effect disagrees with the result: {result:?}"
         );
-        assert_eq!(fx.grant.root().join("tmp").join(name).exists(), expected);
+        assert_eq!(fx.grant.root().join("tmp").join(name).exists(), dispatched);
+        case.check(
+            gents_lean_vocab::families::contracts_artifact_spawn_launch::ArtifactSpawnOutput {
+                mode: dispatched.then(|| CommandExecutionMode::ArtifactWrite.as_str().to_string()),
+            },
+        );
     }
-    assert_eq!(exercised, 5);
 }
 
 #[cfg(target_os = "macos")]

@@ -1407,15 +1407,20 @@ def caseCoverage : List CoverageEntry :=
       "recovery_sweep_cases"
       "RecoverySweepCases")
       "recovery" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "artifact_admission_cases"
-      "ArtifactAdmissionCases"
-      boundaryCommandPolicyHostExecutionAssumptionsId)
+  , tagged { boundaryCoverage
+      "family"
+      "contracts_artifact_admission"
+      boundaryCommandPolicyHostExecutionAssumptionsId with consumed := true }
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "artifact_spawn_cases"
-      "ArtifactSpawnCases"
-      boundaryCommandPolicyHostExecutionAssumptionsId)
+  , tagged { boundaryCoverage
+      "family"
+      "contracts_artifact_spawn_launch"
+      boundaryCommandPolicyHostExecutionAssumptionsId with consumed := true }
+      "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged { boundaryCoverage
+      "family"
+      "contracts_artifact_spawn_lsp"
+      boundaryCommandPolicyHostExecutionAssumptionsId with consumed := true }
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "operator_base_freeze_cases"

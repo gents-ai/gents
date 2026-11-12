@@ -3095,8 +3095,6 @@ pub struct LeanContractSnapshot {
     pub deviations: Vec<LeanDeviation>,
     pub command_policy_cases: Vec<LeanCommandPolicyCase>,
     pub command_isolation_cases: Vec<LeanCommandIsolationCase>,
-    pub artifact_admission_cases: Vec<serde_json::Value>,
-    pub artifact_spawn_cases: Vec<serde_json::Value>,
     pub command_env_cases: Vec<LeanCommandEnvCase>,
     pub live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub request_progress_cases: Vec<LeanRequestProgressCase>,

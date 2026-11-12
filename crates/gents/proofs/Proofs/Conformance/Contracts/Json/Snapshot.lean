@@ -893,8 +893,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"
       ++ deviationsJson ++ ","
-    ++ "\"artifact_admission_cases\":" ++ artifactAdmissionCasesJson ++ ","
-    ++ "\"artifact_spawn_cases\":" ++ artifactSpawnCasesJson ++ ","
     ++ "\"command_policy_cases\":"
       ++ jsonArray (CommandPolicy.commandPolicyCases.map commandPolicyCaseJson) ++ ","
     ++ "\"command_isolation_cases\":" ++ Conformance.CommandIsolation.casesJson.compress ++ ","
