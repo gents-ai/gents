@@ -7,5 +7,7 @@ mod inference_parent_recovery_tests;
 pub mod plugin;
 #[cfg(test)]
 mod rendered_request_sink_tests;
+#[cfg(test)]
+mod self_config_tests;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
