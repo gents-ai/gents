@@ -401,7 +401,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     .with_runtime_identity(Some(runtime.clone()))
     .with_agent_signer(signer.managed_agent_signer())
     .with_node_binding(Some(node_binding.clone()));
-    // Creating an Agent needs the agent catalog grant (`SelfConfig.mayCreateAgent`).
+    // Creating an Agent needs the agent catalog grant (`SelfConfig.agentAdmission`, `ActorGrants.catalog`).
     let mut tool_config = super::tests::config(&["agent", "tools", "node"]);
     tool_config.agent_did = creator.agent_did.clone();
     let tools = super::build_self_config_tools_with_runtime(
@@ -435,6 +435,15 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                     &creator.agent_did,
                 )
                 .await
+            })
+        })
+        .await?;
+    user_access
+        .transact_write("test.agent_creator.catalog", |txn| {
+            let creator = &creator;
+            let runtime = &runtime;
+            Box::pin(async move {
+                gents_documents::grant_agent_catalog(txn, runtime.did(), &creator.agent_did).await
             })
         })
         .await?;

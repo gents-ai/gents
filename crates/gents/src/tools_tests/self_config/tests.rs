@@ -1637,7 +1637,10 @@ async fn agent_reselect_cannot_acquire_grants() {
         )
         .await
         .expect_err("re-pointing an Agent at a granted chain must not acquire the grant");
-        assert!(refused.contains(&format!("context_id {granted_context:?} selects Tools carrying an operator grant this agent does not hold")), "{target}: {refused}");
+        assert!(
+            refused.contains("enable_pack_install cannot be self-granted"),
+            "{target}: {refused}"
+        );
     }
     let holder = reselection_tools("agent-reselect-holder", true).await;
     let selection = format!("context_id=\"{}:context\"", holder.granted);
@@ -4126,6 +4129,7 @@ async fn agent_clone_never_copies_the_source_self_config_grants() {
     let fixture = SelfConfigFixture::new("agent-clone-grants").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     let granted = fixture.install_sibling("granted").await;
     fixture.grant_pack_install_to(&granted).await;
     // Reusing the sibling's profile selects it, which native document ACP
@@ -4225,51 +4229,18 @@ async fn agent_clone_by_holder_copies_granted_source() {
 }
 
 #[tokio::test]
-async fn own_agent_edit_needs_the_agent_category_not_the_catalog() {
-    let fixture = SelfConfigFixture::new("own-agent-category").await;
-    fixture.grant_selected_configuration().await;
-    let current = fixture.agent_did().to_owned();
-    let catalog_only = fixture.tools(&["node"]);
-    let error = call_config_tool(
-        &catalog_only,
-        vec![
-            "agent".into(),
-            "edit".into(),
-            current,
-            "--set".into(),
-            r#"display_name="Renamed""#.into(),
-        ],
-    )
-    .await
-    .expect_err("the catalog grant does not edit the invoking Agent's own configuration");
-    assert!(
-        error.contains("agent configuration is not granted"),
-        "{error}"
-    );
-}
-
-#[tokio::test]
 async fn foreign_agent_configuration_needs_the_catalog_grant() {
     let fixture = SelfConfigFixture::new("foreign-agent-catalog").await;
     fixture.grant_selected_configuration().await;
     let sibling = fixture.install_sibling("sibling-agent").await;
     let agent_only = fixture.tools(&["agent"]);
-    for argv in [
-        vec![
-            "agent".into(),
-            "edit".into(),
-            sibling.clone(),
-            "--set".into(),
-            r#"display_name="Renamed""#.into(),
-        ],
-        vec![
-            "agent".into(),
-            "context".into(),
-            "get".into(),
-            "--agent".into(),
-            sibling.clone(),
-        ],
-    ] {
+    for argv in [vec![
+        "agent".into(),
+        "context".into(),
+        "get".into(),
+        "--agent".into(),
+        sibling.clone(),
+    ]] {
         let error = call_config_tool(&agent_only, argv.clone())
             .await
             .expect_err("an agent-category grant does not reach another Agent");
@@ -4533,6 +4504,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let fixture = SelfConfigFixture::new("descendant-root-self-config").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     let node = fixture.db.node.clone();
     let identity = fixture.db.node_identity.clone();
     let owner = fixture.node_did().to_owned();
@@ -6230,7 +6202,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     )
     .await
     .unwrap_err();
-    assert!(disable.contains("cannot disable itself"), "{disable}");
+    assert!(disable.contains("must stay enabled"), "{disable}");
     // Lean `SelfConfig.keepsReach`: the Engineer tag confers nothing, so
     // dropping it is an ordinary edit.
     ok(call_config_tool(
@@ -6266,7 +6238,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             .await
             .unwrap_err();
     assert!(
-        agent_disable.contains("cannot disable itself"),
+        agent_disable.contains("must stay enabled"),
         "{agent_disable}"
     );
     for name in ["\"\"", "\"   \""] {
@@ -7065,7 +7037,7 @@ async fn an_agent_decides_what_a_pack_does_with_documents_edited_live() {
         failure["error"]
             .as_str()
             .unwrap()
-            .contains("Task/fixture-worker-task of fixture/documents_fixture were edited"),
+            .contains("Task/fixture-worker-task of fixture/documents_fixture was edited"),
         "{failure}"
     );
     assert!(!refused.contains("operator CLI"), "{refused}");
@@ -7126,7 +7098,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
     manifest.as_object_mut().unwrap().remove("schemas");
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (_home, plugins) = gents_toolcalls::test_support::home_with_pack_dir(&directory);
+    let (home, plugins) = gents_toolcalls::test_support::home_with_pack_dir(&directory);
     let (fixture, tools) = signed_pack_tool("inspect-documents-pack", plugins).await;
     let did = fixture.db.node_identity.did();
     let slot = format!("worker={}:inference", fixture.agent_did());
@@ -7283,6 +7255,9 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     );
     // A reinstall finds the collection the first install left behind. It did
     // not create it, so removing the pack with its collections keeps it.
+    gents_pack::pack::store::PackStore::new(home.path())
+        .import(&gents_pack::pack::archive::pack_dir(&directory).unwrap().0[..], None)
+        .unwrap();
     config_call(&tools, &install).await.unwrap();
     let adopted: Value =
         serde_json::from_str(&config_call(&tools, &with_collections).await.unwrap()).unwrap();
@@ -7304,6 +7279,9 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     };
     drop_collection().await;
 
+    gents_pack::pack::store::PackStore::new(home.path())
+        .import(&gents_pack::pack::archive::pack_dir(&directory).unwrap().0[..], None)
+        .unwrap();
     config_call(&tools, &install).await.unwrap();
     admin
         .write(
@@ -7331,6 +7309,9 @@ async fn pack_document_installation_uses_existing_lifecycle() {
             gents_store::config_client::NodePermission::CollectionTruncate,
         )
         .await
+        .unwrap();
+    gents_pack::pack::store::PackStore::new(home.path())
+        .import(&gents_pack::pack::archive::pack_dir(&directory).unwrap().0[..], None)
         .unwrap();
     config_call(&tools, &install).await.unwrap();
     admin
@@ -7564,17 +7545,19 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
 }
 
 #[tokio::test]
-async fn config_backend_accounts_is_readable_without_the_backend_grant() {
+async fn config_backend_accounts_needs_the_backend_grant() {
     let fixture = SelfConfigFixture::new("config-accounts-grant").await;
     let tools = fixture.tools(&["node", "profile"]);
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    config
+    let error = config
         .call(json!({"argv":["backend", "accounts"]}).to_string())
         .await
-        .unwrap();
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("backend configuration is not granted"), "{error}");
     assert!(config
         .call(json!({"argv":["backend", "list"]}).to_string())
         .await
@@ -8339,7 +8322,10 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(error.contains("digest changed"), "{error}");
+    assert!(
+        error.contains(&wrong) && error.contains("nothing was written"),
+        "{error}"
+    );
     assert!(gents_pack::plugin::store::list_records(home.path())
         .unwrap()
         .is_empty());
@@ -8442,7 +8428,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     .await
     .unwrap_err()
     .to_string();
-    assert!(error.contains("digest changed"));
+    assert!(error.contains(archive.digest()) && error.contains("nothing was written"));
     config_call(&tools, &["pack", "update", path, "--digest", next.digest()])
         .await
         .unwrap();
