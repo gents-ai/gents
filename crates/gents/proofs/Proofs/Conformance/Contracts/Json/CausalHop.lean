@@ -2,6 +2,7 @@ import Proofs.Session.Request.CausalHop
 import Proofs.Session.DurableLineage
 import Proofs.Session.AgentSession
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.CausalHopContracts
 
@@ -312,24 +313,29 @@ def capObservationCases : List CapObservationCase :=
   , ⟨"at_bound", some (some 1), 1⟩
   , ⟨"over_bound", some (some 1), 2⟩ ]
 
-def capObservationCaseJson (c : CapObservationCase) : String :=
-  let visible := c.observation.isSome
-  let cap := c.observation.getD none
-  let expected := CausalHop.admitObservedHop c.observation c.hop
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"visible\":" ++ toString visible
-    ++ ",\"cap\":" ++ optionalNatJson cap
-    ++ ",\"hop\":" ++ toString c.hop
-    ++ ",\"expected_bound\":" ++ optionalNatJson (CausalHop.observedHopBound c.observation)
-    ++ ",\"expected\":" ++ (match expected with
-      | none => "null"
-      | some value => toString value) ++ "}"
+structure CapObservationInput where
+  name : String
+  visible : Bool
+  cap : Option Nat
+  hop : Nat
+  deriving Lean.ToJson
+
+structure CapObservationOutput where
+  expected : Option Bool
+  bound : Option Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def capObservation : Family CapObservationInput CapObservationOutput where
+  inputs := capObservationCases.map fun c =>
+    { name := c.name, visible := c.observation.isSome, cap := c.observation.getD none, hop := c.hop }
+  model := fun i =>
+    let observation := if i.visible then some i.cap else none
+    { expected := CausalHop.admitObservedHop observation i.hop
+      bound := CausalHop.observedHopBound observation }
 
 def defaultMaxRequestHopJson : String :=
   optionalNatJson CausalHop.defaultMaxRequestHop
-
-def capObservationCasesJson : String :=
-  jsonArray (capObservationCases.map capObservationCaseJson)
 
 def stepCasesJson : String :=
   jsonArray (stepCases.map stepCaseJson)

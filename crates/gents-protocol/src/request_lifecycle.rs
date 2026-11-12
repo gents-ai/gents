@@ -304,10 +304,36 @@ mod tests {
 
 #[cfg(test)]
 mod conformance {
-    use super::RequestLifecycleState;
+    use super::{request_hop_within_bound, RequestHopCapObservation, RequestLifecycleState};
 
     #[test]
     fn lifecycle_states_are_the_lean_request_states() {
         gents_lean_vocab::families::request_state_vocabulary::replay(&RequestLifecycleState::ALL);
+    }
+
+    #[test]
+    fn hop_cap_observations_follow_the_lean_causal_hop_model() {
+        gents_lean_vocab::families::causal_hop_contracts_cap_observation::replay(|case| {
+            let hop = u32::try_from(case.hop).unwrap();
+            let observation = if case.visible {
+                RequestHopCapObservation::Visible(case.cap.map(|cap| u32::try_from(cap).unwrap()))
+            } else {
+                RequestHopCapObservation::Unavailable
+            };
+            let expected = observation.admit(hop);
+            let bound = observation.bound();
+            if hop > 0 {
+                assert_eq!(
+                    request_hop_within_bound(bound, hop),
+                    expected.unwrap_or(false),
+                    "{}",
+                    case.name
+                );
+            }
+            gents_lean_vocab::families::causal_hop_contracts_cap_observation::CapObservationOutput {
+                expected,
+                bound: bound.map(u64::from),
+            }
+        });
     }
 }

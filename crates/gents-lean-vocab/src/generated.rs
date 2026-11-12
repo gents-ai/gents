@@ -1913,17 +1913,6 @@ pub enum LeanCanonicalWriter {
     Tool { call: u64 },
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCapObservationCase {
-    pub name: String,
-    pub visible: bool,
-    pub cap: Option<u32>,
-    pub hop: u32,
-    pub expected_bound: Option<u32>,
-    pub expected: Option<bool>,
-}
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct LeanCaptureOrderCase {
     pub name: String,
@@ -3141,7 +3130,6 @@ pub struct LeanContractSnapshot {
     pub enrollment_renewal_intent_cases: Vec<LeanEnrollmentRenewalIntentCase>,
     pub agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub causal_hop_default_max_request_hop: Option<u32>,
-    pub causal_hop_cap_observation_cases: Vec<LeanCapObservationCase>,
     pub causal_hop_step_cases: Vec<LeanCausalHopStepCase>,
     pub causal_hop_chain_cases: Vec<LeanCausalHopChainCase>,
     pub causal_hop_call_cases: Vec<LeanCausalHopCallCase>,

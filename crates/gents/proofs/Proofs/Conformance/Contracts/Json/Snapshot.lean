@@ -1062,8 +1062,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"scope_template_cases\":" ++ scopeTemplateCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
-    ++ "\"causal_hop_cap_observation_cases\":"
-      ++ Conformance.CausalHopContracts.capObservationCasesJson ++ ","
     ++ "\"causal_hop_step_cases\":"
       ++ Conformance.CausalHopContracts.stepCasesJson ++ ","
     ++ "\"causal_hop_chain_cases\":"
