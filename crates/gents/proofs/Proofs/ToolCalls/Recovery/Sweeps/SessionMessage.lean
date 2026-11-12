@@ -201,4 +201,128 @@ theorem active_reason_differs_from_absent :
       show AssignmentHandoff.absent.toReason = "assignment_absent" from rfl] at h
   exact absurd h (by decide)
 
+/-- The terminal of the request a session-message row caused. -/
+inductive CausedTerminal where
+  | completed
+  | failed
+  | dead
+  | interrupted
+  | superseded
+  deriving DecidableEq, Repr
+
+def CausedTerminal.recoveryCause : CausedTerminal → ToolRecoveryCause
+  | .completed => .requestCompleted
+  | .failed => .requestFailed
+  | .dead => .requestDead
+  | .interrupted => .requestInterrupted
+  | .superseded => .requestSuperseded
+
+/-- The state a settled session-message row takes, which its completion
+notice names as its status. -/
+def CausedTerminal.settledState (terminal : CausedTerminal) : ToolCallState :=
+  terminal.recoveryCause.terminalState
+
+/-- What settlement reads of the caused session's assignment: no Goal bound
+to the caused request, a Goal it cannot read, or the bound Goal's durable
+status. -/
+inductive AssignmentObservation where
+  | absent
+  | unknown
+  | active
+  | paused
+  | blocked
+  | usageLimited
+  | budgetLimited
+  | complete
+  | stopped
+  deriving DecidableEq, Repr
+
+def AssignmentObservation.handoff : AssignmentObservation → AssignmentHandoff
+  | .absent => .absent
+  | .unknown => .unknown
+  | .complete => .complete
+  | .stopped => .stopped
+  | .active => .live "active"
+  | .paused => .live "paused"
+  | .blocked => .live "blocked"
+  | .usageLimited => .live "usage_limited"
+  | .budgetLimited => .live "budget_limited"
+
+/-- The `<reason>` a session-message settlement persists and its notice
+renders. Each constructor's wire name is the reason text. -/
+inductive SettlementReason where
+  | assignmentAbsent
+  | assignmentUnknown
+  | assignmentActive
+  | assignmentPaused
+  | assignmentBlocked
+  | assignmentUsageLimited
+  | assignmentBudgetLimited
+  | assignmentStopped
+  | requestFailed
+  | requestDead
+  | requestInterrupted
+  | requestSuperseded
+  deriving DecidableEq, Repr
+
+def SettlementReason.toReason : SettlementReason → String
+  | .assignmentAbsent => "assignment_absent"
+  | .assignmentUnknown => "assignment_unknown"
+  | .assignmentActive => "assignment_active"
+  | .assignmentPaused => "assignment_paused"
+  | .assignmentBlocked => "assignment_blocked"
+  | .assignmentUsageLimited => "assignment_usage_limited"
+  | .assignmentBudgetLimited => "assignment_budget_limited"
+  | .assignmentStopped => "assignment_stopped"
+  | .requestFailed => "request_failed"
+  | .requestDead => "request_dead"
+  | .requestInterrupted => "request_interrupted"
+  | .requestSuperseded => "request_superseded"
+
+/-- The reason a session-message settlement records. A completed turn hands
+off the assignment observation (`sessionMessageHandoffReason`), so a live,
+stopped, absent or unreadable assignment is never read as success and only a
+complete one is reasonless; any other terminal keeps its recovery cause's
+reason and the assignment is not consulted. -/
+def sessionMessageSettlementReason
+    (terminal : CausedTerminal) (assignment : AssignmentObservation) :
+    Option SettlementReason :=
+  match terminal, assignment with
+  | .completed, .absent => some .assignmentAbsent
+  | .completed, .unknown => some .assignmentUnknown
+  | .completed, .active => some .assignmentActive
+  | .completed, .paused => some .assignmentPaused
+  | .completed, .blocked => some .assignmentBlocked
+  | .completed, .usageLimited => some .assignmentUsageLimited
+  | .completed, .budgetLimited => some .assignmentBudgetLimited
+  | .completed, .stopped => some .assignmentStopped
+  | .completed, .complete => none
+  | .failed, _ => some .requestFailed
+  | .dead, _ => some .requestDead
+  | .interrupted, _ => some .requestInterrupted
+  | .superseded, _ => some .requestSuperseded
+
+theorem settlement_reason_is_handoff_or_terminal_reason
+    (terminal : CausedTerminal) (assignment : AssignmentObservation) :
+    (sessionMessageSettlementReason terminal assignment).map SettlementReason.toReason =
+      if terminal = .completed then sessionMessageHandoffReason true assignment.handoff
+      else terminal.recoveryCause.notificationReason := by
+  cases terminal <;> cases assignment <;> rfl
+
+theorem only_a_complete_assignment_is_reasonless
+    (terminal : CausedTerminal) (assignment : AssignmentObservation) :
+    sessionMessageSettlementReason terminal assignment = none ↔
+      terminal = .completed ∧ assignment = .complete := by
+  cases terminal <;> cases assignment <;> simp [sessionMessageSettlementReason]
+
+/-- A completed turn's reason never equals a failed turn's: the assignment
+and terminal vocabularies are disjoint. -/
+theorem completed_turn_reason_is_not_a_terminal_reason
+    (terminal : CausedTerminal) (assignment other : AssignmentObservation)
+    (h : terminal ≠ .completed) :
+    sessionMessageSettlementReason .completed assignment ≠
+      sessionMessageSettlementReason terminal other := by
+  cases terminal <;> cases assignment <;> cases other <;>
+    simp_all [sessionMessageSettlementReason]
+
 end Recovery

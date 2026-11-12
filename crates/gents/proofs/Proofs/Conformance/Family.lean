@@ -13,6 +13,7 @@ wire name: the name its `conformance_vocabulary` function gives it, or
 `wireName` of the constructor when it has none. -/
 inductive Schema where
   | bool
+  | option (item : Schema)
   | enum (name : String) (values : List (String × String))
   | struct (name : String) (fields : List (String × Schema))
 
@@ -34,6 +35,7 @@ def wireKey (declaration : Name) : String :=
 
 partial def Schema.wire : Schema → Json
   | .bool => "bool"
+  | .option item => Json.mkObj [("option", item.wire)]
   | .enum name values =>
       Json.mkObj [("enum", name), ("values", Json.arr (values.map (Json.str ·.2)).toArray)]
   | .struct name fields =>
@@ -42,6 +44,8 @@ partial def Schema.wire : Schema → Json
 
 /-- Rewrites derived `ToJson` output to wire names. -/
 partial def Schema.encode : Schema → Json → Json
+  | .option _, .null => .null
+  | .option item, value => item.encode value
   | .enum _ values, .str value => Json.str ((values.lookup value).getD value)
   | .struct _ fields, value =>
       Json.mkObj (fields.map fun (field, schema) =>
@@ -86,9 +90,11 @@ private def enumSchemaTerm (name : Name) (constructors : List Name) : MetaM (TSy
     `(($(quote constructor.getString!), $wire))
   `(Schema.enum $(quote name.getString!) [$values,*])
 
-private def schemaTerm (type : Expr) : MetaM (TSyntax `term) := do
+private partial def schemaTerm (type : Expr) : MetaM (TSyntax `term) := do
   let type ← whnfR type
   if type.isConstOf ``Bool then return ← `(Schema.bool)
+  if type.isAppOfArity ``Option 1 then
+    return ← `(Schema.option $(← schemaTerm type.appArg!))
   let (name, constructors) ← enumConstructors type
   enumSchemaTerm name constructors
 
