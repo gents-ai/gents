@@ -166,16 +166,6 @@ async fn workspace_agent_selection_binds_visible_physical_targets() -> anyhow::R
     let writer_binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let integrator_binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let creator = gents_store::identity::resolve_agent_identity(&runtime, &creator_binding)?;
-    let context =
-        defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
-    node.add_dac_policy_with_counter_as(
-        &context,
-        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-        0,
-    )
-    .await?;
-    node.add_collection_as(&context, gents_protocol::schemas::AGENT)
-        .await?;
     let admin =
         gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
     for permission in [
@@ -2369,19 +2359,6 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
         identity::Did::new(other.did())?,
         other.as_ref(),
     )?;
-    let context = defra_core::RequestContext::default().with_identity(Some(root.did().to_owned()));
-    node.add_dac_policy_with_counter_as(&context, &contract.policy_yaml, 0)
-        .await?;
-    let directive = format!(
-        "type RepositoryPlacement @policy(id: \"{}\", resource: \"configuration\")",
-        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-    );
-    let schema = gents_protocol::schemas::REPOSITORY_PLACEMENT.replacen(
-        "type RepositoryPlacement",
-        &directive,
-        1,
-    );
-    owner.add_collection(&schema).await?;
     let response = owner.write("test.callback.placement", &format!(
         "mutation {{create_RepositoryPlacement(input:{{node_did:\"{}\",repository_id:\"repo\",host_path:\"/tmp/repo\",enabled:true}}){{_docID}}}}",
         gents_store::graphql::escape_graphql_string(root.did()))).await?;
