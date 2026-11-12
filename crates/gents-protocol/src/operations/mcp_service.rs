@@ -2,8 +2,8 @@ use std::error::Error;
 
 use serde::{Deserialize, Serialize};
 
+use super::document::{DocumentDeleteError, DocumentOperationError};
 use super::NextCall;
-use super::document::DocumentOperationError;
 use super::StringUpdate;
 
 pub const RESOURCE: &str = "mcp-service";
@@ -83,6 +83,8 @@ pub enum McpServiceOperationError {
     },
     #[error(transparent)]
     Document(#[from] DocumentOperationError),
+    #[error(transparent)]
+    Delete(#[from] DocumentDeleteError),
 }
 
 impl McpServiceOperationError {
@@ -93,6 +95,7 @@ impl McpServiceOperationError {
                 verb: "register",
             },
             Self::Document(error) => error.recovery(RESOURCE),
+            Self::Delete(error) => error.recovery(RESOURCE),
         }
     }
 }

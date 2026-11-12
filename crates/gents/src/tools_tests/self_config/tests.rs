@@ -3658,19 +3658,27 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     .unwrap();
     let orphan = created["agent_did"].as_str().unwrap().to_owned();
 
-    let referenced = call_config_tool(
-        &tools,
-        vec![
-            "cleanup".into(),
-            "preview".into(),
-            "--target".into(),
-            "backend=orphan-backend".into(),
-        ],
+    let referenced: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec![
+                "cleanup".into(),
+                "preview".into(),
+                "--target".into(),
+                "backend=orphan-backend".into(),
+            ],
+        )
+        .await
+        .expect("a refused preview is an answer"),
     )
-    .await
-    .expect_err("cleanup must reject a retained profile's backend");
+    .unwrap();
+    assert_eq!(referenced["refusal"], "still_referenced", "{referenced}");
+    assert_eq!(referenced["committed"], false);
     assert!(
-        referenced.contains("references missing InferenceBackend"),
+        referenced["message"]
+            .as_str()
+            .unwrap()
+            .contains("references missing InferenceBackend"),
         "{referenced}"
     );
 
@@ -6402,12 +6410,14 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     )
     .await);
 
-    assert!(call_config_tool(
-        &tools,
-        command(&["cleanup", "preview", "--target", "agent-target=gatekeeper"]),
-    )
-    .await
-    .is_err());
+    assert_eq!(
+        ok(call_config_tool(
+            &tools,
+            command(&["cleanup", "preview", "--target", "agent-target=gatekeeper"]),
+        )
+        .await)["refusal"],
+        "still_referenced"
+    );
     let refused = call_config_tool(
         &tools,
         command(&["tools", "edit", "--set", r#"agents={"enabled":true}"#]),

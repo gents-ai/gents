@@ -20,6 +20,9 @@ Decisions (maintainer, 2026-11-11, #3654):
 * Registering an MCP service again changes its endpoint and nothing else: a
   disabled service stays disabled and its `send_node_did` choice stays.
 
+The delete itself is `DocumentOperations.deleteOutcome` in
+`Proofs.Documents.Operations`, the one delete every collection uses.
+
 Rust owner: `crates/gents-documents/src/operations.rs` and its modules.
 -/
 
@@ -113,51 +116,6 @@ def ownerResolution (ownerNamed : Bool) (owners : OwnerCount) : OwnerResolution 
 
 theorem several_owners_are_never_reached_unnamed :
     ownerResolution false .several = .refusedAmbiguous := rfl
-
-/-- What a delete call carries: nothing, or the digest a preview returned,
-which either still matches the stored content or no longer does. -/
-inductive Confirmation where
-  | absent
-  | current
-  | stale
-  deriving DecidableEq, Repr
-
-inductive DeleteOutcome where
-  | deleted
-  | refusedNeedsPreview
-  | refusedMissing
-  | refusedChanged
-  | refusedReferenced
-  deriving DecidableEq, Repr
-
-/-- One delete for every client. An Agent deletes only what it previewed; a
-digest anyone sends is checked; a document another document still selects is
-kept. -/
-def deleteOutcome (actor : Actor) (confirmation : Confirmation)
-    (stored referenced : Bool) : DeleteOutcome :=
-  if actor = .agent ∧ confirmation = .absent then .refusedNeedsPreview
-  else if !stored then .refusedMissing
-  else if confirmation = .stale then .refusedChanged
-  else if referenced then .refusedReferenced
-  else .deleted
-
-theorem agent_deletes_only_what_it_previewed (confirmation : Confirmation)
-    (stored referenced : Bool) :
-    deleteOutcome .agent confirmation stored referenced = .deleted →
-      confirmation = .current := by
-  cases confirmation <;> cases stored <;> cases referenced <;> decide
-
-theorem user_deletes_in_one_call :
-    deleteOutcome .user .absent true false = .deleted := rfl
-
-theorem delete_keeps_a_selected_document (actor : Actor) (confirmation : Confirmation)
-    (stored : Bool) :
-    deleteOutcome actor confirmation stored true ≠ .deleted := by
-  cases actor <;> cases confirmation <;> cases stored <;> decide
-
-theorem delete_checks_any_digest_sent (actor : Actor) (stored referenced : Bool) :
-    deleteOutcome actor .stale stored referenced ≠ .deleted := by
-  cases actor <;> cases stored <;> cases referenced <;> decide
 
 inductive ImportOutcome where
   | created

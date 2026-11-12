@@ -2,16 +2,15 @@ use std::path::{Path, PathBuf};
 
 use gents_protocol::document_query::{fields::skill as fields, Filter, Query, Selection};
 use gents_protocol::operations::document::{
-    DeleteReceipt, DocumentOperationError, DocumentReceipt, OperationActor, OwnerCount,
+    DocumentDeleteReceipt, DocumentOperationError, DocumentReceipt, OperationActor, OwnerCount,
     OwnerResolution, WriteMode,
 };
 use gents_protocol::operations::skill::{SkillImportOutcome, SkillOperationError};
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use serde_json::{json, Map, Value};
 
-use super::delete::{decide_owner, DocumentDelete};
 use super::write::{candidate_in_txn, publish_in_txn, DocumentWrite};
-use super::OperationFailure;
+use super::{decide_owner, OperationFailure};
 use crate::inference_backend::AdvertisedProfilePolicy;
 use crate::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::skills::import::load_skill_source;
@@ -344,7 +343,7 @@ pub async fn resolve_owner(
     }
 }
 
-/// Deletes one Skill of `owner`, or previews the delete.
+/// Deletes one Skill of `owner` through the one document delete.
 pub async fn delete(
     access: &ConfigAccess,
     actor: OperationActor,
@@ -352,21 +351,17 @@ pub async fn delete(
     skill_id: &str,
     digest: Option<&str>,
     policy: &dyn AdvertisedProfilePolicy,
-    commit: bool,
-) -> Result<DeleteReceipt, SkillFailure> {
-    let targets = [(SelfConfigTarget::Skill, skill_id.to_owned())];
+) -> Result<DocumentDeleteReceipt, SkillFailure> {
+    let targets = [(SelfConfigTarget::Skill.collection(), skill_id.to_owned())];
     super::delete::delete(
         access,
         "operations.skill.delete",
-        &DocumentDelete {
-            actor,
-            owner,
-            targets: &targets,
-            digest,
-        },
+        owner,
+        &targets,
+        actor,
+        digest,
         policy,
-        commit,
     )
     .await
-    .map_err(|failure| failure.map(|error| SkillOperationError::Document(error.into())))
+    .map_err(|error| OperationFailure::Operation(SkillOperationError::Delete(error)))
 }

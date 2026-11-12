@@ -287,10 +287,10 @@ impl ConfigReferences {
         references_of(collection, value, &self.node_did)
     }
 
-    /// The first retained document that still selects one of `removed`.
-    pub fn retained_reference_to(
+    /// The first retained document that requires one of `removed`.
+    pub fn referrer_of_removed(
         &self,
-        removed: &[(Collection, String)],
+        removed: &BTreeSet<(Collection, String)>,
     ) -> Result<Option<MissingReference>> {
         for ((collection, id), document) in &self.documents {
             if removed.contains(&(*collection, id.clone())) {

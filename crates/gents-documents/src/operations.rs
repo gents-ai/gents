@@ -10,6 +10,7 @@ pub mod mcp_service;
 pub mod skill;
 pub mod write;
 
+use gents_protocol::operations::document::{OwnerCount, OwnerResolution};
 use gents_store::config_client::{ConfigClientError, TransactionFailure};
 
 /// A handler failure inside a transaction: the operation's own refusal, or
@@ -59,5 +60,17 @@ impl<E> TransactionFailure for OperationFailure<E> {
             Self::Operation(_) => None,
             Self::Other(error) => error.config_client_error(),
         }
+    }
+}
+
+/// Lean `DocumentOperations.ownerResolution`.
+pub fn decide_owner(owner_named: bool, owners: OwnerCount) -> OwnerResolution {
+    if owner_named {
+        return OwnerResolution::Named;
+    }
+    match owners {
+        OwnerCount::None => OwnerResolution::RefusedMissing,
+        OwnerCount::One => OwnerResolution::Sole,
+        OwnerCount::Several => OwnerResolution::RefusedAmbiguous,
     }
 }

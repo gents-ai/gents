@@ -35,7 +35,11 @@ impl ConfigCommandTool {
                 format!("{resource}={id}"),
             ];
             cleanup.extend_from_slice(&args[1..]);
-            let mut receipt: Value = serde_json::from_str(&self.cleanup(&cleanup).await?)?;
+            let answer = self.cleanup(&cleanup).await?;
+            let mut receipt: Value = serde_json::from_str(&answer)?;
+            if receipt["admitted"] == json!(false) {
+                return Ok(Some(answer));
+            }
             receipt["operation"] = json!(if preview { "preview delete" } else { "delete" });
             if preview {
                 receipt["effect"] = json!("No documents changed. Use the returned delete call; it rechecks content and references before committing.");

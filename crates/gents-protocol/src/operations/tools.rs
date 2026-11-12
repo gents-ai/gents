@@ -3,8 +3,8 @@ use std::error::Error;
 
 use serde::{Deserialize, Serialize};
 
+use super::document::{DocumentDeleteError, DocumentOperationError, DocumentPatch, WriteMode};
 use super::NextCall;
-use super::document::{DocumentOperationError, DocumentPatch, WriteMode};
 
 pub const RESOURCE: &str = "tools";
 
@@ -81,6 +81,8 @@ pub enum ToolsOperationError {
     PluginNotInstalled { plugin: String, reason: String },
     #[error(transparent)]
     Document(#[from] DocumentOperationError),
+    #[error(transparent)]
+    Delete(#[from] DocumentDeleteError),
 }
 
 impl ToolsOperationError {
@@ -96,6 +98,7 @@ impl ToolsOperationError {
             }
             Self::PluginNotInstalled { .. } => NextCall::List { resource: "pack" },
             Self::Document(error) => error.recovery(RESOURCE),
+            Self::Delete(error) => error.recovery(RESOURCE),
         }
     }
 
@@ -109,7 +112,7 @@ impl ToolsOperationError {
             Self::LosesOwnControl { .. } => Some(ToolsSaveOutcome::RefusedLosesOwnControl),
             Self::DropsSettings { .. } => Some(ToolsSaveOutcome::RefusedDropsSettings),
             Self::PluginNotInstalled { .. } => Some(ToolsSaveOutcome::RefusedPluginNotInstalled),
-            Self::Document(_) => None,
+            Self::Document(_) | Self::Delete(_) => None,
         }
     }
 }

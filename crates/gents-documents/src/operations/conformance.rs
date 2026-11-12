@@ -2,7 +2,7 @@ use gents_lean_vocab::families;
 use gents_protocol::operations::document::{FieldAfter, FieldUpdate};
 use serde_json::{json, Map, Value};
 
-use super::delete::{decide_delete, decide_owner};
+use super::decide_owner;
 use super::mcp_service::{
     defaults_path, enabled_after_register, endpoint_storage, send_node_did_after_register,
 };
@@ -40,13 +40,6 @@ fn write_admission_matches_lean() {
 fn owner_resolution_matches_lean() {
     families::document_operations_owner_resolution::replay(|i| {
         decide_owner(i.owner_named, i.owners)
-    });
-}
-
-#[test]
-fn delete_admission_matches_lean() {
-    families::document_operations_delete_outcome::replay(|i| {
-        decide_delete(i.actor, i.confirmation, i.stored, i.referenced)
     });
 }
 

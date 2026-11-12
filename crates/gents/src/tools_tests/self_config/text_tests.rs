@@ -806,11 +806,17 @@ async fn crud_documents_share_verbs_and_preserve_reference_and_identity_checks()
         json!({"argv":["profile","update"],"target_id":id,"set":{"sampling_id":"selected"}}),
     )
     .await;
-    let refused_delete = refused(
+    let refused_delete = ok(
         &tools,
         json!({"argv":["sampling","preview","delete","selected"]}),
     )
     .await;
+    assert_eq!(refused_delete["refusal"], "still_referenced");
+    assert_eq!(
+        refused_delete["next_call"],
+        json!({"argv":["profile","get"],"target_id":id})
+    );
+    let refused_delete = refused_delete["message"].as_str().unwrap().to_owned();
     assert!(
         refused_delete.contains("Deletion would leave a broken reference"),
         "{refused_delete}"
@@ -956,11 +962,9 @@ async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
     assert!(!message.contains("\"plan\""), "{failure}");
     assert!(message.contains("separate Trigger"), "{failure}");
     ok(&tools, failure["recovery"]["next_call"].clone()).await;
-    assert!(
-        refused(&tools, json!({"argv":["task","preview","delete","job"]}))
-            .await
-            .contains("job")
-    );
+    let referenced = ok(&tools, json!({"argv":["task","preview","delete","job"]})).await;
+    assert_eq!(referenced["refusal"], "still_referenced", "{referenced}");
+    assert!(referenced["message"].as_str().unwrap().contains("job"));
     for (resource, id) in [
         ("trigger", "tick"),
         ("task", "job"),
@@ -2112,9 +2116,9 @@ async fn ux_preview_tools(label: &str, home: &std::path::Path) -> (SelfConfigFix
     grants.agent_did = fixture.agent_did().to_owned();
     let tools = fixture.tools_with_plugins(
         &grants,
-        std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-            home.to_owned(),
-        ))),
+        std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+            Some(home.to_owned()),
+        )),
     );
     (fixture, tools)
 }
