@@ -1489,7 +1489,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         active_rx.borrow().generation,
         apply_failed.post_active_generation as u64
     );
-    let failed_status = fetch_runtime_status(&node, node_did).await;
+    let failed_status = await_settled_runtime_status(&node, node_did).await;
     assert_eq!(
         failed_status.reconcile_phase,
         apply_failed.post_phase.as_str()
