@@ -1,15 +1,17 @@
 use anyhow::{Context, Result};
-use gents_protocol::client_protocol::RequestLifecycleState;
+use gents_protocol::operations::request::{
+    DeliveryChoice, MessageSendInput, ReissueKind, RequestReissueInput,
+};
 use gents_protocol::request_input::RequestInput;
 use gents_store::config_client::ConfigAccess;
 use serde_json::json;
 
 use crate::cli::args::{RequestCommand, RequestResendArgs, RequestSubmitArgs};
-use crate::request_helpers::{fetch_request_view, parse_valid_until_flag, RequestOutputEnvelope};
-use crate::{
-    create_agent_request, print_json, resolve_request_content, resolve_request_id,
-    wait_for_terminal_response, write_json_output_file, RequestSubmitOptions,
+use crate::operation_failure::OperationFailure;
+use crate::request_helpers::{
+    client_signer, parse_valid_until_flag, request_ref, wait_for_request, RequestOutputEnvelope,
 };
+use crate::{print_json, resolve_request_content, resolve_request_id, write_json_output_file};
 use gents_service::home_state::resolve_graphql_endpoint;
 use gents_service::home_state::resolve_node_did;
 
@@ -55,15 +57,43 @@ fn wait_result(
     Ok(serde_json::Value::Object(object))
 }
 
+struct Report<'a> {
+    no_wait: bool,
+    timeout_secs: u64,
+    poll_secs: u64,
+    output_file: Option<&'a std::path::Path>,
+}
+
+async fn report(
+    access: &ConfigAccess,
+    node_did: &str,
+    request_id: &str,
+    request_summary: serde_json::Value,
+    how: Report<'_>,
+) -> Result<()> {
+    let result = if how.no_wait {
+        request_summary
+    } else {
+        let request = request_ref(node_did, request_id);
+        let envelope =
+            wait_for_request(access, request, how.timeout_secs, how.poll_secs, || async {
+                Ok(false)
+            })
+            .await?;
+        wait_result(request_summary, &envelope)?
+    };
+    print_json(&result)?;
+    if let Some(path) = how.output_file {
+        write_json_output_file(path, &result)?;
+    }
+    Ok(())
+}
+
 async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let valid_until = parse_valid_until_flag(args.valid_until.as_deref())?;
-    let session_id = args
-        .session_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let input = args
         .input
         .as_deref()
@@ -71,140 +101,86 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         .transpose()
         .context("--input must be canonical RequestInput JSON")?
         .unwrap_or_default();
-    let input = gents_session::request::lifecycle::prepare_user_message_input(
-        &ConfigAccess::Graphql(graphql.clone()),
-        &node_did,
-        &session_id,
-        input,
-        gents_protocol::request_input::QueueDelivery::Steer,
-    )
-    .await?;
-    let submitted = create_agent_request(
-        &graphql,
-        &node_did,
-        &content,
-        Some(&session_id),
-        args.agent_did.as_deref(),
-        RequestSubmitOptions {
-            input: Some(input),
+    let access = ConfigAccess::Graphql(graphql);
+    let signer = client_signer(&access)?;
+    let receipt = gents::operations::request::send(
+        &access,
+        &signer,
+        MessageSendInput {
+            node_did: node_did.clone(),
+            session_id: args.session_id.clone(),
+            agent_did: args.agent_did.clone(),
+            content,
+            input,
+            delivery: DeliveryChoice::steer_when(args.steer),
             valid_until,
             ..Default::default()
         },
     )
-    .await?;
+    .await
+    .map_err(OperationFailure::from)?;
     let request_summary = json!({
-        "request_id": submitted.request_id,
-        "session_id": submitted.session_id,
-        "node_did": submitted.node_did,
-        "agent_did": submitted.agent_did,
-        "input": submitted.input,
+        "request_id": receipt.request_id,
+        "session_id": receipt.session_id,
+        "node_did": receipt.node_did,
+        "agent_did": receipt.agent_did,
+        "input": receipt.input,
     });
-    if args.no_wait {
-        print_json(&request_summary)?;
-        if let Some(path) = args.output_file.as_deref() {
-            write_json_output_file(path, &request_summary)?;
-        }
-        return Ok(());
-    }
-
-    let response = wait_for_terminal_response(
-        &graphql,
-        &submitted.request_id,
-        args.timeout_secs,
-        args.poll_secs,
+    report(
+        &access,
+        &receipt.node_did,
+        &receipt.request_id,
+        request_summary,
+        Report {
+            no_wait: args.no_wait,
+            timeout_secs: args.timeout_secs,
+            poll_secs: args.poll_secs,
+            output_file: args.output_file.as_deref(),
+        },
     )
     .await
-    .with_context(|| {
-        format!(
-            "waiting for request {} to reach a terminal lifecycle state",
-            submitted.request_id
-        )
-    })?;
-    let result = wait_result(request_summary, &response)?;
-    print_json(&result)?;
-    if let Some(path) = args.output_file.as_deref() {
-        write_json_output_file(path, &result)?;
-    }
-    Ok(())
 }
 
 async fn request_resend(args: RequestResendArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let stale_id = resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
-    let stale = fetch_request_view(&graphql, &stale_id).await?;
-    if stale.lifecycle_state != Some(RequestLifecycleState::Dead)
-        || stale.failure_reason.as_deref() != Some("Stale")
-    {
-        anyhow::bail!(
-            "request {stale_id} is not a stale terminal (lifecycle_state={}, failure_reason={}); resend is only valid for stale-dead requests",
-            stale.lifecycle_state.map_or("<missing>", RequestLifecycleState::as_str),
-            stale.failure_reason.as_deref().unwrap_or("<missing>")
-        );
-    }
-    let stale_node_did = stale
-        .node_did
-        .as_deref()
-        .context("stale request has no node_did")?;
-    let stale_content = stale
-        .content
-        .as_deref()
-        .context("stale request has no content")?;
-    let stale_doc_id = stale
-        .doc_id
-        .as_deref()
-        .context("stale request has no _docID")?;
-    let valid_until = Some(chrono::Utc::now() + chrono::Duration::minutes(5));
-    let submitted = create_agent_request(
-        &graphql,
-        stale_node_did,
-        stale_content,
-        None,
-        stale.agent_did.as_deref(),
-        RequestSubmitOptions {
-            caused_by_source_doc_id: None,
-            input: stale.input.as_ref().map(RequestInput::for_fresh_session),
-            valid_until,
-            retry_parent_request: Some(stale_id.clone()),
-            retry_parent_request_doc_id: Some(stale_doc_id.to_string()),
-            retry_root_request: stale.retry_root_request.clone(),
-            retry_key: None,
+    let access = ConfigAccess::Graphql(graphql);
+    let signer = client_signer(&access)?;
+    let receipt = gents_session::operations::request::reissue(
+        &access,
+        &signer,
+        RequestReissueInput {
+            kind: ReissueKind::Resend,
+            parent: request_ref(&node_did, &stale_id),
+            request_id: None,
         },
     )
-    .await?;
+    .await
+    .map_err(OperationFailure::from)?;
     let request_summary = json!({
-        "request_id": submitted.request_id,
-        "session_id": submitted.session_id,
-        "node_did": submitted.node_did,
-        "agent_did": submitted.agent_did,
-        "retry_parent_request": stale_id,
-        "retry_root_request": stale.retry_root_request,
+        "request_id": receipt.request_id,
+        "session_id": receipt.session_id,
+        "node_did": receipt.node_did,
+        "agent_did": receipt.agent_did,
+        "retry_parent_request": receipt.retry_parent_request,
+        "retry_root_request": receipt.retry_root_request,
+        "retry_count": receipt.retry_count,
+        "max_retries": receipt.max_retries,
     });
-    if args.no_wait {
-        print_json(&request_summary)?;
-        if let Some(path) = args.output_file.as_deref() {
-            write_json_output_file(path, &request_summary)?;
-        }
-        return Ok(());
-    }
-    let response = wait_for_terminal_response(
-        &graphql,
-        &submitted.request_id,
-        args.timeout_secs,
-        args.poll_secs,
+    report(
+        &access,
+        &receipt.node_did,
+        &receipt.request_id,
+        request_summary,
+        Report {
+            no_wait: args.no_wait,
+            timeout_secs: args.timeout_secs,
+            poll_secs: args.poll_secs,
+            output_file: args.output_file.as_deref(),
+        },
     )
     .await
-    .with_context(|| {
-        format!(
-            "waiting for request {} to reach a terminal lifecycle state",
-            submitted.request_id
-        )
-    })?;
-    let result = wait_result(request_summary, &response)?;
-    print_json(&result)?;
-    if let Some(path) = args.output_file.as_deref() {
-        write_json_output_file(path, &result)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

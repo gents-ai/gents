@@ -83,10 +83,10 @@ pub(super) fn recent_runs_for_task_views(
     })
 }
 
-pub(crate) use gents_desktop_core::client::SessionOrderKey as SessionSummaryOrderKey;
-
-pub(crate) fn session_summary_order_key(summary: &SessionSummary) -> SessionSummaryOrderKey {
-    gents_desktop_core::client::session_order_key(
+pub(crate) fn session_summary_order_key(
+    summary: &SessionSummary,
+) -> gents_protocol::operations::session::SessionOrderKey {
+    gents_protocol::operations::session::session_order_key(
         summary.updated_at.as_deref(),
         summary.created_at.as_deref(),
         &summary.session_id,

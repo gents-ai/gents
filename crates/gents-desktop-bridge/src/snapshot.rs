@@ -202,9 +202,7 @@ mod task_lineage;
 #[cfg(test)]
 use runtime_tasks::{recent_runs_for_task_views, task_run_histories};
 use runtime_tasks::{request_matches_node, source_matches_node};
-pub(crate) use runtime_tasks::{
-    session_summaries, session_summary_order_key, SessionSummaryOrderKey,
-};
+pub(crate) use runtime_tasks::{session_summaries, session_summary_order_key};
 
 #[path = "snapshot/runtime.rs"]
 mod runtime;

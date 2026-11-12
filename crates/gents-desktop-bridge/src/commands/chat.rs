@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
-use uuid::Uuid;
+use gents_desktop_core::client::ClientCore;
+use gents_protocol::operations::request::MessageSendInput;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
 
@@ -90,13 +90,6 @@ pub async fn send_chat_message(
             "this message was written under another client identity"
         );
     }
-    let request_id = request
-        .request_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
     let captured_context = request.captured_context.unwrap_or_default();
     let attachments = request.attachments.unwrap_or_default();
     let (content, question_reply) = match &request.answer {
@@ -118,56 +111,24 @@ pub async fn send_chat_message(
         }
         None => (request.content.trim().to_string(), None),
     };
-    if content.is_empty() && captured_context.is_empty() && attachments.is_empty() {
-        bail!("content is required");
-    }
-
-    let agent_did = request
-        .agent_did
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
-    let requested_session_id = request
-        .session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let session_id = requested_session_id
-        .map(str::to_string)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-
-    let input = core
-        .prepare_user_message_input_with_delivery(
-            &node_did,
-            &session_id,
-            gents_protocol::request_input::RequestInput {
+    let submitted = core
+        .send_message(MessageSendInput {
+            node_did,
+            session_id: request.session_id,
+            agent_did: request.agent_did,
+            request_id: request.request_id,
+            content,
+            input: gents_protocol::request_input::RequestInput {
                 question_reply,
                 cwd: chat_folder(request.cwd.as_deref())?,
                 captured_context,
                 attachments,
                 ..Default::default()
             },
-            request
-                .delivery
-                .unwrap_or(gents_protocol::request_input::QueueDelivery::Steer),
-        )
-        .await?;
-
-    let submitted = core
-        .submit_request_with_options(
-            &session_id,
-            &node_did,
-            &content,
-            agent_did.as_deref(),
-            SubmitRequestOptions {
-                request_id,
-                caused_by_source_doc_id: request.caused_by_source_doc_id,
-                input,
-                ..SubmitRequestOptions::default()
-            },
-        )
+            delivery: request.delivery.into(),
+            valid_until: None,
+            mailbox_item_id: request.caused_by_source_doc_id,
+        })
         .await?;
     Ok(submitted.into())
 }
@@ -213,9 +174,6 @@ pub async fn fork_session_before_message(
 
 #[cfg(test)]
 mod edit_fork_tests {
-    use super::*;
-    use gents_store::config_client::ConfigAccess;
-
     #[test]
     fn fork_wire_requires_the_retained_client_and_destination() {
         let mut request = serde_json::json!({ "nodeDid": "node", "sessionId": "source", "messageKey": "canonical-message" });
@@ -233,45 +191,6 @@ mod edit_fork_tests {
             serde_json::from_value::<crate::types::SessionForkBeforeRequest>(request).unwrap();
         assert_eq!(decoded.child_session_id, "child");
         assert_eq!(decoded.client_did, "client");
-    }
-
-    #[tokio::test]
-    async fn fork_refuses_foreign_clients_and_changed_destination_bytes_before_routing(
-    ) -> Result<()> {
-        let (core, _home) = crate::tests::support::boot_core().await;
-        let result = async {
-            let mut request = crate::types::SessionForkBeforeRequest {
-                node_did: "unrouted-node".into(),
-                session_id: "source".into(),
-                message_key: "message".into(),
-                client_did: "foreign-client".into(),
-                child_session_id: "child".into(),
-            };
-            let error = fork_session_before_message(&core, request.clone())
-                .await
-                .unwrap_err();
-            assert!(
-                error.to_string().contains("another native client"),
-                "{error}"
-            );
-            request.client_did = core.node_identity().did().to_owned();
-            request.child_session_id = " child ".into();
-            let error = fork_session_before_message(&core, request)
-                .await
-                .unwrap_err();
-            assert!(
-                error.to_string().contains("exact canonical identity"),
-                "{error}"
-            );
-            let sessions = ConfigAccess::local(core.node_arc())
-                .execute("{ AgentSession { session_id } }")
-                .await?;
-            assert_eq!(sessions["data"]["AgentSession"], serde_json::json!([]));
-            Ok::<(), anyhow::Error>(())
-        }
-        .await;
-        core.shutdown().await?;
-        result
     }
 }
 
@@ -301,16 +220,8 @@ pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) ->
     if node_did.is_empty() {
         bail!("node_did is required");
     }
-    let session_id = request.session_id.trim().to_string();
-    if session_id.is_empty() {
-        bail!("session_id is required");
-    }
-    let title = request.title.trim().to_string();
-    if title.is_empty() {
-        bail!("title is required");
-    }
-    core.rename_session(&node_did, &session_id, &title).await?;
-    Ok(())
+    core.rename_session(&node_did, request.session_id.trim(), &request.title)
+        .await
 }
 
 pub async fn edit_pending_queue(

@@ -1,16 +1,19 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{bail, Context, Result};
 use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use gents_protocol::mailbox_question::{
     question_requires_reply_receipt, question_source_hash, MailboxQuestion, MailboxQuestionAnswer,
     MailboxQuestionReply,
 };
+use gents_protocol::operations::request::{MessageSendInput, RequestReceipt};
 use gents_protocol::request_input::RequestInput;
-use gents_session::session::mailbox::{MailboxItem, MailboxStatus, MAILBOX_FIELDS};
-use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_session::session::mailbox::{MailboxItem, MAILBOX_FIELDS};
+use gents_store::config_client::ConfigAccess;
 
 use crate::cli::args::{MailboxCommand, MailboxItemArgs, MailboxListArgs, MailboxReplyArgs};
 use crate::cli::output_format::OutputFormat;
-use crate::{print_json, resolve_config_access, SubmittedRequest};
+use crate::operation_failure::OperationFailure;
+use crate::request_helpers::client_signer;
+use crate::{print_json, resolve_config_access};
 
 pub(crate) async fn dispatch(command: MailboxCommand) -> Result<()> {
     match command {
@@ -30,11 +33,11 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
         args.item.access.graphql.as_deref(),
         home,
     )?;
-    let access = ConfigAccess::Graphql(graphql.clone());
+    let access = ConfigAccess::Graphql(graphql);
     let item = load_item(&access, &args.item.doc_id)
         .await?
         .context("MailboxItem not found")?;
-    let submitted = reply_to(&graphql, &item, Reply::Text(args.message)).await?;
+    let submitted = reply_to(&access, &item, Reply::Text(args.message)).await?;
     print_json(&serde_json::json!({
         "request_id": submitted.request_id,
         "request_doc_id": submitted.request_doc_id,
@@ -100,44 +103,41 @@ pub(crate) fn needs_answer(item: &MailboxItem) -> bool {
             .is_some_and(question_requires_reply_receipt)
 }
 
-/// Replies as a request caused by the item, on its session and to its agent.
+/// Replies as a request caused by the item, on its session and to its agent. The
+/// request owner refuses an item that cannot cause it.
 pub(crate) async fn reply_to(
-    graphql: &GraphqlEndpoint,
+    access: &ConfigAccess,
     item: &MailboxItem,
     reply: Reply,
-) -> Result<SubmittedRequest> {
-    ensure!(
-        item.parsed_status() == Some(MailboxStatus::Open),
-        "MailboxItem is no longer open"
-    );
-    ensure!(
-        item.parsed_action() == Some(MailboxAction::StartRequest),
-        "MailboxItem does not accept request replies"
-    );
+) -> Result<RequestReceipt> {
     let (content, input) = match reply {
-        Reply::Text(text) => (text, None),
+        Reply::Text(text) => (text, RequestInput::default()),
         Reply::Answer(answer) => {
             let (content, question_reply) = question_reply(item, &answer)?;
             let input = RequestInput {
                 question_reply,
                 ..Default::default()
             };
-            (content, Some(input))
+            (content, input)
         }
     };
-    crate::create_agent_request(
-        graphql,
-        &item.target_node_did,
-        &content,
-        item.session_id.as_deref(),
-        Some(&item.target_agent_did),
-        crate::RequestSubmitOptions {
-            caused_by_source_doc_id: Some(item.doc_id.clone()),
+    let signer = client_signer(access)?;
+    let receipt = gents::operations::request::send(
+        access,
+        &signer,
+        MessageSendInput {
+            node_did: item.target_node_did.clone(),
+            session_id: item.session_id.clone(),
+            agent_did: Some(item.target_agent_did.clone()),
+            content,
             input,
+            mailbox_item_id: Some(item.doc_id.clone()),
             ..Default::default()
         },
     )
     .await
+    .map_err(OperationFailure::from)?;
+    Ok(receipt)
 }
 
 pub(crate) async fn load_item(access: &ConfigAccess, doc_id: &str) -> Result<Option<MailboxItem>> {

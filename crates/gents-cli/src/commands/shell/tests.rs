@@ -1643,8 +1643,8 @@ async fn a_first_send_starts_a_session_then_a_turn() {
     let queue = input.queue.expect("a user message is queued");
     assert_eq!(
         queue.delivery,
-        gents_protocol::request_input::QueueDelivery::Steer,
-        "it steers a running turn, as the desktop's does"
+        gents_protocol::request_input::QueueDelivery::Queue,
+        "it queues after a running turn: the shell has no steer choice"
     );
     node.text(&request, 0, MessageRole::User, "hello").await;
     let said = item(&session, line("hello", Tone::You, "m0"));
@@ -1754,7 +1754,10 @@ async fn a_refused_send_becomes_a_start_failure_in_the_owners_words() {
     // A failure the tab is told of, so it stops showing the turn as running.
     let refused = Update::StartFailed {
         tab: 3,
-        message: "request agent is disabled".to_string(),
+        message: format!(
+            "agent {} is not one enabled Agent of node {OWNER}\nNext: gents config agent list",
+            did("a")
+        ),
     };
     let read = shell
         .until(|update| matches!(update, Update::StartFailed { .. }))
@@ -2057,24 +2060,10 @@ async fn a_refused_goal_shows_the_owners_reason() {
     let Some(Update::StartFailed { tab: 7, message }) = told.last() else {
         panic!("{told:?}");
     };
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let options = crate::RequestSubmitOptions {
-        retry_key: Some(format!("goal-request:{request_id}")),
-        ..Default::default()
-    };
     let agent = did("a");
-    let work = &on.work;
-    let prepared = crate::prepare_agent_request_with_input(
-        &work.endpoint,
-        OWNER,
-        "ship more",
-        Some("s1"),
-        Some(agent.as_str()),
-        Some(request_id),
-        options,
-    );
-    let create = prepared.await.unwrap().create;
-    let access = work.access();
+    let access = on.work.access();
+    let create = source::goal_request(&access, OWNER, "s1", &agent, "ship more");
+    let create = create.await.unwrap();
     let owner = gents_automation::goal::submit_goal_backed_request(
         &access,
         OWNER,
@@ -3214,6 +3203,7 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
     let elsewhere = closed.clone();
     let fake = with_mailbox(move |query| {
         let mut item = mailbox_item("i1", "s1", "ask", "start_request", OWNER, 1);
+        item["target_agent_did"] = json!(did("a"));
         if elsewhere.load(std::sync::atomic::Ordering::SeqCst) {
             item["status"] = json!("acted");
         }
@@ -3237,7 +3227,11 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
         text: "ship it".to_string(),
     });
 
-    let closed = Update::Notice("MailboxItem is no longer open".to_string());
+    let closed = Update::Notice(
+        "mailbox item i1 cannot cause this message: the item is no longer open\n\
+         Next: gents automation mailbox list"
+            .to_string(),
+    );
     assert_eq!(
         shell.until(is_prompts).await,
         [closed, prompts("s1", Vec::new())]

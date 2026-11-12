@@ -31,6 +31,7 @@ mod config_writes;
 mod desired_state;
 mod graphql_access;
 mod interactive_backend;
+mod operation_failure;
 pub mod packs;
 mod request_helpers;
 mod resolve_helpers;
@@ -340,6 +341,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                     store_key_custody: cli.store_key_custody,
                     agent: cli.agent,
                     print: cli.print,
+                    steer: cli.steer,
                     prompt: cli.prompt,
                     continue_session: cli.continue_session,
                     yolo: cli.yolo,

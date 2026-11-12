@@ -102,6 +102,9 @@ pub(crate) struct Cli {
     /// Send MESSAGE to the agent, print its reply and exit, without opening an interface.
     #[arg(short = 'p', long = "print", value_name = "MESSAGE", value_parser = parse_message)]
     pub(crate) print: Option<String>,
+    /// Steer the running turn instead of queueing after it
+    #[arg(long, requires = "print")]
+    pub(crate) steer: bool,
     /// Use the yolo agent: a general-purpose agent with The Engineer's tools, made on first use.
     #[arg(long, conflicts_with = "agent")]
     pub(crate) yolo: bool,

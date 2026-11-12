@@ -75,21 +75,6 @@ fn normalize_pending_edit_skills(edit: &mut gents_session::request::lifecycle::P
 }
 
 impl ClientCore {
-    pub async fn prepare_user_message_input(
-        &self,
-        node_did: &str,
-        session_id: &str,
-        input: gents_protocol::request_input::RequestInput,
-    ) -> Result<gents_protocol::request_input::RequestInput> {
-        self.prepare_user_message_input_with_delivery(
-            node_did,
-            session_id,
-            input,
-            gents_protocol::request_input::QueueDelivery::Steer,
-        )
-        .await
-    }
-
     pub async fn prepare_user_message_input_with_delivery(
         &self,
         node_did: &str,

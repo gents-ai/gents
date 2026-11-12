@@ -198,7 +198,10 @@ impl BridgeError {
         if gents_store::graphql::is_storage_full(error.as_ref()) {
             return Self::storage_full();
         }
-        if let Some(classified) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {
+        if let Some(classified) = error
+            .downcast_ref::<Self>()
+            .or_else(|| error.chain().find_map(|cause| cause.downcast_ref::<Self>()))
+        {
             return classified.clone();
         }
         if gents_store::config_client::TransactionFailure::permission_denied(&error) {
@@ -344,6 +347,47 @@ pub fn request_operation_failure(
         Ok(cause) => anyhow::Error::new(OperationCause(cause)),
         Err(error @ E::Unconfirmed { .. }) => anyhow::Error::new(error),
         Err(error) => anyhow::Error::new(error).context(bridge),
+    }
+}
+
+/// A refused or failed session operation with its code and next call carried
+/// to the UI.
+pub fn session_operation_failure(
+    error: gents_protocol::operations::session::SessionOperationError,
+) -> anyhow::Error {
+    use gents_protocol::operations::session::SessionOperationError as E;
+    let code = match &error {
+        E::NotFound { .. } => BridgeErrorCode::NotFound,
+        E::FieldRequired(_)
+        | E::Ambiguous { .. }
+        | E::RequesterMissing { .. }
+        | E::RevisionOutOfRange { .. }
+        | E::ForkSourceBusy { .. }
+        | E::ForkTurnOutOfRange { .. }
+        | E::ForkMessageNotEditable { .. }
+        | E::ForkChildNotCanonical { .. }
+        | E::ForkClientMismatch { .. }
+        | E::CrossAgentForkUnavailable
+        | E::AgentUnavailable { .. }
+        | E::ResumeBlocked { .. } => BridgeErrorCode::InvalidArgument,
+        E::RequesterMismatch { .. } => BridgeErrorCode::SessionNotOwned,
+        E::IdentityRequired => BridgeErrorCode::PermissionDenied,
+        E::RemoteNodeUnsupported { .. } => BridgeErrorCode::Unsupported,
+        E::InvalidDocument { .. }
+        | E::ForkRelationshipsIncomplete { .. }
+        | E::ForkRecoveryIntentRequired { .. }
+        | E::ProcessOwnershipUnverifiable { .. }
+        | E::Passthrough(_) => BridgeErrorCode::Unknown,
+    };
+    let bridge = BridgeError::operation(
+        code,
+        error.code(),
+        gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        error.next_call(),
+    );
+    match error {
+        E::Passthrough(cause) => anyhow::Error::new(OperationCause(cause)),
+        error => anyhow::Error::new(error).context(bridge),
     }
 }
 
