@@ -172,7 +172,7 @@ structure JoinInput where
   physicalBindingCurrent : Bool
   branchFieldsExact : Bool
   pendingDeadlineAbsent : Bool
-  ownPhysical : String
+  worldOwnPhysical : String
   activeNormal : Bool
   deriving ToJson
 
@@ -263,7 +263,7 @@ private def JoinInput.ofCase (c : Case) : JoinInput :=
     physicalBindingCurrent := c.row.physicalBindingCurrent
     branchFieldsExact := c.row.branchFieldsExact
     pendingDeadlineAbsent := c.row.pendingDeadlineAbsent
-    ownPhysical := c.ownPhysical, activeNormal := c.activeNormal }
+    worldOwnPhysical := c.ownPhysical, activeNormal := c.activeNormal }
 
 private def JoinInput.toCase (i : JoinInput) : Case :=
   { name := i.name, available := i.observationAvailable
@@ -280,7 +280,7 @@ private def JoinInput.toCase (i : JoinInput) : Case :=
         physicalBindingCurrent := i.physicalBindingCurrent
         branchFieldsExact := i.branchFieldsExact
         pendingDeadlineAbsent := i.pendingDeadlineAbsent }
-    ownPhysical := i.ownPhysical, activeNormal := i.activeNormal }
+    ownPhysical := i.worldOwnPhysical, activeNormal := i.activeNormal }
 
 example : cases.all (fun c => observe (JoinInput.toCase (JoinInput.ofCase c)) == observe c) = true := by
   native_decide
