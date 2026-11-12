@@ -60,29 +60,126 @@ theorem admission_regressions :
       [true, true, false, false, false, false, false, false, false, false, false,
        true, false, false, true, true] := by native_decide
 
-private def render (item : String × World × Nat × PluginEffectAdmission) : Json :=
+structure ToolWire where
+  id : String
+  call_id : Option String
+  name : String
+  deriving ToJson, FromJson, Inhabited
+
+structure DeclarationWire where
+  block : Nat
+  part : Nat
+  kind : String
+  tool : Option ToolWire
+  media_kind : Option String
+  deriving ToJson, FromJson, Inhabited
+
+structure RunWire where
+  stream : Nat
+  bytes : Nat
+  declaration : Option DeclarationWire
+  deriving ToJson, FromJson, Inhabited
+
+structure FlushWire where
+  ordinal : Nat
+  runs : List RunWire
+  payload : List Nat
+  deriving ToJson, FromJson, Inhabited
+
+/-- A segment source or writer as its tag and the coordinates that tag carries. -/
+structure TagWire where
+  kind : String
+  call : Option Nat
+  generation : Option Nat
+  key : Option Nat
+  scope : Option Nat
+  turn : Option Nat
+  attempt : Option Nat
+  auxiliary_kind : Option String
+  deriving ToJson, FromJson, Inhabited
+
+structure CoordinateWire where
+  request : Nat
+  source : TagWire
+  deriving ToJson, FromJson, Inhabited
+
+structure CloseWire where
+  kind : String
+  outcome : Option String
+  segments : Option Nat
+  stream_bytes : Option (List Nat)
+  deriving ToJson, FromJson, Inhabited
+
+/-- A canonical segment in the shape `canonicalSegmentJson` writes. -/
+structure SegmentWire where
+  id : Nat
+  coordinate : CoordinateWire
+  writer : TagWire
+  flush : Option FlushWire
+  close : Option CloseWire
+  created_at : Nat
+  deriving ToJson, FromJson, Inhabited
+
+def segmentWire (segment : Segment) : SegmentWire :=
+  match (Json.parse (Conformance.Contracts.canonicalSegmentJson segment)).bind fromJson? with
+  | .ok wire => wire
+  | .error _ => default
+
+/-- The parent the admission names, as the execution owner reads it. -/
+structure ParentWire where
+  present : Bool
+  provenance : Option String
+  state : Option String
+  request : Option Nat
+  session : Option Nat
+  deadline : Option Nat
+  awaitMode : Option String
+  deriving ToJson
+
+structure ChildWire where
+  document : Nat
+  deadline : Nat
+  awaitMode : String
+  deriving ToJson
+
+structure AdmissionInput where
+  name : String
+  generation : Nat
+  ordinal : Nat
+  parent : ParentWire
+  child : ChildWire
+  arguments : SegmentWire
+  prior : Option SegmentWire
+  deriving ToJson
+
+private def awaitSpelling : ToolExecution.AwaitMode → String
+  | .foreground => "foreground" | .background => "background"
+
+private def admissionInput (item : String × World × Nat × PluginEffectAdmission) : AdmissionInput :=
   let (name, before, generation, call) := item
-  let parent := ownedToolByDocument? before call.parentToolDoc
-  let parentJson := match parent with
-    | none => Json.mkObj [("present", toJson false)]
-    | some p => Json.mkObj [("present", toJson true),
-        ("provenance", toJson (match p.provenance with
+  let parent : ParentWire := match ownedToolByDocument? before call.parentToolDoc with
+    | none => ⟨false, none, none, none, none, none, none⟩
+    | some p => ⟨true,
+        some (match p.provenance with
           | .acceptedIntent => "accepted" | .spawnedBackground _ => "spawned"
-          | .pluginEffect _ _ => "plugin_effect")),
-        ("state", toJson (match p.context.state with
+          | .pluginEffect _ _ => "plugin_effect"),
+        some (match p.context.state with
           | .pending => "pending" | .running => "running" | .completed => "completed"
-          | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timed_out")), ("request", toJson p.requestDoc),
-        ("session", toJson p.session), ("deadline", toJson p.context.deadline),
-        ("await_mode", toJson (match p.context.awaitMode with | .foreground => "foreground" | .background => "background"))]
-  Json.mkObj [("name", toJson name), ("generation", toJson generation),
-    ("ordinal", toJson call.ordinal),
-    ("parent", parentJson), ("child", Json.mkObj [("document", toJson call.document),
-      ("deadline", toJson call.context.deadline),
-      ("await_mode", toJson (match call.context.awaitMode with | .foreground => "foreground" | .background => "background"))]),
-    ("arguments", (Json.parse (Conformance.Contracts.canonicalSegmentJson call.arguments)).toOption.getD Json.null),
-    ("prior", if (ownedToolByDocument? before call.document).isSome then
-      (Json.parse (Conformance.Contracts.canonicalSegmentJson arguments)).toOption.getD Json.null else Json.null),
-    ("expected", toJson (succeeds (admitPluginEffect before generation call)))]
+          | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timed_out"),
+        some p.requestDoc, some p.session, some p.context.deadline,
+        some (awaitSpelling p.context.awaitMode)⟩
+  { name, generation, ordinal := call.ordinal, parent
+    child := ⟨call.document, call.context.deadline, awaitSpelling call.context.awaitMode⟩
+    arguments := segmentWire call.arguments
+    prior := if (ownedToolByDocument? before call.document).isSome then
+      some (segmentWire arguments) else none }
+
+@[conformance_family]
+def admissions : Family AdmissionInput Bool where
+  inputs := scenarios.map admissionInput
+  model := fun i => match scenarios.find? (·.1 == i.name) with
+    | some (_, before, generation, call) => succeeds (admitPluginEffect before generation call)
+    | none => false
 
 def output : Segment :=
   { id := 603, coordinate := ⟨10, .tool 601⟩, writer := .tool 601
@@ -206,8 +303,6 @@ def accountingCasesJson : Json := toJson <|
       ("expected_stuck", toJson child.stuckSince.isSome),
       ("expected_terminal_output", toJson child.terminalOutput.isSome),
       ("expected_normal_ready", toJson (normalCompletionToolsReady post 7))]
-
-def casesJson : Json := toJson (scenarios.map render)
 
 private def backgroundRunning : World := Id.run do
   let admission := { admission with context := { admission.context with awaitMode := .background } }

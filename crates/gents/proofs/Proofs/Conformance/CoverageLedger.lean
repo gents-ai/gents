@@ -1664,8 +1664,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginChildAdmissionCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_tool_effect_cases"
-      "PluginEffectCases")
+      "family"
+      "plugin_effects_admissions")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_tool_effect_terminal_cases"
