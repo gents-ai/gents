@@ -1,4 +1,5 @@
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 import Proofs.Conformance.Contracts.Json.FileInventoryClosure
 import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Session.Compaction.Executable
@@ -137,17 +138,19 @@ def promptAssemblyModeSanitizeCaseJson
 def promptAssemblyModeSanitizeCasesJson : String :=
   jsonArray (promptAssemblyModeSanitizeCases.map promptAssemblyModeSanitizeCaseJson)
 
-def promptAssemblyLayerCaseJson (witness : PromptAssemblyLayerCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"skill_count\":" ++ toString witness.skillCount ++ ","
-    ++ "\"summary_count\":" ++ toString witness.summaryCount ++ ","
-    ++ "\"conversation_len\":" ++ toString witness.conversationLen ++ ","
-    ++ "\"slots\":" ++ jsonStringArray witness.slots
-    ++ "}"
+structure PromptAssemblyLayerInput where
+  skillCount : Nat
+  summaryCount : Nat
+  conversationLen : Nat
+  deriving Lean.ToJson
 
-def promptAssemblyLayerCasesJson : String :=
-  jsonArray (promptAssemblyLayerCases.map promptAssemblyLayerCaseJson)
+@[conformance_family]
+def promptAssemblyLayer : Family PromptAssemblyLayerInput (List String) where
+  inputs := promptAssemblyLayerCases.map fun c =>
+    { skillCount := c.skillCount, summaryCount := c.summaryCount
+      conversationLen := c.conversationLen }
+  model := fun i =>
+    (PromptAssembly.assemble i.skillCount i.summaryCount i.conversationLen).map slotName
 
 def promptAssemblyRepairCaseJson (witness : PromptAssemblyRepairCase) : String :=
   "{"
@@ -161,50 +164,75 @@ def promptAssemblyRepairCaseJson (witness : PromptAssemblyRepairCase) : String :
 def promptAssemblyRepairCasesJson : String :=
   jsonArray (promptAssemblyRepairCases.map promptAssemblyRepairCaseJson)
 
-def promptAssemblyBudgetCaseJson (witness : PromptAssemblyBudgetCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"context_window\":" ++ toString witness.contextWindow ++ ","
-    ++ "\"max_output_tokens\":" ++ toString witness.maxOutputTokens ++ ","
-    ++ "\"threshold_basis_points\":" ++ toString witness.thresholdBasisPoints ++ ","
-    ++ "\"configured_threshold_budget\":"
-      ++ toString witness.configuredThresholdBudget ++ ","
-    ++ "\"prompt_tokens\":" ++ toString witness.promptTokens ++ ","
-    ++ "\"request_tokens\":" ++ toString witness.requestTokens ++ ","
-    ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
-    ++ "\"compaction_input_budget\":" ++ toString witness.compactionInputBudget ++ ","
-    ++ "\"effective_output_tokens\":" ++ toString witness.effectiveOutputTokens ++ ","
-    ++ "\"should_compact\":" ++ boolString witness.shouldCompact ++ ","
-    ++ "\"provider_safe\":" ++ boolString witness.providerSafe ++ ","
-    ++ "\"can_dispatch\":" ++ boolString witness.canDispatch
-    ++ "}"
+structure PromptAssemblyBudgetInput where
+  contextWindow : Nat
+  maxOutputTokens : Nat
+  thresholdBasisPoints : Nat
+  promptTokens : Nat
+  requestTokens : Nat
+  deriving Lean.ToJson
 
-def promptAssemblyBudgetCasesJson : String :=
-  jsonArray (promptAssemblyBudgetCases.map promptAssemblyBudgetCaseJson)
+structure PromptAssemblyBudgetOutput where
+  configuredThresholdBudget : Nat
+  effectiveInputBudget : Nat
+  compactionInputBudget : Nat
+  effectiveOutputTokens : Nat
+  shouldCompact : Bool
+  providerSafe : Bool
+  canDispatch : Bool
+  deriving Lean.ToJson
 
-def promptAssemblyTurnBudgetCaseJson
-    (witness : PromptAssemblyTurnBudgetCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"context_window\":" ++ toString witness.contextWindow ++ ","
-    ++ "\"max_output_tokens\":" ++ toString witness.maxOutputTokens ++ ","
-    ++ "\"threshold_basis_points\":" ++ toString witness.thresholdBasisPoints ++ ","
-    ++ "\"configured_threshold_budget\":"
-      ++ toString witness.configuredThresholdBudget ++ ","
-    ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
-    ++ "\"compaction_input_budget\":" ++ toString witness.compactionInputBudget ++ ","
-    ++ "\"turn_input_tokens\":"
-      ++ jsonArray (witness.turnInputTokens.map toString) ++ ","
-    ++ "\"turn_output_tokens\":"
-      ++ jsonArray (witness.turnOutputTokens.map toString) ++ ","
-    ++ "\"turn_should_compact\":"
-      ++ jsonArray (witness.turnShouldCompact.map boolString) ++ ","
-    ++ "\"turn_can_dispatch\":"
-      ++ jsonArray (witness.turnCanDispatch.map boolString)
-    ++ "}"
+@[conformance_family]
+def promptAssemblyBudget : Family PromptAssemblyBudgetInput PromptAssemblyBudgetOutput where
+  inputs := promptAssemblyBudgetCases.map fun c =>
+    { contextWindow := c.contextWindow, maxOutputTokens := c.maxOutputTokens
+      thresholdBasisPoints := c.thresholdBasisPoints, promptTokens := c.promptTokens
+      requestTokens := c.requestTokens }
+  model := fun i =>
+    let c := budgetCase
+      { name := "", contextWindow := i.contextWindow, maxOutputTokens := i.maxOutputTokens
+        thresholdBasisPoints := i.thresholdBasisPoints, promptTokens := i.promptTokens
+        requestTokens := i.requestTokens }
+    { configuredThresholdBudget := c.configuredThresholdBudget
+      effectiveInputBudget := c.effectiveInputBudget
+      compactionInputBudget := c.compactionInputBudget
+      effectiveOutputTokens := c.effectiveOutputTokens
+      shouldCompact := c.shouldCompact
+      providerSafe := c.providerSafe
+      canDispatch := c.canDispatch }
 
-def promptAssemblyTurnBudgetCasesJson : String :=
-  jsonArray (promptAssemblyTurnBudgetCases.map promptAssemblyTurnBudgetCaseJson)
+structure PromptAssemblyTurnBudgetInput where
+  contextWindow : Nat
+  maxOutputTokens : Nat
+  thresholdBasisPoints : Nat
+  turnInputTokens : List Nat
+  deriving Lean.ToJson
+
+structure PromptAssemblyTurnBudgetOutput where
+  configuredThresholdBudget : Nat
+  effectiveInputBudget : Nat
+  compactionInputBudget : Nat
+  turnOutputTokens : List Nat
+  turnShouldCompact : List Bool
+  turnCanDispatch : List Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def promptAssemblyTurnBudget :
+    Family PromptAssemblyTurnBudgetInput PromptAssemblyTurnBudgetOutput where
+  inputs := promptAssemblyTurnBudgetCases.map fun c =>
+    { contextWindow := c.contextWindow, maxOutputTokens := c.maxOutputTokens
+      thresholdBasisPoints := c.thresholdBasisPoints, turnInputTokens := c.turnInputTokens }
+  model := fun i =>
+    let c := turnBudgetCase
+      { name := "", contextWindow := i.contextWindow, maxOutputTokens := i.maxOutputTokens
+        thresholdBasisPoints := i.thresholdBasisPoints, turnInputTokens := i.turnInputTokens }
+    { configuredThresholdBudget := c.configuredThresholdBudget
+      effectiveInputBudget := c.effectiveInputBudget
+      compactionInputBudget := c.compactionInputBudget
+      turnOutputTokens := c.turnOutputTokens
+      turnShouldCompact := c.turnShouldCompact
+      turnCanDispatch := c.turnCanDispatch }
 
 private def natOptionJson : Option Nat → String
   | some value => toString value

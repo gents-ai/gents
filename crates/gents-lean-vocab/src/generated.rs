@@ -441,10 +441,6 @@ pub fn lean_prompt_assembly_assistant_order_cases() -> &'static [LeanPromptAssem
     &lean_contract_snapshot().prompt_assembly_assistant_order_cases
 }
 
-pub fn lean_prompt_assembly_budget_cases() -> &'static [LeanPromptAssemblyBudgetCase] {
-    &lean_contract_snapshot().prompt_assembly_budget_cases
-}
-
 pub fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAssemblyClaudeBodyCase] {
     &lean_contract_snapshot().prompt_assembly_claude_body_cases
 }
@@ -471,10 +467,6 @@ pub fn lean_prompt_assembly_claude_thinking_stream_cases() -> &'static [LeanProm
 
 pub fn lean_prompt_assembly_compaction_trigger_cases() -> &'static [LeanPromptAssemblyCompactionTriggerCase] {
     &lean_contract_snapshot().prompt_assembly_compaction_trigger_cases
-}
-
-pub fn lean_prompt_assembly_layer_cases() -> &'static [LeanPromptAssemblyLayerCase] {
-    &lean_contract_snapshot().prompt_assembly_layer_cases
 }
 
 pub fn lean_prompt_assembly_mode_sanitize_cases() -> &'static [LeanPromptAssemblyModeSanitizeCase] {
@@ -515,10 +507,6 @@ pub fn lean_prompt_assembly_sanitize_cases() -> &'static [LeanPromptAssemblySani
 
 pub fn lean_prompt_assembly_service_tier_cases() -> &'static [LeanPromptAssemblyServiceTierCase] {
     &lean_contract_snapshot().prompt_assembly_service_tier_cases
-}
-
-pub fn lean_prompt_assembly_turn_budget_cases() -> &'static [LeanPromptAssemblyTurnBudgetCase] {
-    &lean_contract_snapshot().prompt_assembly_turn_budget_cases
 }
 
 pub fn lean_protected_replay_compaction_cases() -> &'static [LeanProtectedReplayCompactionCase] {
@@ -3293,10 +3281,7 @@ pub struct LeanContractSnapshot {
     pub retry_entry_cases: Vec<LeanRetryEntryCase>,
     pub current_input_cases: Vec<LeanCurrentInputCase>,
     pub wake_input_cases: Vec<LeanWakeInputCase>,
-    pub prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
-    pub prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
-    pub prompt_assembly_turn_budget_cases: Vec<LeanPromptAssemblyTurnBudgetCase>,
     pub prompt_assembly_retention_cases: Vec<LeanPromptAssemblyRetentionCase>,
     pub prompt_assembly_compaction_trigger_cases: Vec<
         LeanPromptAssemblyCompactionTriggerCase,
@@ -9299,23 +9284,6 @@ pub struct LeanPromptAssemblyAssistantOrderCase {
     pub expected_twice: Vec<LeanPromptAssemblyItem>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanPromptAssemblyBudgetCase {
-    pub name: String,
-    pub context_window: usize,
-    pub max_output_tokens: usize,
-    pub threshold_basis_points: usize,
-    pub configured_threshold_budget: usize,
-    pub prompt_tokens: usize,
-    pub request_tokens: usize,
-    pub effective_input_budget: usize,
-    pub compaction_input_budget: usize,
-    pub effective_output_tokens: usize,
-    pub should_compact: bool,
-    pub provider_safe: bool,
-    pub can_dispatch: bool,
-}
-
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct LeanPromptAssemblyClaudeBodyCase {
     pub name: String,
@@ -9480,15 +9448,6 @@ pub struct LeanPromptAssemblyItem {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct LeanPromptAssemblyLayerCase {
-    pub name: String,
-    pub skill_count: usize,
-    pub summary_count: usize,
-    pub conversation_len: usize,
-    pub slots: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPromptAssemblyModeSanitizeCase {
     pub name: String,
@@ -9611,21 +9570,6 @@ pub struct LeanPromptAssemblyServiceTierCase {
 pub struct LeanPromptAssemblySplit {
     pub index: usize,
     pub expected: Vec<LeanPromptAssemblyRow>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanPromptAssemblyTurnBudgetCase {
-    pub name: String,
-    pub context_window: usize,
-    pub max_output_tokens: usize,
-    pub threshold_basis_points: usize,
-    pub configured_threshold_budget: usize,
-    pub effective_input_budget: usize,
-    pub compaction_input_budget: usize,
-    pub turn_input_tokens: Vec<usize>,
-    pub turn_output_tokens: Vec<usize>,
-    pub turn_should_compact: Vec<bool>,
-    pub turn_can_dispatch: Vec<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

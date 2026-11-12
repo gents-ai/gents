@@ -449,7 +449,7 @@ private def sanitizeCase (witness : String × List ProviderRow) :
 def promptAssemblySanitizeCases : List PromptAssemblySanitizeCase :=
   witnessTranscripts.map sanitizeCase
 
-private def slotName : PromptAssembly.Slot → String
+def slotName : PromptAssembly.Slot → String
   | .preamble _ => "preamble"
   | .summaryReminder => "summaryReminder"
   | .skillReminder index => s!"skillReminder:{index}"
@@ -524,7 +524,7 @@ def promptAssemblyRepairCases : List PromptAssemblyRepairCase :=
     , expectedTwice := argsName (PromptAssembly.repairArgs Payload.empty once)
     , payloadOnly := isPayloadOnly vector.2 }
 
-private structure BudgetWitness where
+structure BudgetWitness where
   name : String
   contextWindow : Nat
   maxOutputTokens : Nat
@@ -615,7 +615,7 @@ per estimated token, unanchored. -/
 private def unitCalibration : PromptAssembly.ContextCalibration.State :=
   PromptAssembly.ContextCalibration.seed PromptAssembly.ContextCalibration.unitRatio []
 
-private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
+def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
   let configured := PromptAssembly.Budget.configuredThresholdBudget
     witness.contextWindow witness.thresholdBasisPoints
   let effective := PromptAssembly.Budget.effectiveInputBudget configured
@@ -644,7 +644,7 @@ private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
 def promptAssemblyBudgetCases : List PromptAssemblyBudgetCase :=
   budgetWitnesses.map budgetCase
 
-private structure TurnBudgetWitness where
+structure TurnBudgetWitness where
   name : String
   contextWindow : Nat
   maxOutputTokens : Nat
@@ -674,7 +674,7 @@ private def turnBudgetWitnesses : List TurnBudgetWitness :=
     , turnInputTokens := [0, 7499, 7500, 7501] }
   ]
 
-private def turnBudgetCase
+def turnBudgetCase
     (witness : TurnBudgetWitness) : PromptAssemblyTurnBudgetCase :=
   let configured := PromptAssembly.Budget.configuredThresholdBudget
     witness.contextWindow witness.thresholdBasisPoints

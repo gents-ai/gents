@@ -2280,20 +2280,20 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblySanitizeCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_layer_cases"
-      "PromptAssemblyLayerCases")
+      "family"
+      "contracts_prompt_assembly_layer")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "prompt_assembly_repair_cases"
       "PromptAssemblyRepairCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_budget_cases"
-      "PromptAssemblyBudgetCases")
+      "family"
+      "contracts_prompt_assembly_budget")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "prompt_assembly_turn_budget_cases"
-      "PromptAssemblyTurnBudgetCases")
+      "family"
+      "contracts_prompt_assembly_turn_budget")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "prompt_assembly_compaction_trigger_cases"

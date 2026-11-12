@@ -406,29 +406,23 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
 }
 
 #[tokio::test]
-async fn generated_layer_cases_pin_the_assembled_request_order() {
+async fn assembled_request_order_follows_the_lean_model() {
     use crate::turn::prompt::{LayeredPromptBuilder, PromptBuilder};
-    use gents_lean_vocab::lean_prompt_assembly_layer_cases;
 
-    let cases = lean_prompt_assembly_layer_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no PromptAssembly layer cases"
-    );
-
-    for case in cases {
+    for case in gents_lean_vocab::families::contracts_prompt_assembly_layer::cases() {
+        let input = &case.input;
         let builder =
             LayeredPromptBuilder::for_agent("system prompt", "fence", &["bash"], false, &[]);
 
-        let conversation = (0..case.conversation_len)
+        let conversation = (0..input.conversation_len)
             .map(|index| {
                 TaggedMessage::unassociated(Message::user(format!("conversation-{index}")))
             })
             .collect::<Vec<_>>();
-        let summaries = (0..case.summary_count)
+        let summaries = (0..input.summary_count)
             .map(|index| format!("summary-{index}"))
             .collect::<Vec<_>>();
-        let skill_reminders = (0..case.skill_count)
+        let skill_reminders = (0..input.skill_count)
             .map(|index| LayeredPromptBuilder::system_reminder(&format!("skill-{index}")))
             .collect::<Vec<_>>();
 
@@ -462,11 +456,7 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
             ));
         }
 
-        assert_eq!(
-            slots, case.slots,
-            "assembled layer order drifted from the Lean model on case {:?}",
-            case.name
-        );
+        case.check(slots);
     }
 }
 
