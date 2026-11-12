@@ -1493,80 +1493,86 @@ async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() 
 }
 
 #[tokio::test]
-async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
-    let node_db = configured_event_node().await;
-    let node = node_db.node.clone();
-    node.add_collection(
-        r#"type QuiescedGroupMember {
-            run_id: String @index
-            value: String
-        }"#,
-    )
-    .await
-    .expect("quiesced group source schema");
-    for value in ["one", "two"] {
-        let mutation = format!(
-            r#"mutation {{
-                create_QuiescedGroupMember(input: {{ run_id: "run-overfull", value: "{value}" }}) {{
-                    _docID
-                }}
-            }}"#,
-        );
-        let response = node.execute(&mutation).await;
-        assert!(!response.has_errors(), "{:#?}", response.errors);
-    }
-
-    let trigger = ResolvedEventTrigger {
-        fire_mode: gents_documents::automation::EventTriggerFireMode::PerGroup,
-        correlation_field: Some("run_id".into()),
-        expected_count: Some(1),
-        ..resolved_event_trigger(
-            "quiesced-group-trigger",
-            "QuiescedGroupMember",
-            resolved_task("{{ group.count }}"),
-        )
-    };
-    let snapshot = configured_event_snapshot(
-        &node,
-        1,
-        RapidHashMap::from_iter([("quiesced-group-trigger".to_string(), trigger)]),
-    )
-    .await;
-    let (_tx, rx) = watch::channel(snapshot.clone());
-    let mut first_source = EventSource::new(rx, node.clone(), CancellationToken::new());
-    first_source
-        .reconcile_subscriptions(snapshot.as_ref())
-        .await;
-    assert_eq!(first_source.group_membership_query_count(), 1);
-
-    let response = node
-        .execute(
-            r#"query {
-                EventGroupState(
-                    limit: 2
-                ) { quiesced_at quiesced_reason }
+async fn group_evaluation_matches_the_lean_group_model() {
+    for case in gents_lean_vocab::families::event_delivery_group_evaluation::cases() {
+        let node_db = configured_event_node().await;
+        let node = node_db.node.clone();
+        node.add_collection(
+            r#"type QuiescedGroupMember {
+                run_id: String @index
+                value: String
             }"#,
         )
+        .await
+        .expect("quiesced group source schema");
+        for value in 0..case.input.members {
+            let mutation = format!(
+                r#"mutation {{
+                    create_QuiescedGroupMember(input: {{ run_id: "run-group", value: "{value}" }}) {{
+                        _docID
+                    }}
+                }}"#,
+            );
+            let response = node.execute(&mutation).await;
+            assert!(!response.has_errors(), "{:#?}", response.errors);
+        }
+        let trigger = ResolvedEventTrigger {
+            fire_mode: gents_documents::automation::EventTriggerFireMode::PerGroup,
+            correlation_field: Some("run_id".into()),
+            expected_count: Some(case.input.expected as usize),
+            ..resolved_event_trigger(
+                "quiesced-group-trigger",
+                "QuiescedGroupMember",
+                resolved_task("{{ group.count }}"),
+            )
+        };
+        let snapshot = configured_event_snapshot(
+            &node,
+            1,
+            RapidHashMap::from_iter([("quiesced-group-trigger".to_string(), trigger)]),
+        )
         .await;
-    assert!(!response.has_errors(), "{:#?}", response.errors);
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("EventGroupState"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .expect("durable group state");
-    assert!(row.get("quiesced_at").is_some_and(|value| !value.is_null()));
-    assert!(row["quiesced_reason"]
-        .as_str()
-        .is_some_and(|reason| reason.contains("exceeds expected count")));
-
-    let (_tx, rx) = watch::channel(snapshot.clone());
-    let mut restarted_source = EventSource::new(rx, node, CancellationToken::new());
-    restarted_source
-        .reconcile_subscriptions(snapshot.as_ref())
-        .await;
-    assert_eq!(restarted_source.group_membership_query_count(), 0);
+        let (_tx, rx) = watch::channel(snapshot.clone());
+        let mut first_source = EventSource::new(rx, node.clone(), CancellationToken::new());
+        first_source
+            .reconcile_subscriptions(snapshot.as_ref())
+            .await;
+        let reads_on_start = first_source.group_membership_query_count() as u64;
+        drop(first_source);
+        let response = node
+            .execute(r#"query { EventGroupState(limit: 2) { quiesced_at quiesced_reason } }"#)
+            .await;
+        assert!(!response.has_errors(), "{:#?}", response.errors);
+        let rows = response.data.as_ref().unwrap()["EventGroupState"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(rows.len() <= 1, "{rows:?}");
+        let row = rows.first();
+        let quiesced = row.is_some_and(|row| !row["quiesced_at"].is_null());
+        let reason = row
+            .and_then(|row| row["quiesced_reason"].as_str())
+            .map(|reason| {
+                if reason.contains("exceeds expected count") {
+                    "exceeds_expected_count".to_string()
+                } else {
+                    reason.to_string()
+                }
+            });
+        let (_tx, rx) = watch::channel(snapshot.clone());
+        let mut restarted_source = EventSource::new(rx, node, CancellationToken::new());
+        restarted_source
+            .reconcile_subscriptions(snapshot.as_ref())
+            .await;
+        case.check(
+            gents_lean_vocab::families::event_delivery_group_evaluation::GroupEvaluationOutput {
+                quiesced,
+                reason,
+                reads_on_start,
+                reads_after_restart: restarted_source.group_membership_query_count() as u64,
+            },
+        );
+    }
 }
 
 #[test]
@@ -2197,179 +2203,6 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 }
 
 #[tokio::test]
-async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
-    let node_db = gents_inference::test_support::test_db(
-        "event-source-skips-event-for-doc-already",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let node = node_db.node.clone();
-
-    let webhook_sdl = r#"
-        type WebhookEvent {
-            external_id: String
-            payload: String
-        }
-    "#;
-    node.add_collection(webhook_sdl)
-        .await
-        .expect("add_collection for WebhookEvent");
-
-    let seed_mutation = r#"mutation {
-        create_WebhookEvent(input: {
-            external_id: "wh-preexisting",
-            payload: "seed"
-        }) { _docID }
-    }"#;
-    let resp = node.execute(seed_mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "seeding pre-existing doc failed: {:?}",
-        resp.errors,
-    );
-    let lookup = r#"query {
-        WebhookEvent(filter: { external_id: { _eq: "wh-preexisting" } }, limit: 1) {
-            _docID
-        }
-    }"#;
-    let resp = node.execute(lookup).await;
-    assert!(
-        !resp.has_errors(),
-        "lookup of pre-existing doc failed: {:?}",
-        resp.errors,
-    );
-    let preexisting_doc_id = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("WebhookEvent"))
-        .and_then(|arr| arr.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(|v| v.as_str())
-        .expect("WebhookEvent query returned no _docID")
-        .to_string();
-
-    let task = resolved_task("ignored");
-    let trigger = resolved_event_trigger("trigger-noupdate", "WebhookEvent", task);
-    let snapshot = snapshot_with_event_triggers(
-        1,
-        RapidHashMap::from_iter([("trigger-noupdate".to_string(), trigger)]),
-    );
-    let (_tx, rx) = watch::channel(snapshot.clone());
-    let cancel = CancellationToken::new();
-    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
-    source.reconcile_subscriptions(snapshot.as_ref()).await;
-
-    let escaped = escape_graphql_string(&preexisting_doc_id);
-    let update_mutation = format!(
-        r#"mutation {{
-            update_WebhookEvent(
-                docID: "{escaped}",
-                input: {{ payload: "updated" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let node_for_mutation = node.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let resp = node_for_mutation.execute(&update_mutation).await;
-        assert!(
-            !resp.has_errors(),
-            "update_WebhookEvent failed: {:?}",
-            resp.errors,
-        );
-    });
-
-    let result = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
-    assert!(
-        result.is_err(),
-        "next_fire yielded an intent for a pre-seeded doc's update",
-    );
-
-    cancel.cancel();
-}
-
-#[tokio::test]
-async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
-    let node_db = configured_event_node().await;
-    let node = node_db.node.clone();
-    let webhook_sdl = r#"
-        type WebhookEvent {
-            external_id: String
-            payload: String
-        }
-    "#;
-    node.add_collection(webhook_sdl)
-        .await
-        .expect("add_collection for WebhookEvent");
-    let task = resolved_task("ignored");
-    let trigger = resolved_event_trigger("trigger-firstseen", "WebhookEvent", task);
-    let snapshot = configured_event_snapshot(
-        &node,
-        1,
-        RapidHashMap::from_iter([("trigger-firstseen".to_string(), trigger)]),
-    )
-    .await;
-    let (_tx, rx) = watch::channel(snapshot.clone());
-    let cancel = CancellationToken::new();
-    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
-    source.reconcile_subscriptions(snapshot.as_ref()).await;
-    let node_for_create = node.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let mutation = r#"mutation {
-            create_WebhookEvent(input: {
-                external_id: "wh-first",
-                payload: "{}"
-            }) { _docID }
-        }"#;
-        let resp = node_for_create.execute(mutation).await;
-        assert!(
-            !resp.has_errors(),
-            "create_WebhookEvent failed: {:?}",
-            resp.errors,
-        );
-    });
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("next_fire timed out on first observation (create should fire)")
-        .expect("next_fire returned None instead of emitting a FireIntent");
-    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-firstseen"));
-    let doc_id = intent
-        .event_vars
-        .get("source_doc_id")
-        .and_then(|v| v.as_str())
-        .expect("source_doc_id must be a string")
-        .to_string();
-    let escaped = escape_graphql_string(&doc_id);
-    let update_mutation = format!(
-        r#"mutation {{
-            update_WebhookEvent(
-                docID: "{escaped}",
-                input: {{ payload: "updated" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let node_for_update = node.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let resp = node_for_update.execute(&update_mutation).await;
-        assert!(
-            !resp.has_errors(),
-            "update_WebhookEvent failed: {:?}",
-            resp.errors,
-        );
-    });
-    let result = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
-    assert!(
-        result.is_err(),
-        "next_fire yielded an intent for a doc's update; first-seen gate failed to \
-         suppress the second observation",
-    );
-    cancel.cancel();
-}
-
-#[tokio::test]
 async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
     let node_db = configured_event_node().await;
     let node = node_db.node.clone();
@@ -2584,17 +2417,41 @@ mod unacknowledged;
 
 #[tokio::test]
 async fn generated_event_source_convergence_reaches_fixed_point() {
-    use gents_lean_vocab::families::event_delivery_event_source_convergence as family;
-    for case in family::cases::<String>() {
-        assert!(case.input.initial_world.persistent_set.is_empty());
+    for case in
+        gents_lean_vocab::families::event_delivery_event_source_convergence::cases::<String>()
+    {
+        let raw = |docs: &[gents_lean_vocab::families::event_delivery_event_source_convergence::DocId]| docs.iter().map(|doc| doc.raw.clone()).collect::<Vec<_>>();
+        assert_eq!(
+            raw(&case.input.initial_world.processed_set),
+            raw(&case.input.initial_world.persistent_set)
+        );
         assert!(case.input.initial_world.subscription_queue.is_empty());
-        assert!(case.input.initial_world.processed_set.is_empty());
         assert!(case.input.initial_world.handled.is_empty());
         let db = configured_event_node().await;
         let node = db.node.clone();
-        node.add_collection("type ConvergenceDocument { external_id: String }")
+        node.add_collection("type ConvergenceDocument { external_id: String payload: String }")
             .await
             .unwrap();
+        let mut physical = RapidHashMap::default();
+        for seeded in &case.input.initial_world.persistent_set {
+            let name = escape_graphql_string(&seeded.raw);
+            let created = node
+                .execute(&format!(
+                    "mutation {{ create_ConvergenceDocument(input: {{ external_id: \"{name}\" }}) {{ _docID }} }}"
+                ))
+                .await;
+            assert!(!created.has_errors(), "{:?}", created.errors);
+            let found = node
+                .execute(&format!(
+                    "query {{ ConvergenceDocument(filter: {{ external_id: {{ _eq: \"{name}\" }} }}) {{ _docID }} }}"
+                ))
+                .await;
+            let id = found.data.as_ref().unwrap()["ConvergenceDocument"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            physical.insert(id, seeded.raw.clone());
+        }
         let trigger = resolved_event_trigger(
             "convergence-trigger",
             "ConvergenceDocument",
@@ -2609,7 +2466,6 @@ async fn generated_event_source_convergence_reaches_fixed_point() {
         let (_tx, rx) = watch::channel(snapshot.clone());
         let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
         source.reconcile_subscriptions(snapshot.as_ref()).await;
-        let mut physical = RapidHashMap::default();
         let mut offered = Vec::new();
         let mut attempts = Vec::new();
         let mut handled = Vec::new();
@@ -2659,6 +2515,17 @@ async fn generated_event_source_convergence_reaches_fixed_point() {
                     let result = admit_observed_event(&node, &intent).await;
                     (intent.on_result)(result);
                 }
+                "update" => {
+                    let id = physical
+                        .iter()
+                        .find(|(_, name)| *name == &action.document)
+                        .map(|(id, _)| id.clone())
+                        .unwrap();
+                    crate::triggers::callback::test_agent_access(&node)
+                        .write("test.convergence.update", &format!(
+                            "mutation {{ update_ConvergenceDocument(docID: \"{}\", input: {{ payload: \"updated\" }}) {{ _docID }} }}",
+                            escape_graphql_string(&id))).await.unwrap();
+                }
                 other => panic!("unsupported trace action {other}"),
             }
         }
@@ -2676,7 +2543,7 @@ async fn generated_event_source_convergence_reaches_fixed_point() {
                     .clone()
             })
             .collect();
-        case.check(Some(family::ConvergenceObservation {
+        case.check(Some(gents_lean_vocab::families::event_delivery_event_source_convergence::ConvergenceObservation {
             offered: attempts,
             handled,
             offered_after,

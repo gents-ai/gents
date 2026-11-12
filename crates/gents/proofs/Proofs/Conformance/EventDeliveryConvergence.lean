@@ -9,6 +9,7 @@ open _root_.EventDelivery
 
 @[conformance_family] def eventSourceConvergence : Conformance.Family ConvergenceInput (Option ConvergenceObservation) :=
   ⟨[convergenceTrace "event_source_persist_rescan_handle" "doc-1",
-    unacknowledgedTrace "doc-retry"], convergenceObservation⟩
+    unacknowledgedTrace "doc-retry", seededUpdateTrace "doc-seeded",
+    firstSeenUpdateTrace "doc-first"], convergenceObservation⟩
 
 end Conformance.EventDelivery

@@ -785,8 +785,7 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
 
 #[tokio::test]
 async fn generated_watcher_convergence_reaches_fixed_point() {
-    use gents_lean_vocab::families::event_delivery_watcher_convergence as family;
-    for case in family::cases::<String>() {
+    for case in gents_lean_vocab::families::event_delivery_watcher_convergence::cases::<String>() {
         assert!(case.input.initial_world.persistent_set.is_empty());
         assert!(case.input.initial_world.subscription_queue.is_empty());
         assert!(case.input.initial_world.processed_set.is_empty());
@@ -838,7 +837,7 @@ async fn generated_watcher_convergence_reaches_fixed_point() {
         if let Some(next) = next {
             offered.push(next.request_id);
         }
-        case.check(Some(family::ConvergenceObservation {
+        case.check(Some(gents_lean_vocab::families::event_delivery_watcher_convergence::ConvergenceObservation {
             offered: attempts,
             handled,
             offered_after: offered,

@@ -13,6 +13,36 @@ structure EventGroupState where
 def EventGroupState.quiesce (s : EventGroupState) (now : Nat) : EventGroupState :=
   if s.quiescedAt.isSome then s else { s with quiescedAt := some now }
 
+inductive QuiesceReason where
+  | exceedsExpectedCount
+  deriving DecidableEq, Repr
+
+/-- A group whose membership exceeds its expected count or the hard document
+cap can never become exactly complete, so it is quiesced durably instead of
+waiting. -/
+def quiesceReason (members expected : Nat) : Option QuiesceReason :=
+  if maxGroupDocs < members || expected < members then some .exceedsExpectedCount else none
+
+def EventGroupState.evaluate (s : EventGroupState) (members expected now : Nat) :
+    EventGroupState :=
+  if (quiesceReason members expected).isSome then s.quiesce now else s
+
+/-- Startup recovery prunes quiesced groups before reading their membership. -/
+def membershipReads : Option EventGroupState → Nat
+  | none => 1
+  | some s => if s.quiescedAt.isSome then 0 else 1
+
+theorem invalid_group_is_durably_quiesced_and_pruned_after_restart
+    (s : EventGroupState) (members expected now : Nat) (h : expected < members) :
+    (s.evaluate members expected now).quiescedAt.isSome ∧
+      quiesceReason members expected = some .exceedsExpectedCount ∧
+      membershipReads (some (s.evaluate members expected now)) = 0 := by
+  have hr : quiesceReason members expected = some .exceedsExpectedCount := by
+    simp [quiesceReason, h]
+  refine ⟨?_, hr, ?_⟩ <;>
+    cases hq : s.quiescedAt <;>
+      simp [EventGroupState.evaluate, hr, EventGroupState.quiesce, hq, membershipReads]
+
 def EventGroupState.observe (s : EventGroupState) (cached : Option Nat) : TimeoutObservation :=
   ⟨s.firstSeen, cached⟩
 

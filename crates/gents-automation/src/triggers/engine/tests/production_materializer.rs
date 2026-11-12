@@ -901,234 +901,265 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
 }
 
 #[tokio::test]
-async fn durable_goal_task_replay_retains_its_admitted_assignment() {
-    let (db, _user, _client_access, behavior) =
-        signed_materializer_agent("goal-task-retained-assignment").await;
-    let agent_did = behavior.agent_did.clone();
-    let agent_identity = behavior.agent_identity.clone();
-    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
-    let owner = snapshot.local_did.clone();
-    let node = db.node.clone();
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let session = "replaced-task-goal-session";
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent_did.parse().unwrap(),
-        agent_identity.as_ref(),
-    )
-    .unwrap();
-    access
-        .transact_write("test.replay_session", |txn| {
-            Box::pin(gents_session::session::ensure_session_in_txn(
-                txn,
-                session,
-                &owner,
-                &agent_did,
-                Some(&agent_did),
-                None,
-                None,
-                "2030-01-01T00:00:00Z",
-            ))
-        })
-        .await
-        .unwrap();
-    let initial = gents_protocol::goal::deterministic_goal_id(&owner, session);
-    let selected = crate::goal::replacement_goal_identity(&owner, session, "first-replacement");
-    access.transact_write("test.replay_current_goal", |txn| {
-        let selected = &selected;
-        let agent_did = &agent_did;
-        let owner = &owner;
-        Box::pin(async move {
-            let existing = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, owner, session)
-                .await?.expect("existing task session");
-            let input = serde_json::json!({
-                "node_did": owner, "session_id": session, "session_doc_id": existing.doc_id,
-                "agent_did": agent_did, "requester_did": agent_did, "creator_did": agent_did,
-                "parent_linked": true, "goal_id": selected.goal_id, "creation_key": selected.creation_key,
-                "objective": "Finish the task", "status": "active", "created_at": "2030-01-01T00:00:00Z",
-            });
-            let created = txn.execute_with_variables(
-                "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
-                &serde_json::json!({"input": input}),
-            ).await?;
-            let doc = gents_store::graphql::created_doc_id(&created, "Goal")?;
-            txn.add_resource_relationship("Goal", &doc, "parent", "sessions", &existing.doc_id).await?;
-            txn.add_actor_relationship("Goal", &doc, "working_agent", &identity::Did::new(agent_did)?).await?;
-            Ok::<_, anyhow::Error>(())
-        })
-    }).await.unwrap();
-    let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: owner.clone(),
-        trigger_id: "replay-goal-trigger".into(),
-        source_collection: "Schedule".into(),
-        source_doc_id: "original-due-occurrence".into(),
-    };
-    let prepared = crate::triggers::engine::durable::PreparedFire {
-        receipt: gents_protocol::trigger_delivery::TriggerFire {
-            fire_key: identity.fire_key(),
-            request_id: identity.request_id(),
-            identity,
-            task_id: "replay-goal-task".into(),
-            session_id: session.into(),
-            goal_id: Some(initial),
-            goal_objective: Some("Finish the task".into()),
-            goal_token_budget: None,
-            goal_assignment_applied: false,
-            emit_outcome: false,
-            queued_serial: false,
-            source_handoff_id: None,
-            reply_session_id: None,
-            shard_id: None,
-            attempt: None,
-            created_at: "2030-01-01T00:00:00Z".into(),
-        },
-        target_existing: true,
-        create_session: false,
-        max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
-        replace_prior: false,
-        event_source_generation: None,
-    };
-    let mut task = resolved_task("Finish the task");
-    task.task_id = prepared.receipt.task_id.clone();
-    task.agent_did = agent_did.clone();
-    task.goal_objective_template = prepared.receipt.goal_objective.clone();
-    let publish = || {
-        materializer.materialize(
-            &task,
-            Some("replay-goal-trigger"),
-            TriggerKind::Schedule,
-            Some("replay-goal-trigger-document"),
-            None,
-            None,
-            None,
-            "Finish the task",
-            Some("Finish the task"),
-            &prepared.receipt.fire_key,
-            Some(&prepared),
-            None,
+async fn goal_task_replay_traces_match_the_lean_admission_model() {
+    for case in gents_lean_vocab::families::trigger_materializer_goal_task_replay::cases::<String>()
+    {
+        assert!(case.input.target_existing);
+        let (db, _user, _client_access, behavior) =
+            signed_materializer_agent("goal-task-retained-assignment").await;
+        let agent_did = behavior.agent_did.clone();
+        let agent_identity = behavior.agent_identity.clone();
+        let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
+        let owner = snapshot.local_did.clone();
+        let node = db.node.clone();
+        let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
+        let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+        let session = "replaced-task-goal-session";
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent_did.parse().unwrap(),
+            agent_identity.as_ref(),
         )
-    };
-    assert_eq!(publish().await.unwrap(), prepared.receipt.request_id);
-    let query = format!(
-        "{{AgentRequest {{{}}} TriggerFire {{_docID goal_id request_id}}}}",
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-    );
-    let admitted = access.execute(&query).await.unwrap();
-    let existing_scope = gents_protocol::session::SessionScope {
-        node_did: owner.clone(),
-        session_id: session.to_owned(),
-        requester_did: Some(agent_did.clone()),
-    };
-    assert!(
-        !gents_session::session::origin::task_triggered_opening(&access, &existing_scope)
-            .await
-            .unwrap()
-    );
-    let later_doc = admitted["data"]["AgentRequest"][0]["_docID"]
-        .as_str()
         .unwrap();
-    access.write("test.later_task_is_not_creation", &format!(
-        r#"mutation {{update_AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}, input: {{provenance: {{opening_request_doc_id: "{}"}}}}) {{_docID}}}}"#,
-        escape_graphql_string(&owner), escape_graphql_string(session), escape_graphql_string(later_doc),
-    )).await.unwrap();
-    assert!(
-        !gents_session::session::origin::task_triggered_opening(&access, &existing_scope)
-            .await
-            .unwrap()
-    );
-    assert_eq!(
-        admitted["data"]["TriggerFire"][0]["goal_id"],
-        selected.goal_id
-    );
-    assert_eq!(
-        admitted["data"]["AgentRequest"][0]["input"]["goal_assignment"]["goal_id"],
-        selected.goal_id
-    );
-    assert!(
-        admitted["data"]["AgentRequest"][0]["input"]["goal_assignment"]["root_request_doc_id"]
-            .is_null()
-    );
-    let goal = access
-        .transact_readonly("test.replay_goal", |txn| {
-            Box::pin(crate::goal::load_canonical_goal_in_txn(
-                txn, &owner, session,
-            ))
-        })
-        .await
-        .unwrap()
-        .unwrap();
-    let replacement = crate::goal::replacement_goal_identity(&owner, session, "later-replacement");
-    access
-        .write(
-            "test.replay_later_goal",
-            &format!(
-                "mutation {{update_Goal(docID: \"{}\", input: {{goal_id: \"{}\"}}) {{_docID}}}}",
-                escape_graphql_string(&goal.doc_id),
-                escape_graphql_string(&replacement.goal_id),
-            ),
-        )
-        .await
-        .unwrap();
-    let duplicate = publish().await.unwrap_err();
-    assert_eq!(
-        duplicate
-            .downcast_ref::<MaterializeDuplicate>()
-            .unwrap()
-            .request_id,
-        prepared.receipt.request_id
-    );
-    assert_eq!(access.execute(&query).await.unwrap(), admitted);
-    assert_eq!(
         access
-            .transact_readonly("test.replay_later_goal", |txn| {
-                Box::pin(crate::goal::load_canonical_goal_in_txn(
-                    txn, &owner, session,
+            .transact_write("test.replay_session", |txn| {
+                Box::pin(gents_session::session::ensure_session_in_txn(
+                    txn,
+                    session,
+                    &owner,
+                    &agent_did,
+                    Some(&agent_did),
+                    None,
+                    None,
+                    "2030-01-01T00:00:00Z",
                 ))
             })
             .await
-            .unwrap()
-            .unwrap()
-            .goal_id,
-        replacement.goal_id
-    );
-    node.shutdown().await.expect("node shutdown");
+            .unwrap();
+        let initial = gents_protocol::goal::deterministic_goal_id(&owner, session);
+        let selected =
+            crate::goal::replacement_goal_identity(&owner, session, &case.input.current_goal);
+        access.transact_write("test.replay_current_goal", |txn| {
+            let selected = &selected;
+            let agent_did = &agent_did;
+            let owner = &owner;
+            Box::pin(async move {
+                let existing = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, owner, session)
+                    .await?.expect("existing task session");
+                let input = serde_json::json!({
+                    "node_did": owner, "session_id": session, "session_doc_id": existing.doc_id,
+                    "agent_did": agent_did, "requester_did": agent_did, "creator_did": agent_did,
+                    "parent_linked": true, "goal_id": selected.goal_id, "creation_key": selected.creation_key,
+                    "objective": "Finish the task", "status": "active", "created_at": "2030-01-01T00:00:00Z",
+                });
+                let created = txn.execute_with_variables(
+                    "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
+                    &serde_json::json!({"input": input}),
+                ).await?;
+                let doc = gents_store::graphql::created_doc_id(&created, "Goal")?;
+                txn.add_resource_relationship("Goal", &doc, "parent", "sessions", &existing.doc_id).await?;
+                txn.add_actor_relationship("Goal", &doc, "working_agent", &identity::Did::new(agent_did)?).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.unwrap();
+        let identity = gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: owner.clone(),
+            trigger_id: "replay-goal-trigger".into(),
+            source_collection: "Schedule".into(),
+            source_doc_id: "original-due-occurrence".into(),
+        };
+        let prepared = crate::triggers::engine::durable::PreparedFire {
+            receipt: gents_protocol::trigger_delivery::TriggerFire {
+                fire_key: identity.fire_key(),
+                request_id: identity.request_id(),
+                identity,
+                task_id: "replay-goal-task".into(),
+                session_id: session.into(),
+                goal_id: Some(initial.clone()),
+                goal_objective: Some("Finish the task".into()),
+                goal_token_budget: None,
+                goal_assignment_applied: false,
+                emit_outcome: false,
+                queued_serial: false,
+                source_handoff_id: None,
+                reply_session_id: None,
+                shard_id: None,
+                attempt: None,
+                created_at: "2030-01-01T00:00:00Z".into(),
+            },
+            target_existing: case.input.target_existing,
+            create_session: false,
+            max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
+            replace_prior: false,
+            event_source_generation: None,
+        };
+        let mut task = resolved_task("Finish the task");
+        task.task_id = prepared.receipt.task_id.clone();
+        task.agent_did = agent_did.clone();
+        task.goal_objective_template = prepared.receipt.goal_objective.clone();
+        let publish = || {
+            materializer.materialize(
+                &task,
+                Some("replay-goal-trigger"),
+                TriggerKind::Schedule,
+                Some("replay-goal-trigger-document"),
+                None,
+                None,
+                None,
+                "Finish the task",
+                Some("Finish the task"),
+                &prepared.receipt.fire_key,
+                Some(&prepared),
+                None,
+            )
+        };
+
+        let query = format!(
+            "{{AgentRequest {{{}}} TriggerFire {{_docID goal_id request_id}}}}",
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+        );
+        let existing_scope = gents_protocol::session::SessionScope {
+            node_did: owner.clone(),
+            session_id: session.to_owned(),
+            requester_did: Some(agent_did.clone()),
+        };
+        let goal_name = |goal_id: &str| {
+            if goal_id == initial {
+                return "initial".to_string();
+            }
+            for name in ["first-replacement", "later-replacement"] {
+                if crate::goal::replacement_goal_identity(&owner, session, name).goal_id == goal_id
+                {
+                    return name.to_string();
+                }
+            }
+            goal_id.to_string()
+        };
+        let current_goal = || async {
+            access
+                .transact_readonly("test.replay_goal", |txn| {
+                    Box::pin(crate::goal::load_canonical_goal_in_txn(
+                        txn, &owner, session,
+                    ))
+                })
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        let mut observed = Vec::new();
+        for step in &case.input.steps {
+            match step.action.as_str() {
+                "publish" => {
+                    let before = access.execute(&query).await.unwrap();
+                    let outcome = match publish().await {
+                        Ok(request) if request == prepared.receipt.request_id => "fired",
+                        Ok(request) => panic!("published another request {request}"),
+                        Err(error) => {
+                            assert_eq!(
+                                error
+                                    .downcast_ref::<MaterializeDuplicate>()
+                                    .unwrap()
+                                    .request_id,
+                                prepared.receipt.request_id
+                            );
+                            "duplicate"
+                        }
+                    };
+                    let after = access.execute(&query).await.unwrap();
+                    let fire_goal = after["data"]["TriggerFire"][0]["goal_id"].as_str().unwrap();
+                    let request = &after["data"]["AgentRequest"][0];
+                    assert_eq!(
+                        request["input"]["goal_assignment"]["goal_id"].as_str(),
+                        Some(fire_goal)
+                    );
+                    let opened = gents_session::session::origin::task_triggered_opening(
+                        &access,
+                        &existing_scope,
+                    )
+                    .await
+                    .unwrap();
+                    access.write("test.later_task_is_not_creation", &format!(
+                        r#"mutation {{update_AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}, input: {{provenance: {{opening_request_doc_id: "{}"}}}}) {{_docID}}}}"#,
+                        escape_graphql_string(&owner), escape_graphql_string(session),
+                        escape_graphql_string(request["_docID"].as_str().unwrap()),
+                    )).await.unwrap();
+                    assert_eq!(
+                        gents_session::session::origin::task_triggered_opening(
+                            &access,
+                            &existing_scope
+                        )
+                        .await
+                        .unwrap(),
+                        opened
+                    );
+                    observed.push(gents_lean_vocab::families::trigger_materializer_goal_task_replay::GoalTaskObservation {
+                        outcome: Some(outcome.to_string()),
+                        bound_goal: Some(goal_name(fire_goal)),
+                        rows_changed: Some(before != after),
+                        task_opened: Some(opened),
+                        assignment_root: Some(
+                            !request["input"]["goal_assignment"]["root_request_doc_id"].is_null(),
+                        ),
+                        current_goal: goal_name(&current_goal().await.goal_id),
+                    });
+                }
+                "replace_goal" => {
+                    let goal = current_goal().await;
+                    let replacement = crate::goal::replacement_goal_identity(
+                        &owner,
+                        session,
+                        step.goal.as_deref().unwrap(),
+                    );
+                    access
+                        .write(
+                            "test.replay_later_goal",
+                            &format!(
+                                "mutation {{update_Goal(docID: \"{}\", input: {{goal_id: \"{}\"}}) {{_docID}}}}",
+                                escape_graphql_string(&goal.doc_id),
+                                escape_graphql_string(&replacement.goal_id),
+                            ),
+                        )
+                        .await
+                        .unwrap();
+                    observed.push(gents_lean_vocab::families::trigger_materializer_goal_task_replay::GoalTaskObservation {
+                        outcome: None,
+                        bound_goal: None,
+                        rows_changed: None,
+                        task_opened: None,
+                        assignment_root: None,
+                        current_goal: goal_name(&current_goal().await.goal_id),
+                    });
+                }
+                other => panic!("unsupported goal task action {other}"),
+            }
+        }
+        case.check(observed);
+        node.shutdown().await.expect("node shutdown");
+    }
 }
 
-#[tokio::test]
-async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
-    let (first_db, _first_user, _first_client_access, first_behavior) =
-        signed_materializer_agent("goal-task-first-node").await;
-    let first_did = first_behavior.node_did().to_string();
-    let first_agent = first_behavior.agent_did.clone();
-    let first_node = first_db.node.clone();
-    let first_snapshot = snapshot_with_agent_and_schedules(first_behavior, RapidHashMap::new());
-    let (_first_tx, first_rx) = watch::channel(first_snapshot);
-    let first_materializer = ProductionMaterializer::new(first_node.clone(), first_rx);
-    let (second_db, _second_user, _second_client_access, second_behavior) =
-        signed_materializer_agent("goal-task-second-node").await;
-    let second_did = second_behavior.node_did().to_string();
-    let second_agent = second_behavior.agent_did.clone();
-    let second_node = second_db.node.clone();
-    let second_snapshot = snapshot_with_agent_and_schedules(second_behavior, RapidHashMap::new());
-    let (_second_tx, second_rx) = watch::channel(second_snapshot);
-    let second_materializer = ProductionMaterializer::new(second_node.clone(), second_rx);
-    let task = ResolvedTask {
+fn recovery_task(agent_did: &str) -> ResolvedTask {
+    ResolvedTask {
         emit_outcome: false,
         task_id: "shared-task-id".to_string(),
         name: None,
-        agent_did: first_agent,
+        agent_did: agent_did.to_owned(),
         prompt_template: "shared prompt".to_string(),
         goal_objective_template: Some("shared objective".to_string()),
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
-    };
-    let fire_key = "shared-fire-key";
+    }
+}
 
-    let first_request = first_materializer
+async fn materialize_recovery_fire(
+    materializer: &ProductionMaterializer,
+    task: &ResolvedTask,
+    fire_key: &str,
+) -> String {
+    materializer
         .materialize(
-            &task,
+            task,
             Some("shared-trigger"),
             TriggerKind::Schedule,
             Some("shared-trigger-doc"),
@@ -1142,114 +1173,105 @@ async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
             None,
         )
         .await
-        .expect("first DID materialization");
-    let mut second_task = task.clone();
-    second_task.agent_did = second_agent;
-    let second_request = second_materializer
-        .materialize(
-            &second_task,
-            Some("shared-trigger"),
-            TriggerKind::Schedule,
-            Some("shared-trigger-doc"),
-            None,
-            None,
-            None,
-            "shared prompt",
-            Some("shared objective"),
-            fire_key,
-            None,
-            None,
-        )
-        .await
-        .expect("second DID materialization");
-
-    assert_ne!(first_did, second_did);
-    assert_ne!(first_request, second_request);
-    assert_eq!(
-        first_materializer
-            .recover_goal_task_fire(&task, fire_key)
-            .await
-            .expect("first DID recovery"),
-        Some(first_request)
-    );
-    assert_eq!(
-        second_materializer
-            .recover_goal_task_fire(&second_task, fire_key)
-            .await
-            .expect("second DID recovery"),
-        Some(second_request)
-    );
-    first_node.shutdown().await.unwrap();
-    second_node.shutdown().await.unwrap();
+        .expect("goal Task materialization")
 }
 
 #[tokio::test]
-async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id() {
-    let (db, _user, _client_access, behavior) =
-        signed_materializer_agent("goal-task-foreign-collision").await;
-    let node_did = behavior.node_did().to_string();
-    let agent_did = behavior.agent_did.clone();
-    let agent_identity = behavior.agent_identity.clone();
-    let node = db.node.clone();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent_did.parse().unwrap(),
-        agent_identity.as_ref(),
-    )
-    .unwrap();
-    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let task = ResolvedTask {
-        emit_outcome: false,
-        task_id: "foreign-collision-task".to_string(),
-        name: None,
-        agent_did: agent_did.clone(),
-        prompt_template: "prompt".to_string(),
-        goal_objective_template: Some("objective".to_string()),
-        goal_token_budget: None,
-        output_schema_ref: None,
-        hooks: Vec::new(),
-    };
-    let fire_key = "foreign-collision-fire";
-    let identity = crate::goal::task_goal_fire_identity(&node_did, &task.task_id, fire_key);
-    let foreign = integration_test_agent("foreign");
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        &identity.request_id,
-        foreign.node_did(),
-        &agent_did,
-        &agent_did,
-        &identity.session_id,
-        "foreign collision",
-        "interactive",
-        "2026-11-04T00:00:00Z",
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did),
-    );
-    create.retry_key = Some(identity.retry_key);
-    gents_session::request::admission::sign_agent_request_create(
-        agent_identity.as_ref(),
-        &mut create,
-    )
-    .await
-    .unwrap();
-    access
-        .write(
-            "test.foreign_goal_task_collision",
-            &create.graphql_mutation().unwrap(),
+async fn goal_task_fire_recovery_matches_the_lean_recovery_model() {
+    let fire_key = "shared-fire-key";
+    let (other_db, _other_user, _other_client_access, other_behavior) =
+        signed_materializer_agent("goal-task-recovery-other-node").await;
+    let other_task = recovery_task(&other_behavior.agent_did);
+    let other_node = other_db.node.clone();
+    let (_other_tx, other_rx) = watch::channel(snapshot_with_agent_and_schedules(
+        other_behavior,
+        RapidHashMap::new(),
+    ));
+    let other_materializer = ProductionMaterializer::new(other_node.clone(), other_rx);
+    let other_request = materialize_recovery_fire(&other_materializer, &other_task, fire_key).await;
+    for (index, case) in
+        gents_lean_vocab::families::trigger_materializer_task_fire_recovery::cases::<String>()
+            .into_iter()
+            .enumerate()
+    {
+        let (db, _user, _client_access, behavior) =
+            signed_materializer_agent(&format!("goal-task-recovery-{index}")).await;
+        let node_did = behavior.node_did().to_string();
+        let agent_did = behavior.agent_did.clone();
+        let agent_identity = behavior.agent_identity.clone();
+        let node = db.node.clone();
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent_did.parse().unwrap(),
+            agent_identity.as_ref(),
         )
-        .await
-        .expect("seed visible foreign-scope collision as selected Agent");
-
-    let error = materializer
-        .recover_goal_task_fire(&task, fire_key)
-        .await
-        .expect_err("wrong-principal deterministic binding must conflict");
-    assert!(
-        error.to_string().contains("identity conflicts"),
-        "{error:#}"
-    );
-    node.shutdown().await.unwrap();
+        .unwrap();
+        let (_tx, rx) = watch::channel(snapshot_with_agent_and_schedules(
+            behavior,
+            RapidHashMap::new(),
+        ));
+        let materializer = ProductionMaterializer::new(node.clone(), rx);
+        let task = recovery_task(&agent_did);
+        let identity = crate::goal::task_goal_fire_identity(&node_did, &task.task_id, fire_key);
+        let mut materialized = None;
+        match case.input.row.as_deref() {
+            None => {}
+            Some("materialized") => {
+                materialized =
+                    Some(materialize_recovery_fire(&materializer, &task, fire_key).await);
+            }
+            Some("foreign_node") => {
+                let foreign = integration_test_agent("foreign");
+                let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+                    gents_protocol::request_admission::RequestPurpose::Normal,
+                    &identity.request_id,
+                    foreign.node_did(),
+                    &agent_did,
+                    &agent_did,
+                    &identity.session_id,
+                    "foreign collision",
+                    "interactive",
+                    "2026-11-04T00:00:00Z",
+                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                        &agent_did,
+                    ),
+                );
+                create.retry_key = Some(identity.retry_key.clone());
+                gents_session::request::admission::sign_agent_request_create(
+                    agent_identity.as_ref(),
+                    &mut create,
+                )
+                .await
+                .unwrap();
+                access
+                    .write(
+                        "test.foreign_goal_task_collision",
+                        &create.graphql_mutation().unwrap(),
+                    )
+                    .await
+                    .expect("seed visible foreign-scope collision as selected Agent");
+            }
+            Some(other) => panic!("unsupported recovery row {other}"),
+        }
+        let (disposition, recovered) =
+            match materializer.recover_goal_task_fire(&task, fire_key).await {
+                Ok(None) => ("absent".to_string(), None),
+                Ok(Some(request)) => ("recovered".to_string(), Some(request)),
+                Err(error) if error.to_string().contains("identity conflicts") => {
+                    ("conflict".to_string(), None)
+                }
+                Err(error) => panic!("{error:#}"),
+            };
+        case.check(
+            gents_lean_vocab::families::trigger_materializer_task_fire_recovery::RecoveryOutput {
+                disposition,
+                recovers_materialized: recovered.is_some() && recovered == materialized,
+                other_node_request_differs: other_request != identity.request_id,
+            },
+        );
+        node.shutdown().await.unwrap();
+    }
+    other_node.shutdown().await.unwrap();
 }
 
 /// Writes a runtime request as `access`'s Agent, which owns it.
@@ -1514,69 +1536,67 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
 }
 
 #[tokio::test]
-async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
-    let trigger = "review-\"verify";
-    let (_db, agent, access, materializer, _) =
-        signed_trigger_materializer("durable-group-marker", &[trigger, "other-trigger"]).await;
-    let owner = agent.node_did();
-    let correlation = "run-\"42";
-    let old =
-        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["old-membership"]);
-    let next =
-        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["new-membership"]);
-    create_request(
-        &access,
-        &old,
-        owner,
-        "completed",
-        trigger,
-        TriggerKind::Event,
-        correlation,
-    )
-    .await;
-    assert!(materializer
-        .has_materialized_group_request(owner, trigger, &old)
-        .await
-        .unwrap());
-    assert!(
-        !materializer
-            .has_materialized_group_request(owner, trigger, &next)
-            .await
-            .unwrap(),
-        "same correlation in a different generation must remain eligible"
-    );
-    assert!(!materializer
-        .has_materialized_group_request("did:key:z-other", trigger, &old)
-        .await
-        .unwrap());
-    assert!(!materializer
-        .has_materialized_group_request(owner, "other-trigger", &old)
-        .await
-        .unwrap());
-    let goal = crate::goal::task_goal_fire_identity(owner, "old-task-name", &next);
-    create_request(
-        &access,
-        &goal.request_id,
-        owner,
-        "completed",
-        trigger,
-        TriggerKind::Event,
-        correlation,
-    )
-    .await;
-    assert!(
-        materializer
-            .has_materialized_group_request(owner, trigger, &next)
-            .await
-            .unwrap(),
-        "goal task still marks the same delivery after task rename or goal-mode switch"
-    );
-    let later =
-        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["third-membership"]);
-    assert!(!materializer
-        .has_materialized_group_request(owner, trigger, &later)
-        .await
-        .unwrap());
+async fn group_marker_reads_match_the_lean_marker_model() {
+    for (index, case) in gents_lean_vocab::families::trigger_materializer_group_marker::cases()
+        .into_iter()
+        .enumerate()
+    {
+        let quoted_trigger = "review-\"verify";
+        let (_db, agent, access, materializer, _) = signed_trigger_materializer(
+            &format!("durable-group-marker-{index}"),
+            &[quoted_trigger, "other-trigger"],
+        )
+        .await;
+        let owner = |name: &str| match name {
+            "owner" => agent.node_did().to_owned(),
+            "other-owner" => "did:key:z-other".to_owned(),
+            other => panic!("unsupported owner {other}"),
+        };
+        let trigger = |name: &str| match name {
+            "trigger" => quoted_trigger.to_owned(),
+            other => other.to_owned(),
+        };
+        let key = |generation: &str| {
+            gents_protocol::trigger_delivery::durable_fire_key(
+                "event-group",
+                &[&format!("{generation}-membership")],
+            )
+        };
+        for row in &case.input.rows {
+            let row_owner = owner(&row.owner);
+            let request_id = match &row.goal_task {
+                None => key(&row.key),
+                Some(task) => {
+                    crate::goal::task_goal_fire_identity(&row_owner, task, &key(&row.key))
+                        .request_id
+                }
+            };
+            create_request(
+                &access,
+                &request_id,
+                &row_owner,
+                "completed",
+                &trigger(&row.trigger),
+                TriggerKind::Event,
+                "run-\"42",
+            )
+            .await;
+        }
+        let mut observed = Vec::new();
+        for query in &case.input.queries {
+            observed.push(
+                materializer
+                    .has_materialized_group_request(
+                        &owner(&query.owner),
+                        &trigger(&query.trigger),
+                        &key(&query.key),
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+        case.check(observed);
+    }
 }
 
 #[tokio::test]
@@ -1628,109 +1648,82 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
 }
 
 #[tokio::test]
-async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclusion() {
-    let trigger = "review-verify";
-    let (_db, agent, access, materializer, _) =
-        signed_trigger_materializer("trigger-wide-gate", &[trigger, "other-trigger"]).await;
-    let owner = agent.node_did();
-    create_request(
-        &access,
-        "old-schedule",
-        owner,
-        "pending",
-        trigger,
-        TriggerKind::Schedule,
-        "old-correlation",
-    )
-    .await;
-    assert!(
-        materializer
-            .has_active_runtime_request_for_trigger(owner, trigger, None)
-            .await
-            .unwrap(),
-        "changing Trigger.source to Event cannot forget a prior Schedule request"
-    );
-    create_request(
-        &access,
-        "new-event",
-        owner,
-        "pending",
-        trigger,
-        TriggerKind::Event,
-        "new-correlation",
-    )
-    .await;
-    create_request(
-        &access,
-        "terminal",
-        owner,
-        "completed",
-        trigger,
-        TriggerKind::Event,
-        "terminal-correlation",
-    )
-    .await;
-    create_request(
-        &access,
-        "foreign-owner",
-        "other-owner",
-        "pending",
-        trigger,
-        TriggerKind::Event,
-        "new-correlation",
-    )
-    .await;
-    create_request(
-        &access,
-        "foreign-trigger",
-        owner,
-        "pending",
-        "other-trigger",
-        TriggerKind::Event,
-        "new-correlation",
-    )
-    .await;
-    assert!(materializer
-        .has_active_runtime_request_for_trigger(owner, trigger, Some("old-schedule"))
-        .await
-        .unwrap());
-    assert_eq!(
-        materializer
-            .supersede_active_runtime_requests_for_trigger(owner, trigger, Some("old-schedule"))
-            .await
-            .unwrap(),
-        1
-    );
-    assert!(
-        !materializer
-            .has_active_runtime_request_for_trigger(owner, trigger, Some("old-schedule"))
-            .await
-            .unwrap(),
-        "self-retry exclusion must retain its own request and remove only the competing request"
-    );
-    assert!(materializer
-        .has_active_runtime_request_for_trigger(owner, trigger, None)
-        .await
-        .unwrap());
-    assert_eq!(
-        materializer
-            .supersede_active_runtime_requests_for_trigger(owner, trigger, None)
-            .await
-            .unwrap(),
-        1
-    );
-    assert!(!materializer
-        .has_active_runtime_request_for_trigger(owner, trigger, None)
-        .await
-        .unwrap());
-    assert!(materializer
-        .has_active_runtime_request_for_trigger("other-owner", trigger, None)
-        .await
-        .unwrap());
-    assert!(materializer
-        .has_active_runtime_request_for_trigger(owner, "other-trigger", None)
-        .await
-        .unwrap());
+async fn trigger_wide_gate_traces_match_the_lean_gate_model() {
+    for (index, case) in
+        gents_lean_vocab::families::trigger_materializer_trigger_wide_gate::cases::<String, String>(
+        )
+        .into_iter()
+        .enumerate()
+    {
+        let (_db, agent, access, materializer, _) = signed_trigger_materializer(
+            &format!("trigger-wide-gate-{index}"),
+            &["review-verify", "other-trigger"],
+        )
+        .await;
+        let owner = |name: &str| match name {
+            "owner" => agent.node_did().to_owned(),
+            other => other.to_owned(),
+        };
+        let trigger = |name: &str| match name {
+            "trigger" => "review-verify".to_owned(),
+            other => other.to_owned(),
+        };
+        let mut observed = Vec::new();
+        for step in &case.input {
+            let (owner, trigger) = (owner(&step.owner), trigger(&step.trigger));
+            match step.action.as_str() {
+                "create" => {
+                    let id = step.request.as_deref().unwrap();
+                    create_request(
+                        &access,
+                        id,
+                        &owner,
+                        if step.active { "pending" } else { "completed" },
+                        &trigger,
+                        match step.kind.as_str() {
+                            "schedule" => TriggerKind::Schedule,
+                            "event" => TriggerKind::Event,
+                            other => panic!("unsupported kind {other}"),
+                        },
+                        &format!("{id}-correlation"),
+                    )
+                    .await;
+                    observed.push(gents_lean_vocab::families::trigger_materializer_trigger_wide_gate::GateObservation {
+                        gated: None,
+                        superseded: None,
+                    });
+                }
+                "gate" => observed.push(gents_lean_vocab::families::trigger_materializer_trigger_wide_gate::GateObservation {
+                    gated: Some(
+                        materializer
+                            .has_active_runtime_request_for_trigger(
+                                &owner,
+                                &trigger,
+                                step.request.as_deref(),
+                            )
+                            .await
+                            .unwrap(),
+                    ),
+                    superseded: None,
+                }),
+                "supersede" => observed.push(gents_lean_vocab::families::trigger_materializer_trigger_wide_gate::GateObservation {
+                    gated: None,
+                    superseded: Some(
+                        materializer
+                            .supersede_active_runtime_requests_for_trigger(
+                                &owner,
+                                &trigger,
+                                step.request.as_deref(),
+                            )
+                            .await
+                            .unwrap() as u64,
+                    ),
+                }),
+                other => panic!("unsupported gate action {other}"),
+            }
+        }
+        case.check(observed);
+    }
 }
 
 fn workspace_writer_task(agent_did: &str) -> ResolvedTask {
@@ -2345,151 +2338,114 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
 }
 
 #[tokio::test]
-async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
-    let (_db, agent, access, materializer, snapshot) =
-        signed_trigger_materializer("admitted-event-replay", &["replay-trigger"]).await;
-    let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: snapshot.local_did.clone(),
-        trigger_id: "replay-trigger".into(),
-        source_collection: "ReplayWork".into(),
-        source_doc_id: "physical-source".into(),
-    };
-    let key = crate::triggers::engine::durable::fire_key(&identity);
-    let fire = gents_protocol::trigger_delivery::TriggerFire {
-        fire_key: key.clone(),
-        request_id: identity.request_id(),
-        identity,
-        task_id: "replay-task".into(),
-        session_id: "original-session".into(),
-        goal_id: None,
-        goal_objective: None,
-        goal_token_budget: None,
-        goal_assignment_applied: false,
-        emit_outcome: false,
-        queued_serial: false,
-        source_handoff_id: None,
-        reply_session_id: None,
-        shard_id: None,
-        attempt: None,
-        created_at: "2030-01-01T00:00:00Z".into(),
-    };
-    // The Agent admitted this fire and owns its receipt and request.
-    access.transact_write("test.seed_committed_replay", |txn| {
-        let fire = fire.clone();
-        let agent_did = agent.agent_did.clone();
-        Box::pin(async move {
-            assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
-            txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
-                "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_did": agent_did, "purpose": "normal",
-                "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
-                "created_at": fire.created_at
-            }})).await?;
-            Ok::<_, anyhow::Error>(())
-        })
-    }).await.unwrap();
-    let (_, rx) = watch::channel(snapshot);
-    let engine = TriggerEngine::new(rx, Arc::new(materializer));
-    let mut task = resolved_task("{{ doc.field_added_after_admission }}");
-    task.task_id = "replay-task".into();
-    task.agent_did = agent.agent_did.clone();
-    let result = engine.dispatch(FireIntent {
-        trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Event,
-        task, concurrency: ConcurrencyMode::LatestOnly,
-        event_vars: serde_json::json!({"source_collection":"ReplayWork", "source_doc_id":"physical-source"}),
-        doc_vars: None, correlation: None, group_vars: None, trigger_context: None, args_vars: None,
-        durable_fire_key: "replayed-arrival".into(), pre_materialized_request_id: None,
+async fn replayed_dispatch_matches_the_lean_replay_model() {
+    for (index, case) in
+        gents_lean_vocab::families::trigger_materializer_dispatch::cases::<String>()
+            .into_iter()
+            .enumerate()
+    {
+        let (_db, agent, access, materializer, snapshot) =
+            signed_trigger_materializer(&format!("replay-dispatch-{index}"), &["replay-trigger"])
+                .await;
+        let (trigger_kind, collection, document, durable_fire_key) = match case.input.kind.as_str()
+        {
+            "event" => (
+                TriggerKind::Event,
+                "ReplayWork",
+                "physical-source",
+                "replayed-arrival",
+            ),
+            "schedule" => (
+                TriggerKind::Schedule,
+                "Schedule",
+                "persisted-due-occurrence",
+                "persisted-due-occurrence",
+            ),
+            other => panic!("unsupported replay kind {other}"),
+        };
+        let identity = gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: snapshot.local_did.clone(),
+            trigger_id: "replay-trigger".into(),
+            source_collection: collection.into(),
+            source_doc_id: if case.input.admitted {
+                document.into()
+            } else {
+                "earlier-source".into()
+            },
+        };
+        let fire = gents_protocol::trigger_delivery::TriggerFire {
+            fire_key: crate::triggers::engine::durable::fire_key(&identity),
+            request_id: identity.request_id(),
+            identity,
+            task_id: "replay-task".into(),
+            session_id: "original-session".into(),
+            goal_id: None,
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_assignment_applied: false,
+            emit_outcome: false,
+            queued_serial: false,
+            source_handoff_id: None,
+            reply_session_id: None,
+            shard_id: None,
+            attempt: None,
+            created_at: "2030-01-01T00:00:00Z".into(),
+        };
+        access.transact_write("test.seed_committed_replay", |txn| {
+            let fire = fire.clone();
+            let agent_did = agent.agent_did.clone();
+            Box::pin(async move {
+                assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
+                txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
+                    "request_id": fire.request_id, "node_did": fire.identity.owner_did,
+                    "session_id": fire.session_id, "agent_did": agent_did, "purpose": "normal",
+                    "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
+                    "created_at": fire.created_at
+                }})).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.unwrap();
+        let (_, rx) = watch::channel(snapshot);
+        let engine = TriggerEngine::new(rx, Arc::new(materializer));
+        let mut task = resolved_task(if case.input.renders {
+            "work"
+        } else {
+            "{{ doc.field_added_after_admission }}"
+        });
+        task.task_id = "replay-task".into();
+        task.agent_did = agent.agent_did.clone();
+        let result = engine.dispatch(FireIntent {
+            trigger_id: Some("replay-trigger".into()), trigger_kind,
+            task, concurrency: ConcurrencyMode::LatestOnly,
+            event_vars: serde_json::json!({"source_collection":"ReplayWork", "source_doc_id":"physical-source"}),
+            doc_vars: None, correlation: None, group_vars: None, trigger_context: None, args_vars: None,
+            durable_fire_key: durable_fire_key.into(), pre_materialized_request_id: None,
             event_source_generation: None,
-        on_result: Box::new(|_| {}),
-    }).await;
-    assert!(
-        matches!(result, FireResult::Duplicate { request_id } if request_id == fire.request_id)
-    );
-    let response = access
-        .execute(&format!(
-            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
-            escape_graphql_string(&fire.request_id)
-        ))
-        .await
-        .unwrap();
-    assert_eq!(
-        response["data"]["AgentRequest"][0]["lifecycle_state"],
-        "processing"
-    );
-}
-
-#[tokio::test]
-async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession() {
-    let (_db, agent, access, materializer, snapshot) =
-        signed_trigger_materializer("admitted-schedule-replay", &["replay-trigger"]).await;
-    let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: snapshot.local_did.clone(),
-        trigger_id: "replay-trigger".into(),
-        source_collection: "Schedule".into(),
-        source_doc_id: "persisted-due-occurrence".into(),
-    };
-    let key = crate::triggers::engine::durable::fire_key(&identity);
-    let fire = gents_protocol::trigger_delivery::TriggerFire {
-        fire_key: key.clone(),
-        request_id: identity.request_id(),
-        identity,
-        task_id: "replay-task".into(),
-        session_id: "original-session".into(),
-        goal_id: None,
-        goal_objective: None,
-        goal_token_budget: None,
-        goal_assignment_applied: false,
-        emit_outcome: false,
-        queued_serial: false,
-        source_handoff_id: None,
-        reply_session_id: None,
-        shard_id: None,
-        attempt: None,
-        created_at: "2030-01-01T00:00:00Z".into(),
-    };
-    // The Agent admitted this fire and owns its receipt and request.
-    access.transact_write("test.seed_committed_replay", |txn| {
-        let fire = fire.clone();
-        let agent_did = agent.agent_did.clone();
-        Box::pin(async move {
-            assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
-            txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
-                "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_did": agent_did, "purpose": "normal",
-                "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
-                "created_at": fire.created_at
-            }})).await?;
-            Ok::<_, anyhow::Error>(())
-        })
-    }).await.unwrap();
-    let (_, rx) = watch::channel(snapshot);
-    let engine = TriggerEngine::new(rx, Arc::new(materializer));
-    let mut task = resolved_task("{{ doc.field_added_after_admission }}");
-    task.task_id = "replay-task".into();
-    task.agent_did = agent.agent_did.clone();
-    let result = engine.dispatch(FireIntent {
-        trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Schedule,
-        task, concurrency: ConcurrencyMode::LatestOnly,
-        event_vars: serde_json::json!({"source_collection":"ReplayWork", "source_doc_id":"physical-source"}),
-        doc_vars: None, correlation: None, group_vars: None, trigger_context: None, args_vars: None,
-        durable_fire_key: "persisted-due-occurrence".into(), pre_materialized_request_id: None,
-            event_source_generation: None,
-        on_result: Box::new(|_| {}),
-    }).await;
-    assert!(
-        matches!(result, FireResult::Duplicate { request_id } if request_id == fire.request_id)
-    );
-    let response = access
-        .execute(&format!(
-            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
-            escape_graphql_string(&fire.request_id)
-        ))
-        .await
-        .unwrap();
-    assert_eq!(
-        response["data"]["AgentRequest"][0]["lifecycle_state"],
-        "processing"
-    );
+            on_result: Box::new(|_| {}),
+        }).await;
+        let outcome = match &result {
+            FireResult::Duplicate { request_id } if request_id == &fire.request_id => {
+                "duplicate".to_string()
+            }
+            FireResult::Fired { .. } => "fired".to_string(),
+            FireResult::Rejected { .. } => "rejected".to_string(),
+            other => format!("{other:?}"),
+        };
+        let response = access
+            .execute(&format!(
+                "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
+                escape_graphql_string(&fire.request_id)
+            ))
+            .await
+            .unwrap();
+        case.check(
+            gents_lean_vocab::families::trigger_materializer_dispatch::ReplayOutput {
+                outcome,
+                prior_work_kept: response["data"]["AgentRequest"][0]["lifecycle_state"]
+                    == "processing",
+            },
+        );
+    }
 }
 
 #[tokio::test]
