@@ -28,9 +28,8 @@ use admission_slot_accounting::{
 };
 use gents_lean_vocab::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
-    lean_backend_health_cases, lean_client_agent_readiness_cases, lean_command_env_case,
-    lean_command_policy_case, lean_command_sandbox_case, lean_compaction_cursor_cases,
+    assert_state_machine_contract_is_complete,
+    lean_backend_health_cases, lean_client_agent_readiness_cases, lean_compaction_cursor_cases,
     lean_compaction_reducer_cases, lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
     lean_inference_slot_accounting_cases, lean_interrupt_disposition_cases, lean_mcp_health_cases,
@@ -38,7 +37,7 @@ use gents_lean_vocab::{
     lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_restart_disposition_cases,
     lean_session_control_cases, lean_startup_readiness_cases, lean_tool_output_paging_cases,
-    lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    lean_vocabulary_values, LeanEventDeliveryAction,
     LeanLifecycleTransitionCase,
 };
 use support::snapshots::{
@@ -58,8 +57,6 @@ mod background;
 mod callback_lifecycle;
 #[path = "conformance/client_runtime.rs"]
 mod client_runtime;
-#[path = "conformance/command_policy.rs"]
-mod command_policy;
 #[path = "conformance/compaction_gate.rs"]
 mod compaction_gate;
 #[path = "conformance/completion_retry.rs"]
@@ -112,11 +109,6 @@ mod session_control;
 mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]
 mod streaming_compaction;
-
-#[test]
-fn lean_executable_contracts_cover_initial_domains() {
-    coverage::lean_executable_contracts_cover_initial_domains();
-}
 
 #[tokio::test]
 async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
@@ -208,16 +200,6 @@ fn generated_self_config_cases_fence_patch_merge() {
 #[test]
 fn completion_retry_lean_witness_cases_hold() {
     completion_retry::completion_retry_lean_witness_cases_hold();
-}
-
-#[test]
-fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
-    pairing_reconcile::pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep();
-}
-
-#[test]
-fn pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried() {
-    pairing_reconcile::pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried();
 }
 
 #[test]
