@@ -1339,18 +1339,12 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         .find(|body| canonical(body) == captured)
         .expect("the successor capture must match an actual provider request");
     let messages = retry_body["messages"].as_array().unwrap();
-    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let case = contract["retry_entry_cases"]
-        .as_array()
-        .unwrap()
+    let cases = &gents_lean_vocab::lean_contract_snapshot().retry_entry_cases;
+    let case = cases
         .iter()
-        .find(|case| {
-            case["resume"] == true
-                && case["history"] == serde_json::json!([1, 2, 3])
-                && case["context"].is_null()
-        })
+        .find(|case| case.resume && case.history == vec![1, 2, 3] && case.context.is_none())
         .unwrap();
-    let expected = case["expected"].as_array().unwrap();
+    let expected = &case.expected;
     assert_eq!(
         messages
             .iter()
@@ -1373,7 +1367,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     )).await.unwrap();
     assert_eq!(
         rows["data"]["AgentMessage"].as_array().unwrap().len(),
-        usize::from(case["publish"].as_bool().unwrap())
+        usize::from(case.publish)
     );
     fixture.runtime.shutdown().await;
 }

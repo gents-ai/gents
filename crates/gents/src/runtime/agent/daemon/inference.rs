@@ -1015,12 +1015,12 @@ pub(super) mod tests {
     #[test]
     fn retry_entry_matches_lean_frontier() {
         for case in &gents_lean_vocab::lean_contract_snapshot().retry_entry_cases {
-            let message = |value: &serde_json::Value| {
+            let message = |value: &u64| {
                 use gents_inference::llm::message::{
                     AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
                     UserContent,
                 };
-                let native = match value.as_u64().unwrap() {
+                let native = match *value {
                     2 => gents_inference::llm::message::Message::Assistant {
                         request_id: None,
                         id: None,
@@ -1051,29 +1051,19 @@ pub(super) mod tests {
                 };
                 super::TaggedMessage::unassociated(native)
             };
-            let history = case["history"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(message)
-                .collect();
-            let context = (!case["context"].is_null()).then(|| message(&case["context"]).message);
+            let history = case.history.iter().map(message).collect();
+            let context = case.context.as_ref().map(|value| message(value).message);
             let (mut actual, prompt) = super::request_entry(
                 history,
-                &gents_inference::llm::message::Message::user(case["authored"].to_string()),
-                case["resume"].as_bool().unwrap(),
+                &gents_inference::llm::message::Message::user(case.authored.to_string()),
+                case.resume,
                 context.as_ref(),
                 &[],
             )
             .unwrap();
             actual.push(prompt);
-            let expected: Vec<_> = case["expected"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(message)
-                .collect();
-            assert_eq!(actual, expected, "{case}");
+            let expected: Vec<_> = case.expected.iter().map(message).collect();
+            assert_eq!(actual, expected, "{case:?}");
         }
     }
 

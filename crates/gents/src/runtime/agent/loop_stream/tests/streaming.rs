@@ -254,7 +254,7 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             RawStreamingChoice::FinalResponse(()),
         ]);
         let mut loop_config = config(1);
-        loop_config.resume_from_history = case["resume"].as_bool().unwrap();
+        loop_config.resume_from_history = case.resume;
         let context = gents_inference::rendered_request::RenderedRequestContext {
             request_doc_id: "retry-input-doc".into(),
             request_commit_cid: "bafy-retry".into(),
@@ -304,10 +304,6 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             authored
         })
         .await;
-        assert_eq!(
-            authored,
-            usize::from(case["publish"].as_bool().unwrap()),
-            "{case}"
-        );
+        assert_eq!(authored, usize::from(case.publish), "{case:?}");
     }
 }
