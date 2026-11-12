@@ -3194,7 +3194,6 @@ pub struct LeanContractSnapshot {
     pub plugin_reference_cases: Vec<serde_json::Value>,
     pub plugin_pin_cases: Vec<serde_json::Value>,
     pub pack_wire_lock_cases: Vec<serde_json::Value>,
-    pub pack_wire_target_cases: Vec<serde_json::Value>,
     pub pack_finality_cases: Vec<serde_json::Value>,
     pub hosted_plugin_cases: Vec<serde_json::Value>,
     pub readiness_publication_cases: Vec<LeanReadinessPublicationCase>,

@@ -163,12 +163,17 @@ def wireLockCasesJson : String := jsonArray ([false, true].map fun held =>
     toString (Configuration.wireAndPluginPublishAllowed held) ++
     ",\"resolve_allowed\":" ++ toString (Configuration.stagedPluginResolutionAllowed held) ++ "}")
 
-def wireTargetCasesJson : String := jsonArray (
-  [false, true].flatMap fun localTarget => [false, true].flatMap fun preview =>
-    [false, true].map fun remove =>
-      "{\"local\":" ++ toString localTarget ++ ",\"preview\":" ++ toString preview ++
-      ",\"remove\":" ++ toString remove ++ ",\"allowed\":" ++
-      toString (Configuration.wireTargetAllowed localTarget preview remove) ++ "}")
+structure WireTargetInput where
+  «local» : Bool
+  preview : Bool
+  remove : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def wireTarget : Conformance.Family WireTargetInput Bool where
+  inputs := [false, true].flatMap fun localTarget => [false, true].flatMap fun preview =>
+    [false, true].map fun remove => { «local» := localTarget, preview, remove }
+  model := fun i => Configuration.wireTargetAllowed i.«local» i.preview i.remove
 
 def operatorWireCasesJson : String := jsonArray (
   [false, true].flatMap fun operator => [false, true].flatMap fun ready =>

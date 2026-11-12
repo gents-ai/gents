@@ -908,10 +908,6 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
     let access = gents_store::config_client::ConfigAccess::graphql(format!(
         "http://{address}/api/v0/graphql"
     ));
-    let cases: Value =
-        tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
-            .await
-            .unwrap();
     for (preview, remove) in [(false, false), (true, false), (false, true)] {
         let request = gents_pack::pack::plugin_wire::WireRequest {
             plugin: "acme/missing".into(),
@@ -932,16 +928,7 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
         .await
         .unwrap_err();
         let text = format!("{error:#}");
-        let allowed = cases["pack_wire_target_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| {
-                case["local"] == false && case["preview"] == preview && case["remove"] == remove
-            })
-            .unwrap()["allowed"]
-            .as_bool()
-            .unwrap();
+        let allowed = gents_pack::pack::plugin_wire::wire_target_allowed(false, preview, remove);
         assert_eq!(
             text.contains("cannot publish a plugin pin through GraphQL"),
             !allowed,
