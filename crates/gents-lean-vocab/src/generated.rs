@@ -3031,7 +3031,6 @@ pub struct LeanContractSnapshot {
     >,
     pub session_input_edit_native_claim_cases: Vec<serde_json::Value>,
     pub client_optimistic_send_cases: serde_json::Value,
-    pub identity_client_agent_recovery_cases: Vec<LeanIdentityClientAgentRecoveryCase>,
     pub client_publication_protected_collection: String,
     pub watcher_actor_cases: Vec<LeanWatcherActorCase>,
     pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
@@ -6013,37 +6012,6 @@ pub struct LeanIdentityBootstrapReservationCase {
     pub expected: bool,
     pub file_synced: bool,
     pub name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanIdentityClientAgentJournalStatus {
-    Fresh,
-    Pending,
-    Succeeded,
-    Failed,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientAgentRecoveryCase {
-    pub name: String,
-    pub actor_matches: bool,
-    pub record_present: bool,
-    pub binding_matches: bool,
-    pub commit: LeanIdentityClientAgentJournalStatus,
-    pub parent: LeanIdentityClientAgentJournalStatus,
-    pub executor: LeanIdentityClientAgentJournalStatus,
-    pub expected: LeanIdentityClientAgentRecoveryDisposition,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanIdentityClientAgentRecoveryDisposition {
-    Proceed,
-    BindingMismatch,
-    CommitUnknown,
-    ExplicitRepair,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

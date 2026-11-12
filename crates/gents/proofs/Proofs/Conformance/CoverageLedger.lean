@@ -483,9 +483,7 @@ def stateMachineCoverage : List CoverageEntry :=
   ]
 
 def caseCoverage : List CoverageEntry :=
-  [ tagged (followUpCoverage
-      "identity_client_agent_recovery_cases" "IdentityClientAgentRecoveryCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  [ tagged (consumerCoverage "family" "client_agent_journal_recovery")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "network_protocol_resource")
       "identity-permission" [Surface.runtimeInternal]

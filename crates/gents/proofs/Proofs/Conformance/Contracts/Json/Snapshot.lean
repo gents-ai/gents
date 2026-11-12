@@ -717,8 +717,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
     ++ "\"client_optimistic_send_cases\":"
       ++ ClientOptimisticSend.casesJson ++ ","
-    ++ "\"identity_client_agent_recovery_cases\":"
-      ++ Identity.ClientAgentJournal.recoveryCasesJson ++ ","
     ++ "\"client_publication_protected_collection\":"
       ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
     ++ "\"identity_bootstrap_cases\":"
