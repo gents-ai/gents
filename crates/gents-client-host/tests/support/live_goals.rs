@@ -62,8 +62,7 @@ pub async fn prepare(root: &Path, scenario: &str, gates: &[HeldTool]) -> Result<
                 "editor-goal-delivery-fixture.json",
                 json!({"objective":format!("Recover this installed Goal without replacing its input. {} When this Goal is later resumed, call update_goal with status complete.", gates[0].prompt()),
                     "capture":"unsaved Goal delivery context\n",
-                    "draft":"Keep this newer Goal delivery draft.","gate":descriptors[0],
-                    "image":{"name":"goal.png","mediaType":"image/png","data":super::super::goal_delivery::IMAGE_DATA}}),
+                    "draft":"Keep this newer Goal delivery draft.","gate":descriptors[0]}),
             )
         }
         _ => return Ok(()),
@@ -134,10 +133,7 @@ pub async fn verify(
                 .captured_context
                 .iter()
                 .any(|capture| Some(capture.content.as_str()) == ui["capture"].as_str()));
-            ensure!(
-                input.attachments.len() == 1
-                    && Some(input.attachments[0].data.as_str()) == ui["image"]["data"].as_str()
-            );
+            ensure!(input.attachments.is_empty());
         }
     }
     for key in ["queued", "followup"] {
