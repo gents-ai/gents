@@ -1,5 +1,5 @@
 use super::*;
-use gents_lean_vocab::families::goal_session_observation_contracts_classification as family;
+use gents_lean_vocab::families::goal_session_observation_contracts_classification as wire;
 use crate::goal::operator_resume::support::{Fixture, SESSION};
 use futures::FutureExt;
 use serde_json::{json, Value};
@@ -436,8 +436,8 @@ fn modeled_number(value: &str, prefix: &str) -> u64 {
 
 fn modeled_goal(
     reference: &gents_protocol::request_input::GoalAssignmentInput,
-) -> family::Reference {
-    family::Reference {
+) -> wire::Reference {
+    wire::Reference {
         goal: modeled_number(&reference.goal_id, "goal:"),
         root: reference
             .root_request_doc_id
@@ -446,25 +446,25 @@ fn modeled_goal(
     }
 }
 
-fn modeled_state(value: &SessionGoalObservationState) -> family::StateWire<String> {
+fn modeled_state(value: &SessionGoalObservationState) -> wire::StateWire<String> {
     let cause = |cause: &SessionGoalUnknownCause| {
         serde_json::from_value(serde_json::to_value(cause).unwrap()).unwrap()
     };
     match value {
-        SessionGoalObservationState::NoReadableSession => family::StateWire {
+        SessionGoalObservationState::NoReadableSession => wire::StateWire {
             kind: "no_readable_session".into(),
             cause: None,
             goal: None,
         },
-        SessionGoalObservationState::Unknown(unknown) => family::StateWire {
+        SessionGoalObservationState::Unknown(unknown) => wire::StateWire {
             kind: "unknown".into(),
             cause: Some(cause(unknown)),
             goal: None,
         },
-        SessionGoalObservationState::Observed(observation) => family::StateWire {
+        SessionGoalObservationState::Observed(observation) => wire::StateWire {
             kind: "observed".into(),
             cause: None,
-            goal: observation.goal.as_ref().map(|goal| family::Reference {
+            goal: observation.goal.as_ref().map(|goal| wire::Reference {
                 goal: modeled_number(&goal.snapshot.goal_id, "goal:"),
                 root: goal
                     .assignment_root_request_doc_id
@@ -559,7 +559,7 @@ async fn generated_session_goal_reads_classify_and_bind() {
             .err()
             .map(|refused| serde_json::from_value(json!(refused.cause())).unwrap());
         let bind = match bound {
-            Err(_) => family::PreparedWire {
+            Err(_) => wire::PreparedWire {
                 kind: "pending".into(),
                 reference: None,
             },
@@ -567,13 +567,13 @@ async fn generated_session_goal_reads_classify_and_bind() {
                 let mut unchanged = prepared.clone();
                 unchanged.goal_assignment = input.goal_assignment.clone();
                 assert_eq!(unchanged, input, "{case}: binding changes only the assignment");
-                family::PreparedWire {
+                wire::PreparedWire {
                     kind: "prepared".into(),
                     reference: prepared.goal_assignment.as_ref().map(modeled_goal),
                 }
             }
         };
-        modeled.check(family::ClassificationOutput {
+        modeled.check(wire::ClassificationOutput {
             state: observed_state,
             next,
             bind,

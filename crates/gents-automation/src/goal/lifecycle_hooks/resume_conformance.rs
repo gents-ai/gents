@@ -1,5 +1,5 @@
 use super::*;
-use gents_lean_vocab::families::hooks_contracts_goal_resume as family;
+use gents_lean_vocab::families::hooks_contracts_goal_resume as wire;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -21,14 +21,14 @@ fn goal_id(goal: u64) -> String {
     format!("goal-{goal}")
 }
 
-fn reference(lean: &family::ResumeReferenceWire) -> GoalAssignmentInput {
+fn reference(lean: &wire::ResumeReferenceWire) -> GoalAssignmentInput {
     GoalAssignmentInput {
         goal_id: goal_id(lean.goal),
         root_request_doc_id: lean.root.map(doc),
     }
 }
 
-fn goal_row(node: &str, agent: &str, goal: &family::Goal<String>) -> Row {
+fn goal_row(node: &str, agent: &str, goal: &wire::Goal<String>) -> Row {
     Row {
         doc: DocRef::new("Goal", GOAL_DOC),
         revision: 1,
@@ -73,13 +73,13 @@ fn number(value: &str, prefix: &str) -> u64 {
     value.strip_prefix(prefix).unwrap().parse().unwrap()
 }
 
-fn goal_of(value: &serde_json::Value) -> family::Goal<String> {
+fn goal_of(value: &serde_json::Value) -> wire::Goal<String> {
     let status = value["status"].as_str().unwrap();
     assert!(
         matches!(status, "active" | "paused" | "complete"),
         "unmodelled Goal status {status}"
     );
-    family::Goal {
+    wire::Goal {
         goal: number(value["goal_id"].as_str().unwrap(), "goal-"),
         status: status.to_owned(),
         root: value["assignment_root_request_doc_id"]
@@ -88,8 +88,8 @@ fn goal_of(value: &serde_json::Value) -> family::Goal<String> {
     }
 }
 
-fn reference_of(input: &Option<GoalAssignmentInput>) -> Option<family::ResumeReferenceWire> {
-    input.as_ref().map(|reference| family::ResumeReferenceWire {
+fn reference_of(input: &Option<GoalAssignmentInput>) -> Option<wire::ResumeReferenceWire> {
+    input.as_ref().map(|reference| wire::ResumeReferenceWire {
         goal: number(&reference.goal_id, "goal-"),
         root: reference
             .root_request_doc_id
@@ -127,7 +127,7 @@ fn merged(row: &Row, input: Option<&serde_json::Value>) -> Row {
 
 async fn request_rows(
     identity: &KeyIdentity,
-    case: &family::GoalResumeInput<String>,
+    case: &wire::GoalResumeInput<String>,
 ) -> Vec<Row> {
     let mut rows = Vec::new();
     for (index, request) in case.requests.iter().enumerate() {
@@ -169,10 +169,10 @@ async fn request_rows(
     rows
 }
 
-fn request_wire(row: &Row) -> family::ResumeRequestWire {
+fn request_wire(row: &Row) -> wire::ResumeRequestWire {
     let request: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(row.value.clone()).unwrap();
-    family::ResumeRequestWire {
+    wire::ResumeRequestWire {
         id: number(request.doc_id.as_deref().unwrap(), "physical-"),
         terminal: request.lifecycle_state != Some(RequestLifecycleState::Processing),
         trigger: request
@@ -187,15 +187,15 @@ fn decision(
     decided: &Result<Vec<Effect>>,
     before: &Row,
     created_doc: u64,
-) -> family::ResumeDecisionWire<String> {
+) -> wire::ResumeDecisionWire<String> {
     match decided {
-        Err(error) => family::ResumeDecisionWire {
+        Err(error) => wire::ResumeDecisionWire {
             kind: "refuse".into(),
             reason: Some(error.to_string()),
             goal: None,
             create: None,
         },
-        Ok(effects) => family::ResumeDecisionWire {
+        Ok(effects) => wire::ResumeDecisionWire {
             kind: "proceed".into(),
             reason: None,
             goal: written(effects).map(|input| goal_of(&merged(before, Some(input)).value)),
@@ -205,7 +205,7 @@ fn decision(
                     create.caused_by_trigger_id.as_ref().map(|_| GOAL_TRIGGER_KIND),
                     "a requested continuation names the Goal trigger kind"
                 );
-                family::ResumeCreateWire {
+                wire::ResumeCreateWire {
                     id: created_doc,
                     trigger: create
                         .caused_by_trigger_id
@@ -262,22 +262,22 @@ async fn generated_goal_resume_cases_drive_the_resume_and_binding_listeners() {
             decided
         });
         let result = match refused {
-            Some(reason) => family::ResumeResultWire {
+            Some(reason) => wire::ResumeResultWire {
                 kind: "error".into(),
                 goals: Vec::new(),
                 requests: Vec::new(),
-                refusal: Some(family::ResumeRefusalWire {
+                refusal: Some(wire::ResumeRefusalWire {
                     kind: "refused".into(),
                     plugin: Some(manifest().name.into()),
                     reason: Some(reason),
                 }),
             },
-            None => family::ResumeResultWire {
+            None => wire::ResumeResultWire {
                 kind: "ok".into(),
                 goals: vec![goal_of(&current.value)],
                 requests: continuation
                     .iter()
-                    .map(|create| family::ResumeRequestWire {
+                    .map(|create| wire::ResumeRequestWire {
                         id: case.next,
                         terminal: false,
                         trigger: create
@@ -291,7 +291,7 @@ async fn generated_goal_resume_cases_drive_the_resume_and_binding_listeners() {
                 refusal: None,
             },
         };
-        modeled.check(family::GoalResumeOutput {
+        modeled.check(wire::GoalResumeOutput {
             restage,
             bind,
             result,

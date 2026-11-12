@@ -361,7 +361,7 @@ mod tests {
     /// the owner's classifier and the DTO projection the desktop receives.
     #[test]
     fn generated_session_goal_views_name_their_cause() {
-        use gents_lean_vocab::families::goal_session_observation_contracts_presentation as family;
+        use gents_lean_vocab::families::goal_session_observation_contracts_presentation as wire;
         let row = gents_protocol::session::decode_session_row(&json!({
             "_docID": "session-document", "session_id": "chat", "node_did": "did:key:node",
             "requester_did": "did:key:user", "agent_did": "did:key:agent",
@@ -371,7 +371,7 @@ mod tests {
         let number = |value: &str, prefix: &str| -> u64 {
             value.strip_prefix(prefix).unwrap().parse().unwrap()
         };
-        gents_lean_vocab::families::goal_session_observation_contracts_presentation::replay::<String, String>(|case: &family::Case<String>| {
+        gents_lean_vocab::families::goal_session_observation_contracts_presentation::replay::<String, String>(|case: &wire::Case<String>| {
             let session = match case.session.as_str() {
                 "absent" => AgentSessionRowRead::Absent,
                 "present" => AgentSessionRowRead::Present(Box::new(row.clone())),
@@ -404,21 +404,21 @@ mod tests {
             .unwrap();
             let view = match dto["kind"].as_str().unwrap() {
                 "observed" => match dto["observation"]["goal"]["goalId"].as_str() {
-                    Some(goal_id) => family::ViewWire {
+                    Some(goal_id) => wire::ViewWire {
                         kind: "goal".into(),
-                        goal: Some(family::Reference {
+                        goal: Some(wire::Reference {
                             goal: number(goal_id, "goal:"),
                             root,
                         }),
                         cause: None,
                     },
-                    None => family::ViewWire {
+                    None => wire::ViewWire {
                         kind: "no_goal".into(),
                         goal: None,
                         cause: None,
                     },
                 },
-                "no_readable_session" => family::ViewWire {
+                "no_readable_session" => wire::ViewWire {
                     kind: "unavailable".into(),
                     goal: None,
                     cause: Some("session_not_readable".into()),
@@ -431,7 +431,7 @@ mod tests {
                         gents_automation::goal::GoalInputRefused::from(refused).to_string(),
                         "the view's reason is the refusal a send returns: {dto}"
                     );
-                    family::ViewWire {
+                    wire::ViewWire {
                         kind: "unavailable".into(),
                         goal: None,
                         cause: Some(dto["cause"].as_str().unwrap().to_owned()),
@@ -439,7 +439,7 @@ mod tests {
                 }
                 other => panic!("unmodeled view {other}"),
             };
-            family::ViewOutput {
+            wire::ViewOutput {
                 view,
                 next: serde_json::from_value(dto["next"].clone()).unwrap(),
             }

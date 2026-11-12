@@ -2180,13 +2180,13 @@ mod native_route_tests {
 
     #[test]
     fn native_documents_carry_the_modeled_route() {
-        use gents_lean_vocab::families::native_route_delivery as family;
-        let fields = |route: &HandoffRoute| family::Fields {
+        use gents_lean_vocab::families::native_route_delivery as wire;
+        let fields = |route: &HandoffRoute| wire::Fields {
             handoff_id: route.handoff_id.clone(),
             reply_session_id: route.reply_session_id.clone(),
             attempt: route.attempt,
         };
-        gents_lean_vocab::families::native_route_delivery::replay(|case: &family::DeliveryInput| {
+        gents_lean_vocab::families::native_route_delivery::replay(|case: &wire::DeliveryInput| {
             let input = serde_json::json!({
                 "handoff_id": &case.input.handoff_id,
                 "reply_session_id": &case.input.reply_session_id,
@@ -2218,7 +2218,7 @@ mod native_route_tests {
                 case.name
             );
             let observed = route_json(&stamped);
-            family::DeliveryOutput {
+            wire::DeliveryOutput {
                 stamped: fields(&stamped),
                 admitted: crate::triggers::engine::dispatch::outcome_fire_admitted(
                     case.emit_outcome,

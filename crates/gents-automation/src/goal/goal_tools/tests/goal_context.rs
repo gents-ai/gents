@@ -67,7 +67,7 @@ async fn versions(access: &ConfigAccess) -> Value {
 
 #[tokio::test]
 async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
-    use gents_lean_vocab::families::goal_tool_context_contracts_context as family;
+    use gents_lean_vocab::families::goal_tool_context_contracts_context as wire;
     for modeled in gents_lean_vocab::families::goal_tool_context_contracts_context::cases::<String>() {
         let case = &modeled.input;
         let mut observation = None;
@@ -261,18 +261,18 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     *map.iter().find(|(_, held)| held.as_str() == doc).unwrap().0
                 };
                 observation = Some(match &context {
-                    crate::goal::RequestAssignmentObservation::None => family::ObservationWire {
+                    crate::goal::RequestAssignmentObservation::None => wire::ObservationWire {
                         kind: "unassigned".into(),
                         identity: None,
                     },
-                    crate::goal::RequestAssignmentObservation::Unknown => family::ObservationWire {
+                    crate::goal::RequestAssignmentObservation::Unknown => wire::ObservationWire {
                         kind: "unknown".into(),
                         identity: None,
                     },
                     crate::goal::RequestAssignmentObservation::Assigned(goal) => {
-                        family::ObservationWire {
+                        wire::ObservationWire {
                             kind: "assigned".into(),
-                            identity: Some(family::Identity {
+                            identity: Some(wire::Identity {
                                 document: number(&goal.doc_id, &documents),
                                 goal: case
                                     .versions
@@ -462,7 +462,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 .remove(&hook_execution_fixture_key(&hook, &request_id));
             node.shutdown().await.expect("shut down test node");
         }
-        modeled.check(family::ContextOutput {
+        modeled.check(wire::ContextOutput {
             observation: observation.unwrap(),
             read_only: read_only.unwrap(),
             can_create: can_create.unwrap(),

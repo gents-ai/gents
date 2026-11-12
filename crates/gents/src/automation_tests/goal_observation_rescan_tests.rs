@@ -37,7 +37,7 @@ impl futures::Stream for ObservedTicks {
 
 #[tokio::test]
 async fn generated_goal_rescans_recover_lost_notifications() {
-    use gents_lean_vocab::families::goal_observation_contracts_recovery as family;
+    use gents_lean_vocab::families::goal_observation_contracts_recovery as wire;
     for case in gents_lean_vocab::families::goal_observation_contracts_recovery::cases() {
         let removed = case.input.goal.is_none();
         let mut observed = Vec::new();
@@ -176,7 +176,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             .unwrap();
             assert_eq!(refreshed.goal.as_ref().map(|goal| &goal.revision), canonical.as_ref(),
                 "periodic durable observation must select the canonical Goal without a notification");
-            let reference = |goal: &gents_protocol::goal_control::ObservedGoal| family::GoalReference {
+            let reference = |goal: &gents_protocol::goal_control::ObservedGoal| wire::GoalReference {
                 node: if goal.snapshot.node_did == f.identity.did() { "node".into() } else { goal.snapshot.node_did.clone() },
                 session: if goal.snapshot.session_id == SESSION { "session".into() } else { goal.snapshot.session_id.clone() },
                 document: if goal.revision.document == f.goal.doc_id { "goal-document".into() } else { goal.revision.document.clone() },
@@ -188,8 +188,8 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                     goal.revision.composite.clone()
                 },
             };
-            observed.push(family::RecoveryOutput {
-                recovery: family::RecoveryTrace {
+            observed.push(wire::RecoveryOutput {
+                recovery: wire::RecoveryTrace {
                     before: previous.goal.as_ref().map(reference),
                     after: refreshed.goal.as_ref().map(reference),
                 },

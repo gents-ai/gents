@@ -1,7 +1,7 @@
 use super::support::*;
 use super::*;
 use crate::goal::continuation::goal_continuation_identity;
-use gents_lean_vocab::families::goal_reset_resume_contracts_reset as family;
+use gents_lean_vocab::families::goal_reset_resume_contracts_reset as wire;
 use gents_loop::provider_limit::{
     classify_provider_limit, persisted_failure_reason, ProviderLimit, ProviderLimitHeaders,
 };
@@ -223,7 +223,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         } else {
             f.observe().await
         };
-        modeled.check(family::ResetOutput {
+        modeled.check(wire::ResetOutput {
             expected: serde_json::from_value(observed).unwrap(),
             outcome: outcome.to_owned(),
         });

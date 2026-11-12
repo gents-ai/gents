@@ -180,7 +180,7 @@ mod tests {
 
     #[tokio::test]
     async fn generated_manual_task_goal_input_preserves_signed_receipts() -> Result<()> {
-        use gents_lean_vocab::families::goal_delivery_input_manual_task_run as family;
+        use gents_lean_vocab::families::goal_delivery_input_manual_task_run as wire;
         for modeled in gents_lean_vocab::families::goal_delivery_input_manual_task_run::cases() {
             let case = &serde_json::to_value(&modeled.input)?;
             let source = fixture(
@@ -225,9 +225,9 @@ mod tests {
             let number = |value: &str, prefix: &str| -> u64 {
                 value.strip_prefix(prefix).unwrap().parse().unwrap()
             };
-            let prepared = family::PreparedWire {
+            let prepared = wire::PreparedWire {
                 kind: "prepared".into(),
-                reference: actual.goal_assignment.as_ref().map(|goal| family::Reference {
+                reference: actual.goal_assignment.as_ref().map(|goal| wire::Reference {
                     goal: number(&goal.goal_id, "goal:"),
                     root: goal
                         .root_request_doc_id
