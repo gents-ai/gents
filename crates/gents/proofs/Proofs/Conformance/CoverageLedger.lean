@@ -721,10 +721,18 @@ def caseCoverage : List CoverageEntry :=
       "QueuedSteeringTraceCases"
       "Native binding covers only the publication-before-provider-stream-entry script: it reconstructs the generated prepared prompt from its canonical candidate and observes the durable authored header before the provider stream opens. It does not execute generated steering queue ingress, inspect the UI admissionVisible projection or serialized capture body, or prove native lease authorization. Claimed pre-start failure, prepublication send denial, conflicting capture, and exact replay scripts remain model-derived/decoder-checked only.")
       "prompt-assembly" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "pack_finality_cases"
-      "PackFinalityCases"
-      "Binds callback rejection, lost receipt and a later failed retry to the shared transaction owner.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_finality_transaction")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_finality_staged_plugin")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_pack_installation_finality_unreached"
+      "model-production-gap: the shared transaction owner folds one write's attempts into a sticky unconfirmed flag inside its retry loop; no scenario drives several commit attempts of one transaction, or an error with no failed attempt.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"

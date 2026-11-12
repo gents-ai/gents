@@ -668,27 +668,14 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
 
 #[tokio::test]
 async fn pin_rejection_after_unknown_commit_preserves_unconfirmed_outcome() {
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .pack_finality_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    for events in [&["no_commit"][..], &["unknown_commit", "no_commit"][..]] {
-        let modeled = cases
-            .iter()
-            .find(|case| case["attempts"] == json!(events))
-            .unwrap()["unconfirmed"]
-            .as_bool()
-            .unwrap();
+    for unconfirmed in [false, true] {
         let result = classify_plugin_store_failure(
             PluginStoreChangeError::PinConflict("pin conflict".into()),
-            modeled,
+            unconfirmed,
         );
         assert_eq!(
             matches!(result, PluginStoreChangeError::Unconfirmed(_)),
-            modeled
+            unconfirmed
         );
     }
 }
@@ -3507,19 +3494,6 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
     .await
     .unwrap();
     let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .pack_finality_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    let expected = cases
-        .iter()
-        .find(|case| case["attempts"] == json!(["no_commit"]))
-        .unwrap()["unconfirmed"]
-        .as_bool()
-        .unwrap();
     node.shutdown().await.expect("node shutdown");
     let error = super::documents::install_documents_with_plugins(
         &access,
@@ -3538,7 +3512,6 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
     )
     .await
     .unwrap_err();
-    assert!(!expected);
     assert!(
         format!("{error:#}").contains("transaction was rejected"),
         "{error:#}"
@@ -4393,19 +4366,18 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
     tokio::time::resume();
     let error = write.await.unwrap_err();
     let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .pack_finality_cases
-            .clone()
+        gents_lean_vocab::families::contracts_pack_installation_finality_staged_plugin::cases::<String>()
     })
     .await
     .unwrap();
-    let expected = cases
-        .iter()
-        .find(|case| case["attempts"] == json!(["unknown_commit"]))
-        .unwrap()["unconfirmed"]
-        .as_bool()
-        .unwrap();
-    assert_eq!(error.unconfirmed, expected);
+    for case in cases {
+        assert_eq!(case.input.attempts, ["unknown_commit"]);
+        case.check(
+            gents_lean_vocab::families::contracts_pack_installation_finality_staged_plugin::FinalityOutput {
+                unconfirmed: error.unconfirmed,
+            },
+        );
+    }
     stage.finish(error.unconfirmed).await.unwrap();
     assert_eq!(
         crate::plugin::store::read_record(home.path(), "acme", "web_search")
