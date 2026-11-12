@@ -1595,19 +1595,16 @@ pub async fn verify_resumed_claim_version(
 #[cfg(test)]
 #[test]
 fn resumed_claim_admission_matches_the_generated_model() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().backend_resume_admission_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        let facts = ResumeClaimFacts {
-            waiting: case.waiting,
-            version_present: case.version_present,
-            claimed: case.claimed,
-            same_identity: case.same_identity,
-            same_deadline: case.same_deadline,
-            same_backend: case.same_backend,
-        };
-        assert_eq!(resume_claim_valid(&facts), case.admitted, "{case:?}");
-    }
+    gents_lean_vocab::families::backend_wake_resume_admission::replay(|i| {
+        resume_claim_valid(&ResumeClaimFacts {
+            waiting: i.waiting,
+            version_present: i.version_present,
+            claimed: i.claimed,
+            same_identity: i.same_identity,
+            same_deadline: i.same_deadline,
+            same_backend: i.same_backend,
+        })
+    });
 }
 
 #[cfg(test)]

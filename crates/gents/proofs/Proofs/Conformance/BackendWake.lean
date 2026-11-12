@@ -57,24 +57,21 @@ def generationMark : Family GenerationInput Bool where
     [ ⟨none, none⟩, ⟨none, some 1⟩, ⟨some 1, some 1⟩, ⟨some 1, some 2⟩, ⟨some 2, none⟩ ]
   model := fun i => EventDelivery.Watcher.generationMarkApplies i.marked i.observed
 
-def admissionFacts : List RequestResumeAdmission.ClaimFacts :=
-  [ ⟨true, true, true, true, true, true⟩,
-    ⟨false, true, true, true, true, true⟩,
-    ⟨true, false, true, true, true, true⟩,
-    ⟨true, true, false, true, true, true⟩,
-    ⟨true, true, true, false, true, true⟩,
-    ⟨true, true, true, true, false, true⟩,
-    ⟨true, true, true, true, true, false⟩ ]
+deriving instance ToJson for RequestResumeAdmission.ClaimFacts
+
+@[conformance_family]
+def resumeAdmission : Family RequestResumeAdmission.ClaimFacts Bool where
+  inputs :=
+    [ ⟨true, true, true, true, true, true⟩,
+      ⟨false, true, true, true, true, true⟩,
+      ⟨true, false, true, true, true, true⟩,
+      ⟨true, true, false, true, true, true⟩,
+      ⟨true, true, true, false, true, true⟩,
+      ⟨true, true, true, true, false, true⟩,
+      ⟨true, true, true, true, true, false⟩ ]
+  model := fun facts => RequestResumeAdmission.deadlineAdmitted false facts
 
 def boolJson (b : Bool) : String := if b then "true" else "false"
-
-def admissionCaseJson (facts : RequestResumeAdmission.ClaimFacts) : String :=
-  "{\"waiting\":" ++ boolJson facts.waiting ++ ",\"version_present\":" ++ boolJson facts.versionPresent ++
-  ",\"claimed\":" ++ boolJson facts.claimed ++ ",\"same_identity\":" ++ boolJson facts.sameIdentity ++
-  ",\"same_deadline\":" ++ boolJson facts.sameDeadline ++ ",\"same_backend\":" ++ boolJson facts.sameBackend ++
-  ",\"admitted\":" ++ boolJson (RequestResumeAdmission.deadlineAdmitted false facts) ++ "}"
-
-def admissionCasesJson : String := jsonArray (admissionFacts.map admissionCaseJson)
 
 structure ReparkInput where
   resuming : Bool

@@ -21,6 +21,7 @@
   "backend_wake_fallback_wake": {"input":{"fields":[["now_ms","nat"],["deadline_ms","nat"],["attempts","nat"]],"struct":"WakeInput"},"output":{"option":"nat"}},
   "backend_wake_generation_mark": {"input":{"fields":[["marked",{"option":"nat"}],["observed",{"option":"nat"}]],"struct":"GenerationInput"},"output":"bool"},
   "backend_wake_healthy_wake": {"input":{"fields":[["started_ms","nat"],["now_ms","nat"],["observed_ms",{"option":"nat"}]],"struct":"HealthInput"},"output":"bool"},
+  "backend_wake_resume_admission": {"input":{"fields":[["waiting","bool"],["version_present","bool"],["claimed","bool"],["same_identity","bool"],["same_deadline","bool"],["same_backend","bool"]],"struct":"ClaimFacts"},"output":"bool"},
   "background_process_control_may_settle_terminal": {"input":{"fields":[["intent",{"enum":"TerminalIntent","values":["completed","cancelled","timed_out","failed","panicked"]}],["evidence",{"enum":"LiveProcessEvidence","values":["never_spawned","spawned_unverified","exited"]}]],"struct":"Input"},"output":"bool"},
   "background_process_control_retire_stop_receipt": {"input":{"fields":[["terminal_committed","bool"]],"struct":"Input"},"output":"bool"},
   "background_process_control_settle_live_cancel": {"input":{"fields":[["released","bool"],["evidence",{"enum":"LiveProcessEvidence","values":["never_spawned","spawned_unverified","exited"]}]],"struct":"Input"},"output":{"enum":"StopOutcome","values":["stopped","alreadyExited","stillRunning","notOwned"]}},

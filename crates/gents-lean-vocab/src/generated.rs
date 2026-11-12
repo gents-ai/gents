@@ -1252,17 +1252,6 @@ pub struct LeanBackendReparkCase {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBackendResumeAdmissionCase {
-    pub waiting: bool,
-    pub version_present: bool,
-    pub claimed: bool,
-    pub same_identity: bool,
-    pub same_deadline: bool,
-    pub same_backend: bool,
-    pub admitted: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanBackendResumedTurnCase {
     pub completed: Vec<u32>,
     pub next: usize,
@@ -3215,7 +3204,6 @@ pub struct LeanContractSnapshot {
     pub tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub tool_retry_cases: Vec<LeanToolRetryCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub backend_resume_admission_cases: Vec<LeanBackendResumeAdmissionCase>,
     pub backend_repark_cases: Vec<LeanBackendReparkCase>,
     pub backend_parked_finalize_cases: Vec<LeanBackendParkedFinalizeCase>,
     pub backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
