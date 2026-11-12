@@ -2272,8 +2272,7 @@ def caseCoverage : List CoverageEntry :=
       "Binds canonical header classification and selection to CurrentInput. Full reconstructed-history regression additionally covers retaining a current-request tool result; arbitrary imported-seed reachability is not claimed.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "wake_input_cases"
-      "WakeInputCases")
+      "family" "contracts_wake_input_projection")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family" "contracts_prompt_assembly_sanitize")

@@ -3288,7 +3288,6 @@ pub struct LeanContractSnapshot {
     pub provider_tool_identity_cases: Vec<serde_json::Value>,
     pub routing_affinity_cases: Vec<LeanRoutingAffinityCase>,
     pub current_input_cases: Vec<LeanCurrentInputCase>,
-    pub wake_input_cases: Vec<LeanWakeInputCase>,
     pub prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
     pub prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
@@ -12015,25 +12014,6 @@ pub enum LeanUsageBudgetResult {
 pub struct LeanVocabularyContract {
     pub domain: String,
     pub values: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWakeInputCase {
-    pub name: String,
-    pub claimed: Vec<String>,
-    pub acknowledged: Vec<String>,
-    pub rows: Vec<LeanWakeInputRow>,
-    pub notifications: Vec<LeanWakeInputRow>,
-    pub current_keys: Vec<String>,
-    pub expected_order: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWakeInputRow {
-    pub header: String,
-    pub notification_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

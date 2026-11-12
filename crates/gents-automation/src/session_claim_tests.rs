@@ -1099,20 +1099,27 @@ async fn background_claim_keeps_fork_imports_out_of_notification_input() {
             .unwrap(),
     )
     .unwrap();
-    let contract = gents_lean_vocab::lean_contract_snapshot()
-        .wake_input_cases
-        .iter()
-        .find(|case| case.name == "imported_notification_stays_in_history")
-        .unwrap();
-    let expected = contract
-        .current_keys
-        .iter()
-        .map(|key| {
-            assert_eq!(key, "a");
-            origin_key.to_owned()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(keys, expected);
+    let [contract] = gents_lean_vocab::families::contracts_wake_input_claimed_keys::cases()
+        .try_into()
+        .unwrap_or_else(|_| panic!("the imported-notification scenario replays one modeled wake"));
+    let modeled = [
+        (origin_key, "a"),
+        (
+            "background-completion-notification:imported:tool",
+            "imported",
+        ),
+    ];
+    contract.check(
+        keys.iter()
+            .map(|key| {
+                modeled
+                    .iter()
+                    .find(|(native, _)| native == key)
+                    .map(|(_, modeled)| (*modeled).to_owned())
+                    .unwrap_or_else(|| panic!("claimed an unmodeled notification key {key}"))
+            })
+            .collect::<Vec<_>>(),
+    );
     assert_eq!(
         lifecycle.background_completion_input_through_sequence(),
         Some(2)

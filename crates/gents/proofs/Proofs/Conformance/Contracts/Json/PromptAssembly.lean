@@ -109,18 +109,65 @@ def currentInputCaseJson (witness : CurrentInputCase) : String :=
 
 def currentInputCasesJson : String := jsonArray (currentInputCases.map currentInputCaseJson)
 
-def wakeInputCasesJson : String := jsonArray (wakeInputCases.map fun witness =>
-  "{\"name\":" ++ jsonString witness.name ++
-  ",\"claimed\":" ++ jsonArray (witness.claimed.map jsonString) ++
-  ",\"acknowledged\":" ++ jsonArray (witness.acknowledged.map jsonString) ++
-  ",\"rows\":" ++ jsonArray (witness.history.map fun row =>
-    "{\"header\":" ++ jsonString row.header ++
-    ",\"notification_key\":" ++ jsonOptionalString row.notificationKey ++ "}") ++
-  ",\"notifications\":" ++ jsonArray (witness.notifications.map fun row =>
-    "{\"header\":" ++ jsonString row.header ++
-    ",\"notification_key\":" ++ jsonOptionalString row.notificationKey ++ "}") ++
-  ",\"current_keys\":" ++ jsonArray (witness.currentKeys.map jsonString) ++
-  ",\"expected_order\":" ++ jsonArray (witness.expectedOrder.map jsonString) ++ "}")
+deriving instance Lean.ToJson for WakeInputRow
+
+structure WakeInputWire where
+  name : String
+  claimed : List String
+  acknowledged : List String
+  rows : List WakeInputRow
+  notifications : List WakeInputRow
+  deriving Lean.ToJson
+
+def WakeInputWire.ofCase (c : WakeInputCase) : WakeInputWire :=
+  { name := c.name, claimed := c.claimed, acknowledged := c.acknowledged
+    rows := c.history, notifications := c.notifications }
+
+def WakeInputWire.currentKeys (i : WakeInputWire) : List String :=
+  PromptAssembly.CurrentInput.wakeNotificationKeys i.claimed i.acknowledged
+
+def WakeInputWire.expectedOrder (i : WakeInputWire) : List String :=
+  (PromptAssembly.CurrentInput.wakeEntry
+    (fun row => row.notificationKey.any i.currentKeys.contains) i.rows i.notifications).map
+      (·.header)
+
+structure WakeInputOutput where
+  currentKeys : List String
+  expectedOrder : List String
+  deriving Lean.ToJson
+
+/-- The notification keys a wake still owes and the provider order of its
+history and notifications: production `current_keys` and `project`. -/
+@[conformance_family]
+def wakeInputProjection : Family WakeInputWire WakeInputOutput where
+  inputs := wakeInputCases.map .ofCase
+  model := fun i => { currentKeys := i.currentKeys, expectedOrder := i.expectedOrder }
+
+structure WakeProviderOrderInput where
+  wake : WakeInputWire
+  /-- The headers whose content the served daemon's captured provider input
+  can locate. -/
+  observable : List String
+  deriving Lean.ToJson
+
+/-- A served daemon runs a background wake and then its successor; the
+successor's captured provider input is ordered. Only the successor scenario is
+built: it is the case whose previous wake left an answer and a new
+notification behind. -/
+@[conformance_family]
+def wakeInputProviderOrder : Family WakeProviderOrderInput (List String) where
+  inputs := (wakeInputCases.filter (·.name == "successor_wake_moves_only_new_notification")).map
+    fun c => { wake := .ofCase c, observable := ["notification-a", "notification-b", "answer-0"] }
+  model := fun i => i.wake.expectedOrder.filter i.observable.contains
+
+/-- A served node claims a background wake whose session also holds a
+notification imported from another session. Only that case is built: it is
+the case about a claimed key whose notification came from elsewhere. -/
+@[conformance_family]
+def wakeInputClaimedKeys : Family WakeInputWire (List String) where
+  inputs := (wakeInputCases.filter (·.name == "imported_notification_stays_in_history")).map
+    .ofCase
+  model := WakeInputWire.currentKeys
 
 def jsonNatArray (values : List Nat) : String :=
   jsonArray (values.map toString)

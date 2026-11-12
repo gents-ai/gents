@@ -1438,12 +1438,14 @@ pub(super) mod tests {
             .process_request(successor.clone(), shutdown_rx)
             .await
             .unwrap();
-        let contract = gents_lean_vocab::lean_contract_snapshot()
-            .wake_input_cases
-            .iter()
-            .find(|case| case.name == "successor_wake_moves_only_new_notification")
-            .unwrap();
+        let [contract] = gents_lean_vocab::families::contracts_wake_input_provider_order::cases()
+            .try_into()
+            .unwrap_or_else(|_| panic!("the successor wake scenario replays one modeled wake"));
         let labels = ["notification-a", "notification-b", "answer-0"];
+        assert_eq!(
+            contract.input.observable, labels,
+            "the scenario locates these headers in the provider input"
+        );
         {
             let captured = provider_inputs.lock().unwrap();
             assert_eq!(captured.len(), 2);
@@ -1463,17 +1465,7 @@ pub(super) mod tests {
                 ("answer-0", answer),
             ];
             observed.sort_by_key(|(_, position)| *position);
-            let expected = contract
-                .expected_order
-                .iter()
-                .map(String::as_str)
-                .filter(|header| labels.contains(header))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                observed.map(|(header, _)| header).as_slice(),
-                expected,
-                "current wake order must match the model: {input}"
-            );
+            contract.check(observed.map(|(header, _)| header.to_owned()).to_vec());
             assert_eq!(input.matches("successor native output").count(), 1);
             assert_eq!(input.matches("durable native output").count(), 1);
         }
@@ -1510,6 +1502,8 @@ pub(super) mod tests {
         ];
         durable.sort_by_key(|(_, position)| *position);
         let expected = contract
+            .input
+            .wake
             .rows
             .iter()
             .map(|row| row.header.as_str())
