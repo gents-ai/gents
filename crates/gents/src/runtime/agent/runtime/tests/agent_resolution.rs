@@ -112,7 +112,7 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().runtime_session_selection_cases;
     assert_eq!(cases.len(), 3);
     for case in cases {
-        let name = case["name"].as_str().unwrap();
+        let name = case.name.as_str();
         let bound = if name == "mismatched" {
             fixture.other.did()
         } else {
@@ -146,7 +146,7 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
             Some(value) if value.rejection_reason.is_some() => "mismatched",
             Some(_) => "matched",
         };
-        assert_eq!(observed, case["expected"].as_str().unwrap(), "{name}");
+        assert_eq!(observed, case.expected.as_str(), "{name}");
     }
     assert!(
         resolve_agent_for_request(&fixture.db.node, &fixture.request("missing"))
