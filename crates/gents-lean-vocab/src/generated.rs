@@ -165,10 +165,6 @@ pub fn lean_eval_outcome_cases() -> &'static [LeanEvalOutcomeCase] {
     &lean_contract_snapshot().eval_outcome_cases
 }
 
-pub fn lean_event_delivery_convergence_traces() -> &'static [LeanEventDeliveryConvergenceTrace] {
-    &lean_contract_snapshot().event_delivery_convergence_traces
-}
-
 pub fn lean_event_group_cases() -> &'static [LeanEventGroupCase] {
     &lean_contract_snapshot().event_group_cases
 }
@@ -3402,7 +3398,6 @@ pub struct LeanContractSnapshot {
     pub callback_cases: Vec<LeanCallbackCase>,
     pub callback_retry_cases: Vec<LeanCallbackRetryCase>,
     pub callback_recovery_cases: Vec<LeanCallbackRecoveryCase>,
-    pub event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -3991,37 +3986,6 @@ pub struct LeanEvalOutcomeCase {
     pub provider_reason: Option<String>,
     pub class: String,
     pub subject_causable: bool,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanEventDeliveryAction {
-    Persist { doc: String },
-    Depersist { doc: String },
-    Enqueue { doc: String },
-    Drop { doc: String },
-    DeliverFromQueue { doc: String },
-    RescanTick,
-    Handle { doc: String },
-    Release { doc: String },
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanEventDeliveryConvergenceTrace {
-    pub name: String,
-    pub instance_name: String,
-    pub initial_world: LeanEventDeliveryWorld,
-    pub actions: Vec<LeanEventDeliveryAction>,
-    pub final_world: LeanEventDeliveryWorld,
-    pub status: String,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-pub struct LeanEventDeliveryWorld {
-    pub persistent_set: Vec<String>,
-    pub subscription_queue: Vec<String>,
-    pub processed_set: Vec<String>,
-    pub handled: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

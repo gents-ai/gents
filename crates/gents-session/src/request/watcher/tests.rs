@@ -782,3 +782,67 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
         .expect("pending scan");
     assert_eq!(wake.request_id, wake_id);
 }
+
+#[tokio::test]
+async fn generated_watcher_convergence_reaches_fixed_point() {
+    use gents_lean_vocab::families::event_delivery_watcher_convergence as family;
+    for case in family::cases::<String>() {
+        assert!(case.input.initial_world.persistent_set.is_empty());
+        assert!(case.input.initial_world.subscription_queue.is_empty());
+        assert!(case.input.initial_world.processed_set.is_empty());
+        assert!(case.input.initial_world.handled.is_empty());
+        let fixture = ScopedWatcherFixture::new().await;
+        let mut watcher = fixture.watcher();
+        let mut offered = Vec::new();
+        let mut attempts = Vec::new();
+        let mut handled = Vec::new();
+        for action in &case.input.actions {
+            match action.kind.as_str() {
+                "persist" => {
+                    fixture
+                        .insert_request(
+                            &action.document,
+                            &format!("session-{}", action.document),
+                            "pending",
+                            "2026-03-12T00:00:00Z",
+                        )
+                        .await;
+                }
+                "rescan" => {
+                    let requests = watcher.pending_requests().await.unwrap();
+                    while let Some(request) = super::cooldown::take_next_eligible_pending_request(
+                        &mut watcher.processed_request_ids,
+                        requests.clone(),
+                        Instant::now(),
+                    ) {
+                        attempts.push(request.request_id.clone());
+                        offered.push(request.request_id);
+                    }
+                }
+                "handle" => {
+                    let observed = offered.remove(0);
+                    assert_eq!(observed, action.document);
+                    handled.insert(0, observed);
+                }
+                other => panic!("unsupported trace action {other}"),
+            }
+        }
+        let marks_before = watcher.processed_request_ids.clone();
+        let requests = watcher.pending_requests().await.unwrap();
+        let next = super::cooldown::take_next_eligible_pending_request(
+            &mut watcher.processed_request_ids,
+            requests,
+            Instant::now(),
+        );
+        let fixed = next.is_none() && marks_before == watcher.processed_request_ids;
+        if let Some(next) = next {
+            offered.push(next.request_id);
+        }
+        case.check(Some(family::ConvergenceObservation {
+            offered: attempts,
+            handled,
+            offered_after: offered,
+            status: if fixed { "fixed_point" } else { "pending" }.into(),
+        }));
+    }
+}

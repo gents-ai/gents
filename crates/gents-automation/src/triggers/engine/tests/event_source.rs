@@ -2581,3 +2581,106 @@ mod resumed_goal;
 
 #[path = "event_source/unacknowledged.rs"]
 mod unacknowledged;
+
+#[tokio::test]
+async fn generated_event_source_convergence_reaches_fixed_point() {
+    use gents_lean_vocab::families::event_delivery_event_source_convergence as family;
+    for case in family::cases::<String>() {
+        assert!(case.input.initial_world.persistent_set.is_empty());
+        assert!(case.input.initial_world.subscription_queue.is_empty());
+        assert!(case.input.initial_world.processed_set.is_empty());
+        assert!(case.input.initial_world.handled.is_empty());
+        let db = configured_event_node().await;
+        let node = db.node.clone();
+        node.add_collection("type ConvergenceDocument { external_id: String }")
+            .await
+            .unwrap();
+        let trigger = resolved_event_trigger(
+            "convergence-trigger",
+            "ConvergenceDocument",
+            resolved_task("handle"),
+        );
+        let snapshot = configured_event_snapshot(
+            &node,
+            1,
+            RapidHashMap::from_iter([("convergence-trigger".into(), trigger)]),
+        )
+        .await;
+        let (_tx, rx) = watch::channel(snapshot.clone());
+        let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+        source.reconcile_subscriptions(snapshot.as_ref()).await;
+        let mut physical = RapidHashMap::default();
+        let mut offered = Vec::new();
+        let mut attempts = Vec::new();
+        let mut handled = Vec::new();
+        for action in &case.input.actions {
+            match action.kind.as_str() {
+                "persist" => {
+                    let result = crate::triggers::callback::test_agent_access(&node)
+                        .write("test.convergence.persist", &format!(
+                            "mutation {{ create_ConvergenceDocument(input: {{ external_id: \"{}\" }}) {{ _docID }} }}",
+                            escape_graphql_string(&action.document))).await.unwrap();
+                    let id = gents_store::graphql::created_doc_id(&result, "ConvergenceDocument")
+                        .unwrap();
+                    physical.insert(id, action.document.clone());
+                }
+                "rescan" => {
+                    if let Some(intent) = source.conformance_rescan().await {
+                        attempts.push(
+                            physical
+                                .get(intent.event_vars["source_doc_id"].as_str().unwrap())
+                                .unwrap()
+                                .clone(),
+                        );
+                        offered.push(intent);
+                    }
+                }
+                "deliver" => {
+                    let intent = offered.remove(0);
+                    assert_eq!(
+                        physical
+                            .get(intent.event_vars["source_doc_id"].as_str().unwrap())
+                            .unwrap(),
+                        &action.document
+                    );
+                    drop(intent);
+                    drop(source);
+                    let (_replacement_tx, replacement_rx) = watch::channel(snapshot.clone());
+                    source =
+                        EventSource::new(replacement_rx, node.clone(), CancellationToken::new());
+                    source.reconcile_subscriptions(snapshot.as_ref()).await;
+                }
+                "handle" => {
+                    let intent = offered.remove(0);
+                    let id = intent.event_vars["source_doc_id"].as_str().unwrap();
+                    let observed = physical.get(id).unwrap().clone();
+                    assert_eq!(observed, action.document);
+                    handled.insert(0, observed);
+                    let result = admit_observed_event(&node, &intent).await;
+                    (intent.on_result)(result);
+                }
+                other => panic!("unsupported trace action {other}"),
+            }
+        }
+        let repeated = source.conformance_rescan().await;
+        let fixed = repeated.is_none();
+        if let Some(intent) = repeated {
+            offered.push(intent);
+        }
+        let offered_after = offered
+            .iter()
+            .map(|intent| {
+                physical
+                    .get(intent.event_vars["source_doc_id"].as_str().unwrap())
+                    .unwrap()
+                    .clone()
+            })
+            .collect();
+        case.check(Some(family::ConvergenceObservation {
+            offered: attempts,
+            handled,
+            offered_after,
+            status: if fixed { "fixed_point" } else { "pending" }.into(),
+        }));
+    }
+}

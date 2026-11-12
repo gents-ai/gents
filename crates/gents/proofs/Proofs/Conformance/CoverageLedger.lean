@@ -2456,10 +2456,9 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "event_delivery_source_contracts")
       "event-delivery" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "event_delivery_convergence_traces"
-      "EventDeliveryConvergenceTraces"
-      "Observes persisted documents recovered by real rescans and emitted request identities for all three sources. Does not assert full final World state, monotone-once silence on later rescans, or subscription delivery/multiset semantics.")
+  , tagged (consumerCoverage "family" "event_delivery_watcher_convergence")
+      "event-delivery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "event_delivery_event_source_convergence")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "mcp_health_cases"

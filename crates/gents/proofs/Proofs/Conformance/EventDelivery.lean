@@ -1,6 +1,7 @@
 import Proofs.Automation.EventDelivery
 import Proofs.Conformance.Family
 import Proofs.Conformance.EventDeliveryTransitions
+import Proofs.Conformance.EventDeliveryConvergence
 import Proofs.Automation.EventDelivery.Instances
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ContractTypes
@@ -10,89 +11,8 @@ namespace Conformance.EventDelivery
 open _root_.EventDelivery
 open Conformance.Contracts
 
-private def doc (s : String) : DocId := ⟨s⟩
-private def mkWorld (ps sq proc h : List DocId) : World := ⟨ps, sq, proc, h⟩
-
 @[conformance_family] def sourceContracts : Conformance.Family SourceKind SourceContract :=
   ⟨[.watcher, .eventSource], sourceContract⟩
-
-structure ConvergenceTraceRow where
-  name           : String
-  instanceName   : String
-  initialWorld   : World
-  actions        : List Action
-  finalWorld     : World
-  status         : String
-
-def watcherTrace : ConvergenceTraceRow :=
-  { name := "watcher_persist_rescan_handle"
-  , instanceName := "Watcher"
-  , initialWorld := World.empty
-  , actions :=
-      [ .persist (doc "req-1")
-      , .rescanTick
-      , .handle (doc "req-1") ]
-  , finalWorld := mkWorld [doc "req-1"] [] [doc "req-1"] [doc "req-1"]
-  , status := "substantive"
-  }
-
-def eventSourceTrace : ConvergenceTraceRow :=
-  { name := "event_source_persist_rescan_handle"
-  , instanceName := "EventSource"
-  , initialWorld := World.empty
-  , actions :=
-      [ .persist (doc "doc-1")
-      , .rescanTick
-      , .handle (doc "doc-1") ]
-  , finalWorld := mkWorld [doc "doc-1"] [] [doc "doc-1"] [doc "doc-1"]
-  , status := "substantive"
-  }
-
-def convergenceTraces : List ConvergenceTraceRow :=
-  [ watcherTrace, eventSourceTrace ]
-
-def convergenceTraceCount : Nat := convergenceTraces.length
-
-def jsonOptionString : Option String → String := jsonOptionalString
-
-def docIdJson (d : DocId) : String := jsonString d.raw
-
-def docIdListJson (ds : List DocId) : String :=
-  jsonArray (ds.map docIdJson)
-
-def worldJson (w : World) : String :=
-  "{"
-    ++ "\"persistent_set\":" ++ docIdListJson w.persistentSet ++ ","
-    ++ "\"subscription_queue\":" ++ docIdListJson w.subscriptionQueue ++ ","
-    ++ "\"processed_set\":" ++ docIdListJson w.processedSet ++ ","
-    ++ "\"handled\":" ++ docIdListJson w.handled
-    ++ "}"
-
-def actionJson : Action → String
-  | .persist d => "{\"kind\":\"persist\",\"doc\":" ++ docIdJson d ++ "}"
-  | .depersist d => "{\"kind\":\"depersist\",\"doc\":" ++ docIdJson d ++ "}"
-  | .enqueue d => "{\"kind\":\"enqueue\",\"doc\":" ++ docIdJson d ++ "}"
-  | .drop d => "{\"kind\":\"drop\",\"doc\":" ++ docIdJson d ++ "}"
-  | .deliverFromQueue d =>
-      "{\"kind\":\"deliver_from_queue\",\"doc\":" ++ docIdJson d ++ "}"
-  | .rescanTick => "{\"kind\":\"rescan_tick\"}"
-  | .handle d => "{\"kind\":\"handle\",\"doc\":" ++ docIdJson d ++ "}"
-  | .release d => "{\"kind\":\"release\",\"doc\":" ++ docIdJson d ++ "}"
-
-def convergenceTraceRowJson (r : ConvergenceTraceRow) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString r.name ++ ","
-    ++ "\"instance_name\":" ++ jsonString r.instanceName ++ ","
-    ++ "\"initial_world\":" ++ worldJson r.initialWorld ++ ","
-    ++ "\"actions\":" ++ jsonArray (r.actions.map actionJson) ++ ","
-    ++ "\"final_world\":" ++ worldJson r.finalWorld ++ ","
-    ++ "\"status\":" ++ jsonString r.status
-    ++ "}"
-
-def convergenceTracesJson : String :=
-  jsonArray (convergenceTraces.map convergenceTraceRowJson)
-
-
 
 structure GroupClockCase where
   name : String
