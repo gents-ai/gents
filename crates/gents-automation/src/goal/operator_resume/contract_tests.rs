@@ -19,15 +19,7 @@ struct ResumeCase {
 #[derive(Deserialize)]
 struct Contracts {
     pub goal_operator_resume_cases: Vec<ResumeCase>,
-    pub goal_config_reactivation_cases: Vec<ConfigCase>,
     pub goal_wake_ancestry_cases: Vec<serde_json::Value>,
-}
-
-#[derive(Deserialize)]
-struct ConfigCase {
-    pub current: String,
-    pub target: String,
-    pub allowed: bool,
 }
 
 #[tokio::test]
@@ -211,12 +203,12 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
 
 #[tokio::test]
 async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_config_reactivation_cases.len(), 7);
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_config_reactivation_cases;
+    assert_eq!(cases.len(), 7);
     let mut seen = std::collections::BTreeSet::new();
-    for case in contracts.goal_config_reactivation_cases {
+    for case in cases {
         assert!(seen.insert((case.current.clone(), case.target.clone())));
-        let before = json!({"status":case.current,"blocked_audits":2,"wrapup_requested":false,
+        let before = json!({"status":&case.current,"blocked_audits":2,"wrapup_requested":false,
             "wrapup_completed":false,"sequence":0,"last_continued_from":null,"latest_request":10,
             "children":[],"tokens_used":37,"token_budget":1000});
         let f = Fixture::new(&before).await;
