@@ -592,46 +592,90 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_follows_dispatch_that_wins_the_pending_row() {
-        let (fixture, owner, mut child) = spawned_child("stop-after-dispatch-wins").await;
-        let stale = reload(&child, &fixture.node).await;
-        let registry = BackgroundExecutionRegistry::default();
-        let token = CancellationToken::new();
-        let reservation = registry
-            .reserve(
-                child.tool_call_id().into(),
-                child.doc_id().unwrap().into(),
-                token.clone(),
+    async fn stops_after_a_pending_observation_match_the_lean_model() {
+        use gents_session::session::tool_call_state::ToolCallState;
+        for case in gents_lean_vocab::families::background_stop_after_pending_observation::cases::<
+            String,
+            ToolCallState,
+        >() {
+            let durable = case.input.durable;
+            let (fixture, owner, mut child) =
+                spawned_child(&format!("stop-after-pending-{durable:?}")).await;
+            let observed = reload(&child, &fixture.node).await;
+            let registry = BackgroundExecutionRegistry::default();
+            let token = CancellationToken::new();
+            let reservation = registry
+                .reserve(
+                    child.tool_call_id().into(),
+                    child.doc_id().unwrap().into(),
+                    token.clone(),
+                )
+                .unwrap();
+            if durable != ToolCallState::Pending {
+                child.start_running().await.unwrap();
+            }
+            match durable {
+                ToolCallState::Completed => child.complete("done").await.unwrap(),
+                ToolCallState::Failed => child
+                    .fail(
+                        "failed",
+                        gents_loop::tool_call_lifecycle::FailureClass::External,
+                    )
+                    .await
+                    .unwrap(),
+                ToolCallState::TimedOut => assert!(child.timeout().await.unwrap()),
+                ToolCallState::Cancelled => assert!(child
+                    .cancel_during_run(CancelCause::UserCancelled)
+                    .await
+                    .unwrap()),
+                ToolCallState::Pending | ToolCallState::Running => {}
+            }
+            let worker = tokio::spawn({
+                let token = token.clone();
+                async move {
+                    token.cancelled().await;
+                    drop(reservation);
+                }
+            });
+            let outcome = cancel_loaded_background_tool_call(
+                fixture.node.clone(),
+                &registry,
+                &gents_session::session::message::NoSessionMessageGoals,
+                observed,
+                "explicit_cancel",
             )
+            .await
             .unwrap();
-        child.start_running().await.unwrap();
-        let worker = tokio::spawn({
-            let token = token.clone();
-            async move {
-                token.cancelled().await;
-                drop(reservation);
+            let execution_signalled = token.is_cancelled();
+            if execution_signalled {
+                worker.await.unwrap();
+            } else {
+                worker.abort();
             }
-        });
-        let outcome = cancel_loaded_background_tool_call(
-            fixture.node.clone(),
-            &registry,
-            &gents_session::session::message::NoSessionMessageGoals,
-            stale,
-            "explicit_cancel",
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            outcome,
-            CancelBackgroundToolCallOutcome::Cancelled {
-                live_execution_cancelled: true
-            }
-        );
-        worker.await.unwrap();
-        assert!(reload(&child, &fixture.node).await.is_cancelled());
-        drop(owner);
-        fixture.node.shutdown().await.expect("shut down test node");
-        let _ = std::fs::remove_dir_all(&fixture.path);
+            let row_state = reload(&child, &fixture.node).await.state();
+            let action = match outcome {
+                CancelBackgroundToolCallOutcome::Cancelled {
+                    live_execution_cancelled: false,
+                } => "cancel_before_dispatch",
+                CancelBackgroundToolCallOutcome::Cancelled {
+                    live_execution_cancelled: true,
+                } => "stop_process",
+                CancelBackgroundToolCallOutcome::AlreadyTerminal { ref state }
+                    if *state == row_state.as_str() =>
+                {
+                    "report_terminal"
+                }
+                other => panic!("{durable:?}: unexpected stop outcome {other:?}"),
+            };
+            case.check(gents_lean_vocab::families::background_stop_after_pending_observation::StopObservation {
+                action: action.to_owned(),
+                row_state,
+                execution_signalled,
+            });
+            drop(owner);
+            fixture.node.shutdown().await.expect("shut down test node");
+            let _ = std::fs::remove_dir_all(&fixture.path);
+        }
     }
 
     #[cfg(unix)]

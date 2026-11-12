@@ -308,6 +308,27 @@ theorem cancelled_requires_confirmed_stop (outcome : ManagedExec.StopOutcome)
     (h : stopSettlement outcome = .cancelled) : outcome = .stopped := by
   cases outcome <;> simp_all [stopSettlement]
 
+/-- The durable state a stop leaves on a row whose durable state is `durable`:
+a cancellation before dispatch and a verified process stop end it `cancelled`,
+and a reported terminal leaves it as it is. -/
+def stopSettledState (durable : ToolExecution.ToolCallState) : ToolExecution.ToolCallState :=
+  match stopAction durable with
+  | .cancelBeforeDispatch => .cancelled
+  | .stopProcess => stopSettlement .stopped
+  | .reportTerminal => durable
+
+/-- Only a stop of a dispatched invocation signals its live execution. -/
+def stopSignalsExecution : StopAction → Bool
+  | .stopProcess => true
+  | .cancelBeforeDispatch | .reportTerminal => false
+
+/-- A caller that observed the row pending while dispatch moved it to running
+stops the running invocation: the stop reads the durable row, signals the
+live execution and leaves the row cancelled. -/
+theorem stop_follows_dispatch_that_wins_the_pending_row :
+    stopAction .running = .stopProcess ∧ stopSettledState .running = .cancelled ∧
+      stopSignalsExecution (stopAction .running) = true := by decide
+
 /-- Host evidence belongs to one physical invocation. A released worker that
 never spawned is stopped; a spawned process requires observed exit. A missing
 record is not evidence that no process was spawned. -/

@@ -44,3 +44,36 @@ attribute [conformance_function]
   Recovery.pluginJobStepInvocationAllowed
   Recovery.sessionMessageSettlementReason
   Recovery.CausedTerminal.settledState
+
+namespace Background.ProcessControl
+deriving instance Lean.ToJson for StopAction
+end Background.ProcessControl
+
+namespace Conformance.BackgroundStop
+
+open Lean Background.ProcessControl
+
+structure PendingObservation where
+  durable : ToolExecution.ToolCallState
+  deriving ToJson
+
+structure StopObservation where
+  action : StopAction
+  rowState : ToolExecution.ToolCallState
+  executionSignalled : Bool
+  deriving ToJson
+
+/-- The caller observed the row pending; by the time the stop runs the durable
+row holds `durable`: still pending, or running because dispatch won the row.
+A durable terminal row is not an input: there the native pre-dispatch
+cancellation refuses with an error because the row's terminal source is
+already closed, where this model reports the terminal state. -/
+@[conformance_family]
+def afterPendingObservation : Family PendingObservation StopObservation where
+  inputs := [.pending, .running].map fun durable => { durable }
+  model := fun i =>
+    { action := stopAction i.durable
+      rowState := stopSettledState i.durable
+      executionSignalled := stopSignalsExecution (stopAction i.durable) }
+
+end Conformance.BackgroundStop
