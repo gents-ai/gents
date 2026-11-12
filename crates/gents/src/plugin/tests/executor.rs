@@ -435,6 +435,7 @@ mod bound {
                 Some("requester"),
                 "agent",
                 Some(&work),
+                None,
             )
             .unwrap();
             let tool = tool_for(&fx.home, &fx.record);
@@ -476,6 +477,7 @@ mod bound {
             Some("requester"),
             "agent",
             Some(&work),
+            None,
         )
         .unwrap();
         let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
@@ -544,6 +546,7 @@ mod bound {
                 Some("requester"),
                 "agent",
                 Some(&work),
+                None,
             )
             .unwrap();
             let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
@@ -616,6 +619,7 @@ mod bound {
             Some("requester"),
             "agent",
             Some(&work),
+            None,
         )
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
@@ -644,6 +648,7 @@ mod bound {
             Some("requester"),
             "agent",
             Some(&work),
+            None,
         )
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
@@ -669,7 +674,9 @@ mod bound {
             declined.await.unwrap();
         })
         .await;
-        let ask = workspace::get(fx.home.path(), &key).unwrap().unwrap();
+        let ask = workspace::resolve(fx.home.path(), &key, None)
+            .unwrap()
+            .unwrap();
         workspace::save_mode(
             fx.home.path(),
             &key,
@@ -685,6 +692,7 @@ mod bound {
                 Some("requester"),
                 agent,
                 Some(folder),
+                None,
             )
             .unwrap();
             let error = workspace::scope(other_context, in_session(&tool, &target, folder, false))
@@ -721,6 +729,7 @@ mod bound {
             Some("requester"),
             "agent",
             Some(&work),
+            None,
         )
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
@@ -748,6 +757,7 @@ mod bound {
             Some("requester"),
             "agent",
             Some(&work),
+            None,
         )
         .unwrap();
         std::fs::rename(&work, fx.root.join("original-work")).unwrap();

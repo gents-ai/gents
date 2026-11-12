@@ -39,6 +39,11 @@ pub struct Support {
     pub workspace_sandbox: bool,
     #[serde(default)]
     pub remembered_commands: bool,
+    /// The runtime keys a selection by session as well as by agent and
+    /// workspace. An older runtime omits it and every session resolves to the
+    /// agent and workspace default.
+    #[serde(default)]
+    pub session_scoped: bool,
 }
 
 pub fn support() -> Support {
@@ -46,6 +51,7 @@ pub fn support() -> Support {
         contract_version: CONTRACT_VERSION,
         workspace_sandbox: crate::tools::native::workspace_write_sandbox_enforced(),
         remembered_commands: true,
+        session_scoped: true,
     }
 }
 
@@ -56,6 +62,12 @@ pub struct WorkspaceKey {
     pub requester_did: String,
     pub agent_did: String,
     pub path: PathBuf,
+    /// Absent for the agent and workspace default entry, present for one
+    /// session's own entry. A file written before sessions were keyed decodes
+    /// with it absent, which is the entry a session without its own selection
+    /// resolves to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 impl WorkspaceKey {
@@ -83,6 +95,32 @@ impl WorkspaceKey {
             requester_did: requester_did.to_owned(),
             agent_did: agent_did.to_owned(),
             path,
+            session_id: None,
+        })
+    }
+
+    /// The agent and workspace default entry's key for this key's workspace.
+    pub fn base(&self) -> Self {
+        Self {
+            session_id: None,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_session(&self, session_id: Option<&str>) -> Result<Self> {
+        let session_id = match session_id {
+            None => None,
+            Some(value) => {
+                anyhow::ensure!(
+                    !value.trim().is_empty(),
+                    "Start the chat before choosing its permissions."
+                );
+                Some(value.to_owned())
+            }
+        };
+        Ok(Self {
+            session_id,
+            ..self.clone()
         })
     }
 }
@@ -360,7 +398,7 @@ pub(crate) async fn consent_binding(
 pub(crate) struct SelectionChanged;
 
 pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Settings> {
-    let settings = get(home, &binding.scope.workspace)?;
+    let settings = context::governing_settings(home, &binding.scope.workspace)?;
     let available: Vec<_> = settings.iter().map(Settings::scope).collect();
     if !policy::approval_scope_matches(&available, &binding.scope) {
         return Err(SelectionChanged.into());
@@ -468,11 +506,40 @@ fn read(home: &Path) -> Result<Stored> {
     }
 }
 
-pub fn get(home: &Path, key: &WorkspaceKey) -> Result<Option<Settings>> {
+/// The one reader that chooses which stored selection governs a request.
+/// Every reader outside this module goes through it, because an absent entry
+/// disengages the workspace consent gate: resolving a session that has made no
+/// selection to nothing would silently drop the gate its agent and workspace
+/// default configured.
+pub fn resolve(
+    home: &Path,
+    workspace: &WorkspaceKey,
+    session_id: Option<&str>,
+) -> Result<Option<Settings>> {
+    anyhow::ensure!(
+        workspace.session_id.is_none(),
+        "resolution takes the agent and workspace key, not a session entry's key"
+    );
+    let session = session_id
+        .map(|session_id| workspace.with_session(Some(session_id)))
+        .transpose()?;
+    let stored = read(home)?;
+    Ok(
+        policy::resolve(&stored.entries, session.as_ref(), workspace, |entry| {
+            &entry.workspace
+        })
+        .cloned(),
+    )
+}
+
+/// Revalidation of an already resolved key. Choosing which entry governs an
+/// action is `resolve`; this never makes that choice and is reachable only
+/// from this module.
+fn entry(home: &Path, key: &WorkspaceKey) -> Result<Option<Settings>> {
     Ok(read(home)?
         .entries
         .into_iter()
-        .find(|entry| entry.workspace == *key))
+        .find(|stored| stored.workspace == *key))
 }
 
 pub fn save_mode(
@@ -485,6 +552,15 @@ pub fn save_mode(
     let _lock = lock(home)?;
     let mut stored = read(home)?;
     let previous = stored.entries.iter().find(|entry| entry.workspace == *key);
+    let inherited = match (previous.is_none(), key.session_id.is_some()) {
+        (true, true) => stored
+            .entries
+            .iter()
+            .find(|entry| entry.workspace == key.base()),
+        _ => None,
+    };
+    let inherited_task = inherited.and_then(|entry| entry.selection.review_task.clone());
+    let retained_dirs = previous.or(inherited).map(|entry| entry.dirs.clone());
     anyhow::ensure!(
         review_task
             .is_none_or(|selection| !selection.task_id.trim().is_empty()
@@ -495,7 +571,7 @@ pub fn save_mode(
         previous.map(|entry| &entry.selection),
         expected_revision,
         mode,
-        review_task.cloned(),
+        review_task.cloned().or(inherited_task),
     )?;
     if !selected.changed {
         return Ok(previous
@@ -505,7 +581,7 @@ pub fn save_mode(
     let settings = Settings {
         workspace: key.clone(),
         selection: selected.next,
-        dirs: previous.map_or_else(Vec::new, |entry| entry.dirs.clone()),
+        dirs: retained_dirs.unwrap_or_default(),
         command_grants: Vec::new(),
     };
     stored.entries.retain(|entry| entry.workspace != *key);
@@ -609,7 +685,7 @@ mod tests {
             let task = case.requested_task.map(selection);
             let result = save_mode(&home, &key, case.expected, case.mode, task.as_ref());
             assert_eq!(result.is_ok(), case.accepted, "{raw}");
-            let observed = get(&home, &key)?.map(|settings| settings.selection);
+            let observed = resolve(&home, &key, None)?.map(|settings| settings.selection);
             assert_eq!(observed, case.next.map(preference), "{raw}");
             assert_eq!(observed != previous, case.changed, "{raw}");
         }
@@ -617,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn modes_are_scoped_to_the_exact_node_agent_and_canonical_workspace() -> Result<()> {
+    fn modes_are_scoped_to_the_exact_node_agent_canonical_workspace_and_session() -> Result<()> {
         let root = tempfile::tempdir()?;
         let home = root.path().join("home");
         let first = root.path().join("first");
@@ -627,28 +703,47 @@ mod tests {
         let key = WorkspaceKey::canonical("node", "requester", "agent", &first)?;
         let full = save_mode(&home, &key, 0, Mode::FullAccess, None)?;
         assert_eq!(
-            get(
+            resolve(
                 &home,
-                &WorkspaceKey::canonical("node", "requester", "agent", &first.join("."))?
+                &WorkspaceKey::canonical("node", "requester", "agent", &first.join("."))?,
+                None
             )?
             .unwrap()
             .scope(),
             full.scope()
         );
-        for other in [
+        let others = [
             WorkspaceKey::canonical("node", "requester", "agent", &second)?,
             WorkspaceKey::canonical("other", "requester", "agent", &first)?,
             WorkspaceKey::canonical("node", "requester", "other", &first)?,
             WorkspaceKey::canonical("node", "other", "agent", &first)?,
-        ] {
-            assert!(get(&home, &other)?.is_none());
+        ];
+        for other in &others {
+            assert!(resolve(&home, other, None)?.is_none());
         }
+        save_mode(
+            &home,
+            &key.with_session(Some("chat"))?,
+            0,
+            Mode::FullAccess,
+            None,
+        )?;
+        for other in &others {
+            assert!(resolve(&home, other, Some("chat"))?.is_none());
+        }
+        assert!(key.with_session(Some("  ")).is_err());
         assert!(save_mode(&home, &key, 0, Mode::Ask, None).is_err());
-        assert_eq!(get(&home, &key)?.unwrap().selection.mode, Mode::FullAccess);
+        assert_eq!(
+            resolve(&home, &key, None)?.unwrap().selection.mode,
+            Mode::FullAccess
+        );
         let ask = save_mode(&home, &key, full.selection.revision, Mode::Ask, None)?;
         assert!(ask.selection.revision > full.selection.revision);
         assert!(save_mode(&home, &key, ask.selection.revision, Mode::AutoReview, None).is_err());
-        assert_eq!(get(&home, &key)?.unwrap().selection.mode, Mode::Ask);
+        assert_eq!(
+            resolve(&home, &key, None)?.unwrap().selection.mode,
+            Mode::Ask
+        );
         let selected = ReviewTaskSelection::for_task(&crate::documents::Task {
             task_id: "review-task".into(),
             ..default_review_task("node", "agent")
@@ -665,12 +760,241 @@ mod tests {
         Ok(())
     }
 
+    fn consent_fixture() -> Result<(tempfile::TempDir, PathBuf, PathBuf, WorkspaceKey)> {
+        let root = tempfile::tempdir()?;
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home)?;
+        let project = root.path().join("project");
+        std::fs::create_dir_all(&project)?;
+        let project = project.canonicalize()?;
+        let key = WorkspaceKey::canonical("node", "requester", "agent", &project)?;
+        Ok((root, home, project, key))
+    }
+
+    fn command_binding(settings: &Settings, project: &Path) -> Binding {
+        Grant {
+            scope: settings.scope(),
+            action: BindingAction::Command {
+                argv: vec!["printf".into(), "remembered".into()],
+                cwd: project.to_owned(),
+                root: project.to_owned(),
+                writable_root: None,
+                policy: crate::tools::native::CommandExecutionPolicy::write_capable(),
+            },
+        }
+    }
+
+    #[test]
+    fn sessions_select_modes_independently_of_each_other_and_the_default() -> Result<()> {
+        let (_root, home, _project, base) = consent_fixture()?;
+        let first = save_mode(
+            &home,
+            &base.with_session(Some("chat-a"))?,
+            0,
+            Mode::FullAccess,
+            None,
+        )?;
+        let second = save_mode(
+            &home,
+            &base.with_session(Some("chat-b"))?,
+            0,
+            Mode::Ask,
+            None,
+        )?;
+        let mode = |session| -> Result<Option<Mode>> {
+            Ok(resolve(&home, &base, session)?.map(|settings| settings.selection.mode))
+        };
+        assert_eq!(mode(Some("chat-a"))?, Some(Mode::FullAccess));
+        assert_eq!(mode(Some("chat-b"))?, Some(Mode::Ask));
+        assert_eq!(mode(Some("chat-c"))?, None);
+        assert_eq!(mode(None)?, None);
+        let default = save_mode(&home, &base, 0, Mode::Ask, None)?;
+        assert_eq!(
+            resolve(&home, &base, Some("chat-c"))?.unwrap().scope(),
+            default.scope()
+        );
+        assert_eq!(
+            resolve(&home, &base, None)?.unwrap().scope(),
+            default.scope()
+        );
+        assert_eq!(mode(Some("chat-a"))?, Some(Mode::FullAccess));
+        let changed = save_mode(
+            &home,
+            &base.with_session(Some("chat-a"))?,
+            first.selection.revision,
+            Mode::Ask,
+            None,
+        )?;
+        assert!(changed.selection.revision > first.selection.revision);
+        assert_eq!(
+            resolve(&home, &base, Some("chat-b"))?
+                .unwrap()
+                .selection
+                .revision,
+            second.selection.revision
+        );
+        assert_eq!(
+            resolve(&home, &base, None)?.unwrap().selection.revision,
+            default.selection.revision
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_delegated_run_resolves_to_the_default_not_the_chat_that_started_it() -> Result<()> {
+        let (_root, home, _project, base) = consent_fixture()?;
+        save_mode(&home, &base, 0, Mode::Ask, None)?;
+        save_mode(
+            &home,
+            &base.with_session(Some("parent"))?,
+            0,
+            Mode::FullAccess,
+            None,
+        )?;
+        for session in [Some("delegated"), None] {
+            assert_eq!(
+                resolve(&home, &base, session)?.unwrap().selection.mode,
+                Mode::Ask
+            );
+        }
+        assert_eq!(
+            resolve(&home, &base, Some("parent"))?
+                .unwrap()
+                .selection
+                .mode,
+            Mode::FullAccess
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_file_written_without_sessions_still_governs_a_chat_that_never_chose() -> Result<()> {
+        let (_root, home, _project, base) = consent_fixture()?;
+        let reviewer = ReviewTaskSelection::for_task(&default_review_task("node", "agent"));
+        let configured = save_mode(&home, &base, 0, Mode::AutoReview, Some(&reviewer))?;
+        let stored = std::fs::read_to_string(preferences_file(&home))?;
+        assert!(!stored.contains("sessionId"), "{stored}");
+        let governing = resolve(&home, &base, Some("a-chat-that-never-chose"))?.unwrap();
+        assert_eq!(governing.scope(), configured.scope());
+        assert_eq!(governing.selection.mode, Mode::AutoReview);
+        assert_eq!(governing.selection.review_task.as_ref(), Some(&reviewer));
+        Ok(())
+    }
+
+    #[test]
+    fn a_chats_first_selection_keeps_the_default_reviewer_and_folders() -> Result<()> {
+        let (_root, home, project, base) = consent_fixture()?;
+        let reviewer = ReviewTaskSelection::for_task(&default_review_task("node", "agent"));
+        let default = save_mode(&home, &base, 0, Mode::AutoReview, Some(&reviewer))?;
+        let granted = crate::plugin::allowed::AllowedDir {
+            path: project,
+            access: crate::pack::BindAccess::ReadWrite,
+        };
+        save(
+            &home,
+            &Stored {
+                entries: vec![Settings {
+                    dirs: vec![granted.clone()],
+                    ..default.clone()
+                }],
+            },
+        )?;
+        let chat = save_mode(
+            &home,
+            &base.with_session(Some("chat"))?,
+            0,
+            Mode::AutoReview,
+            None,
+        )?;
+        assert_eq!(chat.selection.review_task.as_ref(), Some(&reviewer));
+        assert_eq!(chat.dirs, vec![granted]);
+        assert_eq!(chat.selection.revision, 1);
+        assert_eq!(
+            resolve(&home, &base, None)?.unwrap().selection.revision,
+            default.selection.revision
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_command_remembered_in_one_chat_is_not_honoured_in_another() -> Result<()> {
+        let (_root, home, project, base) = consent_fixture()?;
+        let default = save_mode(&home, &base, 0, Mode::FullAccess, None)?;
+        let chat = save_mode(
+            &home,
+            &base.with_session(Some("chat"))?,
+            0,
+            Mode::FullAccess,
+            None,
+        )?;
+        remember_command(&home, &command_binding(&chat, &project))?;
+        let stored = resolve(&home, &base, Some("chat"))?.unwrap();
+        assert!(has_command_grant(
+            &stored,
+            &command_binding(&stored, &project)
+        )?);
+        for session in [Some("another-chat"), None] {
+            let other = resolve(&home, &base, session)?.unwrap();
+            assert_eq!(other.scope(), default.scope());
+            assert!(!has_command_grant(
+                &other,
+                &command_binding(&other, &project)
+            )?);
+        }
+        revoke_commands(&home, &stored.workspace, stored.selection.revision)?;
+        assert_eq!(
+            resolve(&home, &base, None)?.unwrap().selection.revision,
+            default.selection.revision
+        );
+        assert_eq!(
+            resolve(&home, &base, Some("chat"))?
+                .unwrap()
+                .command_grants
+                .len(),
+            0
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_chats_own_selection_withdraws_a_binding_taken_under_the_default() -> Result<()> {
+        let (_root, home, project, base) = consent_fixture()?;
+        let default = save_mode(&home, &base, 0, Mode::Ask, None)?;
+        let binding = command_binding(&default, &project);
+        let context = for_request(
+            Some(&home),
+            "node",
+            Some("requester"),
+            "agent",
+            Some(&project),
+            Some("chat"),
+        )?;
+        let check = || {
+            let home = home.clone();
+            let binding = binding.clone();
+            let context = context.clone();
+            async move { scope(context, async move { validate_binding(&home, &binding) }).await }
+        };
+        check().await?;
+        save_mode(
+            &home,
+            &base.with_session(Some("chat"))?,
+            0,
+            Mode::FullAccess,
+            None,
+        )?;
+        let error = check().await.unwrap_err();
+        assert!(error.is::<SelectionChanged>(), "{error}");
+        validate_binding(&home, &binding)?;
+        Ok(())
+    }
+
     #[test]
     fn unreadable_settings_are_not_replaced_by_a_more_permissive_default() -> Result<()> {
         let root = tempfile::tempdir()?;
         let key = WorkspaceKey::canonical("node", "requester", "agent", root.path())?;
         std::fs::write(root.path().join(FILE), b"invalid")?;
-        assert!(get(root.path(), &key).is_err());
+        assert!(resolve(root.path(), &key, None).is_err());
         assert!(save_mode(root.path(), &key, 0, Mode::FullAccess, None).is_err());
         assert_eq!(std::fs::read(root.path().join(FILE))?, b"invalid");
         Ok(())

@@ -52,6 +52,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         Some(&key.requester_did),
         &key.agent_did,
         Some(&root),
+        None,
     )
     .unwrap()
     .unwrap()
@@ -236,6 +237,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
             Some(&key.requester_did),
             &key.agent_did,
             Some(&root),
+            None,
         )
         .unwrap()
         .unwrap();

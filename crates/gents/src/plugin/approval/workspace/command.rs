@@ -90,6 +90,65 @@ mod tests {
         selected_workspace: bool,
     }
 
+    /// Absence of an entry skips the workspace consent gate entirely, so a
+    /// chat that has not chosen must resolve to the agent and folder default
+    /// rather than to nothing.
+    #[tokio::test]
+    async fn a_configured_default_still_gates_a_chat_that_never_chose() {
+        let folder = tempfile::tempdir().unwrap();
+        let home = folder.path().join("runtime");
+        std::fs::create_dir(&home).unwrap();
+        let project = folder.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        let key = WorkspaceKey::canonical("node", "requester", "agent", &project).unwrap();
+        workspace::save_mode(&home, &key, 0, Mode::Ask, None).unwrap();
+        let attempt = |session: Option<&'static str>| {
+            let home = home.clone();
+            let project = project.clone();
+            async move {
+                let context = workspace::for_request(
+                    Some(&home),
+                    "node",
+                    Some("requester"),
+                    "agent",
+                    Some(&project),
+                    session,
+                )
+                .unwrap();
+                workspace::scope(
+                    context,
+                    crate::plugin::approval::scope_interactive(false, async move {
+                        let policy = CommandExecutionPolicy::write_capable();
+                        let argv = vec!["printf".to_owned(), "gated".to_owned()];
+                        authorize_command(&argv, &project, &project, None, &policy).await
+                    }),
+                )
+                .await
+            }
+        };
+        let refused = |error: anyhow::Error| {
+            assert!(
+                error
+                    .to_string()
+                    .contains("not approved for this workspace"),
+                "{error}"
+            );
+        };
+        refused(attempt(Some("a-new-chat")).await.unwrap_err());
+        refused(attempt(None).await.unwrap_err());
+        workspace::save_mode(
+            &home,
+            &key.with_session(Some("other-chat")).unwrap(),
+            0,
+            Mode::FullAccess,
+            None,
+        )
+        .unwrap();
+        refused(attempt(Some("a-new-chat")).await.unwrap_err());
+        attempt(Some("other-chat")).await.unwrap();
+    }
+
     #[tokio::test]
     async fn generated_workspace_command_roots_preserve_the_tool_ceiling() {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_command_root_cases;
@@ -124,6 +183,7 @@ mod tests {
                 Some("requester"),
                 "agent",
                 Some(&project),
+                None,
             )
             .unwrap();
             let policy = CommandExecutionPolicy::write_capable().with_mode(case.mode);

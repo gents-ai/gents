@@ -288,7 +288,7 @@ fn both_permission_writers_publish_without_leaving_staged_files() {
         None,
     )
     .unwrap();
-    let loaded = crate::plugin::approval::workspace::get(&world.gents, &key)
+    let loaded = crate::plugin::approval::workspace::resolve(&world.gents, &key, None)
         .unwrap()
         .unwrap();
     assert_eq!(loaded.scope(), saved.scope());
