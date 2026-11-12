@@ -1,9 +1,5 @@
-use gents_session::request::watcher::cooldown::ProcessedMark;
-use gents_session::request::watcher::*;
+use gents_session::request::watcher::DefraWatcher;
 use gents_session::test_support::ScopedWatcherFixture;
-use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
 
 #[tokio::test]
 async fn pending_requests_are_scoped_by_node_did_without_host_identity() {
@@ -36,7 +32,7 @@ async fn pending_requests_are_scoped_by_node_did_without_host_identity() {
         pending[0].workspace_owner_node_did.as_deref(),
         Some(node_did)
     );
-    let continuation = gents_automation::goal::continuation::prepare_goal_continuation(
+    let continuation = crate::goal::continuation::prepare_goal_continuation(
         &pending[0],
         pending[0].agent_did.clone(),
         "goal-workspace-owner",

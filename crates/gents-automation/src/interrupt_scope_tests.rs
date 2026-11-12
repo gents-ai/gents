@@ -13,19 +13,19 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         .unwrap();
     assert_eq!(case.preserved_foreign_requester_request_ids.len(), 1);
     assert_eq!(case.preserved_foreign_owner_request_ids.len(), 1);
-    let db = gents_automation::triggers::callback::test_node_builder(
+    let db = crate::triggers::callback::test_node_builder(
         "generated-interrupt-drain-preserves-fore",
     )
     .await;
     let node = db.node.clone();
     let root_did = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
-    gents_automation::triggers::callback::seed_test_agent(&node, root_did).await;
-    let agent = gents_automation::triggers::callback::test_agent_identity();
+    crate::triggers::callback::seed_test_agent(&node, root_did).await;
+    let agent = crate::triggers::callback::test_agent_identity();
     let signer = agent.managed_agent_signer().unwrap();
     let signer = Some(&signer);
     let session = case.session_id.to_string();
     use gents_store::identity::NodeIdentity as _;
-    let root = gents_automation::triggers::callback::test_root_identity();
+    let root = crate::triggers::callback::test_root_identity();
     let derived_did = |nonce: char| {
         gents_store::identity::derive_agent_identity(&root, &nonce.to_string().repeat(64))
             .unwrap()
@@ -48,7 +48,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         session: &str,
         source: Option<&str>,
     ) -> String {
-        let agent = gents_automation::triggers::callback::test_agent_did();
+        let agent = crate::triggers::callback::test_agent_did();
         let input=source.map(|source|json!({"queue":{"source":source,"policy":if source=="background_completion" {"coalesce"} else {"append"},"key":if source=="background_completion" {Some(format!("background_completion:{session}"))}else{None}}}));
         let value = json!({"request_id":id,"purpose":"normal","node_did":owner,"requester_did":requester,"session_id":session,
             "agent_did":agent,"lifecycle_state":"pending","execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
@@ -69,7 +69,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     }
     async fn row(node: &Arc<EmbeddedNode>, doc: &str) -> Value {
         let doc = escape_graphql_string(doc);
-        let response = gents_automation::triggers::callback::test_agent_access(node)
+        let response = crate::triggers::callback::test_agent_access(node)
             .execute(&format!("{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state interrupt_requested_at}}}}"))
             .await
             .unwrap();
@@ -169,14 +169,14 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
 
 #[tokio::test]
 async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
-    let db = gents_automation::triggers::callback::test_node_builder(
+    let db = crate::triggers::callback::test_node_builder(
         "logical-interrupt-latches-only-as-the-si",
     )
     .await;
     let node = db.node.clone();
     let root_did = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
-    gents_automation::triggers::callback::seed_test_agent(&node, root_did).await;
-    let agent = gents_automation::triggers::callback::test_agent_identity();
+    crate::triggers::callback::seed_test_agent(&node, root_did).await;
+    let agent = crate::triggers::callback::test_agent_identity();
     let value = json!({"request_id":"logical-latch","purpose":"normal","node_did":root_did,
         "session_id":"logical-latch-session","agent_did":agent.did(),"lifecycle_state":"pending",
         "execution_origin":"interactive","created_at":"2026-09-01T00:00:00Z"});
@@ -202,7 +202,7 @@ async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
     .unwrap();
     let latched = || async {
         let doc = escape_graphql_string(&doc);
-        gents_automation::triggers::callback::test_agent_access(&node)
+        crate::triggers::callback::test_agent_access(&node)
             .execute(&format!(
                 "{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{interrupt_requested_at}}}}"
             ))
@@ -212,7 +212,7 @@ async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
     };
     // A key without a managed Agent signer, even one derived by this runtime,
     // is refused before any read or write.
-    let root = gents_automation::triggers::callback::test_root_identity();
+    let root = crate::triggers::callback::test_root_identity();
     let unmanaged = gents_store::identity::derive_agent_identity(&root, &"f".repeat(64)).unwrap();
     let refused = interrupt_request(&node, unmanaged.as_ref(), "logical-latch").await;
     assert!(matches!(

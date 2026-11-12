@@ -130,7 +130,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let request_id = format!("auxiliary-{name}-{}", uuid::Uuid::new_v4());
     let session_id = format!("session-{request_id}");
     let now = chrono::Utc::now().to_rfc3339();
-    let agent_did = gents_automation::triggers::callback::test_agent_did();
+    let agent_did = crate::triggers::callback::test_agent_did();
     let node_did = node
         .node_identity_did()
         .expect("fixture node identity")
@@ -164,7 +164,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         })
         .await
         .unwrap();
-    let access = gents_automation::triggers::callback::test_agent_access(node);
+    let access = crate::triggers::callback::test_agent_access(node);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         gents_store::graphql::escape_graphql_string(&request_id),
@@ -176,7 +176,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let mut lifecycle =
         RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
     lifecycle
-        .bind_managed_agent(gents_automation::triggers::callback::test_agent_identity().as_ref())
+        .bind_managed_agent(crate::triggers::callback::test_agent_identity().as_ref())
         .unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
@@ -257,7 +257,7 @@ fn native_raw(
 
 async fn output_state(node: &Arc<EmbeddedNode>, request_doc_id: &str) -> serde_json::Value {
     let request_doc_id = gents_store::graphql::escape_graphql_string(request_doc_id);
-    let response = gents_automation::triggers::callback::test_agent_access(node)
+    let response = crate::triggers::callback::test_agent_access(node)
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
         ))
@@ -283,12 +283,12 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             case.name,
             uuid::Uuid::new_v4()
         ));
-        let db = gents_automation::triggers::callback::test_node_builder(
+        let db = crate::triggers::callback::test_node_builder(
             "generated-auxiliary-cases-drive-owned-be",
         )
         .await;
         let node = db.node.clone();
-        gents_automation::triggers::callback::seed_test_agent(
+        crate::triggers::callback::seed_test_agent(
             &node,
             gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
         )
@@ -324,7 +324,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         let before = native_raw(case, &lifecycle, &generation);
         let claimed_append = canonical::append_provider_segment_with_signer(
             &node,
-            identity::Did::new(gents_automation::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
             lifecycle.managed_agent_signer(),
             &generation,
             &before,
@@ -362,7 +362,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         let raw = native_raw(case, &lifecycle, &generation);
         let append = canonical::append_provider_segment_with_signer(
             &node,
-            identity::Did::new(gents_automation::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
             lifecycle.managed_agent_signer(),
             &generation,
             &raw,
@@ -540,7 +540,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         });
         let publication = canonical::publish_provider_turn_with_signer(
             &node,
-            identity::Did::new(gents_automation::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
             lifecycle.managed_agent_signer(),
             &generation,
             canonical::ProviderPublicationPlan {
@@ -589,7 +589,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         };
         let close = canonical::close_provider_attempt_with_signer(
             &node,
-            identity::Did::new(gents_automation::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
             lifecycle.managed_agent_signer(),
             &generation,
             &raw,
@@ -618,7 +618,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         };
         let stale_replay = canonical::close_provider_attempt_with_signer(
             &node,
-            identity::Did::new(gents_automation::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
             lifecycle.managed_agent_signer(),
             &stale_generation,
             &stale,
@@ -679,12 +679,12 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             case.name,
             uuid::Uuid::new_v4()
         ));
-        let db = gents_automation::triggers::callback::test_node_builder(
+        let db = crate::triggers::callback::test_node_builder(
             "generated-auxiliary-cases-drive-non-clau",
         )
         .await;
         let node = db.node.clone();
-        gents_automation::triggers::callback::seed_test_agent(
+        crate::triggers::callback::seed_test_agent(
             &node,
             gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
         )
@@ -754,7 +754,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         .unwrap();
 
         let request_doc_id = gents_store::graphql::escape_graphql_string(&request.doc_id);
-        let response = gents_automation::triggers::callback::test_agent_access(&node).execute(&format!(
+        let response = crate::triggers::callback::test_agent_access(&node).execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
         )).await.unwrap();
         let data = &response["data"];
