@@ -40,7 +40,9 @@ pub enum EnrollmentApprovalError {
     Verify(#[source] IdentityError),
     #[error("the approver cannot read this runtime's Node; nothing was granted or approved")]
     NodeRead(#[source] ConfigClientError),
-    #[error("the approver sees {0} Nodes for this runtime, not one; nothing was granted or approved")]
+    #[error(
+        "the approver sees {0} Nodes for this runtime, not one; nothing was granted or approved"
+    )]
     NodeCount(usize),
     #[error(
         "the approver may not grant this enrollment's Node administration, which only the Node \

@@ -455,6 +455,7 @@ impl P2pTool {
                                 Ok::<_, anyhow::Error>(value)
                             },
                         )?;
+                        async {
                         let request = store
                             .load_projection()
                             .await?
@@ -481,6 +482,8 @@ impl P2pTool {
                         .await
                         .map(|(_, decided)| decided)
                         .map_err(anyhow::Error::from)
+                        }
+                        .await
                     }
                     "deny" => decide(EnrollmentOperatorAction::Deny, 0).await,
                     _ => decide(EnrollmentOperatorAction::Revoke, 0).await,

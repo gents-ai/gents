@@ -179,16 +179,21 @@ pub async fn admit_managed_enrollment_as(
     request_id: &str,
     lease_seconds: u64,
 ) -> Result<ManagedEnrollmentDecisionOutcome> {
-    let body =
-        crate::enrollment_admin::approve_verified_client(home, owner, request_id, lease_seconds, None)
-            .await?
-            .ok_or_else(|| EnrollmentDecisionRejected {
-                status: reqwest::StatusCode::CONFLICT,
-                message: format!(
-                    "enrollment request {request_id} is not pending; nothing was granted or approved"
-                ),
-                code: Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending),
-            })?;
+    let body = crate::enrollment_admin::approve_verified_client(
+        home,
+        owner,
+        request_id,
+        lease_seconds,
+        None,
+    )
+    .await?
+    .ok_or_else(|| EnrollmentDecisionRejected {
+        status: reqwest::StatusCode::CONFLICT,
+        message: format!(
+            "enrollment request {request_id} is not pending; nothing was granted or approved"
+        ),
+        code: Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending),
+    })?;
     serde_json::from_value(body).context("decoding managed enrollment decision")
 }
 
