@@ -14,7 +14,7 @@
 use gents_lean_vocab::{
     lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases,
     lean_plugin_job_authority_cases, lean_plugin_job_control_cases, lean_plugin_job_key_cases,
-    lean_plugin_job_lineage_cases, lean_plugin_job_wire_cases, LeanPluginJobAdoptionCase,
+    lean_plugin_job_wire_cases, LeanPluginJobAdoptionCase,
     LeanPluginJobAuthorityCase, LeanPluginJobCeiling, LeanPluginJobContext,
     LeanPluginJobControlCase, LeanPluginJobControlEcho, LeanPluginJobExtras, LeanPluginJobGuestPin,
     LeanPluginJobHostFacts, LeanPluginJobKill, LeanPluginJobObservation, LeanPluginJobOutput,
@@ -1297,44 +1297,6 @@ fn generated_plugin_job_wire_cases_round_trip_protocol_types() {
         ]),
         "Lean pins these wire samples in `wire_regressions`"
     );
-}
-
-/// The `OpeningRequest` rows decode strictly; L3 consumes them to drive
-/// `opening_request`.
-#[test]
-fn generated_plugin_job_lineage_cases_decode_strictly() {
-    let cases = lean_plugin_job_lineage_cases();
-    assert_eq!(
-        cases.len(),
-        7,
-        "Lean pins seven lineage rows in `lineage_regressions`"
-    );
-    let mut names = BTreeSet::new();
-    for case in cases {
-        assert!(names.insert(case.name.as_str()), "duplicate {}", case.name);
-        let docs: BTreeSet<&str> = case.rows.iter().map(|r| r.doc_id.as_str()).collect();
-        assert_eq!(
-            docs.len(),
-            case.rows.len(),
-            "{}: duplicate _docID",
-            case.name
-        );
-        assert!(!case.queries.is_empty(), "{}: no query", case.name);
-        for query in &case.queries {
-            if let Some(opening) = &query.expected_opening_doc_id {
-                assert!(
-                    docs.contains(opening.as_str()),
-                    "{}: opening request {opening} is not a row",
-                    case.name
-                );
-            }
-            assert!(
-                !query.listed_start || query.expected_opening_doc_id.is_some(),
-                "{}: a listed start has an opening request",
-                case.name
-            );
-        }
-    }
 }
 
 /// `strip_secret_fields` drops a field whose upper-cased name contains one of

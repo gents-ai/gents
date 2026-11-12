@@ -5043,10 +5043,12 @@ dependencies = [
 name = "gents-lean-vocab"
 version = "1.0.0-rc2"
 dependencies = [
+ "acp",
  "anyhow",
  "chrono",
  "gents-lean-contract",
  "gents-protocol",
+ "identity",
  "prettyplease",
  "proc-macro2",
  "quote",
