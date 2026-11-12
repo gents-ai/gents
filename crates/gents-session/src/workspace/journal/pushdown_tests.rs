@@ -1,5 +1,4 @@
 use crate::workspace::{action_journal_prefix_legal, retry_allowed, ActionJournalEntry};
-use gents_lean_vocab::{lean_callback_cases, lean_callback_retry_cases};
 
 fn journal(states: &[String]) -> Vec<ActionJournalEntry> {
     states
@@ -17,50 +16,19 @@ fn journal(states: &[String]) -> Vec<ActionJournalEntry> {
 
 #[test]
 fn generated_retry_decisions_match_runtime_owner() {
-    let cases = lean_callback_retry_cases();
-    assert_eq!(cases.len(), 224, "Lean must emit the whole retry matrix");
-    assert!(cases.iter().any(|case| case.allowed));
-    for case in cases {
-        assert_eq!(
-            retry_allowed(
-                &case.state,
-                &journal(&case.journal),
-                case.attempts,
-                case.max_attempts
-            ),
-            case.allowed,
-            "{}: production retry decision",
-            case.name,
-        );
-    }
+    gents_lean_vocab::families::contracts_callback_retry::replay(|case| {
+        retry_allowed(
+            &case.state,
+            &journal(&case.journal),
+            u32::try_from(case.attempts).unwrap(),
+            u32::try_from(case.max_attempts).unwrap(),
+        )
+    });
 }
 
 #[test]
 fn generated_callback_journals_match_runtime_owner() {
-    let cases = lean_callback_cases();
-    assert!(!cases.is_empty(), "Lean must emit callback journal cases");
-    for case in cases {
-        assert_ne!(
-            case.agent_did, case.owner_node_did,
-            "modeled callback actor is not its routing node"
-        );
-        let journal = case
-            .journal
-            .iter()
-            .enumerate()
-            .map(|(index, state)| {
-                ActionJournalEntry::new(
-                    u32::try_from(index).expect("journal index fits runtime"),
-                    serde_json::from_value(serde_json::Value::String(state.clone()))
-                        .expect("runtime action journal state"),
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            action_journal_prefix_legal(&journal),
-            case.journal_prefix_legal,
-            "{}: production journal prefix",
-            case.name,
-        );
-    }
+    gents_lean_vocab::families::contracts_callback_journal::replay(|case| {
+        action_journal_prefix_legal(&journal(&case.journal))
+    });
 }
