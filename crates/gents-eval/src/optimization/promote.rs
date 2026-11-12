@@ -830,37 +830,156 @@ mod tests {
 
     #[tokio::test]
     async fn held_user_promotion_and_revert_match_native_job_permissions() -> anyhow::Result<()> {
+        use gents_lean_vocab::families::optimization_promotion_held_transition::{
+            JournalWire, PromotionOutput,
+        };
         use gents_store::config_client::GraphqlEndpoint;
         use gents_store::identity::NodeIdentity;
 
-        let modeled =
-            &gents_lean_vocab::lean_contract_snapshot().identity_optimization_promotion_cases;
-        let expected = |name: &str| {
-            modeled
+        for case in gents_lean_vocab::families::optimization_promotion_held_transition::cases() {
+            let (harness, request) =
+                accepting_harness(&format!("native-promotion-{}", case.input.name)).await;
+            let digest = checkpoint_digest(&harness, &request.job_id).await;
+            let keys = tempfile::tempdir()?;
+            let outsider = gents_store::identity::KeyIdentity::load_or_create(
+                keys.path().join("outsider.key"),
+                None,
+            )?;
+            let endpoint = match harness.access() {
+                ConfigAccess::Graphql(endpoint) => endpoint.url(),
+                _ => panic!("held evaluator must use HTTP"),
+            };
+            let foreign = ConfigAccess::Graphql(
+                GraphqlEndpoint::as_principal(endpoint, outsider.did())
+                    .with_client_signing_capability(outsider.client_signing_capability()?)?
+                    .with_client_signed_agent_creates(),
+            );
+            let anonymous = ConfigAccess::graphql(endpoint);
+            let caller = match case.input.actor.as_deref() {
+                None => &anonymous,
+                Some("reader") => {
+                    admit_reader(&harness, &request.job_id, &digest, &foreign, &outsider).await?;
+                    &foreign
+                }
+                Some(_) => harness.access(),
+            };
+
+            let target_digest = if case.input.action == "reverted" {
+                let promotion =
+                    promote(harness.access(), harness.owner(), &request.job_id, &digest).await?;
+                let promoted = load_job(harness.access(), harness.owner(), &request.job_id)
+                    .await?
+                    .unwrap();
+                assert!(revert(
+                    &foreign,
+                    harness.owner(),
+                    &request.job_id,
+                    &promotion.target_digest
+                )
+                .await
+                .is_err());
+                assert_eq!(
+                    live_prompt(&harness).await.as_deref(),
+                    Some(CANDIDATE_PROMPT)
+                );
+                assert_eq!(
+                    load_job(harness.access(), harness.owner(), &request.job_id)
+                        .await?
+                        .unwrap()
+                        .journal,
+                    promoted.journal
+                );
+                Some(promotion.target_digest)
+            } else {
+                None
+            };
+
+            let before_prompt = live_prompt(&harness).await.expect("target prompt");
+            let before_job = load_job(harness.access(), harness.owner(), &request.job_id)
+                .await?
+                .unwrap();
+            let (outcome, written) = match &target_digest {
+                None => (
+                    promote(caller, harness.owner(), &request.job_id, &digest)
+                        .await
+                        .map(|_| ()),
+                    CANDIDATE_PROMPT.to_owned(),
+                ),
+                Some(target_digest) => (
+                    revert(caller, harness.owner(), &request.job_id, target_digest).await,
+                    BASELINE_PROMPT.to_owned(),
+                ),
+            };
+            if case.input.actor.is_none() {
+                assert_eq!(
+                    outcome
+                        .as_ref()
+                        .err()
+                        .and_then(promote_refused)
+                        .map(|error| error.reason),
+                    Some("actor_required")
+                );
+            }
+            let after_prompt = live_prompt(&harness).await.expect("target prompt");
+            let target = if after_prompt == before_prompt {
+                "before"
+            } else if after_prompt == written {
+                "after"
+            } else {
+                panic!("{}: the target holds {after_prompt:?}", case.input.name)
+            };
+            assert_eq!(outcome.is_ok(), target == "after", "{}", case.input.name);
+            let after_job = load_job(harness.access(), harness.owner(), &request.job_id)
+                .await?
+                .unwrap();
+            assert_eq!(
+                after_job.journal[..before_job.journal.len()],
+                before_job.journal[..]
+            );
+            let principal = |by: &str| {
+                if by == harness.evaluator_did() {
+                    "user".to_owned()
+                } else if by == outsider.did() {
+                    "reader".to_owned()
+                } else {
+                    by.to_owned()
+                }
+            };
+            let journal = after_job.journal[before_job.journal.len()..]
                 .iter()
-                .find(|case| case["name"] == name)
-                .expect("modeled case")
-        };
-        let (harness, request) = accepting_harness("native-promotion").await;
-        let digest = checkpoint_digest(&harness, &request.job_id).await;
-        let keys = tempfile::tempdir()?;
-        let outsider = gents_store::identity::KeyIdentity::load_or_create(
-            keys.path().join("outsider.key"),
-            None,
-        )?;
-        let endpoint = match harness.access() {
-            ConfigAccess::Graphql(endpoint) => endpoint.url(),
-            _ => panic!("held evaluator must use HTTP"),
-        };
-        let foreign = ConfigAccess::Graphql(
-            GraphqlEndpoint::as_principal(endpoint, outsider.did())
-                .with_client_signing_capability(outsider.client_signing_capability()?)?
-                .with_client_signed_agent_creates(),
-        );
-        let hidden = promote(&foreign, harness.owner(), &request.job_id, &digest)
+                .map(|entry| match entry {
+                    JournalEntry::Promoted { by, .. } => JournalWire {
+                        action: "promoted".to_owned(),
+                        principal: principal(by),
+                    },
+                    JournalEntry::Reverted { by } => JournalWire {
+                        action: "reverted".to_owned(),
+                        principal: principal(by),
+                    },
+                    other => panic!("{}: unexpected journal entry {other:?}", case.input.name),
+                })
+                .collect();
+            case.check(PromotionOutput {
+                target: target.to_owned(),
+                journal,
+            });
+        }
+        Ok(())
+    }
+
+    async fn admit_reader(
+        harness: &Harness,
+        job_id: &str,
+        digest: &str,
+        foreign: &ConfigAccess,
+        outsider: &gents_store::identity::KeyIdentity,
+    ) -> anyhow::Result<()> {
+        use gents_store::identity::NodeIdentity;
+
+        let hidden = promote(foreign, harness.owner(), job_id, digest)
             .await
             .unwrap_err();
-        let missing = promote(&foreign, harness.owner(), "missing-job", &digest)
+        let missing = promote(foreign, harness.owner(), "missing-job", digest)
             .await
             .unwrap_err();
         assert_eq!(
@@ -871,16 +990,6 @@ mod tests {
             promote_refused(&hidden).map(|error| error.reason),
             promote_refused(&missing).map(|error| error.reason)
         );
-        let anonymous = ConfigAccess::graphql(endpoint);
-        let no_actor = promote(&anonymous, harness.owner(), &request.job_id, &digest)
-            .await
-            .unwrap_err();
-        assert_eq!(
-            promote_refused(&no_actor).map(|error| error.reason),
-            Some("actor_required")
-        );
-        assert_eq!(expected("missing-actor")["expected_target"], "before");
-
         let owner = harness.owner().to_owned();
         let node_doc = harness
             .access()
@@ -918,14 +1027,11 @@ mod tests {
                 ],
             )
             .await?;
-        let before_prompt = live_prompt(&harness).await.expect("target prompt");
-        let before_job = load_job(harness.access(), harness.owner(), &request.job_id)
+        let before_prompt = live_prompt(harness).await.expect("target prompt");
+        let before_job = load_job(harness.access(), harness.owner(), job_id)
             .await?
             .unwrap();
         let retained = checkpoint(&before_job.journal).expect("ready checkpoint");
-
-        // Establish that the foreign caller can stage the target update, then
-        // abort that independent probe before exercising the joint transaction.
         let probe = foreign
             .transact_write("test.promotion.target_probe", |txn| {
                 let origin = &before_job.origin;
@@ -946,84 +1052,8 @@ mod tests {
             .unwrap_err();
         assert_eq!(probe.to_string(), "target probe rollback");
         assert_eq!(
-            live_prompt(&harness).await.as_deref(),
+            live_prompt(harness).await.as_deref(),
             Some(before_prompt.as_str())
-        );
-        assert!(promote(&foreign, harness.owner(), &request.job_id, &digest)
-            .await
-            .is_err());
-        let denied = expected("reader-cannot-update-job");
-        assert_eq!(denied["expected_target"], "before");
-        assert_eq!(
-            live_prompt(&harness).await.as_deref(),
-            Some(before_prompt.as_str())
-        );
-        let after_denial = load_job(harness.access(), harness.owner(), &request.job_id)
-            .await?
-            .unwrap();
-        assert_eq!(after_denial.journal, before_job.journal);
-        assert_eq!(denied["expected_journal"].as_array().unwrap().len(), 0);
-
-        let promotion =
-            promote(harness.access(), harness.owner(), &request.job_id, &digest).await?;
-        let granted = expected("held-user-promote");
-        assert_eq!(granted["expected_target"], "after");
-        assert_eq!(
-            live_prompt(&harness).await.as_deref(),
-            Some(CANDIDATE_PROMPT)
-        );
-        let promoted = load_job(harness.access(), harness.owner(), &request.job_id)
-            .await?
-            .unwrap();
-        assert_eq!(
-            promoted.journal.len(),
-            before_job.journal.len() + granted["expected_journal"].as_array().unwrap().len()
-        );
-        assert!(
-            matches!(promoted.journal.last(), Some(JournalEntry::Promoted { by, .. }) if by == &harness.evaluator_did())
-        );
-
-        assert!(revert(
-            &foreign,
-            harness.owner(),
-            &request.job_id,
-            &promotion.target_digest
-        )
-        .await
-        .is_err());
-        assert_eq!(
-            live_prompt(&harness).await.as_deref(),
-            Some(CANDIDATE_PROMPT)
-        );
-        assert_eq!(
-            load_job(harness.access(), harness.owner(), &request.job_id)
-                .await?
-                .unwrap()
-                .journal,
-            promoted.journal
-        );
-        revert(
-            harness.access(),
-            harness.owner(),
-            &request.job_id,
-            &promotion.target_digest,
-        )
-        .await?;
-        let reverted = expected("held-user-revert");
-        assert_eq!(reverted["expected_target"], "after");
-        assert_eq!(
-            live_prompt(&harness).await.as_deref(),
-            Some(before_prompt.as_str())
-        );
-        let final_job = load_job(harness.access(), harness.owner(), &request.job_id)
-            .await?
-            .unwrap();
-        assert_eq!(
-            final_job.journal.len(),
-            promoted.journal.len() + reverted["expected_journal"].as_array().unwrap().len()
-        );
-        assert!(
-            matches!(final_job.journal.last(), Some(JournalEntry::Reverted { by }) if by == &harness.evaluator_did())
         );
         Ok(())
     }

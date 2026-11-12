@@ -489,6 +489,11 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "network_protocol_resource")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "optimization_promotion_held_transition")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "optimization_promotion_held_transition_unreached"
+      "model-production-gap: no production path withholds target update permission from a caller that may update the job, forces a stale journal compare-and-set, or fails the commit after both writes are staged.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "identity_secret_publication_cases" "IdentitySecretPublicationCases"
       "The snapshot emits and the decoder accepts these cases; no native test reads them.")

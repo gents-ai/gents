@@ -3041,7 +3041,6 @@ pub struct LeanContractSnapshot {
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub identity_callback_parent_actor_cases: Vec<serde_json::Value>,
     pub identity_eval_record_cases: Vec<LeanIdentityEvalRecordCase>,
-    pub identity_optimization_promotion_cases: Vec<serde_json::Value>,
     pub identity_readiness_preflight_cases: Vec<serde_json::Value>,
     pub identity_secret_publication_cases: Vec<serde_json::Value>,
     pub identity_deferred_operation_cases: Vec<serde_json::Value>,
