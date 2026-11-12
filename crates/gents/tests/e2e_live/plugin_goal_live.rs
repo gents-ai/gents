@@ -96,9 +96,17 @@ pub(super) async fn submit_with_cwd(
         .to_owned()
 }
 
-pub(super) async fn select_profiles(live: &LiveUser, target: &InferenceTarget, agents: &[&str]) {
-    let mut documents = Vec::new();
-    for agent in agents {
+pub(super) async fn select_profiles(
+    live: &LiveUser,
+    target: &InferenceTarget,
+    parent: &str,
+    children: &[&str],
+) {
+    let mut documents = vec![(
+        Collection::DefaultAgentSelection,
+        json!({"node_did": live.node_did, "default_agent_did": parent}),
+    )];
+    for agent in std::iter::once(parent).chain(children.iter().copied()) {
         let value = live
             .access
             .transact_readonly("test.live_job.profile", |txn| {
@@ -184,7 +192,8 @@ pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarne
     select_profiles(
         &live,
         &target,
-        &[&actors.fixture.binding.agent_did, &actors.child_did],
+        &actors.fixture.binding.agent_did,
+        &[&actors.child_did],
     )
     .await;
     let cwd = tokio::fs::canonicalize(plugin_home.path()).await.unwrap();

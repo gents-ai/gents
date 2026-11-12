@@ -71,7 +71,8 @@ impl LiveJobs {
         select_profiles(
             &live,
             &target,
-            &[&actors.fixture.binding.agent_did, &actors.child_did],
+            &actors.fixture.binding.agent_did,
+            &[&actors.child_did],
         )
         .await;
         for (agent, id, child) in [
