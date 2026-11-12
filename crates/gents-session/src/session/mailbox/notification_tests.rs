@@ -16,18 +16,14 @@ fn notification_outcomes_follow_lean_cases() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_notification_cases;
     assert_eq!(cases.len(), 8);
     for case in cases {
-        let mode = if case["mode"] == "event" {
+        let mode = if case.mode == "event" {
             NotificationIdentity::Event
         } else {
             NotificationIdentity::Condition { key: "disk".into() }
         };
         assert_eq!(
-            serde_json::to_value(mode.write_outcome(
-                case["open_exists"].as_bool().unwrap(),
-                case["same_content"].as_bool().unwrap()
-            ))
-            .unwrap(),
-            case["outcome"]
+            serde_json::to_value(mode.write_outcome(case.open_exists, case.same_content)).unwrap(),
+            serde_json::Value::String(case.outcome.clone())
         );
     }
 }
@@ -93,7 +89,7 @@ async fn generated_notification_cases_drive_durable_writes() {
         .iter()
         .enumerate()
     {
-        let identity = if case["mode"] == "event" {
+        let identity = if case.mode == "event" {
             NotificationIdentity::Event
         } else {
             NotificationIdentity::Condition {
@@ -109,7 +105,7 @@ async fn generated_notification_cases_drive_durable_writes() {
             )
             .unwrap();
         let mut args = tests::args(MailboxAction::Ack, &source);
-        let initial = if case["open_exists"] == true {
+        let initial = if case.open_exists {
             Some(
                 stamp_notification(
                     &node,
@@ -126,7 +122,7 @@ async fn generated_notification_cases_drive_durable_writes() {
         } else {
             None
         };
-        if case["same_content"] == false {
+        if !case.same_content {
             args.title = "Updated reading: \"disk\"\n82%".into();
         }
         let receipt = stamp_notification(
@@ -141,7 +137,7 @@ async fn generated_notification_cases_drive_durable_writes() {
         .unwrap();
         assert_eq!(
             serde_json::to_value(receipt.outcome).unwrap(),
-            case["outcome"]
+            serde_json::Value::String(case.outcome.clone())
         );
         let persisted = tests::load_as_creator(&node, &receipt.item.doc_id)
             .await
