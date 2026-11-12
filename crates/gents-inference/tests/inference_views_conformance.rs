@@ -191,9 +191,10 @@ async fn inference_view_exposure_follows_reader_acp_on_served_node() -> Result<(
         )
         .await?;
         let profiles = reader_access.read_view(&ProfileList::new(scope)).await?;
-        assert_eq!(!rows.is_empty(), case.expected.backend);
-        assert_eq!(!profiles.is_empty(), case.expected.backend);
-        for present in [
+        let observation = rows.iter().any(|row| row.observation.is_some());
+        for backend in [
+            !rows.is_empty(),
+            !profiles.is_empty(),
             !reader_access
                 .read_view(&SamplingList::new(scope))
                 .await?
@@ -207,12 +208,13 @@ async fn inference_view_exposure_follows_reader_acp_on_served_node() -> Result<(
                 .await?
                 .is_empty(),
         ] {
-            assert_eq!(present, case.expected.backend);
+            case.check(
+                gents_lean_vocab::families::inference_views_exposure::Exposure {
+                    backend,
+                    observation,
+                },
+            );
         }
-        assert_eq!(
-            rows.iter().any(|row| row.observation.is_some()),
-            case.expected.observation
-        );
     }
     db.node.shutdown().await?;
     Ok(())

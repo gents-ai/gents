@@ -39,7 +39,7 @@ async fn inference_activity_views_match_model_on_served_node() -> anyhow::Result
     GrantSet::OperatorUser.grant(&owner, &reader_did).await?;
     let access = db.client_access(&reader);
     let cases =
-        gents_lean_vocab::families::inference_activity_views_included::cases::<Mode, State>();
+        gents_lean_vocab::families::inference_activity_views_included::cases::<State, Mode>();
     assert!(!cases.is_empty());
     for (index, case) in cases.into_iter().enumerate() {
         let input = &case.input;

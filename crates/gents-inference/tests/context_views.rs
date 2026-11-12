@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use gents_inference::views::context::{ContextCalls, ContextCursor};
 use gents_protocol::document_query::{fields::inference_call, Create, Input};
 use gents_store::config_client::ConfigAccess;
-use gents_store::identity::NodeIdentity;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
