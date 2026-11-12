@@ -136,6 +136,12 @@ import Proofs.Conformance.SubscriptionStream
 import Proofs.Conformance.ReceiptRecovery
 import Proofs.Conformance.HomeRetirement
 import Proofs.Conformance.StoreKeyCustody
+import Proofs.Conformance.BackgroundExecutionRegistry
+import Proofs.Conformance.BackgroundWaitChange
+import Proofs.Conformance.InvocationReply
+import Proofs.Conformance.InterruptedDiagnostic
+import Proofs.Conformance.HookInterrupt
+import Proofs.Conformance.PluginJobDispatch
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.CatalogRefresh
