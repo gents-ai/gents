@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn exact_seed_rendering_matches_lean() {
-        for row in &gents_lean_vocab::lean_optimization_cases().seed_rendering {
+        gents_lean_vocab::families::optimization_seed_rendering::replay(|row| {
             let dir = tempfile::tempdir().unwrap();
             crate::optimization::subject::tests::write_task_fixture_pack(dir.path(), false);
             use gents_store::identity::NodeIdentity;
@@ -178,7 +178,7 @@ mod tests {
             for source in &row.sources {
                 let mut value = fixture.config.event_sources[0].clone();
                 value.event_source_id = source.event_source_id.clone();
-                value.source_collection = source.source_collection.clone();
+                value.source_collection = source.collection.clone();
                 value.event_kind = source.event_kind.clone();
                 baseline.config.event_sources.push(value);
             }
@@ -191,7 +191,10 @@ mod tests {
                 let case: EvalCase = serde_json::from_value(json!({
                     "case_id": seed.case_id, "split": "validation", "stages": [{
                         "stage_id": seed.stage_id, "prompt":"", "deadline_secs": 600,
-                        "seed":{"collection":seed.collection,"document":seed.document},
+                        "seed":{
+                            "collection":seed.collection,
+                            "document":serde_json::from_str::<serde_json::Value>(&seed.document).unwrap(),
+                        },
                         "checks":[],
                     }],
                 }))
@@ -213,21 +216,32 @@ mod tests {
                 }
                 definition.cases.push(case);
             }
-            let expected = &row.failed_stages;
             let failures = failed_seeds(&baseline, &definition, &row.text);
-            assert_eq!(failures.len(), expected.len(), "{}: {failures:?}", row.name);
-            for ((case, stage), failure) in expected.iter().zip(&failures) {
-                assert!(
-                    failure.contains(&format!("case {case:?}, stage {stage:?}")),
-                    "{failure}"
-                );
-            }
             assert_eq!(
                 seed_gate(&baseline, &definition, &row.text).is_ok(),
-                expected.is_empty(),
+                failures.is_empty(),
                 "{}",
                 row.name
             );
-        }
+            failures
+                .iter()
+                .map(|failure| {
+                    let seed = row
+                        .seeds
+                        .iter()
+                        .find(|seed| {
+                            failure.contains(&format!(
+                                "case {:?}, stage {:?}",
+                                seed.case_id, seed.stage_id
+                            ))
+                        })
+                        .unwrap_or_else(|| panic!("{}: unattributed failure {failure}", row.name));
+                    gents_lean_vocab::families::optimization_seed_rendering::StageRef {
+                        case_id: seed.case_id.clone(),
+                        stage_id: seed.stage_id.clone(),
+                    }
+                })
+                .collect()
+        });
     }
 }

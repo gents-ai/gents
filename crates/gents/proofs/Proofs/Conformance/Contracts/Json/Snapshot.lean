@@ -812,8 +812,6 @@ def snapshotClientCasesJson : String :=
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"client_agent_readiness_cases\":"
       ++ jsonArray (clientAgentReadinessCases.map clientAgentReadinessCaseJson) ++ ","
-    ++ "\"optimization_cases\":"
-      ++ Conformance.Optimization.optimizationCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
     ++ "\"application_write_cases\":" ++ applicationWriteCasesJson ++ ","

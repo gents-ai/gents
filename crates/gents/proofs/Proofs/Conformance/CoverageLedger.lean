@@ -937,25 +937,21 @@ def caseCoverage : List CoverageEntry :=
       "eval" [Surface.operatorCli]
   , tagged (consumerCoverage "family" "eval_document_capture")
       "eval" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "optimization_alpha_effective")
       "optimization" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "optimization_gate")
       "optimization" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "optimization_cost")
       "optimization" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "optimization_decision")
       "optimization" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "optimization_seed_coverage")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "optimization_seed_coverage_refused")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "optimization_seed_rendering")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "optimization_seed_rendering_candidate")
       "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
       "tool_policy_cases"
