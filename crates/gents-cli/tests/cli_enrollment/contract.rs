@@ -193,7 +193,7 @@ async fn run_contract_with_streaming_cadence(
             }
         });
         let enrollment = timeout(enroll_budget, async {
-            let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+            let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
             reached("enrollment_token");
             let pending = core.request_status_enrollment_with_names(&status, Some("Contract"), Some("Ivan")).await?;
             anyhow::ensure!(pending.state == "pending_approval", "unexpected initial enrollment: {pending:?}");
@@ -1093,7 +1093,7 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                     DesktopPaths::from_root(path), ClientCoreOptions::local_only(),
                 ).await?);
                 core.set_selected_node_did(Some(node_did.clone()));
-                let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+                let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
                 let pending = core.request_status_enrollment_with_label(&status, Some("activity test")).await?;
                 wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await.context("publishing activity enrollment request")?;
                 let home = runtime_home.to_str().context("runtime home UTF-8")?;
@@ -1236,7 +1236,8 @@ async fn run_live_contract(readiness_revisions: usize) -> Result<()> {
                     },
                 async {
                     let (status, _) =
-                        wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+                        wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql)
+                            .await?;
                     let pending = core
                         .request_status_enrollment_with_names(
                             &status,

@@ -57,7 +57,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             )
             .await?;
             let (status, _) =
-                wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+                wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
             let pending = core
                 .request_status_enrollment_with_label(&status, Some("live isolation"))
                 .await

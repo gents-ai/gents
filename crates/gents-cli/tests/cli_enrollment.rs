@@ -215,7 +215,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
             wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
             let status_url = format!("http://127.0.0.1:{port}");
-            let (status, _) = wait_for_enrollment_token(&status_url).await?;
+            let (status, _) = wait_for_enrollment_token(&status_url, &graphql).await?;
             assert_eq!(
                 status.get("node_name").and_then(Value::as_str),
                 Some(agent_name.as_str())
@@ -434,12 +434,9 @@ async fn resolve_live_inference() -> Result<(String, String)> {
     Ok((target.endpoint().to_owned(), target.model().to_owned()))
 }
 
-async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> {
+async fn wait_for_enrollment_token(status_url: &str, graphql: &str) -> Result<(Value, String)> {
     let deadline = Instant::now() + Duration::from_secs(30);
-    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&format!(
-        "{}/graphql",
-        status_url.trim_end_matches('/')
-    )));
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
     let mut changes = observed_changes(&access, &["NodeRuntime", "NodeReadiness"]).await;
     loop {
         match fetch_runtime_connection_payload(status_url).await {

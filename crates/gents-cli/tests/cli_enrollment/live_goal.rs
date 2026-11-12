@@ -90,7 +90,7 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?;
         let outcome: Result<()> = async {
-            let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+            let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
             let pending = core.request_status_enrollment_with_label(&status, Some("live Goal")).await?;
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
             run_cli_json_with_env(&home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home_arg], &owner_env)?;
