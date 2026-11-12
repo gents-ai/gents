@@ -221,10 +221,6 @@ pub fn lean_goal_readiness_gate_cases() -> &'static [LeanGoalReadinessGateCase] 
     &lean_contract_snapshot().goal_readiness_gate_cases
 }
 
-pub fn lean_goal_submission_cases() -> &'static [LeanGoalSubmissionCase] {
-    &lean_contract_snapshot().goal_submission_cases
-}
-
 pub fn lean_handover_fold_cases() -> &'static [LeanHandoverFoldCase] {
     &lean_contract_snapshot().handover_fold_cases
 }
@@ -3122,7 +3118,6 @@ pub struct LeanContractSnapshot {
     pub goal_objective_whitespace_codepoints: Vec<u32>,
     pub task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
     pub task_goal_recovery_cases: Vec<LeanTaskGoalRecoveryCase>,
-    pub goal_submission_cases: Vec<LeanGoalSubmissionCase>,
     pub goal_continuation_materialization_cases: Vec<
         LeanGoalContinuationMaterializationCase,
     >,
@@ -5676,20 +5671,6 @@ pub enum LeanGoalResumeStatus {
     Active,
     Paused,
     Complete,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanGoalSubmissionCase {
-    pub name: String,
-    pub durable_goal: bool,
-    pub runnable_request: bool,
-    pub staged_goal: bool,
-    pub staged_request: bool,
-    pub action: String,
-    pub expected_durable_goal: bool,
-    pub expected_runnable_request: bool,
-    pub expected_staged_goal: bool,
-    pub expected_staged_request: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

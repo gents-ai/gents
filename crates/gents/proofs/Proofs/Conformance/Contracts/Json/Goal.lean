@@ -583,27 +583,31 @@ def goalSubmissionCases : List GoalSubmissionCase :=
       action := .commit }
   ]
 
-def submissionActionName : GoalAutomation.SubmissionAction → String
-  | .stageGoal => "stage_goal" | .stageRequest => "stage_request"
-  | .commit => "commit" | .abort => "abort" | .crash => "crash"
+deriving instance Lean.ToJson for GoalAutomation.SubmissionState,
+  GoalAutomation.SubmissionAction, GoalSubmissionCase
 
-def goalSubmissionCaseJson (w : GoalSubmissionCase) : String :=
-  let post := GoalAutomation.submissionStep w.state w.action
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"durable_goal\":" ++ boolString w.state.durableGoal ++ ","
-    ++ "\"runnable_request\":" ++ boolString w.state.runnableRequest ++ ","
-    ++ "\"staged_goal\":" ++ boolString w.state.stagedGoal ++ ","
-    ++ "\"staged_request\":" ++ boolString w.state.stagedRequest ++ ","
-    ++ "\"action\":" ++ jsonString (submissionActionName w.action) ++ ","
-    ++ "\"expected_durable_goal\":" ++ boolString post.durableGoal ++ ","
-    ++ "\"expected_runnable_request\":" ++ boolString post.runnableRequest ++ ","
-    ++ "\"expected_staged_goal\":" ++ boolString post.stagedGoal ++ ","
-    ++ "\"expected_staged_request\":" ++ boolString post.stagedRequest
-    ++ "}"
+@[conformance_family]
+def goalSubmission : Family GoalSubmissionCase GoalAutomation.SubmissionState where
+  inputs := goalSubmissionCases
+  model := fun w => GoalAutomation.submissionStep w.state w.action
 
-def goalSubmissionCasesJson : String :=
-  jsonArray (goalSubmissionCases.map goalSubmissionCaseJson)
+structure GoalSubmissionPublication where
+  durableGoal : Bool
+  runnableRequest : Bool
+  deriving Lean.ToJson
+
+/-- A served node exposes only committed submissions: staged rows live inside
+the publishing transaction and a crash discards them, so the publishing
+scenario can build only the committed case. -/
+def goalSubmissionPublishedCases : List GoalSubmissionCase :=
+  goalSubmissionCases.filter fun w => w.name ∈ ["commit_both_atomically"]
+
+@[conformance_family]
+def goalSubmissionPublished : Family GoalSubmissionCase GoalSubmissionPublication where
+  inputs := goalSubmissionPublishedCases
+  model := fun w =>
+    let post := GoalAutomation.submissionStep w.state w.action
+    { durableGoal := post.durableGoal, runnableRequest := post.runnableRequest }
 
 structure GoalContinuationMaterializationCase where
   name : String

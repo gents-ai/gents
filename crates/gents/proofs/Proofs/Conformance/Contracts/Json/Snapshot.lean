@@ -574,7 +574,6 @@ def snapshotRequestCasesJson : String :=
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
     ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
     ++ "\"task_goal_recovery_cases\":" ++ taskGoalRecoveryCasesJson ++ ","
-    ++ "\"goal_submission_cases\":" ++ goalSubmissionCasesJson ++ ","
     ++ "\"goal_backed_runtime_cases\":" ++ runtimeGoalPublicationCasesJson ++ ","
     ++ "\"goal_continuation_materialization_cases\":"
       ++ goalContinuationMaterializationCasesJson ++ ","

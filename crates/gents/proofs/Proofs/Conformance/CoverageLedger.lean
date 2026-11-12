@@ -661,8 +661,12 @@ def caseCoverage : List CoverageEntry :=
       "TaskGoalRecoveryCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_submission_cases"
-      "GoalSubmissionCases")
+      "family"
+      "contracts_goal_submission")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_goal_submission_published")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_continuation_materialization_cases"

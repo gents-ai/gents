@@ -5,11 +5,11 @@ use crate::goal::{
     GoalAgentObservation, GoalAgentReadiness, GoalAuditObservation, GoalContinuationAction,
     GoalContinuationFacts, GoalContinuationPhase, GoalCreateDisposition, GoalCreateRequest,
     GoalCreationFingerprint, GoalDecision, GoalFailureCause, GoalGatedDecision,
-    GoalRequestTerminal, GoalState, GoalSubmissionAction, GoalSubmissionState,
+    GoalRequestTerminal, GoalState, GoalSubmissionState,
 };
 use gents_lean_vocab::{
     lean_goal_continuation_materialization_cases, lean_goal_create_cases,
-    lean_goal_readiness_gate_cases, lean_goal_submission_cases, lean_task_goal_publication_cases,
+    lean_goal_readiness_gate_cases, lean_task_goal_publication_cases,
     lean_task_goal_recovery_cases,
 };
 use gents_protocol::goal_status::GoalStatus;
@@ -333,55 +333,28 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
 
 #[test]
 fn generated_goal_submission_cases_fence_atomic_visibility() {
-    let cases = lean_goal_submission_cases();
-    assert_eq!(cases.len(), 6, "the goal submission matrix drifted");
-    for case in cases {
-        let action = match case.action.as_str() {
-            "stage_goal" => GoalSubmissionAction::StageGoal,
-            "stage_request" => GoalSubmissionAction::StageRequest,
-            "commit" => GoalSubmissionAction::Commit,
-            "abort" => GoalSubmissionAction::Abort,
-            "crash" => GoalSubmissionAction::Crash,
-            other => panic!(
-                "unknown submission action {other:?} in Lean case {}",
-                case.name
-            ),
-        };
+    gents_lean_vocab::families::contracts_goal_submission::replay(|case| {
         let actual = goal_submission_step(
             GoalSubmissionState {
-                durable_goal: case.durable_goal,
-                runnable_request: case.runnable_request,
-                staged_goal: case.staged_goal,
-                staged_request: case.staged_request,
+                durable_goal: case.state.durable_goal,
+                runnable_request: case.state.runnable_request,
+                staged_goal: case.state.staged_goal,
+                staged_request: case.state.staged_request,
             },
-            action,
-        );
-        assert_eq!(
-            actual.durable_goal, case.expected_durable_goal,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.runnable_request, case.expected_runnable_request,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.staged_goal, case.expected_staged_goal,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.staged_request, case.expected_staged_request,
-            "Lean case {}",
-            case.name
+            case.action,
         );
         assert!(
             !actual.runnable_request || actual.durable_goal,
             "Lean case {} exposed a runnable request without its durable goal",
             case.name
         );
-    }
+        gents_lean_vocab::families::contracts_goal_submission::SubmissionState {
+            durable_goal: actual.durable_goal,
+            runnable_request: actual.runnable_request,
+            staged_goal: actual.staged_goal,
+            staged_request: actual.staged_request,
+        }
+    });
 }
 
 #[test]
