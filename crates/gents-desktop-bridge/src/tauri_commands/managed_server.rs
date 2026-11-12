@@ -24,10 +24,13 @@ use authority::{
 };
 use gents_desktop_core::preference::StoredManagedServer;
 use gents_desktop_core::workspace_root::{select_agent_workspace_root, AgentWorkspaceRoot};
+use gents_protocol::operations::service::ServiceLifecycleAction;
+use gents_service::args::ServiceAction;
 use launch::{fail_managed_start, install_then_launch, LaunchFailure, NativeLaunch};
 use native::{
     ensure_launchable_here, launchable_native_service, native_error, native_service, run_native,
 };
+use native::{install_action, service_action};
 use pairing::{drain_managed_runtime_pairing, pairing_is_ready, start_running_managed_pairing};
 use port::{
     ensure_default_port_identity, ensure_native_owns_running_endpoint, matching_external_server,
@@ -198,7 +201,14 @@ where
     ensure_app_not_quitting(&state)?;
     ensure_no_start_waiting(&state).await?;
     if let Err(error) = run_native(native_service(&app, &state)?, move |service| {
-        service.set_enabled(enabled)
+        service_action(
+            &service,
+            if enabled {
+                ServiceAction::Enable
+            } else {
+                ServiceAction::Disable
+            },
+        )
     })
     .await
     {
@@ -238,7 +248,12 @@ where
     ensure_native_owns_running_endpoint(&port, native.job_loaded)?;
     drain_managed_runtime_pairing(state).await;
     if let Err(error) = run_native(native_service(app, state)?, move |service| {
-        service.stop(disable_auto_start)
+        service_action(
+            &service,
+            ServiceAction::Stop {
+                keep_enabled: !disable_auto_start,
+            },
+        )
     })
     .await
     {
@@ -433,11 +448,10 @@ where
     let lifecycle = lock_lifecycle_superseding_start(state).await;
     ensure_app_not_quitting(state)?;
     let managed_selection = run_native(native_service(app, state)?, |service| {
-        if let Some(id) = service.pending_update()? {
-            anyhow::bail!("Managed runtime update {id} is in progress. Reconnect after it finishes, or run `gents runtime service update-status --home <node-home> {id}` with this node's home to resume its supervisor.");
-        }
+        gents_service::lifecycle::admit(&service, ServiceLifecycleAction::Restart)?;
         service.has_managed_executable()
-    }).await?;
+    })
+    .await?;
     if managed_selection {
         // A package older than the selected runtime must not deserialize and
         // rewrite its init configuration, discarding fields it cannot know.
@@ -495,7 +509,12 @@ where
         default_packs: true,
     };
     if let Err(error) = stop_before_reprovision(
-        || async { run_native(native_service(app, state)?, |service| service.stop(false)).await },
+        || async {
+            run_native(native_service(app, state)?, |service| {
+                service_action(&service, ServiceAction::Stop { keep_enabled: true })
+            })
+            .await
+        },
         || async {
             if !managed_selection {
                 gents_server::server_host::ensure_standard_home(
@@ -559,7 +578,7 @@ where
             error
         })?;
         run_native(launchable_native_service(app, state)?, |service| {
-            service.install()
+            service_action(&service, install_action())
         })
         .await
     };

@@ -1,4 +1,3 @@
-use gents_service::args::ServiceAction;
 use gents_service::home_state::default_data_dir;
 use gents_service::home_state::home_graphql_endpoint;
 use gents_service::home_state::init_config_path;
@@ -505,6 +504,7 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
         }
         command => command,
     };
+    use gents_service::lifecycle::ServiceLifecycleReceipt;
     use gents_service::native_service::{NativeServiceConfig, NativeServiceManager};
 
     tokio::task::spawn_blocking(move || -> Result<()> {
@@ -514,42 +514,13 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
             Some(path) => absolutize(path)?,
             None => std::env::current_exe().context("resolving the gents executable")?,
         };
-        let config = NativeServiceConfig::new(home, executable)?;
-        let home = config.home.clone();
-        let manager = NativeServiceManager::new(config)?;
-        gents_service::service_update::refuse_self_disruption(&home, &action)?;
-        match action {
-            ServiceAction::Install {
-                network,
-                environment_file,
-            } => {
-                let environment = environment_file
-                    .as_deref()
-                    .map(gents_service::native_service::read_environment_file)
-                    .transpose()?;
-                gents_service::network_settings::install_service(
-                    &manager,
-                    &home,
-                    &network,
-                    environment.as_ref(),
-                )
-                .map(drop)
-            }
-            ServiceAction::Start { enable } => manager.start(enable),
-            ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
-            ServiceAction::Restart => manager.restart(),
-            ServiceAction::Enable => manager.set_enabled(true),
-            ServiceAction::Disable => manager.set_enabled(false),
-            ServiceAction::Status => {
-                print!(
-                    "{}\n{}\n",
-                    manager.status()?.summary(),
-                    gents_service::network_settings::NetworkSettings::read(&home)?.summary()
-                );
-                Ok(())
-            }
-            ServiceAction::Uninstall => manager.uninstall(),
+        let manager = NativeServiceManager::new(NativeServiceConfig::new(home, executable)?)?;
+        if let ServiceLifecycleReceipt::Status { service, network } =
+            gents_service::lifecycle::perform(&manager, &action)?
+        {
+            print!("{}\n{}\n", service.summary(), network.summary());
         }
+        Ok(())
     })
     .await?
 }

@@ -1,4 +1,5 @@
 use super::authority::HomeIdentity;
+use super::native::service_action;
 use super::native::{native_service, run_native};
 use super::pairing::drain_managed_runtime_pairing;
 use super::port::{matching_external_server, user_status_signer};
@@ -11,6 +12,7 @@ use crate::tauri_commands::service_executable::resolve_service_executable;
 use crate::types::{HomeResetDisposition, ManagedServerResetResult};
 use gents_desktop_core::home_reset::*;
 use gents_desktop_core::preference::ReviewedHome;
+use gents_service::args::ServiceAction;
 use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -178,14 +180,25 @@ where
     };
 
     if full_reset {
-        run_native(native_service(app, state)?, |service| service.stop(true)).await?;
+        run_native(native_service(app, state)?, |service| {
+            service_action(
+                &service,
+                ServiceAction::Stop {
+                    keep_enabled: false,
+                },
+            )
+        })
+        .await?;
         let native = run_native(native_service(app, state)?, |service| service.status()).await?;
         ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
     }
     let _store_lock = match plan.runtime.as_ref() {
         Some((home, _)) => {
             if !full_reset {
-                run_native(native_service(app, state)?, |service| service.uninstall()).await?;
+                run_native(native_service(app, state)?, |service| {
+                    service_action(&service, ServiceAction::Uninstall)
+                })
+                .await?;
             }
             let native =
                 run_native(native_service(app, state)?, |service| service.status()).await?;
