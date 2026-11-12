@@ -230,6 +230,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     let result = async {
         client.try_call(1, "client_connect_local", json!({"nodeHome": home})).await?;
         client.try_call(2, "client_enroll_local", json!({"nodeHome": home})).await?;
+        let author_paths = paths.clone();
+        let author = tokio::task::spawn_blocking(move || gents_desktop_core::client::PrincipalIdentity::load_existing(&author_paths)).await??;
+        ensure!(author.did() == client_did);
+        let access = ConfigAccess::Graphql(GraphqlEndpoint::as_principal(ready["graphql"].as_str().context("runtime GraphQL endpoint")?, author.did()).with_client_signing_capability(author.client_signing_capability()?)?);
         let mut id = 3;
         let deployment = wait_client(&mut client, &mut updates, &mut id, "desktop_client_snapshot", json!({}), |snapshot| {
             snapshot["client"]["deployments"].as_array().is_some_and(|rows| rows.iter().any(|row|
@@ -298,10 +302,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
         }
         if goal {
-            let author_paths = paths.clone();
-            let author = tokio::task::spawn_blocking(move || gents_desktop_core::client::PrincipalIdentity::load_existing(&author_paths)).await??;
-            let author_access = ConfigAccess::Graphql(GraphqlEndpoint::as_principal(ready["graphql"].as_str().context("runtime GraphQL endpoint")?, author.did()).with_client_signing_capability(author.client_signing_capability()?)?);
-            let seeded = gents_automation::goal::seed_goal_from_access(&author_access, node, session,
+            let seeded = gents_automation::goal::seed_goal_from_access(&access, node, session,
                 Some("Give one short completion sentence, then call update_goal with status complete."),
                 Some(gents_protocol::goal_status::GoalStatus::Paused), Some(Some(16000)), None).await?;
             let view = wait_goal(&mut client, &mut updates, &mut id, node, session, "paused").await?;
