@@ -103,7 +103,13 @@ pub async fn signed_enrollment_offer(
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&network_mutation).await;
+    let response = gents_store::config_client::ConfigAccess::write_local_response(
+        node,
+        "test.signed_enrollment_offer.network",
+        &network_mutation,
+    )
+    .await
+    .expect("write signed enrollment network");
     assert!(
         !response.has_errors(),
         "upsert Network failed: {:?}",
@@ -282,7 +288,13 @@ pub async fn authorize_enrollment_generation(
         field(&request.expires_at),
         candidate_sig,
     );
-    let response = node.execute(&request_mutation).await;
+    let response = gents_store::config_client::ConfigAccess::write_local_response(
+        node,
+        "test.authorize_enrollment_generation.request",
+        &request_mutation,
+    )
+    .await
+    .expect("write signed enrollment request");
     assert!(
         !response.has_errors(),
         "create enrollment request failed: {:?}",

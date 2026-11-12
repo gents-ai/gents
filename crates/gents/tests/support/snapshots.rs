@@ -416,7 +416,13 @@ pub async fn fetch_runtime_snapshot(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Option<RuntimeSnapshot> {
-    let response = node.execute(&runtime_snapshot_query(node_did)).await;
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        &runtime_snapshot_query(node_did),
+        "test.fetch_runtime_snapshot",
+    )
+    .await
+    .expect("read runtime snapshot");
     assert!(
         !response.has_errors(),
         "query failed: {:?}",
