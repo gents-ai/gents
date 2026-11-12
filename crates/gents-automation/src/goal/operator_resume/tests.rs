@@ -6,20 +6,6 @@ use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use serde_json::json;
 
-#[derive(serde::Deserialize)]
-struct GeneratedResumeOnCase {
-    name: String,
-    before: serde_json::Value,
-    target_available: bool,
-    expected: serde_json::Value,
-    outcome: String,
-}
-
-#[derive(serde::Deserialize)]
-struct GeneratedResumeOnContracts {
-    goal_operator_resume_on_cases: Vec<GeneratedResumeOnCase>,
-}
-
 struct Limited {
     f: Fixture,
     access: ConfigAccess,
@@ -166,15 +152,14 @@ async fn completed_resume_retry_does_not_switch_a_profile_moved_again() {
 
 #[tokio::test]
 async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery() {
-    let contracts: GeneratedResumeOnContracts =
-        gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_operator_resume_on_cases.len(), 2);
-    for case in contracts.goal_operator_resume_on_cases {
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_operator_resume_on_cases;
+    assert_eq!(cases.len(), 2);
+    for case in cases {
         assert!(!case.target_available);
         match case.name.as_str() {
             "unavailable_target_keeps_goal_and_publishes_nothing" => {
-                assert!(case.before["children"].as_array().unwrap().is_empty());
-                assert!(case.expected["children"].as_array().unwrap().is_empty());
+                assert!(case.before.children.is_empty());
+                assert!(case.expected.children.is_empty());
                 assert_eq!(case.outcome, "unavailable");
                 let limited = Limited::new(&usage_limit()).await;
                 gents_inference::profile_switch::switch_profile_account(
@@ -201,8 +186,33 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
                 assert_eq!(limited.goal_status().await, "usage_limited");
             }
             "existing_child_is_recovered_after_target_disabled" => {
-                assert_eq!(case.before["children"].as_array().unwrap().len(), 1);
-                assert_eq!(case.expected, case.before);
+                assert_eq!(case.before.children.len(), 1);
+                assert_eq!(case.expected.status, case.before.status);
+                assert_eq!(case.expected.blocked_audits, case.before.blocked_audits);
+                assert_eq!(case.expected.wrapup_requested, case.before.wrapup_requested);
+                assert_eq!(case.expected.wrapup_completed, case.before.wrapup_completed);
+                assert_eq!(case.expected.sequence, case.before.sequence);
+                assert_eq!(case.expected.last_continued_from, case.before.last_continued_from);
+                assert_eq!(case.expected.latest_request, case.before.latest_request);
+                assert_eq!(case.expected.tokens_used, case.before.tokens_used);
+                assert_eq!(case.expected.token_budget, case.before.token_budget);
+                assert_eq!(case.expected.children.len(), case.before.children.len());
+                let expected_children = &case.expected.children;
+                let before_children = &case.before.children;
+                for (expected, before) in expected_children.iter().zip(before_children) {
+                    assert_eq!(expected.goal, before.goal);
+                    assert_eq!(expected.owner, before.owner);
+                    assert_eq!(expected.session, before.session);
+                    assert_eq!(expected.predecessor, before.predecessor);
+                    assert_eq!(expected.predecessor_doc, before.predecessor_doc);
+                    assert_eq!(expected.correlation, before.correlation);
+                    assert_eq!(expected.source_document, before.source_document);
+                    assert_eq!(expected.trigger_context, before.trigger_context);
+                    assert_eq!(expected.workspace_fingerprint, before.workspace_fingerprint);
+                    assert_eq!(expected.semantic_fingerprint, before.semantic_fingerprint);
+                    assert_eq!(expected.child, before.child);
+                    assert_eq!(expected.sequence, before.sequence);
+                }
                 assert_eq!(case.outcome, "recovered");
                 let limited = Limited::new(&usage_limit()).await;
                 let first = limited.resume_on(&limited.b).await.unwrap();
