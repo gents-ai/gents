@@ -387,10 +387,6 @@ def callbackActorMatches (accessActor selectedAgent : String) : Bool :=
 theorem callback_node_identity_is_not_the_agent_actor :
     callbackActorMatches "node" "agent" = false ∧ callbackActorMatches "agent" "agent" = true := by decide
 
-def callbackActorCasesJson : String :=
-  (Lean.toJson ([("agent", "agent", "agent"), ("node", "node", "agent"), ("empty", "", "")].map fun (role, actor, selected) => Lean.Json.mkObj
-    [("actor", Lean.toJson role), ("expected", Lean.toJson (callbackActorMatches actor selected))])).compress
-
 /-- Completion effects are published by the same held Agent selected for the
 request. The node DID is host location and does not provide a substitute signer. -/
 def completionActorMatches (held selected : String) : Bool :=

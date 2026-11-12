@@ -1529,8 +1529,8 @@ def caseCoverage : List CoverageEntry :=
       "The retained FileInventoryRequest schema has no production publisher or consumer; this test covers native document authority, not a live peer flow.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "callback_workspace_actor_cases"
-      "CallbackWorkspaceActorCases"
+      "family"
+      "workspace_and_file_requests_callback_actor"
       "Checks execution-context binding only. Native workspace policy, relationship publication and authorization retain their separate owners.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage

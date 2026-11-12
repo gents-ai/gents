@@ -890,15 +890,14 @@ async fn workspace_reads_keep_the_held_agent_actor() {
         "http://127.0.0.1:1/api/v0/graphql",
         "",
     );
-    for case in &gents_lean_vocab::lean_contract_snapshot().callback_workspace_actor_cases {
-        let gents_lean_vocab::LeanCallbackWorkspaceActorCase { actor, expected } = case;
-        let access = match actor.as_str() {
+    for case in gents_lean_vocab::families::workspace_and_file_requests_callback_actor::cases() {
+        let access = match case.input.access_actor.as_str() {
             "agent" => &agent_access,
             "node" => &node_access,
-            "empty" => &empty_access,
+            "" => &empty_access,
             actor => panic!("unknown modeled actor {actor}"),
         };
-        let selected = if actor == "empty" {
+        let selected = if case.input.selected_agent.is_empty() {
             ""
         } else {
             &agent_did
@@ -910,7 +909,6 @@ async fn workspace_reads_keep_the_held_agent_actor() {
             selected,
         )
         .await;
-        assert_eq!(documents.is_ok(), *expected, "workspace actor: {case:?}");
         let repository = super::documents::load_repository_placement(
             access,
             "missing-repository",
@@ -918,7 +916,13 @@ async fn workspace_reads_keep_the_held_agent_actor() {
             selected,
         )
         .await;
-        assert_eq!(repository.is_ok(), *expected, "repository actor: {case:?}");
+        case.check(
+            gents_lean_vocab::families::workspace_and_file_requests_callback_actor::CallbackActorOutput {
+                expected: documents.is_ok(),
+                workspace_loaded: documents.is_ok(),
+                repository_loaded: repository.is_ok(),
+            },
+        );
     }
     node.shutdown().await.expect("node shutdown");
 }
