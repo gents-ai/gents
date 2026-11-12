@@ -5,20 +5,8 @@ use gents_protocol::request_admission::{
 };
 use gents_store::config_client::session_children::*;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    binding: Value,
-    allowed: bool,
-}
-
-fn text<'a>(binding: &'a Value, field: &str) -> &'a str {
-    binding[field].as_str().expect("modeled binding text")
-}
 
 async fn create_document(
     access: &gents_store::config_client::ConfigAccess,
@@ -56,8 +44,7 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
         "foreign_auxiliary_document",
     ];
     let mut exercised = std::collections::BTreeSet::new();
-    for value in cases {
-        let case: Case = serde_json::from_value(value.clone()).unwrap();
+    for case in cases {
         if !selected.contains(&case.name.as_str()) {
             continue;
         }
@@ -87,15 +74,15 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
         let agent_doc = create_document(&root_access, "Agent", json!({
             "node_did":root.did(), "agent_did":agent.did(), "creation_nonce":binding.creation_nonce,
         })).await;
-        let map_requester = |value: &Value| -> Option<String> {
-            value.as_str().map(|value| match value {
+        let map_requester = |value: Option<&str>| -> Option<String> {
+            value.map(|value| match value {
                 "user" => root.did().to_owned(),
                 "agent" => agent.did().to_owned(),
                 "other" => foreign.did().to_owned(),
                 _ => panic!("unknown modeled requester {value}"),
             })
         };
-        let session_requester = map_requester(&case.binding["sessionRequester"]);
+        let session_requester = map_requester(case.binding.session_requester.as_deref());
         let session_id = format!("session-{}", uuid::Uuid::new_v4());
         let session_doc = create_document(
             &root_access,
@@ -152,7 +139,7 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
         let parent = crate::request::admission::load_request_for_admission_test(&node, &parent_doc)
             .await
             .unwrap();
-        let purpose = RequestPurpose::try_from(text(&case.binding, "auxiliaryPurpose")).unwrap();
+        let purpose = RequestPurpose::try_from(case.binding.auxiliary_purpose.as_str()).unwrap();
         let aux = crate::request::lifecycle::materialize::write_pending_auxiliary_request(
             &node,
             &parent,
@@ -164,7 +151,7 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
         .await
         .unwrap();
         let absent_request_doc = format!("bae-{}", uuid::Uuid::new_v4());
-        let actor = if text(&case.binding, "actor") == "agent" {
+        let actor = if case.binding.actor == "agent" {
             &agent
         } else {
             &foreign
@@ -175,25 +162,25 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
             actor.as_ref(),
         )
         .unwrap();
-        let child_node = if text(&case.binding, "childNode") == "node" {
+        let child_node = if case.binding.child_node == "node" {
             root.did()
         } else {
             foreign.did()
         };
-        let child_session = if text(&case.binding, "childSession") == "session" {
+        let child_session = if case.binding.child_session == "session" {
             session_id.as_str()
         } else {
             "foreign-session"
         };
-        let requester = map_requester(&case.binding["childRequester"]);
+        let requester = map_requester(case.binding.child_requester.as_deref());
         let request_doc = if case.name == "missing_auxiliary" {
             &absent_request_doc
-        } else if text(&case.binding, "childRequestDoc") == "aux-doc" {
+        } else if case.binding.child_request_doc == "aux-doc" {
             &aux.doc_id
         } else {
             &parent_doc
         };
-        let kind = match text(&case.binding, "source") {
+        let kind = match case.binding.source.as_str() {
             "title" => CaptureScopeKind::Title,
             "access-review" => CaptureScopeKind::AccessReview,
             "ordinary" => CaptureScopeKind::Inference,
@@ -205,7 +192,7 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
             turn_index: 0,
             attempt: 0,
         };
-        let source = match text(&case.binding, "collection") {
+        let source = match case.binding.collection.as_str() {
             "AgentOutputSegment" => SessionChildSource::Output(&output),
             "RenderedRequest" => SessionChildSource::Capture(&scope),
             value => panic!("unrepresented collection {value}"),

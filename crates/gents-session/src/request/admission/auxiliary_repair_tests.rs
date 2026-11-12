@@ -8,16 +8,8 @@ use gents_store::config_client::session_children::ownership::*;
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    parent_granted: bool,
-    parent_linked: bool,
-}
 
 async fn create_document(access: &ConfigAccess, collection: &str, input: Value) -> String {
     let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
@@ -56,8 +48,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
         "completed_then_revoked",
     ];
     let mut exercised = std::collections::BTreeSet::new();
-    for value in cases {
-        let case: Case = serde_json::from_value(value.clone()).unwrap();
+    for case in cases {
         if !selected.contains(&case.name.as_str()) {
             continue;
         }
