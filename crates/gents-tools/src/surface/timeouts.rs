@@ -237,14 +237,64 @@ impl ToolTimeouts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_lean_vocab::{LeanToolTimeoutCasesLspItem, LeanToolTimeoutCasesWaitItem};
     use serde_json::{json, Value};
 
-    fn opt_i64(value: &Value) -> Option<i64> {
-        value.as_i64()
+    fn opt_i64(value: Option<u64>) -> Option<i64> {
+        value.and_then(|value| i64::try_from(value).ok())
     }
 
-    fn opt_u64(value: &Value) -> Option<u64> {
-        value.as_u64()
+    trait BoundedCase {
+        fn case_name(&self) -> &str;
+        fn authored(&self) -> (Option<u64>, Option<u64>);
+        fn expected_pair(&self) -> Option<(u64, u64)>;
+        fn requests(&self) -> Vec<(Option<u64>, Option<u64>)>;
+    }
+
+    impl BoundedCase for LeanToolTimeoutCasesWaitItem {
+        fn case_name(&self) -> &str {
+            &self.name
+        }
+
+        fn authored(&self) -> (Option<u64>, Option<u64>) {
+            (self.timeout_secs, self.max_timeout_secs)
+        }
+
+        fn expected_pair(&self) -> Option<(u64, u64)> {
+            self.expected
+                .as_ref()
+                .map(|expected| (expected.default, expected.maximum))
+        }
+
+        fn requests(&self) -> Vec<(Option<u64>, Option<u64>)> {
+            self.requests
+                .iter()
+                .map(|request| (request.requested, request.effective))
+                .collect()
+        }
+    }
+
+    impl BoundedCase for LeanToolTimeoutCasesLspItem {
+        fn case_name(&self) -> &str {
+            &self.name
+        }
+
+        fn authored(&self) -> (Option<u64>, Option<u64>) {
+            (self.timeout_secs, self.max_timeout_secs)
+        }
+
+        fn expected_pair(&self) -> Option<(u64, u64)> {
+            self.expected
+                .as_ref()
+                .map(|expected| (expected.default, expected.maximum))
+        }
+
+        fn requests(&self) -> Vec<(Option<u64>, Option<u64>)> {
+            self.requests
+                .iter()
+                .map(|request| (request.requested, request.effective))
+                .collect()
+        }
     }
 
     fn document(groups: Value) -> gents_documents::Tools {
@@ -256,47 +306,44 @@ mod tests {
 
     /// A `null` expectation is a document the model rejects; native validation
     /// must reject the same document.
-    fn assert_admission(name: &str, expected: &Value, groups: Value) -> bool {
+    fn assert_admission(name: &str, expected_admitted: bool, groups: Value) -> bool {
         let admitted = document(groups).validate();
         assert_eq!(
             admitted.is_ok(),
-            !expected.is_null(),
+            expected_admitted,
             "{name}: native admission disagrees with the model: {admitted:?}"
         );
-        !expected.is_null()
+        expected_admitted
     }
 
-    fn pair(value: &Value) -> (Duration, Duration) {
-        (
-            Duration::from_secs(value["default"].as_u64().unwrap()),
-            Duration::from_secs(value["maximum"].as_u64().unwrap()),
-        )
+    fn pair(default: u64, maximum: u64) -> (Duration, Duration) {
+        (Duration::from_secs(default), Duration::from_secs(maximum))
     }
 
-    fn bounded_cases(
-        cases: &Value,
+    fn bounded_cases<T>(
+        cases: &[T],
         groups: impl Fn(Value) -> Value,
         resolve: impl Fn(Option<i64>, Option<i64>) -> BoundedTimeout,
         effective: impl Fn(&BoundedTimeout, Option<u64>) -> Duration,
-    ) {
-        for case in cases.as_array().unwrap() {
-            let name = case["name"].as_str().unwrap();
-            let (authored, maximum) = (
-                opt_i64(&case["timeout_secs"]),
-                opt_i64(&case["max_timeout_secs"]),
-            );
+    ) where
+        T: BoundedCase,
+    {
+        for case in cases {
+            let name = case.case_name();
+            let (authored_secs, maximum_secs) = case.authored();
+            let (authored, maximum) = (opt_i64(authored_secs), opt_i64(maximum_secs));
             let fields = json!({"timeout_secs": authored, "max_timeout_secs": maximum});
-            if !assert_admission(name, &case["expected"], groups(fields)) {
+            if !assert_admission(name, case.expected_pair().is_some(), groups(fields)) {
                 continue;
             }
             let policy = resolve(authored, maximum);
-            let (default, max) = pair(&case["expected"]);
-            assert_eq!((policy.default, policy.maximum), (default, max), "{name}");
-            for request in case["requests"].as_array().unwrap() {
+            let (default, max) = case.expected_pair().unwrap();
+            assert_eq!((policy.default, policy.maximum), pair(default, max), "{name}");
+            for (requested, effective_secs) in case.requests() {
                 assert_eq!(
-                    effective(&policy, opt_u64(&request["requested"])),
-                    Duration::from_secs(request["effective"].as_u64().unwrap()),
-                    "{name}: {request}"
+                    effective(&policy, requested),
+                    Duration::from_secs(effective_secs.unwrap()),
+                    "{name}: requested {requested:?} effective {effective_secs:?}"
                 );
             }
         }
@@ -306,66 +353,56 @@ mod tests {
     fn generated_tool_timeout_cases_bind_native_resolution() {
         let cases = &gents_lean_vocab::lean_contract_snapshot().tool_timeout_cases;
 
-        let foreground = cases["foreground"].as_array().unwrap();
+        let foreground = &cases.foreground;
         assert_eq!(foreground.len(), 11);
         for case in foreground {
-            let name = case["name"].as_str().unwrap();
-            let (timeout, maximum) = (
-                opt_i64(&case["timeout_secs"]),
-                opt_i64(&case["max_timeout_secs"]),
-            );
+            let name = case.name.as_str();
+            let timeout = opt_i64(case.timeout_secs);
+            let maximum = opt_i64(case.max_timeout_secs);
             let groups = json!({"host": {"bash": {
                 "timeout_secs": timeout, "max_timeout_secs": maximum}}});
-            if !assert_admission(name, &case["expected"], groups) {
+            if !assert_admission(name, case.expected.is_some(), groups) {
                 continue;
             }
-            let host_default = Duration::from_secs(case["host_default"].as_u64().unwrap());
-            let host_maximum = Duration::from_secs(case["host_maximum"].as_u64().unwrap());
+            let host_default = Duration::from_secs(case.host_default);
+            let host_maximum = Duration::from_secs(case.host_maximum);
+            let expected = case.expected.as_ref().unwrap();
             assert_eq!(
                 effective_bash_foreground(host_default, host_maximum, timeout, maximum),
-                pair(&case["expected"]),
+                pair(expected.default, expected.maximum),
                 "{name}"
             );
         }
 
-        for case in cases["cli"].as_array().unwrap() {
-            let name = case["name"].as_str().unwrap();
-            let authored = opt_i64(&case["timeout_secs"]);
+        for case in &cases.cli {
+            let name = case.name.as_str();
+            let authored = opt_i64(case.timeout_secs);
             let groups = json!({"host": {"cli": [{"name": "tool", "timeout_secs": authored}]}});
-            if !assert_admission(name, &case["expected"], groups) {
+            if !assert_admission(name, case.expected.is_some(), groups) {
                 continue;
             }
-            let cap = Duration::from_secs(
-                case["host_default"]
-                    .as_u64()
-                    .unwrap()
-                    .max(case["host_maximum"].as_u64().unwrap()),
-            );
+            let cap = Duration::from_secs(case.host_default.max(case.host_maximum));
             assert_eq!(
-                effective_cli_timeout_secs(
-                    cap,
-                    case["registration_secs"].as_u64().unwrap(),
-                    authored
-                ),
-                case["expected"].as_u64().unwrap(),
+                effective_cli_timeout_secs(cap, case.registration_secs, authored),
+                case.expected.unwrap(),
                 "{name}"
             );
         }
 
-        for case in cases["background"].as_array().unwrap() {
-            let name = case["name"].as_str().unwrap();
-            let authored = opt_i64(&case["background_timeout_secs"]);
+        for case in &cases.background {
+            let name = case.name.as_str();
+            let authored = case.background_timeout_secs;
             for groups in [
                 json!({"host": {"bash": {"background_timeout_secs": authored}}}),
                 json!({"remote": {"services": [{"mcp_service_id": "svc",
                     "background_timeout_secs": authored}]}}),
             ] {
-                if !assert_admission(name, &case["expected"], groups) {
+                if !assert_admission(name, case.expected.is_some(), groups) {
                     continue;
                 }
                 assert_eq!(
                     effective_background_lifetime(authored),
-                    Duration::from_secs(case["expected"].as_u64().unwrap()),
+                    Duration::from_secs(case.expected.unwrap()),
                     "{name}"
                 );
             }
@@ -378,13 +415,13 @@ mod tests {
             })
         };
         bounded_cases(
-            &cases["wait"],
+            &cases.wait,
             |fields| json!({"host": {"bash": wait_fields(fields)}}),
             BoundedTimeout::wait,
             BoundedTimeout::wait_for,
         );
         bounded_cases(
-            &cases["wait"],
+            &cases.wait,
             |fields| {
                 let mut service = wait_fields(fields);
                 service["mcp_service_id"] = "svc".into();
@@ -394,7 +431,7 @@ mod tests {
             BoundedTimeout::wait_for,
         );
         bounded_cases(
-            &cases["lsp"],
+            &cases.lsp,
             |fields| json!({"integrations": {"lsp": fields}}),
             BoundedTimeout::lsp_action,
             BoundedTimeout::action_for,
