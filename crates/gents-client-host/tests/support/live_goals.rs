@@ -14,7 +14,7 @@ pub async fn gates(root: &Path, scenario: Option<&str>) -> Result<Vec<HeldTool>>
         Some("live-goal-removal") => 2,
         Some("live-goal-replacement") => 3,
         Some("live-goal-delivery" | "live-steering" | "live-questions") => 1,
-        Some("live-goal-steering") => 2,
+        Some("live-goal-steering" | "live-related-work") => 2,
         _ => 0,
     };
     let mut gates = Vec::with_capacity(count);

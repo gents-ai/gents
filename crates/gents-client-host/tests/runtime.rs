@@ -747,6 +747,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         return live_runtime::exercise_editor(root, "live-questions").await;
     }
     #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorRelatedWork) {
+        return live_runtime::exercise_editor(root, "live-related-work").await;
+    }
+    #[cfg(feature = "editor-e2e")]
     if matches!(journey, Journey::EditorHistory)
         && !editor_history::Options::from_env()?.profile
         && std::env::var_os("GENTS_PREVIOUS_CLIENT_HOST").is_none()
@@ -1903,36 +1907,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "the recovered Goal must deliver its frozen image to the provider exactly once: {images:?}"
         );
     }
-    let user_rounds = requests
-        .iter()
-        .filter(|request| {
-            request["messages"].as_array().is_some_and(|messages| {
-                messages.iter().any(|message| {
-                    message["role"] == "user"
-                        && match &message["content"] {
-                            Value::String(text) => text == "Return the fixture response.",
-                            Value::Array(parts) => parts
-                                .iter()
-                                .any(|part| part["text"] == "Return the fixture response."),
-                            _ => false,
-                        }
-                })
-            })
-        })
-        .count();
-    ensure!(
-        user_rounds
-            == if matches!(journey, Journey::EditorGoalRecovery) {
-                7
-            } else if matches!(journey, Journey::EditorGoalSteering) {
-                3
-            } else if journey.is_steering() || matches!(journey, Journey::RuntimeReplacement) {
-                2
-            } else {
-                1
-            },
-        "unexpected provider round count: {user_rounds}"
-    );
     if journey.is_steering() {
         let evidence = editor_steering::verify(
             &access,

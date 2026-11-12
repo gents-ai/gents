@@ -25,6 +25,8 @@ mod live_gate;
 mod live_goals;
 #[path = "live_questions.rs"]
 mod live_questions;
+#[path = "live_related_work.rs"]
+mod live_related_work;
 #[path = "live_steering.rs"]
 mod live_steering;
 
@@ -165,6 +167,22 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
     } else {
         None
     };
+    let related_work = if editor == Some("live-related-work") {
+        let ConfigAccess::Graphql(endpoint) = &access else {
+            anyhow::bail!("native related work requires a served runtime");
+        };
+        Some(
+            live_related_work::RelatedWork::prepare(
+                root,
+                endpoint,
+                node,
+                [gates[0].descriptor(), gates[1].descriptor()],
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let mut client = Attachment::start_with_binary(&paths, &binary).await;
     let mut updates = Attachment::start_with_binary(&paths, &binary).await;
     let result = async {
@@ -178,7 +196,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
         let agent = deployment["client"]["deployments"].as_array().unwrap().iter()
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
-        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref()).await?;
+        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref()).await?;
         let opening = if steering { gates[0].prompt() } else if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools.".to_owned() } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.".to_owned() };
         let receipt = if goal_steering {
             client.try_call(id, "desktop_goal_control", json!({"request":{"nodeDid":node,"agentDid":agent,"action":{"kind":"create","objective":opening,"tokenBudget":"16000"}}})).await?
@@ -266,7 +284,11 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>) -> Result<()> {
                 tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
             }
             super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), scenario).await?;
-            if let Some(questions) = &questions {
+            if let Some(related_work) = &related_work {
+                let evidence = related_work.verify(&access, root, node, session, &client_did).await?;
+                tokio::fs::write(root.join("editor-related-work-canonical.json"), serde_json::to_vec(&evidence)?).await?;
+                projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
+            } else if let Some(questions) = &questions {
                 let evidence = questions.verify(&access, root, node, session, &client_did).await?;
                 tokio::fs::write(root.join("editor-questions-canonical.json"), serde_json::to_vec(&evidence)?).await?;
                 projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed" || value["turnState"] == "interrupted").await?;
@@ -371,6 +393,7 @@ async fn configure(
     gates: &[live_gate::HeldTool],
     editor: Option<&str>,
     questions: Option<&live_questions::Questions>,
+    related_work: Option<&live_related_work::RelatedWork>,
 ) -> Result<()> {
     let setup = client
         .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
@@ -422,6 +445,9 @@ async fn configure(
     }
     if let Some(questions) = questions {
         questions.configure(&mut document, node)?;
+    }
+    if let Some(related_work) = related_work {
+        related_work.configure(&mut document, node)?;
     }
     client
         .try_call(
