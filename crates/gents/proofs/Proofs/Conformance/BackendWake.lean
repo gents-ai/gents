@@ -3,13 +3,12 @@ import Proofs.Shared.RenderedCapture
 import Proofs.Automation.EventDelivery.Watcher
 import Proofs.Session.Request.ResumeAdmission
 import Proofs.Session.RequestExecutionLease.Transition
-import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.Functions.Session
 import Proofs.Conformance.Family
 
 namespace Conformance.BackendWake
 
-open Lean Conformance.Contracts
+open Lean
 
 structure WakeInput where
   nowMs : Nat
@@ -114,13 +113,15 @@ example : parkedFinalize.inputs.any fun i => parkedFinalize.model i && i.outcome
 
 example : parkedFinalize.inputs.any fun i => !parkedFinalize.model i := by native_decide
 
-def resumedTurnCases : List (List Nat) :=
-  [[], [0], [0, 1, 2], [2, 0, 1], [4], [3, 3]]
+structure ResumedTurnInput where
+  completed : List Nat
+  deriving ToJson
 
-def resumedTurnCaseJson (completed : List Nat) : String :=
-  "{\"completed\":" ++ jsonArray (completed.map toString) ++
-    ",\"next\":" ++ toString (RequestBackendWake.resumedTurn completed) ++ "}"
+@[conformance_family]
+def resumedTurnIndex : Family ResumedTurnInput Nat where
+  inputs := [[], [0], [0, 1, 2], [2, 0, 1], [4], [3, 3]].map fun completed => { completed }
+  model := fun i => RequestBackendWake.resumedTurn i.completed
 
-def resumedTurnCasesJson : String := jsonArray (resumedTurnCases.map resumedTurnCaseJson)
+example : resumedTurnIndex.inputs.any fun i => resumedTurnIndex.model i > 1 := by native_decide
 
 end Conformance.BackendWake

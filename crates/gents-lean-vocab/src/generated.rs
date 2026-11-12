@@ -1233,12 +1233,6 @@ pub struct LeanBackendProbeScheduleCase {
     pub observed: Vec<LeanBackendProbeConfiguration>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendResumedTurnCase {
-    pub completed: Vec<u32>,
-    pub next: usize,
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanBackgroundProcessIdentityCase {
@@ -3186,7 +3180,6 @@ pub struct LeanContractSnapshot {
     pub tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub tool_retry_cases: Vec<LeanToolRetryCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
     pub mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub backend_health_cases: Vec<LeanBackendHealthCase>,
     pub backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,

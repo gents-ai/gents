@@ -634,15 +634,12 @@ mod tests {
 
     #[test]
     fn resumed_turn_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_resumed_turn_cases;
-        assert!(cases.iter().any(|case| case.next > 1));
-        for case in cases {
-            assert_eq!(
-                super::resumed_turn_index(case.completed.iter().copied()),
-                case.next,
-                "{case:?}"
-            );
-        }
+        gents_lean_vocab::families::backend_wake_resumed_turn_index::replay(|i| {
+            u64::try_from(super::resumed_turn_index(
+                i.completed.iter().map(|turn| u32::try_from(*turn).unwrap()),
+            ))
+            .unwrap()
+        });
     }
 
     #[test]
