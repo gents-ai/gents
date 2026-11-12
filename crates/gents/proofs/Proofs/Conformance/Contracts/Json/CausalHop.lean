@@ -14,11 +14,6 @@ def causeString : CausalHop.Cause → String
   | .returnEdge => "return"
   | .continuation => "continuation"
 
-def causeHopJson : CausalHop.Cause → String
-  | .crossSession causeHop => toString causeHop
-  | _ => "null"
-
-
 structure StepCase where
   name : String
   cause : CausalHop.Cause
@@ -111,17 +106,6 @@ def callCaseJson (c : CallCase) : String :=
     ++ ",\"expected_admitted\":"
       ++ jsonArray (hops.map (toString ∘ CausalHop.admitHop c.maxRequestHop)) ++ "}"
 
-def stepCaseJson (c : StepCase) : String :=
-  let hop := CausalHop.nextHop c.cause c.ownPredecessorHop
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"cause\":" ++ jsonString (causeString c.cause)
-    ++ ",\"cause_hop\":" ++ causeHopJson c.cause
-    ++ ",\"own_predecessor_hop\":" ++ toString c.ownPredecessorHop
-    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
-    ++ ",\"expected_hop\":" ++ toString hop
-    ++ ",\"expected_admitted\":" ++ toString (CausalHop.admitHop c.maxRequestHop hop) ++ "}"
-
-
 def chainHops : Nat → List CausalHop.Step → List Nat
   | _, [] => []
   | start, step :: rest =>
@@ -173,12 +157,6 @@ def jobCreationCases : List (Bool × Bool × Bool × Bool) :=
   [(true, true, true, true), (false, true, true, true),
    (true, false, true, true), (true, true, false, true),
    (true, true, true, false)]
-
-def jobCreationCaseJson (c : Bool × Bool × Bool × Bool) : String :=
-  let (parent, job, key, spawn) := c
-  "{\"parent\":" ++ toString parent ++ ",\"job\":" ++ toString job
-    ++ ",\"key\":" ++ toString key ++ ",\"spawn\":" ++ toString spawn
-    ++ ",\"expected\":" ++ toString (DurableLineage.verifiedJobCreation parent job key spawn) ++ "}"
 
 structure InterruptCase where
   name : String
@@ -234,6 +212,7 @@ structure SessionTargetCase where
   sameNode : Bool
   caused : Bool
   allowedTarget : Bool
+  deriving Lean.ToJson
 
 def sessionTargetCases : List SessionTargetCase := do
   let sameRequester ← [false, true]
@@ -241,14 +220,6 @@ def sessionTargetCases : List SessionTargetCase := do
   let caused ← [false, true]
   let allowedTarget ← [false, true]
   pure ⟨sameRequester, sameNode, caused, allowedTarget⟩
-
-def sessionTargetCaseJson (c : SessionTargetCase) : String :=
-  "{\"same_requester\":" ++ toString c.sameRequester
-    ++ ",\"same_node\":" ++ toString c.sameNode
-    ++ ",\"caused\":" ++ toString c.caused
-    ++ ",\"allowed_target\":" ++ toString c.allowedTarget
-    ++ ",\"expected_allowed\":" ++ toString (DurableLineage.sessionTargetAllowed
-      c.sameRequester c.sameNode c.caused c.allowedTarget) ++ "}"
 
 structure SessionListCase where
   target : SessionTargetCase
@@ -260,19 +231,6 @@ def sessionListCases : List SessionListCase := do
   let verifiedStarterReceipt ← [false, true]
   let interruptAllowed ← [false, true]
   pure ⟨target, verifiedStarterReceipt, interruptAllowed⟩
-
-def sessionListCaseJson (c : SessionListCase) : String :=
-  let entry := DurableLineage.listedSession c.target.sameRequester c.target.sameNode
-    c.target.caused c.target.allowedTarget c.verifiedStarterReceipt c.interruptAllowed
-  "{\"same_requester\":" ++ toString c.target.sameRequester
-    ++ ",\"same_node\":" ++ toString c.target.sameNode
-    ++ ",\"caused\":" ++ toString c.target.caused
-    ++ ",\"allowed_target\":" ++ toString c.target.allowedTarget
-    ++ ",\"verified_starter_receipt\":" ++ toString c.verifiedStarterReceipt
-    ++ ",\"interrupt_allowed\":" ++ toString c.interruptAllowed
-    ++ ",\"expected_listed\":" ++ toString entry.isSome
-    ++ ",\"expected_can_message\":" ++ toString (entry.any (·.canMessage))
-    ++ ",\"expected_can_interrupt\":" ++ toString (entry.any (·.canInterrupt)) ++ "}"
 
 structure CapObservationCase where
   name : String
@@ -302,9 +260,6 @@ def capObservationCaseJson (c : CapObservationCase) : String :=
 def capObservationCasesJson : String :=
   jsonArray (capObservationCases.map capObservationCaseJson)
 
-def stepCasesJson : String :=
-  jsonArray (stepCases.map stepCaseJson)
-
 def chainCasesJson : String :=
   jsonArray (chainCases.map chainCaseJson)
 
@@ -314,18 +269,95 @@ def callCasesJson : String :=
 def creationCasesJson : String :=
   jsonArray (creationCases.map creationCaseJson)
 
-def jobCreationCasesJson : String :=
-  jsonArray (jobCreationCases.map jobCreationCaseJson)
-
 def writeCasesJson : String :=
   jsonArray (writeCases.map writeCaseJson)
 
-def sessionTargetCasesJson : String :=
-  jsonArray (sessionTargetCases.map sessionTargetCaseJson)
+structure StepInput where
+  name : String
+  cause : String
+  causeHop : Option Nat
+  ownPredecessorHop : Nat
+  maxRequestHop : Option Nat
+  deriving Lean.ToJson
 
-def sessionListCasesJson : String :=
-  jsonArray (sessionListCases.map sessionListCaseJson)
+structure StepOutput where
+  hop : Nat
+  admitted : Bool
+  deriving Lean.ToJson
 
+def causeOfWire : String → Option Nat → CausalHop.Cause
+  | "cross_session", some causeHop => .crossSession causeHop
+  | "return", _ => .returnEdge
+  | "continuation", _ => .continuation
+  | _, _ => .root
+
+def causeHopOf : CausalHop.Cause → Option Nat
+  | .crossSession causeHop => some causeHop
+  | _ => none
+
+def StepInput.ofCase (c : StepCase) : StepInput :=
+  { name := c.name
+    cause := causeString c.cause
+    causeHop := causeHopOf c.cause
+    ownPredecessorHop := c.ownPredecessorHop
+    maxRequestHop := c.maxRequestHop }
+
+@[conformance_family]
+def stepAdmission : Family StepInput StepOutput where
+  inputs := stepCases.map StepInput.ofCase
+  model := fun i =>
+    let hop := CausalHop.nextHop (causeOfWire i.cause i.causeHop) i.ownPredecessorHop
+    { hop, admitted := CausalHop.admitHop i.maxRequestHop hop }
+
+structure JobCreationInput where
+  parent : Bool
+  job : Bool
+  key : Bool
+  spawn : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def jobCreation : Family JobCreationInput Bool where
+  inputs := jobCreationCases.map fun (parent, job, key, spawn) =>
+    { parent, job, key, spawn }
+  model := fun i => DurableLineage.verifiedJobCreation i.parent i.job i.key i.spawn
+
+@[conformance_family]
+def sessionTarget : Family SessionTargetCase Bool where
+  inputs := sessionTargetCases
+  model := fun c =>
+    DurableLineage.sessionTargetAllowed c.sameRequester c.sameNode c.caused c.allowedTarget
+
+structure SessionListInput where
+  sameRequester : Bool
+  sameNode : Bool
+  caused : Bool
+  allowedTarget : Bool
+  verifiedStarterReceipt : Bool
+  interruptAllowed : Bool
+  deriving Lean.ToJson
+
+structure SessionListOutput where
+  listed : Bool
+  canMessage : Bool
+  canInterrupt : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def sessionList : Family SessionListInput SessionListOutput where
+  inputs := sessionListCases.map fun c =>
+    { sameRequester := c.target.sameRequester
+      sameNode := c.target.sameNode
+      caused := c.target.caused
+      allowedTarget := c.target.allowedTarget
+      verifiedStarterReceipt := c.verifiedStarterReceipt
+      interruptAllowed := c.interruptAllowed }
+  model := fun i =>
+    let entry := DurableLineage.listedSession i.sameRequester i.sameNode i.caused
+      i.allowedTarget i.verifiedStarterReceipt i.interruptAllowed
+    { listed := entry.isSome
+      canMessage := entry.any (·.canMessage)
+      canInterrupt := entry.any (·.canInterrupt) }
 
 theorem step_cases_cover_causes_and_outcomes :
     ["root", "cross_session", "return", "continuation"].all (fun cause =>

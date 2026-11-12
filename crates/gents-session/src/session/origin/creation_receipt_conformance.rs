@@ -47,12 +47,9 @@ async fn verified_receipt_cannot_authorize_a_different_opening_request() {
 
 #[test]
 fn job_creation_binding_matches_executable_model() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().causal_hop_job_creation_cases {
-        assert_eq!(
-            super::job_creation_matches(case.parent, case.job, case.key, case.spawn),
-            case.expected
-        );
-    }
+    gents_lean_vocab::families::causal_hop_contracts_job_creation::replay(|case| {
+        super::job_creation_matches(case.parent, case.job, case.key, case.spawn)
+    });
 }
 
 #[test]

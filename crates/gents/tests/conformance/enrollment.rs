@@ -129,17 +129,6 @@ fn generated_causal_hop_cases_match_native_materializer() {
         "continuation" => RequestHopCause::Continuation,
         other => panic!("unknown Lean causal-hop cause {other:?}"),
     };
-    assert!(!contract.causal_hop_step_cases.is_empty());
-    for case in &contract.causal_hop_step_cases {
-        let hop = next_request_hop(cause(&case.cause, case.cause_hop), case.own_predecessor_hop);
-        assert_eq!(hop, case.expected_hop, "{}", case.name);
-        assert_eq!(
-            request_hop_within_bound(case.max_request_hop, hop),
-            case.expected_admitted,
-            "{}",
-            case.name
-        );
-    }
     assert!(!contract.causal_hop_chain_cases.is_empty());
     for chain in &contract.causal_hop_chain_cases {
         let mut hop = 0;
