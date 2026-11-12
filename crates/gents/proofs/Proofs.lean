@@ -96,7 +96,6 @@ import Proofs.Runtime.Recovery
 import Proofs.Runtime.Properties.SchedulingSafety
 import Proofs.Runtime.Properties.SchedulingLiveness
 import Proofs.Conformance.Gents
-import Proofs.Conformance.Boundaries
 import Proofs.Conformance.Deviations
 import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Contracts
@@ -142,3 +141,5 @@ import Proofs.Shared.ToolExecution.Parallel
 
 import Proofs.Automation.Hooks
 import Proofs.Pack.Operations
+
+import Proofs.Session.Request.PreclaimBoundary
