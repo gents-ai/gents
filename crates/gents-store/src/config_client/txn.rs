@@ -29,6 +29,8 @@ use super::{
 pub use apply_txn::ConfigApplyTxn;
 pub use cursor::ConfigCursor;
 pub use gate::LocalConfigAccess;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use fault_injection::NativeOperationObservation;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub(super) use transact::client_signed_write_may_retry;

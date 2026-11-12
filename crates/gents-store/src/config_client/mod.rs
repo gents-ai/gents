@@ -119,6 +119,8 @@ pub use schema_install::{
     SchemaInstallPlan,
 };
 pub use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use txn::NativeOperationObservation;
 pub use txn::{
     ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
     NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite, TransactionFinalityError,

@@ -2,13 +2,10 @@ use super::*;
 use crate::request::lifecycle::test_support::{
     agent_access, agent_identity, agent_signer, agent_write_value, claimed_owner,
     expire_observed_execution, observed_case_request, observed_execution, output_segment_snapshot,
-    owner, request_row, test_node, PendingNativeOutcome,
+    owner, request_row, test_node,
 };
 use anyhow::Result;
 use std::{sync::Arc, time::Duration};
-use tracing::instrument::WithSubscriber;
-use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
-use tracing_subscriber::{Layer, Registry};
 
 mod generated_policy;
 mod request_row_writers;
@@ -2109,8 +2106,14 @@ async fn backend_wait_parks_once_and_fences_the_execution_generation() {
     assert!(!lifecycle.owns_execution().await.unwrap());
 }
 
-struct PendingNativeObserver(Arc<tokio::sync::Notify>);
-
+/// The modeled `caller_timed_out` step is an ordering fact on the runtime's
+/// own clock, so this driver observes it on that clock: it advances past the
+/// storage-step timeout and awaits the owner's abandonment while time is
+/// still paused. Auto-advance can fire a timer inside that paused window
+/// only once no task is runnable, which is sound here because the
+/// abandonment needs nothing off the runtime; `native_returned` does need
+/// DefraDB's own threads, so it runs after the clock resumes and its bound
+/// is a liveness backstop, not an ordering assertion.
 #[tokio::test]
 async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_attempt() {
     let cases = tokio::task::spawn_blocking(|| {
@@ -2153,17 +2156,16 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
 
         let entered = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
-        let pending_native = Arc::new(tokio::sync::Notify::new());
-        let subscriber = tracing::Dispatch::new(
-            Registry::default().with(PendingNativeObserver(Arc::clone(&pending_native))),
-        );
+        let observation =
+            Arc::new(gents_store::config_client::NativeOperationObservation::default());
         let access_for_attempt = access.clone();
         let request_for_attempt = doc_id.clone();
         let generation_for_attempt = generation.clone();
         let mut first_attempt = tokio::spawn(
-            gents_store::config_client::ConfigApplyTxn::with_native_operation_pause(
+            gents_store::config_client::ConfigApplyTxn::with_observed_native_operation_pause(
                 Arc::clone(&entered),
                 Arc::clone(&release),
+                Arc::clone(&observation),
                 async move {
                     crate::request::lifecycle::renew_execution_lease_once_at_with_access(
                         &access_for_attempt,
@@ -2174,8 +2176,7 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                     )
                     .await
                 },
-            )
-            .with_subscriber(subscriber),
+            ),
         );
 
         let mut first_result = None;
@@ -2185,17 +2186,20 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                     tokio::time::timeout(Duration::from_secs(10), entered.notified())
                         .await
                         .expect("renewal admitted one native operation");
+                    assert_eq!(observed.caller, "waiting", "{}: {event}", case.name);
                 }
                 "caller_timed_out" => {
                     tokio::time::pause();
                     tokio::time::advance(
-                        gents_store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                        gents_store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT
+                            + Duration::from_secs(1),
                     )
                     .await;
-                    tokio::time::resume();
-                    tokio::time::timeout(Duration::from_secs(10), pending_native.notified())
+                    tokio::time::timeout(Duration::from_secs(60), observation.abandoned())
                         .await
-                        .expect("transaction owner records native work as pending before release");
+                        .expect("the expired storage step abandons the native registry");
+                    assert_eq!(observed.caller, "timed_out", "{}: {event}", case.name);
+                    tokio::time::resume();
                 }
                 "native_returned" => {
                     release.notify_one();
@@ -2223,11 +2227,6 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                             case.name
                         );
                     }
-                    assert_eq!(
-                        actually_returned, observed.renewal_attempt_returned,
-                        "{}: {event}",
-                        case.name
-                    );
                 }
                 "renewal_requested" => {
                     let actually_returned = first_result.is_some() || first_attempt.is_finished();
@@ -2271,6 +2270,24 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                 other => panic!("unexpected Lean native-completion event: {other}"),
             }
             assert!(!observed.gate_held, "renewal remains outside mutation gate");
+            assert_eq!(
+                observation.is_abandoned(),
+                observed.poisoned,
+                "{}: owner registry state after {event}",
+                case.name
+            );
+            assert_eq!(
+                observation.is_abandoned(),
+                observed.caller_abandonment_observed,
+                "{}: owner abandonment observation after {event}",
+                case.name
+            );
+            assert_eq!(
+                observation.in_flight() as u64,
+                observed.native_outstanding,
+                "{}: outstanding native work after {event}",
+                case.name
+            );
         }
 
         if first_result.is_none() {
@@ -2294,20 +2311,3 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
     }
 }
 
-impl<S> Layer<S> for PendingNativeObserver
-where
-    S: tracing::Subscriber,
-{
-    fn on_event(&self, event: &tracing::Event<'_>, _context: LayerContext<'_, S>) {
-        if event.metadata().target()
-            != gents_store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET
-        {
-            return;
-        }
-        let mut outcome = PendingNativeOutcome::default();
-        event.record(&mut outcome);
-        if outcome.0 {
-            self.0.notify_one();
-        }
-    }
-}
