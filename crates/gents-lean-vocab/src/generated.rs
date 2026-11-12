@@ -3065,7 +3065,6 @@ pub struct LeanContractSnapshot {
     pub remote_agent_delivery_response_cases: Vec<serde_json::Value>,
     pub remote_agent_delivery_claim_cases: Vec<LeanRemoteAgentDeliveryClaimCase>,
     pub cross_actor_authorization_cases: Vec<LeanCrossActorAuthorizationCase>,
-    pub client_telemetry_cases: Vec<serde_json::Value>,
     pub client_settings_cases: LeanClientSettingsCases,
     pub client_data_publication_cases: LeanClientDataPublicationCases,
     pub client_request_patch_publication_cases: LeanClientRequestPatchPublicationCases,

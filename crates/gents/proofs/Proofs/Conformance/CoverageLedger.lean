@@ -1144,8 +1144,8 @@ def caseCoverage : List CoverageEntry :=
       "The desktop chat-send replay was removed when desktop sends moved onto the shared request handler; the replay must be rebuilt against that handler.")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_telemetry_cases"
-      "ClientTelemetryCases")
+      "family"
+      "client_telemetry_trace")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_settings_cases"
