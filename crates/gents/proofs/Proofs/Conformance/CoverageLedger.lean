@@ -1180,8 +1180,8 @@ def caseCoverage : List CoverageEntry :=
       "FrontendClientShellCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "desktop_client_shell_cases"
-      "DesktopClientShellCases")
+      "family"
+      "client_shell_contracts_desktop")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_session_turn_cases"
@@ -1205,8 +1205,8 @@ def caseCoverage : List CoverageEntry :=
       "client_live_delta_contracts_cursor")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "request_lifecycle_operator_ui_cases"
-      "RequestLifecycleOperatorUiCases")
+      "family"
+      "client_shell_contracts_desktop")
       "request-lifecycle" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "tool_preflight_cases"

@@ -129,10 +129,6 @@ pub fn lean_composed_invariant_witnesses() -> &'static [LeanComposedInvariantWit
     &lean_contract_snapshot().composed_invariant_witnesses
 }
 
-pub fn lean_desktop_client_shell_cases() -> &'static [LeanClientShellCase] {
-    &lean_contract_snapshot().desktop_client_shell_cases
-}
-
 pub fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {
     &lean_contract_snapshot().durable_reduction_cases
 }
@@ -591,10 +587,6 @@ pub fn lean_request_execution_lease_observed_cases() -> &'static [LeanRequestExe
 
 pub fn lean_request_execution_lease_trace_cases() -> &'static [LeanRequestExecutionLeaseTraceCase] {
     &lean_contract_snapshot().request_execution_lease_trace_cases
-}
-
-pub fn lean_request_lifecycle_operator_ui_cases() -> &'static [LeanClientShellCase] {
-    &lean_contract_snapshot().request_lifecycle_operator_ui_cases
 }
 
 pub fn lean_request_progress_cases() -> &'static [LeanRequestProgressCase] {
@@ -3160,10 +3152,7 @@ pub struct LeanContractSnapshot {
     pub title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub frontend_client_shell_case_count: usize,
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
-    pub desktop_client_shell_case_count: usize,
-    pub desktop_client_shell_cases: Vec<LeanClientShellCase>,
     pub client_session_turn_cases: Vec<LeanSessionTurnCase>,
-    pub request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub runtime_session_selection_cases: Vec<LeanRuntimeSessionSelectionCase>,
     pub runtime_configuration_admission_cases: Vec<
         LeanRuntimeConfigurationAdmissionCase,

@@ -5,8 +5,6 @@ namespace Conformance.SessionQueueOrder
 
 open Lean ClientShell.SessionTurn Conformance.ClientShellContracts.SessionTurnCases
 
-deriving instance ToJson for RowState, Row
-
 def scenarios : List (String × List Nat) :=
   [ ("replacement_keeps_original_slot", [4, 3])
   , ("replacement_taken_before_pending_read", [4, 3])

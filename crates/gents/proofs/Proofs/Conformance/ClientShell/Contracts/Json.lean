@@ -84,20 +84,85 @@ def frontendClientShellCaseCount : Nat :=
 def desktopClientShellCases : List ClientShellContractCase :=
   clientShellCases.filter (fun witness => witness.desktopSelectedSessionId.isSome)
 
-def desktopClientShellCasesJson : String :=
-  jsonArray (desktopClientShellCases.map ClientShellContractCase.toJson)
+def turnOfName (name : Option String) : Option ClientTurnState :=
+  name.bind fun name =>
+    [ClientTurnState.waitingForClaim, .running, .completed, .failed, .superseded, .interrupted].find?
+      (clientTurnStateName · == name)
 
-def desktopClientShellCaseCount : Nat :=
-  desktopClientShellCases.length
+structure DesktopInput where
+  name : String
+  desktopSelectedSessionId : Nat
+  desktopPreferredRequestId : Option Nat
+  desktopObservedRequestId : Option Nat
+  desktopObservedTurnState : Option String
+  desktopRows : List ClientShell.SessionTurn.Row
+  deriving Lean.ToJson
+
+structure DesktopOutput where
+  desktopSnapshotPresent : Bool
+  desktopExpectedLatestRequestId : Option Nat
+  desktopExpectedTurnState : Option String
+  desktopQueuedRequestIds : List Nat
+  desktopFoldedRequestIds : List Nat
+  desktopExpectPendingTurn : Option Bool
+  deriving Lean.ToJson, BEq
+
+/-- The store a desktop snapshot reads: the session turn rows when the case
+has them, otherwise the one observed request. -/
+def desktopObservation (i : DesktopInput) : Option SessionObservation :=
+  match i.desktopRows.getLast? with
+  | some newest =>
+      some (ClientShell.SessionTurn.observe i.desktopSelectedSessionId contractNode
+        (some contractAgent) i.desktopRows newest)
+  | none =>
+      i.desktopObservedRequestId.map fun request =>
+        sessionObs i.desktopSelectedSessionId (some request) (turnOfName i.desktopObservedTurnState)
+
+def desktopProjection (obs : Option SessionObservation) : DesktopOutput :=
+  { desktopSnapshotPresent := obs.isSome
+    desktopExpectedLatestRequestId := obs.bind (·.latestObservedRequest)
+    desktopExpectedTurnState := turnStateOptionName (obs.bind (·.latestTurn))
+    desktopQueuedRequestIds := queuedRequestsOf obs
+    desktopFoldedRequestIds := foldedRequestsOf obs
+    desktopExpectPendingTurn := desktopPendingExpectation obs }
+
+def desktopInputOf (c : ClientShellContractCase) : DesktopInput :=
+  { name := c.name
+    desktopSelectedSessionId := c.desktopSelectedSessionId.getD 0
+    desktopPreferredRequestId := c.desktopPreferredRequestId
+    desktopObservedRequestId := c.desktopObservedRequestId
+    desktopObservedTurnState := c.desktopObservedTurnState
+    desktopRows := c.desktopRows }
+
+@[conformance_family]
+def desktop : Family DesktopInput DesktopOutput where
+  inputs := desktopClientShellCases.map desktopInputOf
+  model := fun i => desktopProjection (desktopObservation i)
+
+example : desktopClientShellCases.all fun c =>
+    desktop.model (desktopInputOf c) ==
+      { desktopSnapshotPresent := c.desktopSnapshotPresent
+        desktopExpectedLatestRequestId := c.desktopExpectedLatestRequestId
+        desktopExpectedTurnState := c.desktopExpectedTurnState
+        desktopQueuedRequestIds := c.desktopQueuedRequestIds
+        desktopFoldedRequestIds := c.desktopFoldedRequestIds
+        desktopExpectPendingTurn := c.desktopExpectPendingTurn } := by native_decide
+
+example : desktopClientShellCases.any (!·.desktopQueuedRequestIds.isEmpty) := by native_decide
+
+example : desktopClientShellCases.any (!·.desktopFoldedRequestIds.isEmpty) := by native_decide
+
+example : desktopClientShellCases.any fun c =>
+    c.desktopObservedTurnState == some "waitingForClaim" || c.desktopObservedTurnState == some "running" := by
+  native_decide
+
+example : desktopClientShellCases.any fun c =>
+    c.desktopObservedTurnState.isSome &&
+      !(c.desktopObservedTurnState == some "waitingForClaim" || c.desktopObservedTurnState == some "running") := by
+  native_decide
 
 def sessionTurnCasesJson : String := SessionTurnCases.casesJson
 
 def sessionTurnCaseCount : Nat := SessionTurnCases.caseCount
-
-def requestLifecycleOperatorUiCases : List ClientShellContractCase :=
-  desktopClientShellCases.filter (fun witness => witness.desktopObservedTurnState.isSome)
-
-def requestLifecycleOperatorUiCasesJson : String :=
-  jsonArray (requestLifecycleOperatorUiCases.map ClientShellContractCase.toJson)
 
 end Conformance.ClientShellContracts
