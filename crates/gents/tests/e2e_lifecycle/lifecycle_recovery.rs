@@ -522,74 +522,77 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
 }
 
 #[tokio::test]
-async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff() {
-    let db = test_db("lifecycle-background-wake-isolated-backoff").await;
-    let actors = RequestActors::new(&db).await;
-    let agent_identity = actors.agent().clone();
-    let access = &actors.agent_access;
-    let node_did = db.node_identity.did().to_string();
-    let session_id = "wake-isolated-backoff-session";
-    let request_id = "failed-isolated-backoff-wake";
-    let input = background_wake_input(session_id);
-    let terminalized_at = chrono::Utc::now();
-    let created_at = crate::support::agent_requests::canonical_at(
-        terminalized_at - chrono::Duration::seconds(1),
-    );
-    let terminalized_at = terminalized_at.to_rfc3339();
-    let mut seed = RequestSeed::new(request_id, session_id, &created_at);
-    seed.content = Some("continue after background completion");
-    seed.execution_origin = Some("scheduled");
-    let mut create = actors.request_create(&seed);
-    create.input = input;
-    create.retry_count = 4;
-    create.max_retries = 6;
-    let failed_doc = actors.create_signed(create).await;
-    actors
-        .update_request(
-            &failed_doc,
-            serde_json::json!({
-                "lifecycle_state": "failed",
-                "failure_reason": "provider failed",
-                "terminalized_at": terminalized_at,
-            }),
-        )
-        .await;
-    actors
-        .seed_session_observation_from_request(
-            session_id,
-            request_id,
-            "continue after background completion",
-        )
-        .await;
+async fn failed_background_wake_sweep_follows_the_lean_redrive_model() {
+    use gents_lean_vocab::families::wake_redrive_sweep_sweep;
+    for case in gents_lean_vocab::families::wake_redrive_sweep_sweep::cases::<String>() {
+        let db = test_db("lifecycle-background-wake-isolated-backoff").await;
+        let actors = RequestActors::new(&db).await;
+        let agent_identity = actors.agent().clone();
+        let access = &actors.agent_access;
+        let node_did = db.node_identity.did().to_string();
+        let session_id = "wake-isolated-backoff-session";
+        let request_id = "failed-isolated-backoff-wake";
+        let input = background_wake_input(session_id);
+        let terminalized_at =
+            chrono::Utc::now() - chrono::Duration::seconds(case.input.elapsed_seconds as i64);
+        let created_at = crate::support::agent_requests::canonical_at(
+            terminalized_at - chrono::Duration::seconds(1),
+        );
+        let terminalized_at = terminalized_at.to_rfc3339();
+        let mut seed = RequestSeed::new(request_id, session_id, &created_at);
+        seed.content = Some("continue after background completion");
+        seed.execution_origin = Some("scheduled");
+        let mut create = actors.request_create(&seed);
+        create.input = input;
+        create.retry_count = case.input.retry_count.try_into().unwrap();
+        create.max_retries = case.input.max_retries.try_into().unwrap();
+        let failed_doc = actors.create_signed(create).await;
+        actors
+            .update_request(
+                &failed_doc,
+                serde_json::json!({
+                    "lifecycle_state": "failed",
+                    "failure_reason": "provider failed",
+                    "terminalized_at": terminalized_at,
+                }),
+            )
+            .await;
+        actors
+            .seed_session_observation_from_request(
+                session_id,
+                request_id,
+                "continue after background completion",
+            )
+            .await;
 
-    let before = background_wake_retry_rows(access, session_id).await;
-    assert_eq!(before.len(), 1, "no same-key pending wake may mask backoff");
-    assert_eq!(
-        before[0].lifecycle_state,
-        Some(RequestLifecycleState::Failed)
-    );
-    let next_retry_at = gents_session::request::lifecycle::background_wake_next_retry_at(
-        before[0].terminalized_at.as_deref(),
-        before[0].retry_count.expect("persisted retry count"),
-    )
-    .expect("persisted terminal timestamp determines backoff");
-    assert!(next_retry_at > chrono::Utc::now());
-
-    let report = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
-        &db.node,
-        &node_did,
-        std::slice::from_ref(&agent_identity),
-    )
-    .await
-    .expect("isolated backoff sweep");
-    assert_eq!(report.scanned, 1);
-    assert_eq!(report.deferred, 1);
-    assert_eq!(report.redriven, 0);
-    assert_eq!(report.coalesced, 0);
-    assert_eq!(report.already_redriven, 0);
-    assert_eq!(report.ineligible, 0);
-    assert_eq!(report.failed, 0);
-    assert_eq!(background_wake_retry_rows(access, session_id).await, before);
+        let before = background_wake_retry_rows(access, session_id).await;
+        let report = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+            &db.node,
+            &node_did,
+            std::slice::from_ref(&agent_identity),
+        )
+        .await
+        .expect("redrive sweep");
+        let decision = match (
+            report.scanned,
+            report.ineligible,
+            report.coalesced,
+            report.deferred,
+            report.redriven,
+            report.already_redriven,
+            report.failed,
+        ) {
+            (1, 1, 0, 0, 0, 0, 0) => "ineligible".to_owned(),
+            (1, 0, 1, 0, 0, 0, 0) => "coalesced".to_owned(),
+            (1, 0, 0, 1, 0, 0, 0) => "deferred".to_owned(),
+            (1, 0, 0, 0, 1, 0, 0) => "redriven".to_owned(),
+            _ => format!("{report:?}"),
+        };
+        case.check(wake_redrive_sweep_sweep::Output {
+            decision,
+            rows_unchanged: background_wake_retry_rows(access, session_id).await == before,
+        });
+    }
 }
 
 #[tokio::test]
