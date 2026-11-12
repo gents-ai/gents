@@ -91,12 +91,14 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             .queue
             .as_ref()
             .and_then(|queue| queue.queued_after_request_id.as_deref());
-        case.check(gents_lean_vocab::families::causal_hop_contracts_write::WriteOutput {
-            hop: u64::from(planned.hop()),
-            names_caller_tool_call: create.caused_by_parent_tool_call_doc_id.as_deref()
-                == Some(cause.tool_call_doc_id.as_str()),
-            queued_after_active: queued_after == Some(caused.request_id.as_str()),
-        });
+        case.check(
+            gents_lean_vocab::families::causal_hop_contracts_write::WriteOutput {
+                hop: u64::from(planned.hop()),
+                names_caller_tool_call: create.caused_by_parent_tool_call_doc_id.as_deref()
+                    == Some(cause.tool_call_doc_id.as_str()),
+                queued_after_active: queued_after == Some(caused.request_id.as_str()),
+            },
+        );
     }
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();

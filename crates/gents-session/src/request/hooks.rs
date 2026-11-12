@@ -3,9 +3,9 @@
 //! `Proofs.Automation.Hooks` is the contract; each item names the definition it executes.
 
 pub mod claim;
-pub mod delivery;
 #[cfg(test)]
 mod decision_conformance;
+pub mod delivery;
 pub mod effect;
 pub mod hook;
 pub(crate) mod native;

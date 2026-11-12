@@ -313,10 +313,6 @@ pub fn lean_lifecycle_hook_stage_cases() -> &'static [LeanLifecycleHookStageCase
     &lean_contract_snapshot().lifecycle_hook_stage_cases
 }
 
-pub fn lean_lifecycle_hook_supersede_cases() -> &'static [LeanLifecycleHookSupersedeCase] {
-    &lean_contract_snapshot().lifecycle_hook_supersede_cases
-}
-
 pub fn lean_live_overlay_cases() -> &'static [LeanLiveOverlayCase] {
     &lean_contract_snapshot().live_overlay_cases
 }
@@ -3322,7 +3318,6 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_owed_delivery_cases: LeanLifecycleHookOwedDeliveryCases,
     pub lifecycle_hook_admit_cases: Vec<LeanLifecycleHookAdmitCase>,
     pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
-    pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
     pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -7143,16 +7138,6 @@ pub enum LeanLifecycleHookSubjectKind {
 pub struct LeanLifecycleHookSuccessor {
     pub request_id: String,
     pub request_doc_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookSupersedeCase {
-    pub name: String,
-    pub selector: LeanSupersedeSelector,
-    pub rows: Vec<LeanSupersedeRow>,
-    pub parents: Vec<LeanSupersedeParent>,
-    pub stale: Vec<LeanSupersedeStale>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -11117,77 +11102,6 @@ pub struct LeanStorageObservationRuntimeCase {
     pub records_success: bool,
     pub terminal_write_observed: bool,
     pub external_visibility_claimed: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanSupersedeAncestry {
-    Ordinary,
-    Broken { link: LeanSupersedeLink },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanSupersedeLink {
-    Unsigned,
-    OtherGoal,
-    NoParent,
-    ParentAbsent,
-    ParentOutsideSession,
-    ParentUnsigned,
-    Diverges,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSupersedeParent {
-    pub doc: String,
-    pub in_session: bool,
-    pub signed: bool,
-    pub goal: Option<String>,
-    pub reference: Option<LeanSupersedeReference>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSupersedeReference {
-    pub goal: String,
-    pub root: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSupersedeRow {
-    pub doc: String,
-    pub request: String,
-    pub pending: bool,
-    pub goal_continuation: bool,
-    pub trigger: Option<String>,
-    pub reference: Option<LeanSupersedeReference>,
-    pub signed: bool,
-    pub parent: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSupersedeSelector {
-    pub goal: String,
-    pub root: String,
-    pub successor: String,
-    pub successor_doc: String,
-    pub reason: String,
-    pub next: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSupersedeStale {
-    pub doc: String,
-    pub request: String,
-    pub successor: String,
-    pub successor_doc: String,
-    pub reason: String,
-    pub ancestry: LeanSupersedeAncestry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
