@@ -44,7 +44,12 @@ where
     verifier: gents_session::request::admission::AgentRequestAdmissionVerifier,
     capture_factory: Option<gents_inference::rendered_request::RenderedRequestCaptureFactory>,
     service_admission: gents_store::service::RuntimeServiceAdmission,
+    /// The clock a claim reads the request's `valid_until` against.
+    expiry_clock: ExpiryClock,
 }
+
+/// Reads the current time for an auxiliary request's expiry check.
+pub(super) type ExpiryClock = Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>;
 
 enum AuxiliaryResult {
     Generated {
@@ -72,6 +77,7 @@ where
                 .background_execution_registry
                 .service_admission()
                 .clone(),
+            expiry_clock: Arc::new(chrono::Utc::now),
         }
     }
 
@@ -264,7 +270,11 @@ where
         lifecycle.set_client_claim_admission(client_claim);
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
-        match lifecycle.claim_with_identity().await {
+        let expiry_clock = Arc::clone(&self.expiry_clock);
+        match lifecycle
+            .claim_with_identity_at(move || expiry_clock())
+            .await
+        {
             Ok(ClaimOutcome::Claimed) => {}
             Ok(ClaimOutcome::Queued | ClaimOutcome::Interrupted | ClaimOutcome::Expired) => {
                 return Ok(None)
