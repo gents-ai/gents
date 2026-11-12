@@ -77,7 +77,8 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
         );
         assert_eq!(actual.queue.is_some(), expected.queued, "{case:?}");
         assert_eq!(
-            actual.goal_continuation.is_some(), expected.continuation,
+            actual.goal_continuation.is_some(),
+            expected.continuation,
             "{case:?}"
         );
         assert_eq!(expected.authored, modeled.authored, "{case:?}");
@@ -87,10 +88,7 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
         );
         assert_eq!(actual.cwd, input.cwd, "{case:?}");
         assert_eq!(actual.initial_title, input.initial_title, "{case:?}");
-        assert_eq!(
-            actual.captured_context, input.captured_context,
-            "{case:?}"
-        );
+        assert_eq!(actual.captured_context, input.captured_context, "{case:?}");
         assert_eq!(actual.for_fresh_session(), actual, "{case:?}");
     }
 }
