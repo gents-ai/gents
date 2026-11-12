@@ -269,7 +269,8 @@ def clientAgentReadinessCases : List ClientAgentReadinessCase :=
 
 def sessionSelectionCasesJson : String :=
   let cases : List (String × Nat × Option Nat) :=
-    [("invisible", 10, none), ("matching", 10, some 10), ("mismatched", 10, some 20)]
+    [("invisible", 10, none), ("matching", 10, some 10), ("mismatched", 10, some 20),
+     ("materialized", 10, RuntimeState.materializedSessionVisible true 10)]
   let result (selection : RuntimeState.SessionSelection) : String :=
     match selection with
     | .unavailable => "unavailable"

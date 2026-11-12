@@ -354,9 +354,12 @@ mod tests {
         let sessions = session_response["data"]["AgentSession"]
             .as_array()
             .expect("session rows");
-        assert!(
-            sessions.is_empty(),
-            "enqueue persists only AgentRequest; the runtime materializes AgentSession"
+        // Lean `RuntimeState.materializedSessionVisible`: the request is
+        // published with its session, which carries the deferred title.
+        assert_eq!(sessions.len(), 1, "{session_response}");
+        assert_eq!(
+            sessions[0].pointer("/title/text").and_then(Value::as_str),
+            Some("mini-host-health-20260430t180405z")
         );
     }
 
