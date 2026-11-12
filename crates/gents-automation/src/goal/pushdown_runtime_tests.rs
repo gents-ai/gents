@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::goal::{session_token_usage, set_goal_from_access, CreateGoalForSessionOutcome};
+use crate::goal::{
+    session_token_usage, set_goal_from_access, CreateGoalForSessionError, CreateGoalForSessionOutcome,
+};
 use crate::{
     triggers::engine::goal_source::GoalSource, triggers::engine::TriggerSource,
     triggers::runtime_snapshot::ActiveRuntimeSnapshot,

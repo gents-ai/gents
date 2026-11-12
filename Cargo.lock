@@ -4392,6 +4392,7 @@ dependencies = [
  "identity",
  "query",
  "rapidhash",
+ "reqwest 0.12.28",
  "schema",
  "serde",
  "serde_json",

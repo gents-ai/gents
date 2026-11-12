@@ -65,4 +65,5 @@ gents-toolcalls = { workspace = true, features = ["test-fixtures"] }
 axum = { version = "0.8", features = ["ws"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
+reqwest.workspace = true
 gents-callback-fixture-create-workspace = { path = "../gents-callbacks/fixture_create_workspace" }

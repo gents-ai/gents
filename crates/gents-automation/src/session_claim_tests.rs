@@ -1011,7 +1011,7 @@ async fn background_claim_snapshots_transcript_before_successor_input() {
         None,
     )
     .await;
-    let history = session::load_sequenced_history_projection_on(
+    let history = gents_session::session::load_sequenced_history_projection_on(
         &agent,
         session_id,
         &node_did,
