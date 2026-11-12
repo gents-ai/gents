@@ -576,7 +576,7 @@ mod tests {
     fn generated_modeled_closure_input_selects_exact_native_manifest() {
         fn closure_documents(
             input: &gents_lean_vocab::families::contracts_file_inventory_closure::HydrationClosureWire,
-        ) -> Option<Vec<gents_lean_vocab::families::contracts_file_inventory_closure::ClosureDocumentKeyWire>> {
+        ) -> Option<Vec<gents_lean_vocab::families::contracts_file_inventory_closure::ClosureDocumentKeyWire>>{
             let request = &input.request;
             let target_session = request.session.as_str();
             let agent = request.node.as_str();
@@ -743,7 +743,9 @@ mod tests {
                         session_id: target_session.into(),
                     },
                     plugin_parent_tool_call_doc_id: effect.parent.map(|id| id.to_string()),
-                    plugin_effect_ordinal: effect.ordinal.map(|ordinal| ordinal.try_into().unwrap()),
+                    plugin_effect_ordinal: effect
+                        .ordinal
+                        .map(|ordinal| ordinal.try_into().unwrap()),
                     spawned: effect.spawned,
                     tool_call_id: effect.tool_call_id.clone(),
                     request_doc_id: String::new(),
@@ -872,6 +874,8 @@ mod tests {
             )
         }
 
-        gents_lean_vocab::families::contracts_file_inventory_closure::replay(|case| closure_documents(&case.closure_input));
+        gents_lean_vocab::families::contracts_file_inventory_closure::replay(|case| {
+            closure_documents(&case.closure_input)
+        });
     }
 }

@@ -2,8 +2,8 @@ use super::*;
 use crate::file_inventory::closure::CanonicalPublicationOrigin;
 use crate::file_inventory::SessionCollection;
 use crate::file_inventory::SessionDocument;
-use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_changes::ImageFailure;
+use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_inventory::{FileChangeMetadata, FileImageMetadata};
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
 use gents_protocol::output::rows::TranscriptMessageRow;
@@ -441,7 +441,9 @@ fn order_resolution_follows_the_lean_model() {
     });
 }
 
-fn image(value: &gents_lean_vocab::families::file_inventory_contracts_order_entry::ImageWire) -> FileImageMetadata {
+fn image(
+    value: &gents_lean_vocab::families::file_inventory_contracts_order_entry::ImageWire,
+) -> FileImageMetadata {
     match (
         value.kind.as_str(),
         value.content_hash.as_ref(),
@@ -465,7 +467,9 @@ fn image(value: &gents_lean_vocab::families::file_inventory_contracts_order_entr
     }
 }
 
-fn inventory_entry(entry: &gents_lean_vocab::families::file_inventory_contracts_order_entry::EntryWire) -> FileInventoryEntry {
+fn inventory_entry(
+    entry: &gents_lean_vocab::families::file_inventory_contracts_order_entry::EntryWire,
+) -> FileInventoryEntry {
     FileInventoryEntry {
         request_coverage: entry.request_coverage.as_ref().map(|coverage| {
             gents_protocol::file_inventory::FileInventoryCoverage {

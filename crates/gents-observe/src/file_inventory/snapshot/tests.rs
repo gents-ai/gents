@@ -836,7 +836,9 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             "forked_repeated_resource",
             observed_resource_order(&complete, &physical_tools),
         );
-        for case in gents_lean_vocab::families::file_inventory_contracts_fork_resource_order::cases() {
+        for case in
+            gents_lean_vocab::families::file_inventory_contracts_fork_resource_order::cases()
+        {
             case.check(resource_orders[case.input.name.as_str()].clone());
         }
         assert!(complete.entries.iter().all(|entry| {
@@ -1014,7 +1016,8 @@ async fn terminal_publications_order_real_inventory_rows() {
 async fn check_real_inventory_chronology(
     background: bool,
     notify: bool,
-) -> gents_lean_vocab::families::file_inventory_contracts_terminal_chronology::ChronologyObservation {
+) -> gents_lean_vocab::families::file_inventory_contracts_terminal_chronology::ChronologyObservation
+{
     use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
     let (fixture, mut request) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "inventory-terminal-chronology".into(),
