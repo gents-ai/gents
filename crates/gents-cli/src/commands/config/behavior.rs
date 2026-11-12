@@ -5,6 +5,9 @@ use gents_protocol::operations::agent::{
     AgentCreateInput, AgentCreateOperation, AgentOperationError,
 };
 use gents_protocol::operations::NextCall;
+use gents_protocol::operations::permission::{
+    AgentPermission, AgentPermissionInput, AgentPermissionReceipt, PermissionChange,
+};
 use gents_protocol::operations::StringUpdate;
 use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
@@ -125,23 +128,7 @@ impl AgentFailure {
 
 impl std::fmt::Display for AgentFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // An edit is `config agent set`; the operations layer names it `update`.
-        let next = match self.next {
-            NextCall::VerbHelp {
-                resource: "agent",
-                verb: "update",
-            } => "gents config agent set --help".to_owned(),
-            NextCall::VerbHelp { resource, verb } => {
-                format!("gents config {resource} {verb} --help")
-            }
-            NextCall::ResourceHelp { resource } => format!("gents config {resource} --help"),
-            NextCall::Inspect { resource } => format!("gents config {resource} show <AGENT_DID>"),
-            NextCall::List { resource } => format!("gents config {resource} list"),
-            NextCall::Preview { resource, verb } => {
-                format!("gents config {resource} {verb} --preview")
-            }
-            NextCall::Verb { resource, verb } => format!("gents config {resource} {verb}"),
-        };
+        let next = crate::next_call::command(self.next, None);
         write!(formatter, "{}\nNext: {next}", self.error)?;
         if matches!(self.error, AgentOperationError::CatalogNotHeld) {
             write!(
@@ -188,28 +175,53 @@ fn optional_update(value: Option<String>) -> StringUpdate {
     value.map(StringUpdate::Set).unwrap_or_default()
 }
 
+async fn change_permission(
+    graphql: &str,
+    node_did: String,
+    agent_did: String,
+    permission: AgentPermission,
+    grant: bool,
+) -> Result<AgentPermissionReceipt> {
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
+        Some(graphql),
+        None,
+    )?);
+    let input = AgentPermissionInput {
+        node_did,
+        agent_did,
+        permission,
+        change: if grant {
+            PermissionChange::Grant
+        } else {
+            PermissionChange::Revoke
+        },
+    };
+    Ok(
+        gents_documents::agent_permission::change_agent_permission(&access, &input)
+            .await
+            .map_err(|error| {
+                let next = error.recovery();
+                crate::commands::refusal::Refusal::new(error, next)
+            })?,
+    )
+}
+
 pub(super) async fn agent_self_config_permission(
     args: AgentSelfConfigPermissionArgs,
     grant: bool,
 ) -> Result<()> {
-    use gents_store::config_client::AgentSelfConfigPermission;
-
-    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
-        Some(&args.graphql),
-        None,
-    )?);
-    let permission = if grant {
-        AgentSelfConfigPermission::Grant
-    } else {
-        AgentSelfConfigPermission::Revoke
-    };
-    access
-        .set_agent_self_config_permission(&args.node_did, &args.agent_did, permission)
-        .await?;
+    let receipt = change_permission(
+        &args.graphql,
+        args.node_did,
+        args.agent_did,
+        AgentPermission::SelfConfig,
+        grant,
+    )
+    .await?;
     print_json(&json!({
-        "node_did": args.node_did,
-        "agent_did": args.agent_did,
-        "self_config_granted": grant,
+        "node_did": receipt.node_did,
+        "agent_did": receipt.agent_did,
+        "self_config_granted": receipt.granted,
         "independent_document_grants_changed": false,
     }))
 }
@@ -218,26 +230,18 @@ pub(super) async fn agent_catalog_permission(
     args: AgentCatalogPermissionArgs,
     grant: bool,
 ) -> Result<()> {
-    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
-        Some(&args.graphql),
-        None,
-    )?);
-    access
-        .transact_write("config.agent.catalog_permission", |txn| {
-            let (node_did, agent_did) = (&args.node_did, &args.agent_did);
-            Box::pin(async move {
-                if grant {
-                    gents_documents::grant_agent_catalog(txn, node_did, agent_did).await
-                } else {
-                    gents_documents::revoke_agent_catalog(txn, node_did, agent_did).await
-                }
-            })
-        })
-        .await?;
+    let receipt = change_permission(
+        &args.graphql,
+        args.node_did,
+        args.agent_did,
+        AgentPermission::Catalog,
+        grant,
+    )
+    .await?;
     print_json(&json!({
-        "node_did": args.node_did,
-        "agent_did": args.agent_did,
-        "catalog_granted": grant,
+        "node_did": receipt.node_did,
+        "agent_did": receipt.agent_did,
+        "catalog_granted": receipt.granted,
     }))
 }
 

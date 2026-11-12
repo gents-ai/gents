@@ -14,6 +14,7 @@ const NEXT_CALL_KINDS: Record<BridgeNextCallKind, true> = {
   resourceHelp: true,
   inspect: true,
   list: true,
+  preview: true,
 };
 
 function asNextCall(value: unknown): BridgeNextCall | null {

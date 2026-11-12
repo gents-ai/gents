@@ -93,6 +93,7 @@ pub enum BridgeNextCallKind {
     ResourceHelp,
     Inspect,
     List,
+    Preview,
 }
 
 /// The call an operation's refusal names, for the UI to offer as an action.
@@ -117,6 +118,9 @@ impl From<gents_protocol::operations::NextCall> for BridgeNextCall {
             }
             NextCall::Inspect { resource } => (BridgeNextCallKind::Inspect, resource, None),
             NextCall::List { resource } => (BridgeNextCallKind::List, resource, None),
+            NextCall::Preview { resource, verb } => {
+                (BridgeNextCallKind::Preview, resource, Some(verb))
+            }
         };
         Self {
             kind,

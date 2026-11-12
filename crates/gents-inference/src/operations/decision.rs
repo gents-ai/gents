@@ -375,7 +375,7 @@ mod conformance {
     #[test]
     fn the_actor_kind_is_decided_as_the_model_decides_it() {
         families::inference_operations_actor_kind::replay(
-            |i: &families::inference_operations_actor_kind::Input<Signer, ActingDid>| {
+            |i: &families::inference_operations_actor_kind::Input<ActingDid, Signer>| {
                 actor_kind(i.signer, i.did)
             },
         );

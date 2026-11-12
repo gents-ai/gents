@@ -1,3 +1,4 @@
+use super::native::service_action;
 use super::native::{launchable_native_service, native_service, run_native};
 use super::readiness::{
     refused_kind, refused_runtime_store, wait_for_managed_server, Readiness, RuntimeStillBooting,
@@ -10,6 +11,7 @@ use super::status::emit_status;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::ManagedServerStatus;
+use gents_service::args::ServiceAction;
 use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
@@ -54,7 +56,12 @@ where
         let enable_at_login = self.enable_at_login;
         let launched = run_native(
             launchable_native_service(self.app, self.state)?,
-            move |service| match service.start(enable_at_login) {
+            move |service| match service_action(
+                &service,
+                ServiceAction::Start {
+                    enable: enable_at_login,
+                },
+            ) {
                 Ok(()) => Ok(Launched::Started),
                 Err(error) => {
                     match error
@@ -267,7 +274,12 @@ where
     let refused_kind = refused_kind(&failure.error);
     let settled = settle_launch_failure(state, token, failure, || async {
         run_native(native_service(app, state)?, move |service| {
-            service.stop(!initial_enabled)
+            service_action(
+                &service,
+                ServiceAction::Stop {
+                    keep_enabled: initial_enabled,
+                },
+            )
         })
         .await
     })

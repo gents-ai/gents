@@ -12,7 +12,6 @@ pub(crate) mod diff;
 pub(crate) mod export;
 pub(crate) mod inference_failure;
 pub(crate) mod profile;
-pub(crate) mod refusal;
 pub(crate) mod skill;
 pub(crate) mod task_run;
 pub(crate) mod tools;

@@ -14,6 +14,7 @@ use crate::config_writes::ConfigAccess;
 use crate::graphql_access::graphql_endpoint_available;
 use gents_host::args::StoreKeyCustodyArg;
 use gents_protocol::node_readiness::{AgentReadinessState, NodeReadinessSnapshot};
+use gents_service::args::ServiceAction;
 use gents_service::home_state::read_finished_init_config;
 use gents_service::home_state::read_runtime_state;
 use gents_service::home_state::resolve_home_dir;
@@ -297,9 +298,16 @@ async fn start_service(home: &Path) -> Result<()> {
         let definition = config.definition_path(platform);
         let manager = NativeServiceManager::new(config)?;
         if !definition.is_file() {
-            manager.install()?;
+            gents_service::lifecycle::perform(
+                &manager,
+                &ServiceAction::Install {
+                    network: Default::default(),
+                    environment_file: None,
+                },
+            )?;
         }
-        manager.start(false)
+        gents_service::lifecycle::perform(&manager, &ServiceAction::Start { enable: false })?;
+        Ok(())
     })
     .await?
     .map_err(|error| anyhow!("{error:#}\n{hint}"))

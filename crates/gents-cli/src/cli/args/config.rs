@@ -389,9 +389,11 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) display_name: Option<String>,
     #[arg(
         long,
-        help = "Register the root disabled; excluded from allowed_roots until re-enabled"
+        help = "Disable the root; excluded from allowed_roots until re-enabled. An existing root keeps its state when neither --disabled nor --enabled is given"
     )]
     pub(crate) disabled: bool,
+    #[arg(long, conflicts_with = "disabled", help = "Re-enable a disabled root")]
+    pub(crate) enabled: bool,
 }
 
 #[derive(clap::Args)]

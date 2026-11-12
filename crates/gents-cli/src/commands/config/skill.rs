@@ -4,7 +4,7 @@ use gents_protocol::operations::skill::{SkillEdit, SkillOperationError};
 use gents_protocol::operations::StringUpdate;
 use serde_json::{json, Value};
 
-use super::refusal::Refusal;
+use crate::commands::refusal::Refusal;
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::print_json;
