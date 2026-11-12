@@ -211,52 +211,6 @@ fn a_removed_key_file_is_a_missing_key_refusal() {
 }
 
 #[test]
-fn a_new_file_key_never_replaces_an_existing_one() {
-    let temp = tempfile::tempdir().unwrap();
-    let (_record, _key, key_file) = file_key(&temp);
-    let original = std::fs::read(&key_file).unwrap();
-    assert!(StoreEncryption::prepare(
-        StoreKeyCustodyChoice::File,
-        &key_file,
-        &temp.path().join("data")
-    )
-    .is_err());
-    assert_eq!(std::fs::read(&key_file).unwrap(), original);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&key_file).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
-}
-
-#[test]
-fn recorded_creation_intent_resumes_without_replacing_a_stores_missing_key() {
-    let temp = tempfile::tempdir().unwrap();
-    let key_file = home_key_file(temp.path());
-    let data = temp.path().join("data");
-    let record = StoreEncryption::prepare(StoreKeyCustodyChoice::File, &key_file, &data)
-        .expect("prepare custody without creating a key");
-    assert!(!key_file.exists());
-    let bytes = serde_json::to_vec(&record).unwrap();
-    let restored: StoreEncryption = serde_json::from_slice(&bytes).unwrap();
-    restored.initialize(&key_file, &data).unwrap();
-    let key_bytes = std::fs::read(&key_file).unwrap();
-    restored.initialize(&key_file, &data).unwrap();
-    assert_eq!(std::fs::read(&key_file).unwrap(), key_bytes);
-
-    std::fs::create_dir_all(&data).unwrap();
-    std::fs::write(data.join("MANIFEST"), b"store exists").unwrap();
-    std::fs::remove_file(&key_file).unwrap();
-    let error = restored.initialize(&key_file, &data).unwrap_err();
-    assert_eq!(
-        incompatible_store(&error, &data).unwrap().kind,
-        IncompatibleStoreKind::MissingStoreKey
-    );
-    assert!(!key_file.exists());
-}
-
-#[test]
 fn only_a_definitely_absent_keychain_item_is_a_missing_key() {
     let data = Path::new("/tmp/gents-home/data");
     let missing = keychain_failure(crate::identity::macos::ERR_SEC_ITEM_NOT_FOUND, data);
@@ -417,16 +371,108 @@ async fn a_store_with_data_but_no_recorded_key_is_refused() {
     );
 }
 
-#[test]
-fn an_unknown_record_version_is_not_offered_for_deletion() {
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Outcome {
+    Prepared,
+    Created,
+    Loaded,
+    UnencryptedStore,
+    UnrecordedKeyFile,
+    MissingStoreKey,
+    ForeignVersion,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum KeyFile {
+    Absent,
+    Unchanged,
+    Created,
+}
+
+type CustodyStep = gents_lean_vocab::families::store_key_custody_load::Step<KeyFile, Outcome>;
+
+fn custody_step<T>(
+    store_data: bool,
+    key_present: bool,
+    done: Outcome,
+    act: impl FnOnce(&Path, &Path) -> Result<T>,
+) -> CustodyStep {
     let temp = tempfile::tempdir().unwrap();
-    let (mut record, _key, key_file) = file_key(&temp);
-    record.version = STORE_ENCRYPTION_VERSION + 1;
+    let key_file = home_key_file(temp.path());
     let data = temp.path().join("data");
-    let error = record.load(&key_file, &data).unwrap_err();
-    let store = incompatible_store(&error, &data).expect("typed refusal");
-    assert_eq!(store.kind, IncompatibleStoreKind::ForeignVersion);
-    assert!(!store.kind.is_older());
+    if key_present {
+        assert!(crate::identity::publish_private_key_file(&key_file, &[7; STORE_KEY_LEN]).unwrap());
+    }
+    if store_data {
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("MANIFEST"), b"store exists").unwrap();
+    }
+    let before = std::fs::read(&key_file).ok();
+    let result = act(&key_file, &data);
+    let after = std::fs::read(&key_file).ok();
+    let key_file = match (&before, &after) {
+        (None, None) => KeyFile::Absent,
+        (None, Some(_)) => KeyFile::Created,
+        (Some(before), Some(after)) if before == after => KeyFile::Unchanged,
+        _ => panic!("an existing key file was replaced or removed"),
+    };
+    let outcome = match &result {
+        Ok(_) if matches!(key_file, KeyFile::Created) => Outcome::Created,
+        Ok(_) => done,
+        Err(StoreKeyError::UnrecordedKeyFile { .. }) => Outcome::UnrecordedKeyFile,
+        Err(error) => match error.incompatible().map(|store| store.kind) {
+            Some(IncompatibleStoreKind::UnencryptedStore) => Outcome::UnencryptedStore,
+            Some(IncompatibleStoreKind::MissingStoreKey) => Outcome::MissingStoreKey,
+            Some(IncompatibleStoreKind::ForeignVersion) => Outcome::ForeignVersion,
+            _ => panic!("{error}"),
+        },
+    };
+    CustodyStep {
+        outcome,
+        key_file,
+        older: result
+            .err()
+            .and_then(|error| Some(error.incompatible()?.kind.is_older())),
+    }
+}
+
+fn file_record(current_version: bool) -> StoreEncryption {
+    StoreEncryption {
+        version: STORE_ENCRYPTION_VERSION + u32::from(!current_version),
+        custody: StoreKeyCustody::File,
+    }
+}
+
+#[test]
+fn custody_steps_match_the_lean_model() {
+    use gents_lean_vocab::families;
+    families::store_key_custody_prepare::replay::<KeyFile, Outcome>(|i| {
+        let choice = if i.keychain {
+            StoreKeyCustodyChoice::Keychain
+        } else {
+            StoreKeyCustodyChoice::File
+        };
+        let step = custody_step(
+            i.store_data,
+            i.key_present,
+            Outcome::Prepared,
+            |key, data| StoreEncryption::prepare(choice, key, data),
+        );
+        gents_lean_vocab::family::recode(&step)
+    });
+    families::store_key_custody_load::replay::<KeyFile, Outcome>(|i| {
+        custody_step(false, i.key_present, Outcome::Loaded, |key, data| {
+            file_record(i.current_version).load(key, data)
+        })
+    });
+    families::store_key_custody_resume::replay::<KeyFile, Outcome>(|i| {
+        let step = custody_step(i.store_data, i.key_present, Outcome::Loaded, |key, data| {
+            file_record(i.current_version).initialize(key, data)
+        });
+        gents_lean_vocab::family::recode(&step)
+    });
 }
 
 #[test]
