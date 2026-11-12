@@ -145,25 +145,6 @@ def finalityCasesJson : String := jsonArray (Configuration.packFinalityCases.map
   "{\"attempts\":" ++ jsonStringArray (attempts.map name) ++
     ",\"unconfirmed\":" ++ toString (Configuration.packCommitUnconfirmed attempts) ++ "}")
 
-def caseJson (name : String) (references : List (List String))
-    (rootShips dependencyShips installed : List String) (isLocal : Bool := true) : String :=
-  "{\"witness\":" ++ jsonString name ++
-    ",\"references\":" ++ jsonArray (references.map jsonStringArray) ++
-    ",\"root_ships\":" ++ jsonStringArray rootShips ++
-    ",\"dependency_ships\":" ++ jsonStringArray dependencyShips ++
-    ",\"installed\":" ++ jsonStringArray installed ++
-    ",\"local\":" ++ toString isLocal ++
-    ",\"removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
-      references.flatten (rootShips ++ dependencyShips) true) ++
-    ",\"unobserved_removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
-      references.flatten (rootShips ++ dependencyShips) false) ++
-    ",\"retain_notification_record\":" ++ toString
-      (Configuration.retainPluginStoreRecord rootShips false) ++
-    ",\"retain_retired_record\":" ++ toString
-      (Configuration.retainPluginStoreRecord rootShips true) ++
-    ",\"accepted\":" ++ toString (Configuration.pluginInstallAvailable
-      references.flatten (rootShips ++ dependencyShips) installed isLocal) ++ "}"
-
 inductive PinSource where
   | installed | shipped
   deriving Lean.ToJson, BEq
@@ -213,26 +194,62 @@ def operatorWireCasesJson : String := jsonArray (
       ",\"home\":" ++ toString home ++ ",\"allowed\":" ++
       toString (Configuration.operatorWireAvailable operator ready home) ++ "}")
 
-def casesJson : String := jsonArray [
-  caseJson "plugin_references.empty" [[]] [] [] [],
-  caseJson "plugin_references.missing" [["acme/search"]] [] [] [],
-  caseJson "plugin_references.shipped" [["acme/search"]] ["acme/search"] [] [],
-  caseJson "plugin_references.dependency" [["acme/search"]] [] ["acme/search"] [],
-  caseJson "plugin_references.installed" [["acme/search"]] [] [] ["acme/search"],
-  caseJson "plugin_references.wrong_namespace" [["other/search"]] ["acme/search"] [] [],
-  caseJson "plugin_references.mixed" [["acme/search", "acme/parse"]]
-    ["acme/search"] [] ["acme/parse"],
-  caseJson "plugin_references.missing_in_dependency"
-    [["acme/search"], ["acme/missing"]] ["acme/search"] [] [],
-  caseJson "plugin_references.repeated" [["acme/search", "acme/search"]]
-    [] ["acme/search"] [],
-  caseJson "plugin_references.remote_empty" [[]] [] [] [] false,
-  caseJson "plugin_references.remote_missing" [["acme/search"]] [] [] [] false,
-  caseJson "plugin_references.remote_recorded" [["acme/search"]] [] [] ["acme/search"] false,
-  caseJson "plugin_references.remote_shipped" [["acme/search"]] ["acme/search"] [] [] false,
-  caseJson "plugin_references.remote_dependency" [[]] [] ["acme/search"] [] false
-]
+structure ReferenceInput where
+  witness : String
+  references : List (List String)
+  rootShips : List String
+  dependencyShips : List String
+  installed : List String
+  «local» : Bool
+  deriving Lean.ToJson
 
+def referenceCases : List ReferenceInput := [
+  ⟨"plugin_references.empty", [[]], [], [], [], true⟩,
+  ⟨"plugin_references.missing", [["acme/search"]], [], [], [], true⟩,
+  ⟨"plugin_references.shipped", [["acme/search"]], ["acme/search"], [], [], true⟩,
+  ⟨"plugin_references.dependency", [["acme/search"]], [], ["acme/search"], [], true⟩,
+  ⟨"plugin_references.installed", [["acme/search"]], [], [], ["acme/search"], true⟩,
+  ⟨"plugin_references.wrong_namespace", [["other/search"]], ["acme/search"], [], [], true⟩,
+  ⟨"plugin_references.mixed", [["acme/search", "acme/parse"]], ["acme/search"], [],
+    ["acme/parse"], true⟩,
+  ⟨"plugin_references.missing_in_dependency", [["acme/search"], ["acme/missing"]],
+    ["acme/search"], [], [], true⟩,
+  ⟨"plugin_references.repeated", [["acme/search", "acme/search"]], [], ["acme/search"], [], true⟩,
+  ⟨"plugin_references.remote_empty", [[]], [], [], [], false⟩,
+  ⟨"plugin_references.remote_missing", [["acme/search"]], [], [], [], false⟩,
+  ⟨"plugin_references.remote_recorded", [["acme/search"]], [], [], ["acme/search"], false⟩,
+  ⟨"plugin_references.remote_shipped", [["acme/search"]], ["acme/search"], [], [], false⟩,
+  ⟨"plugin_references.remote_dependency", [[]], [], ["acme/search"], [], false⟩]
+
+@[conformance_family]
+def referenceAvailability : Conformance.Family ReferenceInput Bool where
+  inputs := referenceCases
+  model := fun i => Configuration.pluginInstallAvailable i.references.flatten
+    (i.rootShips ++ i.dependencyShips) i.installed i.«local»
+
+/-- The removal check reads the node's configuration, so its observation is
+the observed one. -/
+@[conformance_family]
+def referenceRemoval : Conformance.Family ReferenceInput Bool where
+  inputs := referenceCases
+  model := fun i => Configuration.pluginRetirementAllowed i.references.flatten
+    (i.rootShips ++ i.dependencyShips) true
+
+structure RetentionInput where
+  rootShips : List String
+  deriving Lean.ToJson
+
+structure RetentionObservation where
+  retainNotificationRecord : Bool
+  retainRetiredRecord : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def storeRecordRetention : Conformance.Family RetentionInput RetentionObservation where
+  inputs := [[], ["acme/search"]].map fun rootShips => { rootShips }
+  model := fun i =>
+    { retainNotificationRecord := Configuration.retainPluginStoreRecord i.rootShips false
+      retainRetiredRecord := Configuration.retainPluginStoreRecord i.rootShips true }
 
 def identityBindingJson (binding : Configuration.PackIdentity.Binding) : String :=
   "{\"slot\":" ++ jsonString binding.slot ++

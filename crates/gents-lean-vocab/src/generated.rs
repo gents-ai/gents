@@ -425,10 +425,6 @@ pub fn lean_plugin_job_wire_cases() -> &'static [LeanPluginJobWireCase] {
     &lean_contract_snapshot().plugin_job_wire_cases
 }
 
-pub fn lean_plugin_reference_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().plugin_reference_cases
-}
-
 pub fn lean_process_stop_cases() -> &'static [LeanProcessStopCase] {
     &lean_contract_snapshot().process_stop_cases
 }
@@ -3184,7 +3180,6 @@ pub struct LeanContractSnapshot {
     pub client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub snapshot_demotion_cases: Vec<LeanSnapshotDemotionCase>,
-    pub plugin_reference_cases: Vec<serde_json::Value>,
     pub pack_wire_lock_cases: Vec<serde_json::Value>,
     pub pack_wire_target_cases: Vec<serde_json::Value>,
     pub pack_finality_cases: Vec<serde_json::Value>,

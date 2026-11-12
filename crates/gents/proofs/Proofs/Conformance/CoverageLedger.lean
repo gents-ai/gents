@@ -905,8 +905,16 @@ def caseCoverage : List CoverageEntry :=
       "contracts_pack_installation_identity_plan")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_reference_cases"
-      "PluginReferenceCases")
+      "family"
+      "contracts_pack_installation_reference_availability")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_reference_removal")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_store_record_retention")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "snapshot_demotion_cases"

@@ -1759,50 +1759,33 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     );
     // A notice that the files are gone, which is not a retirement, keeps the
     // installation evidence, refreshed by the Agent (`retainPluginStoreRecord`).
-    let retain = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_plugin_reference_cases()
-            .iter()
-            .find(|case| {
-                case["root_ships"]
-                    .as_array()
-                    .is_some_and(|ships| !ships.is_empty())
-            })
-            .and_then(|case| case["retain_notification_record"].as_bool())
-    })
-    .await?
-    .context("modeled plugin retirement case missing")?;
     let retained = creator_access
         .execute("{ PackInstallation(filter: {coordinate: {_eq: \"fixture/native_echo_pack\"}}) { _docID } }")
         .await?;
     let retained = retained["data"]["PackInstallation"]
         .as_array()
         .context("removed pack query missing")?;
-    assert_eq!(!retained.is_empty(), retain);
-    if retain {
-        assert_eq!(retained.len(), 1);
-        assert_eq!(retained[0]["_docID"], record_doc);
-        let history = creator_access
-            .execute(&format!(
-                "{{ _commits(docID: \"{}\") {{ cid height fieldName signature {{ identity type }} }} }}",
-                gents_store::graphql::escape_graphql_string(record_doc),
-            ))
-            .await?;
-        let notice = gents_store::graphql::composite_commits_at(
-            history["data"].get("_commits"),
-            "_commits",
-        )?
-        .into_iter()
-        .max_by_key(|commit| commit.height)
-        .context("plugin removal notice missing")?;
-        assert!(notice.height > latest.height);
-        assert_eq!(
-            notice
-                .signature
-                .as_ref()
-                .map(|signature| signature.identity.as_str()),
-            Some(creator_signer.as_str())
-        );
-    }
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0]["_docID"], record_doc);
+    let history = creator_access
+        .execute(&format!(
+            "{{ _commits(docID: \"{}\") {{ cid height fieldName signature {{ identity type }} }} }}",
+            gents_store::graphql::escape_graphql_string(record_doc),
+        ))
+        .await?;
+    let notice =
+        gents_store::graphql::composite_commits_at(history["data"].get("_commits"), "_commits")?
+            .into_iter()
+            .max_by_key(|commit| commit.height)
+            .context("plugin removal notice missing")?;
+    assert!(notice.height > latest.height);
+    assert_eq!(
+        notice
+            .signature
+            .as_ref()
+            .map(|signature| signature.identity.as_str()),
+        Some(creator_signer.as_str())
+    );
     let archive =tokio::task::spawn_blocking(|| -> Result<gents_pack::pack::archive::PackArchive> {
         let directory = tempfile::tempdir()?;
         let manifest = json!({"manifest_version":1,"name":"native_child","namespace":"fixture","version":"1.0.0",

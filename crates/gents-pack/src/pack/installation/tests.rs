@@ -750,17 +750,6 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         .execute("{ PackInstallation { _docID installed_at } }")
         .await
         .unwrap();
-    let model = gents_lean_vocab::lean_plugin_reference_cases()
-        .iter()
-        .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
-        .unwrap();
-    assert_eq!(
-        !rows["data"]["PackInstallation"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        model["retain_notification_record"].as_bool().unwrap()
-    );
     assert_eq!(
         rows["data"]["PackInstallation"][0]["_docID"],
         before["data"]["PackInstallation"][0]["_docID"]
@@ -768,29 +757,6 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
     assert_ne!(
         rows["data"]["PackInstallation"][0]["installed_at"],
         before["data"]["PackInstallation"][0]["installed_at"]
-    );
-
-    // A retirement releases the record a disappearance notice keeps.
-    super::super::record_plugin_retirement_as(
-        &access,
-        OWNER,
-        None,
-        home.path(),
-        "acme/demo",
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    let rows = access
-        .execute("{ PackInstallation { _docID } }")
-        .await
-        .unwrap();
-    assert_eq!(
-        !rows["data"]["PackInstallation"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        model["retain_retired_record"].as_bool().unwrap()
     );
 }
 
@@ -1618,23 +1584,6 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         .execute("{ PackInstallation { _docID } }")
         .await
         .unwrap();
-    let retained = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_plugin_reference_cases()
-            .iter()
-            .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
-            .unwrap()["retain_notification_record"]
-            .as_bool()
-            .unwrap()
-    })
-    .await
-    .unwrap();
-    assert_eq!(
-        !response["data"]["PackInstallation"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        retained
-    );
     assert_eq!(response["data"]["PackInstallation"][0]["_docID"], record_id);
     node.shutdown().await.expect("node shutdown");
 }
@@ -3043,41 +2992,36 @@ fn a_documents_dependency_naming_an_unresolved_plugin_is_refused() {
     );
 }
 
-#[tokio::test]
-async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
-    fn names(value: &Value) -> Vec<&str> {
-        value
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap().strip_prefix("acme/").unwrap())
-            .collect()
-    }
-    fn config(references: &Value) -> PackConfig {
-        serde_json::from_value(json!({
-            "node": {"node_did": OWNER},
-            "tools": [{"tools_id": "reference-tools", "node_did": OWNER,
-                "integrations": {"plugins": references.as_array().unwrap().iter()
-                    .map(|plugin| json!({"plugin": plugin})).collect::<Vec<_>>()}}],
-        }))
-        .unwrap()
-    }
-    let cases =
-        tokio::task::spawn_blocking(|| gents_lean_vocab::lean_plugin_reference_cases().to_vec())
-            .await
-            .unwrap();
-    assert_eq!(cases.len(), 14);
-    for case in &cases {
+fn acme_names(plugins: &[String]) -> Vec<&str> {
+    plugins
+        .iter()
+        .map(|plugin| plugin.strip_prefix("acme/").unwrap())
+        .collect()
+}
+
+fn reference_config(references: &[String]) -> PackConfig {
+    serde_json::from_value(json!({
+        "node": {"node_did": OWNER},
+        "tools": [{"tools_id": "reference-tools", "node_did": OWNER,
+            "integrations": {"plugins": references.iter()
+                .map(|plugin| json!({"plugin": plugin})).collect::<Vec<_>>()}}],
+    }))
+    .unwrap()
+}
+
+#[test]
+fn plugin_reference_availability_follows_the_lean_model() {
+    gents_lean_vocab::families::contracts_pack_installation_reference_availability::replay(|i| {
         let home = tempfile::tempdir().unwrap();
-        let root = plugin_pack_manifest("workflow", "documents", &names(&case["root_ships"]));
+        let root = plugin_pack_manifest("workflow", "documents", &acme_names(&i.root_ships));
         let dependency =
-            plugin_pack_manifest("dependency", "documents", &names(&case["dependency_ships"]));
-        let references = case["references"].as_array().unwrap();
-        assert!((1..=2).contains(&references.len()));
-        let root_config = config(&references[0]);
-        let mut dependency_config = config(references.get(1).unwrap_or(&json!([])));
+            plugin_pack_manifest("dependency", "documents", &acme_names(&i.dependency_ships));
+        assert!((1..=2).contains(&i.references.len()));
+        let root_config = reference_config(&i.references[0]);
+        let mut dependency_config =
+            reference_config(i.references.get(1).map_or(&[][..], |group| &group[..]));
         dependency_config.tools[0].tools_id = "dependency-tools".into();
-        for plugin in names(&case["installed"]) {
+        for plugin in acme_names(&i.installed) {
             let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(json!({
                 "namespace": "acme", "name": plugin, "version": "1.0.0",
                 "digest": format!("sha256:{}", "a".repeat(64)), "language": "rust",
@@ -3085,23 +3029,27 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
             })).unwrap();
             crate::plugin::store::write_record(home.path(), &record).unwrap();
         }
-        let result = super::documents::ensure_plugin_references_resolve(
+        super::documents::ensure_plugin_references_resolve(
             &[(&root, &root_config), (&dependency, &dependency_config)],
-            case["local"].as_bool().unwrap().then_some(home.path()),
+            i.local.then_some(home.path()),
             &BTreeMap::new(),
-        );
-        assert_eq!(
-            result.is_ok(),
-            case["accepted"].as_bool().unwrap(),
-            "{case}: {result:?}"
-        );
+        )
+        .is_ok()
+    });
+}
+
+#[tokio::test]
+async fn plugin_reference_removal_follows_the_lean_model() {
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::contracts_pack_installation_reference_removal::cases()
+    })
+    .await
+    .unwrap();
+    for case in cases {
         let (_directory, runtime, _node, access) =
             super::super::agent_bindings::tests::fixture().await;
         let owner = gents_store::identity::NodeIdentity::did(&runtime);
-        let references = references
-            .iter()
-            .flat_map(|group| group.as_array().unwrap())
-            .collect::<Vec<_>>();
+        let references = case.input.references.iter().flatten().collect::<Vec<_>>();
         let bindings = references
             .iter()
             .map(|_| gents_store::identity::provision_agent_identity(&runtime).unwrap())
@@ -3134,18 +3082,79 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
         )
         .await
         .unwrap();
-        let removed = case["root_ships"]
-            .as_array()
-            .unwrap()
+        let removed: std::collections::BTreeSet<String> = case
+            .input
+            .root_ships
             .iter()
-            .chain(case["dependency_ships"].as_array().unwrap())
-            .map(|value| value.as_str().unwrap().to_owned())
+            .chain(&case.input.dependency_ships)
+            .cloned()
             .collect();
         let removal = super::ensure_plugins_unreferenced(&access, owner, &removed).await;
-        assert_eq!(
-            removal.is_ok(),
-            case["removal_accepted"].as_bool().unwrap(),
-            "{case}: {removal:?}"
+        case.check(removal.is_ok());
+    }
+}
+
+#[tokio::test]
+async fn plugin_store_record_retention_follows_the_lean_model() {
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::contracts_pack_installation_store_record_retention::cases()
+    })
+    .await
+    .unwrap();
+    for case in cases {
+        let access = access().await;
+        let home = tempfile::tempdir().unwrap();
+        let mut pack = identity("1");
+        if case.input.root_ships.is_empty() {
+            pack.plugins.clear();
+        }
+        record_plugin_store_change(
+            &access,
+            OWNER,
+            home.path(),
+            "acme/demo",
+            Some(&pack),
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        let recorded = |access: ConfigAccess| async move {
+            !access
+                .execute("{ PackInstallation { _docID } }")
+                .await
+                .unwrap()["data"]["PackInstallation"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        };
+        assert!(recorded(access.clone()).await);
+        record_plugin_store_change(
+            &access,
+            OWNER,
+            home.path(),
+            "acme/demo",
+            None,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        let retain_notification_record = recorded(access.clone()).await;
+        super::super::record_plugin_retirement_as(
+            &access,
+            OWNER,
+            None,
+            home.path(),
+            "acme/demo",
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        let retain_retired_record = recorded(access.clone()).await;
+        case.check(
+            gents_lean_vocab::families::contracts_pack_installation_store_record_retention::RetentionObservation {
+                retain_notification_record,
+                retain_retired_record,
+            },
         );
     }
 }
