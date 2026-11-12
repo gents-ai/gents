@@ -170,9 +170,6 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
 }
 
 #[tokio::test]
-}
-
-#[tokio::test]
 async fn effective_config_reports_inherited_workspace_network_as_disabled() {
     let fixture = SelfConfigFixture::new("workspace-network-report").await;
     fixture.grant_selected_configuration().await;

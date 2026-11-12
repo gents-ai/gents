@@ -151,9 +151,6 @@ fn compaction_runtime_reduces_valid_canonical_history() {
         .block_on(compaction_gate::compaction_runtime_reduces_valid_canonical_history());
 }
 
-#[test]
-}
-
 #[tokio::test]
 async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     request_lifecycle::generated_queue_deadline_cases_pin_r4a_contract_rows().await;
