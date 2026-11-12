@@ -182,19 +182,4 @@ fn generated_causal_hop_cases_match_native_materializer() {
         assert_eq!(hops, call.expected_hops, "{}", call.name);
         assert_eq!(admitted, call.expected_admitted, "{}", call.name);
     }
-    assert!(!contract.causal_hop_interrupt_cases.is_empty());
-    for case in &contract.causal_hop_interrupt_cases {
-        assert_eq!(
-            gents_session::session::message::agent_interrupt_allowed(
-                &case.caller_session,
-                &case.target_session,
-                case.target_origin_cause.as_deref(),
-                case.same_node,
-                case.task_triggered,
-            ),
-            case.expected_allowed,
-            "{}",
-            case.name
-        );
-    }
 }
