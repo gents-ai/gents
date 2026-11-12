@@ -1,7 +1,7 @@
 use anyhow::Result;
 use gents_protocol::graphql::{
     graphql_endpoint_available as shared_graphql_endpoint_available, graphql_rows_from_response,
-    graphql_string_list_literal as shared_graphql_string_list_literal, GraphqlRequestOptions,
+    GraphqlRequestOptions,
 };
 use serde_json::Value;
 
@@ -49,8 +49,4 @@ pub(crate) fn is_collection_missing_error(collection_name: &str, error: &anyhow:
         collection_name,
         &error.to_string(),
     )
-}
-
-pub(crate) fn graphql_string_list_literal(values: &[String]) -> String {
-    shared_graphql_string_list_literal(values)
 }

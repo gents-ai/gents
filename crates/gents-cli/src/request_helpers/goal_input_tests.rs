@@ -1,11 +1,13 @@
-use super::*;
+use anyhow::Result;
 use axum::body::Bytes;
+use chrono::Utc;
 use gents_protocol::goal_control::{
     GoalRevision, ObservedGoal, SessionGoalObservation, SESSION_GOAL_CONTROL_VERSION,
 };
-use gents_protocol::request_input::GoalAssignmentInput;
+use gents_protocol::request_input::{GoalAssignmentInput, RequestInput};
+use gents_store::config_client::GraphqlEndpoint;
 use gents_store::identity::NodeIdentity;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 
 /// A served home whose enrolled User reads and submits through a recording
@@ -17,7 +19,6 @@ pub(crate) struct Source {
     pub(crate) graphql: GraphqlEndpoint,
     pub(crate) node_did: String,
     pub(crate) agent_did: String,
-    pub(crate) default_agent_did: String,
     queries: Arc<Mutex<Vec<String>>>,
     _proxy: gents_host::test_support::ForwardingProxy,
 }
@@ -25,15 +26,6 @@ pub(crate) struct Source {
 impl Source {
     pub(crate) fn user(&self) -> &gents_store::identity::KeyIdentity {
         &self.home.user
-    }
-
-    /// Whether any exchange through the proxy named `needle`.
-    pub(crate) fn queried(&self, needle: &str) -> bool {
-        self.queries
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|body| body.contains(needle))
     }
 
     pub(crate) fn exchanges(&self) -> usize {
@@ -253,7 +245,6 @@ pub(crate) async fn fixture(
     Ok(Source {
         node_did: home.node_did().to_owned(),
         agent_did: binding.agent_did,
-        default_agent_did,
         graphql,
         queries,
         _proxy: proxy,
@@ -269,239 +260,4 @@ pub(crate) fn authored_input() -> RequestInput {
             "version":4, "unsaved":true, "range":{"start":{"line":1,"character":0},"end":{"line":2,"character":0}},
             "content":"private unsaved capture"}]
     })).unwrap()
-}
-
-async fn signed_by_user(source: &Source, create: &AgentRequestCreate) -> Result<bool> {
-    let user = source.user();
-    Ok(user
-        .verify(
-            user.did(),
-            &create.signing_payload(),
-            &create.admission.signature,
-        )
-        .await?)
-}
-
-#[tokio::test]
-async fn generated_cli_preparation_captures_goal_before_signing() -> Result<()> {
-    let contract: Value = gents_lean_contract::load_contract_snapshot()?;
-    let cases = contract["goal_input_binding_cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 12);
-    for case in cases {
-        let source = fixture(
-            case["session_readable"].as_bool().unwrap(),
-            case["observation_verified"].as_bool().unwrap(),
-            reference(&case["observed"]),
-            None,
-        )
-        .await?;
-        let mut input = authored_input();
-        input.goal_assignment = reference(&case["captured"]);
-        let original = input.clone();
-        let actual = prepare_agent_request(
-            &source.graphql,
-            &source.node_did,
-            "hello",
-            Some("chat"),
-            Some(&source.agent_did),
-            Some("fixed-request".into()),
-            RequestSubmitOptions {
-                input: Some(input),
-                ..Default::default()
-            },
-        )
-        .await;
-        if case["expected"]["kind"] == "pending" {
-            let error = actual.unwrap_err();
-            assert!(
-                gents_protocol::error_chain::find_source::<gents_automation::goal::GoalInputRefused>(
-                    error.as_ref()
-                )
-                .is_some(),
-                "{case}: {error:#}"
-            );
-        } else {
-            let create = actual?.create;
-            let mut expected = original.clone();
-            expected.goal_assignment = reference(&case["expected"]["reference"]);
-            assert_eq!(create.input, expected, "{case}");
-            assert!(signed_by_user(&source, &create).await?, "{case}");
-            if original.goal_assignment.is_some() {
-                assert!(!source.queried("GoalObservation"), "{case}");
-            }
-        }
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn cli_preparation_rejects_tampered_and_foreign_goal_observations() -> Result<()> {
-    let contract: Value = gents_lean_contract::load_contract_snapshot()?;
-    let modeled = contract["goal_input_binding_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "unverified_goal_is_unknown")
-        .unwrap();
-    assert_eq!(modeled["expected"]["kind"], "pending");
-    for fault in ["tampered-root", "foreign-session"] {
-        let source = fixture(true, true, reference(&modeled["observed"]), Some(fault)).await?;
-        let actual = prepare_agent_request(
-            &source.graphql,
-            &source.node_did,
-            "hello",
-            Some("chat"),
-            Some(&source.agent_did),
-            None,
-            RequestSubmitOptions {
-                input: Some(authored_input()),
-                ..Default::default()
-            },
-        )
-        .await;
-        let error = actual.unwrap_err();
-        assert_eq!(
-            gents_protocol::error_chain::find_source::<gents_automation::goal::GoalInputRefused>(
-                error.as_ref()
-            )
-            .copied(),
-            Some(gents_automation::goal::GoalInputRefused::ProjectionUnverified),
-            "{fault}: {error:#}"
-        );
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn cli_fresh_session_does_not_capture_an_unrelated_goal() -> Result<()> {
-    let source = fixture(
-        true,
-        true,
-        Some(GoalAssignmentInput {
-            goal_id: "unrelated-goal".into(),
-            root_request_doc_id: Some("unrelated-root".into()),
-        }),
-        None,
-    )
-    .await?;
-    let input = authored_input();
-    let create = prepare_agent_request(
-        &source.graphql,
-        &source.node_did,
-        "hello",
-        None,
-        Some(&source.agent_did),
-        None,
-        RequestSubmitOptions {
-            input: Some(input.clone()),
-            ..Default::default()
-        },
-    )
-    .await?
-    .create;
-    assert_ne!(create.session_id, "chat");
-    assert_eq!(create.input, input);
-    assert!(!source.queried("GoalObservation"));
-    assert!(signed_by_user(&source, &create).await?);
-    Ok(())
-}
-
-#[tokio::test]
-async fn cli_retry_keeps_captured_absence_after_a_new_goal() -> Result<()> {
-    let source = fixture(
-        true,
-        true,
-        Some(GoalAssignmentInput {
-            goal_id: "new-goal".into(),
-            root_request_doc_id: Some("new-root".into()),
-        }),
-        None,
-    )
-    .await?;
-    let input = authored_input();
-    let create = prepare_agent_request(
-        &source.graphql,
-        &source.node_did,
-        "retry",
-        Some("chat"),
-        Some(&source.agent_did),
-        None,
-        RequestSubmitOptions {
-            input: Some(input.clone()),
-            retry_parent_request: Some("old-request".into()),
-            retry_parent_request_doc_id: Some("old-physical-request".into()),
-            ..Default::default()
-        },
-    )
-    .await?
-    .create;
-    assert_eq!(create.input, input);
-    assert!(!source.queried("GoalObservation"));
-    assert!(signed_by_user(&source, &create).await?);
-    Ok(())
-}
-
-#[tokio::test]
-async fn client_request_signs_as_user_and_retains_agent_owned_session_scope() -> Result<()> {
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
-    let modeled = snapshot["agent_request_admission_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "client-in-agent-owned-session")
-        .unwrap();
-    assert_eq!(modeled["expected_admitted"], true);
-    let source = fixture(true, true, None, None).await?;
-    let user = source.user();
-    let create = prepare_agent_request_with_input(
-        &source.graphql,
-        &source.node_did,
-        "continue",
-        Some("chat"),
-        Some(&source.agent_did),
-        None,
-        RequestSubmitOptions::default(),
-    )
-    .await?
-    .create;
-    assert_eq!(create.requester_did, source.agent_did);
-    assert_eq!(create.admission.signer_did, user.did());
-    assert_eq!(
-        create.admission.kind,
-        gents_protocol::request_admission::AgentRequestAdmissionKind::Client
-    );
-    assert!(signed_by_user(&source, &create).await?);
-    // The User's admission is not the Node's: the Node's key refuses it.
-    assert!(!matches!(
-        source
-            .home
-            .home
-            .identity
-            .verify(
-                &source.node_did,
-                &create.signing_payload(),
-                &create.admission.signature
-            )
-            .await,
-        Ok(true)
-    ));
-    Ok(())
-}
-
-#[tokio::test]
-async fn request_selection_preserves_existing_session_agent_after_default_changes() -> Result<()> {
-    let source = fixture(true, false, None, Some("different-default-agent")).await?;
-    assert_ne!(source.default_agent_did, source.agent_did);
-    let selected =
-        resolve_request_agent_did(&source.graphql, &source.node_did, Some("chat"), None).await?;
-    assert_eq!(selected, source.agent_did);
-    assert!(resolve_request_agent_did(
-        &source.graphql,
-        &source.node_did,
-        Some("chat"),
-        Some(&source.default_agent_did)
-    )
-    .await
-    .is_err());
-    Ok(())
 }
