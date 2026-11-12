@@ -68,6 +68,7 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE,
         gents_protocol::schemas::ENROLLMENT_RENEWAL_POLICY,
         gents_protocol::schemas::NETWORK_ADMIN_PIN,
+        gents_protocol::schemas::OWED_DELIVERY,
         gents_protocol::schemas::PEER_PAIRING_APPLIED,
         gents_protocol::schemas::PEER_PAIRING_DESIRED,
     ] {
