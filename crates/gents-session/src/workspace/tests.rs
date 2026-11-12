@@ -1190,40 +1190,60 @@ fn integrate_deletes_and_renames_update_trunk_worktree() {
 }
 
 #[test]
-fn integrate_overlapping_dirty_trunk_path_fails_closed() {
-    let fx = Fixture::new();
-    let mut docs = MemoryWorkspaceDocuments::default();
-    let action = fx.action("ws-dirty", "unit-1", "topic-dirty");
-    let created = execute_create_workspace_plan(
-        &emit_create_workspace_plan(action),
-        &mut Vec::new(),
-        &mut fx.ctx(&mut docs, git_worktree_caps()),
-    )
-    .expect("provision");
-    let dest = PathBuf::from(&created.placement.host_path);
-    fs::write(dest.join("README.md"), "writer\n").unwrap();
-    let sealed = seal_writer(&fx, &mut docs, "ws-dirty", "req-writer");
-    let hash = sealed.workspace.seal_hash.clone().unwrap();
-    bind_integrate(&mut docs, "ws-dirty", "req-int", &hash);
-    fs::write(fx.repo.join("README.md"), "operator wip\n").unwrap();
-    let base = git(&fx.repo, &["rev-parse", "HEAD"]);
-    let err = execute_integrate_workspace_plan(
-        &emit_integrate_workspace_plan(IntegrateWorkspaceAction {
-            workspace_id: "ws-dirty".into(),
-            produced_by_request_id: "req-int".into(),
-            produced_by_request_doc_id: "req-int-doc".into(),
-            mode: IntegrateMode::ApplyDiff,
-        }),
-        &mut Vec::new(),
-        &mut fx.ctx(&mut docs, integrate_caps()),
-    )
-    .expect_err("overlapping dirty trunk path must fail closed");
-    assert!(err.to_string().contains("overlapping"), "{err}");
-    assert_eq!(git(&fx.repo, &["rev-parse", "HEAD"]), base);
-    assert_eq!(
-        fs::read_to_string(fx.repo.join("README.md")).unwrap(),
-        "operator wip\n"
-    );
+fn integrate_dirty_trunk_matches_the_lean_model() {
+    for case in gents_lean_vocab::families::workspace_dirty_trunk_integrate::cases() {
+        let fx = Fixture::new();
+        let mut docs = MemoryWorkspaceDocuments::default();
+        let action = fx.action("ws-dirty", "unit-1", "topic-dirty");
+        let created = execute_create_workspace_plan(
+            &emit_create_workspace_plan(action),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, git_worktree_caps()),
+        )
+        .expect("provision");
+        let dest = PathBuf::from(&created.placement.host_path);
+        fs::write(dest.join(&case.input.delta_path), "writer\n").unwrap();
+        let sealed = seal_writer(&fx, &mut docs, "ws-dirty", "req-writer");
+        let hash = sealed.workspace.seal_hash.clone().unwrap();
+        bind_integrate(&mut docs, "ws-dirty", "req-int", &hash);
+        if let Some(dirty) = &case.input.dirty_path {
+            fs::write(fx.repo.join(dirty), "operator wip\n").unwrap();
+        }
+        let base = git(&fx.repo, &["rev-parse", "HEAD"]);
+        let result = execute_integrate_workspace_plan(
+            &emit_integrate_workspace_plan(IntegrateWorkspaceAction {
+                workspace_id: "ws-dirty".into(),
+                produced_by_request_id: "req-int".into(),
+                produced_by_request_doc_id: "req-int-doc".into(),
+                mode: IntegrateMode::ApplyDiff,
+            }),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, integrate_caps()),
+        );
+        let overlap_refusal = result
+            .as_ref()
+            .err()
+            .is_some_and(|err| err.to_string().contains("overlapping"));
+        let head_moved = git(&fx.repo, &["rev-parse", "HEAD"]) != base;
+        let trunk_effects = u64::from(
+            head_moved
+                || result
+                    .as_ref()
+                    .is_ok_and(|outcome| outcome.pending_head_sha.is_some()),
+        );
+        let dirty_preserved = match &case.input.dirty_path {
+            Some(dirty) => fs::read_to_string(fx.repo.join(dirty)).unwrap() == "operator wip\n",
+            None => true,
+        };
+        case.check(
+            gents_lean_vocab::families::workspace_dirty_trunk_integrate::IntegrateOutput {
+                refused: result.is_err(),
+                trunk_effects,
+                overlap_refusal,
+                dirty_preserved,
+            },
+        );
+    }
 }
 
 #[test]

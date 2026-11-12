@@ -1,3 +1,4 @@
+import Proofs.Conformance.WorkspaceDirtyTrunk
 import Proofs.Conformance.WorkspaceOverlayCwd
 import Proofs.Conformance.SessionOrigin
 import Proofs.Conformance.MailboxContent

@@ -12,7 +12,7 @@ private def workspace : IsolatedWorkspace :=
    ownerNodeDid := "host-1", sealHash := none, state := .ready, pathCapability := cap}
 private def ready : Snapshot := ⟨workspace,none,none,0⟩
 private def bind : Binding := binding workspace "tree-1"
-private def evidence : Evidence := ⟨bind,[⟨"src/main.rs",.regular,true⟩],true,true,false,true,true⟩
+private def evidence : Evidence := ⟨bind,[⟨"src/main.rs",.regular,true⟩],true,true,false,true,true,[]⟩
 private def sealed : Snapshot :=
   {ready with workspace := {workspace with state := .sealed, sealHash := some "tree-1"}, writer := some bind}
 private def integrated : Snapshot := {sealed with integrator := some bind, trunkEffects := 1}
