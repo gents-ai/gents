@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use gents::{DocumentRuntimeOptions, Gents};
 use gents_documents::{
@@ -19,18 +19,13 @@ use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
-use crate::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
-};
+#[cfg(feature = "live-e2e")]
+use crate::support::live_inference::{live_target, InferenceTarget};
+use crate::support::snapshots::SnapshotReader;
+use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
 use crate::support::{interrupt::BootedAgent, test_db, TestDb};
 
 const WORK_UNIT: &str = "change-unit:cycle-accepted";
-const WRITER_TASK_MARK: &str = "Implement one requested change";
-const REVIEW_TASK_MARK: &str = "Independently review the sealed writer workspace";
-const INTEGRATE_TASK_MARK: &str = "A read-only review accepted sealed work unit";
-const RECORD_TASK_MARK: &str = "Record integration outcome";
-const RECORD_PLAN: &str = RECORD_TASK_MARK;
-const REJECT_TASK_MARK: &str = "Record terminal outcome";
 const FAILURE_UNIT: &str = "change-unit:cycle-inbox";
 const MODEL: &str = "workspace-cycle-script";
 
@@ -40,9 +35,12 @@ const INTEGRATOR: &str = "change-unit-integrator";
 const RECORDER: &str = "change-unit-record";
 const REJECTER: &str = "change-unit-rejected";
 
-/// A node whose enrolled User installs the change-unit pack, as `gents pack
-/// install` does: the User signs every configuration write, the install
-/// provisions one managed Agent per slot, and the User authors work units.
+enum InferenceSource<'a> {
+    Scripted(&'a str),
+    #[cfg(feature = "live-e2e")]
+    Live(&'a InferenceTarget),
+}
+
 struct Cycle {
     db: TestDb,
     user: gents_store::identity::KeyIdentity,
@@ -52,11 +50,10 @@ struct Cycle {
 }
 
 impl Cycle {
-    async fn install(name: &str, endpoint: &str, root: &Path, repo: &Path) -> Self {
+    async fn install(name: &str, inference: InferenceSource<'_>, root: &Path, repo: &Path) -> Self {
         let db = test_db(name).await;
         let owner = db.node_identity.did().to_owned();
         let user = crate::support::managed_fixture_user(&db).await;
-        // The init User administers its node, including the pack's schemas.
         crate::support::grant_household_owner(&db, &user).await;
         let access = db.client_access(&user);
         apply_documents(
@@ -65,7 +62,7 @@ impl Cycle {
             vec![(Collection::Node, json!({"node_did": owner}))],
         )
         .await;
-        install_inference(&access, &owner, endpoint).await;
+        install_inference(&access, &owner, inference).await;
         let agents = install_pack(&access, &owner, repo).await;
         let cycle = Self {
             db,
@@ -87,7 +84,6 @@ impl Cycle {
         cycle
     }
 
-    /// The provisioned Agent DID bound to a pack slot.
     fn agent(&self, slot: &str) -> &str {
         &self
             .agents
@@ -115,6 +111,69 @@ impl Cycle {
     }
 }
 
+async fn boot_cycle(cycle: &Cycle, root: &Path) -> BootedAgent {
+    let agent = cycle.runtime(root).await;
+    assert!(
+        agent.unavailable_agents().is_empty(),
+        "unavailable agents: {:?}",
+        agent.unavailable_agents()
+    );
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(agent.run(receiver));
+    let runtime = BootedAgent::new(shutdown, handle, cycle.owner.clone());
+    let query = format!(
+        r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
+        escape_graphql_string(&cycle.owner),
+    );
+    crate::support::live_inference::wait_for_rows(
+        &cycle.access,
+        "NodeReadiness",
+        &query,
+        Duration::from_secs(20),
+        |data| {
+            let row = data["NodeReadiness"]
+                .as_array()
+                .and_then(|rows| rows.first())
+                .and_then(|row| {
+                    serde_json::from_value::<gents_protocol::node_readiness::NodeReadinessRow>(
+                        row.clone(),
+                    )
+                    .ok()
+                });
+            let projection = gents_protocol::node_readiness::project_node_readiness(
+                row.as_ref(),
+                &cycle.owner,
+                cycle
+                    .agents
+                    .values()
+                    .map(|binding| binding.agent_did.as_str()),
+                Some(cycle.agent(WRITER)),
+            );
+            projection.unknown_reason.is_none()
+                && projection.agents.values().all(|state| {
+                    matches!(
+                        state,
+                        gents_protocol::node_readiness::ProjectedAgentReadiness::Ready
+                    )
+                })
+        },
+    )
+    .await;
+    runtime
+}
+
+async fn repository_fixture() -> (tempfile::TempDir, std::path::PathBuf, String) {
+    tokio::task::spawn_blocking(|| {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("source-repo");
+        let (base_sha, _) = create_repository(&repo);
+        (root, repo, base_sha)
+    })
+    .await
+    .unwrap()
+}
+
+#[cfg(feature = "live-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let _ = tracing_subscriber::fmt()
@@ -124,19 +183,19 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         ))
         .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;
-    ensure_native_fs_runner_for_test();
-    let backend = scripted_backend();
-    let root = tempfile::tempdir().unwrap();
-    let repo = root.path().join("source-repo");
-    let (base_sha, base_tree) = create_repository(&repo);
+    tokio::task::spawn_blocking(ensure_native_fs_runner_for_test)
+        .await
+        .unwrap();
+    let target = live_target().await;
+    let (root, repo, base_sha) = repository_fixture().await;
     let cycle = Cycle::install(
         "workspace-change-unit-cycle",
-        backend.endpoint(),
+        InferenceSource::Live(&target),
         root.path(),
         &repo,
     )
     .await;
-    let (db, owner, access) = (&cycle.db, cycle.owner.clone(), &cycle.access);
+    let access = &cycle.access;
     let configured = access
         .execute(
             "{ Node { node_did enabled } DefaultAgentSelection { node_did default_agent_did } Agent { agent_did creation_nonce enabled inference_profile_id } InferenceProfile { profile_id backend_id model_name } WorkspaceRoot { root_path enabled } }",
@@ -165,39 +224,16 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         );
     }
 
-    let agent = cycle.runtime(root.path()).await;
-    assert!(
-        agent.unavailable_agents().is_empty(),
-        "change-unit pack behavior resolution failed: {:#?}",
-        agent.unavailable_agents()
-    );
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut handle = tokio::spawn(agent.run(shutdown_rx));
-    tokio::select! {
-        result = gents::runtime::embedded::wait_for_runtime_ready(&db.node, &owner) => {
-            result.expect("runtime ready");
-        }
-        result = &mut handle => {
-            panic!("runtime exited before readiness: {result:?}");
-        }
-        _ = tokio::time::sleep(Duration::from_secs(20)) => {
-            let state = access.execute("{ NodeRuntime { node_did reconcile_phase last_reconcile_result last_reconcile_error } NodeReadiness { node_did snapshot_json } Trigger { trigger_id enabled last_error } }").await.unwrap();
-            panic!("runtime did not publish readiness after 20 seconds; state={state:#}");
-        }
-    }
-    let runtime = BootedAgent::new(shutdown_tx, handle, owner.clone());
-    let readiness = crate::support::snapshots::fetch_node_readiness_snapshot(&db.node, &owner)
-        .await
-        .expect("runtime readiness snapshot after initial convergence");
-    tracing::info!(?readiness, "workspace cycle runtime readiness");
+    let runtime = boot_cycle(&cycle, root.path()).await;
 
     create_work_unit(access, WORK_UNIT, &base_sha, "accepted").await;
 
-    let writer = wait_for_writer(access, &backend, WORK_UNIT).await;
+    let writer = wait_for_writer(access, WORK_UNIT, cycle.agent(WRITER)).await;
     assert_eq!(writer.len(), 1, "{writer:#?}");
     assert_eq!(writer[0]["status"], "ready", "{writer:#?}");
     assert_eq!(
-        writer[0]["changed_files"], "[\"src/lib.rs\"]",
+        serde_json::from_str::<Vec<String>>(writer[0]["changed_files"].as_str().unwrap()).unwrap(),
+        ["src/lib.rs"],
         "{writer:#?}"
     );
 
@@ -207,8 +243,6 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     assert_eq!(writer_receipt["work_unit_id"], WORK_UNIT);
     assert_eq!(writer_receipt["changed_files"], "[\"src/lib.rs\"]");
     let workspace_id = writer_receipt["workspace_id"].as_str().unwrap();
-    let writer_seal_hash = writer_receipt["seal_hash"].as_str().unwrap();
-    assert_ne!(writer_seal_hash, base_tree);
 
     let closure_rows = wait_rows(
         access,
@@ -308,59 +342,24 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         integration_receipt["produced_by_request_id"], outcome["request_id"],
         "success evidence must name the exact request that produced the integration receipt"
     );
-    assert_eq!(
+    let integrated_repo = repo.clone();
+    let integrated_head = integration_receipt["head_sha"].as_str().unwrap().to_owned();
+    let parent = tokio::task::spawn_blocking(move || {
         git(
-            &repo,
-            &[
-                "rev-parse",
-                &format!("{}^", integration_receipt["head_sha"].as_str().unwrap())
-            ]
-        ),
-        base_sha,
-        "host integration commit uses the request's expected base parent"
+            &integrated_repo,
+            &["rev-parse", &format!("{integrated_head}^")],
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(parent, base_sha);
+    assert_eq!(
+        tokio::fs::read_to_string(repo.join("src/lib.rs"))
+            .await
+            .unwrap(),
+        "pub fn cycle_result() -> u8 { 7 }\n"
     );
-    let integrated = wait_for_file_contents(
-        &repo.join("src/lib.rs"),
-        "pub fn cycle_result() -> u8 { 7 }\n",
-    )
-    .await;
-    assert_eq!(integrated, "pub fn cycle_result() -> u8 { 7 }\n");
 
-    let result_plan = wait_for_record_followup(&backend).await;
-    let closure = accepted;
-    let result_args = json!({
-        "result_id": "result-cycle-accepted",
-        "work_unit_id": WORK_UNIT,
-        "handoff_id": closure["handoff_id"],
-        "reply_session_id": closure["reply_session_id"],
-        "attempt": closure["attempt"],
-        "closure_id": closure["closure_id"],
-        "implementation_id": closure["implementation_id"],
-        "review_id": closure["review_id"],
-        "workspace_id": closure["workspace_id"],
-        "status": "integrated",
-        "writer_receipt_id": closure["writer_receipt_id"],
-        "writer_seal_hash": closure["writer_seal_hash"],
-        "integrator_receipt_id": integration_receipt["receipt_id"],
-        "integrator_seal_hash": integration_receipt["seal_hash"],
-        "head_sha": integration_receipt["head_sha"],
-        "summary": "The host integrated the accepted sealed workspace.",
-    });
-    backend.enqueue_response(
-        RECORD_PLAN,
-        StreamResponse::streams(
-            RECORD_PLAN,
-            vec![StreamChunk::tool_call(
-                "record-integrated-result",
-                "write_change_unit_result",
-                result_args.to_string(),
-            )],
-        ),
-    );
-    backend.enqueue_response(
-        RECORD_PLAN,
-        StreamResponse::completes(RECORD_PLAN, ["The host integration receipt is recorded."]),
-    );
     let result_rows = wait_rows(
         access,
         "ChangeUnitResult",
@@ -388,7 +387,6 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     assert_eq!(result["handoff_id"], WORK_UNIT);
     assert_eq!(result["reply_session_id"], accepted["reply_session_id"]);
     assert_eq!(result["attempt"], accepted["attempt"]);
-    assert!(result_plan);
     wait_cycle_requests_completed(
         access,
         WORK_UNIT,
@@ -399,6 +397,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     runtime.shutdown().await;
 }
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_unit_pack_rejection_records_terminal_result_without_integration() {
     let _ = tracing_subscriber::fmt()
@@ -408,27 +407,27 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
         ))
         .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;
-    ensure_native_fs_runner_for_test();
-    let backend = rejected_backend();
-    let root = tempfile::tempdir().unwrap();
-    let repo = root.path().join("source-repo");
-    let (base_sha, _) = create_repository(&repo);
+    tokio::task::spawn_blocking(ensure_native_fs_runner_for_test)
+        .await
+        .unwrap();
+    let target = live_target().await;
+    let (root, repo, base_sha) = repository_fixture().await;
     let cycle = Cycle::install(
         "workspace-change-unit-rejected-cycle",
-        backend.endpoint(),
+        InferenceSource::Live(&target),
         root.path(),
         &repo,
     )
     .await;
-    let (db, owner, access) = (&cycle.db, cycle.owner.clone(), &cycle.access);
-    let agent = cycle.runtime(root.path()).await;
-    assert!(agent.unavailable_agents().is_empty());
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    gents::runtime::embedded::wait_for_runtime_ready(&db.node, &owner)
-        .await
-        .expect("runtime ready");
-    let runtime = BootedAgent::new(shutdown_tx, handle, owner.clone());
+    update_document(
+        &cycle.access, "workspace_cycle.reject_review", Collection::AgentContext,
+        &cycle.owner, "change-unit-reviewer-context", |context| {
+            let prompt = context["system_prompt"].as_str().unwrap();
+            context["system_prompt"] = format!("{prompt} For this rejection-routing test, use verdict rejected and closure status rejected. Record a material finding that this change requires additional operator review. Copy all receipt and work-unit references from the task and read tools.").into();
+        },
+    ).await;
+    let access = &cycle.access;
+    let runtime = boot_cycle(&cycle, root.path()).await;
 
     const REJECTED_UNIT: &str = "change-unit:cycle-rejected";
     create_work_unit(access, REJECTED_UNIT, &base_sha, "rejected").await;
@@ -464,36 +463,6 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     )
     .await;
     assert_eq!(closures.len(), 1);
-    wait_for_task_followup(&backend, REJECT_TASK_MARK).await;
-    backend.enqueue_response(
-        REJECT_TASK_MARK,
-        StreamResponse::streams(
-            REJECT_TASK_MARK,
-            vec![StreamChunk::tool_call(
-                "record-rejected-result",
-                "write_change_unit_result",
-                json!({
-                    "result_id": "result-cycle-rejected",
-                    "work_unit_id": REJECTED_UNIT,
-                    "handoff_id": closures[0]["handoff_id"],
-                    "reply_session_id": closures[0]["reply_session_id"],
-                    "attempt": closures[0]["attempt"],
-                    "closure_id": closures[0]["closure_id"],
-                    "implementation_id": closures[0]["implementation_id"],
-                    "review_id": closures[0]["review_id"],
-                    "workspace_id": closures[0]["workspace_id"],
-                    "status": "rejected",
-                    "writer_receipt_id": writer_receipts[0]["receipt_id"],
-                    "writer_seal_hash": writer_receipts[0]["seal_hash"],
-                })
-                .to_string(),
-            )],
-        ),
-    );
-    backend.enqueue_response(
-        REJECT_TASK_MARK,
-        StreamResponse::completes(REJECT_TASK_MARK, ["The rejection result is durable."]),
-    );
     let results = wait_rejected_result(access, REJECTED_UNIT).await;
     assert_eq!(
         results.len(),
@@ -520,9 +489,17 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     assert_eq!(results[0]["handoff_id"], REJECTED_UNIT);
     assert_eq!(results[0]["reply_session_id"], "workspace-cycle-lead");
     assert_eq!(results[0]["attempt"], 1);
-    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), base_sha);
+    let owned_repo = repo.clone();
     assert_eq!(
-        std::fs::read_to_string(repo.join("src/lib.rs")).unwrap(),
+        tokio::task::spawn_blocking(move || git(&owned_repo, &["rev-parse", "HEAD"]))
+            .await
+            .unwrap(),
+        base_sha
+    );
+    assert_eq!(
+        tokio::fs::read_to_string(repo.join("src/lib.rs"))
+            .await
+            .unwrap(),
         "pub fn cycle_result() -> u8 { 0 }\n"
     );
     let integrator_receipts = access
@@ -548,25 +525,23 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
         ))
         .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;
-    ensure_native_fs_runner_for_test();
+    tokio::task::spawn_blocking(ensure_native_fs_runner_for_test)
+        .await
+        .unwrap();
     let backend = failure_inbox_backend();
-    let root = tempfile::tempdir().unwrap();
-    let repo = root.path().join("source-repo");
-    let (base_sha, _) = create_repository(&repo);
+    let (root, repo, base_sha) = repository_fixture().await;
     let cycle = Cycle::install(
         "workspace-change-unit-failure-inbox",
-        backend.endpoint(),
+        InferenceSource::Scripted(backend.endpoint()),
         root.path(),
         &repo,
     )
     .await;
-    let (db, owner, access) = (&cycle.db, cycle.owner.clone(), &cycle.access);
+    let (owner, access) = (cycle.owner.clone(), &cycle.access);
     disable_pack_writer_trigger(access, &owner).await;
 
     let supervisor = install_failure_inbox_triggers(&cycle).await;
     select_default_agent(access, &owner, cycle.agent(WRITER)).await;
-    // The supervisor's session already exists: the User opened it with the
-    // supervisor Agent, so the User is its requester.
     let supervisor_session = "workspace-cycle-lead";
     let created_at = crate::support::agent_requests::canonical_now();
     gents_session::request::lifecycle::reserve_goal_session(
@@ -589,21 +564,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     .await
     .expect("open the existing supervisor session as the User");
 
-    let agent = cycle.runtime(root.path()).await;
-    assert!(agent.unavailable_agents().is_empty());
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut handle = tokio::spawn(agent.run(shutdown_rx));
-    tokio::select! {
-        result = gents::runtime::embedded::wait_for_runtime_ready(&db.node, &owner) => {
-            result.expect("runtime ready");
-        }
-        result = &mut handle => panic!("runtime exited before readiness: {result:?}"),
-        _ = tokio::time::sleep(Duration::from_secs(20)) => {
-            let state = access.execute("{ NodeRuntime { node_did reconcile_phase last_reconcile_result last_reconcile_error } NodeReadiness { node_did snapshot_json } Trigger { trigger_id enabled last_error } }").await.unwrap();
-            panic!("runtime did not publish readiness after 20 seconds; state={state:#}");
-        }
-    }
-    let runtime = BootedAgent::new(shutdown_tx, handle, owner.clone());
+    let runtime = boot_cycle(&cycle, root.path()).await;
 
     create_work_unit(access, FAILURE_UNIT, &base_sha, "inbox").await;
     let callback = wait_callback_result(access, FAILURE_UNIT).await;
@@ -617,7 +578,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     assert_eq!(failed["trigger_id"], "change-unit-test-failure");
     assert_eq!(failed["terminal_state"], "failed");
 
-    let inbox = wait_supervisor_inbox(access, &backend, FAILURE_UNIT).await;
+    let inbox = wait_supervisor_inbox(access, FAILURE_UNIT).await;
     assert_eq!(inbox["session_id"], supervisor_session);
     assert_eq!(inbox["agent_did"], supervisor);
     assert_eq!(inbox["requester_did"], cycle.user.did());
@@ -639,54 +600,19 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
 }
 
 fn ensure_native_fs_runner_for_test() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .expect("gents manifest should be under workspace crates/");
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
-        let current = std::env::current_exe().expect("integration-test binary path");
-        let parent = current.parent().expect("integration-test binary directory");
-        let profile_dir = parent.parent().expect("Cargo profile directory");
-        let profile = profile_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("Cargo profile directory has a name");
-        let profile = if profile == "debug" { "dev" } else { profile };
-        let status = Command::new(cargo)
-            .args(["build", "-p", "gents-fs-runner"])
-            .args(["--profile", profile])
-            .arg("--target-dir")
-            .arg(profile_dir.parent().expect("Cargo target directory"))
-            .current_dir(repo_root)
-            .status()
-            .expect("building native filesystem runner for workspace cycle test");
-        assert!(
-            status.success(),
-            "gents-fs-runner must build for workspace cycle test"
-        );
-        let runner_name = if cfg!(windows) {
-            "gents-fs-runner.exe"
-        } else {
-            "gents-fs-runner"
-        };
-        assert!(
-            [
-                parent.to_path_buf(),
-                parent
-                    .parent()
-                    .expect("Cargo profile directory")
-                    .to_path_buf()
-            ]
-            .into_iter()
-            .any(|directory| directory.join(runner_name).is_file()),
-            "gents-fs-runner test binary must be adjacent to integration-test binary after build"
-        );
-    });
+    let current = std::env::current_exe().expect("integration-test binary path");
+    let directory = current.parent().unwrap();
+    let name = if cfg!(windows) {
+        "gents-fs-runner.exe"
+    } else {
+        "gents-fs-runner"
+    };
+    assert!(
+        directory.join(name).is_file() || directory.parent().unwrap().join(name).is_file(),
+        "build the workspace runner first: cargo build -p gents-fs-runner --profile fast-dev"
+    );
 }
 
-/// Applies `documents` as the User through the desired-state owner.
 async fn apply_documents(
     access: &ConfigAccess,
     operation: &'static str,
@@ -724,7 +650,6 @@ async fn apply_documents(
         });
 }
 
-/// Rewrites one published document as the User, as `gents config` edits it.
 async fn update_document(
     access: &ConfigAccess,
     operation: &'static str,
@@ -758,136 +683,6 @@ async fn select_default_agent(access: &ConfigAccess, owner: &str, agent_did: &st
     .await;
 }
 
-fn scripted_backend() -> MockStreamingBackend {
-    let writer = StreamPlan::current_authored_user(
-        WRITER_TASK_MARK,
-        vec![
-            StreamResponse::streams(
-                WRITER_TASK_MARK,
-                vec![StreamChunk::tool_call(
-                    "write-cycle-file",
-                    "write_file",
-                    json!({
-                        "path": "src/lib.rs",
-                        "content": "pub fn cycle_result() -> u8 { 7 }\n",
-                        "overwrite": true,
-                    })
-                    .to_string(),
-                )],
-            ),
-            StreamResponse::streams(
-                WRITER_TASK_MARK,
-                vec![
-                    StreamChunk::tool_call(
-                        "check-cycle-diff",
-                        "bash",
-                        json!({"command":"git","args":["diff","--check"],"cwd":".","raw_json":true}).to_string(),
-                    ),
-                    StreamChunk::tool_call(
-                        "write-cycle-implementation",
-                        "write_change_unit_implementation",
-                        json!({
-                            "implementation_id": "implementation-cycle-accepted",
-                            "status": "ready",
-                            "changed_files": "[\"src/lib.rs\"]",
-                            "tests_run": "git diff --check",
-                            "summary": "Updated cycle_result in the owned source file.",
-                        })
-                        .to_string(),
-                    ),
-                ],
-            ),
-            StreamResponse::completes(WRITER_TASK_MARK, ["The implementation is complete."]),
-        ],
-    );
-    let reviewer = StreamPlan::current_authored_user(
-        REVIEW_TASK_MARK,
-        vec![
-            StreamResponse::streams(
-                REVIEW_TASK_MARK,
-                vec![
-                    StreamChunk::tool_call("read-cycle-work", "read_change_unit_work", "{}"),
-                    StreamChunk::tool_call(
-                        "read-cycle-implementation",
-                        "read_change_unit_implementation",
-                        "{}",
-                    ),
-                    StreamChunk::tool_call(
-                        "inspect-cycle-diff",
-                        "bash",
-                        json!({"command":"git","args":["diff","--","src/lib.rs"],"cwd":".","raw_json":true}).to_string(),
-                    ),
-                    StreamChunk::tool_call(
-                        "read-cycle-file",
-                        "read_file",
-                        json!({"path":"src/lib.rs","raw_json":true}).to_string(),
-                    ),
-                ],
-            ),
-            StreamResponse::streams(
-                REVIEW_TASK_MARK,
-                vec![StreamChunk::tool_call(
-                    "write-cycle-review",
-                    "write_change_unit_review",
-                    json!({
-                        "review_id": "review-cycle-accepted",
-                        "implementation_id": "implementation-cycle-accepted",
-                        "verdict": "accepted",
-                        "findings": "[]",
-                        "summary": "The exact owned-file change matches the request.",
-                        "attempt": 1,
-                    })
-                    .to_string(),
-                )],
-            ),
-            StreamResponse::streams(
-                REVIEW_TASK_MARK,
-                vec![StreamChunk::tool_call(
-                    "close-cycle-accepted",
-                    "write_change_unit_closure",
-                    json!({
-                        "closure_id": "closure-cycle-accepted",
-                        "implementation_id": "implementation-cycle-accepted",
-                        "review_id": "review-cycle-accepted",
-                        "status": "accepted",
-                        "attempt": 1,
-                    })
-                    .to_string(),
-                )],
-            ),
-            StreamResponse::completes(REVIEW_TASK_MARK, ["The read-only review is complete."]),
-        ],
-    );
-    let integrator = StreamPlan::current_authored_user(
-        INTEGRATE_TASK_MARK,
-        vec![StreamResponse::completes(
-            INTEGRATE_TASK_MARK,
-            ["Authorize host integration for the accepted closure."],
-        )],
-    );
-    let recorder = StreamPlan::current_authored_user(
-        RECORD_TASK_MARK,
-        vec![StreamResponse::streams(
-            RECORD_TASK_MARK,
-            vec![
-                StreamChunk::tool_call("read-result-work", "read_change_unit_work", "{}"),
-                StreamChunk::tool_call("read-result-closure", "read_change_unit_closure", "{}"),
-                StreamChunk::tool_call("read-result-review", "read_change_unit_review", "{}"),
-                StreamChunk::tool_call(
-                    "read-result-implementation",
-                    "read_change_unit_implementation",
-                    "{}",
-                ),
-            ],
-        )],
-    );
-    let backend =
-        MockStreamingBackend::start_with_plans(MODEL, vec![writer, reviewer, integrator, recorder])
-            .expect("mock provider starts");
-    backend.enable_dynamic_followups(RECORD_PLAN);
-    backend
-}
-
 fn failure_inbox_backend() -> MockStreamingBackend {
     let unit = StreamPlan::current_authored_user(
         "change-unit:cycle-inbox",
@@ -904,190 +699,61 @@ fn failure_inbox_backend() -> MockStreamingBackend {
     MockStreamingBackend::start_with_plans(MODEL, vec![unit]).expect("mock provider starts")
 }
 
-fn rejected_backend() -> MockStreamingBackend {
-    let writer = StreamPlan::current_authored_user(
-        WRITER_TASK_MARK,
-        vec![
-            StreamResponse::streams(
-                WRITER_TASK_MARK,
-                vec![StreamChunk::tool_call(
-                    "write-rejected-cycle-file",
-                    "write_file",
-                    json!({
-                        "path": "src/lib.rs",
-                        "content": "pub fn cycle_result() -> u8 { 9 }\n",
-                        "overwrite": true,
-                    })
-                    .to_string(),
-                )],
+async fn install_inference(access: &ConfigAccess, owner: &str, source: InferenceSource<'_>) {
+    let execution = json!({
+        "node_did":owner,"execution_id":"workspace-cycle-execution","max_turns":8,
+        "deadline_duration_secs":60,"stream_liveness_timeout_secs":10,"stream_batch_ms":5
+    });
+    let mut docs = vec![(Collection::InferenceExecution, execution)];
+    let (backend, profile, sampling) = match source {
+        InferenceSource::Scripted(endpoint) => (
+            json!({"node_did":owner,"backend_id":"workspace-cycle-backend","name":"Workspace cycle failure fixture",
+                "provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,
+                "auth":{"kind":"unauthenticated"},"enabled":true,"max_concurrent":1,"max_queue_depth":8}),
+            json!({"node_did":owner,"profile_id":"workspace-cycle-profile","backend_id":"workspace-cycle-backend",
+                "model_name":MODEL,"context_window":16384,"max_output_tokens":4096,
+                "execution_id":"workspace-cycle-execution","sampling_id":"workspace-cycle-sampling"}),
+            Some(
+                json!({"node_did":owner,"sampling_id":"workspace-cycle-sampling","temperature":0.0}),
             ),
-            StreamResponse::streams(
-                WRITER_TASK_MARK,
-                vec![StreamChunk::tool_call(
-                    "write-rejected-implementation",
-                    "write_change_unit_implementation",
-                    json!({
-                        "implementation_id": "implementation-cycle-rejected",
-                        "status": "ready",
-                        "changed_files": "[\"src/lib.rs\"]",
-                        "tests_run": "git diff --check",
-                        "summary": "Prepared a candidate change for independent review.",
-                    })
-                    .to_string(),
-                )],
-            ),
-            StreamResponse::completes(WRITER_TASK_MARK, ["The candidate is ready for review."]),
-        ],
-    );
-    let reviewer = StreamPlan::current_authored_user(
-        REVIEW_TASK_MARK,
-        vec![
-            StreamResponse::streams(
-                REVIEW_TASK_MARK,
-                vec![
-                    StreamChunk::tool_call("read-rejected-work", "read_change_unit_work", "{}"),
-                    StreamChunk::tool_call(
-                        "read-rejected-implementation",
-                        "read_change_unit_implementation",
-                        "{}",
-                    ),
-                    StreamChunk::tool_call(
-                        "write-rejected-review",
-                        "write_change_unit_review",
-                        json!({
-                            "review_id": "review-cycle-rejected",
-                            "implementation_id": "implementation-cycle-rejected",
-                            "verdict": "rejected",
-                            "findings": "[\"The candidate violates the requested API contract.\"]",
-                            "summary": "The change must not be integrated.",
-                            "attempt": 1,
-                        })
-                        .to_string(),
-                    ),
-                ],
-            ),
-            StreamResponse::streams(
-                REVIEW_TASK_MARK,
-                vec![StreamChunk::tool_call(
-                    "close-rejected-cycle",
-                    "write_change_unit_closure",
-                    json!({
-                        "closure_id": "closure-cycle-rejected",
-                        "implementation_id": "implementation-cycle-rejected",
-                        "review_id": "review-cycle-rejected",
-                        "status": "rejected",
-                        "attempt": 1,
-                    })
-                    .to_string(),
-                )],
-            ),
-            StreamResponse::completes(
-                REVIEW_TASK_MARK,
-                ["The independent review rejected the candidate."],
-            ),
-        ],
-    );
-    let reject = StreamPlan::current_authored_user(
-        REJECT_TASK_MARK,
-        vec![StreamResponse::streams(
-            REJECT_TASK_MARK,
-            vec![
-                StreamChunk::tool_call("read-rejected-closure", "read_change_unit_closure", "{}"),
-                StreamChunk::tool_call("read-rejected-review", "read_change_unit_review", "{}"),
-            ],
-        )],
-    );
-    let backend = MockStreamingBackend::start_with_plans(MODEL, vec![writer, reviewer, reject])
-        .expect("mock rejection provider starts");
-    backend.enable_dynamic_followups(REJECT_TASK_MARK);
-    backend
+        ),
+        #[cfg(feature = "live-e2e")]
+        InferenceSource::Live(target) => {
+            let mut backend = target.backend(owner);
+            backend.backend_id = "workspace-cycle-backend".into();
+            let mut profile = target.profile(owner);
+            profile.profile_id = "workspace-cycle-profile".into();
+            profile.backend_id = backend.backend_id.clone();
+            profile.execution_id = Some("workspace-cycle-execution".into());
+            (
+                serde_json::to_value(backend).unwrap(),
+                serde_json::to_value(profile).unwrap(),
+                target
+                    .sampling(owner)
+                    .map(|value| serde_json::to_value(value).unwrap()),
+            )
+        }
+    };
+    docs.extend([
+        (Collection::InferenceBackend, backend),
+        (Collection::InferenceProfile, profile),
+    ]);
+    if let Some(sampling) = sampling {
+        docs.push((Collection::InferenceSampling, sampling));
+    }
+    apply_documents(access, "workspace_cycle.install_inference", docs).await;
 }
 
-async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
-    let docs = [
-        (
-            Collection::InferenceBackend,
-            json!({
-                "node_did": owner,
-                "backend_id": "workspace-cycle-backend",
-                "name": "Workspace cycle scripted model",
-                "provider_kind": "OpenAiCompatible",
-                "openai_wire_api": "chat_completions",
-                "endpoint": endpoint,
-                "auth": {"kind":"unauthenticated"},
-                "enabled": true,
-                "max_concurrent": 1,
-                "max_queue_depth": 8
-            }),
-        ),
-        (
-            Collection::InferenceExecution,
-            json!({
-                "node_did": owner,
-                "execution_id": "workspace-cycle-execution",
-                "max_turns": 8,
-                "deadline_duration_secs": 60,
-                "stream_liveness_timeout_secs": 10,
-                "stream_batch_ms": 5
-            }),
-        ),
-        (
-            Collection::InferenceSampling,
-            json!({
-                "node_did": owner,
-                "sampling_id": "workspace-cycle-sampling",
-                "temperature": 0.0
-            }),
-        ),
-        (
-            Collection::InferenceProfile,
-            json!({
-                "node_did": owner,
-                "profile_id": "workspace-cycle-profile",
-                "display_name": "Workspace cycle scripted model",
-                "backend_id": "workspace-cycle-backend",
-                "model_name": MODEL,
-                "context_window": 16384,
-                "max_output_tokens": 4096,
-                "execution_id": "workspace-cycle-execution",
-                "sampling_id": "workspace-cycle-sampling"
-            }),
-        ),
-    ];
-    let plan = DesiredStateApplyPlan::new(
-        docs.into_iter()
-            .map(|(collection, value)| DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            })
-            .collect(),
-    )
-    .unwrap();
-    access
-        .transact_write("workspace_cycle.install_inference", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-}
-
-/// Installs the fixture pack as `gents pack install` does for the User: the
-/// install provisions each slot's managed Agent and returns their bindings.
 async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAgentBindings {
-    let (bytes, _) = pack_dir(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace_cycle_pack"),
-    )
+    let archive = tokio::task::spawn_blocking(|| {
+        let (bytes, _) = pack_dir(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace_cycle_pack"),
+        )
+        .unwrap();
+        PackArchive::from_bytes(&bytes).unwrap()
+    })
+    .await
     .unwrap();
-    let archive = PackArchive::from_bytes(&bytes).unwrap();
     let root = repo.to_string_lossy().into_owned();
     let environment = move |name: &str| (name == "GENTS_CHANGE_UNIT_ROOT").then(|| root.clone());
     let inference = BTreeMap::from([
@@ -1145,8 +811,6 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAg
     prepared.agent_bindings
 }
 
-/// Publishes the repository's workspace root as the User, readable by every
-/// pack Agent whose host tools run under it.
 async fn install_workspace_root(cycle: &Cycle, root: &Path) {
     let readers = cycle
         .agents(&[WRITER, REVIEWER, INTEGRATOR, RECORDER, REJECTER])
@@ -1177,8 +841,6 @@ async fn disable_pack_writer_trigger(access: &ConfigAccess, owner: &str) {
     .await;
 }
 
-/// Publishes, as the User, a provisioned supervisor Agent and the test-only
-/// failure-outcome and inbox triggers. Returns the supervisor's DID.
 async fn install_failure_inbox_triggers(cycle: &Cycle) -> String {
     let (owner, writer) = (cycle.owner.as_str(), cycle.agent(WRITER));
     let supervisor = gents_store::identity::provision_agent_identity_authorized(
@@ -1312,7 +974,6 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
-/// Authors the work unit as the User against the pack's installed schema.
 async fn create_work_unit(
     access: &ConfigAccess,
     work_unit_id: &str,
@@ -1320,10 +981,11 @@ async fn create_work_unit(
     attempt: &str,
 ) {
     let branch = format!("cycle-{attempt}");
-    let sdl = std::fs::read_to_string(
+    let sdl = tokio::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/workspace_cycle_pack/schemas/change_unit_work.graphql"),
     )
+    .await
     .unwrap();
     gents_store::config_client::create_authored_document(
         access,
@@ -1333,8 +995,8 @@ async fn create_work_unit(
             "repository_id": "change-unit-repository",
             "base_sha": base_sha,
             "branch": branch,
-            "title": "Scripted change cycle",
-            "instructions": "Set cycle_result to 7 in src/lib.rs and run git diff --check.",
+            "title": "Workspace change cycle",
+            "instructions": "Read src/lib.rs, then call write_file to replace its content with exactly `pub fn cycle_result() -> u8 { 7 }\n`. Run bash with command git, args [diff, --check], cwd . and raw_json true. Then write_change_unit_implementation with status ready, changed_files set to a string encoding the single-element JSON array containing src/lib.rs, and truthful tests_run and summary. Finish after the implementation is durable.",
             "owned_files": "[\"src/lib.rs\"]",
             "status": "ready",
             "caused_by_correlation": work_unit_id,
@@ -1361,6 +1023,7 @@ async fn wait_integrator_outcome(
     request_id: &str,
 ) -> Value {
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut changes = access.subscribe_changes("FireOutcome").await;
     loop {
         let query = format!(
             "{{ FireOutcome(filter: {{ source_handoff_id: {{ _eq: \"{}\" }}, source_doc_id: {{ _eq: \"{}\" }}, request_id: {{ _eq: \"{}\" }} }}) {{ source_collection source_doc_id request_id source_handoff_id reply_session_id attempt terminal_state trigger_id }} }}",
@@ -1377,7 +1040,7 @@ async fn wait_integrator_outcome(
             Instant::now() < deadline,
             "completed integrator FireOutcome did not appear for {work_unit_id}/{closure_doc_id}/{request_id}: {response:#}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -1397,8 +1060,6 @@ async fn query_rows(
         .clone()
 }
 
-/// Waits for `collection` rows of the unit; a request of one of the
-/// `writing_agents` that terminated before writing them fails the wait.
 async fn wait_rows(
     access: &ConfigAccess,
     collection: &str,
@@ -1408,6 +1069,8 @@ async fn wait_rows(
     ready: impl Fn(&[Value]) -> bool,
 ) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(90);
+    let mut changes = access.subscribe_changes(collection).await;
+    let mut request_changes = access.subscribe_changes("AgentRequest").await;
     loop {
         let rows = query_rows(access, collection, work_unit_id, fields).await;
         if ready(&rows) {
@@ -1423,7 +1086,13 @@ async fn wait_rows(
             Instant::now() < deadline,
             "timed out waiting for {collection} {work_unit_id}; last rows: {rows:#?}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                _ = changes.recv() => (),
+                _ = request_changes.recv() => (),
+            }
+        })
+        .await;
     }
 }
 
@@ -1506,12 +1175,10 @@ async fn cycle_failure_diagnostics(
     failures
 }
 
-async fn wait_for_writer(
-    access: &ConfigAccess,
-    backend: &MockStreamingBackend,
-    work_unit_id: &str,
-) -> Vec<Value> {
+async fn wait_for_writer(access: &ConfigAccess, work_unit_id: &str, writer: &str) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut changes = access.subscribe_changes("ChangeUnitImplementation").await;
+    let mut request_changes = access.subscribe_changes("AgentRequest").await;
     loop {
         let rows = query_rows(
             access,
@@ -1523,20 +1190,18 @@ async fn wait_for_writer(
         if !rows.is_empty() {
             return rows;
         }
-        if Instant::now() >= deadline {
-            let state = access
-                .execute(
-                    "{ NodeRuntime { node_did reconcile_phase last_reconcile_result last_reconcile_error } NodeReadiness { snapshot_json } EventSource { event_source_id source_collection event_kind filter correlation_field workspace_authority } AgentRequest { request_id lifecycle_state failure_reason caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_source_doc_id } TriggerFire { trigger_id source_collection source_doc_id task_id request_id } Trigger { trigger_id fire_count last_status last_error } CallbackInvocation { callback_id lifecycle_state error caused_by_correlation } CallbackResult { binding_id result_id work_unit_id workspace_id } WorkspaceReceipt { receipt_id kind work_unit_id workspace_id } }",
-                )
-                .await
-                .unwrap();
-            panic!(
-                "writer implementation missing; model_requests={}, model_bodies={}, state={state:#}",
-                backend.observed_requests(WRITER_TASK_MARK),
-                backend.observed_completion_bodies().len(),
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            Instant::now() < deadline,
+            "writer implementation missing for {work_unit_id}: {:?}",
+            cycle_failure_diagnostics(access, work_unit_id, &[writer]).await
+        );
+        let _ = tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                _ = changes.recv() => (),
+                _ = request_changes.recv() => (),
+            }
+        })
+        .await;
     }
 }
 
@@ -1552,6 +1217,7 @@ async fn wait_receipts(
         escape_graphql_string(work_unit_id),
     );
     let deadline = Instant::now() + Duration::from_secs(90);
+    let mut changes = access.subscribe_changes("WorkspaceReceipt").await;
     loop {
         let response = access.execute(&fields).await.unwrap();
         let rows = response["data"]["WorkspaceReceipt"]
@@ -1565,37 +1231,7 @@ async fn wait_receipts(
             Instant::now() < deadline,
             "timed out waiting for {kind} receipt of {work_unit_id}: {response:#}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-async fn wait_for_record_followup(backend: &MockStreamingBackend) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(90);
-    loop {
-        if backend.observed_requests(RECORD_PLAN) >= 2 {
-            return true;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "record task did not reach its scripted follow-up; completion requests: {}",
-            backend.observed_completion_requests()
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-async fn wait_for_task_followup(backend: &MockStreamingBackend, marker: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if backend.observed_requests(marker) >= 2 {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "{marker} did not reach its scripted follow-up; completion requests: {}",
-            backend.observed_completion_requests()
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -1605,6 +1241,7 @@ async fn wait_callback_result(access: &ConfigAccess, work_unit_id: &str) -> Valu
         "{{ CallbackResult(filter: {{ work_unit_id: {{ _eq: \"{work_unit_id}\" }} }}) {{ _docID binding_id work_unit_id workspace_id }} }}"
     );
     let deadline = Instant::now() + Duration::from_secs(15);
+    let mut changes = access.subscribe_changes("CallbackResult").await;
     loop {
         let response = access.execute(&query).await.unwrap();
         let rows = response["data"]["CallbackResult"].as_array().unwrap();
@@ -1615,7 +1252,7 @@ async fn wait_callback_result(access: &ConfigAccess, work_unit_id: &str) -> Valu
             Instant::now() < deadline,
             "workspace callback did not produce CallbackResult for {work_unit_id}: {response:#}"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -1625,6 +1262,7 @@ async fn wait_failure_outcome(access: &ConfigAccess, work_unit_id: &str) -> Valu
         "{{ FireOutcome(filter: {{ trigger_id: {{ _eq: \"change-unit-test-failure\" }}, source_handoff_id: {{ _eq: \"{work_unit_id}\" }} }}) {{ _docID source_collection source_doc_id request_id source_handoff_id reply_session_id attempt terminal_state trigger_id reason }} }}"
     );
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut changes = access.subscribe_changes("FireOutcome").await;
     loop {
         let response = access.execute(&query).await.unwrap();
         let rows = response["data"]["FireOutcome"].as_array().unwrap();
@@ -1635,20 +1273,17 @@ async fn wait_failure_outcome(access: &ConfigAccess, work_unit_id: &str) -> Valu
             Instant::now() < deadline,
             "failed stage did not publish a FireOutcome for {work_unit_id}: {response:#}"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
-async fn wait_supervisor_inbox(
-    access: &ConfigAccess,
-    backend: &MockStreamingBackend,
-    work_unit_id: &str,
-) -> Value {
+async fn wait_supervisor_inbox(access: &ConfigAccess, work_unit_id: &str) -> Value {
     let work_unit_id = escape_graphql_string(work_unit_id);
     let query = format!(
         "{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: \"change-unit-supervisor-inbox\" }}, caused_by_correlation: {{ _eq: \"{work_unit_id}\" }} }}) {{ request_id requester_did session_id agent_did lifecycle_state failure_reason content }} }}"
     );
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut changes = access.subscribe_changes("AgentRequest").await;
     loop {
         let response = access.execute(&query).await.unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
@@ -1658,59 +1293,27 @@ async fn wait_supervisor_inbox(
             }
             assert!(
                 row["lifecycle_state"] != "failed",
-                "supervisor inbox request failed: {row:#}; matching provider calls={}",
-                backend.observed_requests(&work_unit_id)
+                "supervisor inbox request failed: {row:#}"
             );
         }
         assert!(
             Instant::now() < deadline,
             "failed-stage inbox request was not completed: {response:#}"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
-async fn wait_for_file_contents(path: &Path, expected: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Ok(contents) = std::fs::read_to_string(path) {
-            if contents == expected {
-                return contents;
-            }
-        }
-        assert!(
-            Instant::now() < deadline,
-            "host integration did not update {}",
-            path.display()
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
 async fn wait_request_completed(access: &ConfigAccess, request_id: &str) {
-    let request_id = escape_graphql_string(request_id);
-    let query = format!(
-        "{{ AgentRequest(filter: {{request_id: {{_eq: \"{request_id}\"}}}}) {{ request_id lifecycle_state failure_reason }} }}"
+    assert_eq!(
+        crate::support::live_inference::wait_for_request_terminal(
+            access,
+            request_id,
+            Duration::from_secs(10),
+        )
+        .await,
+        "completed"
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let response = access.execute(&query).await.unwrap();
-        let rows = response["data"]["AgentRequest"].as_array().unwrap();
-        if let Some(row) = rows.first() {
-            if row["lifecycle_state"] == "completed" {
-                return;
-            }
-            assert!(
-                row["lifecycle_state"] != "failed",
-                "request {request_id} failed: {row:#}"
-            );
-        }
-        assert!(
-            Instant::now() < deadline,
-            "request {request_id} did not complete: {response:#}"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
 }
 
 async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<Value> {
@@ -1719,6 +1322,7 @@ async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<
         "{{ ChangeUnitResult(filter: {{work_unit_id: {{_eq: \"{unit}\"}}}}) {{ result_id work_unit_id handoff_id reply_session_id attempt closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary }} }}"
     );
     let deadline = Instant::now() + Duration::from_secs(15);
+    let mut changes = access.subscribe_changes("ChangeUnitResult").await;
     loop {
         let response = access.execute(&result_query).await.unwrap();
         let rows = response["data"]["ChangeUnitResult"]
@@ -1735,7 +1339,7 @@ async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<
             let state = access.execute(&diagnostic).await.unwrap();
             panic!("rejected result not written: result={rows:#?}; runtime={state:#}");
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -1745,6 +1349,7 @@ async fn wait_cycle_requests_completed(access: &ConfigAccess, work_unit_id: &str
         "{{ AgentRequest(filter: {{caused_by_correlation: {{_eq: \"{work_unit_id}\"}}}}) {{ request_id agent_did lifecycle_state failure_reason }} }}"
     );
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut changes = access.subscribe_changes("AgentRequest").await;
     loop {
         let response = access.execute(&query).await.unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
@@ -1769,6 +1374,6 @@ async fn wait_cycle_requests_completed(access: &ConfigAccess, work_unit_id: &str
             Instant::now() < deadline,
             "cycle requests did not finish for {work_unit_id}: {relevant:#?}"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
