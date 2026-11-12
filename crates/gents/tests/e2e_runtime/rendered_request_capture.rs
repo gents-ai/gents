@@ -2441,15 +2441,13 @@ impl OwnedCaptureFixture {
             ),
             (
                 gents_store::collection::Collection::Agent,
-                serde_json::json!({"node_did":root.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"capture-profile","context_id":"capture-context","enabled":true}),
+                serde_json::json!({"node_did":root.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"capture-profile","context_id":compaction.then_some("capture-context"),"enabled":true}),
             ),
         ];
         docs.push((gents_store::collection::Collection::Agent, serde_json::json!({"node_did":root.did(),"agent_did":sibling.agent_did,"creation_nonce":sibling.creation_nonce,"inference_profile_id":"capture-profile","enabled":false})));
         if compaction {
             docs.push((gents_store::collection::Collection::AgentContext, serde_json::json!({"node_did":root.did(),"context_id":"capture-context","compaction_id":"capture-compaction"})));
             docs.push((gents_store::collection::Collection::Compaction, serde_json::json!({"node_did":root.did(),"compaction_id":"capture-compaction","strategy":"StripThenSummarize","threshold":0.25})));
-        } else {
-            docs[3].1.as_object_mut().unwrap().remove("context_id");
         }
         let plan = DesiredStateApplyPlan::new(
             docs.into_iter()
