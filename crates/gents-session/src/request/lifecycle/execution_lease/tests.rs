@@ -2165,7 +2165,7 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                 Arc::clone(&entered),
                 Arc::clone(&release),
                 async move {
-                    gents_session::request::lifecycle::renew_execution_lease_once_at_with_access(
+                    crate::request::lifecycle::renew_execution_lease_once_at_with_access(
                         &access_for_attempt,
                         &request_for_attempt,
                         &generation_for_attempt,
@@ -2248,7 +2248,7 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                         .unwrap()
                         .with_timezone(&Utc);
                         let next =
-                            gents_session::request::lifecycle::renew_execution_lease_once_at_with_access(
+                            crate::request::lifecycle::renew_execution_lease_once_at_with_access(
                                 &access,
                                 &doc_id,
                                 &generation,
@@ -2260,8 +2260,8 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                         assert!(
                             matches!(
                                 next,
-                                gents_session::request::lifecycle::RenewalAttemptOutcome::Skipped
-                                    | gents_session::request::lifecycle::RenewalAttemptOutcome::Committed
+                                crate::request::lifecycle::RenewalAttemptOutcome::Skipped
+                                    | crate::request::lifecycle::RenewalAttemptOutcome::Committed
                             ),
                             "{}: fresh renewal runs after the prior native call drains",
                             case.name
