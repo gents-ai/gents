@@ -15,7 +15,11 @@ async fn runtime_location_rejects_an_unknown_node() {
     .unwrap();
     assert!(command.is_cancellable());
     let error = host
-        .execute(command, CancellationToken::new())
+        .execute(
+            command,
+            &crate::host::approvals::AttachmentApprovals::default(),
+            CancellationToken::new(),
+        )
         .await
         .unwrap_err();
     assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
@@ -52,6 +56,7 @@ async fn runtime_location_accepts_a_paired_runtime_without_operator_access() {
             protocol::ClientCommand::RuntimeIsLocal {
                 node_did: "did:paired".into()
             },
+            &crate::host::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -89,6 +94,7 @@ async fn paired_model_settings_use_the_authenticated_client_endpoint() {
             protocol::ClientCommand::InferenceSetupState {
                 node_did: node.clone(),
             },
+            &crate::host::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -173,6 +179,7 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
     let result = host
         .execute(
             protocol::ClientCommand::Snapshot {},
+            &crate::host::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
