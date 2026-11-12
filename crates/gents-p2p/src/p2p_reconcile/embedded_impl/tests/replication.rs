@@ -534,9 +534,11 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         &gents_lean_vocab::lean_contract_snapshot().identity_local_registry_writer_cases;
     let modeled_runtime = writer_cases
         .iter()
-        .find(|case| case["name"] == "user-owner")
-        .context("missing user-owned registry writer case")?["writer"]
-        == "runtime";
+        .find(|case| case.name == "user-owner")
+        .context("missing user-owned registry writer case")?
+        .writer
+        .as_deref()
+        == Some("runtime");
     let runtime_write = admin_local
         .write(
             "test.transport.runtime_registry_update",
@@ -561,9 +563,10 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         .await;
     let modeled_foreign = writer_cases
         .iter()
-        .find(|case| case["name"] == "foreign-owner")
-        .context("missing foreign registry writer case")?["writer"]
-        .is_string();
+        .find(|case| case.name == "foreign-owner")
+        .context("missing foreign registry writer case")?
+        .writer
+        .is_some();
     assert_eq!(
         foreign_write.as_ref().is_ok_and(|value| {
             gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
