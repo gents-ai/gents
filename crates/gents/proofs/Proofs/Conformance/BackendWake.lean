@@ -4,6 +4,7 @@ import Proofs.Automation.EventDelivery.Watcher
 import Proofs.Session.Request.ResumeAdmission
 import Proofs.Session.RequestExecutionLease.Transition
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Functions.Session
 import Proofs.Conformance.Family
 
 namespace Conformance.BackendWake
@@ -71,8 +72,6 @@ def resumeAdmission : Family RequestResumeAdmission.ClaimFacts Bool where
       ⟨true, true, true, true, true, false⟩ ]
   model := fun facts => RequestResumeAdmission.deadlineAdmitted false facts
 
-def boolJson (b : Bool) : String := if b then "true" else "false"
-
 structure ReparkInput where
   resuming : Bool
   observedGeneration : Nat
@@ -95,20 +94,25 @@ def repark : Family ReparkInput Bool where
     (RequestExecutionLease.step? pre
       (.reparkExpiredResume .mutationWriteGate i.expectedGeneration i.expectedExpiry)).isSome
 
-def parkedFinalizeInputs : List (RequestState × RequestExecutionLease.Outcome) :=
-  [RequestState.waitingForBackend, .resumingBackend, .processing, .pending].flatMap fun request =>
-    [RequestExecutionLease.Outcome.completed, .failed, .interrupted, .dead, .superseded].map
-      fun outcome => (request, outcome)
+structure ParkedFinalizeInput where
+  request : RequestState
+  outcome : RequestExecutionLease.Outcome
+  deriving ToJson
 
-def parkedFinalizeCaseJson (input : RequestState × RequestExecutionLease.Outcome) : String :=
-  let (request, outcome) := input
-  let pre := { RequestExecutionLease.initial Nat with request := request, usedGenerations := [7] }
-  let allowed := (RequestExecutionLease.step? pre
-    (.finalizeParked .mutationWriteGate 8 outcome)).isSome
-  "{\"request\":\"" ++ request.toDefraDB ++ "\",\"outcome\":\"" ++
-    outcome.requestState.toDefraDB ++ "\",\"allowed\":" ++ boolJson allowed ++ "}"
+@[conformance_family]
+def parkedFinalize : Family ParkedFinalizeInput Bool where
+  inputs :=
+    [RequestState.waitingForBackend, .resumingBackend, .processing, .pending].flatMap fun request =>
+      [RequestExecutionLease.Outcome.completed, .failed, .interrupted, .dead, .superseded].map
+        fun outcome => { request, outcome }
+  model := fun i =>
+    let pre := { RequestExecutionLease.initial Nat with request := i.request, usedGenerations := [7] }
+    (RequestExecutionLease.step? pre (.finalizeParked .mutationWriteGate 8 i.outcome)).isSome
 
-def parkedFinalizeCasesJson : String := jsonArray (parkedFinalizeInputs.map parkedFinalizeCaseJson)
+example : parkedFinalize.inputs.any fun i => parkedFinalize.model i && i.outcome == .superseded := by
+  native_decide
+
+example : parkedFinalize.inputs.any fun i => !parkedFinalize.model i := by native_decide
 
 def resumedTurnCases : List (List Nat) :=
   [[], [0], [0, 1, 2], [2, 0, 1], [4], [3, 3]]

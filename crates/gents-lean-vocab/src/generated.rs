@@ -1217,13 +1217,6 @@ pub struct LeanBackendHealthCase {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBackendParkedFinalizeCase {
-    pub request: gents_protocol::request_lifecycle::RequestLifecycleState,
-    pub outcome: gents_protocol::request_lifecycle::RequestLifecycleState,
-    pub allowed: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanBackendProbeConfiguration {
     pub backend_id: u32,
     pub revision: u32,
@@ -3193,7 +3186,6 @@ pub struct LeanContractSnapshot {
     pub tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub tool_retry_cases: Vec<LeanToolRetryCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub backend_parked_finalize_cases: Vec<LeanBackendParkedFinalizeCase>,
     pub backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
     pub mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub backend_health_cases: Vec<LeanBackendHealthCase>,

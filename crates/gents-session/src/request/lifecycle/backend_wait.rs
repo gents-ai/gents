@@ -646,26 +646,6 @@ mod tests {
     }
 
     #[test]
-    fn parked_terminal_outcomes_match_the_generated_model() {
-        use gents_protocol::request_lifecycle::RequestLifecycleState as State;
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_parked_finalize_cases;
-        assert!(cases
-            .iter()
-            .any(|case| case.allowed && case.outcome == State::Superseded));
-        assert!(cases.iter().any(|case| !case.allowed));
-        for case in cases {
-            assert_eq!(
-                crate::request::lifecycle::execution_policy::can_finalize_parked(
-                    case.request,
-                    case.outcome
-                ),
-                case.allowed,
-                "{case:?}"
-            );
-        }
-    }
-
-    #[test]
     fn healthy_wakeup_matches_the_generated_model() {
         let at = |millis: u64| {
             Utc.timestamp_millis_opt(i64::try_from(millis).unwrap())

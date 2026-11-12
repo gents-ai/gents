@@ -175,6 +175,14 @@ mod conformance {
     use super::*;
 
     #[test]
+    fn parked_terminal_outcomes_match_the_generated_model() {
+        gents_lean_vocab::families::backend_wake_parked_finalize::replay::<
+            RequestLifecycleState,
+            RequestLifecycleState,
+        >(|i| can_finalize_parked(i.request, i.outcome));
+    }
+
+    #[test]
     fn provider_eof_is_failure_matches_lean() {
         gents_lean_vocab::families::request_execution_lease_provider_eof_is_failure::replay(|i| {
             provider_eof_is_failure(i.saw_explicit_final)
