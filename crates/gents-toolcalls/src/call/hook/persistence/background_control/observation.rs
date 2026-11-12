@@ -2,7 +2,7 @@ use futures::StreamExt;
 use tokio::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub(super) enum Change {
     Quiet,
@@ -13,7 +13,7 @@ pub(super) enum Change {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub(super) enum Wake {
     Cancel,

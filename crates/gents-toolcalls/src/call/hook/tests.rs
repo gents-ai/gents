@@ -2669,13 +2669,13 @@ async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
 
 #[tokio::test]
 async fn generated_background_process_identity_cases_cancel_only_the_physical_invocation() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().background_process_identity_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
+    for case in gents_lean_vocab::families::native_refinement_process_identity::cases() {
+        let input = &case.input;
         let registry = BackgroundExecutionRegistry::default();
         let token = CancellationToken::new();
-        let owned_id = case.owned_id.as_str();
-        let owned_doc = case.owned_doc.as_str();
+        let release = CancellationToken::new();
+        let owned_id = input.owned_id.as_str();
+        let owned_doc = input.owned_doc.as_str();
         let reservation = registry
             .reserve(owned_id.into(), owned_doc.into(), token.clone())
             .unwrap();
@@ -2684,30 +2684,35 @@ async fn generated_background_process_identity_cases_cancel_only_the_physical_in
         let sibling_reservation = registry
             .reserve(owned_id.into(), sibling_doc.clone(), sibling.clone())
             .unwrap();
-        let worker_token = token.clone();
-        let expected = case.expected_cancel;
-        let worker = tokio::spawn(async move {
-            if expected {
-                worker_token.cancelled().await;
+        let worker = tokio::spawn({
+            let token = token.clone();
+            let release = release.clone();
+            async move {
+                tokio::select! {
+                    _ = token.cancelled() => {}
+                    _ = release.cancelled() => {}
+                }
+                drop(reservation);
             }
-            drop(reservation);
         });
         let outcome = registry
-            .stop_execution(case.requested_id.as_str(), case.requested_doc.as_str())
+            .stop_execution(input.requested_id.as_str(), input.requested_doc.as_str())
             .await;
-        assert_eq!(token.is_cancelled(), expected, "{case:?}");
+        let cancelled = token.is_cancelled();
         assert_eq!(
             outcome == gents_session::exec::ProcessStopOutcome::Stopped,
-            expected,
-            "{case:?}"
+            cancelled,
+            "{input:?}"
         );
         assert!(
             !sibling.is_cancelled(),
-            "a repeated provider call ID must not alias its sibling: {case:?}"
+            "a repeated provider call ID must not alias its sibling: {input:?}"
         );
+        release.cancel();
         worker.await.unwrap();
         assert_eq!(registry.active_tool_call_doc_ids(), vec![sibling_doc]);
         drop(sibling_reservation);
+        case.check(cancelled);
     }
 }
 

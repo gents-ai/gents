@@ -1148,10 +1148,9 @@ mod signed_conformance {
             requester_did: Some("requester".into()),
             tool_call_id: "call".into(),
         };
-        let cases = &gents_lean_vocab::lean_contract_snapshot().client_signed_control_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let signer = if case.author == "client" {
+        for case in gents_lean_vocab::families::native_refinement_signed_control::cases() {
+            let case_input = &case.input;
+            let signer = if case_input.author == "client" {
                 &client
             } else {
                 &other
@@ -1160,29 +1159,30 @@ mod signed_conformance {
                 version: 1,
                 intent_id: "unique".into(),
                 client_did: signer.did().into(),
-                node_did: case.node.clone(),
-                agent_did: case.agent.clone(),
+                node_did: case_input.node.clone(),
+                agent_did: case_input.agent.clone(),
                 session_id: "session".into(),
-                session_doc_id: case.session.clone(),
-                request_doc_id: case.request.clone(),
+                session_doc_id: case_input.session.clone(),
+                request_doc_id: case_input.request.clone(),
                 requester_did: Some("requester".into()),
-                tool_call_id: case.call.clone(),
-                tool_call_doc_id: case.document.clone(),
-                action: case.action.clone(),
+                tool_call_id: case_input.call.clone(),
+                tool_call_doc_id: case_input.document.clone(),
+                action: case_input.action.clone(),
                 signature: Vec::new(),
             };
             intent.signature = signer
                 .sign(&intent.signing_payload().unwrap())
                 .await
                 .unwrap();
-            if !case.signature_valid {
+            if !case_input.signature_valid {
                 intent.signature[0] ^= 1;
             }
-            assert_eq!(
-                signed_invocation_authorized(&intent, client.did(), "process_stop", &row),
-                case.expected,
-                "{case:?}"
-            );
+            case.check(signed_invocation_authorized(
+                &intent,
+                client.did(),
+                "process_stop",
+                &row,
+            ));
         }
     }
 }

@@ -452,8 +452,6 @@ def snapshotGoalCasesJson : String :=
       ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
     ++ "\"goal_queue_assignment_cases\":"
       ++ Conformance.GoalQueueAssignmentContracts.casesJson ++ ","
-    ++ "\"durable_observation_cases\":"
-      ++ Conformance.NativeRefinement.observationCasesJson ++ ","
     ++ "\"plugin_job_commit_kill_cases\":"
       ++ Conformance.PluginJob.commitKillCasesJson ++ ","
     ++ "\"client_process_claim_cases\":"
@@ -468,14 +466,6 @@ def snapshotGoalCasesJson : String :=
       ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
     ++ "\"delegated_finality_cases\":"
       ++ Identity.DelegatedFinality.casesJson ++ ","
-    ++ "\"client_signed_control_cases\":"
-      ++ Conformance.NativeRefinement.clientSignedControlCasesJson ++ ","
-    ++ "\"process_stop_action_cases\":"
-      ++ Conformance.NativeRefinement.processStopActionCasesJson ++ ","
-    ++ "\"background_process_identity_cases\":"
-      ++ Conformance.NativeRefinement.processIdentityCasesJson ++ ","
-    ++ "\"plugin_target_resolution_cases\":"
-      ++ Conformance.NativeRefinement.targetCasesJson ++ ","
 
 def snapshotGoalMutationCasesJson : String :=
   ""

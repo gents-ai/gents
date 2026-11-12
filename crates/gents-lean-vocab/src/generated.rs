@@ -1297,16 +1297,6 @@ pub struct LeanBackendWakeCase {
     pub wake_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanBackgroundProcessIdentityCase {
-    pub expected_cancel: bool,
-    pub owned_doc: String,
-    pub owned_id: String,
-    pub requested_doc: String,
-    pub requested_id: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanBackgroundTheoremKindField {
     pub key: String,
@@ -2479,37 +2469,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -2697,21 +2656,6 @@ pub struct LeanClientShellCase {
     pub desktop_expected_latest_request_id: Option<usize>,
     pub desktop_expected_turn_state: Option<String>,
     pub desktop_expect_pending_turn: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientSignedControlCase {
-    pub action: String,
-    pub agent: String,
-    pub author: String,
-    pub call: String,
-    pub document: String,
-    pub expected: bool,
-    pub node: String,
-    pub request: String,
-    pub session: String,
-    pub signature_valid: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2947,11 +2891,6 @@ pub struct LeanContractSnapshot {
     pub client_process_claim_cases: Vec<serde_json::Value>,
     pub client_process_receipt_cases: Vec<LeanClientProcessReceiptCase>,
     pub client_control_grant_cases: Vec<serde_json::Value>,
-    pub client_signed_control_cases: Vec<LeanClientSignedControlCase>,
-    pub process_stop_action_cases: Vec<serde_json::Value>,
-    pub background_process_identity_cases: Vec<LeanBackgroundProcessIdentityCase>,
-    pub durable_observation_cases: Vec<LeanDurableObservationCase>,
-    pub plugin_target_resolution_cases: Vec<LeanPluginTargetResolutionCase>,
     pub goal_request_assignment_cases: Vec<LeanGoalRequestAssignmentCase>,
     pub goal_wake_receipt_cases: Vec<LeanGoalWakeReceiptCase>,
     pub goal_tool_context_cases: Vec<LeanGoalToolContextCase>,
@@ -3035,7 +2974,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3683,20 +3621,6 @@ pub struct LeanDispatchPolicySettlement {
     pub started: bool,
     pub failure_class: Option<String>,
     pub completion_accepted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDurableObservationCase {
-    pub cancelled: bool,
-    pub change: String,
-    pub deadline_at: u64,
-    pub expected_feed_open: bool,
-    pub expected_rescan_at: u64,
-    pub expected_wake: String,
-    pub feed_open: bool,
-    pub now: u64,
-    pub rescan_at: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -9234,26 +9158,6 @@ pub struct LeanPluginJobWithin {
 pub struct LeanPluginJobWork {
     pub document: String,
     pub agent: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginTargetResolutionCase {
-    pub bindings: Vec<LeanPluginTargetResolutionCaseBindingsItem>,
-    pub expected_guest_targets: Vec<String>,
-    pub expected_permitted: bool,
-    pub expected_resolved: Option<Vec<String>>,
-    pub ids: Vec<String>,
-    pub target: Vec<String>,
-    pub wire: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginTargetResolutionCaseBindingsItem {
-    pub agent: String,
-    pub node: String,
-    pub wire: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

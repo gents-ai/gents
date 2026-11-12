@@ -1039,18 +1039,12 @@ mod tests {
 
     #[test]
     fn generated_wire_targets_preserve_endpoint_and_permission_identity() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_target_resolution_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
+        gents_lean_vocab::families::native_refinement_target_resolution::replay(|case| {
             let available: Vec<_> = case
                 .bindings
                 .iter()
                 .map(|binding| binding.wire.clone())
                 .collect();
-            assert_eq!(
-                super::super::input::guest_target_ids(&case.ids, &available),
-                case.expected_guest_targets
-            );
             let mut context = base_context();
             context.target_ids = case
                 .bindings
@@ -1062,20 +1056,20 @@ mod tests {
                     )
                 })
                 .collect();
-            let target = (case.target[0].clone(), case.target[1].clone());
-            let expected_resolved = case
-                .expected_resolved
-                .as_ref()
-                .map(|pair| (pair[0].clone(), pair[1].clone()));
-            assert_eq!(
-                resolve_target(&context, &case.wire).cloned(),
-                expected_resolved
-            );
-            assert_eq!(
-                ids_permit(&context, &case.ids, &target),
-                case.expected_permitted
-            );
-        }
+            let target = (case.target.node.clone(), case.target.agent.clone());
+            gents_lean_vocab::families::native_refinement_target_resolution::TargetOutput {
+                guest_targets: super::super::input::guest_target_ids(&case.ids, &available),
+                resolved: resolve_target(&context, &case.wire)
+                    .cloned()
+                    .map(|(node, agent)| {
+                        gents_lean_vocab::families::native_refinement_target_resolution::Endpoint {
+                            node,
+                            agent,
+                        }
+                    }),
+                permitted: ids_permit(&context, &case.ids, &target),
+            }
+        });
     }
 
     fn pin() -> JobPin {

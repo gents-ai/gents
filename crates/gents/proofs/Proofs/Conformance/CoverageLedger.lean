@@ -1824,8 +1824,8 @@ def caseCoverage : List CoverageEntry :=
       "GoalQueueAssignmentCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "durable_observation_cases"
-      "DurableObservationCases")
+      "family"
+      "native_refinement_observation")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "plugin_job_commit_kill_cases"
@@ -1844,20 +1844,20 @@ def caseCoverage : List CoverageEntry :=
       "ClientControlGrantCases")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_signed_control_cases"
-      "ClientSignedControlCases")
+      "family"
+      "native_refinement_signed_control")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "process_stop_action_cases"
-      "ProcessStopActionCases")
+      "family"
+      "native_refinement_stop_action")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "background_process_identity_cases"
-      "BackgroundProcessIdentityCases")
+      "family"
+      "native_refinement_process_identity")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_target_resolution_cases"
-      "PluginTargetResolutionCases")
+      "family"
+      "native_refinement_target_resolution")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
