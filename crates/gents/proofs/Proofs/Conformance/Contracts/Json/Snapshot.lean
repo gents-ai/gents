@@ -83,6 +83,7 @@ import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
 import Proofs.ToolCalls.Identity.ClientAgentJournal
 import Proofs.Conformance.Identity.NodeFileRequests
+import Proofs.Conformance.Identity.RevokeFollowsGrant
 import Proofs.Conformance.PairingOwnedDiff
 import Proofs.Conformance.PairingDataPlane
 import Proofs.Conformance.PairingTick

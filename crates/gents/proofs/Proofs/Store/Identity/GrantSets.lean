@@ -1,4 +1,5 @@
 import Proofs.Store.Identity.NodeProvisioning
+import Proofs.Store.Identity.Household
 
 /-!
 The named node-permission sets Gents issues, who receives each, and the
@@ -39,8 +40,9 @@ def GrantSet.name : GrantSet → String
 
 /-- `agentBaseline` stays `NodeProvisioning.requiredPermissions`. Every Agent
 turn reads its configuration and session documents, writes its requests,
-outputs and tool calls, and links the documents it creates, all as its own
-signer, so no tool selection can be the removable source of these three.
+outputs and tool calls, and links the documents it creates and can withdraw
+those links (`agent_revokes_what_it_grants`), all as its own signer, so no tool
+selection can be the removable source of these.
 Session-history and goal tool sources therefore add nothing beyond the
 baseline: removing those tools withdraws the tool surface, and document ACP
 still decides each document. Goal creation adds only `delete-document`, so a
@@ -334,6 +336,103 @@ theorem baseline_survives_tool_removal (o : AgentObservation) (tools direct : Li
   rw [live, base]
   simp
 
+/-! ### Revoke follows grant
+
+Maintainer decision (2026-11-12, gents#3683): whoever can grant access on a
+document can revoke it. A native relationship change passes two gates: the
+node operation (`add-dac-relation` or `delete-dac-relation`, NAC) and the
+document's manager check (`Household.mayManage`, DAC), which grants and revokes
+share. Every issued set that holds an add operation holds its delete, so an
+actor's revoke is scoped exactly as its grant: the same documents, relations
+and parent chain. Revoking only narrows (`Household.revocation_only_narrows`). -/
+
+/-- Each relationship-management operation and its revoke. -/
+def relationOperationPairs : List (String × String) :=
+  [("add-dac-relation", "delete-dac-relation"), ("add-nac-relation", "delete-nac-relation")]
+
+theorem grant_set_revokes_what_it_grants (g : GrantSet) (add delete : String)
+    (pair : (add, delete) ∈ relationOperationPairs) (holds : add ∈ g.permissions) :
+    delete ∈ g.permissions := by
+  simp only [relationOperationPairs, List.mem_cons, Prod.mk.injEq, List.mem_nil_iff,
+    or_false] at pair
+  rcases pair with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> revert holds <;> cases g <;> decide
+
+theorem holder_revokes_what_it_grants (sets : List GrantSet) (add delete : String)
+    (pair : (add, delete) ∈ relationOperationPairs) (holds : (holderOf sets).holds add = true) :
+    (holderOf sets).holds delete = true := by
+  simp only [Holder.holds, holderOf, Bool.or_eq_true, List.contains_iff_mem, List.mem_flatMap]
+    at holds ⊢
+  rcases holds with admin | ⟨g, member, held⟩
+  · exact Or.inl admin
+  · exact Or.inr ⟨g, member, grant_set_revokes_what_it_grants g add delete pair held⟩
+
+/-- A live managed Agent holds `delete-dac-relation` through its baseline, so
+whatever adds relationships for it, baseline, Tools source or direct grant, it
+can revoke them, given direct grants are issued as whole sets. -/
+theorem agent_revokes_what_it_grants (o : AgentObservation) (tools direct : List String)
+    (directPaired : direct.contains "add-dac-relation" = true →
+      direct.contains "delete-dac-relation" = true)
+    (holds : agentEffective o tools direct "add-dac-relation" = true) :
+    agentEffective o tools direct "delete-dac-relation" = true := by
+  unfold agentEffective at holds ⊢
+  cases added : direct.contains "add-dac-relation"
+  · simp only [added, Bool.false_or, Bool.and_eq_true] at holds
+    simp [holds.1, GrantSet.permissions, NodeProvisioning.requiredPermissions]
+  · rw [directPaired added, Bool.true_or]
+
+def dacOperation (delete : Bool) : String :=
+  if delete then "delete-dac-relation" else "add-dac-relation"
+
+/-- One document relationship change as `actor`, whose node permissions are
+`holds`: the native operation gate, then the document's manager gate. -/
+def relationChangeAdmitted (holds : String → Bool) (state : Household.State) (actor : DID)
+    (relation : Household.Relation) (delete : Bool) : Bool :=
+  holds (dacOperation delete) && Household.mayManage state actor relation
+
+/-- An actor whose add operation is paired with its delete can revoke the
+relationship it just granted. -/
+theorem revoke_follows_grant (holds : String → Bool)
+    (paired : holds "add-dac-relation" = true → holds "delete-dac-relation" = true)
+    (state : Household.State) (actor : DID) (relation : Household.Relation)
+    (granted : relationChangeAdmitted holds state actor relation false = true) :
+    relationChangeAdmitted holds (Household.apply state (.grantAs actor relation)) actor relation
+      true = true := by
+  simp only [relationChangeAdmitted, dacOperation, Bool.and_eq_true, if_false, if_true]
+    at granted ⊢
+  exact ⟨paired granted.1, (Household.grantor_may_revoke state actor relation granted.2).1⟩
+
+theorem issued_sets_revoke_what_they_grant (sets : List GrantSet) (state : Household.State)
+    (actor : DID) (relation : Household.Relation)
+    (granted : relationChangeAdmitted (holderOf sets).holds state actor relation false = true) :
+    relationChangeAdmitted (holderOf sets).holds (Household.apply state (.grantAs actor relation))
+      actor relation true = true :=
+  revoke_follows_grant _ (holder_revokes_what_it_grants sets _ _ (by decide)) state actor relation
+    granted
+
+/-- The Agent's own session, shared with a grantee and then withdrawn. The
+session is agent-owned (`Household.commitAgentSession`); the sibling is another
+baseline Agent of the same Node. -/
+def shareFixture : Household.State :=
+  Household.commitAgentSession
+    { objects := [⟨"nodes", "home", "user"⟩, ⟨"agents", "general", "user"⟩],
+      relations := [⟨"agents", "general", "parent", .object "nodes" "home"⟩],
+      enrolled := ["user", "grantee"] }
+    "agent-session" "agent" "general" true
+
+def shareRelation : Household.Relation :=
+  ⟨"sessions", "agent-session", "reader", .actor "grantee"⟩
+
+theorem baseline_agent_revokes_its_share :
+    let agent := (holderOf (receives .agent)).holds
+    let shared := Household.apply shareFixture (.grantAs "agent" shareRelation)
+    let revoked := Household.apply shared (.revokeAs "agent" shareRelation)
+    relationChangeAdmitted agent shareFixture "agent" shareRelation false = true ∧
+    Household.allowed 5 shared "grantee" "sessions" "agent-session" "read" = true ∧
+    relationChangeAdmitted agent shared "sibling" shareRelation true = false ∧
+    relationChangeAdmitted agent shared "agent" shareRelation true = true ∧
+    Household.allowed 5 revoked "grantee" "sessions" "agent-session" "read" = false := by
+  native_decide
+
 /-! ### The policy resource
 
 The config tool's `policy` resource (`get`, `check`, `explain`, `grant`,
@@ -504,12 +603,12 @@ theorem yolo_receives_agent_baseline_only : receives yoloRecipient = [.agentBase
   decide
 
 /-- No grant set gives it any of the policy delegation's permissions beyond the
-baseline's own `add-dac-relation`, which every Agent holds to create its
-documents. Its self-config Tools still project `delete-dac-relation` and
-`delete-document` as tool-sourced node operations, as the Engineer's do
-(`Identity.Configuration.toolOperationSources`); those grant nothing and
-confer no document ACP, so it manages no NAC relation and reads no NAC
-status. -/
+baseline's own `add-dac-relation` and `delete-dac-relation`, which every
+Agent holds to link its documents and withdraw those links. Its self-config
+Tools still project `delete-document` as a tool-sourced node operation, as the
+Engineer's do (`Identity.Configuration.toolOperationSources`); that grants
+nothing and confers no document ACP, so it manages no NAC relation and reads no
+NAC status. -/
 theorem yolo_holds_no_policy_delegate_permission :
     (GrantSet.policyDelegate.permissions.filter
         (fun p => !GrantSet.agentBaseline.permissions.contains p)).all
