@@ -138,7 +138,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     ] {
         let case = modeled
             .iter()
-            .find(|case| case["name"] == name)
+            .find(|case| case.name == name)
             .expect("modeled creator");
         create_run(
             actor,
@@ -151,7 +151,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
         .with_context(|| format!("creating {name} run"))?;
         assert_eq!(
             load_run(&access, runtime.did(), name).await?.is_some(),
-            case["expected_user_read"].as_bool().unwrap()
+            case.expected_user_read
         );
         assert!(
             invalidate_run(&access, runtime.did(), name, user.did(), "not creator")
@@ -172,13 +172,13 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     .context("creating held non-owner writer run")?;
     let agent_model = modeled
         .iter()
-        .find(|case| case["name"] == "agent-creator")
+        .find(|case| case.name == "agent-creator")
         .expect("modeled creator");
     assert_eq!(
         load_run(&access, runtime.did(), "agent-run")
             .await?
             .is_some(),
-        agent_model["expected_user_read"].as_bool().unwrap()
+        agent_model.expected_user_read
     );
     assert!(invalidate_run(
         &access,
@@ -199,7 +199,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     .await?;
     let foreign_model = modeled
         .iter()
-        .find(|case| case["name"] == "foreign-node")
+        .find(|case| case.name == "foreign-node")
         .expect("modeled unavailable Node");
     assert!(create_run(
         &outsider_access,
@@ -214,7 +214,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
         load_run(&outsider_access, runtime.did(), "orphan")
             .await?
             .is_some(),
-        foreign_model["expected_created"].as_bool().unwrap()
+        foreign_model.expected_created
     );
     let definition = json!({
         "node_did":runtime.did(), "definition_id":"definition",
@@ -321,7 +321,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     ] {
         let case = modeled
             .iter()
-            .find(|case| case["name"] == name)
+            .find(|case| case.name == name)
             .expect("modeled case");
         let query = format!(
             "{{ {collection}(filter: {{ {id_field}: {{ _eq: \"{name}\" }} }}) {{ _docID }} }}"
@@ -332,7 +332,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
             .is_some_and(|rows| !rows.is_empty());
         assert_eq!(
             visible,
-            case["expected_user_read"].as_bool().unwrap(),
+            case.expected_user_read,
             "{name} user visibility"
         );
         let doc_id = own["data"][collection][0]["_docID"]
@@ -360,7 +360,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
             .is_some_and(|rows| !rows.is_empty());
         assert_eq!(
             foreign_visible,
-            case["expected_stranger_read"].as_bool().unwrap(),
+            case.expected_stranger_read,
             "{name} outsider visibility"
         );
     }
