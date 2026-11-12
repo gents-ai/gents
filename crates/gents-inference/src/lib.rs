@@ -15,6 +15,7 @@ pub mod resolved;
 pub mod test_support;
 pub mod trace_context;
 pub mod usage_observation;
+pub mod views;
 
 #[cfg(test)]
 mod documents_selection_tests;

@@ -264,56 +264,33 @@ impl ConfigCommandTool {
         if id == current {
             return Ok(id.to_owned());
         }
-        let owner = self.node_did.clone();
-        let candidates = [id.to_owned()];
-        let listing = format!(
-            "{{ Agent(filter: {{node_did: {{_eq: \"{}\"}}}}) {{agent_did display_name}} }}",
-            escape_graphql_string(&owner)
-        );
-        let found = gents_store::config_client::ConfigAccess::transact_local_readonly(
-            &self.node,
-            Some(self.core.identity()?),
-            "self_config.resolve_agent",
-            |txn| {
-                let owner = owner.clone();
-                let candidates = candidates.clone();
-                let listing = listing.clone();
-                Box::pin(async move {
-                    for candidate in candidates {
-                        if ops::read_owned_doc(txn, SelfConfigTarget::Agent, &owner, &candidate)
-                            .await?
-                            .is_some()
-                        {
-                            return Ok::<_, anyhow::Error>(Ok(candidate));
-                        }
-                    }
-                    Ok(Err(txn.execute(&listing).await?))
-                })
-            },
-        )
-        .await?;
-        found.map_err(|listing| {
-            let mut suggestions =
-                gents_protocol::graphql::graphql_rows_from_response(&listing, "Agent")
-                    .into_iter()
-                    .filter_map(|row| {
-                        let agent_did = row.get("agent_did")?.as_str()?;
-                        let display_name = row.get("display_name").and_then(Value::as_str);
-                        [Some(agent_did), display_name]
-                            .into_iter()
-                            .flatten()
-                            .any(|name| name.eq_ignore_ascii_case(id))
-                            .then(|| agent_did.to_owned())
-                    })
-                    .collect::<Vec<_>>();
-            suggestions.sort();
-            suggestions.dedup();
-            ops::MissingAgent {
-                agent_did: id.to_owned(),
-                suggestions,
-            }
-            .into()
-        })
+        let rows = self
+            .core
+            .access()?
+            .read_view(&gents_documents::views::agents::AgentList::new(
+                &self.node_did,
+            ))
+            .await?;
+        if rows.iter().any(|row| row.agent.agent_did == id) {
+            return Ok(id.to_owned());
+        }
+        let suggestions = rows
+            .into_iter()
+            .filter_map(|row| {
+                let agent = row.agent;
+                (agent.agent_did.eq_ignore_ascii_case(id)
+                    || agent
+                        .display_name
+                        .as_deref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(id)))
+                .then_some(agent.agent_did)
+            })
+            .collect();
+        Err(ops::MissingAgent {
+            agent_did: id.to_owned(),
+            suggestions,
+        }
+        .into())
     }
 
     fn agent_signer(&self) -> Result<&dyn NodeIdentity> {
