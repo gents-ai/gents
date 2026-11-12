@@ -924,6 +924,12 @@ pub(super) async fn install_documents_report(
             anyhow::Ok((home, owner, local))
         }
         .await?;
+        // Refused before anything is resolved or written.
+        let reviewed = args
+            .root_agents
+            .as_deref()
+            .map(wire::reviewed_root_agents)
+            .transpose()?;
         let dependencies = resolve_dependencies(pack, args).await?;
         // The root pack and its dependencies: the packs whose records the
         // grant reads, whichever install first put them on the node.
@@ -953,14 +959,7 @@ pub(super) async fn install_documents_report(
             // back, or with none given the rows of this install's own plan,
             // which its receipt lists and `--grant-authority` approves.
             let planned = wire::take_planned_root_agents(&mut output);
-            let shown = match &args.root_agents {
-                Some(reviewed) => reviewed
-                    .iter()
-                    .filter_map(|pair| pair.split_once('='))
-                    .map(|(pack, agent)| (pack.to_owned(), agent.to_owned()))
-                    .collect(),
-                None => planned,
-            };
+            let shown = reviewed.unwrap_or(planned);
             let supplied = gents::pack::installer_tool_root(&access, &owner, None).await;
             let readers = match supplied {
                 Ok(supplied) => {

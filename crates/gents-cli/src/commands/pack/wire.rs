@@ -408,6 +408,24 @@ pub(crate) fn take_planned_root_agents(result: &mut Value) -> Vec<(String, Strin
     shown_root_agents(&rows)
 }
 
+/// The `PACK=AGENT` rows a review named back (`--root-agent`), as pairs. A
+/// value that is not one is refused: dropped, it would silently leave an
+/// agent the approver meant ungranted.
+pub(crate) fn reviewed_root_agents(reviewed: &[String]) -> Result<Vec<(String, String)>> {
+    reviewed
+        .iter()
+        .map(|pair| {
+            let (pack, agent) = pair
+                .split_once('=')
+                .filter(|(pack, agent)| !pack.is_empty() && !agent.is_empty())
+                .with_context(|| {
+                    format!("--root-agent {pair:?} is not NAMESPACE/PACK=AGENT, a row of a preview's host_tool_roots.rows")
+                })?;
+            Ok((pack.to_owned(), agent.to_owned()))
+        })
+        .collect()
+}
+
 /// The `(pack, agent)` pairs of report rows ([`root_agent_rows`]).
 fn shown_root_agents(rows: &Value) -> Vec<(String, String)> {
     rows.as_array()
@@ -702,6 +720,22 @@ mod next_command_tests {
         );
         assert_eq!(result, serde_json::json!({"pack": "hands"}));
         assert!(super::take_planned_root_agents(&mut result).is_empty());
+    }
+
+    /// A reviewed row that is not `PACK=AGENT` is refused, not dropped.
+    #[test]
+    fn a_malformed_reviewed_row_is_refused() {
+        assert_eq!(
+            super::reviewed_root_agents(&["acme/hands=hands-worker".to_owned()]).unwrap(),
+            [("acme/hands".to_owned(), "hands-worker".to_owned())]
+        );
+        for malformed in ["acme/hands", "=hands-worker", "acme/hands="] {
+            let refusal = super::reviewed_root_agents(&[malformed.to_owned()]).unwrap_err();
+            assert!(
+                format!("{refusal:#}").contains("NAMESPACE/PACK=AGENT"),
+                "{refusal:#}"
+            );
+        }
     }
 
     #[test]
