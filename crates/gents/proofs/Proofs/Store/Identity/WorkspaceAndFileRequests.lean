@@ -159,12 +159,6 @@ theorem quickstart_creator_resolves_only_selected_agent :
     Household.allowed 8 quickstartSelectedAgentFixture "other" "agents" "target" "read" = false ∧
     Household.allowed 8 quickstartSelectedAgentRevoked "creator" "agents" "target" "read" = false := by native_decide
 
-def quickstartSelectedAgentCasesJson : String :=
-  (Lean.toJson (["user", "creator", "other"].map fun actor => Lean.Json.mkObj
-    [("actor", Lean.toJson actor),
-     ("before", Lean.toJson (Household.allowed 8 quickstartSelectedAgentFixture actor "agents" "target" "read")),
-     ("after_revocation", Lean.toJson (Household.allowed 8 quickstartSelectedAgentRevoked actor "agents" "target" "read"))])).compress
-
 /-- A filtered or malformed physical request is not proof that an exclusive
 workspace binding is stale. Release requires a visible terminal request. -/
 def mayReleaseExclusive (visible terminal : Bool) : Bool := visible && terminal
@@ -336,18 +330,6 @@ def quickstartRepositoryRead (state : Household.State) (actor : String) : Bool :
 
 theorem repository_reader_revocation_survives_reuse :
     quickstartRepositoryRead revokedWorkspaceRepository "agent" = false := by native_decide
-
-def workspaceQuickstartCasesJson : String :=
-  (Lean.toJson (["user", "agent", "other"].map fun actor => Lean.Json.mkObj
-    [("actor", Lean.toJson actor),
-     ("before", Lean.toJson (quickstartRepositoryRead workspaceRepositoryFixture actor)),
-     ("after_revoke", Lean.toJson (quickstartRepositoryRead revokedWorkspaceRepository actor)),
-     ("aborted_document_visible", Lean.toJson (Identity.NodeFileRequests.publish false).document)])).compress
-
-def workspaceLivenessCasesJson : String :=
-  (Lean.toJson ([false, true].flatMap fun visible => [false, true].map fun terminal =>
-    Lean.Json.mkObj [("visible", Lean.toJson visible), ("terminal", Lean.toJson terminal),
-      ("may_release", Lean.toJson (mayReleaseExclusive visible terminal))])).compress
 
 def workspaceAgentSelectionCasesJson : String :=
   let cases : List (String × Option WorkspaceAgentSelection) :=

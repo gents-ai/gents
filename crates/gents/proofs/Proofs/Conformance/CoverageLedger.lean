@@ -1420,8 +1420,8 @@ def caseCoverage : List CoverageEntry :=
       "PrivateJournalPolicy")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "workspace_liveness_cases"
-      "WorkspaceLivenessCases"
+      "family"
+      "workspace_and_file_requests_liveness"
       "Checks native filtered absence before exclusive release; complete workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1435,8 +1435,8 @@ def caseCoverage : List CoverageEntry :=
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
-      "workspace_quickstart_selection_cases"
-      "WorkspaceQuickstartSelectionCases")
+      "family"
+      "workspace_and_file_requests_quickstart_selection")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "family"
@@ -1484,8 +1484,8 @@ def caseCoverage : List CoverageEntry :=
       "Checks duplicate publication after revocation and a stale retry after cleanup has begun.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_quickstart_cases"
-      "WorkspaceQuickstartCases"
+      "family"
+      "workspace_and_file_requests_quickstart_repository"
       "Covers user-signed repository publication, Agent visibility, outsider isolation and revocation; host provisioning follows reservation.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
@@ -1836,8 +1836,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientProcessClaimCases")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_process_receipt_cases"
-      "ClientProcessReceiptCases")
+      "family"
+      "native_refinement_client_process_receipt")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_control_grant_cases"
@@ -2493,13 +2493,13 @@ def caseCoverage : List CoverageEntry :=
       "Replay these cases through the production Workspace binding admission owner after node-field migration; do not restore the deleted test-local binding predicate.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "callback_cases"
-      "CallbackCases"
+      "family"
+      "contracts_callback_journal"
       "Generated journal-prefix observations exercise the actual journal owner. Invocation-state legality, denied execution and result-emission ordering need the callback executor consumer; the removed Rust predicate copy did not establish them.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "callback_retry_cases"
-      "CallbackRetryCases")
+      "family"
+      "contracts_callback_retry")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "callback_recovery_cases"

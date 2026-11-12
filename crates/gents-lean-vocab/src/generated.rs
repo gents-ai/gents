@@ -45,16 +45,8 @@ pub fn lean_budget_rehydration_cases() -> &'static [LeanBudgetRehydrationCase] {
     &lean_contract_snapshot().budget_rehydration_cases
 }
 
-pub fn lean_callback_cases() -> &'static [LeanCallbackCase] {
-    &lean_contract_snapshot().callback_cases
-}
-
 pub fn lean_callback_recovery_cases() -> &'static [LeanCallbackRecoveryCase] {
     &lean_contract_snapshot().callback_recovery_cases
-}
-
-pub fn lean_callback_retry_cases() -> &'static [LeanCallbackRetryCase] {
-    &lean_contract_snapshot().callback_retry_cases
 }
 
 pub fn lean_canonical_dispatch_observation_cases() -> &'static [LeanDispatchObservationCase] {
@@ -1342,19 +1334,6 @@ pub struct LeanBudgetRehydrationCase {
     pub ledger: Option<LeanRehydratedBudget>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LeanCallbackCase {
-    pub agent_did: String,
-    pub journal_prefix_legal: bool,
-    pub name: String,
-    pub invocation_id: String,
-    pub owner_node_did: String,
-    pub state: String,
-    pub journal: Vec<String>,
-    pub result_emitted: bool,
-    pub legal: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanCallbackRecoveryCase {
     pub name: String,
@@ -1367,17 +1346,6 @@ pub struct LeanCallbackRecoveryCase {
     pub deny_post_state: String,
     pub deny_post_journal: Vec<String>,
     pub retry_allowed_after_deny: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackRetryCase {
-    pub name: String,
-    pub state: String,
-    pub journal: Vec<String>,
-    pub attempts: u32,
-    pub max_attempts: u32,
-    pub allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2479,20 +2447,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientProcessReceiptCase {
-    pub agent: String,
-    pub author: String,
-    pub call: String,
-    pub document: String,
-    pub expected: bool,
-    pub intent_doc: String,
-    pub observed_result: String,
-    pub signature_valid: bool,
-    pub signed_result: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientRequestCacheIdentityCase {
     pub current: Vec<LeanClientRequestCacheIdentityCaseCurrentItem>,
     pub expected_rows: Vec<LeanClientRequestCacheIdentityCaseExpectedRowsItem>,
@@ -2914,7 +2868,6 @@ pub struct LeanContractSnapshot {
     pub goal_continuation_assignment_cases: Vec<LeanGoalContinuationAssignmentCase>,
     pub plugin_job_commit_kill_cases: Vec<LeanPluginJobCommitKillCase>,
     pub client_process_claim_cases: Vec<serde_json::Value>,
-    pub client_process_receipt_cases: Vec<LeanClientProcessReceiptCase>,
     pub client_control_grant_cases: Vec<serde_json::Value>,
     pub client_signed_control_cases: Vec<LeanClientSignedControlCase>,
     pub process_stop_action_cases: Vec<serde_json::Value>,
@@ -3017,9 +2970,7 @@ pub struct LeanContractSnapshot {
     pub mailbox_runtime_notice_case: serde_json::Value,
     pub mailbox_claimed_recipient_cases: Vec<LeanMailboxClaimedRecipientCase>,
     pub workspace_agent_selection_cases: Vec<serde_json::Value>,
-    pub workspace_liveness_cases: Vec<LeanWorkspaceLivenessCase>,
     pub workspace_child_cases: Vec<LeanWorkspaceChildCase>,
-    pub workspace_quickstart_selection_cases: Vec<LeanWorkspaceQuickstartSelectionCase>,
     pub pack_placement_reader_cases: Vec<LeanPackPlacementReaderCase>,
     pub native_route_cases: Vec<LeanNativeRouteCase>,
     pub workspace_datastore_write_cases: Vec<LeanWorkspaceDatastoreWriteCase>,
@@ -3028,7 +2979,6 @@ pub struct LeanContractSnapshot {
     pub workspace_admission_cases: Vec<LeanWorkspaceAdmissionCase>,
     pub workspace_cleanup_cases: Vec<LeanWorkspaceCleanupCase>,
     pub workspace_publication_cases: LeanWorkspacePublicationCases,
-    pub workspace_quickstart_cases: Vec<LeanWorkspaceQuickstartCase>,
     pub mailbox_native_policy: serde_json::Value,
     pub session_input_edit_native_discovery_cases: Vec<
         LeanSessionInputEditNativeDiscoveryCase,
@@ -3403,8 +3353,6 @@ pub struct LeanContractSnapshot {
     pub pack_eval_subject_cases: Vec<LeanPackEvalSubjectCase>,
     pub workspace_cases: Vec<LeanWorkspaceCase>,
     pub workspace_binding_cases: Vec<LeanWorkspaceBindingCase>,
-    pub callback_cases: Vec<LeanCallbackCase>,
-    pub callback_retry_cases: Vec<LeanCallbackRetryCase>,
     pub callback_recovery_cases: Vec<LeanCallbackRecoveryCase>,
     pub event_delivery_transition_case_count: usize,
     pub event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
@@ -12303,14 +12251,6 @@ pub struct LeanWorkspaceDatastoreWriteCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanWorkspaceLivenessCase {
-    pub may_release: bool,
-    pub terminal: bool,
-    pub visible: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanWorkspacePathAliasCase {
     pub base_paths: Vec<String>,
     pub base_prefixes: Vec<Vec<String>>,
@@ -12519,23 +12459,6 @@ pub struct LeanWorkspacePublicationCases {
     pub revoked_reader_restored: bool,
     pub revoked_writer_restored: bool,
     pub stale_publication_allowed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspaceQuickstartCase {
-    pub aborted_document_visible: bool,
-    pub actor: String,
-    pub after_revoke: bool,
-    pub before: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspaceQuickstartSelectionCase {
-    pub actor: String,
-    pub after_revocation: bool,
-    pub before: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

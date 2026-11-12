@@ -118,9 +118,10 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         .unwrap()
         .to_owned();
     let quickstart_cases =
-        &gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_selection_cases;
-    for case in quickstart_cases {
-        let actor = match case.actor.as_str() {
+        gents_lean_vocab::families::workspace_and_file_requests_quickstart_selection::cases();
+    let mut selected_before = Vec::new();
+    for case in &quickstart_cases {
+        let actor = match case.input.actor.as_str() {
             "user" => &operator,
             "creator" => &access,
             "other" => &outsider_access,
@@ -130,7 +131,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .as_array()
             .unwrap()
             .is_empty();
-        assert_eq!(visible, case.before, "{case:?}");
+        selected_before.push(visible);
     }
     let modeled = gents_lean_vocab::lean_workspace_cases()
         .iter()
@@ -228,8 +229,11 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let repository_doc = repository["data"]["RepositoryPlacement"][0]["_docID"]
         .as_str()
         .unwrap();
-    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_cases {
-        let actor = match case.actor.as_str() {
+    let repository_cases =
+        gents_lean_vocab::families::workspace_and_file_requests_quickstart_repository::cases();
+    let mut repository_before = Vec::new();
+    for case in &repository_cases {
+        let actor = match case.input.actor.as_str() {
             "user" => &operator,
             "agent" => &access,
             "other" => &outsider_access,
@@ -239,13 +243,11 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .execute("{RepositoryPlacement {_docID}}")
             .await
             .unwrap();
-        assert_eq!(
+        repository_before.push(
             !rows["data"]["RepositoryPlacement"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            case.before,
-            "{case:?}"
         );
     }
     // Commit history is read as the signing User; the node has no fallback.
@@ -293,18 +295,23 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     provision_read_only_workspace(&operator, &access, &fx.repo, &fx.base_sha, &selection)
         .await
         .unwrap();
-    for case in quickstart_cases {
-        let actor = match case.actor.as_str() {
+    for (case, before) in quickstart_cases.iter().zip(selected_before) {
+        let actor = match case.input.actor.as_str() {
             "user" => &operator,
             "creator" => &access,
             "other" => &outsider_access,
             name => panic!("unknown modeled actor {name}"),
         };
-        let visible = !actor.execute(&target_query).await.unwrap()["data"]["Agent"]
+        let after_revocation = !actor.execute(&target_query).await.unwrap()["data"]["Agent"]
             .as_array()
             .unwrap()
             .is_empty();
-        assert_eq!(visible, case.after_revocation, "{case:?}");
+        case.check(
+            gents_lean_vocab::families::workspace_and_file_requests_quickstart_selection::QuickstartSelectionOutput {
+                before,
+                after_revocation,
+            },
+        );
     }
     operator
         .delete_actor_relationship(
@@ -330,8 +337,9 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .is_empty(),
         "quickstart replay restored the revoked repository reader"
     );
-    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_cases {
-        let actor = match case.actor.as_str() {
+    let mut repository_after_revoke = Vec::new();
+    for case in &repository_cases {
+        let actor = match case.input.actor.as_str() {
             "user" => &operator,
             "agent" => &access,
             "other" => &outsider_access,
@@ -341,13 +349,11 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .execute("{RepositoryPlacement {_docID}}")
             .await
             .unwrap();
-        assert_eq!(
+        repository_after_revoke.push(
             !rows["data"]["RepositoryPlacement"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            case.after_revoke,
-            "{case:?}"
         );
     }
     let unpublished = fx._root.path().join("unpublished-repository");
@@ -375,11 +381,19 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         .unwrap()
         .len()
         > 1;
-    assert_eq!(
-        created_after_abort,
-        gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_cases[0]
-            .aborted_document_visible
-    );
+    for ((case, before), after_revoke) in repository_cases
+        .iter()
+        .zip(repository_before)
+        .zip(repository_after_revoke)
+    {
+        case.check(
+            gents_lean_vocab::families::workspace_and_file_requests_quickstart_repository::QuickstartRepositoryOutput {
+                before,
+                after_revoke,
+                aborted_document_visible: created_after_abort,
+            },
+        );
+    }
     for collection in [
         "AgentRequest",
         "AgentMessage",
