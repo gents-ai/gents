@@ -110,7 +110,7 @@ pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
 
 #[tokio::test]
 async fn generated_goal_reset_resume_cases_drive_real_transactions() {
-    for modeled in family::cases::<String, String>() {
+    for modeled in gents_lean_vocab::families::goal_reset_resume_contracts_reset::cases::<String, String>() {
         let case = &modeled.input;
         let before = serde_json::to_value(&case.before).unwrap();
         let f = Fixture::new(&before).await;
