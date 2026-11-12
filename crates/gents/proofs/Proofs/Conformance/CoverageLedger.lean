@@ -1818,8 +1818,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalRequestAncestryCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_queue_assignment_cases"
-      "GoalQueueAssignmentCases")
+      "family"
+      "goal_queue_assignment_contracts_fold_decision")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_queue_assignment_contracts_steer_decision")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "durable_observation_cases"
