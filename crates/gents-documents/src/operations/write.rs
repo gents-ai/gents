@@ -25,6 +25,20 @@ pub fn decide_write(mode: WriteMode, stored: bool) -> WriteOutcome {
     }
 }
 
+/// The patch a client holding the whole typed document stands for: every
+/// writable field set to the document's value, an empty one cleared.
+pub fn whole_document_patch<T>(target: SelfConfigTarget, document: &T) -> anyhow::Result<SelfConfigPatch>
+where
+    T: serde::Serialize,
+{
+    let value = serde_json::to_value(document)?;
+    Ok(target
+        .writable_fields()
+        .into_iter()
+        .map(|field| (field.to_owned(), value.get(field).cloned()))
+        .collect())
+}
+
 pub struct DocumentWrite<'a> {
     pub target: SelfConfigTarget,
     pub owner: &'a str,

@@ -96,7 +96,7 @@ pub(crate) use backed_request::{
     stage_goal_backed_request_in_txn, stage_goal_backed_request_with_identity_in_txn,
 };
 pub use backed_request::{
-    submit_goal_backed_request, submit_goal_backed_request_local, GoalBackedRequestDisposition,
+    submit_goal_backed_request, GoalBackedRequestDisposition,
 };
 pub use controller::{
     claim_continuation_from_access, claim_retry_continuation_from_access,

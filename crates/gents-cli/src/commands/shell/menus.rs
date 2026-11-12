@@ -194,9 +194,11 @@ pub(super) async fn act(
                 Doc::RemoteTool => delete_tool_service_registry_on(&access, node_did, id).await,
                 Doc::Task => return Err(NOT_WIRED.to_string()),
             };
-            deleted
-                .map(|_| format!("Deleted {label}"))
-                .map_err(|error| format!("Couldn’t delete {label}: {error:#}"))
+            match deleted {
+                Ok(0) => Err(format!("Couldn’t delete {label}: it no longer exists")),
+                Ok(_) => Ok(format!("Deleted {label}")),
+                Err(error) => Err(format!("Couldn’t delete {label}: {error:#}")),
+            }
         }
         MenuAct::Dismiss { item } => {
             gents_session::operations::mailbox::dismiss(&access, item)

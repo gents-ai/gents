@@ -254,12 +254,7 @@ pub async fn save(
 /// The fields a whole service document sets and clears, for a client that
 /// saves one.
 pub fn document_patch(document: &ToolServiceRegistry) -> anyhow::Result<SelfConfigPatch> {
-    let value = serde_json::to_value(document)?;
-    Ok(SelfConfigTarget::ToolServiceRegistry
-        .writable_fields()
-        .into_iter()
-        .map(|field| (field.to_owned(), value.get(field).cloned()))
-        .collect())
+    super::write::whole_document_patch(SelfConfigTarget::ToolServiceRegistry, document)
 }
 
 /// Deletes one MCP service of `owner` through the one document delete.
