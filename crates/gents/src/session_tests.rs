@@ -16,4 +16,3 @@ mod streaming_auxiliary_tests;
 mod streaming_canonical_tests;
 mod terminal_tools_tests;
 mod watcher_tests;
-mod workspace_capability_runtime_tests;

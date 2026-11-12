@@ -1,5 +1,5 @@
+use crate::workspace::{action_journal_prefix_legal, retry_allowed, ActionJournalEntry};
 use gents_lean_vocab::{lean_callback_cases, lean_callback_retry_cases};
-use gents_session::workspace::{action_journal_prefix_legal, retry_allowed, ActionJournalEntry};
 
 fn journal(states: &[String]) -> Vec<ActionJournalEntry> {
     states

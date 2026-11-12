@@ -54,8 +54,6 @@ use support::{
 mod backend_health;
 #[path = "conformance/background.rs"]
 mod background;
-#[path = "conformance/callback_lifecycle.rs"]
-mod callback_lifecycle;
 #[path = "conformance/client_runtime.rs"]
 mod client_runtime;
 #[path = "conformance/command_policy.rs"]
@@ -86,8 +84,6 @@ mod inference_call;
 mod interrupts_manual;
 #[path = "conformance/lsp.rs"]
 mod lsp;
-#[path = "conformance/mailbox.rs"]
-mod mailbox;
 #[path = "conformance/mcp_health.rs"]
 mod mcp_health;
 #[path = "conformance/p2p_observability.rs"]

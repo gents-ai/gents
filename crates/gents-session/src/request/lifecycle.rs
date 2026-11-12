@@ -1011,3 +1011,6 @@ mod tests {
         assert_eq!(request["failure_reason"], "setup failed");
     }
 }
+
+#[cfg(test)]
+mod pushdown_tests;
