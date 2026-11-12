@@ -433,4 +433,57 @@ theorem wait_boundary_never_cancels
     (observeBoundary state boundary).cancellationRequested = false := by
   rfl
 
+/-- A client stop and the owner's completion race for one running invocation. A
+live worker that released and exited settles as stopped, so the stop reports a
+cancellation with its live execution cancelled. -/
+def raceStop : ManagedExec.StopOutcome := settleLiveCancel true .exited
+
+/-- The row a client stop observes: running when the stop comes first, the
+already committed completion otherwise. -/
+def stopObserves (cancelFirst : Bool) : ToolExecution.ToolCallState :=
+  if cancelFirst then .running else .completed
+
+def raceRow (cancelFirst : Bool) : ToolExecution.ToolCallState :=
+  match stopAction (stopObserves cancelFirst) with
+  | .stopProcess => stopSettlement raceStop
+  | _ => stopObserves cancelFirst
+
+def stopCancelled (cancelFirst : Bool) : Bool :=
+  match stopAction (stopObserves cancelFirst) with
+  | .stopProcess => ManagedExec.cancelReply raceStop == .cancelled
+  | _ => false
+
+def liveExecutionCancelled (cancelFirst : Bool) : Option Bool :=
+  match stopAction (stopObserves cancelFirst) with
+  | .stopProcess => some true
+  | _ => none
+
+def alreadyTerminalState (cancelFirst : Bool) : Option String :=
+  match stopAction (stopObserves cancelFirst) with
+  | .reportTerminal => some (stopObserves cancelFirst).toDefraDB
+  | _ => none
+
+/-- A completion commits only from a running row, as `ToolCallContext.step?`
+`.complete` requires; the late completion observes the row the stop left. -/
+def completionObserves (cancelFirst : Bool) : ToolExecution.ToolCallState :=
+  if cancelFirst then raceRow true else .running
+
+def completionAccepted (observed : ToolExecution.ToolCallState) : Bool :=
+  observed == .running
+
+def refusedAsTerminal : ToolExecution.ToolCallState → Bool
+  | .completed | .failed | .timedOut | .cancelled => true
+  | _ => false
+
+theorem client_cancel_and_completion_preserve_each_winning_terminal :
+    (raceRow true = .cancelled ∧ stopCancelled true = true ∧
+      liveExecutionCancelled true = some true ∧ alreadyTerminalState true = none ∧
+      completionAccepted (completionObserves true) = false ∧
+      refusedAsTerminal (completionObserves true) = true) ∧
+    (raceRow false = .completed ∧ stopCancelled false = false ∧
+      liveExecutionCancelled false = none ∧ alreadyTerminalState false = some "completed" ∧
+      completionAccepted (completionObserves false) = true ∧
+      refusedAsTerminal (completionObserves false) = false) := by
+  decide
+
 end Background.ProcessControl

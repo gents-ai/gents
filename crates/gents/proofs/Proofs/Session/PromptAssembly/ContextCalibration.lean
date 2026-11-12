@@ -78,6 +78,19 @@ def State.ratio (s : State) : Nat :=
   | [] => s.prior
   | first :: rest => rest.foldl max first
 
+/-- The ratio `State.observe` reports for one observation: the ratio in effect
+after it when the observation is usable, none when it is ignored. -/
+def State.reading (s : State) (observedInput estimatedInput : Nat) : Option Nat :=
+  match observedRatio observedInput estimatedInput with
+  | some _ => some (s.observe observedInput estimatedInput).ratio
+  | none => none
+
+def observeReadings : State → List (Nat × Nat) → List (Option Nat)
+  | _, [] => []
+  | s, (observedInput, estimatedInput) :: rest =>
+    s.reading observedInput estimatedInput ::
+      observeReadings (s.observe observedInput estimatedInput) rest
+
 def calibrated (raw ratio : Nat) : Nat :=
   ceilDiv (raw * max ratio unitRatio) unitRatio
 
@@ -226,5 +239,19 @@ theorem admission_iff_over_budget
   · simp [h]
   · simp [h]
     omega
+
+/-- A calibrated count scales up by the ratio and never down, rounds up, and
+the ratio is floored at one and capped at the malformed-usage clamp. Zero
+observations are ignored, and a higher observation sets the ratio at once. -/
+theorem calibration_scales_up_and_never_down :
+    calibrated 561000 (seed 18000 []).ratio = 1009800 ∧
+    calibrated 3 (seed 15000 []).ratio = 5 ∧
+    calibrated 1000 (seed 5000 []).ratio = 1000 ∧
+    (seed 1 []).ratio = unitRatio ∧
+    observeReadings (seed 1 []) [(500, 1000), (1000000, 1), (0, 1000), (1000, 0)] =
+      [some unitRatio, some maxRatio, none, none] ∧
+    ([(500, 1000), (1000000, 1), (0, 1000), (1000, 0)].foldl
+      (fun (s : State) (p : Nat × Nat) => s.observe p.1 p.2) (seed 1 [])).ratio = maxRatio := by
+  decide
 
 end PromptAssembly.ContextCalibration

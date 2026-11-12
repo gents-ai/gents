@@ -1354,8 +1354,8 @@ representable; provider-input sanitation owns the stricter boundary.
 
 A selected-session read is a direct runtime read (`directSessionRead`): an
 absent or hidden session is an ordinary empty result, and only a duplicate or
-out-of-scope row is an integrity fault. `client_direct_session_read_cases`
-emits it for the desktop-core selected-session reader.
+out-of-scope row is an integrity fault. `Conformance.ClientSessionDelivery.directRead`
+replays it for the desktop-core selected-session reader.
 
 `client-state-machine.md` and external fixtures still need migration to this
 target contract.
@@ -1761,7 +1761,7 @@ completion is gated by that same observed decision before the existing Goal
 status/sequence CAS; explicit operator controls are unchanged.
 
 The model proves outsider exclusion and duplicate observation stability, with
-11 generated `logical_output_obligation_cases` covering inherited eligibility,
+11 generated `logical_output_obligation_contracts_gate` cases covering inherited eligibility,
 combined writes, invalid edges, failed/duplicate observations, scopes and dynamic
 counts. The generated consumer uses signed requests and durable tool-call rows;
 a hook regression also checks actual model Goal completion. Existing expected
