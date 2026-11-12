@@ -68,3 +68,14 @@ impl BuildStanding {
         }
     }
 }
+
+/// Adopt the durable `NodeReadiness` row a previous process left behind,
+/// demoting its process state so no reader projects a dead process as ready.
+/// A serving host calls this before it opens client access.
+pub async fn claim_startup_readiness(
+    node: &std::sync::Arc<defra_node::Node>,
+    node_did: &str,
+) -> anyhow::Result<()> {
+    crate::runtime::node_readiness_publisher::claim_node_readiness_for_new_process(node, node_did)
+        .await
+}

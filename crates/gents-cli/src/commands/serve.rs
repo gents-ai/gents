@@ -476,6 +476,23 @@ async fn wait_for_embedded_http_bind(
     }
 }
 
+/// Test seam. When `GENTS_TEST_STALL_AFTER_CLIENT_ACCESS` names a FIFO, serve
+/// blocks on opening it for reading until a test opens the writing end, which
+/// holds the process in the window between opening client access and the
+/// runtime's first readiness publish. That window is otherwise a race, and a
+/// test that waited for it by elapsed time would prove nothing. The variable is
+/// never set outside this repository's tests; unset, this returns immediately
+/// and serve behaves exactly as it would without it.
+async fn stall_after_client_access_for_tests() -> Result<()> {
+    let Some(path) = std::env::var_os("GENTS_TEST_STALL_AFTER_CLIENT_ACCESS") else {
+        return Ok(());
+    };
+    tokio::fs::File::open(&path)
+        .await
+        .with_context(|| format!("opening the configured startup stall {path:?}"))?;
+    Ok(())
+}
+
 async fn serve_foreground(
     mut args: ServeArgs,
     executor: tokio::runtime::Handle,
@@ -760,7 +777,11 @@ async fn serve_foreground(
                     .context("checking the configured host tool root against published WorkspaceRoot documents")?;
             }
         }
+        gents::runtime::startup_readiness::claim_startup_readiness(&node, identity.did())
+            .await
+            .context("claiming the readiness this home's previous process left behind")?;
         client_access_ready.store(true, std::sync::atomic::Ordering::Release);
+        stall_after_client_access_for_tests().await?;
         gents::store::local::store_key::upgrade::finish(&data_dir)?;
         let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
             .await

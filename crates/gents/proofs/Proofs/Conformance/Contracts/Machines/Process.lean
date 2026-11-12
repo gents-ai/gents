@@ -15,6 +15,7 @@ def processActions : List (String × ProcessState.Action) :=
   , ("recoveryComplete", .recoveryComplete)
   , ("beginShutdown", .beginShutdown)
   , ("finishShutdown", .finishShutdown 0)
+  , ("restartClaim", .restartClaim)
   ]
 
 def processMachine : StateMachineContract :=

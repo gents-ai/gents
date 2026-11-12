@@ -844,6 +844,76 @@ fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
     }
 }
 
+/// Adopt the durable readiness row left behind by a previous process. A runtime
+/// killed without shutdown leaves its last `process_state` in place and the row
+/// carries no process identity, so until the successor claims it every reader
+/// projects the dead process's picture as current. Only `process_state` is
+/// demoted: the predecessor's generations and agent entries stay readable for
+/// diagnosis, and a cleanly shut-down or already recovering row is left alone
+/// so the claim adds no write a restart does not owe.
+pub(crate) async fn claim_node_readiness_for_new_process(
+    node: &std::sync::Arc<defra_node::Node>,
+    node_did: &str,
+) -> Result<()> {
+    use gents_protocol::document_query::{
+        fields::node_readiness as readiness_fields, Filter, Input, Update,
+    };
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "readiness claim DID does not match the configured node identity"
+    );
+    let actor = identity::Did::new(node_did)?;
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let updated_at = Utc::now().to_rfc3339();
+    access
+        .transact_write("readiness.claim", |txn| {
+            let actor = &actor;
+            let updated_at = &updated_at;
+            Box::pin(async move {
+                let Some(row) =
+                    crate::store::config_client::node_readiness::observe_published_readiness(
+                        txn, actor,
+                    )
+                    .await?
+                else {
+                    return Ok::<_, anyhow::Error>(());
+                };
+                // A row that does not decode already projects as malformed, so
+                // rewriting it would destroy evidence without changing any reader.
+                let Ok(mut snapshot) =
+                    gents_protocol::row::decode_node_readiness_snapshot(&row, node_did)
+                else {
+                    return Ok(());
+                };
+                if matches!(
+                    snapshot.process_state,
+                    NodeReadinessProcessState::Shutdown | NodeReadinessProcessState::Recovering
+                ) {
+                    return Ok(());
+                }
+                tracing::info!(
+                    node_did,
+                    claimed_process_state = snapshot.process_state.as_str(),
+                    "claiming the readiness row a previous process left behind"
+                );
+                snapshot.process_state = NodeReadinessProcessState::Recovering;
+                let snapshot_json = serde_json::to_string(&snapshot)?;
+                let update = Update::matching(
+                    Filter::eq(readiness_fields::NODE_DID, node_did),
+                    Input::new()
+                        .set(readiness_fields::SNAPSHOT_JSON, snapshot_json.as_str())
+                        .set(readiness_fields::UPDATED_AT, updated_at.as_str()),
+                )
+                .render();
+                let response = txn.run(&update).await?;
+                gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeReadiness")
+                    .context("readiness document disappeared while claiming")?;
+                Ok(())
+            })
+        })
+        .await
+}
+
 pub(crate) async fn upsert_node_readiness(
     node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,

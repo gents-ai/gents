@@ -457,6 +457,24 @@ theorem missing_or_stale_never_ready
     · cases process <;> simp [project, ProcessState.acceptsWork, hZero]
     · cases process <;> simp [project, ProcessState.acceptsWork, hGeneration]
 
+/-- A process that has just claimed the durable readiness row is never observed
+as client-ready, whatever picture its predecessor left behind. This is what
+makes a row written by a dead process unobservable without stamping process
+identity on it: the claim rewrites the only field the projection checks first.
+External premise: a runtime killed without shutdown leaves its last durable
+`process_state` in place, the store publishes no liveness signal, and document
+age is not a connectivity lease, so the successor's claim is the only fact that
+distinguishes the two processes. -/
+theorem claimed_process_is_never_client_ready
+    {pre post : ProcessState}
+    {s : RuntimeState}
+    {agentDid : AgentDid}
+    {reason : AgentUnavailableReason}
+    (hClaim : ProcessState.step? pre .restartClaim = some post) :
+    project (.observed post s) agentDid reason ≠ .ready := by
+  cases pre <;> simp [ProcessState.step?] at hClaim <;> subst hClaim <;>
+    simp [project, ProcessState.acceptsWork]
+
 theorem unavailable_wins_overlap
     {process : ProcessState}
     {s : RuntimeState}

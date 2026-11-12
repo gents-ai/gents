@@ -240,6 +240,12 @@ def clientAgentReadinessCase
       decide (RuntimeState.AgentAdmissible process state 20)
   }
 
+/-- The process state a restarting runtime's claim leaves on a predecessor's
+fully ready row, derived by running the model's claim rather than stated, so a
+claim that stopped demoting would flip the readiness case below. -/
+def restartClaimedProcessState : ProcessState :=
+  (ProcessState.step? .ready .restartClaim).getD .ready
+
 def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   [ clientAgentReadinessCase "runtime_ready_same_generation" "observed" .ready 4 4 true false false
   , clientAgentReadinessCase "runtime_explicitly_unavailable" "observed" .ready 4 4 false true false
@@ -265,6 +271,7 @@ def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   , clientAgentReadinessCase "invalid_inference_profile_is_unavailable" "observed" .ready 4 4 false true false .inferenceProfileInvalid
   , clientAgentReadinessCase "invalid_tool_configuration_is_unavailable" "observed" .ready 4 4 false true false .toolConfigurationInvalid
   , clientAgentReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
+  , clientAgentReadinessCase "restart_claim_demotes_stale_ready" "observed" restartClaimedProcessState 4 4 true false false
   ]
 
 def sessionSelectionCasesJson : String :=

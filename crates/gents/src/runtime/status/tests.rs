@@ -337,6 +337,18 @@ async fn fetch_node_readiness_row(
     serde_json::from_value(value).expect("decode NodeReadiness row")
 }
 
+async fn read_node_readiness_row(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+) -> gents_protocol::node_readiness::NodeReadinessRow {
+    let row = fetch_node_readiness_row(node, node_did).await;
+    gents_protocol::node_readiness::NodeReadinessRow {
+        node_did: node_did.to_owned(),
+        snapshot_json: row.snapshot_json,
+        updated_at: row.updated_at,
+    }
+}
+
 #[tokio::test]
 async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     let node = test_node().await;
@@ -377,6 +389,89 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     second_owner.close().await.unwrap();
 }
 
+fn status_test_snapshot(
+    generation: u64,
+    dispatcher: mpsc::Sender<gents_protocol::row::AgentRequest>,
+) -> ActiveRuntimeSnapshot {
+    ActiveRuntimeSnapshot {
+        generation,
+        node: None,
+        local_did: String::new(),
+        default_agent_did: "general".to_string(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::from_iter([("general".to_string(), dispatcher)]),
+        agent_executor_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
+        agent_executor_queue_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
+    }
+}
+
+#[tokio::test]
+async fn startup_claim_demotes_a_killed_process_ready_row_before_any_runtime_work() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let (dispatcher, _requests) = mpsc::channel(1);
+
+    let (killed_owner, killed) = RuntimeStatusHandle::start(node.clone(), node_did.clone());
+    killed.initialize_startup("general").await.unwrap();
+    killed
+        .publish_startup_snapshot(&status_test_snapshot(4, dispatcher))
+        .await
+        .unwrap();
+    killed.publish_router_generation(4).await.unwrap();
+    killed
+        .set_process_state_durable(ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    // A runtime killed without shutdown never closes its publisher, so the
+    // durable row keeps the dead process's fully ready picture.
+    drop(killed_owner);
+    drop(killed);
+
+    let row = read_node_readiness_row(&node, &node_did).await;
+    assert!(
+        !matches!(
+            gents_protocol::node_readiness::project_node_readiness_summary(Some(&row), &node_did),
+            gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Unknown(_)
+        ),
+        "the killed process must leave a row every reader still projects as current"
+    );
+
+    crate::runtime::startup_readiness::claim_startup_readiness(&node, &node_did)
+        .await
+        .unwrap();
+
+    let claimed = read_node_readiness_row(&node, &node_did).await;
+    assert_eq!(
+        gents_protocol::node_readiness::project_node_readiness_summary(Some(&claimed), &node_did),
+        gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Unknown(
+            gents_protocol::node_readiness::AgentReadinessUnknownReason::ProcessNotReady
+        ),
+        "a claimed row must be unobservable to every reader of the canonical projection"
+    );
+    let snapshot =
+        gents_protocol::node_readiness::decode_node_readiness_snapshot(&claimed, &node_did)
+            .unwrap();
+    assert_eq!(snapshot.active_generation, 4);
+    assert_eq!(snapshot.router_generation, 4);
+    assert_eq!(snapshot.default_agent_did, "general");
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .any(|entry| entry.agent_did == "general"),
+        "the claim keeps the predecessor's agent picture readable for diagnosis: {snapshot:?}"
+    );
+}
+
 #[test]
 fn rust_process_state_vocabulary_matches_lean_model() {
     let rust_states = vec![
@@ -402,6 +497,7 @@ fn rust_process_transition_action(from: &str, to: &str) -> Option<&'static str> 
         ("recovering", "ready") => Some("recoveryComplete"),
         ("ready", "shuttingDown") => Some("beginShutdown"),
         ("shuttingDown", "shutdown") => Some("finishShutdown"),
+        (from, "recovering") if from != "shutdown" => Some("restartClaim"),
         _ => None,
     }
 }
@@ -453,6 +549,31 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
             status
                 .set_process_state(ProcessLifecycleState::Shutdown)
                 .await;
+        }
+        "restartClaim" => {
+            match case.from.as_str() {
+                "recovering" => {
+                    status
+                        .set_process_state(ProcessLifecycleState::Recovering)
+                        .await;
+                }
+                "ready" => {
+                    status.set_process_state(ProcessLifecycleState::Ready).await;
+                }
+                "shuttingDown" => {
+                    status.set_process_state(ProcessLifecycleState::Ready).await;
+                    status
+                        .set_process_state(ProcessLifecycleState::ShuttingDown)
+                        .await;
+                }
+                other => panic!(
+                    "generated Process transition {} claims from unsupported state {other:?}",
+                    case.name
+                ),
+            }
+            crate::runtime::startup_readiness::claim_startup_readiness(&node, &node_did)
+                .await
+                .unwrap();
         }
         other => panic!(
             "generated Process transition {} has unsupported action {other:?}",
@@ -528,8 +649,8 @@ async fn generated_process_transition_cases_match_runtime_status_policy() {
         }
     }
 
-    assert_eq!(legal_count, 5);
-    assert_eq!(illegal_count, 20);
+    assert_eq!(legal_count, 8);
+    assert_eq!(illegal_count, 17);
 }
 
 #[test]

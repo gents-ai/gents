@@ -6,6 +6,18 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## 1.0.0-rc2 - 2026-11-10
 
+- A restarting server now claims the readiness its home's previous process
+  left behind, demoting that row's process state before it opens client
+  access. A runtime killed without shutdown leaves `process_state: ready` at
+  the old generation and the row carries no process identity, so until now
+  the next server reported its dead predecessor as ready. `/healthz` and
+  `/status` `ok` now report unhealthy, and `/healthz` returns 503, for the
+  whole restart window that previously answered 200; `gents_node_readiness_*`
+  metrics, `/fleet/slots` and the desktop readiness view report the same
+  unknown `process_not_ready` state for that window. External probes and
+  alerts built on `ready == 1` will trip on every restart until the new
+  runtime publishes its own readiness. The predecessor's generations and
+  agent entries stay readable for diagnosis (#3643).
 - Breaking: a home created by v1.0.0-rc1 or v1.0.0-rc0 is not opened,
   converted or migrated. Starting on one stops before any write and says to
   back it up or delete it and run `gents`; see
