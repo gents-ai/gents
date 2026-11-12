@@ -3414,6 +3414,7 @@ pub struct LeanContractSnapshot {
     pub event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
     pub event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     pub event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+    pub recovery_sweep_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -1507,15 +1507,7 @@ fn generated_workspace_path_capability_seal_cases_drive_real_git_executor() {
             "changed_gitlink_rejected" => {
                 fs::remove_file(dest.join("src/main.rs")).unwrap();
                 fs::create_dir(dest.join("src/main.rs")).unwrap();
-                git(&dest.join("src/main.rs"), &["init", "-b", "main"]);
-                git(
-                    &dest.join("src/main.rs"),
-                    &["config", "user.email", "ws@example.com"],
-                );
-                git(
-                    &dest.join("src/main.rs"),
-                    &["config", "user.name", "Workspace Test"],
-                );
+                init_test_repo(&dest.join("src/main.rs"), &["-b", "main"]);
                 fs::write(dest.join("src/main.rs/nested"), "nested\n").unwrap();
                 git(&dest.join("src/main.rs"), &["add", "nested"]);
                 git(&dest.join("src/main.rs"), &["commit", "-m", "nested"]);

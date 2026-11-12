@@ -463,6 +463,15 @@ impl RequestLifecycle {
         self.claim_inner(true).await
     }
 
+    /// Claims as [`Self::claim_with_identity`] does, reading the request's
+    /// `valid_until` against `ttl_now` instead of the wall clock.
+    pub async fn claim_with_identity_at<T>(&mut self, ttl_now: T) -> Result<ClaimOutcome>
+    where
+        T: FnOnce() -> chrono::DateTime<chrono::Utc>,
+    {
+        self.claim_at(ttl_now).await
+    }
+
     pub async fn claim_pending_durable_with_inputs<T, F>(
         &mut self,
         ttl_now: T,
@@ -892,8 +901,15 @@ impl RequestLifecycle {
     }
 
     async fn claim_inner(&mut self, _explicit_did: bool) -> Result<ClaimOutcome> {
+        self.claim_at(chrono::Utc::now).await
+    }
+
+    async fn claim_at<T>(&mut self, ttl_now: T) -> Result<ClaimOutcome>
+    where
+        T: FnOnce() -> chrono::DateTime<chrono::Utc>,
+    {
         let receipt = match self
-            .claim_pending_durable_with_inputs(chrono::Utc::now, || {
+            .claim_pending_durable_with_inputs(ttl_now, || {
                 (chrono::Utc::now(), uuid::Uuid::new_v4().to_string())
             })
             .await?

@@ -55,9 +55,7 @@ async fn startup_binds_an_agent_authored_workspace_request() {
     let fixture = tempfile::tempdir().unwrap();
     let repo = std::fs::canonicalize(fixture.path()).unwrap().join("repo");
     std::fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "-b", "main"]);
-    git(&repo, &["config", "user.email", "recovery@example.com"]);
-    git(&repo, &["config", "user.name", "Workspace Recovery"]);
+    gents_session::workspace::init_test_repo(&repo, &["-b", "main"]);
     std::fs::write(repo.join("README.md"), "sealed\n").unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "sealed recovery fixture"]);

@@ -1085,10 +1085,14 @@ async fn access_review_preserves_a_fenced_output_failure_for_the_caller_and_daem
         fixture.title.doc_id.clone(),
         fixture.title.node_did.clone(),
     ));
+    // The claim reads the review's expiry at the instant the fixture wrote it,
+    // however long the suite takes to reach this test.
+    let written_at = fixture.written_at;
+    let mut task = fixture.task(provider, true);
+    task.expiry_clock = Arc::new(move || written_at);
     let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
     let (_shutdown, shutdown_rx) = watch::channel(false);
-    let error = fixture
-        .task(provider, true)
+    let error = task
         .run_review(
             fixture.title.clone(),
             review_execution(&fixture, &action_id, None),
@@ -1248,6 +1252,9 @@ struct TitleFixture {
     identity: Arc<dyn NodeIdentity>,
     parent: AgentRequest,
     title: AgentRequest,
+    /// When the auxiliary request was written; an access review expires 60
+    /// seconds later.
+    written_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl TitleFixture {
@@ -1454,6 +1461,7 @@ impl TitleFixture {
             lifecycle.begin_owned_execution(&writer).await.unwrap();
             parent = lifecycle.request().clone();
         }
+        let written_at = chrono::Utc::now();
         let title =
             gents_session::request::lifecycle::materialize::write_pending_auxiliary_request(
                 &node,
@@ -1461,7 +1469,7 @@ impl TitleFixture {
                 purpose,
                 content.unwrap_or_else(|| parent.content.clone()),
                 (purpose == RequestPurpose::AccessReview).then(|| {
-                    (chrono::Utc::now() + chrono::Duration::seconds(60))
+                    (written_at + chrono::Duration::seconds(60))
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                 }),
                 &agent_config.agent_identity.managed_agent_signer().unwrap(),
@@ -1477,6 +1485,7 @@ impl TitleFixture {
             identity,
             parent,
             title,
+            written_at,
         }
     }
 
@@ -1502,6 +1511,7 @@ impl TitleFixture {
                 )
                 .unwrap()
             }),
+            expiry_clock: Arc::new(chrono::Utc::now),
         }
     }
 

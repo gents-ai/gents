@@ -2163,15 +2163,13 @@ async fn an_unreadable_runtime_is_lost_before_anything_is_read() {
 /// A repository in a new folder, on branch `trunk`.
 fn repository() -> tempfile::TempDir {
     let repo = tempfile::tempdir().unwrap();
-    git(repo.path(), &["init", "-b", "trunk"]);
+    gents_session::workspace::init_test_repo(repo.path(), &["-b", "trunk"]);
     git(repo.path(), &["commit", "--allow-empty", "-m", "start"]);
     repo
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
     let out = std::process::Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-        .args(["-c", "commit.gpgsign=false"])
         .args(["-c", "core.hooksPath=/dev/null"])
         .args(args)
         .current_dir(dir)

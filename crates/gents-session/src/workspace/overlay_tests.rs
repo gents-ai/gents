@@ -523,9 +523,7 @@ pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixtur
     let root = std::fs::canonicalize(dir.path()).unwrap();
     let repo = root.join("repo");
     std::fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "-b", "main"]);
-    git(&repo, &["config", "user.email", "artifact@example.com"]);
-    git(&repo, &["config", "user.name", "Artifact Test"]);
+    crate::workspace::init_test_repo(&repo, &["-b", "main"]);
     std::fs::write(repo.join("README.md"), "sealed source\n").unwrap();
     for (path, contents) in files {
         let path = repo.join(path);
