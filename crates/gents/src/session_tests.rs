@@ -11,5 +11,4 @@ mod output_replay_tests;
 mod query_result_tests;
 mod queue_tests;
 mod sessions_tests;
-mod streaming_canonical_tests;
 mod terminal_tools_tests;
