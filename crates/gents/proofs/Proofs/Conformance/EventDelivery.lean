@@ -290,8 +290,6 @@ def eventGroupClockCasesJson : String :=
       ++ ",\"elapsed_before\":" ++ toString ((c.clock.observe c.cached).elapsed c.now c.timeout)
       ++ ",\"elapsed_after\":" ++ toString ((after.observe c.cached).elapsed c.now c.timeout) ++ "}")
 
-def eventGroupClockCaseCount : Nat := groupClockCases.length
-
 
 def eventGroupCaptureCases :
     List (String × _root_.EventDelivery.Group.EventGroupState × Triggers.Groups.Candidate) :=

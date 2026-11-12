@@ -374,7 +374,6 @@ def snapshotCoverageTailJson : String :=
     ++ "\"trigger_delivery_self_session_cases\":" ++ Conformance.TriggerDelivery.triggerDeliverySelfSessionCasesJson ++ ","
     ++ "\"event_group_capture_case_count\":" ++ toString Conformance.EventDelivery.eventGroupCaptureCaseCount ++ ","
     ++ "\"event_group_capture_cases\":" ++ Conformance.EventDelivery.eventGroupCaptureCasesJson ++ ","
-    ++ "\"event_group_clock_case_count\":" ++ toString Conformance.EventDelivery.eventGroupClockCaseCount ++ ","
     ++ "\"event_group_clock_cases\":" ++ Conformance.EventDelivery.eventGroupClockCasesJson ++ ","
     ++ "\"event_delivery_transition_cases\":"
       ++ Conformance.EventDelivery.transitionCasesJson ++ ","
