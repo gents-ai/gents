@@ -5,6 +5,7 @@ import Proofs.ToolCalls.PluginJob.Authority
 import Proofs.ToolCalls.PluginJob.ExecutionIdentity
 import Proofs.ToolCalls.PluginJob.RecoveryTrace
 import Proofs.ToolCalls.Recovery.Sweeps.PluginJob
+import Proofs.Conformance.Family
 import Lean
 
 /-!
@@ -1708,14 +1709,25 @@ def wakeCases : List (String × ExecutionIdentity.Work × ExecutionIdentity.Work
   , ("other_row_independent", ⟨"row", "selected"⟩, ⟨"other-row", "selected"⟩)
   , ("other_row_other_agent_independent", ⟨"row", "selected"⟩, ⟨"other-row", "other"⟩) ]
 
-private def workJson (work : ExecutionIdentity.Work) : Json :=
-  Json.mkObj [("document", toJson work.document), ("agent", toJson work.agent)]
+deriving instance ToJson for ExecutionIdentity.Work, ExecutionIdentity.WakeOutcome
 
-def wakeCasesJson : String :=
-  (toJson (wakeCases.map fun (name, running, wake) => Json.mkObj
-    [("name", toJson name), ("running", workJson running), ("wake", workJson wake),
-     ("expected", Json.mkObj
-       [("outcome", toJson (ExecutionIdentity.wakeOutcome running wake).toContract)])])).compress
+structure WakeInput where
+  name : String
+  running : ExecutionIdentity.Work
+  wake : ExecutionIdentity.Work
+  deriving ToJson
+
+structure WakeOutput where
+  outcome : ExecutionIdentity.WakeOutcome
+  deriving ToJson
+
+@[conformance_family]
+def wakes : Family WakeInput WakeOutput where
+  inputs := wakeCases.map fun (name, running, wake) => { name, running, wake }
+  model := fun i => { outcome := ExecutionIdentity.wakeOutcome i.running i.wake }
+
+example : wakes.inputs.any (fun i => (wakes.model i).outcome == .refused) = true := by
+  native_decide
 
 def admissionCasesJson : String :=
   (toJson (((admissionCases ++ sourceBoundaryCases).map fun c => render c) ++

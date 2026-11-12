@@ -1752,8 +1752,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobRecoveryCases")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_wake_cases"
-      "PluginJobWakeCases")
+      "family"
+      "plugin_job_wakes")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"
