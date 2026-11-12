@@ -28,6 +28,12 @@ mod retained_record_warnings;
 #[path = "tests/session_message_commit.rs"]
 mod session_message_commit;
 
+#[path = "tests/plugin_job_dispatch.rs"]
+mod plugin_job_dispatch;
+
+#[path = "tests/r4c_list_background_tools.rs"]
+mod r4c_list_background_tools;
+
 #[path = "tests/process_records.rs"]
 #[cfg(all(test, unix))]
 pub(crate) mod process_records;

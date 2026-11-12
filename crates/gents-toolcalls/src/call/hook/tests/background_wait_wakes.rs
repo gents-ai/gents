@@ -32,7 +32,7 @@ async fn background_wait_ignores_unrelated_changes(resync_required: bool) {
     .await;
     let handle = background_tool(&hook, "scoped-background", "gated_tool").await;
     let tool_id = handle["tool_call_id"].as_str().unwrap();
-    let caller = gents_toolcalls::background::status::ProcessControlScope {
+    let caller = crate::background::status::ProcessControlScope {
         request_id,
         session_id,
         node_did: db.node_identity.did().to_owned(),

@@ -1,13 +1,14 @@
+use crate::call::hook::fixtures::r4c_private_support::{
+    accepted_call, assert_accepted_control_rows, setup_private_hook,
+};
+use crate::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use gents_inference::llm::ToolCallHookAction;
+use gents_inference::test_support::test_db;
 use gents_loop::tool::BoxFuture;
 use gents_loop::tool::ToolDefinition;
 use gents_loop::tool::{ToolDyn, ToolError};
 use gents_store::graphql::escape_graphql_string;
-use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use serde_json::{json, Value};
-
-use super::r4c_private_support::{accepted_call, assert_accepted_control_rows, setup_private_hook};
-use crate::support::test_db;
 
 #[path = "background_wait_wakes.rs"]
 mod background_wait_wakes;
@@ -97,7 +98,7 @@ async fn background_wait_recovers_without_notification(closed: bool) {
     )
     .await;
     let handle = background_tool(&hook, "gated-background", "gated_tool").await;
-    let caller = gents_toolcalls::background::status::ProcessControlScope {
+    let caller = crate::background::status::ProcessControlScope {
         request_id,
         session_id,
         node_did: db.node_identity.did().to_owned(),
@@ -164,11 +165,11 @@ impl ToolDyn for PendingTool {
 async fn setup_hook(
     test_name: &str,
     registry: BackgroundToolRegistry,
-) -> (crate::support::TestDb, DefraSessionHook, String, String) {
-    let db = test_db(test_name).await;
+) -> (gents_inference::test_support::TestDb, DefraSessionHook, String, String) {
+    let db = test_db(test_name, gents_session::test_support::no_lifecycle_plugins()).await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    let hook = setup_private_hook(&db, &request_id, &session_id, registry).await;
+    let hook = setup_private_hook(&db.node, &db.node_identity, &request_id, &session_id, registry).await;
     (db, hook, session_id, request_id)
 }
 
@@ -576,7 +577,7 @@ async fn list_background_tools_reports_running_live_output_bytes() {
 
 #[tokio::test]
 async fn list_background_tools_rejects_sibling_requests() {
-    let db = test_db("r4c-list-bg-sibling").await;
+    let db = test_db("r4c-list-bg-sibling", gents_session::test_support::no_lifecycle_plugins()).await;
     let (hook_1, _session_1, _request_1) = setup_hook_on_db(
         &db,
         "parent-one",
@@ -598,12 +599,12 @@ async fn list_background_tools_rejects_sibling_requests() {
 }
 
 async fn setup_hook_on_db(
-    db: &crate::support::TestDb,
+    db: &gents_inference::test_support::TestDb,
     request_id: &str,
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> (DefraSessionHook, String, String) {
-    let hook = setup_private_hook(db, request_id, session_id, registry).await;
+    let hook = setup_private_hook(&db.node, &db.node_identity, request_id, session_id, registry).await;
     (hook, session_id.to_string(), request_id.to_string())
 }
 
@@ -698,7 +699,7 @@ async fn selected_agent_reads_private_background_call_but_other_agent_cannot() {
     let handle = background_tool(&hook, "private-background", "slow_tool").await;
     let call_id = handle["tool_call_id"].as_str().expect("background call ID");
     let selected = hook.actor.clone().expect("selected agent identity");
-    let visible = gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_as(
+    let visible = crate::call::lifecycle::ToolCallLifecycle::load_as(
         db.node.clone(),
         selected,
         &session_id,
@@ -718,7 +719,7 @@ async fn selected_agent_reads_private_background_call_but_other_agent_cannot() {
     .await;
     let other = identity::Did::new(&other_binding.agent_did).unwrap();
     assert!(
-        gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_as(
+        crate::call::lifecycle::ToolCallLifecycle::load_as(
             db.node.clone(),
             other,
             &session_id,

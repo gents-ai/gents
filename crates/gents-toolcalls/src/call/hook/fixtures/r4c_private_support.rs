@@ -1,18 +1,27 @@
-use super::*;
+use std::sync::Arc;
 
-pub(super) async fn setup_private_hook(
-    db: &crate::support::TestDb,
+use gents_inference::llm::ToolCallHookAction;
+use gents_store::identity::NodeIdentity;
+
+use super::{
+    accept_hook_tool_call, hook_execution_fixture_key, hook_execution_fixtures,
+    HookExecutionFixture,
+};
+use crate::call::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+
+pub async fn setup_private_hook(
+    node: &Arc<defra_node::Node>,
+    node_identity: &Arc<dyn NodeIdentity>,
     request_id: &str,
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> DefraSessionHook {
-    let node_did = db.node_identity.did();
-    let binding =
-        gents_inference::test_support::ensure_test_default_agent(&db.node, node_did).await;
-    let agent = gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+    let node_did = node_identity.did();
+    let binding = gents_inference::test_support::ensure_test_default_agent(node, node_did).await;
+    let agent = gents_store::identity::resolve_agent_identity(node_identity.as_ref(), &binding)
         .expect("resolve the fixture's default Agent from its runtime root");
     setup_private_hook_for_agent(
-        &db.node,
+        node,
         node_did,
         agent.as_ref(),
         request_id,
@@ -22,7 +31,7 @@ pub(super) async fn setup_private_hook(
     .await
 }
 
-pub(super) async fn setup_private_hook_for_agent(
+pub async fn setup_private_hook_for_agent(
     node: &Arc<defra_node::Node>,
     node_did: &str,
     agent_identity: &dyn NodeIdentity,
@@ -140,7 +149,7 @@ pub(super) async fn setup_private_hook_for_agent(
     hook
 }
 
-pub(super) async fn accepted_call(
+pub async fn accepted_call(
     hook: &DefraSessionHook,
     name: &str,
     provider_call_id: Option<String>,
@@ -159,7 +168,7 @@ pub(super) async fn accepted_call(
         .await
 }
 
-pub(super) async fn assert_accepted_control_rows(
+pub async fn assert_accepted_control_rows(
     hook: &DefraSessionHook,
     tool_name: &str,
     expected: usize,
