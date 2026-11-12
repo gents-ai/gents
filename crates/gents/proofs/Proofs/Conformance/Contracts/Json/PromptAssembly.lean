@@ -870,28 +870,6 @@ private def claudeCheckpointResolutionJson
     ",\"expected_reasoning\":" ++
       claudeReasoningWitnessJson resolution.evidence.reasoning ++ "}"
 
-def promptAssemblyClaudeCheckpointCaseJson
-    (witness : PromptAssemblyClaudeCheckpointCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"required\":" ++ jsonArray (witness.required.map claudeReplayTagJson) ++
-    ",\"rows\":" ++ jsonArray (witness.rows.map claudeTaggedReplayRowJson) ++
-    ",\"split\":" ++ toString witness.split ++
-    ",\"carrier_ids\":" ++ jsonStringArray witness.carrierIds ++
-    ",\"resolutions\":" ++
-      jsonArray (witness.resolutions.map claudeCheckpointResolutionJson) ++
-    ",\"outcome\":" ++ jsonString witness.outcome ++
-    ",\"prefix_rows\":" ++
-      jsonArray (witness.prefixRows.map claudeTaggedReplayRowJson) ++
-    ",\"retained\":" ++
-      jsonArray (witness.retained.map claudeTaggedReplayRowJson) ++
-    ",\"replay\":" ++ jsonArray (witness.replay.map fun row =>
-      jsonArray (row.map claudeReplayBlockJson)) ++ "}"
-
-def promptAssemblyClaudeCheckpointCasesJson : String :=
-  jsonArray (promptAssemblyClaudeCheckpointCases.map promptAssemblyClaudeCheckpointCaseJson)
-
-
-
 def promptAssemblyReasoningSuffixCaseJson
     (witness : PromptAssemblyReasoningSuffixCase) : String :=
   "{\"name\":" ++ jsonString witness.name ++
@@ -1051,6 +1029,115 @@ def promptAssemblyReplayPrefix : Family ReplayPrefixInput ReplayPrefixOutput whe
     { ordinaryEqual := row.ordinaryEqual
       reasoningSuffix := row.reasoningSuffix
       leadingRemoval := row.leadingRemoval }
+
+def replayOriginName : PromptAssembly.ClaudeMap.ReplayOrigin → String
+  | .claudeSubscription => "claudeSubscription"
+  | .acceptedProvider => "acceptedProvider"
+  | .recoveredProvider => "recoveredProvider"
+  | .foreign => "foreign"
+  | .missing => "missing"
+  | .ambiguous => "ambiguous"
+
+def replayOriginOfName : String → PromptAssembly.ClaudeMap.ReplayOrigin
+  | "claudeSubscription" => .claudeSubscription
+  | "acceptedProvider" => .acceptedProvider
+  | "recoveredProvider" => .recoveredProvider
+  | "foreign" => .foreign
+  | "missing" => .missing
+  | _ => .ambiguous
+
+def replayWireName : PromptAssembly.ClaudeMap.ReplayWire → String
+  | .claudeMessages => "claude_messages"
+  | .responses => "responses"
+
+def replayWireOfName : String → PromptAssembly.ClaudeMap.ReplayWire
+  | "claude_messages" => .claudeMessages
+  | _ => .responses
+
+structure ReasoningWitnessWire where
+  blockIndex : Nat
+  parts : List ReplayPartWire
+  deriving Lean.ToJson
+
+structure ReplayResolutionWire where
+  tag : ReplayTagWire
+  origin : String
+  issuerFamily : String
+  issuerEndpoint : String
+  wire : String
+  physicalHeader : String
+  complete : Bool
+  captured : Option (List ReplayFlatItemWire)
+  expectedReasoning : List ReasoningWitnessWire
+  deriving Lean.ToJson
+
+def ReplayResolutionWire.ofModel (r : PromptAssemblyClaudeCheckpointResolution) :
+    ReplayResolutionWire :=
+  { tag := .ofModel r.tag, origin := replayOriginName r.evidence.origin
+    issuerFamily := r.evidence.issuer.family, issuerEndpoint := r.evidence.issuer.endpoint
+    wire := replayWireName r.evidence.wire, physicalHeader := r.evidence.physicalHeader
+    complete := r.evidence.complete
+    captured := r.evidence.captured.map (·.map ReplayFlatItemWire.ofModel)
+    expectedReasoning := r.evidence.reasoning.map fun (blockIndex, parts) =>
+      { blockIndex, parts := parts.map ReplayPartWire.ofModel } }
+
+def ReplayResolutionWire.toModel (r : ReplayResolutionWire) :
+    PromptAssemblyClaudeCheckpointResolution :=
+  { tag := r.tag.toModel
+    evidence :=
+      { origin := replayOriginOfName r.origin
+        reasoning := r.expectedReasoning.map fun witness =>
+          (witness.blockIndex, witness.parts.map ReplayPartWire.toModel)
+        issuer := { family := r.issuerFamily, endpoint := r.issuerEndpoint }
+        wire := replayWireOfName r.wire
+        physicalHeader := r.physicalHeader
+        complete := r.complete
+        captured := r.captured.map (·.map ReplayFlatItemWire.toModel) } }
+
+structure ClaudeCheckpointInput where
+  name : String
+  required : List ReplayTagWire
+  rows : List ReplayRowWire
+  split : Nat
+  carrierIds : List String
+  resolutions : List ReplayResolutionWire
+  deriving Lean.ToJson
+
+structure ClaudeCheckpointOutput where
+  outcome : String
+  prefixRows : List ReplayRowWire
+  prefixCarriers : List String
+  retained : List ReplayRowWire
+  retainedCarriers : List String
+  replay : List (List ReplayBlockWire)
+  deriving Lean.ToJson
+
+/-- A reduction checkpoint over tagged assistant rows and the contiguous replay
+it restores: production `prepare_replay_checkpoint` and
+`restore_contiguous_replay`. Each row travels with its message id; the
+checkpoint keeps rows in order, so the prefix carries the first ids and the
+retained rows the ones after them. -/
+@[conformance_family]
+def promptAssemblyClaudeCheckpoint : Family ClaudeCheckpointInput ClaudeCheckpointOutput where
+  inputs := promptAssemblyClaudeCheckpointCases.map fun c =>
+    { name := c.name, required := c.required.map .ofModel, rows := c.rows.map .ofModel
+      split := c.split, carrierIds := c.carrierIds
+      resolutions := c.resolutions.map ReplayResolutionWire.ofModel }
+  model := fun i =>
+    let carriers (rows retained : List PromptAssembly.ClaudeMap.TaggedReplayRow) :=
+      (i.carrierIds.take rows.length, (i.carrierIds.drop rows.length).take retained.length)
+    match PromptAssembly.ClaudeMap.prepareReplayCheckpoint (i.required.map (·.toModel))
+        (i.rows.map (·.toModel)) i.split with
+    | .error error =>
+        { outcome := PromptAssembly.ClaudeMap.errorName error, prefixRows := []
+          prefixCarriers := [], retained := [], retainedCarriers := [], replay := [] }
+    | .ok checkpoint =>
+        let (prefixCarriers, retainedCarriers) := carriers checkpoint.prefixRows checkpoint.retained
+        let (outcome, replay) := match PromptAssembly.ClaudeMap.restoreContiguousReplay checkpoint with
+          | .error error => (PromptAssembly.ClaudeMap.errorName error, [])
+          | .ok replay => ("ok", replay.map (·.map ReplayBlockWire.ofModel))
+        { outcome, prefixRows := checkpoint.prefixRows.map .ofModel, prefixCarriers
+          retained := checkpoint.retained.map .ofModel, retainedCarriers, replay }
 
 def protectedReplayCompactionCaseJson
     (witness : Compaction.ProtectedReplayCompactionCase) : String :=

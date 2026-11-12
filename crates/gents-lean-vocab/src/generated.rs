@@ -445,10 +445,6 @@ pub fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAssemblyC
     &lean_contract_snapshot().prompt_assembly_claude_body_cases
 }
 
-pub fn lean_prompt_assembly_claude_checkpoint_cases() -> &'static [LeanPromptAssemblyClaudeCheckpointCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_checkpoint_cases
-}
-
 pub fn lean_prompt_assembly_claude_map_cases() -> &'static [LeanPromptAssemblyClaudeMapCase] {
     &lean_contract_snapshot().prompt_assembly_claude_map_cases
 }
@@ -2014,16 +2010,6 @@ pub struct LeanClaudeReasoningWitness {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanClaudeReplayBlock {
-    pub kind: String,
-    pub payload: Option<Vec<u8>>,
-    pub signature: Option<String>,
-    pub id: Option<String>,
-    pub name: Option<String>,
-    pub arguments: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct LeanClaudeReplayInputBlock {
     pub kind: String,
     pub payload: Option<Vec<u8>>,
@@ -3281,9 +3267,6 @@ pub struct LeanContractSnapshot {
         LeanPromptAssemblyClaudeThinkingStreamCase,
     >,
     pub prompt_assembly_service_tier_cases: Vec<LeanPromptAssemblyServiceTierCase>,
-    pub prompt_assembly_claude_checkpoint_cases: Vec<
-        LeanPromptAssemblyClaudeCheckpointCase,
-    >,
     pub prompt_assembly_reasoning_suffix_cases: Vec<
         LeanPromptAssemblyReasoningSuffixCase,
     >,
@@ -9287,21 +9270,6 @@ pub struct LeanPromptAssemblyClaudeBodyCase {
     pub body_effort: Option<String>,
     pub diagnostics: LeanPromptAssemblyClaudeFieldDiagnostics,
     pub per_turn_effort: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeCheckpointCase {
-    pub name: String,
-    pub required: Vec<LeanCanonicalCoordinate>,
-    pub rows: Vec<LeanClaudeTaggedReplayRow>,
-    pub split: usize,
-    pub carrier_ids: Vec<String>,
-    pub resolutions: Vec<LeanClaudeCheckpointResolution>,
-    pub outcome: String,
-    pub prefix_rows: Vec<LeanClaudeTaggedReplayRow>,
-    pub retained: Vec<LeanClaudeTaggedReplayRow>,
-    pub replay: Vec<Vec<LeanClaudeReplayBlock>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

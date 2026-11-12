@@ -67,33 +67,3 @@ pub fn native_claude_replay_content(
     }
     content
 }
-
-impl LeanClaudeReplayBlock {
-    pub fn native_json(&self) -> serde_json::Value {
-        let payload = || {
-            String::from_utf8(self.payload.clone().expect("replay payload"))
-                .expect("reconstructed UTF-8")
-        };
-        match self.kind.as_str() {
-            "text" => serde_json::json!({"type":"text", "text":payload()}),
-            "signedThinking" => serde_json::json!({
-                "type":"thinking", "thinking":payload(),
-                "signature":self.signature.as_deref().expect("modeled signature")
-            }),
-            "redactedThinking" => serde_json::json!({
-                "type":"redacted_thinking", "data":payload()
-            }),
-            "toolUse" => {
-                let arguments = String::from_utf8(self.arguments.clone().expect("arguments"))
-                    .expect("reconstructed UTF-8");
-                serde_json::json!({
-                    "type":"tool_use", "id":self.id.as_deref().expect("provider id"),
-                    "name":self.name.as_deref().expect("tool name"),
-                    "input":serde_json::from_str::<serde_json::Value>(&arguments)
-                        .expect("modeled JSON arguments")
-                })
-            }
-            other => panic!("unknown modeled replay output {other}"),
-        }
-    }
-}

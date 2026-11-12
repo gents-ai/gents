@@ -1,8 +1,7 @@
 use gents_inference::llm::message::{AssistantContent, Message, ToolCall, ToolResult, UserContent};
-use gents_loop::claude_messages_body::MessagesBodyError;
 
 use gents_lean_vocab::{
-    native_claude_reasoning_parts, native_claude_replay_content, LeanClaudeReplayBlock,
+    native_claude_reasoning_parts, native_claude_replay_content,
 };
 
 fn native_replay_tag(
@@ -286,39 +285,6 @@ fn replay_codec_outcome(
     }
 }
 
-fn claude_request(
-    preamble: Option<&str>,
-    history: &[Message],
-    tools: Vec<rig::completion::ToolDefinition>,
-) -> rig::completion::CompletionRequest {
-    rig::completion::CompletionRequest {
-        model: None,
-        preamble: preamble.map(str::to_string),
-        chat_history: rig::OneOrMany::many(gents_inference::llm::rig_compat::to_rig_messages(
-            history,
-        ))
-        .expect("at least one history row"),
-        documents: Vec::new(),
-        tools,
-        temperature: None,
-        max_tokens: Some(128),
-        tool_choice: None,
-        additional_params: None,
-        output_schema: None,
-    }
-}
-
-/// The body of an assistant-only history, as the replay cases drive it.
-fn native_messages_body(history: &[Message]) -> Result<serde_json::Value, MessagesBodyError> {
-    if history.is_empty() {
-        return Ok(serde_json::json!({"messages": []}));
-    }
-    gents_inference::clients::claude_messages::build_messages_body(
-        "claude-sonnet-5",
-        &claude_request(None, history, Vec::new()),
-    )
-}
-
 fn replay_checkpoint_outcome(
     error: &gents_loop::claude_messages_body::ReplayCheckpointError,
 ) -> &'static str {
@@ -412,135 +378,6 @@ fn generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint(
             }
         };
         assert_eq!(outcome, case.outcome, "{}: composed checkpoint", case.name);
-    }
-}
-
-#[test]
-fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
-    use gents_lean_vocab::lean_prompt_assembly_claude_checkpoint_cases;
-    use gents_loop::claude_messages_body::{
-        prepare_replay_checkpoint, restore_contiguous_replay, TaggedAssistantRow,
-    };
-    let cases = lean_prompt_assembly_claude_checkpoint_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(case.carrier_ids.len(), case.rows.len(), "{}", case.name);
-        let rows = case
-            .rows
-            .iter()
-            .zip(&case.carrier_ids)
-            .map(|(row, id)| TaggedAssistantRow {
-                source: row.source.as_ref().map(native_replay_tag),
-                physical_header: row.physical_header.clone(),
-                block_indices: row.block_indices.clone(),
-                id: Some(id.clone()),
-                content: native_claude_replay_content(&row.blocks),
-            })
-            .collect();
-        let checkpoint = match prepare_replay_checkpoint(
-            case.required.iter().map(native_replay_tag).collect(),
-            rows,
-            case.split,
-        ) {
-            Err(error) => {
-                assert_eq!(
-                    replay_checkpoint_outcome(&error),
-                    case.outcome,
-                    "{}",
-                    case.name
-                );
-                assert!(
-                    case.prefix_rows.is_empty()
-                        && case.retained.is_empty()
-                        && case.replay.is_empty()
-                );
-                continue;
-            }
-            Ok(checkpoint) => checkpoint,
-        };
-        for (actual, expected, offset) in [
-            (&checkpoint.prefix_rows, &case.prefix_rows, 0),
-            (&checkpoint.retained, &case.retained, case.prefix_rows.len()),
-        ] {
-            assert_eq!(actual.len(), expected.len(), "{}", case.name);
-            for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual.source,
-                    expected.source.as_ref().map(native_replay_tag),
-                    "{}",
-                    case.name
-                );
-                assert_eq!(
-                    actual.content,
-                    native_claude_replay_content(&expected.blocks),
-                    "{}",
-                    case.name
-                );
-                assert_eq!(
-                    actual.id.as_ref(),
-                    Some(&case.carrier_ids[offset + index]),
-                    "{}",
-                    case.name
-                );
-            }
-        }
-        match restore_contiguous_replay(&checkpoint) {
-            Err(error) => assert_eq!(
-                replay_checkpoint_outcome(&error),
-                case.outcome,
-                "{}",
-                case.name
-            ),
-            Ok(prepared) => {
-                assert_eq!(case.outcome, "ok", "{}", case.name);
-                assert_eq!(prepared.len(), case.replay.len(), "{}", case.name);
-                for (row, expected) in prepared.iter().zip(&case.replay) {
-                    assert_eq!(
-                        row,
-                        &expected
-                            .iter()
-                            .map(LeanClaudeReplayBlock::native_json)
-                            .collect::<Vec<_>>(),
-                        "{}",
-                        case.name
-                    );
-                }
-                let native = checkpoint
-                    .retained
-                    .iter()
-                    .map(|row| Message::Assistant {
-                        request_id: None,
-                        id: row.id.clone(),
-                        content: row.content.clone(),
-                    })
-                    .collect::<Vec<_>>();
-                let body = native_messages_body(&native)
-                    .unwrap_or_else(|error| panic!("{}: {error}", case.name));
-                let actual = body["messages"]
-                    .as_array()
-                    .expect("messages")
-                    .iter()
-                    .map(|message| {
-                        let mut blocks = message["content"]
-                            .as_array()
-                            .expect("assistant content")
-                            .clone();
-                        for block in &mut blocks {
-                            block
-                                .as_object_mut()
-                                .expect("content object")
-                                .remove("cache_control");
-                        }
-                        blocks
-                    })
-                    .collect::<Vec<_>>();
-                let expected = prepared
-                    .into_iter()
-                    .filter(|row| !row.is_empty())
-                    .collect::<Vec<_>>();
-                assert_eq!(actual, expected, "{}", case.name);
-            }
-        }
     }
 }
 

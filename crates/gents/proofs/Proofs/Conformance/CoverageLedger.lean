@@ -2365,8 +2365,7 @@ def caseCoverage : List CoverageEntry :=
       "Binds the two capture checks and their agreement with leading-reasoning removal on flat items. Provider acceptance itself is an external premise documented on ReplayFrontier.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_checkpoint_cases"
-      "PromptAssemblyClaudeCheckpointCases"
+      "family" "contracts_prompt_assembly_claude_checkpoint"
       "Models source-tagged selected assistant occurrences, the exact reduction split that keeps a pending tool round out of a summary, and the strict Claude codec. Replay selection is PromptAssemblyReasoningSuffixCases; this model does not prove tag issuance (#1693).")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage "provider_tool_identity_cases" "ProviderToolIdentityCases")

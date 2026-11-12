@@ -688,3 +688,136 @@ fn generated_replay_shape_cases_bind_source_index_projection() {
         }
     });
 }
+
+fn wire_assistant_rows(
+    rows: &[crate::claude_messages_body::TaggedAssistantRow],
+    known: &[gents_lean_vocab::claude_replay::Row],
+    tags: &[gents_lean_vocab::claude_replay::Tag],
+) -> Vec<(gents_lean_vocab::claude_replay::Row, Option<String>)> {
+    rows.iter()
+        .map(|row| {
+            (
+                gents_lean_vocab::claude_replay::Row {
+                    source: row.source.as_ref().map(|tag| tag_of(tag, tags)),
+                    physical_header: row.physical_header.clone(),
+                    block_indices: row
+                        .block_indices
+                        .iter()
+                        .map(|index| u64::try_from(*index).expect("block index fits"))
+                        .collect(),
+                    blocks: wire_blocks(&row.content, &known_blocks(known)),
+                },
+                row.id.clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
+    use crate::claude_messages_body::{
+        prepare_replay_checkpoint, restore_contiguous_replay, TaggedAssistantRow,
+    };
+    gents_lean_vocab::families::contracts_prompt_assembly_claude_checkpoint::replay(|case| {
+        let rows: Vec<gents_lean_vocab::claude_replay::Row> = recode(&case.rows);
+        let required: Vec<gents_lean_vocab::claude_replay::Tag> = recode(&case.required);
+        assert_eq!(case.carrier_ids.len(), rows.len(), "{}", case.name);
+        let mut tags = known_tags(&rows);
+        tags.extend(required.iter().cloned());
+        let native_rows = rows
+            .iter()
+            .zip(&case.carrier_ids)
+            .map(|(row, id)| TaggedAssistantRow {
+                source: row.source.as_ref().map(native_replay_tag),
+                physical_header: row.physical_header.clone(),
+                block_indices: row.block_indices(),
+                id: Some(id.clone()),
+                content: gents_lean_vocab::claude_replay::assistant_content(&row.blocks),
+            })
+            .collect();
+        let checkpoint = match prepare_replay_checkpoint(
+            required.iter().map(native_replay_tag).collect(),
+            native_rows,
+            usize::try_from(case.split).expect("split fits"),
+        ) {
+            Err(error) => {
+                return gents_lean_vocab::families::contracts_prompt_assembly_claude_checkpoint::ClaudeCheckpointOutput {
+                    outcome: replay_checkpoint_outcome(&error).to_owned(),
+                    prefix_rows: Vec::new(),
+                    prefix_carriers: Vec::new(),
+                    retained: Vec::new(),
+                    retained_carriers: Vec::new(),
+                    replay: Vec::new(),
+                };
+            }
+            Ok(checkpoint) => checkpoint,
+        };
+        let rows_wire = rows.clone();
+        let carried = |rows: &[TaggedAssistantRow]| {
+            let (rows, carriers): (Vec<_>, Vec<_>) = wire_assistant_rows(rows, &rows_wire, &tags)
+                .into_iter()
+                .unzip();
+            (
+                rows,
+                carriers
+                    .into_iter()
+                    .map(|carrier| {
+                        carrier
+                            .unwrap_or_else(|| panic!("{}: a row lost its message id", case.name))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let (prefix_rows, prefix_carriers) = carried(&checkpoint.prefix_rows);
+        let (retained, retained_carriers) = carried(&checkpoint.retained);
+        let (outcome, replay) = match restore_contiguous_replay(&checkpoint) {
+            Err(error) => (replay_checkpoint_outcome(&error).to_owned(), Vec::new()),
+            Ok(prepared) => {
+                let native = checkpoint
+                    .retained
+                    .iter()
+                    .map(|row| Message::Assistant {
+                        request_id: None,
+                        id: row.id.clone(),
+                        content: row.content.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                let body = native_messages_body(&native)
+                    .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                let sent = body["messages"]
+                    .as_array()
+                    .expect("messages")
+                    .iter()
+                    .map(body_replay_blocks)
+                    .collect::<Vec<_>>();
+                let replay = prepared
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(gents_lean_vocab::claude_replay::Block::of_native_json)
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    sent,
+                    replay
+                        .iter()
+                        .filter(|row| !row.is_empty())
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    "{}: the Messages body sends the restored replay",
+                    case.name
+                );
+                ("ok".to_owned(), replay)
+            }
+        };
+        gents_lean_vocab::families::contracts_prompt_assembly_claude_checkpoint::ClaudeCheckpointOutput {
+            outcome,
+            prefix_rows: recode(&prefix_rows),
+            prefix_carriers,
+            retained: recode(&retained),
+            retained_carriers,
+            replay: recode(&replay),
+        }
+    });
+}
