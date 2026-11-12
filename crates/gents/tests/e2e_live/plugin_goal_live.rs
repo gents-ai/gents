@@ -96,7 +96,7 @@ pub(super) async fn submit_with_cwd(
         .to_owned()
 }
 
-async fn select_profiles(live: &LiveUser, target: &InferenceTarget, agents: &[&str]) {
+pub(super) async fn select_profiles(live: &LiveUser, target: &InferenceTarget, agents: &[&str]) {
     let mut documents = Vec::new();
     for agent in agents {
         let value = live

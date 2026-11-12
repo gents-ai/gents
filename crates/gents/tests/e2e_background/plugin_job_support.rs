@@ -431,7 +431,9 @@ pub(crate) async fn wait_job(
     timeout: Duration,
 ) -> JobView {
     let access = h.actors.fixture.access.clone();
+    use crate::support::snapshots::SnapshotReader;
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = access.subscribe_changes("AgentToolCall").await;
     loop {
         let last = load_job_view(&access, None, address(h, tool_call_id)).await;
         match &last {
@@ -442,6 +444,10 @@ pub(crate) async fn wait_job(
         if tokio::time::Instant::now() >= deadline {
             panic!("job {tool_call_id} did not reach the awaited state; last read: {last:?}");
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| {
+                panic!("job {tool_call_id} did not reach the awaited state; last read: {last:?}")
+            });
     }
 }

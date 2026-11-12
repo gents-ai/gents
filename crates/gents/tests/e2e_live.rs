@@ -70,5 +70,8 @@ mod runtime_entry_live;
 #[path = "e2e_live/plugin_surface_live.rs"]
 mod plugin_surface_live;
 
+#[cfg(unix)]
+#[path = "e2e_live/plugin_admission_live.rs"]
+mod plugin_admission_live;
 #[path = "e2e_live/session_limit_live.rs"]
 mod session_limit_live;
