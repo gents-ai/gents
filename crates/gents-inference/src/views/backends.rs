@@ -146,6 +146,7 @@ impl<'de> Deserialize<'de> for ObservationRow {
 
 pub struct ObservationList {
     node_did: String,
+    backend_id: Option<String>,
     doc_ids: Option<Vec<String>>,
 }
 
@@ -153,8 +154,14 @@ impl ObservationList {
     pub fn new(node_did: impl Into<String>) -> Self {
         Self {
             node_did: node_did.into(),
+            backend_id: None,
             doc_ids: None,
         }
+    }
+
+    pub fn backend_id(mut self, backend_id: impl Into<String>) -> Self {
+        self.backend_id = Some(backend_id.into());
+        self
     }
 
     pub fn doc_ids(mut self, doc_ids: Vec<String>) -> Self {
@@ -184,6 +191,12 @@ impl View for ObservationList {
             &self.node_did,
         ))
         .order_by(inference_backend_observation::BACKEND_ID, Direction::Asc);
+        if let Some(backend_id) = &self.backend_id {
+            query = query.filter(Filter::eq(
+                inference_backend_observation::BACKEND_ID,
+                backend_id,
+            ));
+        }
         if let Some(doc_ids) = &self.doc_ids {
             query = query.filter(Filter::any_of(
                 inference_backend_observation::DOC_ID,

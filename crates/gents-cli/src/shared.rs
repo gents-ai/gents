@@ -189,17 +189,21 @@ pub(crate) async fn load_backend_observation(
     node_did: &str,
     backend_id: &str,
 ) -> anyhow::Result<gents_documents::InferenceBackendObservation> {
-    let query = format!(
-        "{{ InferenceBackendObservation(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs catalog_freshness probe_status last_probe}} }}",
-        gents_store::graphql::escape_graphql_string(node_did),
-        gents_store::graphql::escape_graphql_string(backend_id),
-    );
-    let rows = crate::graphql_rows(access, "InferenceBackendObservation", &query).await?;
+    let rows = access
+        .read_view(
+            &gents_inference::views::backends::ObservationList::new(node_did)
+                .backend_id(backend_id),
+        )
+        .await?;
     anyhow::ensure!(
         rows.len() == 1,
         "backend observation is missing or ambiguous"
     );
-    gents_inference::backends::registry::decode_backend_observation(rows[0].clone())
+    Ok(rows
+        .into_iter()
+        .next()
+        .expect("one observed backend")
+        .observation)
 }
 
 pub(crate) fn wire<T>(value: &T) -> String
