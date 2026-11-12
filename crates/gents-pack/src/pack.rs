@@ -15,6 +15,7 @@ pub use agent_bindings::{
 };
 pub mod authoring;
 pub mod home_install;
+pub mod home_removal;
 mod inference;
 pub mod install_flow;
 pub mod install_review;
