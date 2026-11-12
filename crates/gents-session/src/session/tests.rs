@@ -1899,15 +1899,6 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 
 #[tokio::test]
 async fn unsigned_starter_cannot_populate_the_index() {
-    let starter_cases =
-        &gents_lean_vocab::lean_contract_snapshot().session_document_starter_verification_cases;
-    assert_eq!(
-        starter_cases
-            .iter()
-            .find(|case| case["name"] == "signature")
-            .unwrap()["accepted"],
-        false
-    );
     let case = gents_lean_vocab::lean_contract_snapshot()
         .session_document_projection_cases
         .iter()

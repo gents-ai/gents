@@ -290,29 +290,6 @@ private def archiveCases : List Json := do
     ("archived_visible", toJson (AgentSession.Archive.visible .archived after)),
     ("all_visible", toJson (AgentSession.Archive.visible .all after))])
 
-/-- Fork inputs and computed durable outputs. Referenced payload closures are
-copied into the child under their logical reference; tool rows are never copied
-and no reference is remapped. `readers` states which direct session grant reads
-the published child's whole transcript. -/
-private def starterVerificationCases : List Json :=
-  let source : AgentSession.Scope := ⟨5, 6, some 7⟩
-  let receipt : AgentSession.CreationReceipt :=
-    { scope := Conformance.SessionDocuments.scope, sessionDoc := 8, agent := 3,
-      openingRequestDoc := 9, causalKind := 1, causeBinding := 2,
-      starter := some ⟨source, 11⟩ }
-  [ ("valid", some (5, 6), 8, some source, some 11, true),
-    ("physical", some (5, 6), 9, some source, some 11, true),
-    ("index", some (5, 7), 8, some source, some 11, true),
-    ("source", some (5, 7), 8, some ⟨5, 7, some 7⟩, some 11, true),
-    ("parent", some (5, 6), 8, some source, some 12, true),
-    ("signature", some (5, 6), 8, some source, some 11, false),
-    ("starter_removed", some (5, 6), 8, none, some 11, true),
-    ("starter_removed_parent_rewritten", some (5, 6), 8, none, some 12, true),
-    ("unindexed", none, 8, some source, some 11, true) ].map
-    fun (name, index, physical, recorded, parent, signed) =>
-      Json.mkObj [("name", toJson name), ("accepted", toJson
-        ((AgentSession.observedStarter index (some receipt) physical recorded parent signed).isSome))]
-
 private def taskOpeningCases : List Json :=
   let fire : AgentSession.TaskFireEvidence := ⟨1, 10, 20, 4, true⟩
   [ ("valid", [fire]), ("missing", []), ("ambiguous", [fire, fire]),
@@ -333,8 +310,44 @@ private def forkAuthorityCases : List Json :=
       ("source_agent", toJson source), ("target_agent", toJson target),
       ("allowed", toJson (SessionFork.mayReuseSourceFragments source target))]
 
-def sessionDocumentStarterVerificationCasesJson : String :=
-  (toJson starterVerificationCases).compress
+deriving instance ToJson for AgentSession.Scope
+
+structure StarterIndex where
+  node : Nat
+  session : Nat
+  deriving ToJson
+
+structure StarterInput where
+  name : String
+  index : Option StarterIndex
+  physical : Nat
+  recorded : Option AgentSession.Scope
+  parent : Option Nat
+  signed : Bool
+  deriving ToJson
+
+@[conformance_family]
+def starterVerification : Family StarterInput Bool where
+  inputs :=
+    let source : AgentSession.Scope := ⟨5, 6, some 7⟩
+    [ ("valid", some (5, 6), 8, some source, some 11, true),
+      ("physical", some (5, 6), 9, some source, some 11, true),
+      ("index", some (5, 7), 8, some source, some 11, true),
+      ("source", some (5, 7), 8, some ⟨5, 7, some 7⟩, some 11, true),
+      ("parent", some (5, 6), 8, some source, some 12, true),
+      ("signature", some (5, 6), 8, some source, some 11, false),
+      ("starter_removed", some (5, 6), 8, none, some 11, true),
+      ("starter_removed_parent_rewritten", some (5, 6), 8, none, some 12, true),
+      ("unindexed", none, 8, some source, some 11, true) ].map
+      fun (name, index, physical, recorded, parent, signed) =>
+        { name, index := index.map fun (node, session) => { node, session }, physical, recorded
+          parent, signed }
+  model := fun i =>
+    (AgentSession.observedStarter (i.index.map fun index => (index.node, index.session))
+      (some starterReceipt) i.physical i.recorded i.parent i.signed).isSome
+
+example : starterVerification.inputs.any fun i =>
+    i.name == "signature" && !starterVerification.model i := by native_decide
 
 def sessionDocumentArchiveCasesJson : String :=
   (toJson archiveCases).compress
@@ -399,8 +412,7 @@ def sessionDocumentSelectionCasesJson : String :=
 def sessionDocumentEditAnchorCasesJson : String :=
   (toJson (editAnchorCases.map editAnchorJson)).compress
 
-deriving instance ToJson for AgentSession.Scope, SessionFork.EditForkBinding,
-  SessionFork.EditForkDecision
+deriving instance ToJson for SessionFork.EditForkBinding, SessionFork.EditForkDecision
 
 structure EditForkInput where
   name : String
@@ -425,6 +437,10 @@ def editForkDecision : Family EditForkInput SessionFork.EditForkDecision where
         | .bound binding => some binding | _ => none }
   model := fun i => SessionFork.decideEditFork i.requested i.retainedFork
 
+/-- Fork inputs and computed durable outputs. Referenced payload closures are
+copied into the child under their logical reference; tool rows are never copied
+and no reference is remapped. `readers` states which direct session grant reads
+the published child's whole transcript. -/
 def sessionDocumentForkCasesJson : String :=
   (toJson [
       forkJson "exact_copy" history child 1 true true true,

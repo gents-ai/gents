@@ -645,7 +645,6 @@ def snapshotSessionCasesJson : String :=
       ++ enrollmentDigestCasesJson ++ ","
     ++ "\"discovery_scope_cases\":" ++ Conformance.ConfigurationScope.discoveryCasesJson ++ ","
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
-    ++ "\"session_document_starter_verification_cases\":" ++ sessionDocumentStarterVerificationCasesJson ++ ","
     ++ "\"session_document_archive_cases\":" ++ sessionDocumentArchiveCasesJson ++ ","
     ++ "\"session_document_reference_encoding\":" ++ sessionDocumentReferenceEncodingJson ++ ","
     ++ "\"session_document_retry_cases\":" ++ sessionDocumentRetryCasesJson ++ ","
