@@ -342,7 +342,44 @@ fn history(input: &family::Input) -> Vec<TaggedMessage> {
     .collect()
 }
 
-async fn observe(input: &family::Input) -> family::Observation {
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Failure {
+    TurnLimit,
+    BudgetExhausted,
+    BudgetOverrun,
+    UsageMissing,
+    CaptureMissing,
+    RetryExhausted,
+    Refused,
+}
+
+/// Requests persist a failure as its rendered reason, and readers classify it by
+/// the reason's leading token; no typed cause separates these completion failures.
+fn failure(error: &crate::error::LoopStreamError) -> Failure {
+    use crate::error::{CompletionFailure, LoopFailureCause, LoopVerdict};
+    let reason = error.to_string();
+    let says = |token: &str| reason.contains(token);
+    match error.cause() {
+        LoopFailureCause::MaxTurns => Failure::TurnLimit,
+        LoopFailureCause::Completion {
+            failure:
+                CompletionFailure::Loop {
+                    verdict: LoopVerdict::AggregateTokenBudgetExhausted,
+                    ..
+                },
+            ..
+        } => Failure::BudgetExhausted,
+        _ if says(AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX) => Failure::BudgetExhausted,
+        _ if says("aggregate_token_budget_overrun: ") => Failure::BudgetOverrun,
+        _ if says("aggregate_token_usage_missing: ") => Failure::UsageMissing,
+        _ if says("missing its capturing transport") => Failure::CaptureMissing,
+        _ if says("retry budget exhausted") => Failure::RetryExhausted,
+        _ => Failure::Refused,
+    }
+}
+
+async fn observe(input: &family::Input) -> family::Observation<Failure> {
     let model = model(&input.calls);
     let captures = Arc::new(Mutex::new(Vec::new()));
     let allowances = Arc::new(Mutex::new(Vec::new()));
@@ -416,8 +453,7 @@ async fn observe(input: &family::Input) -> family::Observation {
         retractions: Vec::new(),
         retries: Vec::new(),
         final_text: None,
-        failed: false,
-        turn_limit: false,
+        failure: None,
         dirty_inputs: Vec::new(),
         context_inputs: Vec::new(),
         captures: Vec::new(),
@@ -458,8 +494,7 @@ async fn observe(input: &family::Input) -> family::Observation {
             Ok(LoopStreamItem::Final { text }) => observed.final_text = Some(text),
             Ok(_) => {}
             Err(error) => {
-                observed.failed = true;
-                observed.turn_limit = error.cause() == &crate::error::LoopFailureCause::MaxTurns;
+                observed.failure = Some(failure(&error));
                 break;
             }
         }
@@ -487,7 +522,7 @@ async fn observe(input: &family::Input) -> family::Observation {
 
 #[tokio::test(start_paused = true)]
 async fn generated_completion_stream_traces_replay_retry_publication_and_repair() {
-    for case in family::cases() {
+    for case in family::cases::<Failure>() {
         let result = if case.input.missing_capture {
             use crate::rendered_request::scope::{scope_request, test_scope};
             use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};

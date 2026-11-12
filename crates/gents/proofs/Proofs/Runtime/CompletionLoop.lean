@@ -64,6 +64,14 @@ structure Capture where
   matchesTransport : Bool
   deriving ToJson
 
+/-- Why a run ended without a final reply. Each kind is a distinct persisted
+reason: readers of a failed request classify it by that reason, so a run that
+fails for the wrong one is a different observation. -/
+inductive Failure where
+  | turnLimit | budgetExhausted | budgetOverrun | usageMissing | captureMissing
+  | retryExhausted | refused
+  deriving BEq, Repr, ToJson
+
 structure Observation where
   text : List String := []
   reasoning : List String := []
@@ -71,8 +79,7 @@ structure Observation where
   retractions : List Coordinate := []
   retries : List Retry := []
   finalText : Option String := none
-  failed : Bool := false
-  turnLimit : Bool := false
+  failure : Option Failure := none
   dirtyInputs : List Bool := []
   contextInputs : List Bool := []
   captures : List Capture := []
@@ -91,6 +98,12 @@ def structuredValid (text : List String) : Bool :=
   | .ok value => (value.getObjValAs? String "answer").isOk
   | .error _ => false
 
+/-- A transient failure ends the run as its exhausted retry budget. A rejection
+the provider would repeat ends it as that rejection, also after its one repair. -/
+def terminalFailure : FailureClass → Failure
+  | .transport | .emptySample => .retryExhausted
+  | _ => .refused
+
 def transition (state : State) (action : Action) : State :=
   (step? state action).getD state
 
@@ -108,18 +121,18 @@ def run (input : Input) : Observation := Id.run do
     (⟨limit, (input.nestedUsage.map fun usage => usage.input + usage.output).getD 0⟩ : PromptAssembly.AggregateBudget.Ledger)
   result := { result with ledgerUsed := ledger.map (·.used) }
   for call in input.calls do
-    if result.failed || result.finalText.isSome then break
+    if result.failure.isSome || result.finalText.isSome then break
     if state.turn > input.maxTurns + 1 then
-      result := { result with failed := true, turnLimit := true }
+      result := { result with failure := some .turnLimit }
       break
     if ledger.isSome && (ledger.map (·.remaining)).getD 0 == 0 then
-      result := { result with failed := true }
+      result := { result with failure := some .budgetExhausted }
       break
     result := { result with allowances := result.allowances ++ (ledger.map (·.remaining)).toList }
     result := { result with dirtyInputs := result.dirtyInputs ++ [dirty], contextInputs := result.contextInputs ++ [input.context], text := result.text ++ call.text, reasoning := result.reasoning ++ call.reasoning }
     result := { result with captures := result.captures ++ [⟨state.turn, state.attempt, if repairAttempt then "repair" else "budgeted", input.context || repaired, (if input.initialDirty then ["ok"] else if input.recoveredPair then ["restored"] else []) ++ result.tools, true⟩] }
     if input.missingCapture then
-      result := { result with failed := true, text := [], reasoning := [] }
+      result := { result with failure := some .captureMissing, text := [], reasoning := [] }
       break
     state := transition state .issue
     let preview := !call.text.isEmpty || !call.reasoning.isEmpty || call.tool
@@ -130,10 +143,15 @@ def run (input : Input) : Observation := Id.run do
         (if call.failure.isNone then call.usage.map Usage.native else none)
       result := { result with ledgerUsed := ledger.map (·.used) }
       let terminal := !call.tool && !call.text.isEmpty && (!input.structured || structuredValid call.text)
-      let failed := charged.any fun charged =>
-        PromptAssembly.AggregateBudget.postChargeAction charged terminal == .fail
-      if failed then
-        result := { result with failed := true }
+      let failure := charged.bind fun charged =>
+        if PromptAssembly.AggregateBudget.postChargeAction charged terminal == .fail then
+          some (match charged with
+            | .missing => Failure.usageMissing
+            | .overrun _ => .budgetOverrun
+            | _ => .budgetExhausted)
+        else none
+      if failure.isSome then
+        result := { result with failure }
         break
     if call.failure.isNone && call.tool then
       result := { result with tools := result.tools ++ ["ECHOED"] }
@@ -168,7 +186,7 @@ def run (input : Input) : Observation := Id.run do
           dirty := false
           repaired := true
           repairAttempt := true
-      else result := { result with failed := true }
+      else result := { result with failure := some (terminalFailure failure) }
   return result
 
 structure TextObservation where
@@ -178,6 +196,6 @@ structure TextObservation where
 
 def toText (input : Input) : TextObservation :=
   let result := run input
-  ⟨result.finalText, result.failed⟩
+  ⟨result.finalText, result.failure.isSome⟩
 
 end CompletionLoop

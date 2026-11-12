@@ -1,26 +1,17 @@
 use futures::StreamExt;
-use gents_automation::test_support::loop_stream::capture::*;
 use gents_automation::test_support::loop_stream::invalid_tool_progress::*;
 use gents_automation::test_support::loop_stream::repeated_tool_failure::*;
 use gents_automation::test_support::loop_stream::request_assembly::*;
 use gents_automation::test_support::loop_stream::tool_execution::*;
 use gents_automation::test_support::loop_stream::*;
-use gents_inference::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
+use gents_inference::llm::message::{Message, ToolResultContent};
 use gents_inference::llm::ToolCallHookAction;
-use gents_inference::rendered_request::{
-    AssemblyBuildPath, AssemblyTrace, ContextCompactionReason,
-};
 use gents_loop::loop_stream::*;
 use gents_loop::tool::ToolDyn;
-use gents_loop::SessionHook;
 use gents_toolcalls::call::hook::fixtures::*;
-use gents_toolcalls::call::hook::FailurePolicy;
-use rig::completion::{CompletionError, CompletionRequest};
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 #[tokio::test]
 async fn other_provider_loop_has_no_codex_affinity() {
     let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
@@ -194,7 +185,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         &requests[1]
             .chat_history
             .iter()
-            .map(rig_compat::from_rig_message)
+            .map(gents_inference::llm::rig_compat::from_rig_message)
             .collect::<Vec<_>>(),
     )
     .unwrap();
@@ -210,7 +201,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         &requests[2]
             .chat_history
             .iter()
-            .map(rig_compat::from_rig_message)
+            .map(gents_inference::llm::rig_compat::from_rig_message)
             .collect::<Vec<_>>(),
     )
     .unwrap();
