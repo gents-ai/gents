@@ -8,8 +8,7 @@ use crate::goal::{
     GoalRequestTerminal, GoalState, GoalSubmissionState,
 };
 use gents_lean_vocab::{
-    lean_goal_continuation_materialization_cases, lean_goal_create_cases,
-    lean_goal_readiness_gate_cases, lean_task_goal_publication_cases,
+    lean_goal_create_cases, lean_goal_readiness_gate_cases, lean_task_goal_publication_cases,
     lean_task_goal_recovery_cases,
 };
 use gents_protocol::goal_status::GoalStatus;
@@ -359,14 +358,10 @@ fn generated_goal_submission_cases_fence_atomic_visibility() {
 
 #[test]
 fn generated_goal_continuation_materialization_cases_fence_restart_idempotency() {
-    let cases = lean_goal_continuation_materialization_cases();
-    assert_eq!(
-        cases.len(),
-        5,
-        "the continuation materialization matrix drifted"
-    );
-    for case in cases {
-        let phase = parse_continuation_phase(&case.phase, &case.name);
+    gents_lean_vocab::families::contracts_goal_continuation_materialization::replay::<
+        String,
+        GoalContinuationPhase,
+    >(|case| {
         let action = match case.action.as_str() {
             "claim_eligible" => GoalContinuationAction::Claim(true),
             "claim_ineligible" => GoalContinuationAction::Claim(false),
@@ -378,17 +373,8 @@ fn generated_goal_continuation_materialization_cases_fence_restart_idempotency()
                 case.name
             ),
         };
-        let actual = goal_continuation_materialization_step(phase, action);
-        let expected = parse_continuation_phase(&case.expected_phase, &case.name);
-        assert_eq!(actual, expected, "Lean case {}", case.name);
-    }
-}
-
-fn parse_continuation_phase(value: &str, case_name: &str) -> GoalContinuationPhase {
-    match value {
-        "unclaimed" => GoalContinuationPhase::Unclaimed,
-        "claimed" => GoalContinuationPhase::Claimed,
-        "child_present" => GoalContinuationPhase::ChildPresent,
-        other => panic!("unknown continuation phase {other:?} in Lean case {case_name}"),
-    }
+        gents_lean_vocab::families::contracts_goal_continuation_materialization::ContinuationMaterializationOutput {
+            phase: goal_continuation_materialization_step(case.phase, action),
+        }
+    });
 }

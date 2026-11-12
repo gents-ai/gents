@@ -669,8 +669,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_goal_submission_published")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_continuation_materialization_cases"
-      "GoalContinuationMaterializationCases")
+      "family"
+      "contracts_goal_continuation_materialization")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_closure_cases"

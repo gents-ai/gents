@@ -622,25 +622,46 @@ def goalContinuationMaterializationCases : List GoalContinuationMaterializationC
   , { name := "restart_does_not_duplicate_child", phase := .childPresent, action := .reconcile }
   ]
 
-def continuationPhaseName : GoalAutomation.ContinuationPhase → String
-  | .unclaimed => "unclaimed" | .claimed => "claimed" | .childPresent => "child_present"
+inductive ContinuationActionWire where
+  | claimEligible
+  | claimIneligible
+  | materialize
+  | reconcile
+  | crash
+  deriving Lean.ToJson
 
-def continuationActionName : GoalAutomation.ContinuationAction → String
-  | .claim true => "claim_eligible" | .claim false => "claim_ineligible"
-  | .materialize => "materialize" | .reconcile => "reconcile" | .crash => "crash"
+def ContinuationActionWire.ofModel : GoalAutomation.ContinuationAction → ContinuationActionWire
+  | .claim true => .claimEligible
+  | .claim false => .claimIneligible
+  | .materialize => .materialize
+  | .reconcile => .reconcile
+  | .crash => .crash
 
-def goalContinuationMaterializationCaseJson
-    (w : GoalContinuationMaterializationCase) : String :=
-  let post := GoalAutomation.continuationStep w.phase w.action
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"phase\":" ++ jsonString (continuationPhaseName w.phase) ++ ","
-    ++ "\"action\":" ++ jsonString (continuationActionName w.action) ++ ","
-    ++ "\"expected_phase\":" ++ jsonString (continuationPhaseName post)
-    ++ "}"
+def ContinuationActionWire.toModel : ContinuationActionWire → GoalAutomation.ContinuationAction
+  | .claimEligible => .claim true
+  | .claimIneligible => .claim false
+  | .materialize => .materialize
+  | .reconcile => .reconcile
+  | .crash => .crash
 
-def goalContinuationMaterializationCasesJson : String :=
-  jsonArray (goalContinuationMaterializationCases.map goalContinuationMaterializationCaseJson)
+deriving instance Lean.ToJson for GoalAutomation.ContinuationPhase
+
+structure ContinuationMaterializationInput where
+  name : String
+  phase : GoalAutomation.ContinuationPhase
+  action : ContinuationActionWire
+  deriving Lean.ToJson
+
+structure ContinuationMaterializationOutput where
+  phase : GoalAutomation.ContinuationPhase
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalContinuationMaterialization :
+    Family ContinuationMaterializationInput ContinuationMaterializationOutput where
+  inputs := goalContinuationMaterializationCases.map fun w =>
+    { name := w.name, phase := w.phase, action := ContinuationActionWire.ofModel w.action }
+  model := fun i => { phase := GoalAutomation.continuationStep i.phase i.action.toModel }
 
 section ReadinessGate
 

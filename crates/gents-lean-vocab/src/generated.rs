@@ -209,10 +209,6 @@ pub fn lean_goal_capability_resolution_cases() -> &'static [LeanGoalCapabilityRe
     &lean_contract_snapshot().goal_capability_resolution_cases
 }
 
-pub fn lean_goal_continuation_materialization_cases() -> &'static [LeanGoalContinuationMaterializationCase] {
-    &lean_contract_snapshot().goal_continuation_materialization_cases
-}
-
 pub fn lean_goal_create_cases() -> &'static [LeanGoalCreateCase] {
     &lean_contract_snapshot().goal_create_cases
 }
@@ -3118,9 +3114,6 @@ pub struct LeanContractSnapshot {
     pub goal_objective_whitespace_codepoints: Vec<u32>,
     pub task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
     pub task_goal_recovery_cases: Vec<LeanTaskGoalRecoveryCase>,
-    pub goal_continuation_materialization_cases: Vec<
-        LeanGoalContinuationMaterializationCase,
-    >,
     pub file_inventory_closure_cases: Vec<LeanSessionClosureCase>,
     pub enrollment_cases: Vec<LeanEnrollmentCase>,
     pub enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
@@ -4988,14 +4981,6 @@ pub struct LeanGoalContinuationAssignmentCaseExpected {
 pub struct LeanGoalContinuationAssignmentCaseParent {
     pub goal_id: String,
     pub root_request_doc_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanGoalContinuationMaterializationCase {
-    pub name: String,
-    pub phase: String,
-    pub action: String,
-    pub expected_phase: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
