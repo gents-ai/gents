@@ -2528,7 +2528,10 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "contracts_session_selection_client_store")
       "client-shell" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_document_fork_cases" "SessionDocumentCases")
+  , tagged (consumerCoverage "family" "contracts_fork_readers")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "contracts_fork_publication_unreached"
+      "model-production-gap: production publishes a fork through its served transaction with DefraDB document identifiers; no production function returns the copied history for comparison with SessionFork.publish, and no scenario builds these source histories.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "contracts_archive_transition")
       "request-lifecycle" [Surface.runtimeInternal]

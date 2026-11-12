@@ -812,179 +812,169 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
     use gents_store::config_client::NodePermission;
     use gents_store::identity::NodeIdentity;
     const SOURCE: &str = "shared-fork-source";
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_fork_cases
-        .iter()
-        .find(|case| case["name"] == "exact_copy")
-        .unwrap();
-    let reads = |grant: &str| {
-        case["readers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|reader| reader["grant"] == grant)
-            .unwrap()["reads_transcript"]
-            .as_bool()
-            .unwrap()
-    };
-    let (db, user, client, binding) = fork_reader_node("shared-fork-reader").await;
-    let node_did = db.node_identity.did();
-    let messages = (1..=3)
-        .map(|turn| format!("shared-{turn}"))
-        .collect::<Vec<_>>();
-    publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
-    let fork_of = |source: &'static str, turn: u32| ForkParams {
-        source_session_id: source,
-        boundary: ForkBoundary::UserTurn(turn),
-        caller_node_did: node_did,
-        caller_requester_did: Some(user.did()),
-        target_agent_did: None,
-    };
-    let receipt = fork_on(&client, fork_of(SOURCE, 2)).await.unwrap();
-    assert_eq!(receipt.copied_messages, 2);
-    let child: &'static str = Box::leak(receipt.session_id.clone().into_boxed_str());
-    let owned = history_on(&client, child, node_did, Some(user.did()), None)
-        .await
-        .unwrap();
-    assert_eq!(
-        owned,
-        messages[..2]
-            .iter()
-            .map(|text| Message::user(text.as_str()))
-            .collect::<Vec<_>>()
-    );
-    let grandchild = fork_on(&client, fork_of(child, 2)).await.unwrap();
-    assert_eq!(grandchild.copied_messages, 2);
-
-    let sharee =
-        tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("fork-sharee"))
+    for case in gents_lean_vocab::families::contracts_fork_readers::cases() {
+        let (db, user, client, binding) = fork_reader_node("shared-fork-reader").await;
+        let node_did = db.node_identity.did();
+        let messages = (1..=3)
+            .map(|turn| format!("shared-{turn}"))
+            .collect::<Vec<_>>();
+        publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+        let fork_of = |source: &'static str, turn: u32| ForkParams {
+            source_session_id: source,
+            boundary: ForkBoundary::UserTurn(turn),
+            caller_node_did: node_did,
+            caller_requester_did: Some(user.did()),
+            target_agent_did: None,
+        };
+        let receipt = fork_on(&client, fork_of(SOURCE, 2)).await.unwrap();
+        assert_eq!(receipt.copied_messages, 2);
+        let child: &'static str = Box::leak(receipt.session_id.clone().into_boxed_str());
+        let owned = history_on(&client, child, node_did, Some(user.did()), None)
             .await
             .unwrap();
-    let sharee_did = identity::Did::new(sharee.did()).unwrap();
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(node_did).unwrap(),
-    );
-    for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
-        admin
-            .grant_node_permission(&sharee_did, permission)
-            .await
-            .unwrap();
-    }
-    let sharee_access =
-        gents_store::config_client::ConfigAccess::local_as(db.node.clone(), sharee_did.clone());
-    let source_doc = session_doc_id(&client, SOURCE).await;
-    let child_doc = session_doc_id(&client, child).await;
-    let grandchild_doc = session_doc_id(&client, &grandchild.session_id).await;
-    let requester = user.did();
-    let sharee = &sharee_access;
-    let sharee_history = |session: String| async move {
-        history_on(sharee, &session, node_did, Some(requester), None).await
-    };
-    let sharee_reads = |session: String| {
-        let expected = &owned;
-        async move {
-            sharee_history(session)
-                .await
-                .is_ok_and(|history| history == *expected)
-        }
-    };
-    let share = |doc: &str, grant: bool| {
-        let doc = doc.to_owned();
-        let client = &client;
-        let sharee_did = &sharee_did;
-        async move {
-            if grant {
-                client
-                    .add_actor_relationship("AgentSession", &doc, "reader", sharee_did)
-                    .await
-                    .unwrap();
-            } else {
-                client
-                    .delete_actor_relationship("AgentSession", &doc, "reader", sharee_did)
-                    .await
-                    .unwrap();
-            }
-        }
-    };
-
-    assert_eq!(
-        sharee_reads(child.to_owned()).await,
-        reads("unrelated_session")
-    );
-    share(&source_doc, true).await;
-    assert_eq!(
-        sharee_history(SOURCE.to_owned()).await.unwrap().len(),
-        3,
-        "the source grant is effective"
-    );
-    assert_eq!(
-        sharee_reads(child.to_owned()).await,
-        reads("source_session")
-    );
-    share(&source_doc, false).await;
-    share(&child_doc, true).await;
-    assert!(reads("child_session"));
-    assert!(
-        sharee_reads(child.to_owned()).await,
-        "a direct reader of only the fork reads its retained transcript"
-    );
-    assert!(
-        sharee_history(SOURCE.to_owned())
-            .await
-            .map_or(true, |history| history.is_empty()),
-        "the fork grant reveals nothing of the source session"
-    );
-    share(&child_doc, false).await;
-    assert_eq!(
-        sharee_reads(child.to_owned()).await,
-        reads("unrelated_session")
-    );
-    share(&grandchild_doc, true).await;
-    assert!(
-        sharee_reads(grandchild.session_id.clone()).await,
-        "a reader of only a fork of a fork reads its retained transcript"
-    );
-    assert!(!sharee_reads(child.to_owned()).await);
-
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    admin
-        .grant_node_permission(
-            &identity::Did::new(agent.did()).unwrap(),
-            NodePermission::DocumentDelete,
-        )
-        .await
-        .unwrap();
-    let source_owner = gents_store::config_client::ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    delete_session_rows(&source_owner, "AgentOutputSegment", SOURCE).await;
-    assert_eq!(
-        history_on(&client, child, node_did, Some(user.did()), None)
-            .await
-            .unwrap(),
-        owned,
-        "an owner whose origin headers remain reads the fork from its copies"
-    );
-    delete_session_rows(&source_owner, "AgentMessage", SOURCE).await;
-    share(&child_doc, true).await;
-    for session in [child.to_owned(), grandchild.session_id.clone()] {
         assert_eq!(
-            history_on(&client, &session, node_did, Some(user.did()), None)
+            owned,
+            messages[..2]
+                .iter()
+                .map(|text| Message::user(text.as_str()))
+                .collect::<Vec<_>>()
+        );
+        let grandchild = fork_on(&client, fork_of(child, 2)).await.unwrap();
+        assert_eq!(grandchild.copied_messages, 2);
+
+        let sharee =
+            tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("fork-sharee"))
+                .await
+                .unwrap();
+        let sharee_did = identity::Did::new(sharee.did()).unwrap();
+        let admin = gents_store::config_client::ConfigAccess::local_as(
+            db.node.clone(),
+            identity::Did::new(node_did).unwrap(),
+        );
+        for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
+            admin
+                .grant_node_permission(&sharee_did, permission)
+                .await
+                .unwrap();
+        }
+        let sharee_access =
+            gents_store::config_client::ConfigAccess::local_as(db.node.clone(), sharee_did.clone());
+        let source_doc = session_doc_id(&client, SOURCE).await;
+        let child_doc = session_doc_id(&client, child).await;
+        let grandchild_doc = session_doc_id(&client, &grandchild.session_id).await;
+        let requester = user.did();
+        let sharee = &sharee_access;
+        let sharee_history = |session: String| async move {
+            history_on(sharee, &session, node_did, Some(requester), None).await
+        };
+        let sharee_reads = |session: String| {
+            let expected = &owned;
+            async move {
+                sharee_history(session)
+                    .await
+                    .is_ok_and(|history| history == *expected)
+            }
+        };
+        let share = |doc: &str, grant: bool| {
+            let doc = doc.to_owned();
+            let client = &client;
+            let sharee_did = &sharee_did;
+            async move {
+                if grant {
+                    client
+                        .add_actor_relationship("AgentSession", &doc, "reader", sharee_did)
+                        .await
+                        .unwrap();
+                } else {
+                    client
+                        .delete_actor_relationship("AgentSession", &doc, "reader", sharee_did)
+                        .await
+                        .unwrap();
+                }
+            }
+        };
+
+        let unrelated_reads = sharee_reads(child.to_owned()).await;
+        share(&source_doc, true).await;
+        assert_eq!(
+            sharee_history(SOURCE.to_owned()).await.unwrap().len(),
+            3,
+            "the source grant is effective"
+        );
+        let source_reads = sharee_reads(child.to_owned()).await;
+        share(&source_doc, false).await;
+        share(&child_doc, true).await;
+        let child_reads = sharee_reads(child.to_owned()).await;
+        assert!(
+            sharee_history(SOURCE.to_owned())
+                .await
+                .map_or(true, |history| history.is_empty()),
+            "the fork grant reveals nothing of the source session"
+        );
+        share(&child_doc, false).await;
+        assert_eq!(sharee_reads(child.to_owned()).await, unrelated_reads);
+        let reader = |grant: &str, reads_transcript: bool| {
+            gents_lean_vocab::families::contracts_fork_readers::ForkReader {
+                grant: grant.to_owned(),
+                reads_transcript,
+            }
+        };
+        case.check(
+            gents_lean_vocab::families::contracts_fork_readers::ForkReaders {
+                readers: vec![
+                    reader("child_session", child_reads),
+                    reader("source_session", source_reads),
+                    reader("unrelated_session", unrelated_reads),
+                ],
+            },
+        );
+        share(&grandchild_doc, true).await;
+        assert!(
+            sharee_reads(grandchild.session_id.clone()).await,
+            "a reader of only a fork of a fork reads its retained transcript"
+        );
+        assert!(!sharee_reads(child.to_owned()).await);
+
+        let agent =
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        admin
+            .grant_node_permission(
+                &identity::Did::new(agent.did()).unwrap(),
+                NodePermission::DocumentDelete,
+            )
+            .await
+            .unwrap();
+        let source_owner = gents_store::config_client::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        delete_session_rows(&source_owner, "AgentOutputSegment", SOURCE).await;
+        assert_eq!(
+            history_on(&client, child, node_did, Some(user.did()), None)
                 .await
                 .unwrap(),
-            owned
+            owned,
+            "an owner whose origin headers remain reads the fork from its copies"
         );
-        assert!(
-            sharee_reads(session).await,
-            "deleting the source keeps the fork readable"
-        );
+        delete_session_rows(&source_owner, "AgentMessage", SOURCE).await;
+        share(&child_doc, true).await;
+        for session in [child.to_owned(), grandchild.session_id.clone()] {
+            assert_eq!(
+                history_on(&client, &session, node_did, Some(user.did()), None)
+                    .await
+                    .unwrap(),
+                owned
+            );
+            assert!(
+                sharee_reads(session).await,
+                "deleting the source keeps the fork readable"
+            );
+        }
+        db.node.shutdown().await.expect("shut down test node");
     }
-    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]

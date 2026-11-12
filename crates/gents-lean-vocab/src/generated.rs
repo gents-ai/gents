@@ -3032,7 +3032,6 @@ pub struct LeanContractSnapshot {
     pub session_document_reference_encoding: String,
     pub session_document_projection_cases: Vec<serde_json::Value>,
     pub session_document_retry_cases: Vec<serde_json::Value>,
-    pub session_document_fork_cases: Vec<serde_json::Value>,
     pub plugin_job_opening_cases: Vec<LeanPluginJobOpeningCase>,
     pub session_reply_preview_cases: Vec<LeanSessionReplyPreviewCase>,
     pub request_input_cases: Vec<serde_json::Value>,

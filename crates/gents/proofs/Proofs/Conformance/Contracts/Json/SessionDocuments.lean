@@ -189,54 +189,6 @@ private def roleName : CanonicalOutput.MessageRole → String
   | .system => "system"
   | .user => "user"
   | .assistant => "assistant"
-private def publicationJson : CanonicalOutput.MessagePublication → Json
-  | .requestExecution generation => Json.mkObj
-      [("kind", toJson "request_execution"), ("generation", toJson generation)]
-  | .requestRecovery generation => Json.mkObj
-      [("kind", toJson "request_recovery"), ("generation", toJson generation)]
-  | .toolDelivery call => Json.mkObj
-      [("kind", toJson "tool_delivery"), ("call", toJson call)]
-  | .fork origin => Json.mkObj [("kind", toJson "fork"), ("origin", toJson origin)]
-private def messageJson (message : CanonicalOutput.MessageEnvelope) : Json := Json.mkObj
-  [("doc_id", toJson message.header.id), ("session", toJson message.header.session),
-   ("message_key", toJson message.key), ("sequence", toJson message.sequence),
-   ("native_id", toJson message.nativeId),
-   ("native_request_id", toJson message.nativeRequestId), ("created_at", toJson message.createdAt),
-   ("request_doc_id", toJson message.header.request),
-   ("origin_header_id", toJson message.header.origin),
-   ("payload_refs", toJson (message.header.refs.map fun ref => Json.mkObj
-     [("close_id", toJson ref.closeId), ("stream", toJson ref.stream)])),
-   ("role", toJson (roleName message.header.role)),
-   ("publication", publicationJson message.header.publication)]
-private def historyJson (h : SessionFork.History) : Json := Json.mkObj
-  [("messages", toJson (h.messages.map messageJson)),
-   ("compactions", toJson (h.compactions.map fun c => Json.mkObj
-     [("doc_id", toJson c.id), ("session", toJson c.session),
-      ("sequence", toJson c.sequence), ("through_sequence", toJson c.throughSequence)])),
-   ("closures", toJson (h.closures.map fun c => Json.mkObj
-     [("doc_id", toJson c.id), ("session", toJson c.session), ("logical", toJson c.logical)]))]
-private def forkJson (name : String) (source : SessionFork.History)
-    (target : AgentSession.Scope) (cut : Nat) (authorized idle coherent : Bool) : Json :=
-  let authorization : SessionFork.SourceAuthorization :=
-    if authorized then
-      ⟨scope, source.messages.map (·.header.id), source.compactions.map (·.id),
-        source.closures.map (·.id)⟩
-    else
-      ⟨{ scope with node := scope.node + 1 }, source.messages.map (·.header.id),
-        source.compactions.map (·.id), source.closures.map (·.id)⟩
-  let published := SessionFork.publish source scope target remap childKey cut authorization idle coherent
-  Json.mkObj [("name", toJson name), ("source", historyJson source), ("parent", scopeJson scope),
-   ("child", scopeJson target), ("exclusive_sequence_cut", toJson cut),
-   ("document_id_offset", toJson (1000 : Nat)), ("authorized", toJson authorized),
-   ("idle", toJson idle), ("coherent", toJson coherent),
-   ("published", published.map historyJson |>.getD Json.null),
-   ("readers", toJson (published.map (fun copied =>
-      [("child_session", target.session), ("source_session", scope.session),
-       ("unrelated_session", target.session + scope.session + 1)].map fun (name, grant) =>
-        Json.mkObj [("grant", toJson name),
-          ("reads_transcript", toJson (SessionFork.readsTranscript grant copied target.session))])
-      |>.getD []))]
-
 private def editBlockName {α : Type} : CanonicalOutput.MessageBlock α → String
   | .text _ => "text"
   | .reasoning _ _ => "reasoning"
@@ -672,21 +624,163 @@ def editForkDecision : Family EditForkInput SessionFork.EditForkDecision where
         | .bound binding => some binding | _ => none }
   model := fun i => SessionFork.decideEditFork i.requested i.retainedFork
 
+structure PayloadRefWire where
+  closeId : Nat
+  stream : Nat
+  deriving ToJson
+
+structure PublicationWire where
+  kind : String
+  generation : Option Nat
+  call : Option Nat
+  origin : Option Nat
+  deriving ToJson
+
+def PublicationWire.ofModel : CanonicalOutput.MessagePublication → PublicationWire
+  | .requestExecution generation =>
+      { kind := "request_execution", generation := some generation, call := none, origin := none }
+  | .requestRecovery generation =>
+      { kind := "request_recovery", generation := some generation, call := none, origin := none }
+  | .toolDelivery call => { kind := "tool_delivery", generation := none, call := some call, origin := none }
+  | .fork origin => { kind := "fork", generation := none, call := none, origin := some origin }
+
+structure MessageWire where
+  docId : Nat
+  session : Nat
+  messageKey : String
+  sequence : Nat
+  nativeId : Option String
+  nativeRequestId : Option String
+  createdAt : Nat
+  requestDocId : Option Nat
+  originHeaderId : Option Nat
+  payloadRefs : List PayloadRefWire
+  role : String
+  publication : PublicationWire
+  deriving ToJson
+
+structure CompactionWire where
+  docId : Nat
+  session : Nat
+  sequence : Nat
+  throughSequence : Nat
+  deriving ToJson
+
+structure ClosureWire where
+  docId : Nat
+  session : Nat
+  logical : Nat
+  deriving ToJson
+
+structure HistoryWire where
+  messages : List MessageWire
+  compactions : List CompactionWire
+  closures : List ClosureWire
+  deriving ToJson
+
+def HistoryWire.ofModel (h : SessionFork.History) : HistoryWire :=
+  { messages := h.messages.map fun message =>
+      { docId := message.header.id, session := message.header.session, messageKey := message.key
+        sequence := message.sequence, nativeId := message.nativeId
+        nativeRequestId := message.nativeRequestId, createdAt := message.createdAt
+        requestDocId := message.header.request, originHeaderId := message.header.origin
+        payloadRefs := message.header.refs.map fun ref => { closeId := ref.closeId, stream := ref.stream }
+        role := roleName message.header.role
+        publication := PublicationWire.ofModel message.header.publication }
+    compactions := h.compactions.map fun c =>
+      { docId := c.id, session := c.session, sequence := c.sequence, throughSequence := c.throughSequence }
+    closures := h.closures.map fun c => { docId := c.id, session := c.session, logical := c.logical } }
+
 /-- Fork inputs and computed durable outputs. Referenced payload closures are
 copied into the child under their logical reference; tool rows are never copied
 and no reference is remapped. `readers` states which direct session grant reads
 the published child's whole transcript. -/
-def sessionDocumentForkCasesJson : String :=
-  (toJson [
-      forkJson "exact_copy" history child 1 true true true,
-      forkJson "empty_prefix" history child 0 true true true,
-      forkJson "duplicate_message_sequence" duplicateSequenceHistory child 1 true true true,
-      forkJson "wrong_requester" history { child with requester := none } 1 true true true,
-      forkJson "busy_source" history child 1 true false true,
-      forkJson "mixed_generation" history child 1 true true false,
-      forkJson "unauthorized" history child 1 false true true,
-      forkJson "cursor_beyond_source"
-        { history with compactions := [⟨4, scope.session, 1, 99⟩] } child 100 true true true,
-      forkJson "invalid_compaction_sequence"
-        { history with compactions := [⟨4, scope.session, 2, 0⟩] } child 1 true true true]).compress
+structure ForkCase where
+  name : String
+  source : SessionFork.History
+  target : AgentSession.Scope
+  cut : Nat
+  authorized : Bool
+  idle : Bool
+  coherent : Bool
+
+def forkCases : List ForkCase :=
+  [ ⟨"exact_copy", history, child, 1, true, true, true⟩,
+    ⟨"empty_prefix", history, child, 0, true, true, true⟩,
+    ⟨"duplicate_message_sequence", duplicateSequenceHistory, child, 1, true, true, true⟩,
+    ⟨"wrong_requester", history, { child with requester := none }, 1, true, true, true⟩,
+    ⟨"busy_source", history, child, 1, true, false, true⟩,
+    ⟨"mixed_generation", history, child, 1, true, true, false⟩,
+    ⟨"unauthorized", history, child, 1, false, true, true⟩,
+    ⟨"cursor_beyond_source",
+      { history with compactions := [⟨4, scope.session, 1, 99⟩] }, child, 100, true, true, true⟩,
+    ⟨"invalid_compaction_sequence",
+      { history with compactions := [⟨4, scope.session, 2, 0⟩] }, child, 1, true, true, true⟩ ]
+
+structure ForkInput where
+  name : String
+  source : HistoryWire
+  parent : AgentSession.Scope
+  child : AgentSession.Scope
+  exclusiveSequenceCut : Nat
+  documentIdOffset : Nat
+  authorized : Bool
+  idle : Bool
+  coherent : Bool
+  deriving ToJson
+
+def ForkCase.input (c : ForkCase) : ForkInput :=
+  { name := c.name, source := HistoryWire.ofModel c.source, parent := scope, child := c.target
+    exclusiveSequenceCut := c.cut, documentIdOffset := 1000, authorized := c.authorized
+    idle := c.idle, coherent := c.coherent }
+
+def ForkCase.published (c : ForkCase) : Option SessionFork.History :=
+  let authorization : SessionFork.SourceAuthorization :=
+    ⟨if c.authorized then scope else { scope with node := scope.node + 1 },
+      c.source.messages.map (·.header.id), c.source.compactions.map (·.id),
+      c.source.closures.map (·.id)⟩
+  SessionFork.publish c.source scope c.target remap childKey c.cut authorization c.idle c.coherent
+
+structure ForkReader where
+  grant : String
+  readsTranscript : Bool
+  deriving ToJson
+
+def ForkCase.readers (c : ForkCase) : List ForkReader :=
+  (c.published.map fun copied =>
+    [("child_session", c.target.session), ("source_session", scope.session),
+     ("unrelated_session", c.target.session + scope.session + 1)].map fun (name, grant) =>
+      { grant := name, readsTranscript := SessionFork.readsTranscript grant copied c.target.session })
+    |>.getD []
+
+def forkCaseOf (i : ForkInput) : Option ForkCase := forkCases.find? (·.name == i.name)
+
+structure ForkReaders where
+  readers : List ForkReader
+  deriving ToJson
+
+/-- A reader granted only a published fork's own session reads its whole
+retained transcript. The served scenario publishes a signed user history and
+forks it exactly, so it replays the exact copy. -/
+@[conformance_family]
+def forkReaders : Family ForkInput ForkReaders where
+  inputs := (forkCases.filter fun c => c.name ∈ ["exact_copy"]).map ForkCase.input
+  model := fun i => { readers := ((forkCaseOf i).map ForkCase.readers).getD [] }
+
+structure ForkPublication where
+  published : Option HistoryWire
+  readers : List ForkReader
+  deriving ToJson
+
+/-- model-production-gap: production publishes a fork through its served
+transaction and assigns DefraDB document identifiers, so no production function
+returns the copied history for comparison with `SessionFork.publish`, and no
+scenario builds these source histories. -/
+@[conformance_family]
+def forkPublicationUnreached : Family ForkInput ForkPublication where
+  inputs := forkCases.map ForkCase.input
+  model := fun i =>
+    { published := ((forkCaseOf i).bind ForkCase.published).map HistoryWire.ofModel
+      readers := ((forkCaseOf i).map ForkCase.readers).getD [] }
+
 end Conformance.Contracts
