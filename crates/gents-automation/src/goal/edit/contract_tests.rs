@@ -220,11 +220,6 @@ fn generated_goal_objective_whitespace_matches_native_character_classification()
 #[tokio::test]
 async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
     let directory = tempfile::tempdir().unwrap();
-    let root =
-        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("root.key"), None)
-            .unwrap();
-    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
-    let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
     let node_db = gents_inference::test_support::test_db(
         "edited-fields-match-operator-updates-wit",
         crate::lifecycle_hooks::composition(),
@@ -232,6 +227,8 @@ async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
     .await;
     let node = node_db.node.clone();
     let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
+    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(agent.did()).unwrap(),

@@ -43,12 +43,6 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
     let intent = &case["intent"];
     use gents_store::identity::NodeIdentity;
     let temp = tempfile::tempdir().unwrap();
-    let root =
-        gents_store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
-            .unwrap();
-    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
-    let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
-    let signer = agent.managed_agent_signer().unwrap();
     let node_db = gents_inference::test_support::test_db(
         "remote-delivery-waits-for-authenticated-",
         crate::test_support::no_lifecycle_plugins(),
@@ -56,6 +50,9 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
     .await;
     let node = node_db.node.clone();
     let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
+    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    let signer = agent.managed_agent_signer().unwrap();
     let cause = gents_protocol::request_lifecycle::SessionMessageCause {
         caller_node_did: root.did().into(),
         caller_agent_did: agent.did().into(),

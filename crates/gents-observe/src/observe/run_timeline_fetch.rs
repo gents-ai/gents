@@ -891,9 +891,6 @@ mod tests {
         };
         use gents_store::identity::{KeyIdentity, NodeIdentity};
         let directory = tempfile::tempdir().unwrap();
-        let root = KeyIdentity::load_or_create(directory.path().join("root.key"), None).unwrap();
-        let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
-        let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let node_db = gents_inference::test_support::test_db(
             "fetches-native-goal-history-without-proj",
             gents_automation::lifecycle_hooks::composition(),
@@ -901,6 +898,8 @@ mod tests {
         .await;
         let node = node_db.node.clone();
         let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
+        let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         gents_store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
