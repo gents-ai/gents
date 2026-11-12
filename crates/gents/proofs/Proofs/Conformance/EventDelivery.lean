@@ -134,8 +134,6 @@ def transitionCases : List TransitionCase :=
     }
   ]
 
-def transitionCaseCount : Nat := transitionCases.length
-
 structure SourceInstanceRow where
   name             : String
   dedupePolicy     : String
