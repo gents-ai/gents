@@ -139,22 +139,18 @@ pub(crate) async fn accepted_job(fixture: &Fixture, job_id: &str) -> String {
 }
 
 pub(crate) async fn delete_definition(fixture: &Fixture) {
-    let owner = fixture.ctx.owner.as_str();
-    let deleted = fixture
-        .ctx
-        .access
-        .transact_write("cli.optimization.test_delete_definition", |txn| {
-            Box::pin(async move {
-                crate::config_import::apply_delete_collection(
-                    txn,
-                    Collection::EvalDefinition,
-                    owner,
-                    &[DEFINITION.to_owned()],
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
+    let deleted = gents_documents::operations::delete::delete(
+        &fixture.ctx.access,
+        "cli.optimization.test_delete_definition",
+        fixture.ctx.owner.as_str(),
+        &[(Collection::EvalDefinition, DEFINITION.to_owned())],
+        gents_protocol::operations::document::OperationActor::User,
+        None,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap()
+    .targets
+    .len();
     assert_eq!(deleted, 1, "the fixture's eval definition");
 }

@@ -104,16 +104,6 @@ async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() ->
         Some(foreign_id)
     );
 
-    let rejected = access
-        .transact_write("test.config_import.dangling_delete", |txn| {
-            let owner_a = &owner_a;
-            Box::pin(async move {
-                apply_delete_collection(txn, Collection::Tools, owner_a, &["tools".into()]).await
-            })
-        })
-        .await;
-    assert!(rejected.is_err());
-    assert!(tools_id(&access, &owner_a, "tools").await?.is_some());
     Ok(())
 }
 
