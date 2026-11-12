@@ -1244,12 +1244,12 @@ def caseCoverage : List CoverageEntry :=
       "CommandPolicyEnv")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "command_isolation_cases"
-      "CommandIsolation")
+      "family"
+      "command_policy_effective_network_mode")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "command_isolation_cases"
-      "CommandIsolationSeatbelt")
+      "family"
+      "command_isolation_seatbelt")
       "command-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "command_policy_cases"

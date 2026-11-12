@@ -920,7 +920,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"artifact_spawn_cases\":" ++ artifactSpawnCasesJson ++ ","
     ++ "\"command_policy_cases\":"
       ++ jsonArray (CommandPolicy.commandPolicyCases.map commandPolicyCaseJson) ++ ","
-    ++ "\"command_isolation_cases\":" ++ Conformance.CommandIsolation.casesJson.compress ++ ","
     ++ "\"command_env_cases\":"
       ++ jsonArray (CommandPolicy.commandEnvCases.map commandEnvCaseJson) ++ ","
     ++ "\"live_overlay_cases\":"
