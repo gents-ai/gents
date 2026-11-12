@@ -13,10 +13,6 @@ pub fn lean_agent_materialization_cases() -> &'static [LeanAgentMaterializationC
     &lean_contract_snapshot().agent_materialization_cases
 }
 
-pub fn lean_agent_request_admission_cases() -> &'static [LeanAgentRequestAdmissionCase] {
-    &lean_contract_snapshot().agent_request_admission_cases
-}
-
 pub fn lean_aggregate_token_budget_cases() -> &'static [LeanAggregateTokenBudgetCase] {
     &lean_contract_snapshot().aggregate_token_budget_cases
 }
@@ -905,36 +901,6 @@ pub struct LeanAgentMessageOutcomeCase {
     pub caused: String,
     pub head: String,
     pub expected: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanAgentRequestAdmissionCase {
-    pub name: String,
-    pub observation_available: bool,
-    pub kind: String,
-    pub signature_valid: bool,
-    pub signed_fields_match: bool,
-    pub branch_fields_exact: bool,
-    pub pending_deadline_absent: bool,
-    pub signer_matches_requester: bool,
-    pub requester_matches_target: bool,
-    pub signer_matches_target: bool,
-    pub signer_matches_issuer: bool,
-    pub requester_matches_session_scope: bool,
-    pub current_approval: bool,
-    pub exact_generation: bool,
-    pub authorization_fresh: bool,
-    pub runtime_evidence_present: bool,
-    pub runtime_source_kind: String,
-    pub target_runtime_attestation_valid: bool,
-    pub source_binding_current: bool,
-    pub trigger_config_document_binding_current: bool,
-    pub source_document_binding_current: bool,
-    pub target_policy_allows: bool,
-    pub native_create_authorized: bool,
-    pub hop_within_bound: bool,
-    pub expected_admitted: bool,
-    pub expected_disposition: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3120,7 +3086,6 @@ pub struct LeanContractSnapshot {
     pub enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub enrollment_auto_renewal_cases: Vec<LeanEnrollmentAutoRenewalCase>,
     pub enrollment_renewal_intent_cases: Vec<LeanEnrollmentRenewalIntentCase>,
-    pub agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub causal_hop_cap_observation_cases: Vec<LeanCapObservationCase>,
     pub causal_hop_step_cases: Vec<LeanCausalHopStepCase>,

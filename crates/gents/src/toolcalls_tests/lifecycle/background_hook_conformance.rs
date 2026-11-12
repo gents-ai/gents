@@ -114,10 +114,6 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let same_requester = gents_lean_vocab::lean_r6_backgrounding_case(
         "read_process_same_requester_next_turn_authorized",
     );
-    let admission_case = gents_lean_vocab::lean_agent_request_admission_cases()
-        .iter()
-        .find(|case| case.name == "local-self-absent-requester")
-        .unwrap();
     let (db, user, client, binding) =
         crate::test_support::root::signed_test_node("background-hook-scope").await;
     let node = db.node.clone();
@@ -357,12 +353,18 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let result = verifier
         .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
         .await;
-    assert!(!admission_case.expected_admitted);
-    assert_eq!(
-        result.as_ref().err().is_some_and(|error| error.is_denied()),
-        admission_case.expected_disposition == "deny",
-        "{result:?}"
-    );
+    let observed = gents_lean_vocab::families::request_admission_absent_requester::Admission {
+        admitted: result.is_ok(),
+        disposition: match &result {
+            Ok(_) => "admit",
+            Err(error) if error.is_denied() => "deny",
+            Err(_) => "retry",
+        }
+        .to_string(),
+    };
+    for case in gents_lean_vocab::families::request_admission_absent_requester::cases() {
+        case.check(observed.clone());
+    }
     let response = access
         .execute(
             "{ AgentToolCall(filter: { request_id: { _eq: \"scope-historical\" } }) { _docID } }",

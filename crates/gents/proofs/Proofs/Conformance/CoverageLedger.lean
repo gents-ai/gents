@@ -833,8 +833,12 @@ def caseCoverage : List CoverageEntry :=
       "RequestProgressCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "agent_request_admission_cases"
-      "AgentRequestAdmissionCases")
+      "family"
+      "request_admission_projected")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "request_admission_absent_requester")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "causal_hop_step_cases"

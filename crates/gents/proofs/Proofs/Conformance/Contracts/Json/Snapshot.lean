@@ -648,8 +648,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","
     ++ "\"background_wake_row_cases\":" ++ backgroundWakeRowsCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
-    ++ "\"agent_request_admission_cases\":"
-      ++ agentRequestAdmissionCasesJson ++ ","
     ++ "\"title_request_admission_cases\":"
       ++ titleRequestAdmissionCasesJson ++ ","
     ++ "\"title_request_purpose_wire_cases\":"
