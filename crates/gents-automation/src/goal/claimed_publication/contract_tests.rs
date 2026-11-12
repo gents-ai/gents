@@ -1,9 +1,11 @@
 use super::*;
 use crate::goal::continuation::goal_continuation_identity;
+use gents_lean_vocab::{
+    LeanGoalClaimedPublicationCaseBefore, LeanGoalClaimedPublicationCaseExpected,
+};
 use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;
 use gents_store::identity::NodeIdentity;
-use serde::Deserialize;
 use serde_json::json;
 
 use gents_protocol::tool_call::AwaitMode;
@@ -45,24 +47,56 @@ async fn verified_client_lifecycle(
     lifecycle
 }
 
-#[derive(Deserialize)]
-struct PublicationContracts {
-    goal_claimed_publication_cases: Vec<PublicationCase>,
-    goal_claimed_target_cases: Vec<serde_json::Value>,
+macro_rules! snapshot_value {
+    ($snapshot:expr) => {{
+        let snapshot = $snapshot;
+        json!({
+            "status": snapshot.status,
+            "blocked_audits": snapshot.blocked_audits,
+            "wrapup_requested": snapshot.wrapup_requested,
+            "wrapup_completed": snapshot.wrapup_completed,
+            "sequence": snapshot.sequence,
+            "last_continued_from": snapshot.last_continued_from,
+            "latest_request": snapshot.latest_request,
+            "children": snapshot.children.iter().map(|child| json!({
+                "goal": child.goal,
+                "owner": child.owner,
+                "session": child.session,
+                "predecessor": child.predecessor,
+                "predecessor_doc": child.predecessor_doc,
+                "correlation": child.correlation,
+                "source_document": child.source_document,
+                "trigger_context": child.trigger_context,
+                "workspace_fingerprint": child.workspace_fingerprint,
+                "semantic_fingerprint": child.semantic_fingerprint,
+                "child": child.child,
+                "sequence": child.sequence,
+            })).collect::<Vec<_>>(),
+            "tokens_used": snapshot.tokens_used,
+            "token_budget": snapshot.token_budget,
+        })
+    }};
+}
+
+fn before_value(before: &LeanGoalClaimedPublicationCaseBefore) -> serde_json::Value {
+    snapshot_value!(before)
+}
+
+fn expected_value(expected: &LeanGoalClaimedPublicationCaseExpected) -> serde_json::Value {
+    snapshot_value!(expected)
 }
 
 #[tokio::test]
 async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
-    let contracts: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    let before = &contracts
+    let located = gents_lean_vocab::lean_contract_snapshot()
         .goal_claimed_publication_cases
         .iter()
         .find(|case| case.name == "claimed_active_publishes_without_reclaim")
-        .unwrap()
-        .before;
-    for case in &contracts.goal_claimed_target_cases {
-        let fixture = Fixture::new(before).await;
-        let name = case["name"].as_str().unwrap();
+        .unwrap();
+    let before = before_value(&located.before);
+    for case in &gents_lean_vocab::lean_contract_snapshot().goal_claimed_target_cases {
+        let fixture = Fixture::new(&before).await;
+        let name = case.name.as_str();
         let duplicate = name == "duplicate-after-revocation";
         let forged = matches!(
             name,
@@ -137,7 +171,7 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
                 result.is_err(),
                 "{name} must not recover a foreign signed target"
             );
-            assert_eq!(case["committed"], false);
+            assert!(!case.committed);
             txn.discard().await.unwrap();
         } else {
             let receipt = result.unwrap().expect("matching claimed publication");
@@ -169,7 +203,7 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
                 owners[0].owner.as_ref().map(identity::Did::as_str),
                 Some(fixture.agent.did())
             );
-            if case["commit"] == true {
+            if case.commit {
                 txn.commit().await.unwrap();
             } else {
                 txn.discard().await.unwrap();
@@ -177,7 +211,7 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
             let user = fixture.user_access().execute(&filter).await.unwrap();
             let visible = !user["data"]["AgentRequest"].as_array().unwrap().is_empty();
             assert_eq!(
-                visible, case["grants"],
+                visible, case.grants,
                 "{name}: User visibility follows modeled grants"
             );
         }
@@ -187,15 +221,14 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
 
 #[tokio::test]
 async fn generated_claimed_identity_cases_drive_real_transactions() {
-    let contracts: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    let before = &contracts
+    let located = gents_lean_vocab::lean_contract_snapshot()
         .goal_claimed_publication_cases
         .iter()
         .find(|case| case.name == "claimed_active_publishes_without_reclaim")
-        .unwrap()
-        .before;
+        .unwrap();
+    let before = before_value(&located.before);
     for case in &gents_lean_vocab::lean_contract_snapshot().goal_claimed_identity_cases {
-        let fixture = Fixture::new(before).await;
+        let fixture = Fixture::new(&before).await;
         let agent = fixture.parent.agent_did.as_str();
         let node = fixture.identity.did();
         let resolve = |name: &str| match name {
@@ -274,29 +307,20 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
     }
 }
 
-#[derive(Deserialize)]
-struct PublicationCase {
-    name: String,
-    before: serde_json::Value,
-    request: serde_json::Value,
-    observation: serde_json::Value,
-    commit: bool,
-    expected: serde_json::Value,
-    outcome: String,
-}
-
 async fn run_generated_running_wait() {
-    let contracts: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    let case = contracts
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .goal_claimed_publication_cases
-        .into_iter()
+        .iter()
         .find(|case| case.name == "claimed_wait_running_defers")
         .expect("generated running wait case");
     assert_eq!(case.outcome, "deferred");
-    assert_eq!(case.request["binding"]["predecessor_doc"], 100);
-    assert_eq!(case.observation["waits"][0]["reply"], "timed_out_running");
-    assert_eq!(case.observation["backgrounds"][0]["state"], "running");
-    let fixture = Fixture::new_with_parent_state(&case.before, false).await;
+    assert_eq!(case.request.binding.predecessor_doc, 100);
+    assert_eq!(case.observation.waits[0].reply, "timed_out_running");
+    assert_eq!(
+        case.observation.backgrounds.as_ref().unwrap()[0].state,
+        "running"
+    );
+    let fixture = Fixture::new_with_parent_state(&before_value(&case.before), false).await;
     let mut request = verified_client_lifecycle(&fixture, fixture.parent.clone()).await;
     assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
     let mut spawn = publish_accepted_on_claimed_request(
@@ -362,7 +386,7 @@ async fn run_generated_running_wait() {
     );
     assert_eq!(
         fixture.observe().await,
-        case.before,
+        before_value(&case.before),
         "running wait prestate"
     );
     let observed = fixture.current_goal().await;
@@ -377,7 +401,7 @@ async fn run_generated_running_wait() {
     .await
     .unwrap();
     assert!(result.is_none(), "generated intentional wait must defer");
-    assert_eq!(fixture.observe().await, case.expected);
+    assert_eq!(fixture.observe().await, expected_value(&case.expected));
     background.complete("finished").await.unwrap();
     assert!(publish_claimed_continuation_with_identity(
         &fixture.node,
@@ -390,7 +414,7 @@ async fn run_generated_running_wait() {
     .await
     .unwrap()
     .is_none());
-    assert_eq!(fixture.observe().await, case.expected);
+    assert_eq!(fixture.observe().await, expected_value(&case.expected));
     let report =
         gents_toolcalls::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
             &fixture.node,
@@ -464,13 +488,13 @@ const ABANDONED_RESCAN: &str = "abandoned_wrapup_rescan_makes_no_write";
 const ABANDONED_CLEARED: &str = "abandoned_wrapup_never_publishes_after_evidence_clears";
 
 async fn run_generated_wait_observations() {
-    let contracts: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    let contracts = gents_lean_vocab::lean_contract_snapshot();
     let follow_up = |name: &str| {
         contracts
             .goal_claimed_publication_cases
             .iter()
             .find(|case| case.name == name)
-            .map(|case| (case.expected.clone(), case.outcome.clone()))
+            .map(|case| (expected_value(&case.expected), case.outcome.clone()))
             .expect("generated abandoned wrap-up follow-up")
     };
     let (rescan_expected, rescan_outcome) = follow_up(ABANDONED_RESCAN);
@@ -481,12 +505,12 @@ async fn run_generated_wait_observations() {
     );
     let cases: Vec<_> = contracts
         .goal_claimed_publication_cases
-        .into_iter()
+        .iter()
         .filter(|case| {
             case.name != ABANDONED_RESCAN
                 && case.name != ABANDONED_CLEARED
                 && (case.name == "launched_without_wait_publishes"
-                    || (case.observation["waits"] != json!([])
+                    || (!case.observation.waits.is_empty()
                         && case.name != "claimed_wait_running_defers"))
         })
         .collect();
@@ -498,7 +522,7 @@ async fn run_generated_wait_observations() {
     );
     for case in cases {
         let fixture = Fixture::new_with_earlier_request(
-            &case.before,
+            &before_value(&case.before),
             false,
             (case.name == "unrelated_wait_cannot_suppress").then_some("older-wait-parent"),
         )
@@ -559,7 +583,7 @@ async fn run_generated_wait_observations() {
             "{}",
             case.name
         );
-        let backgrounds = case.observation["backgrounds"].as_array();
+        let backgrounds = case.observation.backgrounds.as_ref();
         let wants_target = backgrounds.is_some_and(|rows| !rows.is_empty())
             || matches!(
                 case.name.as_str(),
@@ -605,9 +629,9 @@ async fn run_generated_wait_observations() {
             ) {
                 "running"
             } else {
-                case.observation["backgrounds"][0]["state"]
+                case.observation.backgrounds.as_ref().unwrap()[0]
+                    .state
                     .as_str()
-                    .unwrap()
             };
             match target_state {
                 "pending" => {}
@@ -671,16 +695,11 @@ async fn run_generated_wait_observations() {
             assert_ne!(duplicate.doc_id(), target_doc.as_deref());
             turn += 1;
         }
-        for (index, observed_wait) in case.observation["waits"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .enumerate()
-        {
+        for (index, observed_wait) in case.observation.waits.iter().enumerate() {
             if case.name == "unrelated_wait_cannot_suppress" {
                 continue;
             }
-            let reply = observed_wait["reply"].as_str().unwrap();
+            let reply = observed_wait.reply.as_str();
             let malformed_arguments = case.name == "malformed_accepted_wait_error_fails_closed";
             let mut wait = publish_accepted_on_claimed_request(
                 fixture.node.clone(),
@@ -695,19 +714,19 @@ async fn run_generated_wait_observations() {
                     json!({"tool_call_id":handle,"timeout_secs":1})
                 },
                 AwaitMode::Foreground,
-                observed_wait["replied"] != false,
+                observed_wait.replied,
             )
             .await
             .unwrap();
             terminal_header = wait.accepted_header_doc_id().map(str::to_owned);
             wait_docs.push(wait.doc_id().unwrap().to_owned());
-            if observed_wait["replied"] == false {
+            if !observed_wait.replied {
                 turn += 1;
                 continue;
             }
             match reply {
                 "timed_out_running" => {
-                    let reply_handle = if observed_wait["reply_handle"] == "wrong" {
+                    let reply_handle = if observed_wait.reply_handle == "wrong" {
                         "wrong"
                     } else {
                         &handle
@@ -783,11 +802,11 @@ async fn run_generated_wait_observations() {
             }
             turn += 1;
         }
-        let unstarted_wait = case.observation["waits"]
-            .as_array()
-            .unwrap()
+        let unstarted_wait = case
+            .observation
+            .waits
             .iter()
-            .any(|wait| wait["replied"] == false);
+            .any(|wait| !wait.replied);
         let (outcome, failure) = if unstarted_wait {
             (
                 RequestTerminalOutcome::Failed,
@@ -814,7 +833,7 @@ async fn run_generated_wait_observations() {
         );
         assert_eq!(
             fixture.observe().await,
-            case.before,
+            before_value(&case.before),
             "{} prestate",
             case.name
         );
@@ -861,7 +880,7 @@ async fn run_generated_wait_observations() {
             "Original signed continuation",
             wrapup,
         );
-        let result = if case.observation["storage_failed"] == true {
+        let result = if case.observation.storage_failed {
             ConfigApplyTxn::with_read_storage_failure(
                 "await_mode spawned_by_tool_call_doc_id",
                 publication,
@@ -887,7 +906,12 @@ async fn run_generated_wait_observations() {
                     "{}: {error:#}",
                     case.name
                 );
-                assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
+                assert_eq!(
+                    fixture.observe().await,
+                    expected_value(&case.expected),
+                    "{}",
+                    case.name
+                );
                 let retried = publish_claimed_continuation_with_identity(
                     &fixture.node,
                     fixture.agent.as_ref(),
@@ -962,7 +986,12 @@ async fn run_generated_wait_observations() {
             }
             outcome => panic!("unmapped generated wait outcome {outcome}"),
         }
-        assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
+        assert_eq!(
+            fixture.observe().await,
+            expected_value(&case.expected),
+            "{}",
+            case.name
+        );
         fixture.node.shutdown().await.expect("node shutdown");
     }
     assert_eq!(
@@ -979,40 +1008,39 @@ async fn generated_goal_claimed_publication_cases_drive_real_transactions() {
 }
 
 async fn run_historical_publication_cases() {
-    let contracts: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    let contracts = gents_lean_vocab::lean_contract_snapshot();
     let mut seen = std::collections::BTreeSet::new();
     for case in contracts
         .goal_claimed_publication_cases
-        .into_iter()
+        .iter()
         .filter(|case| {
-            case.observation["waits"] == json!([])
+            case.observation.waits.is_empty()
                 && case.name != "launched_without_wait_publishes"
                 && case.name != ABANDONED_CLEARED
         })
     {
         assert!(seen.insert(case.name.clone()), "duplicate generated case");
-        let fixture = Fixture::new(&case.before).await;
-        if !case.before["children"].as_array().unwrap().is_empty() {
+        let fixture = Fixture::new(&before_value(&case.before)).await;
+        if !case.before.children.is_empty() {
             fixture.seed_child(case.outcome == "conflict").await;
         }
-        if case.before["latest_request"] == 40 {
+        if case.before.latest_request == 40 {
             fixture
                 .other_request("claimed-later-request", "2030-01-01T00:00:00Z", "completed")
                 .await;
         }
         assert_eq!(
             fixture.observe().await,
-            case.before,
+            before_value(&case.before),
             "{} initial",
             case.name
         );
         let mut observed = fixture.current_goal().await;
-        observed.status = case.request["expected_status"].as_str().unwrap().into();
-        observed.continuation_sequence = case.request["expected_sequence"].as_i64();
+        observed.status = case.request.expected_status.clone();
+        observed.continuation_sequence = i64::try_from(case.request.expected_sequence).ok();
         observed.last_continued_from_request_id =
-            match case.request["expected_last_continued_from"].as_u64() {
-                Some(10) => Some(PARENT.into()),
-                None => None,
+            match case.request.expected_last_continued_from {
+                10 => Some(PARENT.into()),
                 value => panic!("unmapped observed watermark {value:?}"),
             };
         let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
@@ -1042,10 +1070,10 @@ async fn run_historical_publication_cases() {
                     .await
                     .unwrap()
                     .unwrap();
-                assert_eq!(staged_goal.status, case.before["status"].as_str().unwrap());
+                assert_eq!(staged_goal.status, case.before.status);
                 assert_eq!(
                     staged_goal.continuation_sequence(),
-                    case.before["sequence"].as_i64().unwrap()
+                    i64::try_from(case.before.sequence).unwrap()
                 );
                 assert_eq!(
                     staged_goal.last_continued_from_request_id.as_deref(),
@@ -1117,7 +1145,7 @@ async fn run_historical_publication_cases() {
         }
         assert_eq!(
             fixture.observe().await,
-            case.expected,
+            expected_value(&case.expected),
             "{} durable result",
             case.name
         );
