@@ -699,8 +699,8 @@ def caseCoverage : List CoverageEntry :=
       "EnrollmentPendingRequests")
       "authenticated-enrollment" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_sync_health_cases"
-      "ClientSyncHealthCases")
+      "family"
+      "client_sync_health_cases_projection")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "pending_user_turn_cases"
@@ -1148,8 +1148,12 @@ def caseCoverage : List CoverageEntry :=
       "ClientTelemetryCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_settings_cases"
-      "ClientSettingsCases")
+      "family"
+      "client_settings_revisions")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_settings_fields")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_data_publication_cases"

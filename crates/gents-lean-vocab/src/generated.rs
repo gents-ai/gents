@@ -2556,53 +2556,6 @@ pub struct LeanClientRequestPatchPublicationCasesReuseItem {
     pub same_signature: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientSettingsCases {
-    pub fields: Vec<LeanClientSettingsCasesFieldsItem>,
-    pub revisions: Vec<LeanClientSettingsCasesRevisionsItem>,
-    #[serde(rename = "savedProjections")]
-    pub saved_projections: Vec<LeanClientSettingsCasesSavedProjectionsItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientSettingsCasesFieldsItem {
-    pub collection: String,
-    pub editable: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientSettingsCasesRevisionsItem {
-    pub current: Option<LeanClientSettingsCasesRevisionsItemCurrent>,
-    pub expected: Option<LeanClientSettingsCasesRevisionsItemExpected>,
-    pub matches: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientSettingsCasesRevisionsItemCurrent {
-    pub composite: u64,
-    pub document: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientSettingsCasesRevisionsItemExpected {
-    pub composite: u64,
-    pub document: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientSettingsCasesSavedProjectionsItem {
-    pub adopt: bool,
-    pub content: bool,
-    pub physical: bool,
-    pub read: bool,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct LeanClientShellCase {
     pub name: String,
@@ -2651,19 +2604,6 @@ pub struct LeanClientSignedControlCase {
     pub request: String,
     pub session: String,
     pub signature_valid: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientSyncHealthCase {
-    pub cause: Option<String>,
-    pub configured_peers: u64,
-    pub dialed_peers: u64,
-    pub enrollment: Vec<String>,
-    pub next_action: Option<String>,
-    pub runtimes: Vec<Option<String>>,
-    pub state: String,
-    pub transport: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3039,7 +2979,6 @@ pub struct LeanContractSnapshot {
     pub remote_agent_delivery_claim_cases: Vec<LeanRemoteAgentDeliveryClaimCase>,
     pub cross_actor_authorization_cases: Vec<LeanCrossActorAuthorizationCase>,
     pub client_telemetry_cases: Vec<serde_json::Value>,
-    pub client_settings_cases: LeanClientSettingsCases,
     pub client_data_publication_cases: LeanClientDataPublicationCases,
     pub client_request_patch_publication_cases: LeanClientRequestPatchPublicationCases,
     pub client_direct_session_read_cases: Vec<LeanClientDirectSessionReadCase>,
@@ -3110,9 +3049,6 @@ pub struct LeanContractSnapshot {
     pub enrollment_cases: Vec<LeanEnrollmentCase>,
     pub enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
     pub enrollment_pending_request_cases: Vec<LeanEnrollmentPendingRequestCase>,
-    pub enrollment_absent_peer_cases: Vec<LeanEnrollmentAbsentPeerCase>,
-    pub client_sync_health_cases: Vec<LeanClientSyncHealthCase>,
-    pub enrollment_route_readiness_cases: Vec<LeanEnrollmentRouteReadinessCase>,
     pub enrollment_startup_cases: Vec<LeanEnrollmentStartupCase>,
     pub enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
@@ -3665,15 +3601,6 @@ pub struct LeanDurableUsageRow {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentAbsentPeerCase {
-    pub expected_present: bool,
-    pub expected_ready: bool,
-    pub initial_ready: bool,
-    pub managed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanEnrollmentAutoRenewalCase {
     pub allowed: bool,
     pub current: LeanEnrollmentAutoRenewalCaseCurrent,
@@ -3829,20 +3756,6 @@ pub struct LeanEnrollmentRenewalIntentCaseIntent {
     pub peer: String,
     pub predecessor_sequence: u64,
     pub transport_authenticated: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanEnrollmentRouteReadinessCase {
-    pub digest: bool,
-    pub enrollment: bool,
-    pub expected_ready: bool,
-    pub lease_fresh: bool,
-    pub name: String,
-    pub network: bool,
-    pub operator_endpoint: bool,
-    pub route_applied: bool,
-    pub sequence_fresh: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

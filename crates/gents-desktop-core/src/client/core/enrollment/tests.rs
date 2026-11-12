@@ -2157,9 +2157,7 @@ async fn malformed_authority_rows_are_skipped_by_the_active_listing() {
 
 #[tokio::test]
 async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_absent_peer_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
+    for case in gents_lean_vocab::families::enrollment_pending_requests_absent_peer::cases() {
         let temp = tempfile::tempdir().unwrap();
         let core = start_unsupervised_core(temp.path().join("desktop")).await;
         let admin =
@@ -2184,7 +2182,7 @@ async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() 
             )
             .await
             .unwrap();
-        if case.managed {
+        if case.input.managed {
             record = core
                 .sync_state
                 .upsert_local_standard_peer(
@@ -2197,21 +2195,26 @@ async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() 
                 .await
                 .unwrap();
         }
-        assert_eq!(record.is_managed_runtime(), case.managed);
+        assert_eq!(record.is_managed_runtime(), case.input.managed);
         core.sync_state
-            .set_pairing_ready(&record, case.initial_ready)
+            .set_pairing_ready(&record, case.input.initial_ready)
             .await
             .unwrap()
             .expect("the enrollment record is still current");
 
         reconcile_with_test_transport(&core, test_transport(&authority, true)).await;
         let records = core.peer_records().await;
-        assert_eq!(records.len(), usize::from(case.expected_present));
+        assert!(records.len() <= 1, "{records:?}");
         if let Some(retained) = records.first() {
             assert_eq!(retained.peer_id, authority.request.server_peer);
             assert_eq!(retained.local_node_home.as_deref(), Some("/managed/home"));
-            assert_eq!(retained.pairing_ready, case.expected_ready);
         }
+        case.check(
+            gents_lean_vocab::families::enrollment_pending_requests_absent_peer::AbsentPeerOutput {
+                present: !records.is_empty(),
+                ready: records.first().is_some_and(|retained| retained.pairing_ready),
+            },
+        );
         Arc::new(core).shutdown().await.unwrap();
     }
 }

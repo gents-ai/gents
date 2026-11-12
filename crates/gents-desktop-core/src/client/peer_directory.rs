@@ -1053,12 +1053,10 @@ pub(crate) mod tests {
 
     #[test]
     fn generated_enrollment_route_readiness_matches_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_route_readiness_cases;
-        assert!(!cases.is_empty());
         let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        for case in cases {
+        gents_lean_vocab::families::enrollment_pending_requests_route_readiness::replay(|case| {
             let mut peer = PeerRecord::base("runtime", "peer", "node");
             peer.source = case.enrollment.then(|| "enrollment".into());
             peer.pairing_ready = case.route_applied;
@@ -1074,13 +1072,10 @@ pub(crate) mod tests {
                 peer.graphql = Some("http://127.0.0.1:9191/api/v0/graphql".into());
                 peer.local_node_home = Some("/runtime".into());
             }
-            assert_eq!(
-                peer.is_enrollment_ready_at(now),
-                case.expected_ready,
-                "{}",
-                case.name
-            );
-        }
+            gents_lean_vocab::families::enrollment_pending_requests_route_readiness::RouteReadinessOutput {
+                ready: peer.is_enrollment_ready_at(now),
+            }
+        });
     }
 
     /// Materializes a Lean `ClientChatReadiness.Route` as the record the

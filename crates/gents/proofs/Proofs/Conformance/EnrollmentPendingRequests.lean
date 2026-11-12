@@ -1,6 +1,7 @@
 import Proofs.P2P.Enrollment.DurableProjection
 import Proofs.Conformance.ContractCases.Enrollment
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.EnrollmentPendingRequests
 
@@ -82,14 +83,23 @@ private def caseJson (value : Case) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-def absentPeerCasesJson : String :=
-  jsonArray ([false, true].flatMap fun managed =>
-    [false, true].map fun ready =>
-      let expected := absentEnrollmentPeer managed
-      "{\"managed\":" ++ boolJson managed ++
-      ",\"initial_ready\":" ++ boolJson ready ++
-      ",\"expected_present\":" ++ boolJson expected.1 ++
-      ",\"expected_ready\":" ++ boolJson expected.2 ++ "}")
+structure AbsentPeerInput where
+  managed : Bool
+  initialReady : Bool
+  deriving Lean.ToJson
+
+structure AbsentPeerOutput where
+  present : Bool
+  ready : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def absentPeer : Family AbsentPeerInput AbsentPeerOutput where
+  inputs := [false, true].flatMap fun managed =>
+    [false, true].map fun initialReady => { managed, initialReady }
+  model := fun i =>
+    let expected := absentEnrollmentPeer i.managed
+    { present := expected.1, ready := expected.2 }
 
 structure RouteCase where
   name : String
@@ -100,6 +110,7 @@ structure RouteCase where
   sequenceFresh : Bool := true
   leaseFresh : Bool := true
   operatorEndpoint : Bool := false
+  deriving Lean.ToJson
 
 def routeCases : List RouteCase :=
   [ { name := "applied_fresh_enrollment" }
@@ -111,19 +122,17 @@ def routeCases : List RouteCase :=
   , { name := "invalid_sequence", sequenceFresh := false }
   , { name := "expired_lease", leaseFresh := false, operatorEndpoint := true } ]
 
-private def routeCaseJson (c : RouteCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"enrollment\":" ++ boolJson c.enrollment ++
-  ",\"route_applied\":" ++ boolJson c.routeApplied ++
-  ",\"network\":" ++ boolJson c.network ++
-  ",\"digest\":" ++ boolJson c.digest ++
-  ",\"sequence_fresh\":" ++ boolJson c.sequenceFresh ++
-  ",\"lease_fresh\":" ++ boolJson c.leaseFresh ++
-  ",\"operator_endpoint\":" ++ boolJson c.operatorEndpoint ++
-  ",\"expected_ready\":" ++ boolJson (enrollmentRouteReady c.enrollment c.routeApplied
-    c.network c.digest c.sequenceFresh c.leaseFresh c.operatorEndpoint) ++ "}"
+structure RouteReadinessOutput where
+  ready : Bool
+  deriving Lean.ToJson
 
-def routeCasesJson : String := jsonArray (routeCases.map routeCaseJson)
+@[conformance_family]
+def routeReadiness : Family RouteCase RouteReadinessOutput where
+  inputs := routeCases
+  model := fun c =>
+    let ready := enrollmentRouteReady c.enrollment c.routeApplied c.network c.digest
+      c.sequenceFresh c.leaseFresh c.operatorEndpoint
+    { ready }
 
 /-- The input is a fresh runtime with no request, decision, or authorization. -/
 def freshStartupPreservesAuthority : Bool :=

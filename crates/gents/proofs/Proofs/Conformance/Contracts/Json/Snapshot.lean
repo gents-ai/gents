@@ -625,12 +625,6 @@ def snapshotSessionCasesJson : String :=
       ++ enrollmentDurableProjectionCasesJson ++ ","
     ++ "\"enrollment_pending_request_cases\":"
       ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
-    ++ "\"enrollment_absent_peer_cases\":"
-      ++ Conformance.EnrollmentPendingRequests.absentPeerCasesJson ++ ","
-    ++ "\"client_sync_health_cases\":"
-      ++ Conformance.ClientSyncHealthCases.casesJson ++ ","
-    ++ "\"enrollment_route_readiness_cases\":"
-      ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
     ++ "\"enrollment_startup_cases\":"
       ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
@@ -770,8 +764,6 @@ def snapshotIdentityCasesJson : String :=
 
 def snapshotClientCasesJson : String :=
   ""
-    ++ "\"client_settings_cases\":"
-      ++ clientSettingsCases.compress ++ ","
     ++ "\"client_data_publication_cases\":"
       ++ Conformance.ClientDataPublication.casesJson ++ ","
     ++ "\"client_request_patch_publication_cases\":"
