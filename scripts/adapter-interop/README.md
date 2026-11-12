@@ -22,14 +22,14 @@ adapter envelope JSON files to any directory and run:
 
 ```sh
 GENTS_ADAPTER_INTEROP_FIXTURES=/path/to/generated/fixtures \
-  cargo test -p gents --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
+  cargo test -p gents-observe external_adapter_projection_fixtures_validate_against_contracts -- --ignored --nocapture
 ```
 
 The same harness can be pointed at the checked-in fixtures:
 
 ```sh
 GENTS_ADAPTER_INTEROP_FIXTURES=crates/gents/tests/fixtures/adapter_projections/envelopes \
-  cargo test -p gents --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
+  cargo test -p gents-observe external_adapter_projection_fixtures_validate_against_contracts -- --ignored --nocapture
 ```
 
 The harness accepts either a direct adapter envelope:

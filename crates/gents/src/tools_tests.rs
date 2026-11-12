@@ -1,4 +1,3 @@
-mod change_capture_plugin_inventory_tests;
 mod change_capture_tests;
 mod cli_tool;
 mod command_observability;
