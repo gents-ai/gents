@@ -478,3 +478,83 @@ async fn operator_cancel_and_non_job_stop_each_end_the_row_cancelled() {
         h.runtime.shutdown().await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nine_concurrent_adoptions_on_one_request_leave_exactly_eight() {
+    let h = LiveJobs::boot("live-job-adoption-cap").await;
+    let mut plans = Vec::new();
+    for index in 0..9 {
+        plans.push(
+            holding_plan(
+                &format!("live-cap-{index}"),
+                vec![spawn("child", &h.held_prompt())],
+            )
+            .await,
+        );
+    }
+    let arguments = tokio::task::spawn_blocking(move || {
+        plans
+            .into_iter()
+            .map(|plan| {
+                json!({"args":{"plan":plan.iter().map(PlanEntry::to_json).collect::<Vec<_>>()}})
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap();
+    const REQUEST: &str = "live-job-adoption-cap";
+    submit_with_cwd(
+        &h.live.access,
+        &h.actors.fixture,
+        &h.live.node_did,
+        REQUEST,
+        REQUEST,
+        format!(
+            "Call job_fixture nine times in parallel in your next response, once for each of these nine distinct argument objects: {}. Emit all nine calls together. Keep each object's plan intact and do not combine them. After all results arrive, acknowledge and end your turn. Do not repeat any call, including a refused call, and do not stop any job.",
+            serde_json::to_string(&arguments).unwrap(),
+        ),
+        &h.cwd,
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(&h.live.access, REQUEST, Duration::from_secs(120)).await,
+        "completed"
+    );
+    let rows = h.live.access.execute(&format!(
+        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{REQUEST}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID tool_call_id lifecycle_state}} }}"#,
+    )).await.unwrap();
+    let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
+    assert_eq!(rows.len(), 9, "all nine jobs were submitted: {rows:?}");
+    let running = rows
+        .iter()
+        .filter(|row| row["lifecycle_state"] == "running")
+        .collect::<Vec<_>>();
+    let refused = rows
+        .iter()
+        .filter(|row| row["lifecycle_state"] == "failed")
+        .collect::<Vec<_>>();
+    assert_eq!(running.len(), 8, "the parent retained its eight-job budget");
+    assert_eq!(refused.len(), 1, "the ninth adoption was refused");
+    for row in running {
+        h.wait_held(row, 1).await;
+        let view = h.job(row, |view| view.state == JobState::Running).await;
+        assert_eq!(view.children.len(), 1);
+        assert_eq!(view.children[0].state, JobChildState::Live);
+    }
+    h.refusal(refused[0]).await;
+    let result = gents_session::tool_call::query::result::load_tool_call_result(
+        &h.live.access,
+        refused[0]["_docID"].as_str().unwrap(),
+        &h.live.node_did,
+        REQUEST,
+        Some(h.actors.fixture.user.did()),
+    )
+    .await
+    .unwrap();
+    let refusal: Value = serde_json::from_str(
+        &gents_session::tool_call::query::result::render_tool_result(&result).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(refusal["code"], "background_tool_budget_exceeded");
+    h.runtime.shutdown().await;
+}
