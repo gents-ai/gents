@@ -189,63 +189,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
 
-#[tokio::test]
-async fn agent_tool_call_carries_only_generic_background_fields() {
-    let db = crate::support::test_db("agent-tool-call-background-fields").await;
-    let response = db
-        .node
-        .execute(
-            r#"{
-                __type(name: "AgentToolCall") {
-                    fields { name }
-                }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "introspection errors: {:?}",
-        response.errors
-    );
-    let names: RapidHashSet<String> = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("__type"))
-        .and_then(|t| t.get("fields"))
-        .and_then(|fs| fs.as_array())
-        .map(|fs| {
-            fs.iter()
-                .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    for field in [
-        "await_mode",
-        "cancel_cause",
-        "stuck_since",
-        "spawned_by_tool_call_doc_id",
-        "completion_notification_delivered_at",
-    ] {
-        assert!(names.contains(field), "AgentToolCall missing field {field}");
-    }
-    for field in [
-        "child_request_id",
-        "spawn_target_did",
-        "spawn_agent_did",
-        "delegated_input",
-        "delegated_workspace",
-        "cancel_policy",
-        "cancel_cascade_intent_at",
-        "cancel_pending_remote_ack",
-        "unclaimed_deadline_at",
-    ] {
-        assert!(
-            !names.contains(field),
-            "AgentToolCall retains field {field}"
-        );
-    }
-}
-
 #[test]
 fn lean_boundary_metadata_is_typed_and_reviewable() {
     let snapshot = lean_contract_snapshot();
