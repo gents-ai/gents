@@ -3,20 +3,23 @@ use std::sync::Arc;
 
 #[test]
 fn admission_matches_executable_lean_owner() {
-    let cases = gents_lean_vocab::lean_application_write_cases();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().application_write_cases;
     assert!(!cases.is_empty());
     for case in cases {
-        let observation: Observation = serde_json::from_value(case.clone()).unwrap();
-        assert_eq!(
-            observation.admitted(),
-            case["admitted"].as_bool().unwrap(),
-            "{case}"
-        );
-        assert_eq!(
-            observation.may_apply(),
-            case["may_apply"].as_bool().unwrap(),
-            "{case}"
-        );
+        let observation = Observation {
+            operation: case.operation.clone(),
+            granted: case.granted,
+            application: case.application,
+            protected: case.protected,
+            credential: case.credential,
+            bounded: case.bounded,
+            targets: case.targets as usize,
+            limit: case.limit as usize,
+            preview: case.preview,
+            digest_matches: case.digest_matches,
+        };
+        assert_eq!(observation.admitted(), case.admitted, "{case:?}");
+        assert_eq!(observation.may_apply(), case.may_apply, "{case:?}");
     }
 }
 
