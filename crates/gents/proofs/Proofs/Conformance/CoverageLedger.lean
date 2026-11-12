@@ -1523,6 +1523,14 @@ def caseCoverage : List CoverageEntry :=
       "mailbox_access_claimed_recipient_unreached"
       "model-production-gap: no served fixture commits a client claim without its verified admission; mailbox_access_claimed_recipient_served replays the unadmitted lifecycle before its claim.")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_access_claim_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_access_claim_tool_context")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "mailbox_access_sweep_actors"

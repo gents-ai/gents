@@ -86,6 +86,30 @@ def claimedRecipientUnreached : Family ClaimInput RecipientOutput where
   inputs := [{ present := false, committed := true }]
   model := recipientOutput
 
+structure ClaimVisibilityInput where
+  item : String
+  actor : String
+  deriving ToJson
+
+/-- A delegated client claim routes both the item its mailbox tool creates and
+the claimed request's runtime notice to the immediate signer, so each item
+holds the `fixture` recipient relationship with that signer as "user"; an
+outsider and the session owner hold no relationship to either and stand as
+"other". -/
+@[conformance_family]
+def claimVisibility : Family ClaimVisibilityInput Bool where
+  inputs := [{ item := "tool", actor := "user" }, { item := "tool", actor := "other" },
+    { item := "notice", actor := "other" }]
+  model := fun i => permitted fixture i.actor "read"
+
+/-- The delegated claim scenario binds its tool context to the admitted client
+before and after the claim commits; the context names an admitted client only
+once the claim has committed. -/
+@[conformance_family]
+def claimToolContext : Family ClaimInput Bool where
+  inputs := [{ present := true, committed := false }, { present := true, committed := true }]
+  model := fun i => (claimedRecipient (admittedFixture i.present) i.committed).isSome
+
 structure NoticeOutput where
   document : Bool
   recipient : Bool

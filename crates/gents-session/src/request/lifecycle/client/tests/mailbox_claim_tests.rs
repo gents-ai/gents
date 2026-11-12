@@ -122,24 +122,22 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     );
     lifecycle.bind_managed_agent(agent.as_ref())?;
     lifecycle.set_client_claim_admission(admission);
-    assert_eq!(
-        lifecycle.claimed_tool_context().is_ok(),
-        lifecycle.claimed_client_provenance().is_some()
-    );
+    let mut before_claim = Some(lifecycle.claimed_tool_context().is_ok());
     assert_eq!(
         lifecycle.claim_with_identity().await?,
         ClaimOutcome::Claimed
     );
     let context = lifecycle.claimed_tool_context()?;
-    assert_eq!(
-        context
-            .admitted_client
-            .as_ref()
-            .map(|client| client.signer_did.clone()),
-        lifecycle
-            .claimed_client_provenance()
-            .map(|provenance| provenance.signer_did)
-    );
+    let mut after_claim = Some(context.admitted_client.is_some());
+    for case in gents_lean_vocab::families::mailbox_access_claim_tool_context::cases() {
+        case.check(
+            match case.input.committed {
+                false => before_claim.take(),
+                true => after_claim.take(),
+            }
+            .expect("one tool context observation per modeled claim step"),
+        );
+    }
     assert_eq!(
         context.admitted_client.as_ref().unwrap().signer_did,
         user.did()
@@ -178,32 +176,19 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     )?
     .unwrap();
     assert_block_signer(&node, &version.cid, agent.did()).await;
-    let readable = |actor: &str, doc: &str| {
-        let (node, actor, doc) = (node.clone(), actor.to_owned(), doc.to_owned());
+    let tool_visible = |access: &ConfigAccess| {
+        let (access, query) = (access.clone(), query.clone());
         async move {
-            node.document_acp()
-                .check_doc_access(
-                    &defra_node::AcpIdentity::Authenticated(actor.parse()?),
-                    defra_node::DocumentPermission::Read,
-                    gents_protocol::schemas::MAILBOX_POLICY_ID,
-                    "mailbox_items",
-                    &doc,
-                )
-                .await
-                .map_err(anyhow::Error::from)
+            Ok::<_, anyhow::Error>(
+                !access.execute(&query).await?["data"]["MailboxItem"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+            )
         }
     };
-    for (did, access) in [
-        (user.did(), &user_access),
-        (outsider.did(), &outsider_access),
-    ] {
-        let result = access.execute(&query).await?;
-        assert_eq!(
-            !result["data"]["MailboxItem"].as_array().unwrap().is_empty(),
-            readable(did, doc).await?,
-            "{did}"
-        );
-    }
+    let mut tool_user = Some(tool_visible(&user_access).await?);
+    let mut tool_other = Some(tool_visible(&outsider_access).await?);
     assert!(crate::operations::mailbox::dismiss(&outsider_access, doc)
         .await
         .is_err());
@@ -280,10 +265,18 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
             )
         }
     };
-    assert_eq!(
-        visible(&owner_access, notice_query.clone()).await?,
-        readable(owner.did(), &notice.doc_id).await?
-    );
+    let mut notice_other = Some(visible(&owner_access, notice_query.clone()).await?);
+    for case in gents_lean_vocab::families::mailbox_access_claim_visibility::cases() {
+        case.check(
+            match (case.input.item.as_str(), case.input.actor.as_str()) {
+                ("tool", "user") => tool_user.take(),
+                ("tool", "other") => tool_other.take(),
+                ("notice", "other") => notice_other.take(),
+                _ => None,
+            }
+            .unwrap_or_else(|| panic!("no served observation for {:?}", case.input)),
+        );
+    }
     let mut claimed_notice = Some(
         gents_lean_vocab::families::mailbox_access_notice_publication::NoticeOutput {
             document: claimed_document,
