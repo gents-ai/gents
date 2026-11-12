@@ -323,7 +323,6 @@ async fn local_access_refuses_watch_and_control_on_an_offline_home() -> Result<(
     tokio::task::spawn_blocking(|| {
         let tempdir = tempfile::tempdir().context("creating tempdir")?;
         let node_home = tempdir.path().join("node-home");
-        // The refusal is decided by the access kind before any job lookup.
         let init = run_init_json(
             tempdir.path(),
             &[

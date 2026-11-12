@@ -198,9 +198,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
 
-    let (mut serve, readiness) =
+    let (_serve, readiness) =
         spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
-    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     assert_eq!(
         readiness.get("p2p_transport").and_then(Value::as_str),
@@ -417,8 +416,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
 
-    let mut serve = spawn_server_with_env(&home_dir, port, &["--home", home_arg], &[])?;
-    wait_for_port(port, &mut serve)?;
+    let (_serve, _) = spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     apply_live_file_agent_config(
@@ -829,8 +827,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
-    let mut serve = spawn_server_with_env(&home_dir, port, &["--home", home_arg], &[])?;
-    wait_for_port(port, &mut serve)?;
+    let (serve, _) = spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let default_agent = init
@@ -1139,13 +1136,12 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         .to_owned();
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let (mut serve, _) = spawn_server_with_ready_json(
+    let (_serve, _) = spawn_server_with_ready_json(
         &home,
         port,
         &["--home", home_arg, "--command-timeout-max-secs", "600"],
         &[],
     )?;
-    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node, Duration::from_secs(30)).await?;
     apply_live_file_agent_config(
         &home,
