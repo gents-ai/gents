@@ -52,19 +52,17 @@ fn generated_workspace_path_alias_cases_drive_real_git_delta() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_path_alias_cases;
     assert_eq!(cases.len(), 5, "wire every emitted alias case");
     for case in cases {
-        let paths =
-            |key: &str| -> Vec<String> { serde_json::from_value(case[key].clone()).unwrap() };
-        let changed = paths("changed_paths");
-        let base_paths = paths("base_paths");
-        let tree_paths = paths("tree_paths");
-        for (leaf_paths, key) in [
-            (&changed, "changed_prefixes"),
-            (&base_paths, "base_prefixes"),
-            (&tree_paths, "tree_prefixes"),
+        let changed = case.changed_paths.clone();
+        let base_paths = &case.base_paths;
+        let tree_paths = &case.tree_paths;
+        for (leaf_paths, modeled_prefixes) in [
+            (&case.changed_paths, &case.changed_prefixes),
+            (&case.base_paths, &case.base_prefixes),
+            (&case.tree_paths, &case.tree_prefixes),
         ] {
             assert_eq!(
                 serde_json::to_value(prefixes(leaf_paths)).unwrap(),
-                case[key]
+                serde_json::to_value(modeled_prefixes).unwrap()
             );
         }
         let fx = Fixture::new();
@@ -85,15 +83,15 @@ fn generated_workspace_path_alias_cases_drive_real_git_delta() {
         let output = command.wait_with_output().unwrap();
         assert!(output.status.success());
         let new = String::from_utf8(output.stdout).unwrap().trim().to_owned();
-        let base = index_tree(&fx.repo, &base_paths, &[], &old, &new);
-        let tree = index_tree(&fx.repo, &tree_paths, &changed, &old, &new);
+        let base = index_tree(&fx.repo, base_paths, &[], &old, &new);
+        let tree = index_tree(&fx.repo, tree_paths, &changed, &old, &new);
         let cap = WorkspacePathCapability::exact_paths(changed).unwrap();
         let result = super::super::adapter::validate_tree_delta(&fx.repo, &base, &tree, &cap);
         assert_eq!(
             result.is_ok(),
-            case["expected"].as_bool().unwrap(),
+            case.expected,
             "{}: {result:?}",
-            case["name"]
+            case.name
         );
     }
 }
