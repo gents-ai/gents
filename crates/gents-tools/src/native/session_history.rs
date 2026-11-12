@@ -22,7 +22,7 @@ use investigation::{
 };
 mod observation;
 mod snapshot;
-pub use snapshot::{load_session_history_snapshot, load_session_history_snapshot_with_access};
+pub use snapshot::load_session_history_snapshot_with_access;
 
 use anyhow::{anyhow, Context, Result};
 use defra_node::Node as EmbeddedNode;
@@ -325,7 +325,7 @@ impl Tool for SessionHistoryTool {
                     "session_id":{"type":"string","minLength":1,"description":"Session ID returned by list or search; required for get and transcript. Output defaults to the current session."},
                     "filter":{"type":"object","additionalProperties":false,"properties":{
                         "agent_did":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
-                        "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string","description":"Title or session ID substring only; use query to search transcript text."}
+                        "include_archived":{"type":"boolean","default":false},"tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string","description":"Title or session ID substring only; use query to search transcript text."}
                     }},
                     "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"get: the whole session document, accounting and timeline. transcript: message IDs and payload references."},
                     "call_id":{"type":"string","minLength":1,"description":"Output: the call_id of a tool result or [tool: …] stub."},

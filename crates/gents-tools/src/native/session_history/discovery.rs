@@ -7,14 +7,13 @@ use gents_session::session::TxnCanonicalReader;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::graphql::escape_graphql_string;
 
-const FIELDS: &str = gents_protocol::session::AGENT_SESSION_FIELDS;
-const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript, output. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across nodes and requesters.";
+const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript, output. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility within the selected node.";
 
 fn action_help(topic: Option<&str>) -> Result<&'static str> {
     Ok(match topic {
         None => HELP,
         Some("list") => {
-            r#"{"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}. Filters: agent_did, status (open/closed), tag, created_after (inclusive), created_before (exclusive), text (title or ID substring). Order: created_at descending, then ID descending. Pass next_cursor as cursor with the same filter. Limit: 1–100."#
+            r#"{"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}. Archived sessions are hidden unless include_archived=true. Filters: agent_did, include_archived, status (open/closed), tag, created_after (inclusive), created_before (exclusive), text (title or ID substring). Order: created_at descending, then ID descending. Pass next_cursor as cursor with the same filter. Limit: 1–100."#
         }
         Some("count") => {
             r#"{"action":"count","filter":{"status":"closed"}}. Exact count of authorized sessions, independent of request volume or list limits. Filters are the same as list; no cursor. Use help topic=list for filters."#
@@ -62,6 +61,8 @@ fn missing_search_query(args: &SessionHistoryParams) -> anyhow::Error {
 #[serde(deny_unknown_fields)]
 pub struct SessionFilter {
     pub agent_did: Option<String>,
+    #[serde(default)]
+    pub include_archived: bool,
     pub status: Option<String>,
     pub tag: Option<String>,
     pub created_after: Option<String>,
@@ -90,39 +91,38 @@ fn scope(agent: &str, requester: Option<&str>) -> String {
     )
 }
 
-fn filter_query(filter: &SessionFilter, cursor: Option<&Cursor>) -> Result<String> {
-    let mut parts = Vec::new();
-    if let Some(behavior) = &filter.agent_did {
-        parts.push(format!("{{ agent_did: {{_eq: {}}} }}", quoted(behavior)));
-    }
-    if let Some(tag) = &filter.tag {
-        parts.push(format!("{{ tags: {{_any: {{_eq: {}}}}} }}", quoted(tag)));
-    }
-    if let Some(status) = &filter.status {
-        parts.push(match status.as_str() {
-            "open" => "{closed_at: {_eq: null}}".into(),
-            "closed" => "{closed_at: {_ne: null}}".into(),
-            _ => bail!("invalid status '{status}'; next call: sessions {{\"action\":\"help\"}}"),
-        });
-    }
-    if let Some(after) = &filter.created_after {
-        parts.push(format!("{{created_at: {{_ge: {}}}}}", quoted(after)));
-    }
-    if let Some(before) = &filter.created_before {
-        parts.push(format!("{{created_at: {{_lt: {}}}}}", quoted(before)));
-    }
-    if let Some(cursor) = cursor {
-        let id_operator = if cursor.hit_sequence.is_some() {
-            "_le"
-        } else {
-            "_lt"
-        };
-        parts.push(format!("{{_or: [{{created_at: {{_lt: {time}}}}}, {{created_at: {{_eq: {time}}}, session_id: {{{id_operator}: {id}}}}}]}}", time=quoted(&cursor.created_at), id=quoted(&cursor.session_id)));
-    }
-    Ok(if parts.is_empty() {
-        "{}".into()
-    } else {
-        format!("{{_and: [{}]}}", parts.join(","))
+fn page_view(
+    node: &str,
+    filter: &SessionFilter,
+    cursor: Option<&Cursor>,
+) -> Result<gents_session::views::SessionPage> {
+    use gents_session::views::{SessionPage, SessionPosition, SessionState};
+    Ok(SessionPage {
+        input: gents_protocol::operations::session::SessionListInput {
+            node_did: Some(node.to_owned()),
+            include_archived: filter.include_archived,
+            ..Default::default()
+        },
+        agent_did: filter.agent_did.clone(),
+        state: match filter.status.as_deref() {
+            None => None,
+            Some("open") => Some(SessionState::Open),
+            Some("closed") => Some(SessionState::Closed),
+            Some(status) => {
+                bail!("invalid status '{status}'; next call: sessions {{\"action\":\"help\"}}")
+            }
+        },
+        tag: filter.tag.clone(),
+        created_after: filter.created_after.clone(),
+        created_before: filter.created_before.clone(),
+        after: cursor.map(|cursor| SessionPosition {
+            created_at: cursor.created_at.clone(),
+            session_id: cursor.session_id.clone(),
+            node_did: None,
+            inclusive: cursor.hit_sequence.is_some(),
+        }),
+        limit: Some(100),
+        ..Default::default()
     })
 }
 
@@ -371,15 +371,14 @@ async fn execute(
         .map(serde_json::from_str::<Cursor>)
         .transpose()
         .context("invalid cursor; next call: sessions {\"action\":\"list\"}")?;
-    let condition = filter_query(&filter, cursor.as_ref())?;
     if action == "count" && filter.text.is_none() {
-        let result = txn
-            .execute(&format!(
-                "{{total: COUNT(AgentSession: {{filter: {condition}}})}}"
-            ))
-            .await?;
-        let count = result["data"]["total"]
-            .as_u64()
+        let count = txn
+            .read_view(&gents_session::views::SessionCount {
+                page: page_view(agent, &filter, None)?,
+            })
+            .await?
+            .into_iter()
+            .next()
             .context("sessions exact aggregate count missing")?;
         return Ok(
             json!({"count":count,"scope":{"node_did":agent,"requester_did":requester,"visibility":"acp"}}),
@@ -402,8 +401,9 @@ async fn execute(
     let mut last_selected = None;
     let mut last_hit = None;
     loop {
-        let condition = filter_query(&filter, scan_cursor.as_ref())?;
-        let page = rows(txn.execute(&format!("{{AgentSession(filter: {condition}, order: [{{created_at: DESC}},{{session_id: DESC}}], limit: 100) {{{FIELDS}}}}}")).await?, "AgentSession")?;
+        let page = txn
+            .read_view(&page_view(agent, &filter, scan_cursor.as_ref())?)
+            .await?;
         if page.is_empty() {
             break;
         }
@@ -411,15 +411,10 @@ async fn execute(
         for row in page {
             let position = Cursor {
                 hit_sequence: None,
-                created_at: row["created_at"]
-                    .as_str()
-                    .context("session has no creation time")?
-                    .into(),
-                session_id: row["session_id"]
-                    .as_str()
-                    .context("session has no ID")?
-                    .into(),
+                created_at: row.session.created_at.clone(),
+                session_id: row.session.session_id.clone(),
             };
+            let row = serde_json::to_value(row)?;
             let resume_sequence = scan_cursor
                 .as_ref()
                 .filter(|cursor| cursor.session_id == position.session_id)
@@ -495,24 +490,22 @@ fn session_summary(mut session: Value) -> Value {
 }
 
 async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value> {
-    use gents_protocol::document_query::{
-        fields::agent_session as session_fields, Filter, Query, Selection,
-    };
-    let mut session = rows(
-        txn.run(
-            &Query::select(Selection::owned(FIELDS))
-                .filter(Filter::eq(session_fields::SESSION_ID, id))
-                .limit(2)
-                .render(),
-        )
-        .await?,
-        "AgentSession",
-    )?;
+    let mut sessions = txn
+        .read_view(&gents_session::views::SessionPage {
+            input: gents_protocol::operations::session::SessionListInput {
+                session_id: Some(id.to_owned()),
+                include_archived: true,
+                ..Default::default()
+            },
+            limit: Some(2),
+            ..Default::default()
+        })
+        .await?;
     anyhow::ensure!(
-        session.len() == 1,
+        sessions.len() == 1,
         "session is unavailable or ambiguous under ACP; next call: sessions {{\"action\":\"list\"}}"
     );
-    Ok(session.remove(0))
+    Ok(serde_json::to_value(sessions.remove(0))?)
 }
 
 async fn tool_output(
