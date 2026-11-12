@@ -150,3 +150,11 @@ fn install_repair_crash_loops_match_lean() {
         case.check(serde_json::from_value(json!(states)).unwrap());
     }
 }
+
+#[test]
+fn install_repair_recovery_matches_lean() {
+    for case in families::install_repair_recovery::cases() {
+        let input = serde_json::from_value(serde_json::to_value(&case.input).unwrap()).unwrap();
+        case.check(crate::service_update::can_restore_repair(&input));
+    }
+}

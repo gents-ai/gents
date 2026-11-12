@@ -394,6 +394,7 @@ async fn apply_inner(
     backup: Option<&crate::service_update::RepairBackup>,
 ) -> Result<(), Blocker> {
     let config = manager.config();
+    let exposure = backup.map(|backup| backup.directory.clone());
     match action {
         ServiceAction::MoveFrom {
             from,
@@ -425,6 +426,7 @@ async fn apply_inner(
             on_manager(&previous, NativeServiceManager::uninstall).await?;
             if install {
                 on_manager(config, move |manager| {
+                    crate::service_update::expose_repair_candidate(exposure.as_deref())?;
                     manager.install_carrying(&carried.definition, replace_program, carried.enabled)
                 })
                 .await?;
@@ -456,6 +458,7 @@ async fn apply_inner(
             on_manager(config, move |manager| {
                 manager.uninstall()?;
                 if install {
+                    crate::service_update::expose_repair_candidate(exposure.as_deref())?;
                     manager.install_carrying(&carried.definition, true, carried.enabled)?;
                 }
                 Ok(())

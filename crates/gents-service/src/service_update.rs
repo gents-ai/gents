@@ -508,83 +508,166 @@ pub(crate) async fn finish_repair_backup(backup: Option<&RepairBackup>) -> Resul
     .await?
 }
 
+pub(crate) fn can_restore_repair(
+    observed: &gents_protocol::operations::install_repair::RepairRecoveryObservation,
+) -> bool {
+    Phase::Installed.can_restore_prior(observed.candidate_exposed, observed.same_build)
+}
+
+pub(crate) fn expose_repair_candidate(directory: Option<&Path>) -> Result<()> {
+    if let Some(directory) = directory {
+        files::write_json(&directory.join("candidate-exposed.json"), &true)?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn restore_repair_service(
     backup: &RepairBackup,
     target: &NativeServiceConfig,
 ) -> Result<()> {
     let backup = backup.clone();
-    let target_to_stop = target.clone();
-    let before = backup.definition.clone();
-    let expected_running = backup.running;
-    let prior_config = backup.config.clone();
-    let stopped = tokio::task::spawn_blocking(move || -> Result<_> {
-        let manager = NativeServiceManager::new(target_to_stop.clone())?;
-        let path = target_to_stop
-            .definition_path(crate::native_service::NativeServicePlatform::current()?);
-        match std::fs::read(&path) {
-            Ok(current) if current != before => {
+    let inspected = backup.clone();
+    let target = target.clone();
+    let (cleanup, observation, unchanged, other_home) =
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            let manager = NativeServiceManager::new(target.clone())?;
+            let path =
+                target.definition_path(crate::native_service::NativeServicePlatform::current()?);
+            let current = match std::fs::read(&path) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            let prior_definition = current.as_ref() == Some(&inspected.definition);
+            let cleanup = if prior_definition {
+                inspected.config.clone()
+            } else {
+                target.clone()
+            };
+            if let Some(current) = current.as_ref().filter(|_| !prior_definition) {
                 anyhow::ensure!(
-                    manager.definition_executable(&current)? == target_to_stop.executable,
+                    manager.definition_executable(current)? == target.executable,
                     "service changed outside this repair; recovery refused"
                 );
             }
-            Ok(_) => {
-                let previous = NativeServiceManager::new(prior_config.clone())?;
-                if previous.status()?.running == expected_running {
-                    return Ok(None);
-                }
-                if expected_running {
-                    previous.start(false)?;
-                    return Ok(None);
-                }
-                let pid = previous.job_pid()?;
-                previous.stop(false)?;
-                return Ok(Some((pid, prior_config)));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            let unchanged = prior_definition
+                && NativeServiceManager::new(inspected.config.clone())?
+                    .status()?
+                    .running
+                    == inspected.running;
+            let same_build = inspected.prior_executable.as_ref().is_some_and(|prior| {
+                matches!((files::digest(prior), files::digest(&target.executable)),
+                (Ok(prior), Ok(candidate)) if prior == candidate)
+            });
+            let candidate_exposed = inspected
+                .directory
+                .join("candidate-exposed.json")
+                .try_exists()?
+                || current
+                    .as_ref()
+                    .is_some_and(|current| *current != inspected.definition);
+            let other_home = if target.home.is_dir()
+                && std::fs::canonicalize(&target.home)?
+                    != std::fs::canonicalize(&inspected.config.home)?
+            {
+                Some(target.home)
+            } else {
+                None
+            };
+            Ok((
+                cleanup,
+                gents_protocol::operations::install_repair::RepairRecoveryObservation {
+                    candidate_exposed,
+                    same_build,
+                },
+                unchanged,
+                other_home,
+            ))
+        })
+        .await??;
+    if unchanged {
+        return Ok(());
+    }
+    anyhow::ensure!(can_restore_repair(&observation),
+        "the replacement may have opened this store; prior executable was not restored. Backup retained at {}",
+        backup.directory.display());
+    let reservation = tokio::time::timeout(
+        Duration::from_secs(60),
+        gents_store::local::home::reserve_runtime_startup(&backup.config.home),
+    )
+    .await
+    .context("prior runtime startup is still active; recovery refused")??;
+    let other_reservation = match other_home.as_ref() {
+        Some(home) => Some(
+            tokio::time::timeout(
+                Duration::from_secs(60),
+                gents_store::local::home::reserve_runtime_startup(home),
+            )
+            .await
+            .context("replacement startup is still active; recovery refused")??,
+        ),
+        None => None,
+    };
+    let locked = backup.clone();
+    let store_locks = tokio::task::spawn_blocking(move || -> Result<_> {
+        let mut locks = vec![gents_store::local::home::lock_home_store(
+            &locked.config.home,
+        )?];
+        if let Some(home) = other_home {
+            locks.push(gents_store::local::home::lock_home_store(&home)?);
         }
-        let pid = manager.job_pid()?;
-        manager.stop(false)?;
-        Ok(Some((pid, target_to_stop)))
+        let saved_init = locked.directory.join("before-stop/init.json");
+        if saved_init.is_file() {
+            anyhow::ensure!(
+                std::fs::read(saved_init)? == std::fs::read(locked.config.home.join("init.json"))?,
+                "node identity or configuration changed; recovery refused"
+            );
+        }
+        anyhow::ensure!(
+            NetworkSettings::read(&locked.config.home)? == locked.network,
+            "network settings changed outside this repair; recovery refused"
+        );
+        Ok(locks)
     })
     .await??;
-    let Some((pid, cleanup)) = stopped else {
-        return Ok(());
-    };
+    let stopped = cleanup.clone();
+    let pid = tokio::task::spawn_blocking(move || -> Result<_> {
+        let manager = NativeServiceManager::new(stopped)?;
+        let pid = manager.job_pid()?;
+        manager.stop(false)?;
+        Ok(pid)
+    })
+    .await??;
     if let Some(pid) = pid {
         anyhow::ensure!(
             crate::native_service::wait_for_process_exit(pid, Duration::from_secs(20)).await,
             "replacement process did not stop; prior service was not overwritten"
         );
     }
-    tokio::time::timeout(
-        Duration::from_secs(120),
-        gents_store::local::home::wait_for_store_release(
-            &backup.config.home,
-            &gents_store::local::home::default_data_dir(&backup.config.home),
-        ),
-    )
-    .await
-    .context("replacement still owns the store")??;
-    tokio::task::spawn_blocking(move || {
-        let cleanup = NativeServiceManager::new(cleanup)?;
-        let store = gents_store::local::home::lock_home_store(&backup.config.home)?;
-        cleanup.uninstall()?;
-        let replace = backup.prior_executable.is_some();
-        let mut config = backup.config;
-        if let Some(executable) = backup.prior_executable {
+    let restored = backup.clone();
+    let config = tokio::task::spawn_blocking(move || -> Result<_> {
+        NativeServiceManager::new(cleanup)?.uninstall()?;
+        let replace = restored.prior_executable.is_some();
+        let mut config = restored.config;
+        if let Some(executable) = restored.prior_executable {
             config.executable = executable;
         }
-        let previous = NativeServiceManager::new(config)?;
-        previous.install_carrying(&backup.definition, replace, backup.enabled)?;
-        drop(store);
-        if backup.running {
-            previous.start(false)?;
-        }
-        Ok(())
+        NativeServiceManager::new(config.clone())?.install_carrying(
+            &restored.definition,
+            replace,
+            restored.enabled,
+        )?;
+        Ok(config)
     })
-    .await?
+    .await??;
+    drop(store_locks);
+    drop(other_reservation);
+    drop(reservation);
+    if backup.running {
+        tokio::task::spawn_blocking(move || NativeServiceManager::new(config)?.start(false))
+            .await??;
+    }
+    Ok(())
 }
 
 pub(crate) async fn can_update_live(home: &Path) -> Result<bool> {

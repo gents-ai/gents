@@ -523,3 +523,9 @@ pub struct RepairClientReceipt {
     pub findings: Vec<Finding>,
     pub local_node_lost: bool,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct RepairRecoveryObservation {
+    pub candidate_exposed: bool,
+    pub same_build: bool,
+}
