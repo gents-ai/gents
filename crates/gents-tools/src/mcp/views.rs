@@ -119,32 +119,13 @@ impl View for ServiceDocuments<'_> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolServiceHealthStateRow {
-    #[serde(rename = "_docID")]
-    pub doc_id: String,
-    pub node_did: String,
-    pub service_id: String,
-    pub endpoint: Option<String>,
-    pub status: Option<String>,
-    pub tool_count: Option<i64>,
-    pub failure_count: Option<i64>,
-    pub k_max: Option<i64>,
-    pub backoff_until: Option<String>,
-    pub last_probe_at: Option<String>,
-    pub last_seen: Option<String>,
-    pub last_error_class: Option<String>,
-    pub last_error_message: Option<String>,
-    pub updated_at: Option<String>,
-}
-
 pub struct Health<'a> {
     pub node_did: &'a str,
 }
 
 impl View for Health<'_> {
     type Collection = health::Doc;
-    type Row = ToolServiceHealthStateRow;
+    type Row = gents_protocol::row::ToolServiceHealthStateRow;
 
     fn query(&self, _reader_did: &str) -> Query<Self::Collection> {
         Query::select(

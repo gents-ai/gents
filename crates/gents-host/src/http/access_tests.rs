@@ -664,10 +664,10 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
         &graphql,
     );
     record.local_node_home = Some(home.to_string_lossy().into_owned());
-    let public = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&format!(
-        "{}/status",
-        f.endpoint
-    ))
+    let public = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
+        &format!("{}/status", f.endpoint),
+        None,
+    )
     .await
     .unwrap();
     assert!(public.get("tool_root").is_none());

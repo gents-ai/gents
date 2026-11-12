@@ -1,4 +1,7 @@
+pub mod bindings;
 pub mod reductions;
+pub mod requests;
+pub mod transcript;
 
 use gents_protocol::document_query::{
     fields::agent_session as session, Direction, Filter, Query, Selection,
@@ -103,6 +106,7 @@ pub struct SessionPage {
     pub agent_did: Option<String>,
     pub exclude_session_id: Option<String>,
     pub doc_id: Option<String>,
+    pub doc_ids: Option<Vec<String>>,
     pub state: Option<SessionState>,
     pub tag: Option<String>,
     pub created_after: Option<String>,
@@ -116,12 +120,7 @@ impl View for SessionPage {
     type Row = SessionRow;
 
     fn query(&self, _reader_did: &str) -> Query<Self::Collection> {
-        let mut query = scoped(&self.input)
-            .order_by(session::CREATED_AT, Direction::Desc)
-            .order_by(session::SESSION_ID, Direction::Desc)
-            .order_by(session::NODE_DID, Direction::Desc)
-            .order_by(session::REQUESTER_DID, Direction::Desc)
-            .order_by(session::DOC_ID, Direction::Desc);
+        let mut query = ordered(scoped(&self.input));
         if let Some(agent) = &self.agent_did {
             query = query.filter(Filter::eq(session::AGENT_DID, agent));
         }
@@ -130,6 +129,9 @@ impl View for SessionPage {
         }
         if let Some(id) = &self.doc_id {
             query = query.filter(Filter::eq(session::DOC_ID, id));
+        }
+        if let Some(ids) = &self.doc_ids {
+            query = query.filter(Filter::any_of(session::DOC_ID, ids));
         }
         if let Some(state) = self.state {
             query = query.filter(match state {
@@ -231,5 +233,40 @@ impl View for SessionCount {
 
     fn query(&self, reader_did: &str) -> Query<Self::Collection> {
         self.page.query(reader_did).counted()
+    }
+}
+
+fn ordered(query: Query<session::Doc>) -> Query<session::Doc> {
+    query
+        .order_by(session::CREATED_AT, Direction::Desc)
+        .order_by(session::SESSION_ID, Direction::Desc)
+        .order_by(session::NODE_DID, Direction::Desc)
+        .order_by(session::REQUESTER_DID, Direction::Desc)
+        .order_by(session::DOC_ID, Direction::Desc)
+}
+
+#[derive(Debug, Clone)]
+pub struct ScopedSessions {
+    pub scopes: Vec<gents_protocol::session::SessionScope>,
+    pub include_archived: bool,
+}
+
+impl View for ScopedSessions {
+    type Collection = session::Doc;
+    type Row = SessionRow;
+
+    fn query(&self, _reader_did: &str) -> Query<Self::Collection> {
+        let mut query =
+            Query::select(selection()).filter(Filter::any(self.scopes.iter().map(|scope| {
+                gents_protocol::document_query::session_scope(
+                    &scope.node_did,
+                    &scope.session_id,
+                    scope.requester_did.as_deref(),
+                )
+            })));
+        if !self.include_archived {
+            query = query.filter(Filter::is_null(session::ARCHIVED_AT));
+        }
+        ordered(query)
     }
 }

@@ -84,4 +84,41 @@ def runner (scope : Scope) (actorPresent sameNode sameAgent readable : Bool) : D
     (fun _ => rowAgent) (fun _ _ => readable) [()]
   ⟨actorPresent, !result.isEmpty⟩
 
+inductive DocumentSelection where
+  | any
+  | matching
+  | other
+  | missing
+  deriving DecidableEq, Repr, ToJson
+
+structure CountDecision where
+  admitted : Bool
+  count : Nat
+  deriving DecidableEq, Repr, ToJson
+
+def counted (scope : Scope) (actorPresent sameNode sameAgent readable : Bool)
+    (selection : DocumentSelection) : CountDecision :=
+  let actor := if actorPresent then some "reader" else none
+  let rowNode := if sameNode then "node" else "other-node"
+  let rowAgent := if sameAgent then "reader" else "other-reader"
+  let result := rows scope "node" actor (fun (_ : Unit) => rowNode)
+    (fun _ => rowAgent) (fun _ _ => readable) [()]
+  let selected := selection == .any || selection == .matching
+  ⟨actorPresent, (result.filter fun _ => selected).length⟩
+
+theorem missing_document_count_is_zero (scope : Scope)
+    (actorPresent sameNode sameAgent readable : Bool) :
+    (counted scope actorPresent sameNode sameAgent readable .missing).count = 0 := by
+  simp [counted]
+
+theorem count_requires_explicit_actor (scope : Scope)
+    (sameNode sameAgent readable : Bool) (selection : DocumentSelection) :
+    (counted scope false sameNode sameAgent readable selection).count = 0 := by
+  simp [counted, rows]
+
+theorem unreadable_document_count_is_zero (scope : Scope)
+    (actorPresent sameNode sameAgent : Bool) (selection : DocumentSelection) :
+    (counted scope actorPresent sameNode sameAgent false selection).count = 0 := by
+  cases actorPresent <;> simp [counted, rows, visible]
+
 end ReadViews

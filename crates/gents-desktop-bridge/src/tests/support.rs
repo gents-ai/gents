@@ -698,6 +698,10 @@ impl CountingRead {
 
 #[async_trait::async_trait]
 impl gents_store::config_client::ConfigRead for CountingRead {
+    fn reader_did(&self) -> Option<String> {
+        self.inner.reader_did()
+    }
+
     async fn execute_read(
         &self,
         document: &str,
@@ -705,6 +709,16 @@ impl gents_store::config_client::ConfigRead for CountingRead {
         self.queries
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.execute_read(document).await
+    }
+
+    async fn execute_read_with_variables(
+        &self,
+        document: &str,
+        variables: &serde_json::Value,
+    ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
+        self.queries
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.execute_read_with_variables(document, variables).await
     }
 }
 

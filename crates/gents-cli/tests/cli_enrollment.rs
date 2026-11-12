@@ -470,7 +470,7 @@ async fn resolve_live_inference() -> Result<(String, String)> {
 async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        match fetch_runtime_connection_payload(status_url).await {
+        match fetch_runtime_connection_payload(status_url, None).await {
             Ok(status) => {
                 let token = status
                     .pointer("/enrollment/token")

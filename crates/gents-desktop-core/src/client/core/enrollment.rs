@@ -15,19 +15,15 @@ use gents_protocol::enrollment::{
     decode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind, EnrollmentRequestRecord,
 };
 use gents_protocol::network_token::EndpointRecord;
-use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents_store::identity::NodeIdentity;
 use serde_json::Value;
 use tokio::time::timeout;
 
 use super::{ClientCore, P2P_OPERATION_TIMEOUT};
 use gents_p2p::p2p_reconcile::enrollment_projection::{
-    assemble_durable_enrollment_documents, listing_assembly_requests, listing_revision_rows,
+    assemble_durable_enrollment_documents, listing_assembly_requests,
 };
-use gents_p2p::p2p_reconcile::enrollment_rows::{
-    to_pure_decision, EnrollmentDecisionRow, EnrollmentPinRow, EnrollmentRequestRow,
-    STATUS_ENROLLMENT_QUERY,
-};
+use gents_p2p::p2p_reconcile::enrollment_rows::{to_pure_decision, EnrollmentRequestRow};
 use reconcile::EnrollmentAuthorizationGeneration;
 
 pub(super) mod reconcile;
@@ -185,23 +181,23 @@ impl ClientCore {
             self.node.node_identity_did() == Some(self.node_identity.did()),
             "desktop enrollment requires its configured local identity"
         );
-        let response: defra_node::QueryResponse = serde_json::from_value(
-            gents_store::config_client::ConfigAccess::local_as(
+        let listing = gents_p2p::views::read_enrollment_listing(
+            &gents_store::config_client::ConfigAccess::local_as(
                 self.node.clone(),
                 identity::Did::new(self.node_identity.did())?,
-            )
-            .execute(STATUS_ENROLLMENT_QUERY)
-            .await?,
-        )?;
-        let pins = rows::<EnrollmentPinRow>(&response, "NetworkAdminPin")?
-            .into_iter()
-            .fold(BTreeMap::<String, Vec<String>>::new(), |mut pins, row| {
+            ),
+        )
+        .await?;
+        let pins = listing.pins.into_iter().fold(
+            BTreeMap::<String, Vec<String>>::new(),
+            |mut pins, row| {
                 pins.entry(row.network_id).or_default().push(row.admin_did);
                 pins
-            });
-        let decisions = rows::<EnrollmentDecisionRow>(&response, "NetworkEnrollmentDecision")?;
-        let revisions = listing_revision_rows(&response)?;
-        let request_rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
+            },
+        );
+        let decisions = listing.decisions;
+        let revisions = listing.revisions;
+        let request_rows = listing.requests;
         let retired = self.sync_state.retired_enrollment_digests().await;
         let assembly_requests = listing_assembly_requests(&request_rows, &self.node_identity).await;
         let sync = self.sync_state.snapshot();
@@ -387,21 +383,15 @@ impl ClientCore {
     }
 
     pub async fn resend_status_enrollment(&self, request_id: &str) -> Result<()> {
-        let escaped = escape_graphql_string(request_id);
-        let query = format!(
-            r#"{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
-                _docID protocol_version request_id request_digest offer_id offer_token challenge
-                network_id admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket
-                owner_node_did profile client_nonce issued_at expires_at candidate_sig
-            }} }}"#
-        );
-        let response = graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "loading enrollment request to resend",
+        let rows = gents_store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            identity::Did::new(self.node_identity.did())?,
         )
+        .read_view(&gents_p2p::views::EnrollmentRequests {
+            request_id: Some(request_id.to_owned()),
+            offer_id: None,
+        })
         .await?;
-        let rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let row = select_retryable_local_request(
             &rows,
             self.node_identity.did(),
@@ -428,21 +418,15 @@ impl ClientCore {
         offer_token: &str,
         candidate_peer: &str,
     ) -> Result<Option<(EnrollmentRequestRecord, String)>> {
-        let offer_id = escape_graphql_string(&offer.offer_id);
-        let query = format!(
-            r#"{{ NetworkEnrollmentRequest(filter: {{ offer_id: {{ _eq: "{offer_id}" }} }}) {{
-                _docID protocol_version request_id request_digest offer_id offer_token challenge
-                network_id admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket
-                owner_node_did profile client_nonce issued_at expires_at candidate_sig
-            }} }}"#
-        );
-        let response = graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "loading retryable enrollment request",
+        let rows = gents_store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            identity::Did::new(self.node_identity.did())?,
         )
+        .read_view(&gents_p2p::views::EnrollmentRequests {
+            request_id: None,
+            offer_id: Some(offer.offer_id.clone()),
+        })
         .await?;
-        let rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let Some(row) = select_retryable_local_request(
             &rows,
             self.node_identity.did(),

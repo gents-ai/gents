@@ -28,6 +28,33 @@ pub struct TriggerRow {
     pub fire_count: Option<i64>,
 }
 
+impl TriggerRow {
+    pub fn into_parts(
+        self,
+    ) -> (
+        crate::Trigger,
+        crate::TriggerObservation,
+        crate::ScheduleObservation,
+    ) {
+        let trigger_id = self.trigger.trigger_id.clone();
+        (
+            self.trigger,
+            crate::TriggerObservation {
+                trigger_id: trigger_id.clone(),
+                last_attempt_at: self.last_attempt_at,
+                last_fired_source_doc_id: self.last_fired_source_doc_id,
+                last_status: self.last_status,
+                last_error: self.last_error,
+                fire_count: self.fire_count,
+            },
+            crate::ScheduleObservation {
+                trigger_id,
+                next_run_at: self.next_run_at,
+            },
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleRow {
     #[serde(rename = "_docID")]

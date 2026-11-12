@@ -1,5 +1,4 @@
-use gents_lean_vocab::families::mcp_views_inventory::{self, Node, Reader, Selection};
-use gents_lean_vocab::families::{mcp_views_health, mcp_views_page};
+use gents_lean_vocab::families::{mcp_views_health, mcp_views_inventory, mcp_views_page};
 use gents_protocol::document_query::{
     fields::{
         node as node_fields, tool_service_health_state as health, tool_service_registry as service,
@@ -9,6 +8,43 @@ use gents_protocol::document_query::{
 use gents_store::config_client::NodePermission;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_tools::mcp::views::{Health, ServiceInventory, ServicePage, Services};
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Reader {
+    Owner,
+    Guest,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Node {
+    Local,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Selection {
+    All,
+    Known,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Cursor {
+    Start,
+    A,
+    Z,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PageSize {
+    One,
+    Two,
+}
 
 #[tokio::test]
 async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
@@ -83,7 +119,7 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
         }
     }
     let guest_access = db.client_access(&guest);
-    let cases = mcp_views_inventory::cases();
+    let cases = mcp_views_inventory::cases::<Node, Reader, Selection>();
     assert!(!cases.is_empty());
     for case in cases {
         let input = &case.input;
@@ -117,26 +153,26 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
             .await?;
         case.check(rows.into_iter().map(|row| row.config.service_id).collect());
     }
-    let pages = mcp_views_page::cases();
+    let pages = mcp_views_page::cases::<Cursor, Node, PageSize, Reader>();
     assert!(!pages.is_empty());
     for case in pages {
         let input = &case.input;
         let access = match input.reader {
-            mcp_views_page::Reader::Owner => &owner,
-            mcp_views_page::Reader::Guest => &guest_access,
+            Reader::Owner => &owner,
+            Reader::Guest => &guest_access,
         };
         let node = match input.node {
-            mcp_views_page::Node::Local => db.node_identity.did(),
-            mcp_views_page::Node::Other => guest.did(),
+            Node::Local => db.node_identity.did(),
+            Node::Other => guest.did(),
         };
         let cursor = match input.cursor {
-            mcp_views_page::Cursor::Start => None,
-            mcp_views_page::Cursor::A => Some("a"),
-            mcp_views_page::Cursor::Z => Some("z"),
+            Cursor::Start => None,
+            Cursor::A => Some("a"),
+            Cursor::Z => Some("z"),
         };
         let limit = match input.page_size {
-            mcp_views_page::PageSize::One => 1,
-            mcp_views_page::PageSize::Two => 2,
+            PageSize::One => 1,
+            PageSize::Two => 2,
         };
         let rows = access
             .read_view(&ServicePage {
@@ -147,16 +183,16 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
             .await?;
         case.check(rows.into_iter().map(|row| row.service_id).collect());
     }
-    let health_cases = mcp_views_health::cases();
+    let health_cases = mcp_views_health::cases::<Node, Reader>();
     assert!(!health_cases.is_empty());
     for case in health_cases {
         let access = match case.input.reader {
-            mcp_views_health::Reader::Owner => &owner,
-            mcp_views_health::Reader::Guest => &guest_access,
+            Reader::Owner => &owner,
+            Reader::Guest => &guest_access,
         };
         let node = match case.input.node {
-            mcp_views_health::Node::Local => db.node_identity.did(),
-            mcp_views_health::Node::Other => guest.did(),
+            Node::Local => db.node_identity.did(),
+            Node::Other => guest.did(),
         };
         let rows = access.read_view(&Health { node_did: node }).await?;
         case.check(

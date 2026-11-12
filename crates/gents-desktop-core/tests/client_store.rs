@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents_desktop_core::client::{
-    load_session_transcript_page, load_session_transcript_page_on, ClientCore, ClientCoreOptions,
-    ClientStore, ClientStoreRows, DesktopPaths,
+    load_session_transcript_page_on, ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows,
+    DesktopPaths,
 };
 use gents_desktop_core::test_fixtures::ServedRuntimeHome;
 use tokio::time::timeout;
@@ -535,8 +535,12 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
         "seed immutable twins: {:?}",
         response.errors
     );
-    let result = load_session_transcript_page(
-        core.node(),
+    let creator_access = gents_store::config_client::ConfigAccess::local_as(
+        core.node_arc(),
+        core.node().node_identity_did().unwrap().parse()?,
+    );
+    let result = load_session_transcript_page_on(
+        &creator_access,
         "conflict",
         Some("did:conflict"),
         None,

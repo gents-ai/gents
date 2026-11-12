@@ -1,3 +1,5 @@
+pub mod journals;
+pub mod runtime;
 
 use gents_protocol::document_query::{QuerySet, Rendered};
 use gents_protocol::views::View;
@@ -34,7 +36,12 @@ impl crate::config_client::TransactionFailure for ViewError {
 /// DefraDB may omit unreadable roots after ACP revocation without returning
 /// an error. Missing and null roots therefore represent empty reader-visible
 /// results; malformed present rows remain decoding failures.
-fn decode<V>(view: &V, response: &Value, root: &str) -> Result<Vec<V::Row>, ViewError>
+fn decode<V>(
+    view: &V,
+    response: &Value,
+    root: &str,
+    is_count: bool,
+) -> Result<Vec<V::Row>, ViewError>
 where
     V: View,
 {
@@ -45,8 +52,18 @@ where
     }
     let value = match data.get(root) {
         None | Some(Value::Null) => return Ok(view.finish(Vec::new())),
-        Some(value @ Value::Number(_)) => Value::Array(vec![value.clone()]),
-        Some(value) => value.clone(),
+        Some(value @ Value::Number(_)) if is_count => Value::Array(vec![value.clone()]),
+        Some(value @ Value::Array(_)) if !is_count => value.clone(),
+        Some(_) => {
+            return Err(ViewError::Decode {
+                collection,
+                source: <serde_json::Error as serde::de::Error>::custom(if is_count {
+                    "expected a count"
+                } else {
+                    "expected view rows"
+                }),
+            });
+        }
     };
     let rows =
         serde_json::from_value(value).map_err(|source| ViewError::Decode { collection, source })?;
@@ -57,7 +74,64 @@ pub trait ViewSet {
     type Rows;
 
     fn render(&self, reader_did: &str) -> Rendered;
-    fn decode(&self, response: &Value) -> Result<Self::Rows, ViewError>;
+    fn decode(&self, response: &Value, reader_did: &str) -> Result<Self::Rows, ViewError>;
+
+    fn is_empty(&self) -> bool {
+        false
+    }
+}
+
+impl<V> ViewSet for [V]
+where
+    V: View,
+{
+    type Rows = Vec<Vec<V::Row>>;
+
+    fn render(&self, reader_did: &str) -> Rendered {
+        self.iter()
+            .enumerate()
+            .fold(QuerySet::new(), |queries, (index, view)| {
+                queries.indexed(index, &view.query(reader_did))
+            })
+            .render()
+    }
+
+    fn decode(&self, response: &Value, reader_did: &str) -> Result<Self::Rows, ViewError> {
+        self.iter()
+            .enumerate()
+            .map(|(index, view)| {
+                decode(
+                    view,
+                    response,
+                    &format!("view_{index}"),
+                    view.query(reader_did).is_count(),
+                )
+            })
+            .collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl<V> ViewSet for Vec<V>
+where
+    V: View,
+{
+    type Rows = Vec<Vec<V::Row>>;
+
+    fn render(&self, reader_did: &str) -> Rendered {
+        self.as_slice().render(reader_did)
+    }
+
+    fn decode(&self, response: &Value, reader_did: &str) -> Result<Self::Rows, ViewError> {
+        self.as_slice().decode(response, reader_did)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
 }
 
 macro_rules! view_sets {
@@ -74,8 +148,8 @@ macro_rules! view_sets {
                     .render()
             }
 
-            fn decode(&self, response: &Value) -> Result<Self::Rows, ViewError> {
-                Ok(($(decode(&self.$index, response, $root)?,)+))
+            fn decode(&self, response: &Value, reader_did: &str) -> Result<Self::Rows, ViewError> {
+                Ok(($(decode(&self.$index, response, $root, self.$index.query(reader_did).is_count())?,)+))
             }
         }
     };
@@ -124,24 +198,43 @@ view_sets!(
     (V31, 31, "view_31")
 );
 
+pub async fn read_view<R, V>(reader: &R, view: &V) -> Result<Vec<V::Row>, ViewError>
+where
+    R: crate::config_client::ConfigRead + ?Sized,
+    V: View,
+{
+    read_views(reader, &(view,)).await.map(|(rows,)| rows)
+}
+
+pub async fn read_views<R, V>(reader: &R, views: &V) -> Result<V::Rows, ViewError>
+where
+    R: crate::config_client::ConfigRead + ?Sized,
+    V: ViewSet + ?Sized,
+{
+    let actor = reader.reader_did().ok_or(ViewError::ActorRequired)?;
+    if views.is_empty() {
+        return views.decode(&serde_json::json!({}), &actor);
+    }
+    let query = views.render(&actor);
+    let response = reader
+        .execute_read_with_variables(&query.document, &query.variables)
+        .await?;
+    views.decode(&response, &actor)
+}
+
 impl ConfigAccess {
     pub async fn read_view<V>(&self, view: &V) -> Result<Vec<V::Row>, ViewError>
     where
         V: View,
     {
-        self.read_views(&(view,)).await.map(|(rows,)| rows)
+        read_view(self, view).await
     }
 
     pub async fn read_views<V>(&self, views: &V) -> Result<V::Rows, ViewError>
     where
-        V: ViewSet,
+        V: ViewSet + ?Sized,
     {
-        let actor = self.actor_did().ok_or(ViewError::ActorRequired)?;
-        let query = views.render(&actor);
-        let response = self
-            .execute_with_variables(&query.document, &query.variables)
-            .await?;
-        views.decode(&response)
+        read_views(self, views).await
     }
 }
 
@@ -150,18 +243,13 @@ impl ConfigApplyTxn<'_> {
     where
         V: View,
     {
-        self.read_views(&(view,)).await.map(|(rows,)| rows)
+        read_view(self, view).await
     }
 
     pub async fn read_views<V>(&self, views: &V) -> Result<V::Rows, ViewError>
     where
-        V: ViewSet,
+        V: ViewSet + ?Sized,
     {
-        let actor = self.actor_did().ok_or(ViewError::ActorRequired)?;
-        let query = views.render(actor);
-        let response = self
-            .execute_with_variables(&query.document, &query.variables)
-            .await?;
-        views.decode(&response)
+        read_views(self, views).await
     }
 }

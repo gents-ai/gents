@@ -7,9 +7,10 @@ import Proofs.Session.Views
 import Proofs.Session.TranscriptViews
 import Proofs.Session.RequestViews
 import Proofs.Conformance.SessionViews
+import Proofs.Conformance.InferenceContextViews
 import Proofs.Conformance.Family
 
-attribute [conformance_function] ReadViews.runner McpViews.inventory
+attribute [conformance_function] ReadViews.runner ReadViews.counted McpViews.inventory
   McpViews.page McpViews.health TaskInventory.selection SessionViews.visible
   ConfigurationViews.inventory InferenceActivityViews.included
   TranscriptViews.visible TranscriptViews.window TranscriptViews.sourceVisible

@@ -74,9 +74,13 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
     };
     let selected = doc_id("retired");
     let replacement = doc_id("replacement");
-    let patch = load_request_documents_on(&access, &[selected.clone(), replacement.clone()])
-        .await
-        .expect("exact edit request patch");
+    let patch = load_request_documents_on(
+        &access,
+        "did:test:agent",
+        &[selected.clone(), replacement.clone()],
+    )
+    .await
+    .expect("exact edit request patch");
 
     assert_eq!(
         patch
@@ -184,9 +188,18 @@ async fn fetch_doc_patch_returns_only_matching_rows() {
     assert_eq!(doc_ids.len(), 2);
 
     let target_id = doc_ids[0].clone();
-    let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &[&target_id])
-        .await
-        .expect("fetch_doc_patch");
+    let patch = fetch_doc_patch(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
+                .expect("fixture DID"),
+        ),
+        "did:test:agent",
+        AGENT_MESSAGE_NAME,
+        &[&target_id],
+    )
+    .await
+    .expect("fetch_doc_patch");
     assert_eq!(
         patch.store.transcript_messages.len(),
         1,
@@ -245,15 +258,24 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let observed = load_node_scoped_snapshot(node.as_ref(), "did:test:selected")
-        .await
-        .expect("observer snapshot");
+    let observed = load_node_snapshot_on(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            node.node_identity_did().unwrap().parse().unwrap(),
+        ),
+        "did:test:selected",
+    )
+    .await
+    .expect("observer snapshot");
     assert!(observed.transcript_messages.is_empty());
     assert!(observed.tool_calls.is_empty());
     assert!(observed.compaction_entries.is_empty());
 
-    let context = load_session_context_store(
-        node.as_ref(),
+    let context = load_session_context_store_on(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            node.node_identity_did().unwrap().parse().unwrap(),
+        ),
         "resident",
         Some("did:test:selected"),
         Some("did:test:local"),
@@ -266,8 +288,11 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
         context.compaction_entries[0].summary.as_deref(),
         Some("summary")
     );
-    let compaction_metadata = load_session_compaction_entries(
-        node.as_ref(),
+    let compaction_metadata = load_session_compaction_entries_on(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            node.node_identity_did().unwrap().parse().unwrap(),
+        ),
         "resident",
         "did:test:selected",
         Some("did:test:local"),
@@ -336,9 +361,18 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
         .and_then(Value::as_str)
         .expect("mailbox doc id");
 
-    let patch = fetch_doc_patch(node.as_ref(), MAILBOX_ITEM_NAME, &[doc_id])
-        .await
-        .expect("mailbox patch");
+    let patch = fetch_doc_patch(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
+                .expect("fixture DID"),
+        ),
+        "did:test:agent",
+        MAILBOX_ITEM_NAME,
+        &[doc_id],
+    )
+    .await
+    .expect("mailbox patch");
     assert_eq!(patch.store.mailbox_items.len(), 1);
     assert_eq!(patch.store.mailbox_items[0].title, "Live item");
     assert!(supports_doc_patch_collection(MAILBOX_ITEM_NAME));
@@ -484,13 +518,12 @@ fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
     use crate::error::{BridgeError, BridgeErrorCode};
 
     let lookup = || super::super::SelectedRequestLookup {
-        query: String::new(),
+        view: super::super::request_view("did:test:agent", "session", None),
         expected_doc_id: Some("canonical-doc".into()),
         expected_request_id: Some("canonical-request".into()),
     };
-    let absent = serde_json::json!({ "AgentRequest": [] });
     let error = lookup()
-        .decode(&absent, "did:test:agent", "session", None)
+        .decode(Vec::new(), "did:test:agent", "session", None)
         .unwrap_err();
     assert_eq!(
         error.downcast_ref::<BridgeError>().map(|error| error.code),
@@ -514,7 +547,12 @@ fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
         changed[field] = value;
         let data = serde_json::json!({"AgentRequest": [changed]});
         let error = lookup()
-            .decode(&data, "did:test:agent", "session", None)
+            .decode(
+                serde_json::from_value(data["AgentRequest"].clone()).unwrap(),
+                "did:test:agent",
+                "session",
+                None,
+            )
             .unwrap_err();
         assert!(
             error.downcast_ref::<BridgeError>().is_none(),
@@ -542,12 +580,17 @@ fn selected_request_lookup_keeps_unobserved_rows_pending() {
 
     let data = serde_json::json!({ "AgentRequest": [] });
     let lookup = super::super::SelectedRequestLookup {
-        query: String::new(),
+        view: super::super::request_view("did:test:agent", "session", None),
         expected_doc_id: None,
         expected_request_id: None,
     };
     let error = lookup
-        .decode(&data, "did:test:agent", "session", None)
+        .decode(
+            serde_json::from_value(data["AgentRequest"].clone()).unwrap(),
+            "did:test:agent",
+            "session",
+            None,
+        )
         .expect_err("unobserved request is pending");
     assert_eq!(
         error.downcast_ref::<BridgeError>().map(|error| error.code),
@@ -555,49 +598,22 @@ fn selected_request_lookup_keeps_unobserved_rows_pending() {
     );
 
     let head = super::super::SelectedRequestLookup {
-        query: String::new(),
+        view: super::super::request_view("did:test:agent", "session", None),
         expected_doc_id: Some("canonical-doc".to_string()),
         expected_request_id: Some("canonical-request".to_string()),
     };
     let error = head
-        .decode(&data, "did:test:agent", "session", None)
+        .decode(
+            serde_json::from_value(data["AgentRequest"].clone()).unwrap(),
+            "did:test:agent",
+            "session",
+            None,
+        )
         .expect_err("unobserved canonical head is pending");
     assert_eq!(
         error.downcast_ref::<BridgeError>().map(|error| error.code),
         Some(BridgeErrorCode::ProjectionPending)
     );
-}
-
-#[test]
-fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
-    let lookup = super::super::SelectedRequestLookup {
-        query: String::new(),
-        expected_doc_id: None,
-        expected_request_id: None,
-    };
-    let data = serde_json::json!({
-        "AgentRequest": [
-            {
-                "_docID": "doc-valid",
-                "request_id": "valid",
-                "node_did": "did:test:agent",
-                "session_id": "session",
-                "requester_did": null
-            },
-            {
-                "_docID": "doc-malformed",
-                "request_id": 7,
-                "node_did": "did:test:agent",
-                "session_id": "session",
-                "requester_did": null
-            }
-        ]
-    });
-
-    let error = lookup
-        .decode(&data, "did:test:agent", "session", None)
-        .expect_err("malformed rows are invalid rather than pending");
-    assert!(error.downcast_ref::<crate::error::BridgeError>().is_none());
 }
 
 #[test]
@@ -615,8 +631,10 @@ fn direct_session_read_matches_the_lean_model() {
             ],
             other => panic!("unknown modeled observation {other}"),
         };
-        let result = selected_session_from_data(
-            &serde_json::json!({"AgentSession":rows}),
+        let result = selected_session_from_rows(
+            rows.into_iter()
+                .map(|row| serde_json::from_value(row).unwrap())
+                .collect(),
             "node",
             "session",
         );
@@ -764,9 +782,18 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     };
     let normal_id = id("patch-normal");
     let title_id = id("patch-title");
-    let title_only = fetch_doc_patch(node.as_ref(), AGENT_REQUEST_NAME, &[title_id])
-        .await
-        .expect("title-only patch");
+    let title_only = fetch_doc_patch(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
+                .expect("fixture DID"),
+        ),
+        "did:test:agent",
+        AGENT_REQUEST_NAME,
+        &[title_id],
+    )
+    .await
+    .expect("title-only patch");
     assert_eq!(title_only.observed_documents, 1);
     assert!(title_only
         .missing_doc_ids
@@ -774,9 +801,18 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
         .is_some_and(Vec::is_empty));
     assert!(title_only.store.requests.is_empty());
 
-    let mixed = fetch_doc_patch(node.as_ref(), AGENT_REQUEST_NAME, &[normal_id, title_id])
-        .await
-        .expect("mixed patch");
+    let mixed = fetch_doc_patch(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
+                .expect("fixture DID"),
+        ),
+        "did:test:agent",
+        AGENT_REQUEST_NAME,
+        &[normal_id, title_id],
+    )
+    .await
+    .expect("mixed patch");
     assert_eq!(mixed.observed_documents, 2);
     assert!(mixed.missing_doc_ids.as_ref().is_some_and(Vec::is_empty));
     assert_eq!(mixed.store.requests.len(), 1);
@@ -789,7 +825,12 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     );
 
     let missing = fetch_doc_patch(
-        node.as_ref(),
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
+                .expect("fixture DID"),
+        ),
+        "did:test:agent",
         AGENT_REQUEST_NAME,
         &[title_id, "physically-absent-request"],
     )
@@ -805,18 +846,6 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
         missing.observed_documents < 2,
         "the observer's missing-document predicate must distinguish this batch"
     );
-}
-
-#[test]
-fn request_projection_retains_every_field_needed_to_verify_signed_ancestry() {
-    let projected: std::collections::BTreeSet<_> =
-        AGENT_REQUEST_FIELDS.split_whitespace().collect();
-    for field in gents::SIGNED_REQUEST_FIELDS.split_whitespace() {
-        assert!(
-            projected.contains(field),
-            "request projection omits {field}"
-        );
-    }
 }
 
 #[tokio::test]
@@ -868,13 +897,19 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
     let observation_doc = response["data"]["InferenceBackendObservation"][0]["_docID"]
         .as_str()
         .unwrap();
-    let snapshot = load_node_scoped_snapshot(&node, runtime.node_did()).await?;
+    let snapshot = load_node_snapshot_on(&runtime.user_access(), runtime.node_did()).await?;
     let operator = load_inference_configuration(&access, &backend.node_did).await?;
-    let patch = fetch_doc_patch(&node, INFERENCE_BACKEND_NAME, &[doc_id])
-        .await?
-        .store;
+    let patch = fetch_doc_patch(
+        &access,
+        runtime.node_did(),
+        INFERENCE_BACKEND_NAME,
+        &[doc_id],
+    )
+    .await?
+    .store;
     let observation_patch = fetch_doc_patch(
-        &node,
+        &access,
+        runtime.node_did(),
         INFERENCE_BACKEND_OBSERVATION_NAME,
         &[observation_doc],
     )

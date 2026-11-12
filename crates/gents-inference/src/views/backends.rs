@@ -111,13 +111,37 @@ impl View for BackendList {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ObservationRow {
     #[serde(rename = "_docID")]
     pub doc_id: String,
     pub node_did: String,
     #[serde(flatten)]
     pub observation: InferenceBackendObservation,
+}
+
+impl<'de> Deserialize<'de> for ObservationRow {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Identity {
+            #[serde(rename = "_docID")]
+            doc_id: String,
+            node_did: String,
+        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let identity: Identity =
+            serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
+        let observation = crate::backends::registry::decode_backend_observation(value)
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            doc_id: identity.doc_id,
+            node_did: identity.node_did,
+            observation,
+        })
+    }
 }
 
 pub struct ObservationList {
@@ -151,6 +175,7 @@ impl View for ObservationList {
                 .field(inference_backend_observation::BACKEND_ID)
                 .field(inference_backend_observation::METADATA_DOC_ID)
                 .field(inference_backend_observation::CATALOGS)
+                .field(inference_backend_observation::CATALOG_FRESHNESS)
                 .field(inference_backend_observation::PROBE_STATUS)
                 .field(inference_backend_observation::LAST_PROBE),
         )

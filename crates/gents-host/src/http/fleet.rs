@@ -1,14 +1,13 @@
 use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::{decode_node_readiness_snapshot, AgentRequestRow, NodeReadinessRow};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use gents_store::config_client::post_graphql;
+use gents_store::config_client::ConfigAccess;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FleetSnapshot {
@@ -35,36 +34,26 @@ struct FleetEnvelope {
 
 pub async fn load_fleet_snapshot(graphql: &GraphqlEndpoint) -> Result<FleetSnapshot> {
     let generated_at = Utc::now();
-    let response = post_graphql(graphql, &fleet_query()).await?;
-    let envelope = decode_fleet_response(response)?;
+    let access = ConfigAccess::Graphql(graphql.clone());
+    let envelope = access.transact_readonly("views.http.fleet", |txn| {
+        Box::pin(async move {
+            let nodes = txn.read_view(&gents_documents::views::config::VisibleNodes::new()).await?;
+            let mut envelope = FleetEnvelope { readiness: Vec::new(), requests: Vec::new() };
+            for node in nodes {
+                let node_did = node.document.node_did;
+                let (readiness, requests) = txn.read_views(&(
+                    gents_store::views::runtime::NodeReadinessList::new(&node_did),
+                    gents_session::views::requests::RequestRows::new(
+                        gents_session::views::transcript::Scope::Node(node_did.clone()),
+                    ).active_runtime(),
+                )).await?;
+                envelope.readiness.extend(readiness);
+                envelope.requests.extend(requests);
+            }
+            Ok::<_, anyhow::Error>(envelope)
+        })
+    }).await?;
     Ok(build_fleet_snapshot(generated_at, envelope))
-}
-
-fn fleet_query() -> String {
-    format!(
-        r#"{{
-        NodeReadiness(order: {{ node_did: ASC }}) {{
-            node_did
-            snapshot_json
-            updated_at
-        }}
-        AgentRequest(filter: {{ lifecycle_state: {{ _in: {} }} }}) {{
-            request_id
-            node_did
-            lifecycle_state
-        }}
-    }}"#,
-        RequestLifecycleState::active_runtime_graphql_list(),
-    )
-}
-
-fn decode_fleet_response(response: Value) -> Result<FleetEnvelope> {
-    let data = response
-        .get("data")
-        .filter(|data| data.is_object())
-        .cloned()
-        .with_context(|| format!("fleet query response missing object data: {response}"))?;
-    serde_json::from_value(data).context("decoding fleet query response")
 }
 
 fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) -> FleetSnapshot {

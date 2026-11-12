@@ -7,6 +7,8 @@ use super::write_telemetry::{ConflictSource, WriteTelemetryError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigClientError {
+    #[error("this read adapter does not support GraphQL variables")]
+    ReadVariablesUnsupported,
     #[error(transparent)]
     PackApproval(#[from] super::PackApprovalError),
     #[error("verified pack effect failed")]

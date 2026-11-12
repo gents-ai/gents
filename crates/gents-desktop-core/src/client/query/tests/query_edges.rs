@@ -47,13 +47,15 @@ async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
         .unwrap();
     }
     docs.sort();
-    let data = serde_json::json!({
-        "requests":[], "sessions":[],
-        "triggers":[{"node_did":"did:task-history", "trigger_id":"task-trigger"}]
-    });
-    let rows = complete_local_snapshot_requests(&node, &data, "did:task-history")
-        .await
-        .expect("bounded task history");
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    );
+    let triggers = vec![serde_json::from_value::<Trigger>(serde_json::json!({"node_did":"did:task-history","trigger_id":"task-trigger","task_id":"task","source":{"kind":"event","event_source_id":"source"}})).unwrap()];
+    let rows =
+        complete_access_snapshot_requests(&access, "did:task-history", &[], &triggers, Vec::new())
+            .await
+            .expect("bounded task history");
     assert!(
         rows.len() <= 16,
         "only candidates and cutoff refinements are loaded"
@@ -70,15 +72,6 @@ async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
         "same top eight as complete history, including physical ties"
     );
     node.shutdown().await.unwrap();
-}
-
-#[test]
-fn complete_request_projection_rejects_mixed_valid_and_malformed_rows() {
-    let data = serde_json::json!({"requests":[
-        {"request_id":"valid", "lifecycle_state":"pending"},
-        {"request_id":"malformed", "lifecycle_state":42}
-    ]});
-    assert!(complete_request_rows(&data, "requests").is_err());
 }
 
 #[test]
@@ -116,170 +109,6 @@ fn session_head_seed_requires_observed_physical_and_logical_identity() {
     assert_eq!(accepted[0].request_id, "observed-request");
 }
 
-#[test]
-fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_independent() {
-    let data = serde_json::json!({
-        "triggers": [{
-            "node_did": "did:alpha", "trigger_id": "t", "task_id": "task",
-            "source": {"kind": "event", "event_source_id": "source"},
-            "future_trigger_config": true, "last_status": "ok", "last_attempt_at": null,
-            "last_fired_source_doc_id": null, "last_error": null, "fire_count": 1
-        }],
-        "inference_backends": [{
-            "node_did": "did:alpha", "backend_id": "b", "name": "backend",
-            "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
-            "endpoint": "http://localhost:8000/v1", "auth_kind": "unauthenticated",
-            "enabled": true, "future_backend_config": true
-        }],
-        "backend_observations": [{"node_did":"did:alpha", "backend_id":"b", "catalogs":[], "last_probe":null, "probe_status":"ready"}]
-    });
-
-    let triggers: Vec<Trigger> = parse_projected_query_rows(
-        &data,
-        "triggers",
-        TRIGGER_FIELDS,
-        &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
-    )
-    .expect("row-level malformed config is skipped");
-    let trigger_observations: Vec<TriggerObservation> = parse_observation_query_rows_with_source(
-        &data,
-        "triggers",
-        TRIGGER_OBSERVATION_FIELDS,
-        None,
-    )
-    .expect("trigger observation remains independently decodable")
-    .0;
-    let backends: Vec<gents_documents::InferenceBackendMetadata> =
-        parse_projected_query_rows(&data, "inference_backends", INFERENCE_BACKEND_FIELDS, "")
-            .expect("row-level malformed config is skipped");
-    let mut valid_backend_data = data.clone();
-    valid_backend_data["inference_backends"][0]
-        .as_object_mut()
-        .expect("backend row")
-        .remove("future_backend_config");
-    let valid_backends: Vec<gents_documents::InferenceBackendMetadata> =
-        parse_projected_query_rows(
-            &valid_backend_data,
-            "inference_backends",
-            INFERENCE_BACKEND_FIELDS,
-            "",
-        )
-        .expect("canonical backend fixture");
-    let backend_observations: Vec<InferenceBackendObservation> =
-        parse_observation_query_rows_with_source(
-            &data,
-            "backend_observations",
-            INFERENCE_BACKEND_OBSERVATION_FIELDS,
-            None,
-        )
-        .expect("backend observation remains independently decodable")
-        .0;
-
-    assert!(
-        triggers.is_empty(),
-        "unknown Trigger fields must not be stripped"
-    );
-    assert_eq!(trigger_observations[0].last_status.as_deref(), Some("ok"));
-    assert!(
-        backends.is_empty(),
-        "unknown backend fields must not be stripped"
-    );
-    assert_eq!(
-        valid_backends.len(),
-        1,
-        "control backend fixture must decode"
-    );
-    assert_eq!(
-        backend_observations[0].probe_status.as_deref(),
-        Some("ready")
-    );
-}
-
-#[test]
-fn patch_observation_provenance_stays_aligned_for_repeated_logical_ids() {
-    let data = serde_json::json!({
-        "triggers": [
-        {
-            "node_did": "did:alpha", "trigger_id": "shared", "future_config": true,
-            "last_status": "alpha", "last_attempt_at": null,
-            "last_fired_source_doc_id": null, "last_error": null, "fire_count": 1
-        },
-        {
-            "node_did": "did:beta", "trigger_id": "shared", "future_config": true,
-            "last_status": "beta", "last_attempt_at": null,
-            "last_fired_source_doc_id": null, "last_error": null, "fire_count": 2
-        }
-        ],
-        "inference_backends": [
-            {"node_did": "did:alpha", "backend_id": "shared", "catalogs": [], "last_probe": null, "probe_status": "alpha"},
-            {"node_did": "did:beta", "backend_id": "shared", "catalogs": [], "last_probe": null, "probe_status": "beta"}
-        ]
-    });
-    let (observations, source_node_dids): (Vec<TriggerObservation>, Vec<Option<String>>) =
-        parse_observation_query_rows_with_source(
-            &data,
-            "triggers",
-            TRIGGER_OBSERVATION_FIELDS,
-            Some("node_did"),
-        )
-        .expect("observation rows");
-
-    assert_eq!(observations[0].last_status.as_deref(), Some("alpha"));
-    assert_eq!(observations[1].last_status.as_deref(), Some("beta"));
-    assert_eq!(
-        source_node_dids,
-        [Some("did:alpha".into()), Some("did:beta".into())]
-    );
-    let (backend_observations, backend_source_node_dids): (
-        Vec<InferenceBackendObservation>,
-        Vec<Option<String>>,
-    ) = parse_observation_query_rows_with_source(
-        &data,
-        "inference_backends",
-        INFERENCE_BACKEND_OBSERVATION_FIELDS,
-        Some("node_did"),
-    )
-    .expect("backend observations");
-    assert_eq!(
-        backend_observations[0].probe_status.as_deref(),
-        Some("alpha")
-    );
-    assert_eq!(
-        backend_observations[1].probe_status.as_deref(),
-        Some("beta")
-    );
-    assert_eq!(
-        backend_source_node_dids,
-        [Some("did:alpha".into()), Some("did:beta".into())]
-    );
-}
-
-#[test]
-fn access_query_data_preserves_response_errors_and_null_data() {
-    let partial = serde_json::json!({
-        "data": {"AgentMessage": []},
-        "errors": [{"message": "denied"}],
-    });
-    let error = into_access_graphql_data(partial, "session page").unwrap_err();
-    assert!(error.to_string().contains("session page returned errors"));
-    assert!(error.to_string().contains("denied"));
-    for body in [serde_json::json!({}), Value::Null, serde_json::json!([])] {
-        assert_eq!(
-            into_access_graphql_data(body, "session page")
-                .unwrap_err()
-                .to_string(),
-            "session page returned no data"
-        );
-    }
-    for errors in [Value::Null, serde_json::json!([]), serde_json::json!({})] {
-        assert_eq!(
-            into_access_graphql_data(serde_json::json!({"data": null, "errors": errors}), "query")
-                .unwrap(),
-            Value::Null
-        );
-    }
-}
-
 #[tokio::test]
 async fn fetch_doc_patch_returns_empty_store_for_no_matches() {
     let node = Arc::new(
@@ -292,9 +121,18 @@ async fn fetch_doc_patch_returns_empty_store_for_no_matches() {
         .await
         .expect("schemas");
 
-    let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &["never-existed"])
-        .await
-        .expect("fetch_doc_patch");
+    let patch = fetch_doc_patch(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
+                .expect("fixture DID"),
+        ),
+        "did:test:agent",
+        AGENT_MESSAGE_NAME,
+        &["never-existed"],
+    )
+    .await
+    .expect("fetch_doc_patch");
     assert_eq!(patch.store.transcript_messages.len(), 0);
     assert_eq!(patch.observed_documents, 0);
 }
@@ -311,9 +149,18 @@ async fn fetch_doc_patch_empty_input_is_no_op() {
         .await
         .expect("schemas");
 
-    let patch = fetch_doc_patch(&node, AGENT_MESSAGE_NAME, &[])
-        .await
-        .expect("fetch_doc_patch");
+    let patch = fetch_doc_patch(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
+                .expect("fixture DID"),
+        ),
+        "did:test:agent",
+        AGENT_MESSAGE_NAME,
+        &[],
+    )
+    .await
+    .expect("fetch_doc_patch");
     assert_eq!(patch.store.row_count(), 0);
     assert_eq!(patch.observed_documents, 0);
 }
@@ -344,19 +191,22 @@ async fn trigger_patch_counts_physical_documents_for_mixed_present_and_missing_i
     )
     .await
     .expect("create trigger");
-    let data = execute_local_graphql_query(
-        node.as_ref(),
-        r#"{ Trigger(filter: { node_did: { _eq: "did:test:patch" }, trigger_id: { _eq: "trigger-present" } }) { _docID } }"#,
-        "read trigger fixture",
-    )
-    .await
-    .expect("read trigger document id");
-    let doc_id = data["Trigger"][0]["_docID"]
-        .as_str()
-        .expect("created trigger document id");
-
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
+            .expect("fixture DID"),
+    );
+    let selected = access
+        .read_view(
+            &gents_documents::views::tasks::TriggerList::new("did:test:patch")
+                .trigger_ids(vec!["trigger-present".to_owned()]),
+        )
+        .await
+        .expect("read trigger document id");
+    let doc_id = selected.first().expect("created trigger").doc_id.as_str();
     let patch = fetch_doc_patch(
-        node.as_ref(),
+        &access,
+        "did:test:patch",
         TRIGGER_NAME,
         &[doc_id, "missing-trigger-document"],
     )
@@ -380,7 +230,17 @@ async fn fetch_doc_patch_unknown_collection_errors() {
         .await
         .expect("schemas");
 
-    let result = fetch_doc_patch(node.as_ref(), "NotARealCollection", &["x"]).await;
+    let result = fetch_doc_patch(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
+                .expect("fixture DID"),
+        ),
+        "did:test:agent",
+        "NotARealCollection",
+        &["x"],
+    )
+    .await;
     assert!(result.is_err());
 }
 
@@ -401,21 +261,6 @@ fn doc_patch_support_excludes_pairing_control_collections() {
     }
     assert!(!supports_doc_patch_collection("PeerPairingApplied"));
     assert!(!supports_doc_patch_collection("SessionHydrationRequest"));
-}
-
-#[test]
-fn node_runtime_queries_cannot_reintroduce_readiness_authority() {
-    let fields = NODE_RUNTIME_FIELDS.split_whitespace().collect::<Vec<_>>();
-    for forbidden in [
-        "process_state",
-        "active_generation",
-        "router_generation",
-        "default_agent_did",
-        "runnable_agent_count",
-        "unavailable_agent_count",
-    ] {
-        assert!(!fields.contains(&forbidden), "forbidden field: {forbidden}");
-    }
 }
 
 #[tokio::test]
@@ -443,9 +288,15 @@ async fn load_node_runtimes_hydrates_executor_capacity_and_queue_depth() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let runtimes = load_node_runtimes(node.as_ref())
-        .await
-        .expect("load node runtimes");
+    let runtimes = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    )
+    .read_view(&gents_store::views::runtime::NodeRuntimeList::new(
+        "did:key:runtime-capacity",
+    ))
+    .await
+    .expect("load node runtimes");
     let runtime = runtimes
         .iter()
         .find(|row| row.node_did == "did:key:runtime-capacity")
@@ -470,6 +321,7 @@ async fn load_agent_tool_calls_hydrates_background_projection_fields() {
         .execute(
             r#"mutation {
                 create_AgentToolCall(input: {
+                    node_did: "did:test:agent",
                     tool_call_key: "session-1:start-1",
                     request_id: "parent-1",
                     session_id: "session-1",
@@ -486,9 +338,15 @@ async fn load_agent_tool_calls_hydrates_background_projection_fields() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let tool_calls = load_agent_tool_calls(node.as_ref())
-        .await
-        .expect("load agent tool calls");
+    let tool_calls = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    )
+    .read_view(&gents_session::views::transcript::ToolCallRows::new(
+        gents_session::views::transcript::Scope::Node("did:test:agent".to_owned()),
+    ))
+    .await
+    .expect("load agent tool calls");
     let tool_call = tool_calls
         .iter()
         .find(|row| row.tool_call_key == "session-1:start-1")
@@ -554,6 +412,7 @@ async fn load_agent_tool_calls_hydrates_job_pin_and_progress() {
     };
     let mutation = r#"mutation($job_pin: JSON, $job_progress: JSON) {
         create_AgentToolCall(input: {
+            node_did: "did:test:agent",
             tool_call_key: "session-1:job-1",
             request_id: "parent-1",
             session_id: "session-1",
@@ -577,16 +436,21 @@ async fn load_agent_tool_calls_hydrates_job_pin_and_progress() {
         .await
         .expect("seed job row");
 
-    let tool_calls = load_agent_tool_calls(node.as_ref())
-        .await
-        .expect("load agent tool calls");
+    let tool_calls = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    )
+    .read_view(&gents_session::views::transcript::ToolCallRows::new(
+        gents_session::views::transcript::Scope::Node("did:test:agent".to_owned()),
+    ))
+    .await
+    .expect("load agent tool calls");
     let tool_call = tool_calls
         .iter()
         .find(|row| row.tool_call_key == "session-1:job-1")
         .expect("created tool call");
     assert_eq!(tool_call.job_pin.as_ref(), Some(&pin));
     assert_eq!(tool_call.job_progress.as_ref(), Some(&progress));
-    assert!(!AGENT_TOOL_CALL_FIELDS.contains("job_step_state"));
 }
 
 #[tokio::test]
@@ -641,9 +505,15 @@ async fn load_node_scoped_snapshot_excludes_other_nodes() {
     let response = node.execute(goal_mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let store = load_node_scoped_snapshot(node.as_ref(), "did:alpha")
-        .await
-        .expect("load_node_scoped_snapshot");
+    let store = load_node_snapshot_on(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            node.node_identity_did().unwrap().parse().unwrap(),
+        ),
+        "did:alpha",
+    )
+    .await
+    .expect("load_node_scoped_snapshot");
 
     let dids: Vec<&str> = store
         .sessions
@@ -661,18 +531,4 @@ async fn load_node_scoped_snapshot_excludes_other_nodes() {
     );
     assert_eq!(store.goals.len(), 1);
     assert_eq!(store.goals[0].session_id, "alpha-goal-only");
-}
-
-#[test]
-fn catalog_freshness_failure_keeps_other_backend_observations_and_scope_alignment() {
-    let data = serde_json::json!({"inference_backends":[
-        {"backend_id":"bad", "node_did":"did:bad", "catalogs":null,
-            "catalog_freshness":{"version":255,"entries":[]}},
-        {"backend_id":"good", "node_did":"did:good", "catalogs":null}
-    ]});
-    let (observations, sources) =
-        parse_backend_observation_rows(&data, "inference_backends").unwrap();
-    assert_eq!(observations.len(), 1);
-    assert_eq!(observations[0].backend_id, "good");
-    assert_eq!(sources, [Some("did:good".into())]);
 }

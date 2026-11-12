@@ -26,7 +26,7 @@ impl ConfigCommandTool {
                             .into_iter()
                             .map(|row| row.metadata.into_backend().map_err(anyhow::Error::from))
                             .collect::<Result<Vec<_>>>()?;
-                        let profiles = txn
+                        let profiles: Vec<_> = txn
                             .read_view(&gents_inference::views::profiles::ProfileList::new(
                                 node_did,
                             ))

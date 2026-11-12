@@ -89,6 +89,7 @@ impl Scalar<kind::Json> for &Value {
 /// Kinds with a total order DefraDB can range over.
 pub trait Ordered {}
 impl Ordered for kind::Str {}
+impl Ordered for kind::DocId {}
 impl Ordered for kind::Int {}
 impl Ordered for kind::Float {}
 impl Ordered for kind::DateTime {}
@@ -647,11 +648,22 @@ where
 
     fn render_root(&self, alias: Option<&str>, variables: &mut Variables) -> String {
         let mut arguments = Vec::new();
-        if let Some(doc_id) = &self.doc_id {
+        if let Some(doc_id) = self.doc_id.as_ref().filter(|_| !self.count) {
             let reference = variables.bind("ID!", Value::String(doc_id.clone()));
             arguments.push(format!("docID: {reference}"));
         }
-        if let Some(filter) = &self.filter {
+        let count_filter = self.doc_id.as_ref().filter(|_| self.count).map(|doc_id| {
+            let doc_filter = Filter::eq(Field::<C, kind::DocId>::new("_docID"), doc_id);
+            match &self.filter {
+                Some(filter) => Filter::<C>::wrap(filter.clone()).and(doc_filter),
+                None => doc_filter,
+            }
+        });
+        let filter = count_filter
+            .as_ref()
+            .map(|filter| &filter.expr)
+            .or(self.filter.as_ref());
+        if let Some(filter) = filter {
             arguments.push(format!("filter: {}", render_filter(filter, variables)));
         }
         if !self.order.is_empty() {
@@ -719,6 +731,16 @@ impl QuerySet {
         C: Collection,
     {
         let root = query.render_root(Some(alias), &mut self.variables);
+        self.roots.push(root);
+        self
+    }
+
+    pub fn indexed<C>(mut self, index: usize, query: &Query<C>) -> Self
+    where
+        C: Collection,
+    {
+        let alias = format!("view_{index}");
+        let root = query.render_root(Some(&alias), &mut self.variables);
         self.roots.push(root);
         self
     }
