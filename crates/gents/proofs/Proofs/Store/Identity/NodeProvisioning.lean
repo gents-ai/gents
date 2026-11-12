@@ -4,8 +4,17 @@ namespace Identity.NodeProvisioning
 
 /-- These node permissions are separate from document ACP. Their presence does
 not establish document authorization, and unbound collections do not acquire
-document protection from them. Extra operations require their own justification. -/
-def requiredPermissions : List String := ["read-document", "update-document", "add-dac-relation"]
+document protection from them. Extra operations require their own justification.
+
+`delete-dac-relation` is the revoke of `add-dac-relation` (maintainer decision,
+2026-11-12, gents#3683): whoever can grant access on a document can revoke it,
+so an Agent that links or shares a document it manages can withdraw that
+relationship as itself. Like the add, it is only the native operation gate;
+document ACP still admits a change only from the document's owner or a
+declared manager of that relation (`Household.mayManage`), and a removed tuple
+only narrows access (`Household.revocation_only_narrows`). -/
+def requiredPermissions : List String :=
+  ["read-document", "update-document", "add-dac-relation", "delete-dac-relation"]
 
 /-- An executing Agent carries its own signer. Native NAC decides whether that
 actor may create documents and manage the new document relationships; the

@@ -562,6 +562,119 @@ def apply (state : State) : Action → State
       { state with relations := state.relations.filter (· != relation) } else state
   | .check .. => state
 
+/-- Document ACP is monotone in relationship tuples: no permission expression
+subtracts, so a check that passes with fewer tuples passes with more. -/
+theorem allowedIn_mono (definitions : List ResourceDefinition) (fuel : Nat) (narrowed state : State)
+    (objects : narrowed.objects = state.objects)
+    (sub : ∀ r, r ∈ narrowed.relations → r ∈ state.relations)
+    (actor resource id permission : String)
+    (h : allowedIn definitions fuel narrowed actor resource id permission = true) :
+    allowedIn definitions fuel state actor resource id permission = true := by
+  induction fuel generalizing actor resource id permission with
+  | zero => simp [allowedIn] at h
+  | succ fuel ih =>
+    simp only [allowedIn] at h ⊢
+    rw [objects] at h
+    split at h
+    · rename_i object definition hobj hdef
+      simp only [Bool.or_eq_true, List.any_eq_true] at h ⊢
+      rcases h with (h | ⟨rel, hrel, fact, hmem, hfact⟩) | ⟨⟨rel, inh⟩, hrel, fact, hmem, hfact⟩
+      · exact Or.inl (Or.inl h)
+      · refine Or.inl (Or.inr ⟨rel, hrel, fact, sub _ hmem, ?_⟩)
+        rcases fact with ⟨_, _, _, subject⟩
+        cases subject <;> simp only [Bool.and_eq_true] at hfact ⊢ <;>
+          first | exact hfact | exact ⟨hfact.1, ih _ _ _ _ hfact.2⟩
+      · refine Or.inr ⟨⟨rel, inh⟩, hrel, fact, sub _ hmem, ?_⟩
+        rcases fact with ⟨_, _, _, subject⟩
+        cases subject <;> simp only [Bool.and_eq_true] at hfact ⊢ <;>
+          first | exact hfact | exact ⟨hfact.1, ih _ _ _ _ hfact.2⟩
+    · rename_i object hobj hdef
+      split at h
+      · rename_i hperm
+        rw [if_pos hperm]
+        exact h
+      · rename_i hperm
+        rw [if_neg hperm]
+        simp only [Bool.and_eq_true, List.any_eq_true] at h ⊢
+        rcases h with ⟨hdefs, fact, hmem, hfact⟩
+        refine ⟨hdefs, fact, sub _ hmem, ?_⟩
+        rcases fact with ⟨_, _, _, subject⟩
+        cases subject <;> simp only [Bool.and_eq_true] at hfact ⊢ <;>
+          first | exact hfact | exact ⟨hfact.1, ih _ _ _ _ hfact.2⟩
+    · simp at h
+
+theorem allowed_mono (fuel : Nat) (narrowed state : State)
+    (objects : narrowed.objects = state.objects)
+    (sub : ∀ r, r ∈ narrowed.relations → r ∈ state.relations)
+    (actor resource id permission : String)
+    (h : allowed fuel narrowed actor resource id permission = true) :
+    allowed fuel state actor resource id permission = true :=
+  allowedIn_mono policy fuel narrowed state objects sub actor resource id permission h
+
+theorem mayManage_mono (narrowed state : State)
+    (objects : narrowed.objects = state.objects)
+    (sub : ∀ r, r ∈ narrowed.relations → r ∈ state.relations)
+    (actor : DID) (relation : Relation)
+    (h : mayManage narrowed actor relation = true) : mayManage state actor relation = true := by
+  unfold mayManage at h ⊢
+  rw [objects] at h
+  split at h
+  · rename_i definition object _ _
+    simp only [Bool.and_eq_true, Bool.or_eq_true, List.any_eq_true] at h ⊢
+    rcases h with ⟨notOwner, owner | ⟨manager, hmanager, manages, hallowed⟩⟩
+    · exact ⟨notOwner, Or.inl owner⟩
+    · exact ⟨notOwner, Or.inr ⟨manager, hmanager, manages,
+        allowed_mono 8 narrowed state objects sub _ _ _ _ hallowed⟩⟩
+  · simp at h
+
+/-- Revoking only narrows: whatever any actor may do after a relationship is
+removed, it could do before. A revoke admitted by `delete-dac-relation`
+therefore never widens what an Agent, or anyone else, can see or reach. -/
+theorem revocation_only_narrows (state : State) (revoker : DID) (relation : Relation)
+    (fuel : Nat) (actor resource id permission : String)
+    (h : allowed fuel (apply state (.revokeAs revoker relation)) actor resource id permission = true) :
+    allowed fuel state actor resource id permission = true := by
+  simp only [apply] at h
+  split at h
+  · refine allowed_mono fuel { state with relations := state.relations.filter (· != relation) }
+      state rfl ?_ _ _ _ _ h
+    intro r hr
+    exact (List.mem_filter.mp hr).1
+  · exact h
+
+/-- Revoking never confers relation management on anyone. -/
+theorem revocation_never_widens_management (state : State) (revoker actor : DID)
+    (revoked relation : Relation)
+    (h : mayManage (apply state (.revokeAs revoker revoked)) actor relation = true) :
+    mayManage state actor relation = true := by
+  simp only [apply] at h
+  split at h
+  · refine mayManage_mono { state with relations := state.relations.filter (· != revoked) }
+      state rfl ?_ _ _ h
+    intro r hr
+    exact (List.mem_filter.mp hr).1
+  · exact h
+
+/-- Whoever may grant access on a document may revoke it (maintainer decision,
+2026-11-12, gents#3683). Native relationship management admits grants and
+revokes through the one gate `mayManage`; a grant only adds a tuple, so the
+grantor keeps the standing that admitted it and its revoke removes exactly
+that tuple. -/
+theorem grantor_may_revoke (state : State) (actor : DID) (relation : Relation)
+    (granted : mayManage state actor relation = true) :
+    mayManage (apply state (.grantAs actor relation)) actor relation = true ∧
+      (apply (apply state (.grantAs actor relation)) (.revokeAs actor relation)).relations =
+        (relation :: state.relations).filter (· != relation) := by
+  have shape : apply state (.grantAs actor relation) =
+      { state with relations := relation :: state.relations } := by
+    simp [apply, granted]
+  have after : mayManage { state with relations := relation :: state.relations } actor relation = true := by
+    refine mayManage_mono state { state with relations := relation :: state.relations } rfl ?_ _ _ granted
+    intro r hr
+    exact List.mem_cons_of_mem _ hr
+  rw [shape]
+  exact ⟨after, by simp [apply, after]⟩
+
 /-- The role on one physical Agent controls each explicitly linked document.
 Revocation does not remove an independent direct document grant. -/
 def agentConfigWriterFixture : State :=
