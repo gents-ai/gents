@@ -275,22 +275,34 @@ def groupClockCases : List GroupClockCase :=
   , ⟨"consistent_cache_preserves_deadline", ⟨callback, 100, none⟩, some 100, 150, 40⟩
   , ⟨"evicted_cache_preserves_deadline", ⟨callback, 100, none⟩, none, 150, 40⟩ ]
 
+structure ConsumerWire where
+  kind : String
+  triggerId : Option String
+  bindingId : Option String
+  deriving Lean.ToJson
+
 structure KeyWire where
   nodeDid : String
-  consumerKind : String
-  consumerId : String
+  consumer : ConsumerWire
   consumerConfigKey : String
   correlation : String
   deriving Lean.ToJson
 
+def ConsumerWire.ofModel : Triggers.Groups.EventConsumer → ConsumerWire
+  | .trigger id => ⟨"trigger", some id, none⟩
+  | .callbackBinding id => ⟨"callback_binding", none, some id⟩
+
+def ConsumerWire.toModel (c : ConsumerWire) : Triggers.Groups.EventConsumer :=
+  match c.triggerId with
+  | some id => .trigger id
+  | none => .callbackBinding (c.bindingId.getD "")
+
 def KeyWire.ofModel (key : Triggers.Groups.EventGroupKey) : KeyWire :=
-  { nodeDid := key.nodeDid, consumerKind := key.consumer.kind, consumerId := key.consumer.id
+  { nodeDid := key.nodeDid, consumer := ConsumerWire.ofModel key.consumer
     consumerConfigKey := key.consumerConfigKey, correlation := key.correlation }
 
 def KeyWire.toModel (key : KeyWire) : Triggers.Groups.EventGroupKey :=
-  { nodeDid := key.nodeDid
-    consumer := if key.consumerKind == "trigger" then .trigger key.consumerId
-      else .callbackBinding key.consumerId
+  { nodeDid := key.nodeDid, consumer := key.consumer.toModel
     consumerConfigKey := key.consumerConfigKey, correlation := key.correlation }
 
 structure ClockInput where
@@ -350,21 +362,63 @@ def eventGroupCaptureCases :
     , ("trigger_cannot_capture_callback", { group with key := trigger },
         { candidate with key := trigger }) ]
 
-def eventGroupCaptureCasesJson : String :=
-  jsonArray (eventGroupCaptureCases.map fun (name, clock, c) =>
-    let input := "[\"b\",\"a\"]"
-    let captured := _root_.EventDelivery.Group.captureCallback clock c "inv-capture" input "did:key:agent"
-    "{\"name\":" ++ jsonString name
-      ++ ",\"group_key\":" ++ Conformance.EventGroupContracts.keyJson clock.key
-      ++ ",\"quiesced_at\":" ++ Conformance.EventGroupContracts.jsonOptionNat clock.quiescedAt
-      ++ ",\"candidate\":" ++ Conformance.EventGroupContracts.scenarioJson
-        ⟨name, ⟨[]⟩, c⟩
-      ++ ",\"input\":" ++ jsonString input
-      ++ ",\"captured\":" ++ toString captured.isSome
-      ++ ",\"captured_owner\":" ++ jsonOptionalString (captured.map (·.ownerNodeDid))
-      ++ ",\"captured_input\":" ++ jsonOptionalString (captured.map (·.input))
-      ++ ",\"captured_group_key\":" ++
-        ((captured.bind (·.originGroupKey)).map Conformance.EventGroupContracts.keyJson).getD "null"
-      ++ "}")
+structure CandidateWire where
+  key : KeyWire
+  actualCount : Nat
+  expectedCount : Option Nat
+  minimumCount : Nat
+  timedOut : Bool
+  wellFormed : Bool
+  deriving Lean.ToJson
+
+def CandidateWire.toModel (c : CandidateWire) : Triggers.Groups.Candidate :=
+  ⟨c.key.toModel, c.actualCount, c.expectedCount, c.minimumCount, c.timedOut, c.wellFormed⟩
+
+structure CaptureInput where
+  name : String
+  groupKey : KeyWire
+  firstSeen : Nat
+  quiescedAt : Option Nat
+  offered : CandidateWire
+  input : String
+  deriving Lean.ToJson
+
+structure CaptureOutput where
+  eligible : Bool
+  materialized : Bool
+  markerCountAfter : Nat
+  captured : Bool
+  capturedOwner : Option String
+  capturedInput : Option String
+  capturedGroupKey : Option KeyWire
+  deriving Lean.ToJson
+
+/-- model-production-gap: production captures a callback group only inside the
+served callback scan (`materialize_group` in gents-automation), which loads the
+group by the delivery's own key, so a candidate whose key differs from its
+group, or a trigger group offered to a callback, has no production path; the
+eligible and quiesced cases need a served callback-binding scenario. -/
+@[conformance_family]
+def groupCaptureUnreached : Family CaptureInput CaptureOutput where
+  inputs := eventGroupCaptureCases.map fun (name, clock, c) =>
+    { name, groupKey := KeyWire.ofModel clock.key, firstSeen := clock.firstSeen
+      quiescedAt := clock.quiescedAt
+      offered := { key := KeyWire.ofModel c.key, actualCount := c.actualCount
+                   expectedCount := c.expectedCount, minimumCount := c.minimumCount
+                   timedOut := c.timedOut, wellFormed := c.wellFormed }
+      input := "[\"b\",\"a\"]" }
+  model := fun i =>
+    let candidate := i.offered.toModel
+    let after := Triggers.Groups.reconcile ⟨[]⟩ candidate
+    let captured := _root_.EventDelivery.Group.captureCallback
+      ⟨i.groupKey.toModel, i.firstSeen, i.quiescedAt⟩ candidate "inv-capture" i.input
+      "did:key:agent"
+    { eligible := candidate.eligible
+      materialized := after.has candidate.key
+      markerCountAfter := after.materialized.length
+      captured := captured.isSome
+      capturedOwner := captured.map (·.ownerNodeDid)
+      capturedInput := captured.map (·.input)
+      capturedGroupKey := (captured.bind (·.originGroupKey)).map KeyWire.ofModel }
 
 end Conformance.EventDelivery

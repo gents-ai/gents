@@ -2553,8 +2553,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "family" "event_delivery_group_clock_unreached"
       "model-production-gap: the durable group clock stamps first-seen and quiescence with the wall clock inside a served transaction and keeps no cached first-seen observation; no production path takes now, timeout or a cached first-seen as an input.")
       "triggers" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "event_group_capture_cases" "EventGroupCaptureCases"
-      "Drive captured ordered input and typed origin through the callback capture owner; quiesced groups must reject capture.")
+  , tagged (followUpCoverage "family" "event_delivery_group_capture_unreached"
+      "model-production-gap: production captures a callback group only inside the served callback scan (materialize_group), which loads the group by the delivery's own key; mismatched or trigger candidates have no production path and the eligible and quiesced cases need a served callback-binding scenario.")
       "triggers" [Surface.runtimeInternal]
   , tagged (followUpCoverage "callback_transition_cases" "CallbackTransitionCases"
       "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through callback_recovery_cases.")
