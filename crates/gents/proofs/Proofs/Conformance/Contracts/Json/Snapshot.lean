@@ -696,8 +696,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
     ++ "\"identity_delegation_cases\":"
       ++ Identity.GrantSetsConformance.delegationCasesJson ++ ","
-    ++ "\"identity_agent_baseline_cases\":"
-      ++ Identity.GrantSetsConformance.baselineCasesJson ++ ","
     ++ "\"identity_agent_creator_cases\":"
       ++ Identity.NodeProvisioningConformance.agentCreatorCasesJson ++ ","
     ++ "\"identity_agent_block_signing_cases\":"
