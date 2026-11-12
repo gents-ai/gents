@@ -117,6 +117,7 @@ import Proofs.Conformance.RepeatedToolFailure
 import Proofs.Conformance.ToolTimeouts
 import Proofs.Conformance.PluginResources
 import Proofs.Conformance.PluginJob
+import Proofs.Conformance.PluginJobStep
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxQuestion

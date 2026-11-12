@@ -1132,68 +1132,6 @@ async fn budget_exceeded_pause_settles_paused() {
 }
 
 #[tokio::test]
-async fn staged_plugin_defers_running_job_without_counting_a_failure() {
-    let step = stepper(json!({"result": "done"})).await;
-    let driver = JobDriver::new(step.job.runtime.clone());
-    let actor = super::super::input::tests::agent_actor();
-    let before = step.row_json(&step.row).await;
-    let guard = gents_pack::plugin::store::try_lock_store(&step.job.runtime.home).unwrap();
-    for _ in 0..3 {
-        let error = driver
-            .step_now(&step.row, &actor)
-            .await
-            .unwrap()
-            .unwrap_err();
-        assert!(
-            gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
-                error.as_ref()
-            )
-        );
-    }
-    crate::background::job::recovery::redrive_running_jobs(&driver, &actor)
-        .await
-        .unwrap();
-    assert_eq!(step.row_json(&step.row).await, before);
-    assert!(!driver.failures.lock().unwrap().contains_key(&step.row));
-    drop(guard);
-    assert_eq!(step.run(&step.row).await, StepOutcome::Settled);
-    step.close().await;
-}
-
-#[tokio::test]
-async fn plugin_publication_after_step_precheck_is_transient() {
-    let step = stepper(json!({"result": "done"})).await;
-    let (input, revision) = step.input(&step.row).await;
-    let (namespace, name) = gents_documents::plugin_coordinate::parse_coordinate(
-        &input.pin.as_ref().unwrap().plugin_ref,
-    )
-    .unwrap();
-    let (installed, guard) =
-        gents_pack::plugin::store::read_published_record(&step.job.runtime.home, namespace, name)
-            .unwrap();
-    drop(guard);
-    let mut lifecycle = step.lifecycle(&step.row).await;
-    let guard = gents_pack::plugin::store::try_lock_store(&step.job.runtime.home).unwrap();
-    let error = super::step::step_on(
-        &step.job.runtime,
-        &mut lifecycle,
-        &installed,
-        input,
-        revision,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        crate::plugin::executor::publication_busy(&error),
-        "{error:#}"
-    );
-    assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
-    drop(guard);
-    assert_eq!(step.run(&step.row).await, StepOutcome::Settled);
-    step.close().await;
-}
-
-#[tokio::test]
 async fn engine_change_fails_the_job_closed() {
     let step = stepper(json!({"result": "done"})).await;
     install_engine(&step.job, &json!({"result": "changed"}));
@@ -1454,50 +1392,6 @@ async fn live_child(step: &Stepper, node_did: &str) -> String {
         }),
     )
     .await
-}
-
-#[tokio::test]
-async fn recovery_hold_and_deferred_step_keep_runtime_retirement_busy() {
-    use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
-    use gents_store::service::{RetirementError, RuntimeServiceAdmission};
-
-    let step = stepper(json!({"effects": {}})).await;
-    live_child(&step, "did-owner").await;
-    let admission = RuntimeServiceAdmission::default();
-    let driver = JobDriver::with_service_admission(step.job.runtime.clone(), admission.clone());
-    let authority = || RetirementAuthority {
-        operator_authenticated: true,
-        observed_build_matches: true,
-    };
-    let held = driver.permits.acquire_many(4).await.unwrap();
-    driver
-        .hold_steps(
-            &step.row,
-            &super::super::input::tests::agent_actor(),
-            async {
-                assert_eq!(admission.retire(authority()), Err(RetirementError::Busy));
-                driver
-                    .kick(&step.row, &super::super::input::tests::agent_actor())
-                    .unwrap();
-            },
-        )
-        .await
-        .unwrap();
-    assert!(driver.is_stepping(&step.row));
-    assert_eq!(admission.retire(authority()), Err(RetirementError::Busy));
-    drop(held);
-    idle(&driver).await;
-    assert_eq!(step.progress(&step.row).await.revision, 2);
-    admission.retire(authority()).unwrap();
-    assert!(driver
-        .hold_steps(
-            &step.row,
-            &super::super::input::tests::agent_actor(),
-            async { panic!("retiring runtime admitted recovery") }
-        )
-        .await
-        .is_none());
-    step.close().await;
 }
 
 #[tokio::test]
@@ -1864,44 +1758,231 @@ async fn a_step_without_state_keeps_the_stored_one() {
     step.close().await;
 }
 
-/// A state over `JOB_GUEST_STATE_MAX_BYTES` is a malformed output: nothing
-/// is stored, and the driver counts it until the row fails closed.
+fn attempt_of(outcome: &Result<StepOutcome>) -> &'static str {
+    match outcome {
+        Ok(StepOutcome::Settled) => "settled",
+        Ok(StepOutcome::Refused(Refusal::Terminal)) => "refused_terminal",
+        Err(error)
+            if crate::plugin::executor::publication_busy(error)
+                || gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                    error.as_ref(),
+                ) =>
+        {
+            "publication_busy"
+        }
+        Err(error) if error.downcast_ref::<StepFailure>().is_some() => "invocation_failed",
+        other => panic!("unexpected step outcome {other:?}"),
+    }
+}
+
 #[tokio::test]
-async fn a_guest_state_over_the_cap_fails_the_step_and_stores_nothing() {
-    let big = "x".repeat(gents_protocol::job::JOB_GUEST_STATE_MAX_BYTES + 1);
-    let step = stepper(json!({"effects": {
-        "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
-        "state": {"blob": big},
-    }}))
-    .await;
-    let outcome = run_step(
-        &step.job.runtime,
-        &step.row,
-        &super::super::input::tests::agent_actor(),
+async fn publication_attempts_match_the_lean_model() {
+    let actor = super::super::input::tests::agent_actor();
+    for case in
+        gents_lean_vocab::families::plugin_job_step_publication::cases::<String, String, String>()
+    {
+        let step = stepper(json!({"result": "done"})).await;
+        let driver = JobDriver::new(step.job.runtime.clone());
+        let trap = StepFailure::Trap("before the attempt".to_owned());
+        for _ in 0..case.input.prior_failures {
+            driver.step_failed(&step.row, &actor, &trap).await.unwrap();
+        }
+        let before = step.row_json(&step.row).await;
+        let home = &step.job.runtime.home;
+        let (outcome, guard) = match case.input.lock.as_str() {
+            "free" => (driver.step_now(&step.row, &actor).await.unwrap(), None),
+            "before_read" => {
+                let guard = gents_pack::plugin::store::try_lock_store(home).unwrap();
+                (
+                    driver.step_now(&step.row, &actor).await.unwrap(),
+                    Some(guard),
+                )
+            }
+            "after_precheck" => {
+                let (input, revision) = step.input(&step.row).await;
+                let (namespace, name) = gents_documents::plugin_coordinate::parse_coordinate(
+                    &input.pin.as_ref().unwrap().plugin_ref,
+                )
+                .unwrap();
+                let (installed, read_guard) =
+                    gents_pack::plugin::store::read_published_record(home, namespace, name)
+                        .unwrap();
+                drop(read_guard);
+                let mut lifecycle = step.lifecycle(&step.row).await;
+                let guard = gents_pack::plugin::store::try_lock_store(home).unwrap();
+                (
+                    step_on(
+                        &step.job.runtime,
+                        &mut lifecycle,
+                        &installed,
+                        input,
+                        revision,
+                    )
+                    .await,
+                    Some(guard),
+                )
+            }
+            other => panic!("unknown lock timing {other}"),
+        };
+        crate::background::job::recovery::redrive_running_jobs(&driver, &actor)
+            .await
+            .unwrap();
+        idle(&driver).await;
+        let row = step.row_json(&step.row).await;
+        let consecutive_failures = driver
+            .failures
+            .lock()
+            .unwrap()
+            .get(&step.row)
+            .map_or(0, |failures| u64::from(failures.count));
+        drop(guard);
+        let after_release = run_step(&step.job.runtime, &step.row, &actor).await;
+        case.check(
+            gents_lean_vocab::families::plugin_job_step_publication::PublicationOutput {
+                attempt: attempt_of(&outcome).to_owned(),
+                row_state: row["lifecycle_state"].as_str().unwrap().to_owned(),
+                row_unchanged: row == before,
+                consecutive_failures,
+                after_release: attempt_of(&after_release).to_owned(),
+            },
+        );
+        step.close().await;
+    }
+}
+
+/// The row's closed canonical output's code, or `None` while it is open.
+async fn closed_code(step: &Stepper, row: &str) -> Option<String> {
+    use gents_session::session::tool_output_rows::{
+        observe_canonical_tool_output_with_access, CanonicalToolOutputObservation,
+    };
+    let tool = step.lifecycle(row).await;
+    match observe_canonical_tool_output_with_access(
+        &step.job.access,
+        tool.doc_id().unwrap(),
+        tool.request_doc_id().unwrap(),
+        tool.session_id(),
+        tool.node_did(),
+        tool.requester_did(),
     )
-    .await;
-    assert!(
-        matches!(
-            outcome
-                .as_ref()
-                .map_err(|error| error.downcast_ref::<StepFailure>()),
-            Err(Some(StepFailure::MalformedOutput(_)))
-        ),
-        "an over-cap state is a malformed output: {outcome:?}"
-    );
-    assert_eq!(
-        step.state(&step.row).await.and_then(|state| state.guest),
-        None
-    );
-    let driver = JobDriver::new(step.job.runtime.clone());
-    driver
-        .kick(&step.row, &super::super::input::tests::agent_actor())
-        .unwrap();
-    idle(&driver).await;
-    assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
-    assert_eq!(
-        step.output(&step.row).await["code"],
-        "plugin_job_step_failed"
-    );
-    step.close().await;
+    .await
+    .unwrap()
+    {
+        CanonicalToolOutputObservation::Closed(output) => serde_json::from_str::<Value>(&output)
+            .unwrap()["code"]
+            .as_str()
+            .map(str::to_owned),
+        CanonicalToolOutputObservation::Open(_) => None,
+    }
+}
+
+#[tokio::test]
+async fn guest_state_steps_match_the_lean_model() {
+    let actor = super::super::input::tests::agent_actor();
+    for case in gents_lean_vocab::families::plugin_job_step_guest_state::cases::<String, String>() {
+        let mut effects = json!({
+            "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
+        });
+        if let Some(bytes) = case.input.state_bytes {
+            let bytes = usize::try_from(bytes).unwrap();
+            effects["state"] = json!({"blob": "x".repeat(bytes - r#"{"blob":""}"#.len())});
+            assert_eq!(effects["state"].to_string().len(), bytes);
+        }
+        let step = stepper(json!({ "effects": effects })).await;
+        let first_step = match run_step(&step.job.runtime, &step.row, &actor).await {
+            Ok(StepOutcome::Committed) => "committed",
+            Err(error)
+                if matches!(
+                    error.downcast_ref::<StepFailure>(),
+                    Some(StepFailure::MalformedOutput(_))
+                ) =>
+            {
+                "malformed_output"
+            }
+            other => panic!("unexpected first step {other:?}"),
+        };
+        let stored_guest = step
+            .state(&step.row)
+            .await
+            .and_then(|state| state.guest)
+            .is_some();
+        let driver = JobDriver::new(step.job.runtime.clone());
+        driver.kick(&step.row, &actor).unwrap();
+        idle(&driver).await;
+        let row_state = step.row_json(&step.row).await["lifecycle_state"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        case.check(
+            gents_lean_vocab::families::plugin_job_step_guest_state::GuestStateOutput {
+                first_step: first_step.to_owned(),
+                stored_guest,
+                row_state,
+                failure_code: closed_code(&step, &step.row).await,
+            },
+        );
+        step.close().await;
+    }
+}
+
+#[tokio::test]
+async fn driver_admission_matches_the_lean_model() {
+    use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
+    use gents_store::service::RuntimeServiceAdmission;
+
+    let actor = super::super::input::tests::agent_actor();
+    let authority = || RetirementAuthority {
+        operator_authenticated: true,
+        observed_build_matches: true,
+    };
+    for case in gents_lean_vocab::families::plugin_job_step_driver_admission::cases::<String>() {
+        let step = stepper(json!({"effects": {}})).await;
+        live_child(&step, "did-owner").await;
+        let admission = RuntimeServiceAdmission::default();
+        let driver = JobDriver::with_service_admission(step.job.runtime.clone(), admission.clone());
+        let mut held = if case.input.permits_taken {
+            Some(driver.permits.acquire_many(4).await.unwrap())
+        } else {
+            None
+        };
+        let mut observations = Vec::new();
+        for op in &case.input.ops {
+            let (admitted, retired_during) = match op.kind.as_str() {
+                "hold" => {
+                    let mut during = None;
+                    let ran = driver
+                        .hold_steps(&step.row, &actor, async {
+                            if op.retire_during {
+                                during = Some(admission.retire(authority()).is_ok());
+                            }
+                            if op.wake {
+                                driver.kick(&step.row, &actor).unwrap();
+                            }
+                        })
+                        .await
+                        .is_some();
+                    (ran, during)
+                }
+                "release_permits" => {
+                    held = None;
+                    (true, None)
+                }
+                "retire" => (admission.retire(authority()).is_ok(), None),
+                other => panic!("unknown driver op {other}"),
+            };
+            if held.is_none() {
+                idle(&driver).await;
+            }
+            observations.push(
+                gents_lean_vocab::families::plugin_job_step_driver_admission::DriverObservation {
+                    admitted,
+                    retired_during,
+                    stepping: driver.is_stepping(&step.row),
+                    steps_run: step.progress(&step.row).await.revision - 1,
+                },
+            );
+        }
+        case.check(observations);
+        drop(held);
+        step.close().await;
+    }
 }
