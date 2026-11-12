@@ -2540,7 +2540,7 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
     );
     let original = load_document_runtime_view(&node, root.did()).await.unwrap();
     for case in &gents_lean_vocab::lean_contract_snapshot().watcher_actor_cases {
-        let name = case["name"].as_str().unwrap();
+        let name = case.name.as_str();
         if !matches!(name, "disabled-resolved" | "disabled-unresolved") {
             continue;
         }
@@ -2559,7 +2559,7 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
         );
         let active = snapshot.activate(1, Default::default());
         let selected = active.watcher_identities().unwrap();
-        let expected = case["expected"].as_array().unwrap();
+        let expected = &case.expected;
         assert_eq!(selected.len(), expected.len(), "{name}");
         if !expected.is_empty() {
             assert_eq!(selected[0].did(), did);
