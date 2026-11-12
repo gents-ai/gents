@@ -161,6 +161,13 @@ example : desktopClientShellCases.any fun c =>
       !(c.desktopObservedTurnState == some "waitingForClaim" || c.desktopObservedTurnState == some "running") := by
   native_decide
 
+/-- The operator UI shows the observed request lifecycle: whenever a case
+observes a turn, the desktop projection reports exactly that turn state. -/
+example : desktopClientShellCases.all fun c =>
+    c.desktopObservedTurnState.isNone ||
+      (desktop.model (desktopInputOf c)).desktopExpectedTurnState == c.desktopObservedTurnState := by
+  native_decide
+
 def sessionTurnCasesJson : String := SessionTurnCases.casesJson
 
 def sessionTurnCaseCount : Nat := SessionTurnCases.caseCount
