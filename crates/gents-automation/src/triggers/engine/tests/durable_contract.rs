@@ -1369,21 +1369,6 @@ fn observed_claim_cohorts_match_lean() {
     }
 }
 
-#[test]
-fn task_goal_assignment_root_matches_lean() {
-    let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    for case in contract["trigger_delivery_assignment_root_cases"]
-        .as_array()
-        .unwrap()
-    {
-        assert_eq!(
-            crate::goal::assignment_allows(case["assigned"].as_str(), case["observed"].as_str()),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
-}
-
 fn trigger_with_options(
     template: Option<&str>,
     create_session: Option<bool>,

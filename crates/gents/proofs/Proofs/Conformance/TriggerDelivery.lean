@@ -523,11 +523,17 @@ def observedClaimCases : List String :=
     ("rows", jsonArray (rows.map claimObservationJson)),
     ("allowed", toString (observedClaimAllowed candidate rows))]
 
-def assignmentRootCases : List String :=
-  [(none, none), (none, some "ordinary"), (some "new", none),
-   (some "new", some "new"), (some "new", some "old")].map fun (assigned, observed) => object [
-    ("assigned", jsonOptionalString assigned), ("observed", jsonOptionalString observed),
-    ("allowed", toString (Goals.assignmentAllows assigned observed))]
+structure AssignmentRootInput where
+  assigned : Option String
+  observed : Option String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def assignmentRoot : Family AssignmentRootInput Bool where
+  inputs := [(none, none), (none, some "ordinary"), (some "new", none),
+    (some "new", some "new"), (some "new", some "old")].map fun (assigned, observed) =>
+      { assigned, observed }
+  model := fun i => Goals.assignmentAllows i.assigned i.observed
 
 def selfCases : List String :=
   [("owner", "first", "owner", "first"),
@@ -570,9 +576,6 @@ def triggerDeliveryQueueCasesJson : String :=
 
 def triggerDeliveryObservedClaimCasesJson : String :=
   jsonArray observedClaimCases
-
-def triggerDeliveryAssignmentRootCasesJson : String :=
-  jsonArray assignmentRootCases
 
 def triggerDeliveryOutcomeCasesJson : String :=
   jsonArray outcomeCases

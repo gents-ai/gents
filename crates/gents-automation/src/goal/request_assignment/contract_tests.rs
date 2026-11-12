@@ -37,6 +37,20 @@ async fn physical_goal_caller_reuses_the_signed_session_observation() {
     );
 }
 
+#[test]
+fn task_goal_assignment_root_matches_lean() {
+    gents_lean_vocab::families::trigger_delivery_assignment_root::replay(|input| {
+        entry_matches_assignment(
+            "goal",
+            input.assigned.as_deref(),
+            &AgentRequestRow {
+                doc_id: input.observed.clone(),
+                ..AgentRequestRow::default()
+            },
+        )
+    });
+}
+
 pub(super) fn goal(value: &Value, identities: &[KeyIdentity]) -> GoalDocument {
     serde_json::from_value(json!({
         "_docID":format!("goal-doc-{}-{}",value["goal"],value["root"]),
