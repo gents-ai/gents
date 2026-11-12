@@ -671,25 +671,6 @@ mod tests {
     }
 
     #[test]
-    fn restored_capture_scope_allocation_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_capture_scope_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            assert_eq!(
-                gents_loop::rendered_request::scope::next_scope_sequence(
-                    case.persisted.iter().copied()
-                ),
-                Some(case.next),
-                "{case:?}"
-            );
-        }
-        assert_eq!(
-            gents_loop::rendered_request::scope::next_scope_sequence([u64::MAX]),
-            None
-        );
-    }
-
-    #[test]
     fn healthy_wakeup_matches_the_generated_model() {
         let cases = &gents_lean_vocab::lean_contract_snapshot().backend_health_wake_cases;
         assert!(!cases.is_empty());

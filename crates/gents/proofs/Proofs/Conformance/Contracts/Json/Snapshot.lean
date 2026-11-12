@@ -901,7 +901,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"
       ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
-    ++ "\"backend_capture_scope_cases\":" ++ Conformance.BackendWake.captureScopeCasesJson ++ ","
     ++ "\"backend_health_wake_cases\":" ++ Conformance.BackendWake.healthCasesJson ++ ","
     ++ "\"backend_generation_mark_cases\":" ++ Conformance.BackendWake.generationCasesJson ++ ","
     ++ "\"backend_resume_admission_cases\":" ++ Conformance.BackendWake.admissionCasesJson ++ ","

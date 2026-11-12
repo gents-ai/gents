@@ -24,14 +24,14 @@ def fallbackWake : Family WakeInput (Option Nat) where
       ⟨10000, 10000, 0⟩, ⟨11000, 10000, 3⟩ ]
   model := fun i => RequestBackendWake.fallback i.nowMs i.deadlineMs i.attempts
 
-def captureScopeCases : List (List Nat) :=
-  [[], [1], [1, 4, 2], [8, 8, 3], [0, 15]]
+structure CaptureScopeInput where
+  persisted : List Nat
+  deriving ToJson
 
-def captureScopeCaseJson (scopes : List Nat) : String :=
-  "{\"persisted\":" ++ jsonArray (scopes.map toString) ++
-    ",\"next\":" ++ toString (RenderedCapture.nextScope scopes) ++ "}"
-
-def captureScopeCasesJson : String := jsonArray (captureScopeCases.map captureScopeCaseJson)
+@[conformance_family]
+def captureScope : Family CaptureScopeInput Nat where
+  inputs := [[], [1], [1, 4, 2], [8, 8, 3], [0, 15]].map fun persisted => { persisted }
+  model := fun i => RenderedCapture.nextScope i.persisted
 
 def healthCases : List (Nat × Nat × Option Nat) :=
   [(10, 20, none), (10, 20, some 9), (10, 20, some 10),

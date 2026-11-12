@@ -1193,12 +1193,6 @@ pub struct LeanAuxiliarySessionChildBindingCaseBinding {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBackendCaptureScopeCase {
-    pub persisted: Vec<u64>,
-    pub next: u64,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanBackendGenerationMarkCase {
     pub marked: Option<u64>,
     pub observed: Option<u64>,
@@ -3236,7 +3230,6 @@ pub struct LeanContractSnapshot {
     pub tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub tool_retry_cases: Vec<LeanToolRetryCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub backend_capture_scope_cases: Vec<LeanBackendCaptureScopeCase>,
     pub backend_health_wake_cases: Vec<LeanBackendHealthWakeCase>,
     pub backend_generation_mark_cases: Vec<LeanBackendGenerationMarkCase>,
     pub backend_resume_admission_cases: Vec<LeanBackendResumeAdmissionCase>,
