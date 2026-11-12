@@ -53,3 +53,43 @@ def epoch : Family FailedEpoch EpochOutput where
       nextRetryDelaySeconds := nextRetryDelaySeconds e }
 
 end Conformance.BackgroundDiagnostics
+
+namespace Conformance.BackgroundDiagnostics
+
+open Lean Background.Diagnostics
+
+deriving instance Lean.ToJson for HeadRelation, EpochState
+
+-- `failedEpoch`'s wire structs share short names with `epoch`'s; the generated
+-- Rust names come from the short name, so they live in their own namespace.
+namespace HeadEpoch
+
+structure EpochInput where
+  head : HeadRelation
+  retryCount : Nat
+  maxRetries : Nat
+  deriving Lean.ToJson
+
+structure EpochOutput where
+  state : EpochState
+  nextRetryScheduled : Bool
+  strandedNotifications : Nat
+  deriving Lean.ToJson
+
+end HeadEpoch
+
+@[conformance_family]
+def failedEpoch : Conformance.Family HeadEpoch.EpochInput HeadEpoch.EpochOutput where
+  inputs :=
+    [ { head := .differentRow, retryCount := 0, maxRetries := 3 }
+    , { head := .sameRow, retryCount := 0, maxRetries := 3 }
+    , { head := .absent, retryCount := 0, maxRetries := 3 }
+    , { head := .differentRow, retryCount := 3, maxRetries := 3 }
+    , { head := .sameRow, retryCount := 3, maxRetries := 3 }
+    ]
+  model := fun i =>
+    { state := epochState i.retryCount i.maxRetries i.head
+      nextRetryScheduled := nextRetryScheduled i.retryCount i.maxRetries i.head
+      strandedNotifications := strandedNotifications i.retryCount i.maxRetries i.head }
+
+end Conformance.BackgroundDiagnostics

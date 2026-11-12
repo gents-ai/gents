@@ -747,19 +747,43 @@ mod tests {
     }
 
     #[test]
-    fn retry_eligibility_requires_the_exact_physical_request_head() {
-        let failed = wake("same-logical-id", None, "failed", 0, 3);
-        let authoritative_heads =
-            BTreeMap::from([("session-1".to_owned(), "different-physical-row".to_owned())]);
-        let diagnostics = summarize(
-            vec![failed],
-            vec![notification("same-logical-id", "child-1")],
-            authoritative_heads,
-            Utc::now(),
+    fn failed_epoch_matches_lean() {
+        gents_lean_vocab::families::background_diagnostics_failed_epoch::replay::<String, String>(
+            |case: &gents_lean_vocab::families::background_diagnostics_failed_epoch::EpochInput<
+                String,
+            >| {
+                let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc);
+                let heads = match case.head.as_str() {
+                    "same_row" => head("same-logical-id"),
+                    "different_row" => BTreeMap::from([(
+                        "session-1".to_owned(),
+                        "different-physical-row".to_owned(),
+                    )]),
+                    _ => BTreeMap::new(),
+                };
+                let failed = wake(
+                    "same-logical-id",
+                    None,
+                    "failed",
+                    i64::try_from(case.retry_count).unwrap(),
+                    i64::try_from(case.max_retries).unwrap(),
+                );
+                let diagnostics = summarize(
+                    vec![failed],
+                    vec![notification("same-logical-id", "child-1")],
+                    heads,
+                    now,
+                );
+                let epoch = &diagnostics.epochs[0];
+                gents_lean_vocab::families::background_diagnostics_failed_epoch::EpochOutput {
+                    state: epoch.state.clone(),
+                    next_retry_scheduled: epoch.next_retry_at.is_some(),
+                    stranded_notifications: diagnostics.stranded_notifications as u64,
+                }
+            },
         );
-        assert_eq!(diagnostics.epochs[0].state, "retry_ineligible_not_latest");
-        assert_eq!(diagnostics.epochs[0].next_retry_at, None);
-        assert_eq!(diagnostics.stranded_notifications, 1);
     }
 
     #[test]

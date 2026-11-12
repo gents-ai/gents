@@ -103,3 +103,76 @@ theorem failed_wake_displaced_by_later_turn_is_stranded_not_retrying :
   decide
 
 end BackgroundCompletion.Diagnostics
+
+/-!
+## Physical request head
+
+`summarize` in gents-toolcalls classifies a background-completion epoch for
+operators. This module models one epoch: a single failed scheduled wake whose
+completion notification is still unacknowledged, with no successor request.
+
+The session head is the request document that the session's latest-request
+read names. A wake is retry-eligible only while the head is that exact physical
+document. A different physical row that shares the wake's logical request id
+is not the head, so the wake is not retried.
+-/
+
+namespace Background.Diagnostics
+
+/-- How the session head relates to the failed wake's physical row. A
+`differentRow` head may carry the same logical request id as the wake. -/
+inductive HeadRelation where
+  | sameRow
+  | differentRow
+  | absent
+  deriving DecidableEq, Repr
+
+inductive EpochState where
+  | exhausted
+  | retryIneligibleNotLatest
+  | retryBackoff
+  deriving DecidableEq, Repr
+
+def retryIsLatest : HeadRelation → Bool
+  | .sameRow => true
+  | .differentRow => false
+  | .absent => false
+
+def epochState (retryCount maxRetries : Nat) (head : HeadRelation) : EpochState :=
+  if maxRetries ≤ retryCount then .exhausted
+  else if retryIsLatest head then .retryBackoff
+  else .retryIneligibleNotLatest
+
+def nextRetryScheduled (retryCount maxRetries : Nat) (head : HeadRelation) : Bool :=
+  epochState retryCount maxRetries head == .retryBackoff
+
+/-- The epoch has one unacknowledged notification. It is stranded unless a retry
+is still backing off. -/
+def strandedNotifications (retryCount maxRetries : Nat) (head : HeadRelation) : Nat :=
+  if epochState retryCount maxRetries head == .retryBackoff then 0 else 1
+
+theorem retry_eligibility_requires_the_exact_physical_request_head :
+    epochState 0 3 .differentRow = .retryIneligibleNotLatest ∧
+      nextRetryScheduled 0 3 .differentRow = false ∧
+      strandedNotifications 0 3 .differentRow = 1 := by
+  decide
+
+theorem exact_physical_head_keeps_the_retry :
+    epochState 0 3 .sameRow = .retryBackoff ∧
+      nextRetryScheduled 0 3 .sameRow = true ∧
+      strandedNotifications 0 3 .sameRow = 0 := by
+  decide
+
+theorem absent_head_is_not_retry_eligible :
+    epochState 0 3 .absent = .retryIneligibleNotLatest ∧
+      nextRetryScheduled 0 3 .absent = false := by
+  decide
+
+theorem exhausted_epoch_is_stranded_whatever_the_head :
+    epochState 3 3 .sameRow = .exhausted ∧
+      epochState 3 3 .differentRow = .exhausted ∧
+      strandedNotifications 3 3 .sameRow = 1 ∧
+      strandedNotifications 3 3 .differentRow = 1 := by
+  decide
+
+end Background.Diagnostics
