@@ -119,19 +119,57 @@ async fn wait_for_arrival_checkpoint(
     .expect("source delivery must checkpoint the claimed prefix after the capacity refusal");
 }
 
-fn transition(name: &str) -> &'static Value {
+fn transition(name: &str) -> &'static gents_lean_vocab::LeanCallbackTransitionCase {
     gents_lean_vocab::lean_contract_snapshot()
         .callback_transition_cases
         .iter()
-        .find(|case| case["name"] == name)
+        .find(|case| case.name == name)
         .expect("callback transition emitted by Lean")
 }
 
-fn assert_phase(row: &Value, phase: &Value, attempts: &Value) {
-    assert_eq!(row["lifecycle_state"], phase["state"], "{row}");
-    assert_eq!(row["attempts"], *attempts, "{row}");
+trait Phase {
+    fn state(&self) -> &str;
+    fn journal(&self) -> Value;
+}
+
+impl Phase for gents_lean_vocab::LeanCallbackTransitionCasePre {
+    fn state(&self) -> &str {
+        &self.state
+    }
+
+    fn journal(&self) -> Value {
+        Value::Array(
+            self.journal
+                .iter()
+                .map(|item| json!({"index": item.index, "state": item.state}))
+                .collect(),
+        )
+    }
+}
+
+impl Phase for gents_lean_vocab::LeanCallbackTransitionCasePost {
+    fn state(&self) -> &str {
+        &self.state
+    }
+
+    fn journal(&self) -> Value {
+        Value::Array(
+            self.journal
+                .iter()
+                .map(|item| json!({"index": item.index, "state": item.state}))
+                .collect(),
+        )
+    }
+}
+
+fn assert_phase<P>(row: &Value, phase: &P, attempts: u64)
+where
+    P: Phase,
+{
+    assert_eq!(row["lifecycle_state"], phase.state(), "{row}");
+    assert_eq!(row["attempts"], attempts, "{row}");
     let journal: Value = serde_json::from_str(row["action_journal"].as_str().unwrap()).unwrap();
-    assert_eq!(journal, phase["journal"], "{row}");
+    assert_eq!(journal, phase.journal(), "{row}");
     assert!(row["error"].is_null(), "{row}");
 }
 
@@ -187,9 +225,9 @@ async fn output_rows(access: &ConfigAccess) -> Vec<Value> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     let claim = transition("claim_preserves_captured_group");
-    let running = &transition("interrupt_marks_executing_action_and_fails")["pre"];
-    let success = &transition("success_preserves_captured_group_and_emits_result")["post"];
-    assert_eq!(success["result_emitted"], true);
+    let running = &transition("interrupt_marks_executing_action_and_fails").pre;
+    let success = &transition("success_preserves_captured_group_and_emits_result").post;
+    assert!(success.result_emitted);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -329,7 +367,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         let initial = invocations(&access).await;
         assert_eq!(initial.len(), PLUGIN_CALLBACK_CONCURRENCY);
         for row in &initial {
-            assert_phase(row, running, &claim["post"]["attempts"]);
+            assert_phase(row, running, claim.post.attempts);
         }
         assert!(result_rows(&access).await.is_empty());
         let stale_running = snapshot(&node, &initial[0]).await;
@@ -349,7 +387,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             .iter()
             .find(|row| row["input"]["item"] == PLUGIN_CALLBACK_CONCURRENCY)
             .unwrap();
-        assert_phase(pending, &claim["pre"], &claim["pre"]["attempts"]);
+        assert_phase(pending, &claim.pre, claim.pre.attempts);
         let stale_pending = snapshot(&node, pending).await;
         wait_for_arrival_checkpoint(&access, &mut updates, &claimed_head).await;
         assert_ne!(
@@ -359,7 +397,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         );
         assert_eq!(
             snapshot(&node, pending).await.lifecycle_state,
-            claim["pre"]["state"]
+            claim.pre.state
         );
         assert_eq!(hits.load(Ordering::SeqCst), PLUGIN_CALLBACK_CONCURRENCY);
         assert!(arrivals.try_recv().is_err());
@@ -373,14 +411,14 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             .iter()
             .find(|row| row["invocation_id"] == pending["invocation_id"])
             .unwrap();
-        assert_phase(recovered, running, &claim["post"]["attempts"]);
+        assert_phase(recovered, running, claim.post.attempts);
         let mut succeeded = 0;
         for row in &resumed {
-            if row["lifecycle_state"] == success["state"] {
+            if row["lifecycle_state"] == success.state.as_str() {
                 succeeded += 1;
-                assert_phase(row, success, &claim["post"]["attempts"]);
+                assert_phase(row, success, claim.post.attempts);
             } else {
-                assert_phase(row, running, &claim["post"]["attempts"]);
+                assert_phase(row, running, claim.post.attempts);
             }
         }
         assert_eq!(
@@ -397,11 +435,11 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             rows.len() == PLUGIN_CALLBACK_CONCURRENCY + 1
                 && rows
                     .iter()
-                    .all(|row| row["lifecycle_state"] == success["state"])
+                    .all(|row| row["lifecycle_state"] == success.state.as_str())
         })
         .await;
         for row in &completed {
-            assert_phase(row, success, &claim["post"]["attempts"]);
+            assert_phase(row, success, claim.post.attempts);
         }
         let results = result_rows(&access).await;
         assert_eq!(results.len(), completed.len());
