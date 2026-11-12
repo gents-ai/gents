@@ -1040,7 +1040,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
     ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","
     ++ "\"plugin_job_lineage_cases\":" ++ Conformance.PluginJob.lineageCasesJson ++ ","
-    ++ "\"plugin_job_recovery_cases\":" ++ Conformance.PluginJob.recoveryCasesJson ++ ","
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
     ++ "\"scope_collection_rules\":{"

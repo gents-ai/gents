@@ -1635,20 +1635,32 @@ private def jobRowJson (r : Recovery.PluginJobRow) : Json :=
     ("deadline_expired", toJson r.deadlineExpired), ("available", toJson r.available),
     ("stepped", toJson r.stepped), ("step_in_flight", toJson r.stepInFlight)]
 
-private def renderRecovery (c : RecoveryCase) : Json :=
-  let after := recoveryTick c.row
-  Json.mkObj [("name", toJson c.name),
-    ("sweep_id", toJson Recovery.pluginJobRecoverySweep.sweepId),
-    ("rust_function", toJson Recovery.pluginJobRecoverySweep.rustFunction),
-    ("row", jobRowJson c.row), ("stale", toJson (recoveryStale c.row)),
-    ("measure_before", toJson (recoveryMeasure c.row)),
-    ("measure_after", toJson (recoveryMeasure after)),
-    ("step_commit_allowed", toJson (Recovery.pluginJobStepCommitAllowed c.row.sessionStopped)),
-    ("step_invocation_allowed", toJson (Recovery.pluginJobStepInvocationAllowed
-      c.row.running c.row.sessionStopped)),
-    ("expected_row", jobRowJson after)]
+deriving instance ToJson for Recovery.PluginJobRow
 
-def recoveryCasesJson : String := (toJson (recoveryCases.map renderRecovery)).compress
+structure RecoveryInput where
+  name : String
+  before : Recovery.PluginJobRow
+  deriving ToJson
+
+structure RecoveryOutput where
+  stale : Bool
+  row : Recovery.PluginJobRow
+  stepCommitAllowed : Bool
+  stepInvocationAllowed : Bool
+  deriving ToJson
+
+@[conformance_family]
+def recoveries : Family RecoveryInput RecoveryOutput where
+  inputs := recoveryCases.map fun c => { name := c.name, before := c.row }
+  model := fun i =>
+    { stale := recoveryStale i.before, row := recoveryTick i.before
+      stepCommitAllowed := Recovery.pluginJobStepCommitAllowed i.before.sessionStopped
+      stepInvocationAllowed :=
+        Recovery.pluginJobStepInvocationAllowed i.before.running i.before.sessionStopped }
+
+example : Recovery.pluginJobRecoverySweep.sweepId = "tool_call_lifecycle_recover_plugin_job_rows" ∧
+    Recovery.pluginJobRecoverySweep.rustFunction = "plugin_job::recovery::redrive_running_jobs" := by
+  decide
 
 private def wireBindings : List TargetResolution.Binding :=
   [ ⟨"target-local", targetA.1, targetA.2⟩

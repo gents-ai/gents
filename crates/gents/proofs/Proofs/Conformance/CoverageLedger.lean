@@ -1757,8 +1757,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobLineageCases")
       "plugin-jobs" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "plugin_job_recovery_cases"
-      "PluginJobRecoveryCases")
+      "family"
+      "plugin_job_recoveries")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
