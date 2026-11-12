@@ -19,11 +19,19 @@ const PROVIDERS: [(Provider, &str); 4] = [
 
 impl Provider {
     fn name(self) -> &'static str {
-        PROVIDERS.iter().find(|(known, _)| *known == self).unwrap().1
+        PROVIDERS
+            .iter()
+            .find(|(known, _)| *known == self)
+            .unwrap()
+            .1
     }
 
     fn named(name: &str) -> Self {
-        PROVIDERS.iter().find(|(_, known)| *known == name).unwrap().0
+        PROVIDERS
+            .iter()
+            .find(|(_, known)| *known == name)
+            .unwrap()
+            .0
     }
 }
 
@@ -31,6 +39,7 @@ impl Provider {
 #[serde(rename_all = "snake_case")]
 enum StepKind {
     SignIn,
+    Upsert,
     SetLabel,
     SetEnabled,
     Remove,
@@ -50,7 +59,11 @@ enum Outcome {
 type Step = family::Step<Provider, StepKind>;
 type StepResult = family::StepResult<Outcome>;
 
-fn tokens(provider: Provider, keys: &[String], account_id: Option<&str>) -> (String, Option<String>) {
+fn tokens(
+    provider: Provider,
+    keys: &[String],
+    account_id: Option<&str>,
+) -> (String, Option<String>) {
     match provider {
         Provider::ChatGpt => {
             let mut auth = json!({});
@@ -163,12 +176,12 @@ impl World {
         self.slots.push((doc, credential_id));
     }
 
-    async fn sign_in(&mut self, step: &Step) -> StepResult {
+    fn credential(&self, step: &Step) -> OAuthCredential {
         let did = self.did().to_owned();
         let provider = step.provider.name();
         let (access_token, id_token) =
             tokens(step.provider, &step.token_keys, step.account_id.as_deref());
-        let credential = OAuthCredential {
+        OAuthCredential {
             doc_id: None,
             credential_id: oauth_credential_id(&did, provider),
             node_did: did,
@@ -186,25 +199,56 @@ impl World {
             connected_at: None,
             provider_account_key: step.key.clone(),
             label: None,
-        };
+        }
+    }
+
+    fn written(&mut self, doc: String, credential_id: String, matched: bool) -> StepResult {
+        let known = self.slots.iter().position(|(known, _)| *known == doc);
+        let row = known.unwrap_or_else(|| {
+            self.slots.push((doc, credential_id));
+            self.slots.len() - 1
+        });
+        StepResult {
+            outcome: match known {
+                Some(_) => Outcome::Refreshed,
+                None => Outcome::Added,
+            },
+            row: Some(row as u64),
+            identity_matched: matched,
+        }
+    }
+
+    async fn sign_in(&mut self, step: &Step) -> StepResult {
+        let credential = self.credential(step);
         let Ok(signed) = store_sign_in(&self.access, credential, step.label.as_deref()).await
         else {
             return REJECTED;
         };
-        let known = self.slots.iter().position(|(doc, _)| *doc == signed.doc_id);
-        let row = known.unwrap_or_else(|| {
-            self.slots
-                .push((signed.doc_id.clone(), signed.credential.credential_id.clone()));
-            self.slots.len() - 1
-        });
-        StepResult {
-            outcome: match signed.result {
-                SignInResult::Added => Outcome::Added,
-                SignInResult::Refreshed => Outcome::Refreshed,
-            },
-            row: Some(row as u64),
-            identity_matched: signed.identity_matched,
-        }
+        let result = self.written(
+            signed.doc_id,
+            signed.credential.credential_id,
+            signed.identity_matched,
+        );
+        let reported = match signed.result {
+            SignInResult::Added => Outcome::Added,
+            SignInResult::Refreshed => Outcome::Refreshed,
+        };
+        assert_eq!(
+            result.outcome, reported,
+            "the sign-in reports what it stored"
+        );
+        result
+    }
+
+    async fn upsert(&mut self, step: &Step) -> StepResult {
+        let credential = OAuthCredential {
+            connected_at: Some(Utc::now()),
+            ..self.credential(step)
+        };
+        let doc = upsert_oauth_credential_on(&self.access, &credential)
+            .await
+            .unwrap();
+        self.written(doc, credential.credential_id, false)
     }
 
     async fn lose_backend(&self, row: u64) {
@@ -257,14 +301,13 @@ impl World {
         let label = step.label.as_deref().unwrap_or_default();
         let done = match step.kind {
             StepKind::SignIn => return self.sign_in(step).await,
+            StepKind::Upsert => return self.upsert(step).await,
             StepKind::SetLabel => set_account_label(&self.access, &did, &id, label)
                 .await
                 .is_ok(),
-            StepKind::SetEnabled => {
-                set_account_enabled(&self.access, &did, &id, step.enabled)
-                    .await
-                    .is_ok()
-            }
+            StepKind::SetEnabled => set_account_enabled(&self.access, &did, &id, step.enabled)
+                .await
+                .is_ok(),
             StepKind::Remove => remove(&self.access, &did, &id).await.is_ok(),
             StepKind::LoseBackend => {
                 self.lose_backend(step.row).await;

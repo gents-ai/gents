@@ -75,9 +75,7 @@ fn answer(response: Response, path: &str) -> Option<(u16, &'static str)> {
 async fn upstream() -> Upstream {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let requests = Arc::new(AtomicU64::new(0));
     let response = Arc::new(std::sync::Mutex::new(Response::Windows));
@@ -163,10 +161,7 @@ fn stored_backend(
     stored
 }
 
-fn entry(
-    accounts: &[family::Account<Provider>],
-    read: AccountUsageRead,
-) -> family::Entry<Outcome> {
+fn entry(accounts: &[family::Account<Provider>], read: AccountUsageRead) -> family::Entry<Outcome> {
     let (outcome, reason) = match read.outcome {
         UsageRead::Read => (Outcome::Read, None),
         UsageRead::SkippedRecent => (Outcome::SkippedRecent, None),
@@ -256,7 +251,8 @@ async fn generated_usage_reads_reach_the_modelled_outcomes() {
                     .into_iter()
                     .map(|read| entry(&case.input.accounts, read))
                     .collect();
-                entries.sort_by_key(|entry| (entry.backend.is_some(), entry.account, entry.backend));
+                entries
+                    .sort_by_key(|entry| (entry.backend.is_some(), entry.account, entry.backend));
                 seen.push(family::PassSeen {
                     requests: upstream.requests.load(Ordering::SeqCst) - before,
                     entries,
