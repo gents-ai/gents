@@ -4,43 +4,6 @@ use futures::FutureExt;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Deserialize)]
-struct Contracts {
-    goal_observation_cases: Vec<Case>,
-}
-
-#[derive(Deserialize)]
-struct Case {
-    scope: Scope,
-    goal: Option<Reference>,
-    verified: bool,
-    accepted: bool,
-    recovery: Option<RecoveryTrace>,
-}
-
-#[derive(Deserialize)]
-struct RecoveryTrace {
-    before: Option<Reference>,
-    after: Option<Reference>,
-}
-
-#[derive(Deserialize)]
-struct Scope {
-    node: String,
-    agent: String,
-    session: String,
-    session_document: String,
-    requester: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Reference {
-    node: String,
-    session: String,
-    document: String,
-    composite: String,
-}
-
 async fn fixture() -> Fixture {
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
         "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
@@ -67,8 +30,6 @@ async fn session(f: &Fixture) -> SessionOwnerRow {
 
 #[tokio::test]
 async fn generated_goal_observations_drive_signature_and_scope_validation() {
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_observation_cases.len(), 504);
     let f = fixture().await;
     let current = session(&f).await;
     let native = f
@@ -87,7 +48,8 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
         "session-document" => current.doc_id.clone(),
         other => other.to_owned(),
     };
-    for case in contracts.goal_observation_cases {
+    for modeled in gents_lean_vocab::families::goal_observation_contracts_acceptance::cases() {
+        let case = &modeled.input;
         let mut observation = SessionGoalObservation {
             version: SESSION_GOAL_CONTROL_VERSION,
             node_did: map(&case.scope.node),
@@ -96,15 +58,15 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
             session_doc_id: map(&case.scope.session_document),
             requester_did: case.scope.requester.as_deref().map(map),
             observed_at: Utc::now().to_rfc3339(),
-            goal: case.goal.map(|reference| {
+            goal: case.goal.as_ref().map(|reference| {
                 let mut snapshot = snapshot(&native, Utc::now());
                 snapshot.node_did = map(&reference.node);
                 snapshot.session_id = map(&reference.session);
                 ObservedGoal {
                     assignment_root_request_doc_id: native.assignment_root_request_doc_id.clone(),
                     revision: GoalRevision {
-                        document: reference.document,
-                        composite: reference.composite,
+                        document: reference.document.clone(),
+                        composite: reference.composite.clone(),
                     },
                     snapshot,
                 }
@@ -127,7 +89,11 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
             requester_did: observation.requester_did.clone(),
             observation_json: Some(serde_json::to_string(&observation).unwrap()),
         };
-        if case.accepted {
+        let accepted = verified(f.identity.as_ref(), &current, &row)
+            .await
+            .unwrap()
+            .is_some();
+        if accepted {
             let mut node_signed = observation.clone();
             node_signed.signature = f
                 .identity
@@ -150,14 +116,7 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
                 "node signature must not replace selected agent signature"
             );
         }
-        assert_eq!(
-            verified(f.identity.as_ref(), &current, &row)
-                .await
-                .unwrap()
-                .is_some(),
-            case.accepted,
-            "observation: {observation:?}"
-        );
+        modeled.check(accepted);
     }
     f.node.shutdown().await.expect("node shutdown");
 }

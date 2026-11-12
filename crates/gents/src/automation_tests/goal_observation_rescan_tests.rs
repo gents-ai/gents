@@ -5,25 +5,8 @@ use gents_automation::goal::operator_resume::support::{Fixture, SESSION};
 use gents_automation::goal::*;
 use gents_protocol::goal_control::GoalRevision;
 use gents_store::identity::NodeIdentity;
-use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-
-#[derive(Deserialize)]
-struct Contracts {
-    goal_observation_cases: Vec<Case>,
-}
-
-#[derive(Deserialize)]
-struct Case {
-    recovery: Option<RecoveryTrace>,
-}
-
-#[derive(Deserialize)]
-struct RecoveryTrace {
-    before: Option<serde_json::Value>,
-    after: Option<serde_json::Value>,
-}
 
 async fn fixture() -> Fixture {
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
@@ -54,18 +37,10 @@ impl futures::Stream for ObservedTicks {
 
 #[tokio::test]
 async fn generated_goal_rescans_recover_lost_notifications() {
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    let traces = contracts
-        .goal_observation_cases
-        .into_iter()
-        .filter_map(|case| case.recovery)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        traces.len(),
-        2,
-        "Lean emits Goal replacement and removal traces"
-    );
-    for trace in traces {
+    use gents_lean_vocab::families::goal_observation_contracts_recovery as family;
+    for case in gents_lean_vocab::families::goal_observation_contracts_recovery::cases() {
+        let removed = case.input.goal.is_none();
+        let mut observed = Vec::new();
         for closed_feed in [false, true] {
             let f = fixture().await;
             let identity: Arc<dyn NodeIdentity> = f.identity.clone();
@@ -132,10 +107,9 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             .await
             .unwrap()
             .unwrap();
-            assert_eq!(previous.goal.is_some(), trace.before.is_some());
             let old_revision = previous.goal.as_ref().unwrap().revision.clone();
             access.transact_write("test.missed_goal_notification", |txn| Box::pin(async {
-                let (document, variables) = if trace.after.is_some() {
+                let (document, variables) = if !removed {
                     ("mutation($doc: ID!, $input: GoalMutationInputArg!) { update_Goal(docID: $doc, input: $input) { _docID } }",
                      json!({"doc":f.goal.doc_id,"input":{"tokens_used":38}}))
                 } else {
@@ -168,7 +142,6 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                 })
                 .await
                 .unwrap();
-            assert_eq!(canonical.is_some(), trace.after.is_some());
             let stale = load_session_goal_observation(
                 &access,
                 f.identity.as_ref(),
@@ -203,11 +176,36 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             .unwrap();
             assert_eq!(refreshed.goal.as_ref().map(|goal| &goal.revision), canonical.as_ref(),
                 "periodic durable observation must select the canonical Goal without a notification");
-            assert_eq!(refreshed.goal.is_some(), trace.after.is_some());
+            let reference = |goal: &gents_protocol::goal_control::ObservedGoal| family::GoalReference {
+                node: if goal.snapshot.node_did == f.identity.did() { "node".into() } else { goal.snapshot.node_did.clone() },
+                session: if goal.snapshot.session_id == SESSION { "session".into() } else { goal.snapshot.session_id.clone() },
+                document: if goal.revision.document == f.goal.doc_id { "goal-document".into() } else { goal.revision.document.clone() },
+                composite: if goal.revision.composite == old_revision.composite {
+                    "previous-commit".into()
+                } else if Some(&goal.revision) == canonical.as_ref() {
+                    "goal-commit".into()
+                } else {
+                    goal.revision.composite.clone()
+                },
+            };
+            observed.push(family::RecoveryOutput {
+                recovery: family::RecoveryTrace {
+                    before: previous.goal.as_ref().map(reference),
+                    after: refreshed.goal.as_ref().map(reference),
+                },
+            });
             cancel.cancel();
             run.await.unwrap();
             drop(changes_tx);
             f.node.shutdown().await.expect("node shutdown");
         }
+        let closed = observed.pop().unwrap();
+        let open = observed.pop().unwrap();
+        assert_eq!(
+            serde_json::to_value(&open).unwrap(),
+            serde_json::to_value(&closed).unwrap(),
+            "a closed notification feed recovers like a lost notification"
+        );
+        case.check(closed);
     }
 }

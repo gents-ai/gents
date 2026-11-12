@@ -1884,12 +1884,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalClientReceiptCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_observation_cases"
-      "GoalObservationCases")
+      "family"
+      "goal_observation_contracts_recovery")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_observation_cases"
-      "GoalObservationCases")
+      "family"
+      "goal_observation_contracts_acceptance")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_session_observation_cases"
