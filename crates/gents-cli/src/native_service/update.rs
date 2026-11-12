@@ -388,7 +388,7 @@ mod tests {
                 NativeServiceManager::with_runner(config.clone(), platform, Runner::default());
             fs::write(
                 config.definition_path(platform),
-                manager.render_definition().unwrap(),
+                render(platform, &config).unwrap(),
             )
             .unwrap();
             assert!(manager.has_managed_executable().unwrap());
@@ -405,9 +405,7 @@ mod tests {
         for platform in [NativeServicePlatform::Macos, NativeServicePlatform::Linux] {
             let dir = tempfile::tempdir().unwrap();
             let old = config(dir.path());
-            let manager =
-                NativeServiceManager::with_runner(old.clone(), platform, Runner::default());
-            let definition = manager.render_definition().unwrap();
+            let definition = render(platform, &old).unwrap();
             let custom = BTreeMap::from([("FLEET_HOST".into(), "laptop".into())]);
             let definition = environment::apply(platform, definition, None, Some(&custom)).unwrap();
             let mut next = old;

@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use gents_server::native_service::{
-    CommandOutput, CommandRunner, NativeServiceConfig, NativeServiceManager, NativeServicePlatform,
-    SYSTEMD_UNIT,
+    runtime_error_log, wait_for_process_exit, BackgroundItemStatus, CommandOutput, CommandRunner,
+    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, StartOutcome, SYSTEMD_UNIT,
 };
 
 #[cfg(target_os = "macos")]
@@ -20,6 +20,7 @@ struct ScriptedRunner {
     outputs: Arc<Mutex<VecDeque<CommandOutput>>>,
     repeating: Arc<Mutex<Option<CommandOutput>>>,
     calls: Arc<Mutex<Vec<Vec<String>>>>,
+    background_item: BackgroundItemStatus,
     elapsed: Arc<Mutex<Vec<Duration>>>,
 }
 
@@ -29,6 +30,7 @@ impl ScriptedRunner {
             outputs: Arc::new(Mutex::new(outputs.into_iter().collect())),
             repeating: Arc::new(Mutex::new(None)),
             calls: Arc::new(Mutex::new(Vec::new())),
+            background_item: BackgroundItemStatus::default(),
             elapsed: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -74,6 +76,10 @@ impl CommandRunner for ScriptedRunner {
     fn elapse(&self, delay: Duration) -> Duration {
         self.elapsed.lock().expect("elapsed mutex").push(delay);
         delay
+    }
+
+    fn background_item_status(&self, _definition: &Path) -> BackgroundItemStatus {
+        self.background_item
     }
 }
 
@@ -188,9 +194,23 @@ fn linux_restarts_clean_exits_with_existing_fatal_exit_fences() -> Result<()> {
     let definition = fs::read_to_string(config.definition_path(NativeServicePlatform::Linux))?;
     assert!(definition.lines().any(|line| line == "Restart=always"));
     assert!(definition.lines().any(|line| line == "RestartSec=2"));
+    Ok(())
+}
+
+#[test]
+fn systemd_does_not_restart_refusals() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    manager(
+        config.clone(),
+        NativeServicePlatform::Linux,
+        ScriptedRunner::with_outputs([ok(), ok()]),
+    )
+    .install()?;
+    let definition = fs::read_to_string(config.definition_path(NativeServicePlatform::Linux))?;
     assert!(definition
         .lines()
-        .any(|line| line == "RestartPreventExitStatus=65 66 67"));
+        .any(|line| line == "RestartPreventExitStatus=65 66 67 68 69 72"));
     Ok(())
 }
 
@@ -506,6 +526,305 @@ fn generated_launchd_definition_passes_plutil_lint_without_loading_it() -> Resul
 
 #[path = "native_service/environment.rs"]
 mod environment;
+
+#[test]
+fn a_new_definition_logs_to_the_shared_error_log() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let fixture = config(temp.path(), "gents");
+    let config = NativeServiceConfig::new(fixture.home, fixture.executable)?;
+    assert_eq!(
+        config.stderr_path,
+        Some(runtime_error_log(&config.user_home))
+    );
+    Ok(())
+}
+
+#[test]
+fn job_pid_reads_launchd_print() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    let runner = ScriptedRunner::with_outputs([
+        output(true, "501", ""),
+        output(true, "state = running\n\tpid = 4312\n", ""),
+    ]);
+    assert_eq!(
+        manager(config, NativeServicePlatform::Macos, runner).job_pid()?,
+        Some(4312)
+    );
+    Ok(())
+}
+
+#[test]
+fn linux_job_pid_zero_is_none() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    let runner = ScriptedRunner::with_outputs([output(true, "0\n", "")]);
+    assert_eq!(
+        manager(config, NativeServicePlatform::Linux, runner).job_pid()?,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn installed_home_of_a_foreign_definition_is_reported_not_refused() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut other = config(temp.path(), "gents");
+    other.home = temp.path().join("other-home");
+    fs::create_dir_all(&other.home)?;
+    manager(
+        other.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let mine = config(temp.path(), "gents");
+    let manager = manager(
+        mine,
+        NativeServicePlatform::Macos,
+        ScriptedRunner::default(),
+    );
+    assert_eq!(manager.installed_home()?, Some(other.home));
+    Ok(())
+}
+
+#[test]
+fn refreshing_keeps_the_installed_executable_and_runs_no_commands() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut old = config(temp.path(), "old-gents");
+    old.stderr_path = None;
+    manager(
+        old.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let mut new = config(temp.path(), "new-gents");
+    new.stderr_path = Some(runtime_error_log(temp.path()));
+    let runner = ScriptedRunner::default();
+    let manager = manager(new.clone(), NativeServicePlatform::Macos, runner.clone());
+    assert!(!manager.definition_log_current()?);
+    assert!(manager.refresh_definition_file()?);
+    let text = fs::read_to_string(new.definition_path(NativeServicePlatform::Macos))?;
+    assert!(text.contains("old-gents") && text.contains("runtime-errors.log"));
+    assert!(!text.contains("new-gents"));
+    assert!(runner.calls().is_empty());
+    assert!(manager.definition_log_current()?);
+    assert!(!manager.refresh_definition_file()?);
+    Ok(())
+}
+
+#[test]
+fn an_enabled_node_stays_enabled_after_a_move() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut old = config(temp.path(), "gents");
+    old.home = temp.path().join("old-home");
+    fs::create_dir_all(&old.home)?;
+    manager(
+        old.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let definition = old.definition_path(NativeServicePlatform::Macos);
+    let previous = fs::read(&definition)?;
+    fs::remove_file(&definition)?;
+    let chosen = config(temp.path(), "gents");
+    let runner = ScriptedRunner::with_outputs([
+        output(true, "501", ""),
+        ok(),
+        output(true, "501", ""),
+        ok(),
+    ]);
+    manager(chosen.clone(), NativeServicePlatform::Macos, runner.clone())
+        .install_carrying(&previous, false, true)?;
+    let calls = runner.calls();
+    assert_eq!(calls.last().map(|call| call[1].as_str()), Some("enable"));
+    let text = fs::read_to_string(&definition)?;
+    assert!(text.contains(&chosen.home.display().to_string()));
+    assert!(!text.contains(&old.home.display().to_string()));
+    Ok(())
+}
+
+#[test]
+fn a_reinstall_keeps_the_custom_environment_and_bundle_id() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut desktop = config(temp.path(), "old-gents");
+    desktop.associated_bundle_id = Some("ai.gents.desktop".into());
+    manager(
+        desktop.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install_with_environment(&[("CUSTOM_ENTRY".to_string(), "kept".to_string())].into())?;
+    let definition = desktop.definition_path(NativeServicePlatform::Macos);
+    let previous = fs::read(&definition)?;
+    fs::remove_file(&definition)?;
+    let mut cli = config(temp.path(), "new-gents");
+    cli.associated_bundle_id = None;
+    let runner = ScriptedRunner::with_outputs([output(true, "501", ""), ok()]);
+    manager(cli, NativeServicePlatform::Macos, runner.clone())
+        .install_carrying(&previous, true, false)?;
+    let text = fs::read_to_string(&definition)?;
+    assert!(text.contains("ai.gents.desktop"));
+    assert!(text.contains("CUSTOM_ENTRY") && text.contains("kept"));
+    assert!(text.contains("new-gents") && !text.contains("old-gents"));
+    assert!(!runner.calls().iter().any(|call| call[1] == "enable"));
+    Ok(())
+}
+
+#[test]
+fn a_fresh_macos_install_already_logs_to_the_shared_log() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut fresh = config(temp.path(), "gents");
+    fresh.stderr_path = Some(runtime_error_log(temp.path()));
+    manager(
+        fresh.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let path = fresh.definition_path(NativeServicePlatform::Macos);
+    let before = fs::read(&path)?;
+    let manager = manager(
+        fresh,
+        NativeServicePlatform::Macos,
+        ScriptedRunner::default(),
+    );
+    assert!(manager.definition_log_current()?);
+    assert!(!manager.refresh_definition_file()?);
+    assert_eq!(fs::read(&path)?, before);
+    Ok(())
+}
+
+#[test]
+fn refreshing_keeps_everything_but_the_log_path() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut desktop = config(temp.path(), "gents");
+    desktop.associated_bundle_id = Some("ai.gents.desktop".into());
+    desktop.search_path = Some("/desktop/bin:/usr/bin".into());
+    manager(
+        desktop.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let mut cli = config(temp.path(), "gents");
+    cli.associated_bundle_id = None;
+    cli.search_path = None;
+    cli.stderr_path = Some(runtime_error_log(temp.path()));
+    assert!(
+        manager(cli, NativeServicePlatform::Macos, ScriptedRunner::default())
+            .refresh_definition_file()?
+    );
+    let text = fs::read_to_string(desktop.definition_path(NativeServicePlatform::Macos))?;
+    assert!(text.contains("ai.gents.desktop"));
+    assert!(text.contains("/desktop/bin:/usr/bin"));
+    assert!(text.contains("runtime-errors.log"));
+    Ok(())
+}
+
+#[test]
+fn linux_refresh_keeps_the_installed_path() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut desktop = config(temp.path(), "gents");
+    desktop.search_path = Some("/desktop/bin:/usr/bin".into());
+    manager(
+        desktop.clone(),
+        NativeServicePlatform::Linux,
+        ScriptedRunner::with_outputs([ok(), ok()]),
+    )
+    .install()?;
+    let mut cli = config(temp.path(), "gents");
+    cli.search_path = None;
+    cli.stderr_path = Some(runtime_error_log(temp.path()));
+    assert!(
+        manager(cli, NativeServicePlatform::Linux, ScriptedRunner::default())
+            .refresh_definition_file()?
+    );
+    let text = fs::read_to_string(desktop.definition_path(NativeServicePlatform::Linux))?;
+    assert!(text.contains("PATH=/desktop/bin:/usr/bin"));
+    assert!(text.contains("runtime-errors.log"));
+    Ok(())
+}
+
+#[test]
+fn refreshing_a_foreign_definition_is_refused() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut other = config(temp.path(), "gents");
+    other.home = temp.path().join("other-home");
+    fs::create_dir_all(&other.home)?;
+    manager(
+        other.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let path = other.definition_path(NativeServicePlatform::Macos);
+    let before = fs::read(&path)?;
+    let mut mine = config(temp.path(), "gents");
+    mine.stderr_path = Some(runtime_error_log(temp.path()));
+    assert!(manager(
+        mine,
+        NativeServicePlatform::Macos,
+        ScriptedRunner::default()
+    )
+    .refresh_definition_file()
+    .is_err());
+    assert_eq!(fs::read(&path)?, before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_dead_pid_is_gone() {
+    let mut child = std::process::Command::new("true").spawn().expect("spawn");
+    let pid = child.id();
+    child.wait().expect("wait");
+    assert!(wait_for_process_exit(pid, std::time::Duration::from_secs(1)).await);
+}
+
+#[test]
+fn a_start_macos_withholds_is_an_approval_wait_and_other_failures_stay_errors() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mac = config(temp.path(), "gents");
+    manager(
+        mac.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let withheld = ScriptedRunner {
+        background_item: BackgroundItemStatus::RequiresApproval,
+        ..ScriptedRunner::default()
+    };
+    assert!(matches!(
+        manager(mac, NativeServicePlatform::Macos, withheld.clone()).start_or_approval(false)?,
+        StartOutcome::ApprovalPending { detail: Some(_) }
+    ));
+    assert!(withheld.calls().is_empty(), "{:?}", withheld.calls());
+
+    let linux_root = tempfile::tempdir()?;
+    let linux = config(linux_root.path(), "gents");
+    manager(
+        linux.clone(),
+        NativeServicePlatform::Linux,
+        ScriptedRunner::with_outputs([ok(), ok()]),
+    )
+    .install()?;
+    let failing = ScriptedRunner::with_outputs([
+        output(false, "inactive", ""),
+        output(true, "enabled", ""),
+        output(false, "", "daemon-reload failed"),
+    ]);
+    let error = manager(linux, NativeServicePlatform::Linux, failing)
+        .start_or_approval(false)
+        .expect_err("a failed daemon-reload is not an approval wait");
+    assert!(
+        format!("{error:#}").contains("daemon-reload failed"),
+        "{error:#}"
+    );
+    Ok(())
+}
 
 #[test]
 fn mac_stop_confirms_an_unload_that_takes_longer_than_a_second() -> Result<()> {

@@ -35,6 +35,7 @@ mod network_settings;
 mod p2p_relay;
 pub mod packs;
 mod process_resources;
+pub mod repair;
 mod request_helpers;
 mod resolve_helpers;
 pub mod server_host;

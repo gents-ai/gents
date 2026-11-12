@@ -30,6 +30,8 @@ use gents_protocol::row::{
     ProjectedNodeReadinessSummary,
 };
 
+mod home_watch;
+
 pub(crate) struct CliReadyObserver {
     pub(crate) tx: watch::Sender<ProcessLifecycleState>,
 }
@@ -488,7 +490,10 @@ async fn serve_foreground(
         .map(read_metrics_auth_token)
         .transpose()?;
     let home_dir = resolve_home_dir(args.home.as_deref());
-    tokio::fs::create_dir_all(&home_dir).await?;
+    if !tokio::fs::try_exists(&home_dir).await? {
+        eprintln!("Error: {} does not exist", home_dir.display());
+        std::process::exit(crate::native_service::HOME_GONE_EXIT_CODE);
+    }
     // A home whose identity can never own the node is refused from its
     // configuration alone, before any store is reserved or opened.
     gents::store::local::home::ensure_home_identity_can_serve(&home_dir)?;
@@ -503,6 +508,9 @@ async fn serve_foreground(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
+    let watched_home = home_dir.clone();
+    let (_held_home, home_identity) =
+        tokio::task::spawn_blocking(move || home_watch::hold_home(&watched_home)).await??;
     // Native supervisor respawns must obey the same reservation as desktop
     // preparation, before they can reopen a retiring store or claim work.
     let mut native_reservation = if startup.is_none() {
@@ -742,10 +750,15 @@ async fn serve_foreground(
         );
         listener.spawn(scrape_state, runtime.shutdown_tx.subscribe())
     });
-    let serve_result: Result<()> = async {
+    let serving = async {
         wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
-        if let Err(error) = gents::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await {
-            return Err(gents::store::local::storage_backend::classify_store_error(error, &data_dir).into());
+        if let Err(error) =
+            gents::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await
+        {
+            return Err(gents::store::local::storage_backend::classify_store_error(
+                error, &data_dir,
+            )
+            .into());
         }
         if !matches!(effective_tool_ceiling, ToolCeilingArg::MetaOnly) {
             // A root that does not resolve builds no host tools and is
@@ -762,14 +775,18 @@ async fn serve_foreground(
         }
         client_access_ready.store(true, std::sync::atomic::Ordering::Release);
         gents::store::local::store_key::upgrade::finish(&data_dir)?;
-        let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
-            .await
-            .context("reading client route collection versions after migrations")?;
-        replicated_schema.set(schema).ok();
-        let enrollment_network =
-            crate::http::enrollment::ensure_enrollment_network(&node, identity.as_ref(), &node_name)
+        let schema =
+            gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
                 .await
-                .context("ensuring authenticated enrollment network")?;
+                .context("reading client route collection versions after migrations")?;
+        replicated_schema.set(schema).ok();
+        let enrollment_network = crate::http::enrollment::ensure_enrollment_network(
+            &node,
+            identity.as_ref(),
+            &node_name,
+        )
+        .await
+        .context("ensuring authenticated enrollment network")?;
         *enrollment_decisions.write().await = Some(
             crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
         );
@@ -1092,9 +1109,22 @@ async fn serve_foreground(
         }
         .await;
         outcome
-    }
-    .await;
+    };
+    let serve_result: Result<()> = tokio::select! {
+        result = serving => result,
+        // Exits inside this arm's future: a handler would run only after
+        // `serving` and everything it holds had been dropped.
+        _ = async {
+            home_watch::home_gone(&home_dir, home_identity).await;
+            home_watch::exit_home_gone(&home_dir)
+        } => unreachable!("the home watch exits the process"),
+    };
 
+    // Every serving path, including a runtime that stopped on its own, reaches
+    // the flush below; a replaced home must not receive it.
+    if home_watch::home_replaced(&home_dir, home_identity).await {
+        home_watch::exit_home_gone(&home_dir);
+    }
     tracing::info!(target: "gents::shutdown", stage = "agent_drain", "server shutdown stage started");
     let runtime_result = runtime.finish(serve_result).await;
     tracing::info!(target: "gents::shutdown", stage = "agent_drain", "server shutdown stage completed");

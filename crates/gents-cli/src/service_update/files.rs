@@ -57,8 +57,13 @@ pub(super) fn digest(path: &Path) -> Result<String> {
     }
     Ok(format!("{:x}", hash.finalize()))
 }
+/// Creates only the last component: a missing parent (a deleted home) is an
+/// error, never recreated.
 pub(super) fn private_dir(path: &Path) -> Result<()> {
-    fs::DirBuilder::new().recursive(true).create(path)?;
+    match fs::DirBuilder::new().recursive(false).create(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
+        result => result?,
+    }
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     Ok(())

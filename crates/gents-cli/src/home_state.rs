@@ -62,6 +62,15 @@ pub(crate) fn is_default_home(home_dir: &Path) -> bool {
     default.is_ok_and(|default| canonical(home_dir) == canonical(&default))
 }
 
+/// What `gents` opens with neither `--home` nor `GENTS_HOME`.
+pub(crate) fn default_home_ignoring_env() -> Result<PathBuf> {
+    #[cfg(test)]
+    let default = Ok::<_, gents::store::local::home::HomeError>(default_home_dir());
+    #[cfg(not(test))]
+    let default = gents::store::local::home::default_home_ignoring_env();
+    Ok(default?)
+}
+
 pub(crate) fn default_data_dir(home_dir: &Path) -> PathBuf {
     gents::store::local::home::default_data_dir(home_dir)
 }
@@ -199,8 +208,6 @@ pub(crate) fn load_initialized_home_identity(
 }
 
 pub(crate) fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -> Result<()> {
-    fs::create_dir_all(home_dir)
-        .with_context(|| format!("creating home directory {}", home_dir.display()))?;
     let path = runtime_state_path(home_dir);
     let contents = serde_json::to_vec_pretty(state).context("encoding local runtime state JSON")?;
     // Replaced, never truncated in place: a server killed mid-write would
@@ -209,6 +216,9 @@ pub(crate) fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -
         .with_context(|| format!("writing runtime state {}", path.display()))
 }
 
+/// A record that does not decode was written by another version's runtime,
+/// which this build cannot reach, so it names no runtime. Writes replace the
+/// file whole, so it is never a partial write.
 pub(crate) fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntimeState>> {
     let path = runtime_state_path(home_dir);
     if !path.exists() {
@@ -216,9 +226,13 @@ pub(crate) fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntime
     }
     let bytes =
         fs::read(&path).with_context(|| format!("reading runtime state {}", path.display()))?;
-    let state = serde_json::from_slice(&bytes)
-        .with_context(|| format!("decoding runtime state {}", path.display()))?;
-    Ok(Some(state))
+    match serde_json::from_slice(&bytes) {
+        Ok(state) => Ok(Some(state)),
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "ignoring another version's runtime state");
+            Ok(None)
+        }
+    }
 }
 
 pub(crate) fn clear_runtime_state(home_dir: &Path) -> Result<bool> {
@@ -483,5 +497,15 @@ mod tests {
             home.path(),
             "http://100.69.4.80:9191/api/v0/graphql"
         ));
+    }
+    #[test]
+    fn another_versions_runtime_record_names_no_runtime_this_build_can_reach() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            super::runtime_state_path(home.path()),
+            r#"{"home":"/Users/someone/.gents","graphql":"http://127.0.0.1:9191/api/v0/graphql","node_name":"Forge","node_did":"did:key:z6Mk","default_agent_id":"bae-1","p2p_transport":"iroh","p2p_peer_id":"peer","p2p_listen_addresses":[],"p2p_admission":{}}"#,
+        )
+        .unwrap();
+        assert!(super::read_runtime_state(home.path()).unwrap().is_none());
     }
 }
