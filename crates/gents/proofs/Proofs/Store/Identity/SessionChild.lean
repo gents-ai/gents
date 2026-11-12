@@ -267,23 +267,6 @@ def childScopeCases : List ChildScopeCase :=
     { name := "uncommitted", binding := {}, committed := false },
     { name := "completed_then_revoked", binding := {}, parentLinked := true } ]
 
-def childScopeCaseJson (c : ChildScopeCase) : Lean.Json :=
-  let initial : ParentPublication := ⟨c.committed, c.parentGranted, c.parentLinked⟩
-  let result := recoverBoundSessionChild initial c.binding c.nativeOwner c.creator
-    c.authenticated c.grantOk c.markOk
-  Lean.Json.mkObj [("name", Lean.toJson c.name), ("binding", Lean.toJson c.binding),
-    ("native_owner", Lean.toJson c.nativeOwner), ("creator", Lean.toJson c.creator),
-    ("authenticated", Lean.toJson c.authenticated), ("grant_ok", Lean.toJson c.grantOk),
-    ("mark_ok", Lean.toJson c.markOk), ("committed", Lean.toJson c.committed),
-    ("initial_parent_granted", Lean.toJson c.parentGranted),
-    ("initial_parent_linked", Lean.toJson c.parentLinked),
-    ("allowed", Lean.toJson (childScopeBindingAllowed c.binding)),
-    ("parent_granted", Lean.toJson result.parentGranted),
-    ("parent_linked", Lean.toJson result.parentLinked)]
-
-def childScopeCasesJson : String :=
-  (Lean.toJson (childScopeCases.map childScopeCaseJson)).compress
-
 /-- Fresh Goal and claim documents, their physical session and working-Agent
 relationships, and the linked marker commit as one native transaction. The
 same actor owns the document on both user- and agent-authored paths. Retained
@@ -402,17 +385,6 @@ def clientRequestCases : List ClientRequestCase :=
    ⟨"wrong_signer", ⟨true, true, false⟩, true, false, true, true⟩,
    ⟨"wrong_signature", ⟨true, true, false⟩, false, true, true, true⟩,
    ⟨"already_completed_revoked", ⟨true, false, false⟩, true, true, true, true⟩]
-
-def clientRequestCaseJson (c : ClientRequestCase) : Lean.Json :=
-  let result := recoverClientRequest c.initial c.matchingSignature c.sameSigner c.grantsOk c.markOk
-  Lean.Json.mkObj [("name", Lean.toJson c.name), ("committed", Lean.toJson c.initial.committed),
-    ("pending", Lean.toJson c.initial.pending), ("matching_signature", Lean.toJson c.matchingSignature),
-    ("same_signer", Lean.toJson c.sameSigner), ("grants_ok", Lean.toJson c.grantsOk),
-    ("mark_ok", Lean.toJson c.markOk), ("expected_pending", Lean.toJson result.pending),
-    ("expected_grants", Lean.toJson result.grants)]
-
-def clientRequestPublicationCasesJson : String :=
-  (Lean.toJson (clientRequestCases.map clientRequestCaseJson)).compress
 
 structure GoalLinkStep where
   parentOk : Bool

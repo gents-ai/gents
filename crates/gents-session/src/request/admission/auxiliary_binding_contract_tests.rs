@@ -25,29 +25,8 @@ async fn create_document(
 
 #[tokio::test]
 async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().auxiliary_session_child_binding_cases;
-    let selected = [
-        "paired_title_segment",
-        "paired_title_capture",
-        "paired_review_segment",
-        "paired_review_capture",
-        "ordinary_same_requester",
-        "ordinary_foreign_requester",
-        "ordinary_absent_requester",
-        "source_kind_mismatch",
-        "foreign_actor",
-        "foreign_child_node",
-        "foreign_child_session",
-        "foreign_child_requester",
-        "missing_auxiliary",
-        "foreign_auxiliary_document",
-    ];
-    let mut exercised = std::collections::BTreeSet::new();
-    for case in cases {
-        if !selected.contains(&case.name.as_str()) {
-            continue;
-        }
-        exercised.insert(case.name.clone());
+    for case in gents_lean_vocab::families::session_child_child_scope_binding::cases() {
+        let input = &case.input;
         let node_db = gents_inference::test_support::test_db(
             "modeled-request-child-bindings-use-real-",
             crate::test_support::no_lifecycle_plugins(),
@@ -76,7 +55,7 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
                 _ => panic!("unknown modeled requester {value}"),
             })
         };
-        let session_requester = map_requester(case.binding.session_requester.as_deref());
+        let session_requester = map_requester(input.binding.session_requester.as_deref());
         let session_id = format!("session-{}", uuid::Uuid::new_v4());
         let session_doc = create_document(
             &root_access,
@@ -133,7 +112,7 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
         let parent = crate::request::admission::load_request_for_admission_test(&node, &parent_doc)
             .await
             .unwrap();
-        let purpose = RequestPurpose::try_from(case.binding.auxiliary_purpose.as_str()).unwrap();
+        let purpose = RequestPurpose::try_from(input.binding.auxiliary_purpose.as_str()).unwrap();
         let aux = crate::request::lifecycle::materialize::write_pending_auxiliary_request(
             &node,
             &parent,
@@ -145,7 +124,7 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
         .await
         .unwrap();
         let absent_request_doc = format!("bae-{}", uuid::Uuid::new_v4());
-        let actor = if case.binding.actor == "agent" {
+        let actor = if input.binding.actor == "agent" {
             &agent
         } else {
             &foreign
@@ -156,25 +135,25 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
             actor.as_ref(),
         )
         .unwrap();
-        let child_node = if case.binding.child_node == "node" {
+        let child_node = if input.binding.child_node == "node" {
             root.did()
         } else {
             foreign.did()
         };
-        let child_session = if case.binding.child_session == "session" {
+        let child_session = if input.binding.child_session == "session" {
             session_id.as_str()
         } else {
             "foreign-session"
         };
-        let requester = map_requester(case.binding.child_requester.as_deref());
-        let request_doc = if case.name == "missing_auxiliary" {
+        let requester = map_requester(input.binding.child_requester.as_deref());
+        let request_doc = if input.name == "missing_auxiliary" {
             &absent_request_doc
-        } else if case.binding.child_request_doc == "aux-doc" {
+        } else if input.binding.child_request_doc == "aux-doc" {
             &aux.doc_id
         } else {
             &parent_doc
         };
-        let kind = match case.binding.source.as_str() {
+        let kind = match input.binding.source.as_str() {
             "title" => CaptureScopeKind::Title,
             "access-review" => CaptureScopeKind::AccessReview,
             "ordinary" => CaptureScopeKind::Inference,
@@ -186,7 +165,7 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
             turn_index: 0,
             attempt: 0,
         };
-        let source = match case.binding.collection.as_str() {
+        let source = match input.binding.collection.as_str() {
             "AgentOutputSegment" => SessionChildSource::Output(&output),
             "RenderedRequest" => SessionChildSource::Capture(&scope),
             value => panic!("unrepresented collection {value}"),
@@ -207,16 +186,15 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
                 })
             })
             .await;
-        assert_eq!(actual.is_ok(), case.allowed, "{}: {actual:?}", case.name);
-        if let Ok((physical_session, selected_agent)) = actual {
-            assert_eq!(physical_session, session_doc, "{}", case.name);
-            assert_eq!(selected_agent, agent.did(), "{}", case.name);
+        if let Ok((physical_session, selected_agent)) = &actual {
+            assert_eq!(physical_session, &session_doc, "{}", input.name);
+            assert_eq!(selected_agent, agent.did(), "{}", input.name);
         }
+        case.check(
+            gents_lean_vocab::families::session_child_child_scope_binding::BindingOutput {
+                allowed: actual.is_ok(),
+            },
+        );
         node.shutdown().await.unwrap();
     }
-    assert_eq!(
-        exercised.len(),
-        selected.len(),
-        "every selected Lean case must be exercised"
-    );
 }

@@ -1857,7 +1857,6 @@ mod tests {
             Some("request.client.submit"), submit_client_request(&access, &first),
         ).await;
         assert!(fired && result.unwrap_err().is_unconfirmed());
-        let model = &gents_lean_vocab::lean_contract_snapshot().client_request_publication_cases;
         let committed = gents_lean_vocab::lean_contract_snapshot()
             .identity_atomic_client_request_cases
             .iter()
@@ -1882,11 +1881,6 @@ mod tests {
         );
         assert!(reconcile_client_request(&access, &first).await.unwrap());
         let wrong = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap());
-        let wrong_model = model
-            .iter()
-            .find(|case| case["name"] == "wrong_signer")
-            .unwrap();
-        assert_eq!(wrong_model["expected_pending"], true);
         assert!(reconcile_client_request(&wrong, &first).await.is_err());
         let agent_key = gents_store::identity::resolve_agent_identity(&runtime, &agent).unwrap();
         let agent_access = ConfigAccess::local_managed_agent(
@@ -2095,16 +2089,6 @@ mod tests {
         }
         let wrong = ConfigAccess::local_as(node.clone(), other.did().parse().unwrap());
         assert!(reconcile_client_retry(
-            &wrong,
-            runtime.did(),
-            "retry-session",
-            user.did(),
-            "parent-doc"
-        )
-        .await
-        .unwrap()
-        .is_none());
-        assert!(reconcile_client_retry(
             &access,
             runtime.did(),
             "retry-session",
@@ -2113,37 +2097,46 @@ mod tests {
         )
         .await
         .is_err());
-        let model = &gents_lean_vocab::lean_contract_snapshot().client_request_publication_cases;
-        let granted = model
-            .iter()
-            .find(|case| case["name"] == "grant_succeeded")
-            .unwrap();
-        assert_eq!(
-            reconcile_client_retry(
-                &access,
+        let agent_access = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap());
+        for case in gents_lean_vocab::families::session_child_client_request_recovery::cases() {
+            let recovered = reconcile_client_retry(
+                if case.input.same_signer {
+                    &access
+                } else {
+                    &wrong
+                },
                 runtime.did(),
                 "retry-session",
                 user.did(),
-                "parent-doc"
+                "parent-doc",
             )
             .await
-            .unwrap()
-            .as_deref(),
-            Some("retry")
-        );
-        let rows = access
-            .execute("{ AgentRequest { relationships_pending } }")
-            .await
             .unwrap();
-        assert_eq!(
-            rows["data"]["AgentRequest"][0]["relationships_pending"],
-            granted["expected_pending"]
-        );
-        let visible = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap())
-            .execute("{ AgentRequest { request_id } }")
-            .await
-            .unwrap();
-        assert_eq!(visible["data"]["AgentRequest"][0]["request_id"], "retry");
+            assert_eq!(
+                recovered.as_deref(),
+                case.input.same_signer.then_some("retry")
+            );
+            let rows = access
+                .execute("{ AgentRequest { relationships_pending } }")
+                .await
+                .unwrap();
+            let visible = agent_access
+                .execute("{ AgentRequest { request_id } }")
+                .await
+                .unwrap();
+            case.check(
+                gents_lean_vocab::families::session_child_client_request_recovery::ClientRequestOutput {
+                    pending: rows["data"]["AgentRequest"][0]["relationships_pending"]
+                        .as_bool()
+                        .unwrap(),
+                    grants: visible["data"]["AgentRequest"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|row| row["request_id"] == "retry"),
+                },
+            );
+        }
         assert_eq!(
             reconcile_client_retry(
                 &access,
