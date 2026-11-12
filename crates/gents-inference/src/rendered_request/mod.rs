@@ -144,95 +144,6 @@ mod tests {
         stored
     }
 
-    struct FailingStore;
-
-    #[async_trait::async_trait]
-    impl CaptureBaseReader for FailingStore {
-        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
-            anyhow::bail!("store unavailable")
-        }
-    }
-
-    struct MissingBase;
-
-    struct CountingBase {
-        reads: std::sync::atomic::AtomicUsize,
-        cid: std::sync::Mutex<String>,
-    }
-
-    #[async_trait::async_trait]
-    impl CaptureBaseReader for CountingBase {
-        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
-            self.reads
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let value =
-                serde_json::json!({"model":"m", "stream":false, "padding":"x".repeat(4096)});
-            let encoded = encoding::encode_container(
-                &encoding::encode_full(&value)?,
-                &encoding::encode_full(&serde_json::json!({}))?,
-            )?;
-            Ok(serde_json::json!({"data":{"RenderedRequest":[{
-                "capture_version":2, "node_did":"did:test", "requester_did":"",
-                "session_id":"session", "source":"openai_responses", "capture_scope":"inference.1",
-                "request_json":encoded
-            }], "_commits":[{"cid":self.cid.lock().unwrap().clone(), "height":1, "fieldName":"request_json"}]}}))
-        }
-    }
-
-    #[tokio::test]
-    async fn replay_batch_reuses_witnessed_bases_without_skipping_witness_checks() {
-        let reader = CountingBase {
-            reads: std::sync::atomic::AtomicUsize::new(0),
-            cid: std::sync::Mutex::new("base-commit".into()),
-        };
-        let stored = delta_capture();
-        let mut cache = CaptureReadCache::default();
-        for _ in 0..32 {
-            let decoded = decode_capture_json_from_cached(
-                &reader,
-                2,
-                &stored,
-                CapturePayloadKind::RequestBody,
-                &mut cache,
-            )
-            .await
-            .unwrap();
-            assert_eq!(
-                decoded,
-                serde_json::json!({"model":"m", "stream":true, "padding":"x".repeat(4096)})
-            );
-        }
-        assert_eq!(reader.reads.load(std::sync::atomic::Ordering::Relaxed), 1);
-        for changed in [
-            stored.replace("base-commit", "foreign-commit"),
-            stored.replace("session", "foreign-session"),
-        ] {
-            assert!(decode_capture_json_from_cached(
-                &reader,
-                CAPTURE_VERSION,
-                &changed,
-                CapturePayloadKind::RequestBody,
-                &mut cache
-            )
-            .await
-            .is_err());
-        }
-        *reader.cid.lock().unwrap() = "edited-base-commit".into();
-        assert!(
-            decode_capture_json_from(&reader, 2, &stored, CapturePayloadKind::RequestBody)
-                .await
-                .is_err()
-        );
-        assert_eq!(reader.reads.load(std::sync::atomic::Ordering::Relaxed), 2);
-    }
-
-    #[async_trait::async_trait]
-    impl CaptureBaseReader for MissingBase {
-        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
-            Ok(serde_json::json!({"data": {"RenderedRequest": []}}))
-        }
-    }
-
     #[tokio::test]
     async fn batched_base_read_decodes_through_local_and_embedded_access() {
         use gents_store::config_client::ConfigAccess;
@@ -367,28 +278,6 @@ mod tests {
         node.shutdown().await.expect("node shutdown");
     }
 
-    #[tokio::test]
-    async fn base_resolution_distinguishes_store_reads_from_missing_bases() {
-        let stored = delta_capture();
-        let store =
-            decode_capture_json_from(&FailingStore, 2, &stored, CapturePayloadKind::RequestBody)
-                .await
-                .expect_err("a failed store read cannot decode");
-        assert!(
-            store.downcast_ref::<CaptureStoreReadError>().is_some(),
-            "{store:#}"
-        );
-
-        let missing =
-            decode_capture_json_from(&MissingBase, 2, &stored, CapturePayloadKind::RequestBody)
-                .await
-                .expect_err("a missing base cannot decode");
-        assert!(
-            missing.downcast_ref::<CaptureStoreReadError>().is_none(),
-            "{missing:#}"
-        );
-    }
-
     fn capture_text(len: usize) -> String {
         let mut state = 0x243F_6A88_85A3_08D3_u64;
         let mut out = String::with_capacity(len);
@@ -402,7 +291,7 @@ mod tests {
     }
 
     fn manifest_capture() -> (String, Vec<(String, String, Vec<u8>)>) {
-        let mut body = serde_json::json!({"model": "m", "stream": true});
+        let mut body = serde_json::json!({"model": "m", "stream": true, "request": 7});
         body["padding"] = serde_json::json!(capture_text(6000));
         let canonical = canonical_json_string(&body).unwrap();
         let chunks = encoding::chunk_capture_body(&canonical);
@@ -530,62 +419,180 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn manifest_resolution_distinguishes_store_reads_from_broken_blocks() {
-        use std::collections::BTreeMap;
-        let (stored, blocks) = manifest_capture();
-        let byte_len = blocks[0].2.len();
-        let version = 3;
+    struct DeltaBaseStore {
+        readable: bool,
+        base: Option<(&'static str, &'static str)>,
+    }
 
-        let mut failing = ManifestStore::healthy(&blocks);
-        failing.fail_queries = true;
-        let error =
-            decode_capture_json_from(&failing, version, &stored, CapturePayloadKind::RequestBody)
-                .await
-                .expect_err("a failed store read cannot decode");
-        assert!(
-            error.downcast_ref::<CaptureStoreReadError>().is_some(),
-            "{error:#}"
-        );
-
-        let cases: [(&str, BTreeMap<usize, BlockAnswer>); 3] = [
-            ("an absent block document", BTreeMap::from([(0usize, None)])),
-            (
-                "a block rewritten under another commit",
-                BTreeMap::from([(0usize, Some((blocks[0].2.clone(), "changed".into())))]),
-            ),
-            (
-                "a short block read",
-                BTreeMap::from([(
-                    0usize,
-                    Some((blocks[0].2[..byte_len - 1].to_vec(), blocks[0].0.clone())),
-                )]),
-            ),
-        ];
-        for (label, answers) in cases {
-            let store = ManifestStore::broken(&blocks, answers);
-            let error =
-                decode_capture_json_from(&store, version, &stored, CapturePayloadKind::RequestBody)
-                    .await
-                    .err()
-                    .unwrap_or_else(|| panic!("{label} must fail closed"));
-            assert!(
-                error.downcast_ref::<CaptureStoreReadError>().is_none(),
-                "{label} is a verification failure, not a store failure: {error:#}"
-            );
+    #[async_trait::async_trait]
+    impl CaptureBaseReader for DeltaBaseStore {
+        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
+            anyhow::ensure!(self.readable, "store unavailable");
+            let Some((cid, session)) = self.base else {
+                return Ok(serde_json::json!({"data": {"RenderedRequest": []}}));
+            };
+            let encoded = encoding::encode_container(
+                &encoding::encode_full(&delta_base_value())?,
+                &encoding::encode_full(&serde_json::json!({}))?,
+            )?;
+            Ok(serde_json::json!({"data":{"RenderedRequest":[{
+                "capture_version":2, "node_did":"did:test", "requester_did":"",
+                "session_id":session, "source":"openai_responses", "capture_scope":"inference.1",
+                "request_json":encoded
+            }], "_commits":[{"cid":cid, "height":1, "fieldName":"request_json"}]}}))
         }
+    }
 
-        let healthy = ManifestStore::healthy(&blocks);
+    fn delta_base_value() -> Value {
+        serde_json::json!({"model": "m", "stream": false, "request": 7, "padding": "x".repeat(4096)})
+    }
+
+    fn delta_request_capture() -> String {
+        let mut value = delta_base_value();
+        value["stream"] = serde_json::json!(true);
+        let request = encoding::encode_against(
+            &value,
+            &delta_base_value(),
+            encoding::BaseWitness {
+                doc_id: "bae-base".into(),
+                field_commit_cid: "base-commit".into(),
+                depth: 0,
+                node_did: "did:test".into(),
+                requester_did: String::new(),
+                session_id: "session".into(),
+                source: "openai_responses".into(),
+                capture_scope: "inference.1".into(),
+            },
+        )
+        .unwrap();
+        let provenance = encoding::encode_full(&serde_json::json!({})).unwrap();
+        encoding::encode_container(&request, &provenance).unwrap()
+    }
+
+    async fn stored_decode_observation<R>(
+        reader: &R,
+        version: u32,
+        stored: &str,
+        kinds: &[CapturePayloadKind],
+    ) -> (Option<u64>, Option<String>)
+    where
+        R: CaptureBaseReader + Sync,
+    {
         let mut cache = CaptureReadCache::default();
-        for kind in [
-            CapturePayloadKind::RequestBody,
-            CapturePayloadKind::ProvenancePayload,
-        ] {
-            let decoded =
-                decode_capture_json_from_cached(&healthy, version, &stored, kind, &mut cache)
+        let mut observed = Vec::new();
+        for kind in kinds {
+            for decoded in [
+                decode_capture_json_from(reader, version, stored, *kind).await,
+                decode_capture_json_from_cached(reader, version, stored, *kind, &mut cache).await,
+            ] {
+                observed.push(match decoded {
+                    Ok(value) => (
+                        Some(value["request"].as_u64().expect("decoded request")),
+                        None,
+                    ),
+                    Err(error) => (
+                        None,
+                        Some(
+                            if error.downcast_ref::<CaptureStoreReadError>().is_some() {
+                                "store_read"
+                            } else {
+                                "unverified"
+                            }
+                            .to_owned(),
+                        ),
+                    ),
+                });
+            }
+        }
+        assert!(
+            observed.windows(2).all(|pair| pair[0] == pair[1]),
+            "every payload kind and the cached read must agree: {observed:?}"
+        );
+        observed.remove(0)
+    }
+
+    #[tokio::test]
+    async fn stored_capture_reads_match_the_lean_decode_model() {
+        use std::collections::BTreeMap;
+        let (manifest, blocks) = manifest_capture();
+        let delta = delta_request_capture();
+        for case in gents_lean_vocab::families::contract_cases_rendered_capture_stored_decode::cases::<
+            String,
+            String,
+            String,
+        >() {
+            let fault = case.input.fault.as_str();
+            let (decoded_request, failure) = match case.input.shape.as_str() {
+                "delta" => {
+                    let mut stored = delta.clone();
+                    let mut base = Some(("base-commit", "session"));
+                    let mut readable = true;
+                    match fault {
+                        "intact" => {}
+                        "store_unavailable" => readable = false,
+                        "absent" => base = None,
+                        "rewritten" => base = Some(("edited-base-commit", "session")),
+                        "repinned" => stored = stored.replace("base-commit", "foreign-commit"),
+                        "foreign_session" => base = Some(("base-commit", "foreign-session")),
+                        other => panic!("delta fault {other}"),
+                    }
+                    stored_decode_observation(
+                        &DeltaBaseStore { readable, base },
+                        2,
+                        &stored,
+                        &[CapturePayloadKind::RequestBody],
+                    )
                     .await
-                    .unwrap();
-            assert_eq!(decoded["model"], serde_json::json!("m"));
+                }
+                "manifest" => {
+                    let byte_len = blocks[0].2.len();
+                    let mut store = ManifestStore::healthy(&blocks);
+                    match fault {
+                        "intact" => {}
+                        "store_unavailable" => store.fail_queries = true,
+                        "absent" => {
+                            store = ManifestStore::broken(&blocks, BTreeMap::from([(0usize, None)]))
+                        }
+                        "rewritten" => {
+                            store = ManifestStore::broken(
+                                &blocks,
+                                BTreeMap::from([(
+                                    0usize,
+                                    Some((blocks[0].2.clone(), "changed".into())),
+                                )]),
+                            )
+                        }
+                        "short" => {
+                            store = ManifestStore::broken(
+                                &blocks,
+                                BTreeMap::from([(
+                                    0usize,
+                                    Some((
+                                        blocks[0].2[..byte_len - 1].to_vec(),
+                                        blocks[0].0.clone(),
+                                    )),
+                                )]),
+                            )
+                        }
+                        other => panic!("manifest fault {other}"),
+                    }
+                    stored_decode_observation(
+                        &store,
+                        3,
+                        &manifest,
+                        &[
+                            CapturePayloadKind::RequestBody,
+                            CapturePayloadKind::ProvenancePayload,
+                        ],
+                    )
+                    .await
+                }
+                other => panic!("stored shape {other}"),
+            };
+            case.check(gents_lean_vocab::families::contract_cases_rendered_capture_stored_decode::StoredDecodeOutput {
+                decoded_request,
+                failure,
+            });
         }
     }
 
