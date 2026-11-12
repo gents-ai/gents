@@ -210,7 +210,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
     use std::sync::Arc;
-    use acp::DocumentACP;
+    use acp::{DocumentACP, DocumentPermission, Identity};
     use identity::Did;
     use crate::p2p_reconcile::{client_route_collections, resolve_template_filters, PairingDirection};
 
