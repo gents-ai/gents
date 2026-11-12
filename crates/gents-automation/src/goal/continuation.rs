@@ -130,3 +130,5 @@ pub(crate) async fn goal_continuation_agent(
 
 #[cfg(test)]
 mod pushdown_tests;
+#[cfg(test)]
+mod pushdown_tests_automation_2;

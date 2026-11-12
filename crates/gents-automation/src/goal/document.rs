@@ -105,3 +105,6 @@ pub fn snapshot(goal: &GoalDocument, now: DateTime<Utc>) -> GoalSnapshot {
         updated_at: goal.updated_at.clone(),
     }
 }
+
+#[cfg(test)]
+mod pushdown_tests;
