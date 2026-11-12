@@ -416,12 +416,6 @@ def outcomeTraces : List String :=
 def arrival (position : Nat) (document : String) : EventDelivery.Durable.Arrival :=
   { position, identity := identity "owner-a" document }
 
-def arrivalJson (entry : EventDelivery.Durable.Arrival) : String := object [
-  ("position", jsonString (toString entry.position)), ("identity", identityJson entry.identity)]
-
-def cursorJson (cursor : EventDelivery.Durable.Cursor) : String := object [
-  ("seeded", toString cursor.seeded), ("after", jsonString (toString cursor.after))]
-
 structure CursorScenario where
   name : String
   seedHead : Nat := 1
@@ -592,54 +586,76 @@ structure CallbackCursorScenario where
   editAfterAdmission : Bool := false
   checkpointCommit : Option Bool := none
 
-def callbackCursorCase (scenario : CallbackCursorScenario) : String :=
-  let source := [arrival 1 "a", arrival 2 "b", arrival 3 "c"]
-  let journal : EventDelivery.Durable.Journal := { head := 3, entries := source }
-  let consumer := EventDelivery.Durable.Consumer.callbackBinding
-    scenario.bindingEnabled scenario.callbackEnabled
-  let admission := fun (document version : String) =>
-    ({ identity := identity "owner-a" document, version } : EventDelivery.Durable.CallbackAdmission)
+structure CallbackCursorInput where
+  name : String
+  seedHead : String
+  priorAfter : Option String
+  restart : Bool
+  bindingEnabled : Bool
+  callbackEnabled : Bool
+  preReceipts : List IdentityWire
+  source : List ArrivalWire
+  entry : ArrivalWire
+  matchesFilter : Bool
+  admissionCommit : Option Bool
+  editAfterAdmission : Bool
+  checkpointCommit : Option Bool
+  deriving Lean.ToJson
+
+def callbackAdmission (id : Identity) (version : String) : EventDelivery.Durable.CallbackAdmission :=
+  { identity := id, version }
+
+def callbackCursorInput (scenario : CallbackCursorScenario) : CallbackCursorInput :=
   let pre := scenario.committed.foldl
-    (fun state document => EventDelivery.Durable.admitCallback state (admission document "v1")) {}
-  let first := EventDelivery.Durable.seed {} scenario.seedHead
-  let saved := match scenario.priorAfter with
+    (fun state document => EventDelivery.Durable.admitCallback state
+      (callbackAdmission (identity "owner-a" document) "v1")) {}
+  { name := scenario.name, seedHead := toString scenario.seedHead,
+    priorAfter := scenario.priorAfter.map toString, restart := scenario.restart,
+    bindingEnabled := scenario.bindingEnabled, callbackEnabled := scenario.callbackEnabled,
+    preReceipts := pre.receipts.map .ofModel, source := cursorSource.map .ofModel,
+    entry := .ofModel scenario.entry, matchesFilter := scenario.matchesFilter,
+    admissionCommit := scenario.admissionCommit, editAfterAdmission := scenario.editAfterAdmission,
+    checkpointCommit := scenario.checkpointCommit }
+
+structure CallbackCursorOutput where
+  preCursor : CursorWire
+  postCursor : CursorWire
+  postReceipts : List IdentityWire
+  checkpointSucceeds : Option Bool
+  journalAfter : List ArrivalWire
+  deriving Lean.ToJson
+
+def callbackCursorOutput (i : CallbackCursorInput) : CallbackCursorOutput :=
+  let source := i.source.map (·.toModel)
+  let journal : EventDelivery.Durable.Journal := { head := 3, entries := source }
+  let consumer := EventDelivery.Durable.Consumer.callbackBinding i.bindingEnabled i.callbackEnabled
+  let pre := i.preReceipts.foldl
+    (fun state id => EventDelivery.Durable.admitCallback state (callbackAdmission id.toModel "v1")) {}
+  let first := EventDelivery.Durable.seed {} i.seedHead.toNat!
+  let saved := match i.priorAfter with
     | none => first
-    | some position => { first with after := position }
-  let before := if scenario.restart then EventDelivery.Durable.seed saved journal.head else saved
-  let document := scenario.entry.identity.document
-  let admitted := match scenario.admissionCommit with
-    | some true => EventDelivery.Durable.admitCallback pre (admission document "v1")
+    | some position => { first with after := position.toNat! }
+  let before := if i.restart then EventDelivery.Durable.seed saved journal.head else saved
+  let entry := i.entry.toModel
+  let admitted := match i.admissionCommit with
+    | some true => EventDelivery.Durable.admitCallback pre (callbackAdmission entry.identity "v1")
     | _ => pre
-  let afterState := if scenario.editAfterAdmission
-    then EventDelivery.Durable.admitCallback admitted (admission document "v2") else admitted
-  let filterEligible := fun _ : EventDelivery.Durable.Arrival => scenario.matchesFilter
-  let eligible := consumer.eligible filterEligible
+  let afterState := if i.editAfterAdmission
+    then EventDelivery.Durable.admitCallback admitted (callbackAdmission entry.identity "v2")
+    else admitted
+  let eligible := consumer.eligible fun _ => i.matchesFilter
   let accepted := EventDelivery.Durable.checkpointAccepted before afterState journal
-    scenario.entry.position consumer.mode false eligible
-  let afterCursor := match scenario.checkpointCommit with
+    entry.position consumer.mode false eligible
+  let afterCursor := match i.checkpointCommit with
     | none => before
     | some commit => EventDelivery.Durable.acknowledge before afterState journal
-        scenario.entry.position consumer.mode false eligible commit
-  let optionalBool := fun value : Option Bool => match value with
-    | none => "null"
-    | some value => toString value
-  object [
-    ("name", jsonString scenario.name), ("seed_head", jsonString (toString scenario.seedHead)),
-    ("restart", toString scenario.restart),
-    ("binding_enabled", toString scenario.bindingEnabled),
-    ("callback_enabled", toString scenario.callbackEnabled),
-    ("pre_cursor", cursorJson before), ("post_cursor", cursorJson afterCursor),
-    ("pre_receipts", jsonArray (pre.receipts.map identityJson)),
-    ("post_receipts", jsonArray (afterState.receipts.map identityJson)),
-    ("source", jsonArray (source.map arrivalJson)), ("entry", arrivalJson scenario.entry),
-    ("matches_filter", toString scenario.matchesFilter),
-    ("admission_commit", optionalBool scenario.admissionCommit),
-    ("edit_after_admission", toString scenario.editAfterAdmission),
-    ("checkpoint_commit", optionalBool scenario.checkpointCommit),
-    ("checkpoint_succeeds", optionalBool (scenario.checkpointCommit.map accepted)),
-    ("journal_after", jsonArray ((EventDelivery.Durable.pending afterCursor source true).map arrivalJson))]
+        entry.position consumer.mode false eligible commit
+  { preCursor := .ofModel before, postCursor := .ofModel afterCursor,
+    postReceipts := afterState.receipts.map .ofModel,
+    checkpointSucceeds := i.checkpointCommit.map accepted,
+    journalAfter := (EventDelivery.Durable.pending afterCursor source true).map .ofModel }
 
-def callbackCursorCases : List String :=
+def callbackCursorScenarios : List CallbackCursorScenario :=
   [({ name := "callback_first_seed_excludes_existing", seedHead := 3 } : CallbackCursorScenario),
    { name := "callback_restart_does_not_reseed", restart := true },
    { name := "callback_crash_before_invocation_commit", admissionCommit := some false, checkpointCommit := some true },
@@ -653,7 +669,13 @@ def callbackCursorCases : List String :=
    { name := "callback_complete_prefix_checkpoint", entry := arrival 3 "c", committed := ["b"], admissionCommit := some true, checkpointCommit := some true },
    { name := "callback_disabled_binding_holds_unmatched", bindingEnabled := false, matchesFilter := false, checkpointCommit := some true },
    { name := "callback_disabled_callback_holds_match", callbackEnabled := false, checkpointCommit := some true },
-   { name := "callback_disabled_passes_receipts", bindingEnabled := false, committed := ["b"], checkpointCommit := some true }].map callbackCursorCase
+   { name := "callback_disabled_passes_receipts", bindingEnabled := false, committed := ["b"], checkpointCommit := some true }]
+
+@[conformance_family]
+def callbackCursor : Family CallbackCursorInput CallbackCursorOutput where
+  inputs := callbackCursorScenarios.map callbackCursorInput
+  model := callbackCursorOutput
+
 
 structure FireIdentityInput where
   identity : IdentityWire
@@ -828,9 +850,6 @@ def triggerDeliveryOutcomeTraceCasesJson : String :=
 
 def triggerDeliveryRetainedOutcomeCasesJson : String :=
   jsonArray retainedOutcomeCases
-
-def triggerDeliveryCallbackCursorCasesJson : String :=
-  jsonArray callbackCursorCases
 
 def triggerDeliveryCallbackVisibilityCasesJson : String :=
   jsonArray callbackVisibilityCases

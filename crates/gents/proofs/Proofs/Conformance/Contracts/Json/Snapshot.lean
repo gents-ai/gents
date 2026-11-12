@@ -355,7 +355,6 @@ def snapshotCoverageTailJson : String :=
     ++ "\"trigger_delivery_observed_claim_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryObservedClaimCasesJson ++ ","
     ++ "\"trigger_delivery_outcome_trace_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryOutcomeTraceCasesJson ++ ","
     ++ "\"trigger_delivery_retained_outcome_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryRetainedOutcomeCasesJson ++ ","
-    ++ "\"trigger_delivery_callback_cursor_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryCallbackCursorCasesJson ++ ","
     ++ "\"trigger_delivery_callback_visibility_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryCallbackVisibilityCasesJson ++ ","
     ++ "\"trigger_delivery_session_cases\":" ++ Conformance.TriggerDelivery.triggerDeliverySessionCasesJson ++ ","
     ++ "\"trigger_delivery_session_config_cases\":" ++ Conformance.TriggerDelivery.triggerDeliverySessionConfigCasesJson ++ ","

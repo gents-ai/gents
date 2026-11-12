@@ -1379,11 +1379,9 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_store::config_client::{ConfigAccess, NodePermission};
-    for case in contract()["trigger_delivery_callback_cursor_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let name = &case["name"];
+    for case in gents_lean_vocab::families::trigger_delivery_callback_cursor::cases() {
+        let input = &case.input;
+        let name = &input.name;
         use gents_store::identity::NodeIdentity as _;
         let db = gents_inference::test_support::test_db(
             "callback-checkpoints",
@@ -1424,9 +1422,9 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             .add_collection("type Work { label: String eligible: Boolean }")
             .await
             .unwrap();
-        let source: Vec<Arrival> = decode(&case["source"]);
-        let seed_head: usize = case["seed_head"].as_str().unwrap().parse().unwrap();
-        let eligible = case["matches_filter"].as_bool().unwrap();
+        let source: Vec<Arrival> = gents_lean_vocab::family::recode(&input.source);
+        let seed_head: usize = input.seed_head.parse().unwrap();
+        let eligible = input.matches_filter;
         let mut documents = std::collections::BTreeMap::new();
         for entry in source.iter().take(seed_head) {
             let label = &entry.identity.source_doc_id;
@@ -1435,8 +1433,8 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 create_arrival_source(&access, label, eligible).await,
             );
         }
-        let binding_enabled = case["binding_enabled"].as_bool().unwrap();
-        let callback_enabled = case["callback_enabled"].as_bool().unwrap();
+        let binding_enabled = input.binding_enabled;
+        let callback_enabled = input.callback_enabled;
         let plan = DesiredStateApplyPlan::new([
             (gents_store::collection::Collection::Callback, serde_json::json!({"node_did":owner,"callback_id":"callback",
                 "enabled":callback_enabled,"handler":{"kind":"built_in","emitter":"create_workspace"}})),
@@ -1484,7 +1482,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     .unwrap()
             }
         };
-        assert_eq!(saved().await, seed_head.to_string(), "{name}");
+        assert_eq!(saved().await, input.seed_head, "{name}");
         for entry in source.iter().skip(seed_head) {
             let label = &entry.identity.source_doc_id;
             documents.insert(
@@ -1492,26 +1490,25 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 create_arrival_source(&access, label, eligible).await,
             );
         }
-        let pre_after = case["pre_cursor"]["after"].as_str().unwrap();
-        agent_access
-            .transact_write("test.prior_callback_checkpoint", |txn| {
-                Box::pin(async move {
-                    gents_documents::event_consumer::advance(
-                        txn,
-                        owner,
-                        &handoff_binding(),
-                        "Work",
-                        pre_after,
-                    )
-                    .await
+        if let Some(prior_after) = &input.prior_after {
+            agent_access
+                .transact_write("test.prior_callback_checkpoint", |txn| {
+                    Box::pin(async move {
+                        gents_documents::event_consumer::advance(
+                            txn,
+                            owner,
+                            &handoff_binding(),
+                            "Work",
+                            prior_after,
+                        )
+                        .await
+                    })
                 })
-            })
-            .await
-            .unwrap();
-        if case["restart"].as_bool().unwrap() {
-            assert_eq!(saved().await, pre_after, "{name}");
+                .await
+                .unwrap();
         }
-        for receipt in decode::<Vec<FireIdentity>>(&case["pre_receipts"]) {
+        let pre_after = saved().await;
+        for receipt in gents_lean_vocab::family::recode::<_, Vec<FireIdentity>>(&input.pre_receipts) {
             admit_callback_arrival(
                 &node,
                 &agent_access,
@@ -1522,9 +1519,9 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             )
             .await;
         }
-        let entry: Arrival = decode(&case["entry"]);
+        let entry: Arrival = gents_lean_vocab::family::recode(&input.entry);
         let doc_id = documents[&entry.identity.source_doc_id].clone();
-        if case["admission_commit"].as_bool() == Some(true) {
+        if input.admission_commit == Some(true) {
             admit_callback_arrival(
                 &node,
                 &agent_access,
@@ -1534,7 +1531,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 "v1",
             )
             .await;
-            if case["edit_after_admission"].as_bool().unwrap() {
+            if input.edit_after_admission {
                 access
                     .write(
                         "test.callback_arrival_edit",
@@ -1556,7 +1553,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 .await;
             }
         }
-        if let Some(commit) = case["checkpoint_commit"].as_bool() {
+        let checkpoint_succeeds = if let Some(commit) = input.checkpoint_commit {
             let checkpointed: anyhow::Result<bool> = agent_access
                 .transact_write("test.callback_checkpoint_crash", |txn| {
                     let entry = &entry;
@@ -1575,7 +1572,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     })
                 })
                 .await;
-            let accepted = if commit {
+            Some(if commit {
                 checkpointed.unwrap_or_else(|error| panic!("{name}: checkpoint error: {error:#}"))
             } else {
                 assert!(
@@ -1583,46 +1580,63 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     "{name}: injected checkpoint must roll back"
                 );
                 false
-            };
-            assert_eq!(
-                accepted,
-                case["checkpoint_succeeds"].as_bool().unwrap(),
-                "{name}"
-            );
-        }
+            })
+        } else {
+            None
+        };
         let after = saved().await;
-        assert_eq!(
-            after,
-            case["post_cursor"]["after"].as_str().unwrap(),
-            "{name}"
-        );
         let page = access.execute(&format!(
             "{{ _documentArrivals(collection: \"Work\", after: \"{}\", limit: 128) {{ entries {{ cursor docID }} }} }}",
             escape_graphql_string(&after),
         )).await.unwrap();
-        let actual = page["data"]["_documentArrivals"]["entries"]
+        let modeled_identity = |doc_id: &str| {
+            source
+                .iter()
+                .find(|entry| documents[&entry.identity.source_doc_id] == doc_id)
+                .unwrap()
+                .identity
+                .clone()
+        };
+        let journal_after = page["data"]["_documentArrivals"]["entries"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|entry| entry["docID"].as_str().unwrap().to_owned())
+            .map(|entry| {
+                serde_json::json!({
+                    "position": entry["cursor"],
+                    "identity": modeled_identity(entry["docID"].as_str().unwrap()),
+                })
+            })
             .collect::<Vec<_>>();
-        let expected = decode::<Vec<Arrival>>(&case["journal_after"])
-            .iter()
-            .map(|entry| documents[&entry.identity.source_doc_id].clone())
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected, "{name}");
         let invocations = agent_access
             .execute("{ CallbackInvocation { origin } }")
             .await
             .unwrap();
-        assert_eq!(
-            invocations["data"]["CallbackInvocation"]
-                .as_array()
+        let mut receipts = invocations["data"]["CallbackInvocation"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                let origin: serde_json::Value = match &row["origin"] {
+                    serde_json::Value::String(text) => serde_json::from_str(text).unwrap(),
+                    other => other.clone(),
+                };
+                modeled_identity(origin["source_doc_id"].as_str().unwrap())
+            })
+            .collect::<Vec<_>>();
+        receipts.sort_by_key(|identity| {
+            source
+                .iter()
+                .position(|entry| entry.identity == *identity)
                 .unwrap()
-                .len(),
-            case["post_receipts"].as_array().unwrap().len(),
-            "{name}"
-        );
+        });
+        case.check(gents_lean_vocab::family::recode(&serde_json::json!({
+            "pre_cursor": {"seeded": true, "after": pre_after},
+            "post_cursor": {"seeded": true, "after": after},
+            "post_receipts": receipts,
+            "checkpoint_succeeds": checkpoint_succeeds,
+            "journal_after": journal_after,
+        })));
         node.shutdown().await.expect("node shutdown");
     }
 }
