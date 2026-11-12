@@ -63,6 +63,10 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let root = workspace.path().to_owned();
     let files_root = root.clone();
     tokio::task::spawn_blocking(move || {
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rust-toolchain.toml"),
+            files_root.join("rust-toolchain.toml"),
+        ).expect("give the LSP workspace the repository's installed toolchain selection");
         std::fs::create_dir(files_root.join("src")).unwrap();
         std::fs::write(files_root.join("Cargo.toml"),
             "[package]\nname = \"lsp-live-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n").unwrap();
