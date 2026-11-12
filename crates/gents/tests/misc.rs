@@ -8,8 +8,6 @@ mod client_authored_collections_fence;
 mod goal_controller;
 #[path = "misc/legacy_authority_absence.rs"]
 mod legacy_authority_absence;
-#[path = "misc/node_access_control.rs"]
-mod node_access_control;
 #[path = "misc/startup_readiness_barrier.rs"]
 mod startup_readiness_barrier;
 
