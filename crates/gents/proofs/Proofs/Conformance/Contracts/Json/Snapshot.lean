@@ -36,6 +36,8 @@ import Proofs.Conformance.GoalResetResumeAccount
 import Proofs.Conformance.GoalOperatorResumeProfiles
 import Proofs.Conformance.Identity.SessionInputEdit
 import Proofs.Conformance.Identity.ClientTransport
+import Proofs.Conformance.PluginDataWrites
+import Proofs.Conformance.PluginHostCalls
 import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.ToolRoot
 import Proofs.Conformance.MCPHealthShutdown
