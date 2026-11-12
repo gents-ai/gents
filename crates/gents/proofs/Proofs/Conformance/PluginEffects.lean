@@ -2,6 +2,7 @@ import Proofs.Runtime.CanonicalOutput.Execution.Examples
 import Proofs.Runtime.CanonicalOutput.Execution.Gate
 import Proofs.Runtime.CanonicalOutput.Execution.ToolDeliveryCases
 import Proofs.Conformance.Contracts.Json.ClientRuntime
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.PluginEffects
@@ -234,9 +235,16 @@ theorem asynchronous_receipt_regressions :
       receiptAccepted true true false, receiptAccepted false false true] =
     [true, true, false, false] := by native_decide
 
-def receiptCasesJson : Json := toJson <|
-  [(false, false, false), (true, false, false), (true, true, false), (false, false, true)].map
-    fun (replay, changed, terminal) => Json.mkObj [
-      ("replay", toJson replay), ("changed", toJson changed), ("terminal", toJson terminal),
-      ("expected", toJson (receiptAccepted replay changed terminal))]
+structure ReceiptInput where
+  replay : Bool
+  changed : Bool
+  terminal : Bool
+  deriving ToJson
+
+@[conformance_family]
+def receipts : Family ReceiptInput Bool where
+  inputs := [(false, false, false), (true, false, false), (true, true, false), (false, false, true)].map
+    fun (replay, changed, terminal) => { replay, changed, terminal }
+  model := fun i => receiptAccepted i.replay i.changed i.terminal
+
 end Conformance.PluginEffects

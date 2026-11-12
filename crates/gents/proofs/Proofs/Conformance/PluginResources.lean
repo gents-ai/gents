@@ -693,9 +693,6 @@ def pluginResourceChildAdmissionCasesJson : String :=
 def pluginResourceToolEffectCasesJson : String :=
   PluginEffects.casesJson.compress
 
-def pluginResourceToolEffectReceiptCasesJson : String :=
-  PluginEffects.receiptCasesJson.compress
-
 def pluginResourceToolEffectTerminalCasesJson : String :=
   PluginEffects.terminalCasesJson.compress
 

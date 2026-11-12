@@ -707,9 +707,10 @@ mod tests {
     }
     #[tokio::test]
     async fn asynchronous_receipts_conform_to_the_execution_owner() {
-        let cases =
-            &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_effect_receipt_cases;
-        for (index, case) in cases.as_array().unwrap().iter().enumerate() {
+        for (index, case) in gents_lean_vocab::families::plugin_effects_receipts::cases()
+            .into_iter()
+            .enumerate()
+        {
             let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
                 name: format!("effect-receipt-{index}"),
                 ..Default::default()
@@ -733,10 +734,10 @@ mod tests {
                 .unwrap();
             child.start_running().await.unwrap();
             let binding = child.background_receipt_binding().unwrap();
-            if case["terminal"] == true {
+            if case.input.terminal {
                 child.complete("done").await.unwrap();
             }
-            if case["replay"] == true {
+            if case.input.replay {
                 child
                     .access()
                     .unwrap()
@@ -753,11 +754,7 @@ mod tests {
                     .await
                     .unwrap();
             }
-            let text = if case["changed"] == true {
-                "null"
-            } else {
-                "{}"
-            };
+            let text = if case.input.changed { "null" } else { "{}" };
             let result = child
                 .access()
                 .unwrap()
@@ -770,14 +767,10 @@ mod tests {
                     },
                 )
                 .await;
-            assert_eq!(
-                result.is_ok(),
-                case["expected"].as_bool().unwrap(),
-                "{case}: {result:?}"
-            );
             drop(owner);
             node.shutdown().await.unwrap();
             let _ = std::fs::remove_dir_all(path);
+            case.check(result.is_ok());
         }
     }
 }
