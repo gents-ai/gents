@@ -281,8 +281,6 @@ def snapshotPromptTailJson : String :=
       ++ promptAssemblyClaudeStreamCasesJson ++ ","
     ++ "\"prompt_assembly_claude_thinking_stream_cases\":"
       ++ promptAssemblyClaudeThinkingStreamCasesJson ++ ","
-    ++ "\"protected_replay_compaction_cases\":"
-    ++ protectedReplayCompactionCasesJson ++ ","
 
 def snapshotCaptureTailJson : String :=
   ""

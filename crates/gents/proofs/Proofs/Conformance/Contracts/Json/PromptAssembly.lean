@@ -540,9 +540,6 @@ def promptAssemblyClaudeStreamCaseJson (witness : PromptAssemblyClaudeStreamCase
 def promptAssemblyClaudeStreamCasesJson : String :=
   jsonArray (promptAssemblyClaudeStreamCases.map promptAssemblyClaudeStreamCaseJson)
 
-private def claudeBytesJson (bytes : List UInt8) : String :=
-  jsonArray (bytes.map fun byte => toString byte.toNat)
-
 private def claudeReasoningPartJson {α : Type} (payloadJson : α → String) :
     CanonicalOutput.ReasoningPart α → String
   | .text payload signature =>
@@ -656,38 +653,6 @@ def promptAssemblyResponsesEffort : Family ResponsesEffortInput (Option String) 
       requested := c.requested }
   model := fun i =>
     PromptAssembly.ResponsesStorage.sentEffort i.endpoint i.advertised i.requested
-
-private def claudeReplayInputBlockJson :
-    CanonicalOutput.MessageBlock (List UInt8) → String
-  | .text payload =>
-      "{\"kind\":\"text\",\"payload\":" ++ claudeBytesJson payload ++ "}"
-  | .reasoning id parts =>
-      "{\"kind\":\"reasoning\",\"id\":" ++ jsonOptionalString id ++
-      ",\"parts\":" ++
-      jsonArray (parts.map (claudeReasoningPartJson claudeBytesJson)) ++ "}"
-  | .toolCall docId id callId name arguments signature additionalParams =>
-      "{\"kind\":\"toolCall\",\"doc_id\":" ++ toString docId ++
-      ",\"id\":" ++ jsonString id ++
-      ",\"call_id\":" ++ jsonOptionalString callId ++
-      ",\"name\":" ++ jsonString name ++
-      ",\"arguments\":" ++ claudeBytesJson arguments ++
-      ",\"signature\":" ++ jsonOptionalString signature ++
-      ",\"additional_params\":" ++ jsonOptionalString additionalParams ++ "}"
-  | .toolResult .. => "{\"kind\":\"unsupportedToolResult\"}"
-  | .media .. => "{\"kind\":\"unsupportedMedia\"}"
-
-private def claudeReplayBlockJson : PromptAssembly.ClaudeMap.ReplayBlock → String
-  | .text payload =>
-      "{\"kind\":\"text\",\"payload\":" ++ claudeBytesJson payload ++ "}"
-  | .signedThinking payload signature =>
-      "{\"kind\":\"signedThinking\",\"payload\":" ++ claudeBytesJson payload ++
-      ",\"signature\":" ++ jsonString signature ++ "}"
-  | .redactedThinking payload =>
-      "{\"kind\":\"redactedThinking\",\"payload\":" ++ claudeBytesJson payload ++ "}"
-  | .toolUse id name arguments =>
-      "{\"kind\":\"toolUse\",\"id\":" ++ jsonString id ++
-      ",\"name\":" ++ jsonString name ++
-      ",\"arguments\":" ++ claudeBytesJson arguments ++ "}"
 
 def natsOfBytes (bytes : List UInt8) : List Nat := bytes.map UInt8.toNat
 
@@ -813,62 +778,6 @@ def promptAssemblyClaudeReplayRoundTrip : Family ClaudeReplayInput (List ReplayB
   inputs := (promptAssemblyClaudeReplayCases.filter
     (·.name == "streamed-signed-redacted-tool")).map ClaudeReplayInput.ofCase
   model := fun i => i.replayed.replay
-
-private def claudeReplayOriginJson : PromptAssembly.ClaudeMap.ReplayOrigin → String
-  | .claudeSubscription => jsonString "claudeSubscription"
-  | .acceptedProvider => jsonString "acceptedProvider"
-  | .recoveredProvider => jsonString "recoveredProvider"
-  | .foreign => jsonString "foreign"
-  | .missing => jsonString "missing"
-  | .ambiguous => jsonString "ambiguous"
-
-private def claudeReasoningWitnessJson
-    (witness : PromptAssembly.ClaudeMap.ReasoningWitness) : String :=
-  jsonArray (witness.map fun (index, parts) =>
-    "{\"block_index\":" ++ toString index ++ ",\"parts\":" ++
-      jsonArray (parts.map (claudeReasoningPartJson claudeBytesJson)) ++ "}")
-
-def claudeReplayTagJson (tag : PromptAssembly.ClaudeMap.ReplayTag) : String :=
-  "{\"request\":" ++ toString tag.request ++
-    ",\"source\":" ++ sourceJson tag.source ++ "}"
-
-def claudeTaggedReplayRowJson
-    (row : PromptAssembly.ClaudeMap.TaggedReplayRow) : String :=
-  "{\"source\":" ++
-    (match row.source with
-     | none => "null"
-     | some tag => claudeReplayTagJson tag) ++
-    ",\"physical_header\":" ++
-    (match row.physicalHeader with
-     | none => "null"
-     | some header => jsonString header) ++
-    ",\"block_indices\":" ++ jsonArray (row.blockIndices.map toString) ++
-    ",\"blocks\":" ++ jsonArray (row.blocks.map claudeReplayInputBlockJson) ++ "}"
-
-private def replayFlatItemsJson (items : List PromptAssembly.ClaudeMap.ReplayFlatItem) : String :=
-  jsonArray (items.map fun item =>
-    match item with
-    | .ordinary bytes => "{\"kind\":\"ordinary\",\"bytes\":" ++ claudeBytesJson bytes ++ "}"
-    | .reasoning bytes => "{\"kind\":\"reasoning\",\"bytes\":" ++ claudeBytesJson bytes ++ "}")
-
-private def claudeCheckpointResolutionJson
-    (resolution : PromptAssemblyClaudeCheckpointResolution) : String :=
-  "{\"tag\":" ++ claudeReplayTagJson resolution.tag ++
-    ",\"origin\":" ++ claudeReplayOriginJson resolution.evidence.origin ++
-    ",\"issuer_family\":" ++ jsonString resolution.evidence.issuer.family ++
-    ",\"issuer_endpoint\":" ++ jsonString resolution.evidence.issuer.endpoint ++
-    ",\"wire\":" ++
-      (match resolution.evidence.wire with
-       | .claudeMessages => jsonString "claude_messages"
-       | .responses => jsonString "responses") ++
-    ",\"physical_header\":" ++ jsonString resolution.evidence.physicalHeader ++
-    ",\"complete\":" ++ (if resolution.evidence.complete then "true" else "false") ++
-    ",\"captured\":" ++
-      (match resolution.evidence.captured with
-       | none => "null"
-       | some items => replayFlatItemsJson items) ++
-    ",\"expected_reasoning\":" ++
-      claudeReasoningWitnessJson resolution.evidence.reasoning ++ "}"
 
 def auxiliaryKindName : CanonicalOutput.AuxiliaryKind → String
   | .compaction => "compaction"
@@ -1162,20 +1071,48 @@ def promptAssemblyReasoningSuffix : Family ReasoningSuffixInput ReasoningSuffixO
 example : promptAssemblyReasoningSuffixCases.any
     (fun c => (c.name.splitOn "/before-turn-").length > 1) = true := by native_decide
 
-def protectedReplayCompactionCaseJson
-    (witness : Compaction.ProtectedReplayCompactionCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"message_count\":" ++ toString witness.messageCount ++
-    ",\"raw_index\":" ++ toString witness.rawIndex ++
-    ",\"required\":" ++ jsonArray (witness.required.map claudeReplayTagJson) ++
-    ",\"rows\":" ++ jsonArray (witness.rows.map claudeTaggedReplayRowJson) ++
-    ",\"ceiling_error\":" ++ jsonString witness.ceilingError ++
-    ",\"ceiling\":" ++ jsonOptionalNat witness.ceiling ++
-    ",\"selected_split\":" ++ jsonOptionalNat witness.selectedSplit ++
-    ",\"outcome\":" ++ jsonString witness.outcome ++ "}"
+structure ProtectedReplayCompactionInput where
+  name : String
+  messageCount : Nat
+  rawIndex : Nat
+  required : List ReplayTagWire
+  rows : List ReplayRowWire
+  deriving Lean.ToJson
 
-def protectedReplayCompactionCasesJson : String :=
-  jsonArray (Compaction.protectedReplayCompactionCases.map protectedReplayCompactionCaseJson)
+structure ProtectedReplayCompactionOutput where
+  ceilingError : String
+  ceiling : Option Nat
+  selectedSplit : Option Nat
+  outcome : String
+  deriving Lean.ToJson
+
+/-- The reduction ceiling a pending tool round sets, the pair-safe split under
+it and the composed checkpoint: production `replay_compaction_prefix_bound`,
+`protected_pair_safe_split_index` and `prepare_replay_checkpoint`. -/
+@[conformance_family]
+def protectedReplayCompaction :
+    Family ProtectedReplayCompactionInput ProtectedReplayCompactionOutput where
+  inputs := Compaction.protectedReplayCompactionCases.map fun c =>
+    { name := c.name, messageCount := c.messageCount, rawIndex := c.rawIndex
+      required := c.required.map .ofModel, rows := c.rows.map .ofModel }
+  model := fun i =>
+    let msgs := Compaction.caseFixture i.messageCount
+    let required := i.required.map ReplayTagWire.toModel
+    let rows := i.rows.map ReplayRowWire.toModel
+    match Compaction.replayReductionCeiling required rows with
+    | .error error =>
+        { ceilingError := PromptAssembly.ClaudeMap.errorName error, ceiling := none
+          selectedSplit := none, outcome := "ceiling_refused" }
+    | .ok none => { ceilingError := "", ceiling := none, selectedSplit := none, outcome := "unbounded" }
+    | .ok (some ceiling) =>
+        { ceilingError := "", ceiling := some ceiling
+          selectedSplit := Compaction.protectedPairSafeBoundary msgs i.rawIndex ceiling
+          outcome := match Compaction.prepareProtectedReplayCheckpoint msgs i.rawIndex ceiling
+              required rows with
+            | .ok _ => "ok"
+            | .error .cannotFit => "cannot_fit"
+            | .error .misalignedAssistantProjection => "misaligned_assistant_projection"
+            | .error (.replay error) => PromptAssembly.ClaudeMap.errorName error }
 
 def promptAssemblyServiceTierCasesJson : String :=
   jsonArray (PromptAssembly.ServiceTier.cases.map fun witness =>

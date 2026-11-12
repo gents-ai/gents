@@ -2253,8 +2253,7 @@ def caseCoverage : List CoverageEntry :=
       "Strip/provider-view and immutable publication-gate cases are executable Lean witnesses. The native compaction owner must migrate its reducer gate and checkpoint execution before this is consumer coverage.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "protected_replay_compaction_cases"
-      "ProtectedReplayCompactionCases"
+      "family" "contracts_protected_replay_compaction"
       "Native replay association and reduction ceilings preserve the entire captured prefix of required reasoning. A nonempty required set refuses summarization with CannotFit; an empty set preserves the ordinary retention policy. Retirement of older requirements remains deferred. Generated cases bind modeled assistant blocks to native ceiling and split selection; the summary-provider refusal has separate native coverage.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage

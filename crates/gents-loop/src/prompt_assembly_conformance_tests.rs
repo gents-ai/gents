@@ -950,3 +950,196 @@ fn generated_reasoning_suffix_cases_bind_native_selection() {
         }
     });
 }
+
+fn compaction_messages(count: u64) -> Vec<Message> {
+    let text = |role: &str, text: &str| match role {
+        "user" => Message::User {
+            content: vec![UserContent::Text(Text {
+                text: text.to_owned(),
+            })],
+        },
+        _ => Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![AssistantContent::Text(Text {
+                text: text.to_owned(),
+            })],
+        },
+    };
+    let call = || Message::Assistant {
+        request_id: None,
+        id: None,
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
+            id: "call-1".to_owned(),
+            call_id: Some("call-1".to_owned()),
+            function: ToolFunction {
+                name: "read".to_owned(),
+                arguments: serde_json::json!({ "file_path": "/tmp/compaction-contract.txt" }),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    };
+    let result = |payload: &str| Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: "call-1".to_owned(),
+            call_id: Some("call-1".to_owned()),
+            content: vec![ToolResultContent::Text(Text {
+                text: payload.to_owned(),
+            })],
+        })],
+    };
+    match count {
+        0 => Vec::new(),
+        1 => vec![result("large terminal payload")],
+        2 => vec![call(), result("large tool payload")],
+        3 => vec![text("user", "first"), call(), result("large tool payload")],
+        4 => vec![
+            text("user", "first"),
+            call(),
+            result("large tool payload"),
+            text("assistant", "reply"),
+        ],
+        other => panic!("unsupported compaction message_count {other}"),
+    }
+}
+
+fn modeled_provider_view(
+    messages: &[Message],
+    rows: &[gents_lean_vocab::claude_replay::Row],
+) -> Vec<crate::loop_stream::TaggedMessage> {
+    let mut modeled = rows.iter();
+    let mut announced: std::collections::VecDeque<ToolCall> = std::collections::VecDeque::new();
+    let mut view = Vec::new();
+    for message in messages {
+        match message {
+            Message::Assistant { .. } => {
+                let tagged =
+                    native_tagged_message(modeled.next().expect("one modeled row per assistant"));
+                if let Message::Assistant { content, .. } = &tagged.message {
+                    announced = content
+                        .iter()
+                        .filter_map(|item| match item {
+                            AssistantContent::ToolCall(call) => Some(call.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                }
+                view.push(tagged);
+            }
+            Message::User { content } => {
+                let content = content
+                    .iter()
+                    .map(|item| match item {
+                        UserContent::ToolResult(result) => {
+                            let call = announced
+                                .pop_front()
+                                .expect("a modeled tool call for every fixture tool result");
+                            UserContent::ToolResult(ToolResult {
+                                id: call.id,
+                                call_id: call.call_id,
+                                content: result.content.clone(),
+                            })
+                        }
+                        other => other.clone(),
+                    })
+                    .collect();
+                view.push(crate::loop_stream::TaggedMessage::unassociated(
+                    Message::User { content },
+                ));
+            }
+            other => view.push(crate::loop_stream::TaggedMessage::unassociated(
+                other.clone(),
+            )),
+        }
+    }
+    assert!(
+        modeled.next().is_none(),
+        "every modeled row needs an assistant position"
+    );
+    view
+}
+
+#[test]
+fn generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint() {
+    use crate::claude_messages_body::{prepare_replay_checkpoint, TaggedAssistantRow};
+    use crate::compaction::history::protected_pair_safe_split_index;
+    gents_lean_vocab::families::contracts_protected_replay_compaction::replay(|case| {
+        let rows: Vec<gents_lean_vocab::claude_replay::Row> = recode(&case.rows);
+        let required: Vec<gents_lean_vocab::claude_replay::Tag> = recode(&case.required);
+        let roles = compaction_messages(case.message_count);
+        let assistant_count = roles
+            .iter()
+            .filter(|message| matches!(message, Message::Assistant { .. }))
+            .count();
+        assert_eq!(rows.len(), assistant_count, "{}", case.name);
+        let provider_view = modeled_provider_view(&roles, &rows);
+        let messages = provider_view
+            .iter()
+            .map(|row| row.message.clone())
+            .collect::<Vec<_>>();
+        let native_required = required.iter().map(native_replay_tag).collect::<Vec<_>>();
+        let output = |ceiling_error: &str,
+                      ceiling: Option<usize>,
+                      selected_split: Option<usize>,
+                      outcome: &str| {
+            gents_lean_vocab::families::contracts_protected_replay_compaction::ProtectedReplayCompactionOutput {
+                ceiling_error: ceiling_error.to_owned(),
+                ceiling: ceiling.map(|value| u64::try_from(value).expect("ceiling fits")),
+                selected_split: selected_split.map(|value| u64::try_from(value).expect("split fits")),
+                outcome: outcome.to_owned(),
+            }
+        };
+        let ceiling = match crate::loop_stream::replay_compaction_prefix_bound(
+            &provider_view,
+            &native_required,
+        ) {
+            Err(error) => {
+                return output(
+                    replay_checkpoint_outcome(&error),
+                    None,
+                    None,
+                    "ceiling_refused",
+                );
+            }
+            Ok(ceiling) => ceiling,
+        };
+        let Some(ceiling) = ceiling else {
+            return output("", None, None, "unbounded");
+        };
+        let split = protected_pair_safe_split_index(
+            &messages,
+            usize::try_from(case.raw_index).expect("raw index fits"),
+            ceiling,
+        );
+        let outcome = match split {
+            None => "cannot_fit",
+            Some(split) => {
+                let assistant_split = messages[..split]
+                    .iter()
+                    .filter(|message| matches!(message, Message::Assistant { .. }))
+                    .count();
+                let native_rows = rows
+                    .iter()
+                    .map(|row| TaggedAssistantRow {
+                        source: row.source.as_ref().map(native_replay_tag),
+                        physical_header: row.physical_header.clone(),
+                        block_indices: row.block_indices(),
+                        id: None,
+                        content: gents_lean_vocab::claude_replay::assistant_content(&row.blocks),
+                    })
+                    .collect();
+                match prepare_replay_checkpoint(
+                    native_required.clone(),
+                    native_rows,
+                    assistant_split,
+                ) {
+                    Ok(_) => "ok",
+                    Err(error) => replay_checkpoint_outcome(&error),
+                }
+            }
+        };
+        output("", Some(ceiling), split, outcome)
+    });
+}

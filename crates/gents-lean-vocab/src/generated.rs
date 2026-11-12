@@ -477,10 +477,6 @@ pub fn lean_prompt_assembly_turn_budget_cases() -> &'static [LeanPromptAssemblyT
     &lean_contract_snapshot().prompt_assembly_turn_budget_cases
 }
 
-pub fn lean_protected_replay_compaction_cases() -> &'static [LeanProtectedReplayCompactionCase] {
-    &lean_contract_snapshot().protected_replay_compaction_cases
-}
-
 pub fn lean_provider_eof_cases() -> &'static [LeanProviderEofCase] {
     &lean_contract_snapshot().provider_eof_cases
 }
@@ -1984,27 +1980,6 @@ pub struct LeanClaudeReasoningPart {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanClaudeReplayInputBlock {
-    pub kind: String,
-    pub payload: Option<Vec<u8>>,
-    pub parts: Option<Vec<LeanClaudeReplayInputPart>>,
-    pub id: Option<String>,
-    pub doc_id: Option<u64>,
-    pub call_id: Option<String>,
-    pub name: Option<String>,
-    pub arguments: Option<Vec<u8>>,
-    pub signature: Option<String>,
-    pub additional_params: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanClaudeReplayInputPart {
-    pub kind: String,
-    pub payload: Vec<u8>,
-    pub signature: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct LeanClaudeStreamBlock {
     pub kind: String,
     pub value: Option<String>,
@@ -2024,17 +1999,6 @@ pub struct LeanClaudeStreamEvent {
     pub index: Option<u64>,
     pub fragment: Option<String>,
     pub data: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClaudeTaggedReplayRow {
-    #[serde(deserialize_with = "required_nullable")]
-    pub source: Option<LeanCanonicalCoordinate>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub physical_header: Option<String>,
-    pub block_indices: Vec<usize>,
-    pub blocks: Vec<LeanClaudeReplayInputBlock>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3230,7 +3194,6 @@ pub struct LeanContractSnapshot {
         LeanPromptAssemblyClaudeThinkingStreamCase,
     >,
     pub prompt_assembly_service_tier_cases: Vec<LeanPromptAssemblyServiceTierCase>,
-    pub protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub durable_reduction_cases: Vec<LeanDurableReductionCase>,
     pub compaction_projection_join_cases: Vec<LeanCompactionProjectionJoinCase>,
@@ -9372,22 +9335,6 @@ pub struct LeanPromptAssemblyTurnBudgetCase {
     pub turn_output_tokens: Vec<usize>,
     pub turn_should_compact: Vec<bool>,
     pub turn_can_dispatch: Vec<bool>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct LeanProtectedReplayCompactionCase {
-    pub name: String,
-    pub message_count: usize,
-    pub raw_index: usize,
-    pub required: Vec<LeanCanonicalCoordinate>,
-    pub rows: Vec<LeanClaudeTaggedReplayRow>,
-    pub ceiling_error: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub ceiling: Option<usize>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub selected_split: Option<usize>,
-    pub outcome: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
