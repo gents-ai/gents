@@ -407,16 +407,6 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 16);
     assert_eq!(
         lean_contract_snapshot()
-            .inference_slot_accounting_cases
-            .len(),
-        11
-    );
-    assert_eq!(
-        lean_contract_snapshot().fleet_slot_accounting_cases.len(),
-        5
-    );
-    assert_eq!(
-        lean_contract_snapshot()
             .persistence_failure_policy_cases
             .len(),
         2

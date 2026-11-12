@@ -859,10 +859,6 @@ def snapshotClientCasesJson : String :=
       ++ selfConfigSelectionCasesJson ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
-    ++ "\"inference_slot_accounting_cases\":"
-      ++ jsonArray (inferenceSlotAccountingCases.map inferenceSlotAccountingCaseJson) ++ ","
-    ++ "\"fleet_slot_accounting_cases\":"
-      ++ jsonArray (fleetSlotAccountingCases.map fleetSlotAccountingCaseJson) ++ ","
 
 def snapshotRuntimeCasesJson : String :=
   ""

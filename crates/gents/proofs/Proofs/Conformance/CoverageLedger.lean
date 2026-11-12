@@ -1000,8 +1000,8 @@ def caseCoverage : List CoverageEntry :=
       "Exercises desktop retry eligibility and successor lineage. Admission lease release remains an owner refinement: terminal-failed is the current adapter assumption, and emitted admission witnesses are not independently observed. Exact-row retryFromRows cases require the migrated query/transaction owner.")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "inference_slot_accounting_cases"
-      "InferenceCallSlotAccounting")
+      "family"
+      "inference_slot_accounting_reconstruction")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "mailbox_notification_cases"

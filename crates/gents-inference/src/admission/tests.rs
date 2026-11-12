@@ -17,8 +17,7 @@ use super::{
 use gents_lean_vocab::{
     assert_lean_contract_vocabulary_set_matches, assert_lean_transition_is_illegal,
     assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
-    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_cases, lean_vocabulary_values,
-    LeanContractVocabulary, LeanFleetSlotAccountingCase,
+    lean_vocabulary_values, LeanContractVocabulary,
 };
 use gents_protocol::row::AgentRequest;
 use gents_store::identity::NodeIdentity as _;
@@ -27,7 +26,6 @@ pub(super) async fn test_node() -> (
     crate::test_support::TestDb,
     gents_store::identity::ManagedAgentSigner,
 ) {
-    lean_inference_slot_accounting_cases();
     let (db, _user, _access, binding) = crate::test_support::signed_test_node(
         "inference-admission",
         gents_store::node_extension::Extensions::none(),
@@ -611,91 +609,46 @@ fn rust_inference_call_transition_table_matches_lean_contract() {
     assert_lean_transition_is_illegal("InferenceCall", "completed", "running");
 }
 
-#[test]
-fn generated_inference_slot_accounting_cases_match_admission_reconstruction_logic() {
-    let cases = lean_inference_slot_accounting_cases();
-    assert_eq!(
-        cases.len(),
-        11,
-        "Lean should emit the finite InferenceCall slot-accounting cases"
-    );
-
-    for case in cases {
-        assert_eq!(
-            case.row_backend_ids.len(),
-            case.row_states.len(),
-            "Lean case {} emitted mismatched row arrays",
-            case.name
-        );
-
-        if case.row_states.len() == 1 {
-            let row = InferenceCallSlotRow::new(
-                case.row_backend_ids[0].as_str(),
-                case.row_states[0].as_str(),
-            );
-            assert_eq!(
-                slot_contribution(row, &case.backend_id),
-                case.expected_contribution,
-                "generated case {} drifted from admission slot contribution",
-                case.name
-            );
-            assert_eq!(
-                case.contribution, case.expected_contribution,
-                "Lean case {} should compute its expected contribution",
-                case.name
-            );
-        }
-
-        let reconstructed = reconstructed_running_slot_count(
-            case.row_backend_ids
-                .iter()
-                .zip(&case.row_states)
-                .map(|(backend_id, state)| {
-                    InferenceCallSlotRow::new(backend_id.as_str(), state.as_str())
-                }),
-            &case.backend_id,
-        );
-        assert_eq!(
-            reconstructed, case.reconstructed_running_count,
-            "generated case {} drifted from admission reconstructed running count",
-            case.name
-        );
-        assert_eq!(
-            case.bounded_by_max_concurrent,
-            reconstructed <= case.max_concurrent,
-            "generated case {} drifted from max_concurrent bound",
-            case.name
-        );
-
-        if matches!(
-            case.property.as_str(),
-            "terminal_release" | "permit_drop_terminalization"
-        ) {
-            assert_eq!(case.pre_state.as_str(), "running", "{}", case.name);
-            assert_eq!(case.pre_contribution, 1, "{}", case.name);
-            assert_eq!(case.post_contribution, 0, "{}", case.name);
-            assert!(case.released_slot, "{}", case.name);
-        }
-        if case.property == "permit_drop_terminalization" {
-            assert!(case.permit_drop_terminalization, "{}", case.name);
-        }
+fn fleet_observation(
+    rows: &[&Value],
+    backend_id: &str,
+    max_concurrent: u64,
+) -> gents_lean_vocab::families::fleet_slot_accounting_contribution::SlotObservation {
+    let reconstructed =
+        reconstructed_running_slot_count(rows.iter().map(|row| slot_row_from_value(row)), backend_id)
+            as u64;
+    let contribution = match rows {
+        [row] => slot_contribution(slot_row_from_value(row), backend_id) as u64,
+        _ => reconstructed,
+    };
+    let field = |row: &Value, name: &str| {
+        row.get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("InferenceCall row must include {name}: {row:?}"))
+            .to_owned()
+    };
+    gents_lean_vocab::families::fleet_slot_accounting_contribution::SlotObservation {
+        contribution,
+        row_states: rows.iter().map(|row| field(row, "call_state")).collect(),
+        row_backend_ids: rows.iter().map(|row| field(row, "backend_id")).collect(),
+        reconstructed_running_count: reconstructed,
+        slot_count: reconstructed,
+        bounded_by_max_concurrent: reconstructed <= max_concurrent,
     }
 }
 
 #[tokio::test]
 async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary() {
-    let waiting = lean_fleet_slot_accounting_case("fleet_waiting_contributes_zero");
-    let acquired = lean_fleet_slot_accounting_case("fleet_acquired_contributes_one");
-    let executing = lean_fleet_slot_accounting_case("fleet_executing_contributes_one");
-    let released = lean_fleet_slot_accounting_case("fleet_released_terminal_contributes_zero");
-    let bounded = lean_fleet_slot_accounting_case(
-        "fleet_reconstructed_running_count_bounded_by_max_concurrent",
-    );
-    let backend_id = acquired.backend_id.clone();
-    assert_eq!(waiting.backend_id, backend_id);
-    assert_eq!(executing.backend_id, backend_id);
-    assert_eq!(released.backend_id, backend_id);
-    assert_eq!(bounded.backend_id, backend_id);
+    let contribution_cases =
+        gents_lean_vocab::families::fleet_slot_accounting_contribution::cases::<String, String>();
+    let bound_cases = gents_lean_vocab::families::fleet_slot_accounting_bound::cases();
+    let backend_id = contribution_cases[0].input.backend_id.clone();
+    for case in &contribution_cases {
+        assert_eq!(case.input.backend_id, backend_id);
+    }
+    for case in &bound_cases {
+        assert_eq!(case.input.backend_id, backend_id);
+    }
 
     let (db, signer) = test_node().await;
     let node = db.node.clone();
