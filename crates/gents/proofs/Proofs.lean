@@ -18,6 +18,10 @@ import Proofs.Shared.AccountRotation
 import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Shared.TextNormalization
 import Proofs.Session.TitleText
+import Proofs.Session.ToolResultThreading
+import Proofs.Session.ToolExecution.ArgumentFailure
+import Proofs.Shared.CompletionRetry.ErrorIdentity
+import Proofs.Tools.SelfConfig.ToolsRoot
 import Proofs.Runtime.CrossMachineComposed
 import Proofs.Session.Fleet
 import Proofs.Session.AgentSession

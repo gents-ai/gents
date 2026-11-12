@@ -138,20 +138,36 @@ pub fn plugin_call_then_text_turns() -> Vec<Vec<RawStreamingChoice<()>>> {
     ]
 }
 
-pub async fn plugin_image_result_seen_by(
+pub fn provider_input_counter(
     provider: gents_inference::backends::provider::BackendProviderKind,
+    wire: gents_loop::openai_wire::OpenAiWireApi,
+) -> Arc<gents_loop::provider_input::ProviderInputCounter> {
+    Arc::new(gents_loop::provider_input::ProviderInputCounter::new(
+        provider,
+        wire,
+        "test-model",
+    ))
+}
+
+fn first_tool_result(history: &[Message]) -> Option<Vec<ToolResultContent>> {
+    history.iter().find_map(|message| match message {
+        Message::User { content } => content.iter().find_map(|part| match part {
+            UserContent::ToolResult(result) => Some(result.content.clone()),
+            _ => None,
+        }),
+        _ => None,
+    })
+}
+
+pub async fn plugin_image_result_seen_by(
+    counter: Arc<gents_loop::provider_input::ProviderInputCounter>,
     image_bytes: usize,
 ) -> Vec<ToolResultContent> {
     let (_home, tool) = plugin_image_tool(image_bytes);
     let tools: Vec<Box<dyn ToolDyn>> = vec![tool];
     let model = ScriptedModel::new_turns(plugin_call_then_text_turns()).without_capture();
     let mut config = config(4);
-    config.provider_input_counter =
-        Arc::new(gents_loop::provider_input::ProviderInputCounter::new(
-            provider,
-            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-            "test-model",
-        ));
+    config.provider_input_counter = counter;
     let stream = run_loop_stream(
         model.clone(),
         None::<gents_loop::session_hook::NoopSessionHook>,
@@ -164,45 +180,69 @@ pub async fn plugin_image_result_seen_by(
     let mut final_text = None;
     while let Some(item) = stream.next().await {
         match item {
-            Err(error) => panic!("{provider:?}: {error}"),
+            Err(error) => panic!("{error}"),
             Ok(LoopStreamItem::Final { text }) => final_text = Some(text),
             Ok(_) => {}
         }
     }
     assert_eq!(final_text.as_deref(), Some("seen"));
     let histories = model.seen_histories().await;
-    histories[1]
-        .iter()
-        .find_map(|message| match message {
-            Message::User { content } => content.iter().find_map(|part| match part {
-                UserContent::ToolResult(result) => Some(result.content.clone()),
-                _ => None,
-            }),
-            _ => None,
-        })
-        .expect("the second request carries the plugin's tool result")
+    first_tool_result(&histories[1]).expect("the second request carries the plugin's tool result")
 }
 
-pub async fn persisted_plugin_image_result_replay(image_bytes: usize) {
+pub async fn owned_tool_result_threaded(
+    counter: Arc<gents_loop::provider_input::ProviderInputCounter>,
+    tool: Box<dyn ToolDyn>,
+) -> Vec<ToolResultContent> {
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
+    let model = ScriptedModel::new_turns(vec![
+        echo_tool_turn(),
+        vec![
+            RawStreamingChoice::Message("ok".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let profile = counter.profile();
+    let mut config = owned_config(4);
+    config.provider_input_counter = counter;
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("read the big thing")),
+        Vec::new(),
+        Arc::new(vec![tool]),
+        config,
+    );
+    let collected =
+        collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle, profile).await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
+    assert_eq!(collected.final_text.as_deref(), Some("ok"));
+    let histories = model.seen_histories().await;
+    node.shutdown().await.expect("node shutdown");
+    first_tool_result(&histories[1]).expect("the second request carries the tool result")
+}
+
+pub async fn persisted_plugin_image_result_replay(
+    counter: Arc<gents_loop::provider_input::ProviderInputCounter>,
+    image_bytes: usize,
+) -> Vec<ToolResultContent> {
     let (_home, tool) = plugin_image_tool(image_bytes);
     let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let node = db.node.clone();
+    let profile = counter.profile();
+    let mut config = owned_config(4);
+    config.provider_input_counter = counter;
     let stream = run_loop_stream(
         ScriptedModel::new_turns(plugin_call_then_text_turns()),
         Some(hook.clone()),
         TaggedMessage::unassociated(Message::user("draw it")),
         Vec::new(),
         Arc::new(vec![tool]),
-        owned_config(4),
+        config,
     );
-    let collected = collect_owned_scripted_stream(
-        stream,
-        &hook,
-        &writer,
-        &mut lifecycle,
-        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-    )
-    .await;
+    let collected =
+        collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle, profile).await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.final_text.as_deref(), Some("seen"));
 
@@ -215,29 +255,19 @@ pub async fn persisted_plugin_image_result_replay(image_bytes: usize) {
     )
     .await
     .unwrap();
-    let replayed: Vec<String> = history
+    node.shutdown().await.expect("node shutdown");
+    history
         .iter()
         .flat_map(|message| match message {
             Message::User { content } => content.as_slice(),
             _ => &[],
         })
         .filter_map(|part| match part {
-            UserContent::ToolResult(result) => Some(&result.content),
+            UserContent::ToolResult(result) => Some(result.content.clone()),
             _ => None,
         })
         .flatten()
-        .map(|part| tool_result_text(part).to_string())
-        .collect();
-    assert_eq!(
-        replayed,
-        vec![format!(
-            "{}\n{}",
-            r#"{"height":2,"width":2}"#,
-            gents_loop::loop_stream::TOOL_RESULT_IMAGE_NOT_REPLAYED
-        )],
-        "image of {image_bytes} bytes"
-    );
-    node.shutdown().await.expect("node shutdown");
+        .collect()
 }
 
 pub async fn terminalization_with_principal_output(
