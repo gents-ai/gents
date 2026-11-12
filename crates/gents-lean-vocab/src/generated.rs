@@ -73,10 +73,6 @@ pub fn lean_canonical_payload_presentation_cases() -> &'static [LeanPayloadPrese
     &lean_contract_snapshot().canonical_payload_presentation_cases
 }
 
-pub fn lean_canonical_spawned_target_rejection_cases() -> &'static [LeanSpawnedTargetRejectionCase] {
-    &lean_contract_snapshot().canonical_spawned_target_rejection_cases
-}
-
 pub fn lean_canonical_worker_capacity_cases() -> &'static [LeanWorkerCapacityCase] {
     &lean_contract_snapshot().canonical_worker_capacity_cases
 }
@@ -3286,7 +3282,6 @@ pub struct LeanContractSnapshot {
     pub auxiliary_output_cases: Vec<LeanAuxiliaryOutputCase>,
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
-    pub canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
     pub interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
     pub session_control_cases: Vec<serde_json::Value>,
     pub fold_queue_cases: Vec<LeanFoldQueueCase>,
@@ -11164,25 +11159,6 @@ pub struct LeanSnapshotDemotionCase {
     pub unavailable: Vec<u64>,
     pub well_formed: bool,
     pub witness: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSpawnedTargetRejection {
-    pub failed: bool,
-    pub started: bool,
-    pub failure_class: Option<String>,
-    pub spawned_admitted: bool,
-    pub completion_accepted: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSpawnedTargetRejectionCase {
-    pub name: String,
-    pub parent_tool: String,
-    pub completion_probe_outcome: String,
-    pub expected: LeanSpawnedTargetRejection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
