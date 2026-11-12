@@ -523,7 +523,7 @@ def caseCoverage : List CoverageEntry :=
       "Callback repair assumes trusted authored Agent metadata; forged or missing authenticated creator traces need an ownership-bound native consumer.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "identity_callback_parent_actor_cases" "CallbackParentActor")
+      "family" "callback_parent_actor")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases")
       "durable-goals" [Surface.operatorUi]

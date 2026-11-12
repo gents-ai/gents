@@ -3252,22 +3252,26 @@ async fn callback_parent_requires_the_selected_authenticated_agent() {
         .unwrap();
     assert_eq!(visible["data"]["Agent"].as_array().unwrap().len(), 1);
 
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_callback_parent_actor_cases;
-    assert_eq!(cases.len(), 3);
-    for (index, case) in cases.iter().enumerate() {
-        let actor = match case["actor"].as_str() {
+    for (index, case) in gents_lean_vocab::families::callback_parent_actor::cases()
+        .into_iter()
+        .enumerate()
+    {
+        let selected = match case.input.selected.as_str() {
+            "selected" => agent.clone(),
+            other => panic!("unknown modeled selected Agent {other}"),
+        };
+        let actor = match case.input.actor.as_deref() {
             Some("selected") => Some(identity::Did::new(&agent).unwrap()),
             Some("foreign") => Some(foreign.clone()),
             None => None,
             Some(other) => panic!("unknown modeled actor {other}"),
         };
-        assert_eq!(case["selected"], "selected");
         let result = CallbackResultDoc {
             result_id: format!("actor-case-{index}"),
             invocation_id: format!("actor-invocation-{index}"),
             binding_id: None,
             owner_node_did: owner.into(),
-            agent_did: agent.clone(),
+            agent_did: selected,
             workspace_id: None,
             work_unit_id: None,
             caused_by_correlation: None,
@@ -3295,11 +3299,7 @@ async fn callback_parent_requires_the_selected_authenticated_agent() {
                 })
             })
             .await;
-        assert_eq!(
-            written.is_ok(),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
+        case.check(written.is_ok());
     }
     let results = super::test_agent_access(&node)
         .execute("{ CallbackResult { result_id } }")
