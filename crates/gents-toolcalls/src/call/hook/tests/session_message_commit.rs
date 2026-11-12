@@ -152,31 +152,18 @@ async fn agent_new_inherits_the_signed_caller_directory() {
     .await;
     hook.on_completion_call(&user_text_message("start agents"), &[])
         .await;
-    for (call_id, args, operation) in [
-        (
-            "cwd-normal",
-            json!({"agent": "general", "prompt": "work"}),
-            "session_message.commit_request",
-        ),
-        (
-            "cwd-goal",
-            json!({"agent": "general", "task": {"task_id": "goal"}}),
-            "session_message.commit_goal",
-        ),
-    ] {
-        let (_, caused) = dispatch_with_lost_receipt(
-            &hook,
-            call_id,
-            gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
-            args,
-            operation,
-        )
-        .await;
-        assert_eq!(
-            caused["input"]["cwd"],
-            db.data_path().to_string_lossy().as_ref()
-        );
-    }
+    let (_, caused) = dispatch_with_lost_receipt(
+        &hook,
+        "cwd-normal",
+        gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
+        json!({"agent": "general", "prompt": "work"}),
+        "session_message.commit_request",
+    )
+    .await;
+    assert_eq!(
+        caused["input"]["cwd"],
+        db.data_path().to_string_lossy().as_ref()
+    );
     node.shutdown().await.expect("shut down test node");
 }
 
@@ -266,14 +253,6 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     .await;
     assert_eq!(notifications.len(), 1, "one completion notification");
 
-    dispatch_with_lost_receipt(
-        &hook,
-        "goal-call",
-        gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
-        json!({ "agent": "general", "task": { "task_id": "goal" } }),
-        "session_message.commit_goal",
-    )
-    .await;
     force_request_state(&access, &caused_row.doc_id, "processing").await;
     let (_, steering) = dispatch_with_lost_receipt(
         &hook,

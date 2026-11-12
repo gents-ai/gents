@@ -121,18 +121,28 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         let name = case["name"].as_str().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
-        let node_db = gents_inference::test_support::test_db(
-            "retained-task-outcomes-follow-modeled-as",
-            crate::lifecycle_hooks::composition(),
-        )
-        .await;
+        let (mut node_db, _user, _user_access, binding) =
+            gents_inference::test_support::signed_test_node(
+                "retained-task-outcomes-follow-modeled-as",
+                crate::lifecycle_hooks::composition(),
+            )
+            .await;
         let node = node_db.node.clone();
         let identity =
             gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         // Task requests, receipts, Goals and outcomes belong to the Task's
         // Agent; it writes and recovers them with its managed signer.
-        let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        // The Task's Agent retires the Goals it created through the
+        // `goal-create` tool source, which this node's tool policy does not
+        // project.
+        ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap())
+            .grant_node_permission(
+                &::identity::Did::new(agent.did()).unwrap(),
+                gents_store::config_client::NodePermission::DocumentDelete,
+            )
+            .await
+            .unwrap();
         let agent_access = |node: &Arc<defra_node::Node>| {
             ConfigAccess::local_managed_agent(
                 node.clone(),
@@ -309,16 +319,9 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         );
         assert_eq!(outcome_rows(&access).await, before, "{name}: rollback");
         drop(access);
-        node.shutdown().await.expect("node shutdown");
         drop(node);
-        let node_db = gents_inference::test_support::test_db(
-            "retained-task-outcomes-follow-modeled-as",
-            crate::lifecycle_hooks::composition(),
-        )
-        .await;
+        node_db.simulate_process_crash().await.unwrap();
         let node = node_db.node.clone();
-        let identity =
-            gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let access = agent_access(&node);
         let due = case["recover_reason"].as_str();
         assert_eq!(

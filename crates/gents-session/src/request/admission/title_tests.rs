@@ -125,16 +125,26 @@ async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &st
 fn modeled_agent(label: &str) -> Arc<dyn NodeIdentity> {
     let home = tempfile::tempdir().unwrap();
     let root = crate::request::lifecycle::test_support::pin_fixed_signing_identity(home.path());
-    let nonce: String = label
+    gents_store::identity::derive_agent_identity(&root, &modeled_nonce(label))
+        .expect("derive modeled agent identity")
+}
+
+fn modeled_nonce(label: &str) -> String {
+    label
         .bytes()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>()
         .chars()
         .chain(std::iter::repeat('0'))
         .take(64)
-        .collect();
-    gents_store::identity::derive_agent_identity(&root, &nonce)
-        .expect("derive modeled agent identity")
+        .collect()
+}
+
+fn modeled_binding(label: &str) -> gents_protocol::agent_identity::AgentIdentityBinding {
+    gents_protocol::agent_identity::AgentIdentityBinding {
+        agent_did: modeled_agent_did(label),
+        creation_nonce: modeled_nonce(label),
+    }
 }
 
 fn modeled_agent_did(label: &str) -> String {
@@ -143,8 +153,10 @@ fn modeled_agent_did(label: &str) -> String {
 
 async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     let temp = tempfile::tempdir().expect("temporary identity directory");
-    let node_db = gents_inference::test_support::test_db(
+    crate::request::lifecycle::test_support::pin_fixed_signing_identity(temp.path());
+    let node_db = gents_inference::test_support::test_db_as(
         "title-generated-case-node",
+        crate::request::lifecycle::test_support::PIN_FIXED_DID,
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
@@ -173,6 +185,22 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     assert_eq!(parent_fields[1], parent.request_id);
     assert_eq!(parent_fields[3], parent.document_id);
     let target = identity.did();
+    let mut labels = vec![
+        case.session_agent.as_str(),
+        case.request.agent_did.as_str(),
+        parent.agent_did.as_str(),
+    ];
+    labels.sort_unstable();
+    labels.dedup();
+    for label in labels {
+        gents_inference::test_support::install_test_agent_binding(
+            &node,
+            target,
+            label,
+            &modeled_binding(label),
+        )
+        .await;
+    }
     let request_agent = modeled_agent(&case.request.agent_did);
     // The modeled requester is the request's own Agent, the target node, or a
     // foreign principal.

@@ -42,18 +42,6 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     let second_signer =
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &second).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    for did in [first.agent_did.as_str(), second.agent_did.as_str()] {
-        for permission in [
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-        ] {
-            admin
-                .grant_node_permission(&did.parse().unwrap(), permission)
-                .await
-                .unwrap();
-        }
-    }
     let owner = db.client_access(&user);
     seed_owned_agent(&owner, runtime.did(), &first).await;
     let parent = owner.execute("{ Node { _docID } }").await.unwrap()["data"]["Node"][0]["_docID"]
@@ -342,11 +330,21 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     watcher
         .set_agent_identities(vec![first_signer, second_signer.clone()])
         .unwrap();
-    admin
-        .revoke_node_permission(
-            &second.agent_did.parse().unwrap(),
-            NodePermission::DocumentRead,
-        )
+    owner
+        .transact_write("test.watcher.disable_second", |txn| {
+            let agent_doc = &agent_doc;
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(
+                        r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{}", input: $input) {{ _docID }} }}"#,
+                        gents_store::graphql::escape_graphql_string(agent_doc)
+                    ),
+                    &serde_json::json!({"input": {"enabled": false}}),
+                    gents_protocol::schemas::AGENT,
+                )
+                .await
+            })
+        })
         .await
         .unwrap();
     let missing = snapshot
@@ -790,7 +788,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let persisted_tampered = user_access.transact_write("test.control.invalid_signed_intent", |txn| {
         let tampered = &tampered;
         Box::pin(async move {
-            let response = txn.execute_with_variables(
+            let response = txn.execute_client_signed_create(
                 "mutation($input: AgentToolControlMutationInputArg!) { create_AgentToolControl(input: $input) { _docID } }",
                 &serde_json::json!({"input": {
                     "intent_id": tampered.intent_id, "intent_json": serde_json::to_string(tampered)?,
@@ -800,6 +798,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
                     "requester_did": tampered.requester_did, "tool_call_id": tampered.tool_call_id,
                     "tool_call_doc_id": tampered.tool_call_doc_id, "action": tampered.action, "state": "pending"
                 }}),
+                gents_protocol::schemas::AGENT_TOOL_CONTROL,
             ).await?;
             Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(&response, "AgentToolControl")?)
         })
@@ -847,9 +846,10 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let fake = foreign_access.transact_write("test.control.foreign_claim", |txn| {
         let first = &first; let binding = &binding;
         Box::pin(async move {
-            let response = txn.execute_with_variables(
+            let response = txn.execute_client_signed_create(
                 "mutation($input: AgentToolControlClaimMutationInputArg!) { create_AgentToolControlClaim(input: $input) { _docID } }",
                 &serde_json::json!({"input": {"intent_doc_id": first, "intent_json": "{}", "agent_did": binding.agent_did, "receipt_json": "{}"}}),
+                gents_protocol::schemas::AGENT_TOOL_CONTROL_CLAIM,
             ).await?;
             Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(&response, "AgentToolControlClaim")?)
         })

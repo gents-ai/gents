@@ -207,6 +207,18 @@ mod tests {
                 created_at: "2026-01-01T00:00:00Z".into(),
             };
             let directory = tempfile::tempdir().unwrap();
+            let (root, key) = (
+                gents_store::identity::NodeIdentity::did(
+                    &crate::triggers::callback::test_root_identity(),
+                )
+                .to_owned(),
+                directory.path().join("node.key"),
+            );
+            tokio::task::spawn_blocking(move || {
+                gents_store::test_support::write_held_identity_key(&root, &key)
+            })
+            .await
+            .unwrap();
             let mut db = gents_inference::test_support::test_db_at(
                 directory.path(),
                 None,

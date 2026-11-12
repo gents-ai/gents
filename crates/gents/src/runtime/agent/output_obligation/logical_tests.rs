@@ -23,10 +23,16 @@ async fn rooted_node() -> (gents_inference::test_support::TestDb, KeyIdentity) {
     (db, root)
 }
 
-/// An Agent DID derives from the runtime root and a creation nonce.
-fn derived_agent(root: &KeyIdentity) -> Arc<dyn NodeIdentity> {
-    let binding = gents_store::identity::provision_agent_identity(root).unwrap();
-    gents_store::identity::resolve_agent_identity(root, &binding).unwrap()
+/// The Node's live Agent, created by its enrolled User; its DID derives from
+/// the runtime root and a creation nonce.
+async fn live_agent(
+    db: gents_inference::test_support::TestDb,
+    root: &KeyIdentity,
+) -> (gents_inference::test_support::TestDb, Arc<dyn NodeIdentity>) {
+    let (db, _user, _access, binding) =
+        gents_inference::test_support::signed_test_node_from_db(db, "output-obligation").await;
+    let agent = gents_store::identity::resolve_agent_identity(root, &binding).unwrap();
+    (db, agent)
 }
 
 async fn persist_request(
@@ -326,8 +332,8 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
     assert_eq!(cases.len(), 11);
     for case in cases {
         let (db, identity) = rooted_node().await;
+        let (db, agent) = live_agent(db, &identity).await;
         let node = db.node.clone();
-        let agent = derived_agent(&identity);
         assert_ne!(identity.did(), agent.did());
         let automated = case.automated_root;
         let mut root = AgentRequestCreate::base(
@@ -465,13 +471,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     &json!({"expected_total": expected}),
                 )
                 .await;
-                terminalize_accepted_tool(
-                    &node,
-                    &mut lifecycle,
-                    accepted,
-                    write.completed,
-                )
-                .await;
+                terminalize_accepted_tool(&node, &mut lifecycle, accepted, write.completed).await;
                 last_message_doc_id = Some(message_doc_id);
             }
             let doc_id = last_message_doc_id
@@ -521,12 +521,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     }
                 }
             };
-        assert_eq!(
-            observed,
-            case.expected_decision.as_str(),
-            "{}",
-            case.name
-        );
+        assert_eq!(observed, case.expected_decision.as_str(), "{}", case.name);
         node.shutdown().await.expect("node shutdown");
     }
 }

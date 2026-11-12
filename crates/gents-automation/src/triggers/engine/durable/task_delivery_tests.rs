@@ -247,6 +247,10 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         node.clone(),
         identity::Did::new(runtime.did()).unwrap(),
     );
+    gents_store::identity::GrantSet::OperatorUser
+        .grant(&node_actor, &identity::Did::new(user.did()).unwrap())
+        .await
+        .unwrap();
     node_actor
         .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
         .await
@@ -391,9 +395,21 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         session_before_retry["data"]["AgentSession"][0]["relationships_pending"],
         false
     );
+    let household_owner = gents_store::identity::KeyIdentity::load_or_create(
+        identity_dir.path().join("household-owner.key"),
+        None,
+    )
+    .unwrap();
+    gents_store::identity::GrantSet::HouseholdOwner
+        .grant(
+            &node_actor,
+            &identity::Did::new(household_owner.did()).unwrap(),
+        )
+        .await
+        .unwrap();
     let removed = node
         .delete_dac_actor_relationship(
-            agent.did(),
+            household_owner.did(),
             "AgentSession",
             session_doc,
             "working_agent",
@@ -407,7 +423,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         .unwrap();
     let restored = node
         .delete_dac_actor_relationship(
-            agent.did(),
+            household_owner.did(),
             "AgentSession",
             session_doc,
             "working_agent",
@@ -533,6 +549,10 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         None,
     )
     .unwrap();
+    gents_store::identity::GrantSet::OperatorUser
+        .grant(&node_actor, &identity::Did::new(outsider.did()).unwrap())
+        .await
+        .unwrap();
     let outsider_access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         outsider.did().parse().unwrap(),
@@ -572,7 +592,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         .iter()
         .find(|case| case.name == "interrupted_then_repaired")
         .unwrap();
-    access
+    db.client_access(&household_owner)
         .delete_resource_relationship("AgentSession", session_doc, "parent", "agents", &agent_doc)
         .await
         .unwrap();
@@ -684,7 +704,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
             expected
         );
     }
-    access
+    db.client_access(&household_owner)
         .delete_resource_relationship(
             "TriggerFire",
             receipt_doc,

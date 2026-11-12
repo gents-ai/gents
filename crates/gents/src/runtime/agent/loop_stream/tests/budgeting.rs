@@ -525,14 +525,14 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         ("compacted prompt".to_string(), 1_000, "dispatch"),
     ] {
         let expected_rows = committed(rebuilt_result);
-        let node_db = gents_inference::test_support::test_db(
-            "staged-turn-reduction-commits-its-row-on",
-            gents_automation::lifecycle_hooks::composition(),
-        )
-        .await;
+        let (node_db, _user, _user_access, binding) =
+            gents_inference::test_support::signed_test_node(
+                "staged-turn-reduction-commits-its-row-on",
+                gents_automation::lifecycle_hooks::composition(),
+            )
+            .await;
         let node = node_db.node.clone();
         let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
-        let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let root_did = gents_store::graphql::escape_graphql_string(root.did());
         let agent_did = gents_store::graphql::escape_graphql_string(agent.did());

@@ -103,6 +103,16 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
         let signer = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let temp = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
+        gents_store::identity::GrantSet::OperatorUser
+            .grant(
+                &gents_store::config_client::ConfigAccess::local_as(
+                    node.clone(),
+                    identity::Did::new(signer.did()).unwrap(),
+                ),
+                &identity::Did::new(user.did()).unwrap(),
+            )
+            .await
+            .unwrap();
         let binding = gents_store::identity::provision_agent_identity(&signer).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&signer, &binding).unwrap();
         let access = db.client_access(&user);
@@ -190,10 +200,12 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             goal = fixture_goal(&access, signer.did(), "session").await;
         }
         let mut reference: Option<GoalAssignmentInput> =
-            case.reference.as_ref().map(|reference| GoalAssignmentInput {
-                goal_id: reference.goal_id.clone(),
-                root_request_doc_id: reference.root_request_doc_id.clone(),
-            });
+            case.reference
+                .as_ref()
+                .map(|reference| GoalAssignmentInput {
+                    goal_id: reference.goal_id.clone(),
+                    root_request_doc_id: reference.root_request_doc_id.clone(),
+                });
         if let Some(reference) = reference.as_mut() {
             if reference.goal_id == "goal" {
                 reference.goal_id = goal.goal_id.clone();

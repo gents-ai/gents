@@ -271,19 +271,23 @@ async fn stop_latch_reads_as_the_selected_actor() {
     let user =
         gents_store::identity::KeyIdentity::load_or_create(home.path().join("user.key"), None)
             .unwrap();
-    let agent =
-        gents_store::identity::KeyIdentity::load_or_create(home.path().join("agent.key"), None)
-            .unwrap();
-    let other =
-        gents_store::identity::KeyIdentity::load_or_create(home.path().join("other.key"), None)
-            .unwrap();
-    let node_db = gents_inference::test_support::test_db(
+    let (node_db, _owner, owner_access, binding) = gents_inference::test_support::signed_test_node(
         "stop-latch-reads-as-the-selected-actor",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
     let node = node_db.node.clone();
     let runtime = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
+    let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+    let sibling = gents_store::identity::provision_agent_identity(&runtime).unwrap();
+    gents_inference::test_support::install_test_agent_binding_with_access(
+        runtime.did(),
+        "Sibling",
+        &sibling,
+        &owner_access,
+    )
+    .await;
+    let other = gents_store::identity::resolve_agent_identity(&runtime, &sibling).unwrap();
     // Embedded writes need the node identity or a managed Agent; the requester
     // user is recorded as data on the session, not used as the writer.
     let access = gents_store::config_client::ConfigAccess::local_as(

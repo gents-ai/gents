@@ -2,11 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn event_source_reads_seed_and_group_as_selected_agent() {
-    let node_db = gents_inference::test_support::test_db(
-        "event-source-reads-seed-and-group-as-sel",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
+    let node_db = configured_event_node().await;
     let node = node_db.node.clone();
     node.add_collection("type SelectionProbe { kind: String @index message: String }")
         .await
@@ -15,7 +11,7 @@ async fn event_source_reads_seed_and_group_as_selected_agent() {
         .write("test.event_selection_probe", r#"mutation { create_SelectionProbe(input: {kind: "ready", message: "hello"}) { _docID } }"#)
         .await;
     let id = gents_store::graphql::created_doc_id(&response.unwrap(), "SelectionProbe").unwrap();
-    let agent_did = "did:key:z6MkhfKM8cN5hVhu5B4msjSKmz2zPPaTF7s8q5VVt57Uoz6f";
+    let agent_did = &crate::triggers::callback::test_agent_did();
     let task = ResolvedTask {
         agent_did: agent_did.to_owned(),
         ..resolved_task("handle")
@@ -76,11 +72,7 @@ async fn event_source_reads_seed_and_group_as_selected_agent() {
 
 #[tokio::test]
 async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
-    let node_db = gents_inference::test_support::test_db(
-        "startup-seeding-covers-every-document-be",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
+    let node_db = configured_event_node().await;
     let node = node_db.node.clone();
     let ids =
         crate::triggers::engine::event_delivery::source_scan::tests::create_source_documents(&node)
@@ -89,10 +81,12 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
         resolved_event_trigger("complete-seed", "RescanSource", resolved_task("observe"));
     trigger.correlation_field = Some("correlation".to_owned());
     trigger.filter = Some("{correlation: {_like: \"group-%\"}}".to_owned());
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("complete-seed".to_owned(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(&snapshot).await;
@@ -324,13 +318,10 @@ async fn event_source_acknowledges_exact_configuration_after_subscription_setup(
 
 #[tokio::test]
 async fn event_source_retries_schema_visibility_before_subscription_readiness() {
-    let node_db = gents_inference::test_support::test_db(
-        "event-source-retries-schema-visibility-b",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
+    let node_db = configured_event_node().await;
     let node = node_db.node.clone();
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([(
             "delayed-schema".into(),
@@ -340,7 +331,8 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
                 resolved_task("observe"),
             ),
         )]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let observer = Arc::new(SubscriptionObserver::default());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new())
@@ -399,17 +391,13 @@ async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations()
 
 #[tokio::test]
 async fn event_source_repairs_failed_seed_on_later_reconcile_before_readiness() {
-    let node_db = gents_inference::test_support::test_db(
-        "event-source-repairs-failed-seed-on-late",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
+    let node_db = configured_event_node().await;
     let node = node_db.node.clone();
     let triggers = RapidHashMap::from_iter([(
         "eventual".into(),
         resolved_event_trigger("eventual", "EventualInput", resolved_task("observe")),
     )]);
-    let first = snapshot_with_event_triggers(1, triggers.clone());
+    let first = configured_event_snapshot(&node, 1, triggers.clone()).await;
     let (_tx, rx) = watch::channel(first.clone());
     let observer = Arc::new(SubscriptionObserver::default());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new())
@@ -419,7 +407,7 @@ async fn event_source_repairs_failed_seed_on_later_reconcile_before_readiness() 
     node.add_collection("type EventualInput { value: String }")
         .await
         .unwrap();
-    let second = snapshot_with_event_triggers(2, triggers);
+    let second = configured_event_snapshot(&node, 2, triggers).await;
     source.reconcile_subscriptions(&second).await;
 
     let observations = observer.0.lock().unwrap();
@@ -1228,11 +1216,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
 
 #[tokio::test]
 async fn correlation_populated_after_create_remains_eligible_for_delivery() {
-    let node_db = gents_inference::test_support::test_db(
-        "correlation-populated-after-create-remai",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
+    let node_db = configured_event_node().await;
     let node = node_db.node.clone();
     node.add_collection(
         r#"type DeferredCorrelationMember {
@@ -1276,10 +1260,12 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
             resolved_task("{{ event.correlation }}"),
         )
     };
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("deferred-correlation-trigger".to_string(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.deferrals =
@@ -1441,11 +1427,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
 
 #[tokio::test]
 async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() {
-    let node_db = gents_inference::test_support::test_db(
-        "startup-seed-defers-only-the-incomplete-",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
+    let node_db = configured_event_node().await;
     let node = node_db.node.clone();
     node.add_collection(
         r#"type SeededMixedCorrelationMember {
@@ -1487,13 +1469,15 @@ async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() 
             resolved_task("{{ event.correlation }}"),
         )
     };
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([
             (ready.trigger_id.clone(), ready),
             (pending.trigger_id.clone(), pending),
         ]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;

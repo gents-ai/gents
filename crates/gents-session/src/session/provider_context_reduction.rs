@@ -1260,14 +1260,13 @@ mod tests {
         gents_store::identity::ManagedAgentSigner,
     ) {
         use gents_store::identity::NodeIdentity;
-        let db = gents_inference::test_support::test_db(
+        let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node(
             "provider-context-reduction",
             crate::test_support::no_lifecycle_plugins(),
         )
         .await;
         let node = db.node.clone();
         let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-        let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let signer = agent.managed_agent_signer().unwrap();
         let node_did = root.did().to_owned();
@@ -1858,6 +1857,12 @@ mod tests {
             None,
         )
         .unwrap();
+        crate::test_support::grant_operator_user(
+            &node,
+            &gents_store::test_support::held_runtime_identity(&node_did),
+            &outsider,
+        )
+        .await;
         let outsider_access = gents_store::config_client::ConfigAccess::local_as(
             node.clone(),
             outsider.did().parse().unwrap(),
@@ -1943,7 +1948,16 @@ mod tests {
                     .is_empty()
             );
         }
-        access
+        let household_owner = gents_store::identity::KeyIdentity::load_or_create(
+            std::env::temp_dir().join(format!("reduction-owner-{}.key", uuid::Uuid::new_v4())),
+            None,
+        )
+        .unwrap();
+        gents_store::identity::GrantSet::HouseholdOwner
+            .grant(&reader, &household_owner.did().parse().unwrap())
+            .await
+            .unwrap();
+        db.client_access(&household_owner)
             .delete_actor_relationship(
                 "AgentSession",
                 &session,
@@ -2077,6 +2091,15 @@ mod tests {
             assert_eq!(loaded[0].retained_suffix_json, first.retained_suffix_json);
         }
 
+        // A lost block is a storage fault no actor can cause: the owning
+        // Agent's baseline holds no delete, so the fault is injected through it.
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap())
+            .grant_node_permission(
+                &agent_did.parse().unwrap(),
+                gents_store::config_client::NodePermission::DocumentDelete,
+            )
+            .await
+            .unwrap();
         reader
             .write(
                 "test.delete_reduction_block",
