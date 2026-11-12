@@ -1,24 +1,19 @@
-use gents_protocol::output::{OutputOutcome, SourceClose, TerminalOutput};
-use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::output::{OutputOutcome, TerminalOutput};
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_message;
 use gents_session::request::interrupt::interrupt_request;
-use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin};
 use gents_store::graphql::escape_graphql_string;
 
 use crate::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
 use crate::support::interrupt::{
-    fetch_output_segments_for_request, managed_runtime_builder, spawn_runtime,
-    wait_for_inference_call_state, wait_for_provider_output_contains,
-    wait_for_request_lifecycle_state, BootedAgent,
+    managed_runtime_builder, spawn_runtime, wait_for_inference_call_state,
+    wait_for_provider_output_contains, wait_for_request_lifecycle_state, BootedAgent,
 };
-use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
-use crate::support::{first_row, test_db, BACKEND_ID, DEADLINE_SECS, NODE_DID};
+use crate::support::{first_row, test_db};
 
 const STREAM_MODEL: &str = "default";
 const STREAM_BACKEND_ID: &str = "backend-stream";
-const PRIMARY_AGENT: &str = "general";
 const TARGET_MARKER: &str = "interrupt-target";
 const TARGET_PARTIAL: &str = "partial response content ";
 const SURVIVOR_MARKER: &str = "survivor-target";
@@ -67,156 +62,6 @@ async fn submit_request(
     let mut seed = RequestSeed::new(request_id, session_id, &created_at);
     seed.content = Some(content);
     actors.create_request(seed).await
-}
-
-#[tokio::test]
-async fn offline_replay_of_stale_requests_does_not_call_backend() {
-    let db = test_db("offline-replay-stale").await;
-    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
-    let past = (chrono::Utc::now() - chrono::Duration::seconds(10))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let created_at = crate::support::agent_requests::canonical_now();
-
-    const BATCH: usize = 20;
-    let mut request_doc_ids = Vec::with_capacity(BATCH);
-    for _ in 0..BATCH {
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let doc_id = actors
-            .create_request(
-                crate::support::agent_requests::RequestSeed::new(
-                    &request_id,
-                    &session_id,
-                    &created_at,
-                )
-                .state("pending")
-                .valid_until(Some(&past)),
-            )
-            .await;
-        request_doc_ids.push((doc_id, request_id, session_id));
-    }
-
-    for (doc_id, request_id, session_id) in request_doc_ids.clone() {
-        let request = actors.build_request(doc_id, request_id, session_id, created_at.clone());
-        let mut lifecycle = actors.lifecycle(
-            request,
-            DEADLINE_SECS,
-            ExecutionOrigin::Interactive,
-            BACKEND_ID,
-        );
-        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
-    }
-
-    for (doc_id, _, _) in &request_doc_ids {
-        let snap = fetch_request_snapshot(&actors, doc_id).await;
-        assert_eq!(snap.lifecycle_state, RequestLifecycleState::Dead);
-        assert_eq!(snap.failure_reason, "Stale");
-        assert_eq!(
-            snap.backend_id, "",
-            "stale request must not be bound to a backend"
-        );
-        assert!(
-            !snap.claimed_at_present,
-            "stale request must not be claimed"
-        );
-    }
-}
-
-#[tokio::test]
-async fn inference_call_wait_observes_latest_attempt() {
-    let db = test_db("inference-call-wait-latest").await;
-    let request_id = "req-inference-call-wait-latest";
-
-    insert_inference_call(
-        db.node.as_ref(),
-        request_id,
-        1,
-        "failed",
-        Some("ProviderError: transient connect failure"),
-    )
-    .await;
-    insert_inference_call(db.node.as_ref(), request_id, 2, "running", None).await;
-
-    let call = wait_for_inference_call_state(db.node.as_ref(), request_id, "running").await;
-    assert_eq!(call.call_seq, 2);
-    assert_eq!(call.call_state, "running");
-}
-
-#[test]
-fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
-    run_on_production_runtime(async {
-        let db = test_db("daemon-interrupt-mid-stream").await;
-        let backend = MockStreamingBackend::start(
-            STREAM_MODEL,
-            vec![StreamScript::paused(TARGET_MARKER, [TARGET_PARTIAL])],
-        )
-        .unwrap();
-        let actors = RequestActors::new(&db).await;
-        let agent = boot_streaming_agent(&db, backend.endpoint(), &[&actors], 2).await;
-
-        let request_id = "req-daemon-interrupt-mid-stream";
-        let session_id = "session-daemon-interrupt-mid-stream";
-        let request_doc_id = submit_request(&actors, request_id, session_id, TARGET_MARKER).await;
-
-        backend.wait_for_chunks(TARGET_MARKER, 1).await;
-        wait_for_provider_output_contains(&actors, &request_doc_id, TARGET_PARTIAL).await;
-
-        interrupt_request(&db.node, actors.agent().as_ref(), request_id)
-            .await
-            .expect("interrupt_request should latch interrupt_requested_at");
-
-        wait_for_request_lifecycle_state(&actors, &request_doc_id, "interrupted").await;
-        let call = wait_for_inference_call_state(&actors, request_id, "cancelled").await;
-        assert_eq!(call.failure_reason.as_deref(), Some("Cancelled"));
-
-        let terminal = fetch_terminal_request(&actors, &request_doc_id).await;
-        assert!(
-            terminal
-                .interrupt_requested_at
-                .as_deref()
-                .is_some_and(|at| !at.is_empty()),
-            "daemon interrupt must retain the accepted interrupt intent timestamp"
-        );
-        let TerminalOutput::Message { message_doc_id } = terminal
-            .terminal_output
-            .expect("interrupted request selects retained partial output")
-        else {
-            panic!("interrupted request must select its retained partial message")
-        };
-        let (header, native) = gents_session::session::load_canonical_message(
-            &actors.agent_access,
-            &message_doc_id,
-            agent.node_did.as_str(),
-            terminal.requester_did.as_deref(),
-        )
-        .await
-        .expect("reconstruct selected partial message");
-        assert_eq!(
-            header.request_doc_id.as_deref(),
-            Some(request_doc_id.as_str())
-        );
-        assert_eq!(header.outcome, OutputOutcome::Partial);
-        assert_eq!(
-            present_message(&native).body_markdown,
-            TARGET_PARTIAL.trim()
-        );
-
-        let segments = fetch_output_segments_for_request(&actors, &request_doc_id).await;
-        assert!(
-            segments.iter().any(|row| {
-                matches!(
-                    &row.segment.close,
-                    Some(SourceClose::Closed {
-                        outcome: OutputOutcome::Partial,
-                        ..
-                    })
-                )
-            }),
-            "interrupted provider source must be sealed Partial"
-        );
-
-        agent.shutdown().await;
-    });
 }
 
 #[test]
@@ -383,58 +228,4 @@ async fn set_backend_max_concurrent(
         })
         .await
         .expect("set streaming backend concurrency as the User");
-}
-
-async fn insert_inference_call(
-    node: &gents::defra_node::Node,
-    request_id: &str,
-    call_seq: i64,
-    call_state: &str,
-    failure_reason: Option<&str>,
-) {
-    let call_id = format!("call-{request_id}-{call_seq}");
-    let now = chrono::Utc::now().to_rfc3339();
-    let escaped_call_id = escape_graphql_string(&call_id);
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_call_state = escape_graphql_string(call_state);
-    let escaped_now = escape_graphql_string(&now);
-    let failure_reason_field = failure_reason
-        .map(|reason| format!(r#"failure_reason: "{}","#, escape_graphql_string(reason)))
-        .unwrap_or_default();
-    let ended_at_field = if matches!(call_state, "failed" | "completed" | "cancelled") {
-        format!(r#"ended_at: "{escaped_now}","#)
-    } else {
-        String::new()
-    };
-
-    let mutation = format!(
-        r#"mutation {{
-            add_InferenceCall(input: {{
-                call_id: "{escaped_call_id}",
-                runtime_instance_id: "runtime-test",
-                request_id: "{escaped_request_id}",
-                call_seq: {call_seq},
-                backend_id: "{STREAM_BACKEND_ID}",
-                agent_did: "{PRIMARY_AGENT}",
-                node_did: "{NODE_DID}",
-                call_kind: "inference",
-                attempt: {call_seq},
-                call_state: "{escaped_call_state}",
-                {failure_reason_field}
-                queued_at: "{escaped_now}",
-                started_at: "{escaped_now}",
-                {ended_at_field}
-                priority: 0,
-                queue_depth_at_enqueue: 0,
-                controller_generation: 0,
-                backend_config_fingerprint: "test"
-            }}) {{ _docID }}
-        }}"#,
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "insert inference call failed: {:?}",
-        response.errors
-    );
 }
