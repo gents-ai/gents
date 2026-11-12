@@ -90,20 +90,15 @@ fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
 
 #[test]
 fn generated_live_cursor_contract() {
-    let data = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    let cases = data["client_live_delta_cases"].as_array().unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().client_live_delta_cases;
     assert_eq!(cases.len(), 18);
     for case in cases {
-        let base = case["base"].as_u64().map(|v| v.to_string());
-        let current = case["current"].as_u64().map(|v| v.to_string());
+        let base = case.base.map(|v| v.to_string());
+        let current = case.current.map(|v| v.to_string());
         assert_eq!(
-            accepts_live_cursor(
-                base.as_deref(),
-                current.as_deref(),
-                case["terminal"].as_bool().unwrap()
-            ),
-            case["accepted"].as_bool().unwrap(),
-            "{case}"
+            accepts_live_cursor(base.as_deref(), current.as_deref(), case.terminal),
+            case.accepted,
+            "{case:?}"
         );
     }
 }
