@@ -331,7 +331,8 @@ fn run_browser_helper(
         let mut diagnostic = String::new();
         stderr.take(64 * 1024).read_to_string(&mut diagnostic)?;
         bail!(
-            "Gents could not clear browser data: {}. Install the matching Gents desktop app and retry.",
+            "{} did not answer as the Gents desktop app that matches this CLI, so browser data was left alone. Name that app's executable with `--desktop-executable <Gents.app>/Contents/MacOS/gents-desktop-tauri` and retry. It said: {}",
+            executable.display(),
             diagnostic.trim()
         );
     }
@@ -404,6 +405,17 @@ mod tests {
         let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
             .unwrap_err();
         assert!(format!("{error:#}").contains("store held"), "{error:#}");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\necho \"error: unexpected argument '--check' found\" >&2\nexit 2\n",
+        )
+        .unwrap();
+        let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with(&executable.display().to_string()), "{error}");
+        assert!(error.contains("--desktop-executable"), "{error}");
+        assert!(error.ends_with("unexpected argument '--check' found"), "{error}");
     }
 
     fn initialized_reset(user: &std::path::Path) -> (std::path::PathBuf, HomeResetPlan) {
