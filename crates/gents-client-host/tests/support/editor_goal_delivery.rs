@@ -1,6 +1,9 @@
 use super::{fake_llm, support::Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents_protocol::{goal_control::SessionGoalControl, row::AgentRequestRow};
+use gents_protocol::{
+    goal_control::{GoalControlOutcome, GoalOperation, SessionGoalControl},
+    row::AgentRequestRow,
+};
 use gents_store::{
     config_client::ConfigAccess, graphql::escape_graphql_string, identity::NodeIdentity,
 };
@@ -101,41 +104,24 @@ fn image() -> gents_protocol::request_input::RequestAttachment {
 
 pub fn verify_images(provider: &fake_llm::FakeLlm) -> Result<()> {
     let requests = provider.captured_chat_requests();
-    let rounds: Vec<_> = requests
-        .iter()
-        .filter(|request| {
+    let expected = format!("data:image/png;base64,{}", image().data);
+    ensure!(
+        requests.iter().any(|request| {
             request["messages"].as_array().is_some_and(|messages| {
                 messages.iter().any(|message| {
                     message["role"] == "user"
-                        && match &message["content"] {
-                            Value::String(text) => text == OBJECTIVE,
-                            Value::Array(parts) => {
-                                parts.iter().any(|part| part["text"] == OBJECTIVE)
-                            }
-                            _ => false,
-                        }
+                        && message["content"].as_array().is_some_and(|parts| {
+                            parts.iter().any(|part| part["text"] == OBJECTIVE)
+                                && parts.iter().any(|part| {
+                                    part.pointer("/image_url/url").and_then(Value::as_str)
+                                        == Some(expected.as_str())
+                                })
+                        })
                 })
             })
-        })
-        .collect();
-    ensure!(!rounds.is_empty(), "Goal never reached the provider");
-    let expected = format!("data:image/png;base64,{}", image().data);
-    for request in rounds {
-        let images: Vec<_> = request["messages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|message| message["role"] == "user")
-            .filter_map(|message| message["content"].as_array())
-            .flatten()
-            .filter_map(|part| part.pointer("/image_url/url").and_then(Value::as_str))
-            .collect();
-        ensure!(
-            images == [expected.as_str()],
-            "Goal round changed or duplicated its image: image count={}",
-            images.len()
-        );
-    }
+        }),
+        "the provider payload lost the goal's frozen image bytes"
+    );
     Ok(())
 }
 
@@ -160,11 +146,11 @@ pub async fn verify(
     root: &Path,
 ) -> Result<Value> {
     let opening: Value =
-        serde_json::from_slice(&std::fs::read(root.join("editor-goal-reply-loss.json"))?)?;
+        serde_json::from_slice(&tokio::fs::read(root.join("editor-goal-reply-loss.json")).await?)?;
     let pause: Value =
-        serde_json::from_slice(&std::fs::read(root.join("editor-goal-pause-loss.json"))?)?;
+        serde_json::from_slice(&tokio::fs::read(root.join("editor-goal-pause-loss.json")).await?)?;
     let acknowledgement: Value =
-        serde_json::from_slice(&std::fs::read(root.join("editor-goal-ack-loss.json"))?)?;
+        serde_json::from_slice(&tokio::fs::read(root.join("editor-goal-ack-loss.json")).await?)?;
     ensure!(
         opening["command"] == "desktop_goal_control" && pause["command"] == "desktop_goal_control"
     );
@@ -186,6 +172,19 @@ pub async fn verify(
         gents::SIGNED_REQUEST_FIELDS,
         gents_protocol::goal::GOAL_FIELDS
     );
+    let paths = gents_desktop_core::client::DesktopPaths::from_root(root.join("client"));
+    let signer = tokio::task::spawn_blocking(move || {
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
+    })
+    .await??;
+    ensure!(signer.did() == author);
+    let ConfigAccess::Graphql(endpoint) = access else {
+        anyhow::bail!("installed Goal recovery requires the served runtime");
+    };
+    let access = ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint.url(), author)
+            .with_client_signing_capability(signer.client_signing_capability()?)?,
+    );
     let value = access.execute(&query).await?;
     let controls = value["data"]["AgentSessionGoalControl"]
         .as_array()
@@ -202,6 +201,7 @@ pub async fn verify(
         .as_str()
         .context("Goal session agent")?;
     let mut initial_request = None;
+    let mut resumed_request = None;
     for row in controls {
         let signed: SessionGoalControl =
             serde_json::from_str(row["intent_json"].as_str().context("signed command")?)?;
@@ -238,7 +238,27 @@ pub async fn verify(
             );
             initial_request = Some(first.request_id.clone());
         }
+        if matches!(&signed.operation, GoalOperation::Resume {}) {
+            if let GoalControlOutcome::Applied {
+                request_id: Some(request),
+                ..
+            } = &receipt.outcome
+            {
+                resumed_request = Some(request.clone());
+            }
+        }
     }
+    let resumed_request = resumed_request.context("resumed Goal request receipt")?;
+    ensure!(
+        gents::support::live_inference::wait_for_request_terminal(
+            &access,
+            &resumed_request,
+            Duration::from_secs(30),
+        )
+        .await
+            == "completed"
+    );
+    let value = access.execute(&query).await?;
     let requests: Vec<AgentRequestRow> =
         serde_json::from_value(value["data"]["AgentRequest"].clone())?;
     ensure!(

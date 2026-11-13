@@ -153,6 +153,7 @@ pub(in crate::background::job) async fn step_context_for(
         cwd_allowed,
         within,
         script_digest: super::super::admit::script_digest_of(input.script.as_deref()),
+        caller_node_did: Some(caller.node_did.clone()),
         adoption_facts: facts.clone(),
         caller_scope: ProcessControlScope {
             request_id: caller.request_id.clone(),

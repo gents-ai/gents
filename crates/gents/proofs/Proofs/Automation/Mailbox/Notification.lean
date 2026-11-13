@@ -74,4 +74,71 @@ theorem terminal_content_is_immutable (row : ContentRow) (content : String)
     (h : row.item.status ≠ .open) : updateContent row content = row := by
   simp [updateContent, h]
 
+/-! Content writes of one condition notification within a single request
+stream: the stored row keeps the provenance of the request that created it. -/
+
+structure ContentStep where
+  requestId : String
+  requester : String
+  causeDocId : String
+  title : String
+  deriving DecidableEq, Repr
+
+structure StoredContent where
+  title : String
+  requester : String
+  requestId : String
+  causeDocId : String
+  deriving DecidableEq, Repr
+
+structure ContentObservation where
+  outcome : WriteOutcome
+  title : String
+  requesterAdmitted : Bool
+  requestId : Option String
+  causeDocId : Option String
+  sameDocument : Bool
+  deriving DecidableEq, Repr
+
+def stepOutcome (previous : Option StoredContent) (step : ContentStep) : WriteOutcome :=
+  match previous with
+  | none => decideWrite .condition false true
+  | some stored => decideWrite .condition true (stored.title == step.title)
+
+def advanceContent (previous : Option StoredContent) (step : ContentStep) : StoredContent :=
+  match previous with
+  | none => ⟨step.title, step.requester, step.requestId, step.causeDocId⟩
+  | some stored =>
+    match stepOutcome (some stored) step with
+    | .updated => { stored with title := step.title }
+    | _ => stored
+
+def observeContent : Option StoredContent → List ContentStep → List ContentObservation
+  | _, [] => []
+  | previous, step :: rest =>
+    let stored := advanceContent previous step
+    ⟨stepOutcome previous step, stored.title, stored.requester == step.requester,
+      some stored.requestId, some stored.causeDocId, previous.isSome⟩ ::
+      observeContent (some stored) rest
+
+def updatedSequence : List ContentStep :=
+  [ ⟨"one", "did:test:delegate", "input-one", "Disk 81%, Docker unavailable"⟩,
+    ⟨"two", "did:test:delegate", "input-two", "Disk 82%, Docker unavailable"⟩ ]
+
+def repeatedSequence : List ContentStep :=
+  [ ⟨"one", "did:test:delegate", "input-one", "Disk 81%, Docker unavailable"⟩,
+    ⟨"two", "did:test:delegate", "input-two", "Disk 81%, Docker unavailable"⟩ ]
+
+theorem content_tool_stamps_current_request_and_reuses_configured_condition :
+    (observeContent none updatedSequence).map
+      (fun o => (o.outcome, o.requesterAdmitted, o.requestId, o.causeDocId, o.sameDocument)) =
+    [ (.created, true, some "one", some "input-one", false),
+      (.updated, true, some "one", some "input-one", true) ] := by
+  decide
+
+theorem repeated_content_reuses_the_open_condition :
+    (observeContent none repeatedSequence).map (fun o => (o.outcome, o.title)) =
+    [ (.created, "Disk 81%, Docker unavailable"), (.reused, "Disk 81%, Docker unavailable") ] := by
+  decide
+
 end Mailbox.Notification

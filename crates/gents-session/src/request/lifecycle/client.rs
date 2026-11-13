@@ -1884,9 +1884,9 @@ mod tests {
         let wrong = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap());
         let wrong_model = model
             .iter()
-            .find(|case| case["name"] == "wrong_signer")
+            .find(|case| case.name == "wrong_signer")
             .unwrap();
-        assert_eq!(wrong_model["expected_pending"], true);
+        assert!(wrong_model.expected_pending);
         assert!(reconcile_client_request(&wrong, &first).await.is_err());
         let agent_key = gents_store::identity::resolve_agent_identity(&runtime, &agent).unwrap();
         let agent_access = ConfigAccess::local_managed_agent(
@@ -2116,7 +2116,7 @@ mod tests {
         let model = &gents_lean_vocab::lean_contract_snapshot().client_request_publication_cases;
         let granted = model
             .iter()
-            .find(|case| case["name"] == "grant_succeeded")
+            .find(|case| case.name == "grant_succeeded")
             .unwrap();
         assert_eq!(
             reconcile_client_retry(
@@ -2137,7 +2137,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows["data"]["AgentRequest"][0]["relationships_pending"],
-            granted["expected_pending"]
+            granted.expected_pending
         );
         let visible = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap())
             .execute("{ AgentRequest { request_id } }")

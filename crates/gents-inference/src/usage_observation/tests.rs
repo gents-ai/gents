@@ -870,78 +870,93 @@ fn cached_open_and_refresh_follow_the_executable_model() {
     });
 }
 
+fn used_u64(stored: Option<UsageObservation>, label: &str) -> Option<u64> {
+    stored
+        .and_then(|stored| used(&stored, label))
+        .map(|pct| pct as u64)
+}
+
 #[tokio::test]
-async fn cache_is_runtime_local_and_replacement_sign_ins_reject_late_responses() {
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
-        "usage-observation",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let cache = UsageCache::default();
-    let row = credential(did, None, Some("same-provider-account"));
-    seed(&node, &row).await;
-    let access = local(&node);
-    let original = resolve_oauth_credential(&access, did, CODEX, AccountPick::Reference(None))
-        .await
-        .unwrap()
-        .unwrap();
-    let account = UsageAccount::for_credential(&original);
-    let now = Utc::now();
-    record_usage(
-        &cache,
-        &node,
-        &account,
-        report(vec![window("primary", 12.0, now)]),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        used(
-            &load_usage(&cache, &access, &account)
-                .await
-                .unwrap()
-                .unwrap(),
-            "primary"
-        ),
-        Some(12.0)
-    );
-    assert!(load_usage(&UsageCache::default(), &access, &account)
-        .await
-        .unwrap()
-        .is_none());
-    access
-        .transact_write("test.remove", |txn| {
-            let credential_id = row.credential_id.clone();
-            Box::pin(async move {
-                crate::auth::credential::remove_account_in_txn(txn, did, &credential_id).await
-            })
-        })
-        .await
-        .unwrap();
-    let replacement = crate::auth::credential::store_sign_in(
-        &access,
-        credential(did, None, Some("same-provider-account")),
-        Some("replacement"),
-    )
-    .await
-    .unwrap()
-    .credential;
-    record_usage(
-        &cache,
-        &node,
-        &account,
-        report(vec![window("primary", 90.0, now)]),
-    )
-    .await
-    .unwrap();
-    assert!(
-        load_usage(&cache, &access, &UsageAccount::for_credential(&replacement))
+async fn usage_cache_runtime_replacement_follows_the_lean_model() {
+    for case in gents_lean_vocab::families::usage_cache_runtime_replacement::cases() {
+        let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+            "usage-observation",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
+        let node = db.node.clone();
+        let did = db.node_identity.did();
+        let cache = UsageCache::default();
+        let row = credential(did, None, Some("same-provider-account"));
+        seed(&node, &row).await;
+        let access = local(&node);
+        let original = resolve_oauth_credential(&access, did, CODEX, AccountPick::Reference(None))
             .await
             .unwrap()
-            .is_none()
-    );
+            .unwrap();
+        let account = UsageAccount::for_credential(&original);
+        let now = Utc::now();
+        record_usage(
+            &cache,
+            &node,
+            &account,
+            report(vec![window("primary", case.input.used as f64, now)]),
+        )
+        .await
+        .unwrap();
+        let same_runtime = used_u64(
+            load_usage(&cache, &access, &account).await.unwrap(),
+            "primary",
+        );
+        let other_runtime = used_u64(
+            load_usage(&UsageCache::default(), &access, &account)
+                .await
+                .unwrap(),
+            "primary",
+        );
+        access
+            .transact_write("test.remove", |txn| {
+                let credential_id = row.credential_id.clone();
+                Box::pin(async move {
+                    crate::auth::credential::remove_account_in_txn(txn, did, &credential_id).await
+                })
+            })
+            .await
+            .unwrap();
+        let replacement = crate::auth::credential::store_sign_in(
+            &access,
+            credential(did, None, Some("same-provider-account")),
+            Some("replacement"),
+        )
+        .await
+        .unwrap()
+        .credential;
+        record_usage(
+            &cache,
+            &node,
+            &account,
+            report(vec![window(
+                "primary",
+                case.input.late as f64,
+                now + Duration::seconds(1),
+            )]),
+        )
+        .await
+        .unwrap();
+        let replacement = used_u64(
+            load_usage(&cache, &access, &UsageAccount::for_credential(&replacement))
+                .await
+                .unwrap(),
+            "primary",
+        );
+        case.check(
+            gents_lean_vocab::families::usage_cache_runtime_replacement::ReplacementOutput {
+                same_runtime,
+                other_runtime,
+                replacement,
+            },
+        );
+    }
 }
 
 #[test]
@@ -956,65 +971,73 @@ fn a_write_lands_only_on_the_credential_row_it_was_read_for() {
 }
 
 #[tokio::test]
-async fn newer_observations_win_and_backend_edits_get_an_empty_cache() {
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
-        "usage-observation",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let other_db = crate::test_support::test_db(
-        "usage-other-node",
-        gents_store::node_extension::Extensions::none(),
-    )
-    .await;
-    let other_did = other_db.node_identity.did();
-    let cache = UsageCache::default();
-    let mut backend = backend(
-        did,
-        "OpenRouter",
-        "account",
-        json!({"kind":"api_key", "key":"first"}),
-    );
-    let old = UsageAccount::for_backend(did, &backend);
-    let now = Utc::now();
-    record_usage(
-        &cache,
-        &node,
-        &old,
-        report(vec![window("requests", 50.0, now)]),
-    )
-    .await
-    .unwrap();
-    record_usage(
-        &cache,
-        &node,
-        &old,
-        report(vec![window("requests", 5.0, now - Duration::seconds(1))]),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        used(
-            &load_usage(&cache, &local(&node), &old)
+async fn usage_cache_runtime_newer_follows_the_lean_model() {
+    for case in gents_lean_vocab::families::usage_cache_runtime_newer::cases() {
+        let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+            "usage-observation",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
+        let node = db.node.clone();
+        let did = db.node_identity.did();
+        let other_db = crate::test_support::test_db(
+            "usage-other-node",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
+        let other_did = other_db.node_identity.did();
+        let cache = UsageCache::default();
+        let mut backend = backend(
+            did,
+            "OpenRouter",
+            "account",
+            json!({"kind":"api_key", "key":"first"}),
+        );
+        let old = UsageAccount::for_backend(did, &backend);
+        let now = Utc::now();
+        let newest = (now, 50.0);
+        let oldest = (now - Duration::seconds(1), 5.0);
+        let writes = if case.input.newer_first {
+            [newest, oldest]
+        } else {
+            [oldest, newest]
+        };
+        for (observed_at, used_pct) in writes {
+            record_usage(
+                &cache,
+                &node,
+                &old,
+                report(vec![window("requests", used_pct, observed_at)]),
+            )
+            .await
+            .unwrap();
+        }
+        let used_value = used_u64(
+            load_usage(&cache, &local(&node), &old).await.unwrap(),
+            "requests",
+        );
+        let other_node = UsageAccount::for_backend(other_did, &backend);
+        let other_node_value = used_u64(
+            load_usage(&cache, &local(&node), &other_node)
                 .await
-                .unwrap()
                 .unwrap(),
-            "requests"
-        ),
-        Some(50.0)
-    );
-    let other_node = UsageAccount::for_backend(other_did, &backend);
-    assert!(load_usage(&cache, &local(&node), &other_node)
-        .await
-        .unwrap()
-        .is_none());
-    backend.endpoint.push_str("/changed");
-    assert!(usage_for_backend(&cache, &local(&node), did, &backend)
-        .await
-        .unwrap()
-        .is_none());
+            "requests",
+        );
+        backend.endpoint.push_str("/changed");
+        let after_edit = used_u64(
+            usage_for_backend(&cache, &local(&node), did, &backend)
+                .await
+                .unwrap(),
+            "requests",
+        );
+        case.check(
+            gents_lean_vocab::families::usage_cache_runtime_newer::NewerOutput {
+                used: used_value,
+                other_node: other_node_value,
+                after_edit,
+            },
+        );
+    }
 }
 
 #[tokio::test]

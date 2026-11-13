@@ -80,11 +80,16 @@ pub fn repeat_call(index: usize, event: &serde_json::Value) -> RawStreamingChoic
 
 pub struct EnvelopeShapedTool {
     pub calls: Arc<std::sync::atomic::AtomicUsize>,
+    pub command_envelope: bool,
+    pub varying_hint: bool,
 }
 
 impl ToolDyn for EnvelopeShapedTool {
     fn name(&self) -> String {
         "envelope_shaped".into()
+    }
+    fn emits_command_envelope(&self) -> bool {
+        self.command_envelope
     }
     fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async {
@@ -98,10 +103,11 @@ impl ToolDyn for EnvelopeShapedTool {
     fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let hint = if self.varying_hint { call } else { 0 };
             Err(ToolError::ReportedFailure {
                 class: gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
                 text: format!(
-                    "gents_exec: {{\"ok\":false,\"duration_ms\":1,\"hint\":\"step {call}\"}}\nstdout:\n(empty)\nstderr:\nfailed"
+                    "gents_exec: {{\"ok\":false,\"duration_ms\":1,\"hint\":\"step {hint}\"}}\nstdout:\n(empty)\nstderr:\nfailed"
                 ),
             })
         })

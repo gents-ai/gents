@@ -96,4 +96,48 @@ example : cases.map (fun c => observation c.2) =
 
 example : cases.all (fun c => (run c.2).isSome) = true := by native_decide
 
+/-- A pending row of the interrupted session. A replica whose node scope is
+another node lives in that node's queue, so the interrupt owner, which acts on
+its own scope only, never drains it. -/
+structure ScopedRow where
+  foreign : Bool
+  entry : QueueEntry
+
+def foreignScope : AgentSession.Scope := { queue.scope with node := queue.scope.node + 1 }
+
+def queueOf (foreign : Bool) (rows : List ScopedRow) : SessionQueueState :=
+  { scope := if foreign then foreignScope else queue.scope
+    active := if foreign then none else queue.active
+    pending := (rows.filter (·.foreign == foreign)).map (·.entry)
+    terminal := ∅ }
+
+/-- The interrupt owner finds the named request among its own scope's active
+request; any other id is missing and changes nothing. -/
+def lookupScope (requestId : RequestId) : Option AgentSession.Scope :=
+  if queue.active = some requestId then some queue.scope else none
+
+def interruptQueue (target : AgentSession.Scope) (q : SessionQueueState) :
+    Bool × SessionQueueState :=
+  match latchInterruptScoped target request q with
+  | some (latched, next) => (latched.interruptRequestedAt.isSome, next)
+  | none => (false, q)
+
+def interruptRows (requestId : RequestId) (rows : List ScopedRow) :
+    Option (Bool × List Bool) := do
+  let target ← lookupScope requestId
+  let (latched, own) := interruptQueue target (queueOf false rows)
+  let (_, foreign) := interruptQueue target (queueOf true rows)
+  pure (latched, rows.map fun row =>
+    decide (row.entry.requestId ∈ (if row.foreign then foreign else own).terminal))
+
+theorem interrupt_request_errors_on_unknown_request_id (rows : List ScopedRow) :
+    interruptRows 999 rows = none := by
+  simp [interruptRows, lookupScope, queue]
+
+theorem interrupt_request_drains_automated_wakeups_in_owner_scope :
+    interruptRows 100
+      [⟨false, wake 301⟩, ⟨true, wake 305⟩, ⟨false, interactiveMetadata⟩,
+        ⟨false, { user with origin := .scheduled }⟩] =
+      some (true, [true, false, false, false]) := by native_decide
+
 end SessionQueue.InterruptCases

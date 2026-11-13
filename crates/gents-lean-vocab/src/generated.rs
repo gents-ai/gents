@@ -113,8 +113,16 @@ pub fn lean_compaction_canonical_projection_cases() -> &'static [LeanCanonicalCo
     &lean_contract_snapshot().compaction_canonical_projection_cases
 }
 
+pub fn lean_compaction_cursor_cases() -> &'static [LeanCompactionCursorCase] {
+    &lean_contract_snapshot().compaction_cursor_cases
+}
+
 pub fn lean_compaction_projection_join_cases() -> &'static [LeanCompactionProjectionJoinCase] {
     &lean_contract_snapshot().compaction_projection_join_cases
+}
+
+pub fn lean_compaction_reducer_cases() -> &'static [LeanCompactionReducerCase] {
+    &lean_contract_snapshot().compaction_reducer_cases
 }
 
 pub fn lean_completion_retry_cases() -> &'static [LeanCompletionRetryCase] {
@@ -155,18 +163,6 @@ pub fn lean_eval_document_capture_cases() -> &'static [LeanEvalDocumentCaptureCa
 
 pub fn lean_eval_outcome_cases() -> &'static [LeanEvalOutcomeCase] {
     &lean_contract_snapshot().eval_outcome_cases
-}
-
-pub fn lean_event_delivery_convergence_traces() -> &'static [LeanEventDeliveryConvergenceTrace] {
-    &lean_contract_snapshot().event_delivery_convergence_traces
-}
-
-pub fn lean_event_delivery_source_instances() -> &'static [LeanEventDeliverySourceInstance] {
-    &lean_contract_snapshot().event_delivery_source_instances
-}
-
-pub fn lean_event_delivery_transition_cases() -> &'static [LeanEventDeliveryTransitionCase] {
-    &lean_contract_snapshot().event_delivery_transition_cases
 }
 
 pub fn lean_event_group_cases() -> &'static [LeanEventGroupCase] {
@@ -321,10 +317,6 @@ pub fn lean_live_overlay_cases() -> &'static [LeanLiveOverlayCase] {
     &lean_contract_snapshot().live_overlay_cases
 }
 
-pub fn lean_lsp_action_cases() -> &'static [LeanLspActionCase] {
-    &lean_contract_snapshot().lsp_action_cases
-}
-
 pub fn lean_managed_exec_liveness_cases() -> &'static [LeanManagedExecLivenessCase] {
     &lean_contract_snapshot().managed_exec_liveness_cases
 }
@@ -433,6 +425,10 @@ pub fn lean_prompt_assembly_assistant_order_cases() -> &'static [LeanPromptAssem
     &lean_contract_snapshot().prompt_assembly_assistant_order_cases
 }
 
+pub fn lean_prompt_assembly_budget_cases() -> &'static [LeanPromptAssemblyBudgetCase] {
+    &lean_contract_snapshot().prompt_assembly_budget_cases
+}
+
 pub fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAssemblyClaudeBodyCase] {
     &lean_contract_snapshot().prompt_assembly_claude_body_cases
 }
@@ -459,6 +455,10 @@ pub fn lean_prompt_assembly_claude_thinking_stream_cases() -> &'static [LeanProm
 
 pub fn lean_prompt_assembly_compaction_trigger_cases() -> &'static [LeanPromptAssemblyCompactionTriggerCase] {
     &lean_contract_snapshot().prompt_assembly_compaction_trigger_cases
+}
+
+pub fn lean_prompt_assembly_layer_cases() -> &'static [LeanPromptAssemblyLayerCase] {
+    &lean_contract_snapshot().prompt_assembly_layer_cases
 }
 
 pub fn lean_prompt_assembly_mode_sanitize_cases() -> &'static [LeanPromptAssemblyModeSanitizeCase] {
@@ -499,6 +499,10 @@ pub fn lean_prompt_assembly_sanitize_cases() -> &'static [LeanPromptAssemblySani
 
 pub fn lean_prompt_assembly_service_tier_cases() -> &'static [LeanPromptAssemblyServiceTierCase] {
     &lean_contract_snapshot().prompt_assembly_service_tier_cases
+}
+
+pub fn lean_prompt_assembly_turn_budget_cases() -> &'static [LeanPromptAssemblyTurnBudgetCase] {
+    &lean_contract_snapshot().prompt_assembly_turn_budget_cases
 }
 
 pub fn lean_protected_replay_compaction_cases() -> &'static [LeanProtectedReplayCompactionCase] {
@@ -871,18 +875,6 @@ pub struct LeanAgentFoldedBindingCase {
     pub expected: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAgentInterruptCase {
-    pub name: String,
-    pub caller_session: String,
-    pub target_session: String,
-    pub target_origin_cause: Option<String>,
-    pub same_node: bool,
-    pub task_triggered: bool,
-    pub expected_allowed: bool,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct LeanAgentMaterializationCase {
     #[serde(flatten)]
@@ -937,6 +929,35 @@ pub struct LeanAgentResolvedSession {
     pub backend_id: String,
     pub model: String,
     pub effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LeanAgentSteerDispositionCase {
+    pub active: bool,
+    pub compatible: bool,
+    pub expected: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LeanAgentSteerReachabilityCase {
+    pub inputs: Vec<LeanAgentSteerReachabilityInput>,
+    pub target: u64,
+    pub expected: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LeanAgentSteerReachabilityInput {
+    pub id: u64,
+    pub kind: String,
+    pub compatible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanAgentSteerTargetCase {
+    pub active_head: u64,
+    pub expected: bool,
+    pub planned_head: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1271,16 +1292,6 @@ pub struct LeanBackgroundTheoremWitness {
     pub scenario: String,
     pub numeric_bound: usize,
     pub kind_fields: Vec<LeanBackgroundTheoremKindField>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBoundary {
-    pub id: String,
-    pub domain: String,
-    pub subject: String,
-    pub statement: String,
-    pub accepted_failure_mode: Option<String>,
-    pub accepted_follow_up: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1943,18 +1954,6 @@ pub struct LeanCausalHopChainStep {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanCausalHopStepCase {
-    pub name: String,
-    pub cause: String,
-    pub cause_hop: Option<u32>,
-    pub own_predecessor_hop: u32,
-    pub max_request_hop: Option<u32>,
-    pub expected_hop: u32,
-    pub expected_admitted: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanCausedFacts {
     pub terminal: bool,
     pub this_runtime: bool,
@@ -2414,13 +2413,6 @@ pub struct LeanClientDataPublicationCasesScopedReplacementItemLookupsItem {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientDirectSessionReadCase {
-    pub expected: String,
-    pub session_row: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientLiveDeltaCase {
     pub accepted: bool,
     pub base: Option<u64>,
@@ -2527,6 +2519,20 @@ pub struct LeanClientRequestPatchPublicationCasesReuseItem {
     pub name: String,
     pub rows_current: bool,
     pub same_signature: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanClientRequestPublicationCase {
+    pub committed: bool,
+    pub expected_grants: bool,
+    pub expected_pending: bool,
+    pub grants_ok: bool,
+    pub mark_ok: bool,
+    pub matching_signature: bool,
+    pub name: String,
+    pub pending: bool,
+    pub same_signer: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2700,6 +2706,21 @@ pub enum LeanCommandResult {
     Interrupted,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LeanCompactionCursorCase {
+    pub name: String,
+    pub compacted: usize,
+    pub expected_cursor: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LeanCompactionInputRow {
+    Ordinary { role: String, text: String },
+    AssistantToolCalls { role: String, call_ids: Vec<String> },
+    ToolResult { role: String, call_id: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanCompactionProjectionJoinCase {
@@ -2720,6 +2741,30 @@ pub struct LeanCompactionProjectionJoinCase {
     pub result: String,
     pub output_tokens: Option<usize>,
     pub committed_reductions: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LeanCompactionReducerCase {
+    pub input_rows: Vec<LeanCompactionInputRow>,
+    pub projected_prefix_ready: bool,
+    pub name: String,
+    pub group: String,
+    pub reducer: String,
+    pub legal: bool,
+    pub pre_message_count: usize,
+    pub post_message_count: usize,
+    pub preserves_pairs: bool,
+    pub preserves_order: bool,
+    pub gate_open: Option<bool>,
+    pub publication_ready: bool,
+    pub provider_fixpoint: bool,
+    pub turn_boundary: bool,
+    pub safe_to_reduce: bool,
+    pub reducer_is_identity: bool,
+    pub reducer_is_idempotent: bool,
+    pub split_index: usize,
+    pub safe_boundary: usize,
+    pub retained_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2821,7 +2866,6 @@ pub struct LeanContractSnapshot {
     pub goal_wake_ancestry_cases: Vec<LeanGoalWakeAncestryCase>,
     pub goal_request_scope_cases: Vec<serde_json::Value>,
     pub goal_request_ancestry_cases: Vec<LeanGoalRequestAncestryCase>,
-    pub goal_queue_assignment_cases: Vec<LeanGoalQueueAssignmentCase>,
     pub goal_first_request_binding_cases: Vec<LeanGoalFirstRequestBindingCase>,
     pub goal_continuation_assignment_cases: Vec<LeanGoalContinuationAssignmentCase>,
     pub plugin_job_commit_kill_cases: Vec<LeanPluginJobCommitKillCase>,
@@ -2847,24 +2891,14 @@ pub struct LeanContractSnapshot {
     pub goal_reset_resume_cases: Vec<LeanGoalResetResumeCase>,
     pub trigger_delivery_admission_cases: serde_json::Value,
     pub trigger_delivery_queue_cases: serde_json::Value,
-    pub trigger_delivery_observed_claim_cases: serde_json::Value,
     pub trigger_delivery_assignment_root_cases: serde_json::Value,
     pub trigger_delivery_outcome_cases: serde_json::Value,
     pub trigger_delivery_outcome_trace_cases: serde_json::Value,
-    pub trigger_delivery_retained_outcome_cases: serde_json::Value,
     pub trigger_delivery_cursor_cases: serde_json::Value,
     pub trigger_delivery_callback_cursor_cases: serde_json::Value,
     pub trigger_delivery_callback_visibility_cases: serde_json::Value,
     pub trigger_delivery_identity_cases: serde_json::Value,
-    pub trigger_delivery_session_cases: serde_json::Value,
-    pub trigger_delivery_session_config_cases: serde_json::Value,
-    pub trigger_fire_budget_cases: serde_json::Value,
-    pub trigger_fire_budget_config_cases: serde_json::Value,
-    pub trigger_fire_budget_default: serde_json::Value,
-    pub trigger_fire_budget_status: serde_json::Value,
-    pub trigger_delivery_option_cases: serde_json::Value,
     pub trigger_delivery_latest_admission_cases: serde_json::Value,
-    pub trigger_delivery_self_session_cases: serde_json::Value,
     pub operator_base_freeze_cases: Vec<serde_json::Value>,
     pub workspace_path_capability_cases: Vec<LeanWorkspacePathCapabilityCase>,
     pub file_inventory_direct_reader_cases: Vec<serde_json::Value>,
@@ -2875,13 +2909,11 @@ pub struct LeanContractSnapshot {
     pub file_inventory_order_resolution_cases: Vec<serde_json::Value>,
     pub file_inventory_order_comparison_cases: Vec<serde_json::Value>,
     pub file_inventory_order_entry_cases: Vec<serde_json::Value>,
-    pub file_review_route_cases: Vec<LeanFileReviewRouteCase>,
     pub file_review_subscription_cases: Vec<LeanFileReviewSubscriptionCase>,
-    pub workspace_path_alias_cases: Vec<LeanWorkspacePathAliasCase>,
-    pub logical_output_obligation_cases: Vec<LeanLogicalOutputObligationCase>,
     pub count_carrier_cases: serde_json::Value,
     pub schema_argument_repair_cases: Vec<LeanSchemaArgumentRepairCase>,
     pub invalid_tool_progress_cases: Vec<LeanInvalidToolProgressCase>,
+    pub repeated_tool_failure_cases: Vec<serde_json::Value>,
     pub tool_timeout_cases: LeanToolTimeoutCases,
     pub plugin_resource_consent_cases: serde_json::Value,
     pub plugin_resource_budget_cases: serde_json::Value,
@@ -2929,16 +2961,18 @@ pub struct LeanContractSnapshot {
     pub mailbox_claimed_recipient_cases: Vec<LeanMailboxClaimedRecipientCase>,
     pub workspace_agent_selection_cases: Vec<serde_json::Value>,
     pub workspace_liveness_cases: Vec<LeanWorkspaceLivenessCase>,
+    pub workspace_child_cases: Vec<LeanWorkspaceChildCase>,
     pub workspace_quickstart_selection_cases: Vec<LeanWorkspaceQuickstartSelectionCase>,
     pub pack_placement_reader_cases: Vec<LeanPackPlacementReaderCase>,
     pub native_route_cases: Vec<LeanNativeRouteCase>,
     pub workspace_datastore_write_cases: Vec<LeanWorkspaceDatastoreWriteCase>,
     pub workspace_root_access_cases: Vec<LeanWorkspaceRootAccessCase>,
+    pub workspace_child_revocation_cases: Vec<LeanWorkspaceChildRevocationCase>,
+    pub workspace_admission_cases: Vec<LeanWorkspaceAdmissionCase>,
+    pub workspace_cleanup_cases: Vec<LeanWorkspaceCleanupCase>,
+    pub workspace_publication_cases: LeanWorkspacePublicationCases,
     pub workspace_quickstart_cases: Vec<LeanWorkspaceQuickstartCase>,
     pub mailbox_native_policy: serde_json::Value,
-    pub session_input_edit_native_discovery_cases: Vec<
-        LeanSessionInputEditNativeDiscoveryCase,
-    >,
     pub session_input_edit_native_claim_cases: Vec<serde_json::Value>,
     pub client_optimistic_send_cases: serde_json::Value,
     pub identity_client_agent_recovery_cases: Vec<LeanIdentityClientAgentRecoveryCase>,
@@ -2961,7 +2995,6 @@ pub struct LeanContractSnapshot {
     pub identity_pairing_reader_policy_cases: Vec<serde_json::Value>,
     pub identity_local_registry_writer_cases: Vec<LeanIdentityLocalRegistryWriterCase>,
     pub identity_discovery_policy_cases: Vec<LeanIdentityDiscoveryPolicyCase>,
-    pub identity_client_transport_cases: Vec<LeanIdentityClientTransportCase>,
     pub identity_replica_grant_cases: Vec<LeanIdentityReplicaGrantCase>,
     pub identity_enrollment_policy_cases: Vec<LeanIdentityEnrollmentPolicyCase>,
     pub identity_readiness_recovery_cases: Vec<serde_json::Value>,
@@ -2978,7 +3011,6 @@ pub struct LeanContractSnapshot {
     pub client_settings_cases: LeanClientSettingsCases,
     pub client_data_publication_cases: LeanClientDataPublicationCases,
     pub client_request_patch_publication_cases: LeanClientRequestPatchPublicationCases,
-    pub client_direct_session_read_cases: Vec<LeanClientDirectSessionReadCase>,
     pub storage_failure_cases: Vec<serde_json::Value>,
     pub client_request_closure_cases: Vec<serde_json::Value>,
     pub client_request_cache_identity_cases: Vec<LeanClientRequestCacheIdentityCase>,
@@ -3027,9 +3059,11 @@ pub struct LeanContractSnapshot {
     pub goal_observation_cases: Vec<serde_json::Value>,
     pub goal_session_observation_cases: Vec<serde_json::Value>,
     pub goal_session_fold_cases: Vec<serde_json::Value>,
-    pub workspace_command_grant_answers: Vec<serde_json::Value>,
-    pub workspace_command_grant_lookups: Vec<serde_json::Value>,
-    pub workspace_command_grant_revocations: Vec<serde_json::Value>,
+    pub workspace_command_grant_answers: Vec<LeanWorkspaceCommandGrantAnswersItem>,
+    pub workspace_command_grant_lookups: Vec<LeanWorkspaceCommandGrantLookupsItem>,
+    pub workspace_command_grant_revocations: Vec<
+        LeanWorkspaceCommandGrantRevocationsItem,
+    >,
     pub workspace_permission_write_cases: Vec<LeanWorkspacePermissionWriteCase>,
     pub workspace_permission_cases: Vec<serde_json::Value>,
     pub operator_path_cases: Vec<serde_json::Value>,
@@ -3060,17 +3094,10 @@ pub struct LeanContractSnapshot {
     pub agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub causal_hop_cap_observation_cases: Vec<LeanCapObservationCase>,
-    pub causal_hop_step_cases: Vec<LeanCausalHopStepCase>,
     pub causal_hop_chain_cases: Vec<LeanCausalHopChainCase>,
     pub causal_hop_call_cases: Vec<LeanCausalHopCallCase>,
-    pub causal_hop_interrupt_cases: Vec<LeanAgentInterruptCase>,
     pub causal_hop_creation_cases: Vec<LeanSessionCreationCase>,
-    pub causal_hop_creation_signer_cases: Vec<LeanSessionCreationSignerCase>,
-    pub causal_hop_job_creation_cases: Vec<LeanJobCreationCase>,
-    pub causal_hop_deferred_creation_cases: Vec<LeanDeferredCreationCase>,
     pub causal_hop_write_cases: Vec<LeanSessionMessageWriteCase>,
-    pub causal_hop_session_target_cases: Vec<LeanSessionTargetCase>,
-    pub causal_hop_session_list_cases: Vec<LeanSessionListCase>,
     pub scope_collection_rules: std::collections::BTreeMap<
         String,
         Vec<LeanScopeCollectionRule>,
@@ -3090,10 +3117,6 @@ pub struct LeanContractSnapshot {
     pub client_session_turn_cases: Vec<LeanSessionTurnCase>,
     pub request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub client_live_delta_cases: Vec<LeanClientLiveDeltaCase>,
-    pub runtime_session_selection_cases: Vec<LeanRuntimeSessionSelectionCase>,
-    pub runtime_configuration_admission_cases: Vec<
-        LeanRuntimeConfigurationAdmissionCase,
-    >,
     pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub startup_readiness_cases: Vec<LeanStartupReadinessCase>,
@@ -3114,7 +3137,6 @@ pub struct LeanContractSnapshot {
     pub write_input_cases: Vec<serde_json::Value>,
     pub invocation_correlation_cases: Vec<LeanInvocationCorrelationCase>,
     pub goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
-    pub lsp_action_cases: Vec<LeanLspActionCase>,
     pub self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
     pub self_config_resource_read_exposure_cases: Vec<
         LeanSelfConfigResourceReadExposureCase,
@@ -3161,7 +3183,6 @@ pub struct LeanContractSnapshot {
     pub mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub backend_health_cases: Vec<LeanBackendHealthCase>,
     pub backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
-    pub boundaries: Vec<LeanBoundary>,
     pub deviations: Vec<LeanDeviation>,
     pub command_policy_cases: Vec<LeanCommandPolicyCase>,
     pub command_isolation_cases: Vec<LeanCommandIsolationCase>,
@@ -3176,7 +3197,10 @@ pub struct LeanContractSnapshot {
     pub queued_steering_guard_cases: Vec<LeanQueuedSteeringGuardCase>,
     pub agent_delivery_cases: Vec<LeanAgentDeliveryCase>,
     pub interrupt_delivery_cases: Vec<LeanInterruptDeliveryCase>,
+    pub agent_steer_disposition_cases: Vec<LeanAgentSteerDispositionCase>,
+    pub agent_steer_target_cases: Vec<LeanAgentSteerTargetCase>,
     pub agent_steering_boundary_cases: Vec<LeanAgentSteeringBoundaryCase>,
+    pub agent_steer_reachability_cases: Vec<LeanAgentSteerReachabilityCase>,
     pub agent_message_outcome_cases: Vec<LeanAgentMessageOutcomeCase>,
     pub agent_folded_binding_cases: Vec<LeanAgentFoldedBindingCase>,
     pub queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
@@ -3218,6 +3242,8 @@ pub struct LeanContractSnapshot {
         LeanTerminalDiagnosticPresentationCase,
     >,
     pub terminal_diagnostic_replay_cases: Vec<LeanTerminalDiagnosticReplayCase>,
+    pub compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
+    pub compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
     pub prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
     pub provider_tool_identity_cases: Vec<serde_json::Value>,
@@ -3227,7 +3253,10 @@ pub struct LeanContractSnapshot {
     pub retry_entry_cases: Vec<LeanRetryEntryCase>,
     pub current_input_cases: Vec<LeanCurrentInputCase>,
     pub wake_input_cases: Vec<LeanWakeInputCase>,
+    pub prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
+    pub prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
+    pub prompt_assembly_turn_budget_cases: Vec<LeanPromptAssemblyTurnBudgetCase>,
     pub prompt_assembly_retention_cases: Vec<LeanPromptAssemblyRetentionCase>,
     pub prompt_assembly_compaction_trigger_cases: Vec<
         LeanPromptAssemblyCompactionTriggerCase,
@@ -3262,7 +3291,7 @@ pub struct LeanContractSnapshot {
     pub repaired_projection_admission_cases: Vec<LeanRepairedProjectionCase>,
     pub rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     pub auxiliary_session_child_binding_cases: Vec<LeanAuxiliarySessionChildBindingCase>,
-    pub client_request_publication_cases: Vec<serde_json::Value>,
+    pub client_request_publication_cases: Vec<LeanClientRequestPublicationCase>,
     pub capture_scope_cases: Vec<LeanCaptureScopeCase>,
     pub capture_order_cases: Vec<LeanCaptureOrderCase>,
     pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
@@ -3305,10 +3334,6 @@ pub struct LeanContractSnapshot {
     pub callback_cases: Vec<LeanCallbackCase>,
     pub callback_retry_cases: Vec<LeanCallbackRetryCase>,
     pub callback_recovery_cases: Vec<LeanCallbackRecoveryCase>,
-    pub event_delivery_transition_case_count: usize,
-    pub event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
-    pub event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
-    pub event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
     pub pack_operator_wire_cases: Vec<LeanPackOperatorWireCase>,
     pub recovery_sweep_ids: Vec<String>,
 }
@@ -3428,16 +3453,6 @@ pub struct LeanDecisionRow {
     pub cost_ok: bool,
     pub improves: bool,
     pub decision: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDeferredCreationCase {
-    pub kind: bool,
-    pub receipt: bool,
-    pub opening: bool,
-    pub cause: bool,
-    pub expected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -3901,53 +3916,6 @@ pub struct LeanEvalOutcomeCase {
     pub subject_causable: bool,
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanEventDeliveryAction {
-    Persist { doc: String },
-    Depersist { doc: String },
-    Enqueue { doc: String },
-    Drop { doc: String },
-    DeliverFromQueue { doc: String },
-    RescanTick,
-    Handle { doc: String },
-    Release { doc: String },
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanEventDeliveryConvergenceTrace {
-    pub name: String,
-    pub instance_name: String,
-    pub initial_world: LeanEventDeliveryWorld,
-    pub actions: Vec<LeanEventDeliveryAction>,
-    pub final_world: LeanEventDeliveryWorld,
-    pub status: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanEventDeliverySourceInstance {
-    pub name: String,
-    pub dedupe_policy: String,
-    pub rescan_bounded_by: u64,
-    pub deviation: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanEventDeliveryTransitionCase {
-    pub name: String,
-    pub pre: LeanEventDeliveryWorld,
-    pub action: LeanEventDeliveryAction,
-    pub post: LeanEventDeliveryWorld,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-pub struct LeanEventDeliveryWorld {
-    pub persistent_set: Vec<String>,
-    pub subscription_queue: Vec<String>,
-    pub processed_set: Vec<String>,
-    pub handled: Vec<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanEventGroupCase {
     pub name: String,
@@ -4026,19 +3994,6 @@ pub struct LeanFieldReadCase {
     pub offset: u64,
     pub present: bool,
     pub widths: Vec<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFileReviewRouteCase {
-    pub demand_collection: String,
-    pub direction: String,
-    pub expected: Option<serde_json::Value>,
-    pub image_collection: String,
-    pub image_filter_installed: bool,
-    pub images_granted: bool,
-    pub owner: String,
-    pub requester: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -5271,30 +5226,6 @@ pub struct LeanGoalOperatorResumeOnCaseExpectedChildrenItem {
     pub workspace_fingerprint: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalQueueAssignmentCase {
-    pub candidate_reference: Option<LeanGoalQueueAssignmentCaseCandidateReference>,
-    pub expected_fold: bool,
-    pub expected_steer: bool,
-    pub head_reference: Option<LeanGoalQueueAssignmentCaseHeadReference>,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalQueueAssignmentCaseCandidateReference {
-    pub goal_id: String,
-    pub root_request_doc_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalQueueAssignmentCaseHeadReference {
-    pub goal_id: String,
-    pub root_request_doc_id: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanGoalReadinessGateCase {
     pub name: String,
@@ -5949,13 +5880,6 @@ pub enum LeanIdentityClientAgentRecoveryDisposition {
     BindingMismatch,
     CommitUnknown,
     ExplicitRepair,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientTransportCase {
-    pub allowed: bool,
-    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -6616,16 +6540,6 @@ pub struct LeanInvocationCorrelationCase {
     pub supplied: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanJobCreationCase {
-    pub parent: bool,
-    pub job: bool,
-    pub key: bool,
-    pub spawn: bool,
-    pub expected: bool,
-}
-
 /// A self-config write of a Tools `integrations` value (Lean `JobGuardRow`):
 /// `writer` is `"model"` or `"operator"`, `stored_integrations` is null when
 /// the stored Tools document has no `integrations`.
@@ -7216,42 +7130,6 @@ pub struct LeanLiveOverlayCase {
     pub has_reasoning: bool,
     #[serde(rename = "expectOverlay")]
     pub expect_overlay: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLogicalOutputObligationCase {
-    pub authenticated_child: bool,
-    pub automated_root: bool,
-    pub count_valid: bool,
-    pub expected_count: Option<u64>,
-    pub expected_decision: String,
-    pub minimum: u64,
-    pub name: String,
-    pub request_scope: bool,
-    pub writes: Vec<LeanLogicalOutputObligationCaseWritesItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLogicalOutputObligationCaseWritesItem {
-    pub call_doc: u64,
-    pub completed: bool,
-    pub request_doc: u64,
-    pub tool: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanLspActionCase {
-    pub name: String,
-    pub lsp: bool,
-    pub file_rank: u8,
-    pub action: String,
-    pub mutates: bool,
-    pub source: String,
-    pub advertised: bool,
-    pub action_authorized: bool,
-    pub apply_authorized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -9230,6 +9108,23 @@ pub struct LeanPromptAssemblyAssistantOrderCase {
     pub expected_twice: Vec<LeanPromptAssemblyItem>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct LeanPromptAssemblyBudgetCase {
+    pub name: String,
+    pub context_window: usize,
+    pub max_output_tokens: usize,
+    pub threshold_basis_points: usize,
+    pub configured_threshold_budget: usize,
+    pub prompt_tokens: usize,
+    pub request_tokens: usize,
+    pub effective_input_budget: usize,
+    pub compaction_input_budget: usize,
+    pub effective_output_tokens: usize,
+    pub should_compact: bool,
+    pub provider_safe: bool,
+    pub can_dispatch: bool,
+}
+
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct LeanPromptAssemblyClaudeBodyCase {
     pub name: String,
@@ -9394,6 +9289,15 @@ pub struct LeanPromptAssemblyItem {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct LeanPromptAssemblyLayerCase {
+    pub name: String,
+    pub skill_count: usize,
+    pub summary_count: usize,
+    pub conversation_len: usize,
+    pub slots: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPromptAssemblyModeSanitizeCase {
     pub name: String,
@@ -9516,6 +9420,21 @@ pub struct LeanPromptAssemblyServiceTierCase {
 pub struct LeanPromptAssemblySplit {
     pub index: usize,
     pub expected: Vec<LeanPromptAssemblyRow>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LeanPromptAssemblyTurnBudgetCase {
+    pub name: String,
+    pub context_window: usize,
+    pub max_output_tokens: usize,
+    pub threshold_basis_points: usize,
+    pub configured_threshold_budget: usize,
+    pub effective_input_budget: usize,
+    pub compaction_input_budget: usize,
+    pub turn_input_tokens: Vec<usize>,
+    pub turn_output_tokens: Vec<usize>,
+    pub turn_should_compact: Vec<bool>,
+    pub turn_can_dispatch: Vec<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -10338,17 +10257,6 @@ pub struct LeanRoutingAffinityCase {
     pub session: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRuntimeConfigurationAdmissionCase {
-    pub active: u64,
-    pub deferred_at: u64,
-    pub expected: String,
-    pub name: String,
-    pub retries: bool,
-    pub visible: bool,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct LeanRuntimeReconcileCase {
     pub requested_agent: Option<usize>,
@@ -10376,15 +10284,6 @@ pub struct LeanRuntimeReconcileCase {
     pub tracked_request_session: usize,
     pub tracked_request_agent: usize,
     pub tracked_session_agent: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRuntimeSessionSelectionCase {
-    pub expected: String,
-    pub name: String,
-    pub requested: u64,
-    pub visible: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -10779,15 +10678,6 @@ pub struct LeanSessionCreationCase {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanSessionCreationSignerCase {
-    pub agent_new: bool,
-    pub has_requester: bool,
-    pub signer: String,
-    pub expected: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanSessionInputEditAuthority {
     pub signature_valid: bool,
     pub replacements_valid: bool,
@@ -10834,14 +10724,6 @@ pub struct LeanSessionInputEditCommand {
     pub replacements: Vec<LeanFoldQueueEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionInputEditNativeDiscoveryCase {
-    pub actor: String,
-    pub selected: bool,
-    pub visible: bool,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanSessionInputEditReceipt {
@@ -10877,20 +10759,6 @@ pub enum LeanSessionInputEditor {
     WorkingAgent,
     Admin,
     Other,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionListCase {
-    pub same_requester: bool,
-    pub same_node: bool,
-    pub caused: bool,
-    pub allowed_target: bool,
-    pub verified_starter_receipt: bool,
-    pub interrupt_allowed: bool,
-    pub expected_listed: bool,
-    pub expected_can_message: bool,
-    pub expected_can_interrupt: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -11000,16 +10868,6 @@ pub struct LeanSessionReplyPreviewCase {
     pub reply: Option<String>,
     pub request: u64,
     pub state: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionTargetCase {
-    pub same_requester: bool,
-    pub same_node: bool,
-    pub caused: bool,
-    pub allowed_target: bool,
-    pub expected_allowed: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -12095,6 +11953,14 @@ pub struct LeanWorkerCapacityState {
     pub active: Vec<[u64; 2]>,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceAdmissionCase {
+    pub admitted: bool,
+    pub complete: bool,
+    pub occupied: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LeanWorkspaceBindingCase {
     pub name: String,
@@ -12132,6 +11998,235 @@ pub struct LeanWorkspaceCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceChildCase {
+    pub actor: String,
+    pub expected: bool,
+    pub permission: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceChildRevocationCase {
+    pub actor: String,
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCleanupCase {
+    pub active: bool,
+    pub allowed: bool,
+    pub begins: bool,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItem {
+    pub accepted: bool,
+    pub available: Vec<LeanWorkspaceCommandGrantAnswersItemAvailableItem>,
+    pub binding: LeanWorkspaceCommandGrantAnswersItemBinding,
+    pub choice: String,
+    pub expected: LeanWorkspaceCommandGrantAnswersItemExpected,
+    pub id: String,
+    pub initial: LeanWorkspaceCommandGrantAnswersItemInitial,
+    pub kind: String,
+    pub now: u64,
+    pub reuse: Vec<LeanWorkspaceCommandGrantAnswersItemReuseItem>,
+    pub supported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemAvailableItem {
+    pub revision: u64,
+    pub workspace: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemBinding {
+    pub action: u64,
+    pub scope: LeanWorkspaceCommandGrantAnswersItemBindingScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemBindingScope {
+    pub revision: u64,
+    pub workspace: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemExpected {
+    pub grants: Vec<LeanWorkspaceCommandGrantAnswersItemExpectedGrantsItem>,
+    pub question: LeanWorkspaceCommandGrantAnswersItemExpectedQuestion,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemExpectedGrantsItem {
+    pub action: u64,
+    pub scope: LeanWorkspaceCommandGrantAnswersItemExpectedGrantsItemScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemExpectedGrantsItemScope {
+    pub revision: u64,
+    pub workspace: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemExpectedQuestion {
+    pub decision: Option<bool>,
+    pub folder_grant: Option<serde_json::Value>,
+    pub path_grant: Option<serde_json::Value>,
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemInitial {
+    pub grants: Vec<serde_json::Value>,
+    pub question: LeanWorkspaceCommandGrantAnswersItemInitialQuestion,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemInitialQuestion {
+    pub decision: Option<bool>,
+    pub folder_grant: Option<serde_json::Value>,
+    pub path_grant: Option<serde_json::Value>,
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemReuseItem {
+    pub allowed: bool,
+    pub candidate: LeanWorkspaceCommandGrantAnswersItemReuseItemCandidate,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemReuseItemCandidate {
+    pub action: u64,
+    pub scope: LeanWorkspaceCommandGrantAnswersItemReuseItemCandidateScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantAnswersItemReuseItemCandidateScope {
+    pub revision: u64,
+    pub workspace: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantLookupsItem {
+    pub allowed: bool,
+    pub expected: LeanWorkspaceCommandGrantLookupsItemExpected,
+    pub grants: Vec<LeanWorkspaceCommandGrantLookupsItemGrantsItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantLookupsItemExpected {
+    pub action: u64,
+    pub scope: LeanWorkspaceCommandGrantLookupsItemExpectedScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantLookupsItemExpectedScope {
+    pub revision: u64,
+    pub workspace: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantLookupsItemGrantsItem {
+    pub action: u64,
+    pub scope: LeanWorkspaceCommandGrantLookupsItemGrantsItemScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantLookupsItemGrantsItemScope {
+    pub revision: u64,
+    pub workspace: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantRevocationsItem {
+    #[serde(rename = "expectedRevision")]
+    pub expected_revision: u64,
+    pub grants: Vec<LeanWorkspaceCommandGrantRevocationsItemGrantsItem>,
+    pub previous: LeanWorkspaceCommandGrantRevocationsItemPrevious,
+    pub remaining: Vec<LeanWorkspaceCommandGrantRevocationsItemRemainingItem>,
+    pub result: LeanWorkspaceCommandGrantRevocationsItemResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantRevocationsItemGrantsItem {
+    pub action: u64,
+    pub scope: LeanWorkspaceCommandGrantRevocationsItemGrantsItemScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantRevocationsItemGrantsItemScope {
+    pub revision: u64,
+    pub workspace: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantRevocationsItemPrevious {
+    pub mode: String,
+    #[serde(rename = "reviewTask")]
+    pub review_task: Option<u64>,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantRevocationsItemRemainingItem {
+    pub action: u64,
+    pub scope: LeanWorkspaceCommandGrantRevocationsItemRemainingItemScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantRevocationsItemRemainingItemScope {
+    pub revision: u64,
+    pub workspace: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantRevocationsItemResult {
+    pub accepted: bool,
+    pub changed: bool,
+    pub next: LeanWorkspaceCommandGrantRevocationsItemResultNext,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspaceCommandGrantRevocationsItemResultNext {
+    pub mode: String,
+    #[serde(rename = "reviewTask")]
+    pub review_task: Option<u64>,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LeanWorkspaceDatastoreWriteCase {
     pub allowed: bool,
     pub collection: String,
@@ -12143,19 +12238,6 @@ pub struct LeanWorkspaceLivenessCase {
     pub may_release: bool,
     pub terminal: bool,
     pub visible: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspacePathAliasCase {
-    pub base_paths: Vec<String>,
-    pub base_prefixes: Vec<Vec<String>>,
-    pub changed_paths: Vec<String>,
-    pub changed_prefixes: Vec<Vec<String>>,
-    pub expected: bool,
-    pub name: String,
-    pub tree_paths: Vec<String>,
-    pub tree_prefixes: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -12345,6 +12427,16 @@ pub struct LeanWorkspacePermissionWriteCasePrevious {
     #[serde(rename = "reviewTask")]
     pub review_task: Option<u64>,
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanWorkspacePublicationCases {
+    pub aborted_document_visible: bool,
+    pub effect_after_failed_reservation: bool,
+    pub revoked_reader_restored: bool,
+    pub revoked_writer_restored: bool,
+    pub stale_publication_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
