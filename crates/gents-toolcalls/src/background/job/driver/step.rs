@@ -58,6 +58,32 @@ enum Stepped {
     Committed(Option<PluginJobTerminal>),
 }
 
+/// Why a step returned no outcome.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum StepError {
+    /// The invocation failed in a way that counts towards
+    /// `plugin_job_step_failed`.
+    #[error("{context}")]
+    Failed {
+        #[source]
+        failure: StepFailure,
+        context: String,
+    },
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl StepError {
+    /// The erased error of `run_step`: a counted failure stays the root under
+    /// its context, where `anyhow::Error::downcast_ref` finds it.
+    pub(super) fn erase(self) -> anyhow::Error {
+        match self {
+            Self::Failed { failure, context } => anyhow::Error::new(failure).context(context),
+            Self::Other(error) => error,
+        }
+    }
+}
+
 /// Runs one step of the running job row `row_doc_id`: builds its input, runs
 /// the plugin on the shared executor without a tool dispatcher, and commits
 /// the step in one revision-checked transaction.
@@ -66,6 +92,17 @@ pub async fn run_step(
     row_doc_id: &str,
     actor: &identity::Did,
 ) -> Result<StepOutcome> {
+    try_step(runtime, row_doc_id, actor)
+        .await
+        .map_err(StepError::erase)
+}
+
+/// `run_step`, keeping a counted failure typed for the driver.
+pub(super) async fn try_step(
+    runtime: &JobRuntime,
+    row_doc_id: &str,
+    actor: &identity::Did,
+) -> std::result::Result<StepOutcome, StepError> {
     let access = runtime.agent_access(actor)?;
     let mut lifecycle = load_lifecycle(&access, row_doc_id).await?;
     let row_running = lifecycle.is_running();
@@ -93,15 +130,16 @@ pub async fn run_step(
     let (namespace, name) = parse_coordinate(&pin.plugin_ref)?;
     let installed = match read_published_record(&runtime.home, namespace, name) {
         Ok((record, _guard)) if record.digest == pin.engine_digest => record,
-        Ok(_) => return fail_closed(&access, &mut lifecycle, Refusal::EngineChanged).await,
-        Err(error) if error.is_busy() => return Err(error.into()),
-        Err(_) => return fail_closed(&access, &mut lifecycle, Refusal::NotAvailable).await,
+        Ok(_) => return Ok(fail_closed(&access, &mut lifecycle, Refusal::EngineChanged).await?),
+        Err(error) if error.is_busy() => return Err(anyhow::Error::from(error).into()),
+        Err(_) => return Ok(fail_closed(&access, &mut lifecycle, Refusal::NotAvailable).await?),
     };
     let (input, revision) = build_step_input(&access, runtime, row_doc_id, StepKind::Later).await?;
-    step_on(runtime, &mut lifecycle, &installed, input, revision).await
+    try_step_on(runtime, &mut lifecycle, &installed, input, revision).await
 }
 
 /// The step of `input`, built at progress `revision`, on `installed`.
+#[cfg(test)]
 pub(super) async fn step_on(
     runtime: &JobRuntime,
     lifecycle: &mut ToolCallLifecycle,
@@ -109,6 +147,18 @@ pub(super) async fn step_on(
     input: JobStepInput,
     revision: u64,
 ) -> Result<StepOutcome> {
+    try_step_on(runtime, lifecycle, installed, input, revision)
+        .await
+        .map_err(StepError::erase)
+}
+
+async fn try_step_on(
+    runtime: &JobRuntime,
+    lifecycle: &mut ToolCallLifecycle,
+    installed: &InstalledPlugin,
+    input: JobStepInput,
+    revision: u64,
+) -> std::result::Result<StepOutcome, StepError> {
     let access = runtime.agent_access(lifecycle.actor())?;
     let row_doc_id = input.job.row_doc_id.as_str();
     let pin = input
@@ -140,7 +190,7 @@ pub(super) async fn step_on(
         .plugins
         .call_job_step_with_receipt(
             installed,
-            serde_json::to_value(&input)?,
+            serde_json::to_value(&input).map_err(anyhow::Error::from)?,
             Some(DataCaller::for_agent(
                 runtime.node.clone(),
                 &caller.node_did,
@@ -153,31 +203,37 @@ pub(super) async fn step_on(
         Ok(call) => call,
         Err(error) => {
             if crate::plugin::executor::publication_busy(&error) {
-                return Err(error);
+                return Err(error.into());
             }
             let trapped = error
                 .chain()
                 .any(|cause| cause.downcast_ref::<GuestTrap>().is_some());
             // A non-trap call error counts too: it raises no progress
             // revision, so recovery would otherwise re-step the row every sweep.
-            let error = anyhow::Error::new(if trapped {
-                StepFailure::Trap(format!("{error:#}"))
-            } else {
-                StepFailure::NotRun(format!("{error:#}"))
+            return Err(StepError::Failed {
+                failure: if trapped {
+                    StepFailure::Trap(format!("{error:#}"))
+                } else {
+                    StepFailure::NotRun(format!("{error:#}"))
+                },
+                context: format!("the step of job row {row_doc_id} did not run"),
             });
-            return Err(error.context(format!("the step of job row {row_doc_id} did not run")));
         }
     };
     if let Some(failure) = step_failure(call.outcome.verdict, &call.outcome.diagnostics) {
-        return Err(anyhow::Error::new(failure).context(format!(
-            "the step of job row {row_doc_id} returned {:?}",
-            call.outcome.verdict
-        )));
+        return Err(StepError::Failed {
+            failure,
+            context: format!(
+                "the step of job row {row_doc_id} returned {:?}",
+                call.outcome.verdict
+            ),
+        });
     }
-    let output: JobStepOutput = serde_json::from_value(call.outcome.output).map_err(|error| {
-        anyhow::Error::new(StepFailure::MalformedOutput(error.to_string()))
-            .context(format!("decoding the step output of job row {row_doc_id}"))
-    })?;
+    let output: JobStepOutput =
+        serde_json::from_value(call.outcome.output).map_err(|error| StepError::Failed {
+            failure: StepFailure::MalformedOutput(error.to_string()),
+            context: format!("decoding the step output of job row {row_doc_id}"),
+        })?;
     // Checked before the step transaction so the driver counts it.
     if let Some(bytes) = guest_state_of(&output)
         .map(|state| state.to_string().len())
@@ -187,10 +243,10 @@ pub(super) async fn step_on(
             bytes,
             max: JOB_GUEST_STATE_MAX_BYTES,
         };
-        return Err(
-            anyhow::Error::new(StepFailure::MalformedOutput(too_large.to_string()))
-                .context(format!("the step output of job row {row_doc_id}")),
-        );
+        return Err(StepError::Failed {
+            failure: StepFailure::MalformedOutput(too_large.to_string()),
+            context: format!("the step output of job row {row_doc_id}"),
+        });
     }
 
     let scratch = scratch_of(&output);
@@ -268,7 +324,7 @@ pub(super) async fn step_on(
         Ok(stepped) => stepped,
         Err(error) => {
             if PublishedPluginReadError::error_chain_is_busy(error.as_ref()) {
-                return Err(error);
+                return Err(error.into());
             }
             if matches!(
                 error.downcast_ref::<RecordError>(),
@@ -279,7 +335,7 @@ pub(super) async fn step_on(
             let staged = std::mem::take(&mut *staged.lock().expect("staged requests lock"));
             recover_step_commit(
                 &runtime.node,
-                Some(::identity::Did::new(caller.agent_did.clone())?),
+                Some(::identity::Did::new(caller.agent_did.clone()).map_err(anyhow::Error::from)?),
                 error,
                 &staged,
             )
