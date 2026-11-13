@@ -65,7 +65,6 @@ pub fn charged_usage_total(usage: rig::completion::Usage) -> u64 {
     usage.input_tokens.saturating_add(usage.output_tokens)
 }
 
-/// [`crate::provider_usage::contract_input_tokens`] of a Rig usage report.
 pub fn contract_usage_input_tokens(usage: &rig::completion::Usage) -> Option<u64> {
     crate::provider_usage::contract_input_tokens(
         usage.input_tokens,

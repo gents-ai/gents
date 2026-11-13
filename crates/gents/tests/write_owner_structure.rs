@@ -1222,26 +1222,25 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents/src/runtime/agent/loop_stream",
 ];
 
+/// Files that implement a Rig trait or build a Rig provider client, which no
+/// re-export through `rig_compat` can stand in for. The capture layer, the
+/// credential and limit-header clients, the Responses and session-tagging
+/// layers, the Codex and xAI policies and the Claude transport implement
+/// `HttpClientExt` or are generic over it; `claude_subscription` implements
+/// `CompletionModel` and `CompletionClient`; `backend_client`, `inference_http`,
+/// `chatgpt_codex` and `xai_grok` name or build `rig::providers` clients. A row
+/// leaves when its owner exposes a native transport or model trait that one
+/// adapter in `rig_compat` lifts into Rig's.
 #[rustfmt::skip]
 const RIG_PATH_ALLOWLIST: &[&str] = &[
-    "crates/gents-loop/src/claude_messages_body.rs",
-    "crates/gents-loop/src/provider_stream.rs",
-    "crates/gents-loop/src/provider_usage.rs",
     "crates/gents-loop/src/rendered_request/transport.rs",
     "crates/gents-inference/src/clients/chatgpt_codex.rs",
-    "crates/gents-inference/src/clients/claude_messages/error.rs",
-    "crates/gents-inference/src/clients/claude_messages/mod.rs",
-    "crates/gents-inference/src/clients/claude_messages/send.rs",
-    "crates/gents-inference/src/clients/claude_messages/sse.rs",
-    "crates/gents-inference/src/clients/claude_messages/sse_body.rs",
-    "crates/gents-inference/src/clients/claude_messages/sse_state.rs",
     "crates/gents-inference/src/clients/claude_messages/transport.rs",
     "crates/gents-inference/src/clients/claude_subscription.rs",
     "crates/gents-inference/src/clients/inference_http.rs",
     "crates/gents-inference/src/llm/backend_client.rs",
     "crates/gents-inference/src/auth/http.rs",
     "crates/gents-inference/src/clients/provider_http.rs",
-    "crates/gents-inference/src/usage_observation.rs",
     "crates/gents-inference/src/clients/xai_grok.rs",
 ];
 
