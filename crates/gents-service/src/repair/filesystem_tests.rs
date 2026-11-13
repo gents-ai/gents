@@ -202,6 +202,9 @@ async fn an_older_home_is_reported_and_left_exactly_as_it_was() {
                 assert_ne!(kind, IncompatibleStoreKind::ForeignVersion);
                 assert!(message.contains("older version of Gents"), "{message}");
                 assert!(message.contains("Nothing in it was changed"), "{message}");
+                let read_only = super::home::refuse_older_home(&home).await.unwrap_err();
+                assert_eq!((read_only.kind, read_only.to_string()), (kind, message));
+                assert_eq!(checksum(temp.path()), before);
             }
             other => panic!("expected an older-store refusal, got {other:?}"),
         }
