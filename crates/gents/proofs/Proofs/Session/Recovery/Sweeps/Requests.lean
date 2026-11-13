@@ -75,4 +75,31 @@ def requestRecoverySweep : RecoverySweep :=
   , h_recover_zero := requestRecover_zero
   }
 
+/-- A row the terminal repair sweep can see. The sweep reads only rows whose
+node scope is its own node; a replica another node owns is never repaired here,
+however expired its lease looks. -/
+structure ScopedRecoveryRow where
+  ownNode : Bool
+  row : RequestRecoveryRow
+  deriving Repr
+
+def sweepRepairs (entry : ScopedRecoveryRow) : Bool :=
+  entry.ownNode && decide (requestRecoveryStale entry.row)
+
+def sweepRow (entry : ScopedRecoveryRow) : RequestRecoveryRow :=
+  if sweepRepairs entry then requestRecover entry.row else entry.row
+
+def sweepRepaired (rows : List ScopedRecoveryRow) : Nat :=
+  (rows.filter sweepRepairs).length
+
+theorem terminal_repair_sweep_ignores_foreign_did_claims (entry : ScopedRecoveryRow)
+    (hForeign : entry.ownNode = false) : sweepRow entry = entry.row := by
+  simp [sweepRow, sweepRepairs, hForeign]
+
+theorem sweep_repairs_own_stale_rows (entry : ScopedRecoveryRow)
+    (hOwn : entry.ownNode = true) (hStale : requestRecoveryStale entry.row) :
+    isTerminal (sweepRow entry).request.state := by
+  simp only [sweepRow, sweepRepairs, hOwn, Bool.true_and, decide_eq_true hStale, if_true]
+  exact requestRecover_terminal _ hStale
+
 end Recovery

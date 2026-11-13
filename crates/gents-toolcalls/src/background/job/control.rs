@@ -1034,41 +1034,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupted_caller_keeps_its_job() {
-        let admission = job_row("control-caller-interrupted").await;
-        let node_did = admission.tool.node_did().to_owned();
-        let live = caused(&admission, "a", &node_did, "processing").await;
-        gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
-            &access(&admission),
-            admission.tool.request_doc_id().unwrap(),
-            &node_did,
-            admission.tool.requester_did(),
-        )
-        .await
-        .unwrap();
-        assert!(interrupted(&admission, admission.tool.request_doc_id().unwrap()).await);
-        // The owner that reacts to a parent request for background rows must
-        // leave the job running and its child alone.
-        let signer: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
-            admission
-                .tool
-                .access()
-                .unwrap()
-                .managed_agent_signer()
-                .unwrap(),
-        );
-        let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
-            &admission.node,
-            &node_did,
-            &[signer],
-            &crate::call::hook::BackgroundExecutionRegistry::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(report.tool_calls_terminalized, 0);
-        assert_eq!(row_state(&admission).await, "running");
-        assert!(!interrupted(&admission, &live).await);
-        finish(admission).await;
+    async fn plugin_job_caller_interrupt_sweep_matches_lean() {
+        use gents_lean_vocab::families::plugin_job_caller_interrupt_sweep as family;
+        for case in family::cases() {
+            let admission = job_row("control-caller-interrupted").await;
+            let node_did = admission.tool.node_did().to_owned();
+            let live = caused(&admission, "a", &node_did, "processing").await;
+            gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
+                &access(&admission),
+                admission.tool.request_doc_id().unwrap(),
+                &node_did,
+                admission.tool.requester_did(),
+            )
+            .await
+            .unwrap();
+            assert!(interrupted(&admission, admission.tool.request_doc_id().unwrap()).await);
+            let signer: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
+                admission
+                    .tool
+                    .access()
+                    .unwrap()
+                    .managed_agent_signer()
+                    .unwrap(),
+            );
+            let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
+                &admission.node,
+                &node_did,
+                &[signer],
+                &crate::call::hook::BackgroundExecutionRegistry::default(),
+            )
+            .await
+            .unwrap();
+            let output = family::CallerInterruptOutput {
+                tool_calls_terminalized: report.tool_calls_terminalized as u64,
+                row_running: row_state(&admission).await == "running",
+                child_interrupted: interrupted(&admission, &live).await,
+            };
+            case.check(output);
+            finish(admission).await;
+        }
     }
 
     #[test]

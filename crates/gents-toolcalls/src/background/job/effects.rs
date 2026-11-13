@@ -602,19 +602,58 @@ mod tests {
             .exists());
     }
 
+    fn scratch_files_under(
+        root: &Path,
+        dir: &Path,
+        cwd: &str,
+        files: &mut Vec<gents_lean_vocab::families::plugin_scratch_writes::WrittenFile>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scratch_files_under(root, &path, cwd, files);
+            } else {
+                let content = read(&path);
+                files.push(
+                    gents_lean_vocab::families::plugin_scratch_writes::WrittenFile {
+                        path: format!(
+                            "{cwd}/{}",
+                            path.strip_prefix(root).unwrap().to_str().unwrap()
+                        ),
+                        write: u64::from(content[0] - b'0'),
+                    },
+                );
+            }
+        }
+    }
+
     #[test]
-    fn resumed_row_writes_under_its_own_tool_call_id_and_earlier_paths_stay() {
-        let cwd = tempfile::tempdir().unwrap();
-        write_scratch(cwd.path(), "call-1", &[file("notes.md", "first")]).unwrap();
-        write_scratch(cwd.path(), "call-2", &[file("notes.md", "second")]).unwrap();
-        assert_eq!(
-            read(&cwd.path().join(".gents/workflows/runs/call-1/notes.md")),
-            b"first"
-        );
-        assert_eq!(
-            read(&cwd.path().join(".gents/workflows/runs/call-2/notes.md")),
-            b"second"
-        );
+    fn scratch_writes_match_the_lean_model() {
+        gents_lean_vocab::families::plugin_scratch_writes::replay(|trace| {
+            let cwd = tempfile::tempdir().unwrap();
+            let written = trace
+                .writes
+                .iter()
+                .enumerate()
+                .map(|(index, write)| {
+                    let mut content = index.to_string();
+                    content.push_str(&"x".repeat(usize::try_from(write.size).unwrap() - 1));
+                    write_scratch(
+                        cwd.path(),
+                        &write.tool_call_id,
+                        &[file(&write.name, &content)],
+                    )
+                    .is_ok()
+                })
+                .collect();
+            let mut files = Vec::new();
+            scratch_files_under(cwd.path(), cwd.path(), &trace.cwd, &mut files);
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            gents_lean_vocab::families::plugin_scratch_writes::Outcome { written, files }
+        });
     }
 
     /// Reads the request's interrupt latch as `access`; an Agent-owned
@@ -819,6 +858,7 @@ mod tests {
             control_targets: Vec::new(),
             resume_targets: Vec::new(),
             resume_facts: facts(),
+            caller_node_did: None,
         }
     }
 

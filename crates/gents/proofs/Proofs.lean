@@ -18,6 +18,10 @@ import Proofs.Shared.AccountRotation
 import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Shared.TextNormalization
 import Proofs.Session.TitleText
+import Proofs.Session.ToolResultThreading
+import Proofs.Session.ToolExecution.ArgumentFailure
+import Proofs.Shared.CompletionRetry.ErrorIdentity
+import Proofs.Tools.SelfConfig.ToolsRoot
 import Proofs.Runtime.CrossMachineComposed
 import Proofs.Session.Fleet
 import Proofs.Session.AgentSession
@@ -36,6 +40,7 @@ import Proofs.Runtime.CanonicalOutput
 import Proofs.Session.StreamingResponse.ReasoningAudit
 import Proofs.Runtime.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Session.PromptAssembly.ClaudeWire
+import Proofs.Session.PromptAssembly.ClaudeSse
 import Proofs.Session.PromptAssembly.ResponsesStorage
 import Proofs.Session.Compaction
 import Proofs.Session.PromptAssembly
@@ -96,7 +101,6 @@ import Proofs.Runtime.Recovery
 import Proofs.Runtime.Properties.SchedulingSafety
 import Proofs.Runtime.Properties.SchedulingLiveness
 import Proofs.Conformance.Gents
-import Proofs.Conformance.Boundaries
 import Proofs.Conformance.Deviations
 import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Contracts
@@ -127,6 +131,7 @@ import Proofs.Conformance.OperatorBaseFreeze
 
 
 import Proofs.Documents.Configuration
+import Proofs.Documents.DesiredStatePlan
 import Proofs.Tools.ToolPolicy.Configuration
 import Proofs.Tools.SelfConfig.Auth
 
@@ -142,3 +147,5 @@ import Proofs.Shared.ToolExecution.Parallel
 
 import Proofs.Automation.Hooks
 import Proofs.Pack.Operations
+
+import Proofs.Session.Request.PreclaimBoundary

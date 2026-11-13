@@ -763,18 +763,102 @@ mod tests {
         );
     }
 
+    fn invocation_wire(invocation: Invocation) -> String {
+        match invocation {
+            Invocation::ToolCall => "tool_call",
+            Invocation::JobStep => "job_step",
+            Invocation::Callback => "callback",
+            Invocation::Ux => "ux",
+        }
+        .to_owned()
+    }
+
+    fn context_of(invocation: &str) -> StampContext {
+        let caller_did = "did:key:node".to_owned();
+        match invocation {
+            "tool_call" => tool_output(),
+            "job_step" => StampContext::JobStep {
+                caller_did,
+                session_id: "s".into(),
+                request_doc_id: "r".into(),
+                tool_call_doc_id: "t".into(),
+                job_row_doc_id: "j".into(),
+                chain_root_doc_id: "c".into(),
+            },
+            "callback" => StampContext::Callback { caller_did },
+            "ux" => StampContext::Ux { caller_did },
+            other => panic!("unmodelled invocation {other}"),
+        }
+    }
+
     #[test]
-    fn granted_collection_without_field_names_is_refused() {
-        let mut data = grant();
-        data.collection_fields.clear();
-        assert_eq!(
-            admit(
-                &data,
-                &tool_output(),
-                vec![insert("Note", json!({"body": "a"}))]
-            )
-            .unwrap_err(),
-            WriteRefusal::Other
+    fn granted_writes_are_admitted_as_the_lean_model() {
+        use gents_lean_vocab::families::plugin_data_writes_admit::{AdmitOutput, RefusalWire};
+        gents_lean_vocab::families::plugin_data_writes_admit::replay::<DataOp, String, String, Stamp>(
+            |i| {
+                let collection = if i.collection_granted {
+                    "Note"
+                } else {
+                    "Other"
+                };
+                let mut data = PluginData {
+                    declaration: PluginDataDeclaration {
+                        collections: vec!["Note".into()],
+                        ops: if i.op_granted {
+                            vec![op_name(i.op).into()]
+                        } else {
+                            Vec::new()
+                        },
+                        stamped: BTreeMap::from([("owner".to_owned(), i.stamp)]),
+                    },
+                    collection_fields: BTreeMap::new(),
+                    unique_keys: BTreeMap::new(),
+                };
+                if i.fields_known {
+                    data.collection_fields
+                        .insert(collection.into(), vec!["owner".into(), "body".into()]);
+                }
+                let mut body = json!({"body": "x"});
+                if i.guest_stamped {
+                    body["owner"] = json!("did:key:forged");
+                }
+                let write = DataWrite {
+                    op: i.op,
+                    collection: collection.into(),
+                    doc_id: i.doc_id.then(|| "bae-1".to_owned()),
+                    fields: fields(body),
+                    on_conflict: i.on_conflict.then_some(OnConflict::Ignore),
+                };
+                let verdict = admit(
+                    &data,
+                    &context_of(&i.invocation),
+                    vec![write; i.count as usize],
+                );
+                AdmitOutput {
+                    refusal: verdict.as_ref().err().map(|refusal| match refusal {
+                        WriteRefusal::StampUnavailable { stamp, invocation } => RefusalWire {
+                            kind: "stamp_unavailable".to_owned(),
+                            stamp: Some(*stamp),
+                            invocation: Some(invocation_wire(*invocation)),
+                        },
+                        WriteRefusal::Other => RefusalWire {
+                            kind: "other".to_owned(),
+                            stamp: None,
+                            invocation: None,
+                        },
+                    }),
+                    stamped_fields: verdict
+                        .map(|admitted| {
+                            data.declaration
+                                .stamped
+                                .keys()
+                                .filter(|field| admitted[0].write.fields.contains_key(*field))
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }
+            },
         );
     }
 

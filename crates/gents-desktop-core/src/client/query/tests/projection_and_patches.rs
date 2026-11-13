@@ -640,18 +640,20 @@ fn selected_request_lookup_keeps_unobserved_rows_pending() {
 
 #[test]
 fn direct_session_read_matches_the_lean_model() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().client_direct_session_read_cases;
-    assert!(!cases.is_empty());
     let row = serde_json::json!({"node_did":"node", "session_id":"session", "agent_did":"agent", "created_at":"now"});
-    for case in cases {
-        let rows = match case.session_row.as_str() {
-            "absent" => vec![],
-            "canonical" => vec![row.clone()],
-            "duplicate" => vec![row.clone(), row.clone()],
-            "out_of_scope" => vec![
+    for case in gents_lean_vocab::families::client_session_delivery_direct_read::cases::<
+        String,
+        gents_protocol::client_protocol::SessionRowObservation,
+    >() {
+        let rows = match case.input.session_row {
+            gents_protocol::client_protocol::SessionRowObservation::Absent => vec![],
+            gents_protocol::client_protocol::SessionRowObservation::Canonical => vec![row.clone()],
+            gents_protocol::client_protocol::SessionRowObservation::Duplicate => {
+                vec![row.clone(), row.clone()]
+            }
+            gents_protocol::client_protocol::SessionRowObservation::OutOfScope => vec![
                 serde_json::json!({"node_did":"other", "session_id":"session", "agent_did":"agent", "created_at":"now"}),
             ],
-            other => panic!("unknown modeled observation {other}"),
         };
         let result = selected_session_from_rows(
             rows.into_iter()
@@ -665,7 +667,11 @@ fn direct_session_read_matches_the_lean_model() {
             Ok(Some(_)) => "visible",
             Err(_) => "integrity_fault",
         };
-        assert_eq!(actual, case.expected.as_str(), "{case:?}");
+        case.check(
+            gents_lean_vocab::families::client_session_delivery_direct_read::ReadOutput {
+                expected: actual.to_owned(),
+            },
+        );
     }
 }
 

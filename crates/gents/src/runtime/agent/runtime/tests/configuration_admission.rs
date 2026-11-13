@@ -13,23 +13,16 @@ use serde_json::json;
 
 #[test]
 fn configuration_admission_and_deferral_match_lean() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().runtime_configuration_admission_cases;
-    assert_eq!(cases.len(), 4);
-    for case in cases {
-        let name = case.name.as_str();
-        let admission = match configuration_admission(case.visible) {
-            ConfigurationAdmission::Claim => "claim",
-            ConfigurationAdmission::AwaitNewerGeneration => "await_newer_generation",
-        };
-        assert_eq!(admission, case.expected.as_str(), "{name}");
+    gents_lean_vocab::families::contract_cases_runtime_configuration_admission_deferral::replay::<
+        ConfigurationAdmission,
+    >(|i| {
         let mut deferred = DeferredRequests::default();
-        deferred.defer(case.deferred_at, request(Some("did:key:agent"), name));
-        assert_eq!(
-            deferred.release(case.active).is_some(),
-            case.retries,
-            "{name}"
-        );
-    }
+        deferred.defer(i.deferred_at, request(Some("did:key:agent"), i.name.as_str()));
+        gents_lean_vocab::families::contract_cases_runtime_configuration_admission_deferral::ConfigurationAdmissionOutput {
+            expected: configuration_admission(i.visible),
+            retries: deferred.release(i.active).is_some(),
+        }
+    });
 }
 
 fn selection(configuration: &ResolvedConfiguration) -> &SelectedConfiguration {
