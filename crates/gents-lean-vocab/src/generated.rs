@@ -5,10 +5,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub fn lean_canonical_dispatch_observation_cases() -> &'static [LeanDispatchObservationCase] {
-    &lean_contract_snapshot().canonical_dispatch_observation_cases
-}
-
 pub fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalExecutionCase] {
     &lean_contract_snapshot().canonical_execution_gate_cases
 }
@@ -461,7 +457,6 @@ pub struct LeanContractSnapshot {
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
-    pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub session_input_edit_cases: Vec<LeanSessionInputEditCase>,
     pub families: BTreeMap<String, LeanFamily>,
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
@@ -481,62 +476,6 @@ pub struct LeanCoverageEntry {
     pub accepted_follow_up: String,
     pub feature: String,
     pub surfaces: Vec<LeanSurface>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDispatchObservationCase {
-    pub name: String,
-    pub inputs: Vec<LeanDispatchObservationInput>,
-    pub expected: Vec<LeanDispatchObservationResult>,
-    pub completion_probe_outcome: String,
-    pub completion_probe_accepted: bool,
-    pub parent_outcome: String,
-    pub expected_after_parent_failure: LeanDispatchParentFailure,
-    pub expected_after_policy_settlement: Option<LeanDispatchPolicySettlement>,
-    pub expected_after_parent_recovery: Option<LeanDispatchParentRecovery>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDispatchObservationInput {
-    pub acknowledged: bool,
-    pub policy_allows: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDispatchObservationResult {
-    pub observation: String,
-    pub may_invoke: bool,
-    pub running: bool,
-    pub in_flight: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDispatchParentFailure {
-    pub running: bool,
-    pub needs_recovery: bool,
-    pub message_count: usize,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDispatchParentRecovery {
-    pub state: String,
-    pub dispatchable: bool,
-    pub terminalized: usize,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDispatchPolicySettlement {
-    pub failed: bool,
-    pub running: bool,
-    pub started: bool,
-    pub failure_class: Option<String>,
-    pub completion_accepted: bool,
 }
 
 #[derive(Debug, Deserialize)]

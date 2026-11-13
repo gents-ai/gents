@@ -2935,20 +2935,24 @@ def caseCoverage : List CoverageEntry :=
       "dispatch_observation_contracts_spawned_target")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "canonical_dispatch_observation_cases"
-      "CanonicalDispatchObservationCases")
+      "family"
+      "dispatch_observation_contracts_hook_receipt")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "canonical_dispatch_observation_cases"
-      "CanonicalDispatchObservationCases")
+      "family"
+      "dispatch_observation_contracts_owned_receipt")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "canonical_dispatch_observation_cases"
-      "CanonicalDispatchObservationCases")
+      "family"
+      "dispatch_observation_contracts_owned_policy_settlement")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "canonical_dispatch_observation_cases"
-      "CanonicalDispatchObservationCases")
+      "family"
+      "dispatch_observation_contracts_loop_election")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "dispatch_observation_contracts_control_replay")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
       "family"

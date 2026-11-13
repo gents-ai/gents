@@ -8,13 +8,15 @@
         { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterPolicySettlement" },
         { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterSpawnedTargetRejection" },
         { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterParentFailureRecovery" },
-        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/DispatchObservation.lean", "symbol": "Conformance.DispatchObservationContracts.cases" }
+        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/DispatchObservation.lean", "symbol": "Conformance.DispatchObservationContracts.cases" },
+        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/DispatchObservation.lean", "symbol": "Conformance.DispatchObservationContracts.hookReceipt" },
+        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/DispatchObservation.lean", "symbol": "Conformance.DispatchObservationContracts.loopElection" }
       ],
       "constructors": [],
-      "generated_groups": ["canonical_dispatch_observation_cases"],
+      "generated_groups": ["families"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": ["crates/gents-toolcalls/src/call/hook/persistence/prompt_hook.rs", "crates/gents-toolcalls/src/call/hook.rs", "crates/gents-toolcalls/src/call/lifecycle/transition/native.rs", "crates/gents-loop/src/loop_stream.rs", "crates/gents-loop/src/tool.rs", "crates/gents-tools/src/native/bash_tools.rs", "crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", "crates/gents-toolcalls/src/call/lifecycle/recovery.rs"],
-      "consumer_paths": ["crates/gents-lean-vocab/src/canonical_execution.rs", "crates/gents-toolcalls/src/call/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/runtime/agent/loop_stream/tests/tool_execution.rs", "crates/gents/src/toolcalls_tests/hook/background_admission.rs"],
+      "consumer_paths": ["crates/gents-lean-vocab/src/canonical_execution.rs", "crates/gents-toolcalls/src/call/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/runtime/agent/loop_stream/tests/tool_execution.rs", "crates/gents/src/toolcalls_tests/hook.rs", "crates/gents/src/toolcalls_tests/hook/background_admission.rs", "crates/gents-automation/src/goal/goal_tools/tests.rs"],
       "native_status": "pending",
       "required_cases": [
         "lost_receipt_then_replay preserves Running without either observation granting invocation authority",
