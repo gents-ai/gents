@@ -4,7 +4,6 @@ use serde_json::Value;
 
 use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::config_client::ConfigApplyTxn;
-use gents_toolcalls::call::lifecycle::query;
 use gents_tools::native::background_args::WaitToolArgs;
 
 pub(super) enum WaitEvidence {

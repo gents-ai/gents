@@ -1,0 +1,38 @@
+{
+  "runtime": {
+    "repository": {
+      "files": {
+        "data/sales.csv": "month,revenue\nJan,10\nFeb,12\nMar,9\n"
+      }
+    },
+    "seed": {
+      "collection": "ChartRequest",
+      "fields": {
+        "run_id": "run-${ATTEMPT}",
+        "chart": "bar",
+        "path": "${REPOSITORY}/data",
+        "file": "sales.csv",
+        "save": "",
+        "output": "png",
+        "width": 360,
+        "height": 240
+      }
+    },
+    "taken": {
+      "collection": "ChartResult",
+      "fields": {
+        "chart": "bar"
+      }
+    },
+    "expect": [
+      {
+        "collection": "ChartResult",
+        "fields": {
+          "chart": "bar",
+          "png_width": 360,
+          "png_height": 240
+        }
+      }
+    ]
+  }
+}

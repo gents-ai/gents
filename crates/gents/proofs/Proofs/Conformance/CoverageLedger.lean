@@ -604,8 +604,8 @@ def caseCoverage : List CoverageEntry :=
       "The consumer exercises the production resource diff over emitted multi-resource snapshots. Connected flags are observations; actual transport dial/failure and applying operations to reach the post-state still require the transport reconciliation owner.")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "request_transition_cases"
-      "RequestTransitions")
+      "family"
+      "request_transition_classification")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -3375,9 +3375,6 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: production has no lifecycle-transition owner; host executor plans write each transition inline and no scenario replays these transitions through them, and the illegal transitions have no production path.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "contracts_workspace_binding_admission")
-      "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "contracts_workspace_binding_admission_unreached"
-      "model-production-gap: binding admission takes neither the workspace owner nor the command's git metadata writes; production sets a binding's owner from the workspace and denies git metadata writes in the command spawn policy, so the non-owner and git-metadata cases have no production path through admit_workspace_binding.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"

@@ -1183,8 +1183,6 @@ pub async fn load_memory_workspace_docs(
     Ok(docs)
 }
 
-pub(crate) use gents_session::workspace::flush_workspace_docs;
-
 pub(crate) async fn load_isolated_workspace(
     access: &gents_store::config_client::ConfigAccess,
     workspace_id: &str,

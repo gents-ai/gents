@@ -78,7 +78,7 @@ pub(crate) use overlay::{
 };
 
 #[cfg(any(test, feature = "test-fixtures"))]
-pub use binding::{admit_workspace_binding, new_binding, AdmitBinding};
+pub use binding::{admit_workspace_binding, new_binding, AdmitBinding, BindingWorkspace};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use documents::workspace_integrate_docs_mutation;
 #[cfg(any(test, feature = "test-fixtures"))]

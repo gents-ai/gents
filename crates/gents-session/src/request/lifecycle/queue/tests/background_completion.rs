@@ -1,24 +1,5 @@
 use super::*;
 
-use crate::request::lifecycle::RequestTerminalOutcome;
-use crate::session;
-
-/// Agent-owned session and request rows are read through the owning Agent's managed access;
-/// the node identity has no read grant over them.
-async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
-    db.agent_access.execute(query).await.unwrap()["data"].clone()
-}
-
-/// Agent-owned request rows are written through the owning Agent's managed access.
-async fn agent_write(db: &TestDb, operation: &'static str, mutation: &str) {
-    db.agent_access
-        .transact_write(operation, |txn| {
-            Box::pin(async move { Ok::<_, anyhow::Error>(txn.execute(mutation).await?) })
-        })
-        .await
-        .unwrap();
-}
-
 #[tokio::test]
 async fn append_sequence_index_fetches_only_latest_header() {
     let db = test_db("sequence-index").await;

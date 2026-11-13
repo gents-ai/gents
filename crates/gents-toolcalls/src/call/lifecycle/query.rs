@@ -4,10 +4,8 @@ pub use gents_session::tool_call::query::result::{
     load_tool_call_result, load_tool_file_change_observation, render_tool_result,
     CanonicalToolCallPresentation, ToolFileChangeRead,
 };
-pub(crate) use gents_session::tool_call::query::result::{
-    load_tool_call_arguments_in_txn, load_tool_call_read, load_tool_call_read_in_txn,
-    CanonicalToolCallRead,
-};
+#[cfg(test)]
+use gents_session::tool_call::query::result::load_tool_call_read_in_txn;
 
 use std::sync::Arc;
 

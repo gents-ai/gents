@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gents_pack::pack::core_packs::{self, PluginInterfaceError, UpdateDecision};
 use gents_pack::pack::PackChangeError;
 use serde_json::{json, Value};
 
@@ -70,6 +71,14 @@ pub(crate) async fn outdated_packs_on(
     Ok(report)
 }
 
+/// The plugin interface refusal of a candidate the update could not open.
+fn interface_refusal(error: &PackChangeError) -> Option<&PluginInterfaceError> {
+    match error {
+        PackChangeError::Other(error) => core_packs::plugin_interface_refusal(error.as_ref()),
+        _ => None,
+    }
+}
+
 fn is_newer(latest: &str, installed: &str) -> Option<bool> {
     let latest = semver::Version::parse(latest).ok()?;
     let installed = semver::Version::parse(installed).ok()?;
@@ -114,6 +123,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
     let mut updated = Vec::new();
     let mut failed = Vec::new();
     let mut current = Vec::new();
+    let mut kept = Vec::new();
     for pack in selected {
         let coordinate = pack["pack"].as_str().unwrap_or_default().to_owned();
         if let Some(error) = pack["error"].as_str() {
@@ -155,6 +165,19 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
             Ok(_) => updated.push(coordinate),
+            Err(error)
+                if interface_refusal(&error).is_some_and(|refusal| {
+                    core_packs::update_decision(refusal.admission())
+                        == UpdateDecision::KeepInstalled
+                }) =>
+            {
+                kept.push(json!({
+                    "pack": coordinate,
+                    "installed": pack["installed"],
+                    "candidate": latest,
+                    "reason": format!("{error:#}"),
+                }));
+            }
             Err(error) => {
                 failed.push(json!({ "pack": coordinate, "error": format!("{error:#}") }));
                 if named {
@@ -165,7 +188,11 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
     }
 
     let any_failed = !failed.is_empty();
-    crate::print_json(&json!({ "updated": updated, "failed": failed, "current": current }))?;
+    let mut report = json!({ "updated": updated, "failed": failed, "current": current });
+    if !kept.is_empty() {
+        report["kept"] = kept.into();
+    }
+    crate::print_json(&report)?;
     if let Some(error) = own_failure {
         return Err(error);
     }
@@ -492,6 +519,157 @@ mod tests {
 
         assert!(install.contains("refusing to install"), "{install}");
         assert!(lookup.contains("the registry has nothing at"), "{lookup}");
+    }
+
+    fn install_from(
+        package: String,
+        scope: &crate::cli::ScopeArgs,
+        registry: Option<String>,
+    ) -> PackInstallArgs {
+        PackInstallArgs {
+            package,
+            inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
+            bind_agents: Vec::new(),
+            preview: false,
+            scope: scope.clone(),
+            output: OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry,
+            drift: crate::cli::PackDriftArgs::default(),
+            grant_authority: false,
+            wire: Vec::new(),
+            expect_digest: None,
+            root_agents: None,
+            explicit: true,
+        }
+    }
+
+    fn home_scope(home: &std::path::Path) -> crate::cli::ScopeArgs {
+        crate::cli::ScopeArgs {
+            home: Some(home.to_path_buf()),
+            graphql: None,
+            node_did: None,
+        }
+    }
+
+    /// `fixture/assets_fixture` at `version`, its manifest declaring
+    /// `declared` as the plugin interface it was built for.
+    fn assets_pack_declaring(version: &str, declared: Option<u64>) -> tempfile::TempDir {
+        let dir = super::super::test_support::assets_pack_dir("fixture", "assets_fixture", version);
+        let path = dir.path().join("manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        if let Some(declared) = declared {
+            manifest["plugin_interface"] = declared.into();
+        }
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn interface_admission_conforms_through_the_install_handler() {
+        use gents_lean_vocab::families::pack_core_packs_interface_admission_cases as family;
+        use gents_pack::pack::core_packs::InterfaceAdmission;
+
+        for case in family::cases() {
+            let declared: Option<u64> = case.input.declared;
+            let home = tempfile::tempdir().unwrap();
+            let pack = assets_pack_declaring("1.0.0", declared);
+            let package = pack.path().to_str().unwrap().to_owned();
+            let installed = crate::request_helpers::capture_report(super::super::install(
+                install_from(package, &home_scope(home.path()), None),
+            ))
+            .await;
+            let admission: InterfaceAdmission = match installed {
+                Ok(_) => InterfaceAdmission::Compatible,
+                Err(error) => interface_refusal(&error)
+                    .unwrap_or_else(|| {
+                        panic!("{declared:?} was refused for another reason: {error:#}")
+                    })
+                    .admission(),
+            };
+            case.check(admission);
+        }
+    }
+
+    #[tokio::test]
+    async fn update_decision_conforms_through_the_update_handler() {
+        use gents_lean_vocab::families::pack_core_packs_update_decision as family;
+        use gents_pack::pack::core_packs::{
+            interface_admission, InterfaceAdmission, OLDEST_PLUGIN_INTERFACE, PLUGIN_INTERFACE,
+        };
+
+        for case in family::cases() {
+            let candidate: InterfaceAdmission = case.input.candidate;
+            let declared = match candidate {
+                InterfaceAdmission::Compatible => PLUGIN_INTERFACE,
+                InterfaceAdmission::TooOld => OLDEST_PLUGIN_INTERFACE - 1,
+                InterfaceAdmission::TooNew => PLUGIN_INTERFACE + 1,
+            };
+            assert_eq!(interface_admission(Some(declared)), candidate);
+
+            let home = tempfile::tempdir().unwrap();
+            let scope = home_scope(home.path());
+            let installed = assets_pack_declaring("1.0.0", None);
+            crate::request_helpers::capture_report(super::super::install(install_from(
+                installed.path().to_str().unwrap().to_owned(),
+                &scope,
+                None,
+            )))
+            .await
+            .expect("installing the current build");
+
+            let newer = assets_pack_declaring("1.1.0", Some(declared.into()));
+            let (bytes, _) =
+                gents_pack::pack::archive::format::pack_dir_for_any_interface(newer.path())
+                    .unwrap();
+            let digest = {
+                use sha2::Digest;
+                format!("{:x}", sha2::Sha256::digest(&bytes))
+            };
+            let (registry, _state) = crate::commands::pack::registry::tests::serve_fake_pack(
+                "assets_fixture",
+                "1.1.0",
+                bytes,
+                digest,
+            )
+            .await;
+            let report = crate::request_helpers::capture_report(update(PackUpdateArgs {
+                package: None,
+                inference_slots: Vec::new(),
+                scope,
+                registry: Some(registry),
+                drift: crate::cli::PackDriftArgs::default(),
+            }))
+            .await
+            .unwrap_or_else(|error| panic!("{candidate:?}: the update failed: {error:#}"));
+
+            let named = |list: &str| {
+                report[list].as_array().into_iter().flatten().any(|entry| {
+                    entry == "fixture/assets_fixture" || entry["pack"] == "fixture/assets_fixture"
+                })
+            };
+            let decision = match (named("updated"), named("kept")) {
+                (true, false) => UpdateDecision::Take,
+                (false, true) => UpdateDecision::KeepInstalled,
+                _ => panic!("{candidate:?}: the update neither took nor kept the pack: {report}"),
+            };
+            let version = gents_pack::pack::list_home_installs(home.path())
+                .unwrap()
+                .into_iter()
+                .find(|record| record.coordinate == "fixture/assets_fixture")
+                .map(|record| record.version);
+            let expected = match decision {
+                UpdateDecision::Take => "1.1.0",
+                UpdateDecision::KeepInstalled => "1.0.0",
+            };
+            assert_eq!(
+                version.as_deref(),
+                Some(expected),
+                "{candidate:?}: {report}"
+            );
+            case.check(decision);
+        }
     }
 
     #[tokio::test]

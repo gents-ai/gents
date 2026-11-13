@@ -21,13 +21,6 @@ fn goal_id(goal: u64) -> String {
     format!("goal-{goal}")
 }
 
-fn reference(lean: &wire::ResumeReferenceWire) -> GoalAssignmentInput {
-    GoalAssignmentInput {
-        goal_id: goal_id(lean.goal),
-        root_request_doc_id: lean.root.map(doc),
-    }
-}
-
 fn goal_row(node: &str, agent: &str, goal: &wire::Goal<String>) -> Row {
     Row {
         doc: DocRef::new("Goal", GOAL_DOC),

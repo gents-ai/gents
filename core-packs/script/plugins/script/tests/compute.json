@@ -1,0 +1,4 @@
+{
+  "input": {"script": "return {sum: input.reduce((a,b) => a+b, 0), tools: typeof tools};", "input": [1,2,3]},
+  "expect": {"sum": 6, "tools": "undefined"}
+}

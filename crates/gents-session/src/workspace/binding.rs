@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 
+use super::action_plan::CreationPolicy;
 use super::documents::{
     binding_id_for, WorkspaceBindingDoc, BINDING_ACTIVE, BINDING_RELEASED, LIFECYCLE_SEALED,
 };
@@ -14,14 +15,35 @@ pub enum AdmitBinding {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BindingWorkspace<'a> {
+    pub workspace_id: &'a str,
+    pub owner_node_did: &'a str,
+    pub lifecycle_state: &'a str,
+    pub seal_hash: Option<&'a str>,
+    pub creation_policy: CreationPolicy,
+}
+
 pub fn admit_workspace_binding(
-    workspace_id: &str,
-    workspace_state: &str,
-    workspace_seal_hash: Option<&str>,
+    workspace: BindingWorkspace<'_>,
     existing: &[WorkspaceBindingDoc],
     candidate: WorkspaceBindingDoc,
+    git_metadata_write: bool,
     release_previous: bool,
 ) -> Result<AdmitBinding> {
+    let BindingWorkspace {
+        workspace_id,
+        owner_node_did: workspace_owner,
+        lifecycle_state: workspace_state,
+        seal_hash: workspace_seal_hash,
+        creation_policy,
+    } = workspace;
+    if candidate.owner_node_did != workspace_owner {
+        bail!(
+            "node {} does not own workspace {workspace_id}",
+            candidate.owner_node_did
+        );
+    }
     anyhow::ensure!(
         !candidate.owner_node_did.trim().is_empty()
             && existing
@@ -41,6 +63,15 @@ pub fn admit_workspace_binding(
         bail!(
             "binding workspace_id {} does not match {workspace_id}",
             candidate.workspace_id
+        );
+    }
+
+    if git_metadata_write
+        && creation_policy == CreationPolicy::GitWorktreeDiff
+        && authority == WorkspaceAuthority::ReadWrite
+    {
+        bail!(
+            "a ReadWrite binding on git-worktree-diff workspace {workspace_id} may not write git metadata"
         );
     }
 

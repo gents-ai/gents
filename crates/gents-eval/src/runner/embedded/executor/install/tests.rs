@@ -880,12 +880,15 @@ async fn session_fixtures_publish_only_declared_cross_agent_readers() {
 
 #[tokio::test]
 async fn expired_request_fixtures_are_signed_published_and_expired_without_inference() {
-    let transition = gents_lean_vocab::lean_request_transition_cases()
-        .iter()
-        .find(|case| case.from == "pending" && case.to == "dead")
-        .expect("Lean models pending expiry");
-    assert_eq!(transition.classification, "legal");
-    assert_eq!(transition.action.as_deref(), Some("expire"));
+    let transition = gents_protocol::request_lifecycle::RequestLifecycleState::Pending
+        .transition_to(gents_protocol::request_lifecycle::RequestLifecycleState::Dead)
+        .expect("the request transition owner permits pending expiry");
+    assert_eq!(
+        transition.classification(),
+        gents_protocol::request_lifecycle::RequestTransitionClassification::Legal(
+            gents_protocol::request_lifecycle::RequestTransitionAction::Expire
+        )
+    );
     let dir = tempfile::tempdir().unwrap();
     let pack_dir = dir.path().join("pack");
     write_slot_pack(&pack_dir, "gents:inference-slot:primary");
@@ -925,7 +928,7 @@ async fn expired_request_fixtures_are_signed_published_and_expired_without_infer
     assert_eq!(requests.len(), 2);
     let mut ids = Vec::new();
     for row in requests {
-        assert_eq!(row["lifecycle_state"], transition.to);
+        assert_eq!(row["lifecycle_state"], transition.to().as_str());
         assert_eq!(row["relationships_pending"], false);
         assert!(row["claimed_at"].is_null());
         assert_eq!(row["requester_did"], spec.evaluator_did);

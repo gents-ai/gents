@@ -49,6 +49,7 @@ pub fn install_from_pack(
         data_unique_keys,
         data_collection_fields,
         BTreeMap::new(),
+        None,
         consent,
     )
     .map_err(Into::into)
@@ -68,6 +69,7 @@ fn install_from_pack_locked(
     data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
     data_collection_fields: BTreeMap<String, Vec<String>>,
     data_collection_schemas: BTreeMap<String, String>,
+    plugin_interface: Option<u32>,
     consent: bool,
 ) -> Result<InstalledPlugin, GrantError> {
     // The pack lifecycle already holds this lock across its transaction window; flock does not re-enter.
@@ -116,6 +118,7 @@ fn install_from_pack_locked(
         data_unique_keys,
         data_collection_fields,
         data_collection_schemas,
+        plugin_interface,
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -216,6 +219,7 @@ fn install_pack_plugins_locked<'a>(
                 data_unique_keys,
                 data_collection_fields,
                 data_collection_schemas,
+                manifest.plugin_interface,
                 consent,
             )
         })

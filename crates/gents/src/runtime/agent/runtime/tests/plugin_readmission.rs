@@ -125,8 +125,10 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
             .map(identity::Did::new)
             .transpose()
             .unwrap(),
-        plugin_home.path(),
-        &pack.coordinate,
+        gents_pack::pack::PluginStoreLocation {
+            home: plugin_home.path(),
+            coordinate: &pack.coordinate,
+        },
         Some(&pack),
         Some(&fixture.node_binding),
         &gents_inference::resolved::ProviderProfilePolicy,
@@ -157,8 +159,10 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
             .map(identity::Did::new)
             .transpose()
             .unwrap(),
-        plugin_home.path(),
-        &pack.coordinate,
+        gents_pack::pack::PluginStoreLocation {
+            home: plugin_home.path(),
+            coordinate: &pack.coordinate,
+        },
         None,
         Some(&fixture.node_binding),
         &gents_inference::resolved::ProviderProfilePolicy,
@@ -186,8 +190,10 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
             .map(identity::Did::new)
             .transpose()
             .unwrap(),
-        plugin_home.path(),
-        &pack.coordinate,
+        gents_pack::pack::PluginStoreLocation {
+            home: plugin_home.path(),
+            coordinate: &pack.coordinate,
+        },
         Some(&pack),
         Some(&fixture.node_binding),
         &gents_inference::resolved::ProviderProfilePolicy,

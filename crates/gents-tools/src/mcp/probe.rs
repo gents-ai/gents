@@ -28,6 +28,13 @@ pub async fn enabled_services(
     Ok(services)
 }
 
+pub struct ProbeOptions<'a> {
+    pub actor: &'a str,
+    pub timeout: Duration,
+    pub local_hostname: &'a str,
+    pub local_subnet: Option<&'a str>,
+}
+
 /// Probes one enabled MCP service of `node_did` once as `actor`. The service
 /// is read again immediately before the probe, so a service disabled or
 /// removed since it was listed is not contacted. `timeout` bounds the probe;
@@ -36,12 +43,15 @@ pub async fn probe(
     access: &ConfigAccess,
     node_did: &str,
     service_id: &str,
-    actor: &str,
-    timeout: Duration,
-    local_hostname: &str,
-    local_subnet: Option<&str>,
     pool: &McpPool,
+    options: ProbeOptions<'_>,
 ) -> McpProbeReceipt {
+    let ProbeOptions {
+        actor,
+        timeout,
+        local_hostname,
+        local_subnet,
+    } = options;
     let unreachable = |latency_ms, error: String| McpProbeReceipt {
         service_id: service_id.to_owned(),
         health_state: HealthStatus::Unreachable.to_string(),
@@ -179,11 +189,13 @@ mod tests {
             &access,
             root.did(),
             "svc-1",
-            root.did(),
-            Duration::from_secs(1),
-            "local",
-            None,
             &McpPool::new(),
+            ProbeOptions {
+                actor: root.did(),
+                timeout: Duration::from_secs(1),
+                local_hostname: "local",
+                local_subnet: None,
+            },
         )
         .await;
         assert_eq!(

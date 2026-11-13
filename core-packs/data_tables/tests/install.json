@@ -1,0 +1,18 @@
+{
+  "install": {
+    "documents": [
+      "Agent/data-analyst",
+      "AgentContext/data-analyst-context",
+      "Callback/data-run",
+      "CallbackBinding/data-run",
+      "EventSource/data-run",
+      "Tools/data-analyst-tools"
+    ],
+    "plugins": [
+      "data_tables"
+    ],
+    "slots": [
+      "data_analyst"
+    ]
+  }
+}

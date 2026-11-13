@@ -74,12 +74,12 @@ pub use generated::*;
 
 mod canonical_execution;
 mod canonical_output;
-mod plugin_job_wire;
-mod session_turn_wire;
 pub mod canonical_wire;
 pub mod claude_replay;
 pub mod consumer_scan;
 pub mod family;
+mod plugin_job_wire;
+mod session_turn_wire;
 mod title;
 
 /// Family types generated from `families.schema.json`, which Lean emits.
@@ -89,9 +89,9 @@ pub mod families {
 
 pub use canonical_execution::*;
 pub use canonical_output::*;
+pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use plugin_job_wire::*;
 pub use session_turn_wire::*;
-pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use title::*;
 
 #[cfg(test)]
@@ -169,84 +169,6 @@ impl LeanQueueManagementState {
             terminal: self.terminal.iter().copied().map(&native).collect(),
         }
     }
-}
-
-pub fn assert_lifecycle_transition_cases_partition(
-    domain: &str,
-    states: &[&str],
-    cases: &[LeanLifecycleTransitionCase],
-) {
-    let expected_pairs = states
-        .iter()
-        .flat_map(|from| {
-            states
-                .iter()
-                .map(move |to| ((*from).to_string(), (*to).to_string()))
-        })
-        .collect::<BTreeSet<_>>();
-    let mut actual_pairs = BTreeSet::new();
-    let mut invalid_cases = Vec::new();
-
-    for case in cases {
-        if case.domain != domain {
-            invalid_cases.push(format!("{} has wrong domain {:?}", case.name, case.domain));
-        }
-        if !matches!(
-            case.classification.as_str(),
-            "legal" | "illegal" | "recoveryReachable"
-        ) {
-            invalid_cases.push(format!(
-                "{} has invalid classification {:?}",
-                case.name, case.classification
-            ));
-        }
-        if case.classification == "legal" && case.action.is_none() {
-            invalid_cases.push(format!("{} legal case missing action", case.name));
-        }
-        if case.classification != "legal" && case.action.is_some() {
-            invalid_cases.push(format!("{} non-legal case has action", case.name));
-        }
-        let requires_boundary = case.classification == "recoveryReachable";
-        if requires_boundary && case.boundary.is_none() {
-            invalid_cases.push(format!(
-                "{} {} case missing boundary",
-                case.name, case.classification
-            ));
-        }
-        if !requires_boundary && case.boundary.is_some() {
-            invalid_cases.push(format!("{} reachable case has boundary", case.name));
-        }
-        if !expected_pairs.contains(&(case.from.clone(), case.to.clone())) {
-            invalid_cases.push(format!(
-                "{} has pair outside {domain} vocabulary: {:?} -> {:?}",
-                case.name, case.from, case.to
-            ));
-        }
-        if !actual_pairs.insert((case.from.clone(), case.to.clone())) {
-            invalid_cases.push(format!(
-                "{} duplicates pair {:?} -> {:?}",
-                case.name, case.from, case.to
-            ));
-        }
-    }
-
-    let missing = expected_pairs
-        .difference(&actual_pairs)
-        .cloned()
-        .collect::<Vec<_>>();
-    let extra = actual_pairs
-        .difference(&expected_pairs)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        invalid_cases.is_empty() && missing.is_empty() && extra.is_empty(),
-        "Lean lifecycle transition cases for {domain:?} do not form a state^2 partition\n  invalid cases: {:?}\n  missing pairs: {:?}\n  extra pairs: {:?}\n  cases: {:?}",
-        invalid_cases,
-        missing,
-        extra,
-        cases
-    );
 }
 
 pub fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>) {

@@ -142,13 +142,20 @@ fn main() {
         }
         writeln!(
             out,
+            "    pub type {} = Vec<crate::family::Case<{input}, {output}>>;",
+            generic("Cases", &enums)
+        )
+        .unwrap();
+        writeln!(
+            out,
             "    pub fn replay<{parameters}>(run: impl Fn(&{input}) -> {output})\n    where\n        \
              {input}: serde::de::DeserializeOwned,\n        {output}: serde::Serialize,\n    {{\n        \
              crate::family::replay({key:?}, run)\n    }}\n    \
-             pub fn cases<{parameters}>() -> Vec<crate::family::Case<{input}, {output}>>\n    where\n        \
+             pub fn cases<{parameters}>() -> {cases}\n    where\n        \
              {input}: serde::de::DeserializeOwned,\n    {{\n        \
              crate::family::cases({key:?})\n    }}\n}}",
             parameters = enums.join(", "),
+            cases = generic("Cases", &enums),
         )
         .unwrap();
     }

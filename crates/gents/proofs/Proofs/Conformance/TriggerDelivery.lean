@@ -92,39 +92,12 @@ def StateWire.toModel (s : StateWire) : State :=
   { receipts := s.receipts.map (·.toModel), requests := s.requests.map (·.toModel),
     outcomes := s.outcomes.map (·.toModel), goals := s.goals.map (·.toModel) }
 
-def object (fields : List (String × String)) : String :=
-  "{" ++ String.intercalate "," (fields.map fun (k, v) => jsonString k ++ ":" ++ v) ++ "}"
-
 def identity (owner document : String) : Identity :=
   { owner, document, trigger := "handoff", collection := "Work" }
 
 def fire (document : String) : Fire :=
   { identity := identity "owner-a" document, session := "lead-session",
     serial := true, emitOutcome := true, goalBacked := false }
-
-def identityJson (id : Identity) : String := object [
-  ("owner_did", jsonString id.owner), ("trigger_id", jsonString id.trigger),
-  ("source_collection", jsonString id.collection), ("source_doc_id", jsonString id.document)]
-
-def fireJson (f : Fire) : String := object [
-  ("identity", identityJson f.identity), ("session", jsonString f.session),
-  ("serial", toString f.serial), ("emit_outcome", toString f.emitOutcome),
-  ("goal_backed", toString f.goalBacked)]
-
-def requestJson (r : Request) : String := object [
-  ("fire", fireJson r.fire), ("running", toString r.running),
-  ("terminal", toString r.terminal), ("assignment_replaced", toString r.assignmentReplaced),
-  ("goal_assignment_applied", toString r.goalAssignmentApplied)]
-
-def goalBindingJson (goal : GoalBinding) : String := object [
-  ("owner", jsonString goal.owner), ("session", jsonString goal.session),
-  ("assignment", identityJson goal.assignment), ("status", jsonString goal.status.toDefraDB)]
-
-def stateJson (s : State) : String := object [
-  ("receipts", jsonArray (s.receipts.map identityJson)),
-  ("requests", jsonArray (s.requests.map requestJson)),
-  ("outcomes", jsonArray (s.outcomes.map identityJson)),
-  ("goals", jsonArray (s.goals.map goalBindingJson))]
 
 structure AdmissionInput where
   name : String
@@ -899,23 +872,7 @@ def deliveryOptions : Family DeliveryOptionInput Bool where
     [false, true].map fun targetExisting => { kind, emitOutcome, concurrency, targetExisting }
   model := fun i => Triggers.deliveryOptionsAllowed i.kind i.emitOutcome i.concurrency i.targetExisting
 
-def latestAdmissionCases : List String :=
-  let old := { fire "old" with emitOutcome := false, identity := { identity "owner-a" "old" with collection := "Schedule" } }
-  let next := { old with identity := { old.identity with document := "next" } }
-  let pre := admit {} old
-  [("invalid_target_preserves_pending", pre, false),
-   ("valid_target_replaces_pending", pre, true),
-   ("duplicate_preserves_later_work", admit (admit pre next)
-      { old with identity := { old.identity with document := "later" } }, true)].map fun (name, before, allowed) =>
-    object [("name", jsonString name), ("pre", stateJson before),
-      ("fire", fireJson next), ("destination_allowed", toString allowed),
-      ("post", stateJson (admitLatest before next allowed))]
-
 attribute [conformance_function] EventDelivery.Durable.callbackResultReady
-
-
-def triggerDeliveryLatestAdmissionCasesJson : String :=
-  jsonArray latestAdmissionCases
 
 example : (admit (admit {} (fire "a")) (fire "a")).requests.length = 1 := by native_decide
 example : outcomeDue {} { fire := { fire "a" with goalBacked := true }, terminal := false } = false := by

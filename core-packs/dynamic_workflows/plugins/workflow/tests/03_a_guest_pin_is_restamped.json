@@ -1,0 +1,26 @@
+{
+  "input": {
+    "pin": null,
+    "script": "module.exports = (i) => ({effects: {pin: {script_id: \"mine\", source_digest: \"sha256:mine\", agent_budget: 1, handle: \"m\"}, spawn: [{slot: \"s\", attempt: 0, target: \"wf-read-only\", prompt: \"p\", title: \"t\"}]}})",
+    "args": {}
+  },
+  "expect": {
+    "effects": {
+      "pin": {
+        "script_id": "adb9b8df1bdcad973a08f7ee3a0bd36e0bf24d223d56f96217a5bcffe9754367",
+        "source_digest": "sha256:adb9b8df1bdcad973a08f7ee3a0bd36e0bf24d223d56f96217a5bcffe9754367",
+        "agent_budget": 1,
+        "handle": "m"
+      },
+      "spawn": [
+        {
+          "slot": "s",
+          "attempt": 0,
+          "target": "wf-read-only",
+          "prompt": "p",
+          "title": "t"
+        }
+      ]
+    }
+  }
+}

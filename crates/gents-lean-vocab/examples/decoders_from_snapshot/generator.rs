@@ -1084,10 +1084,7 @@ fn disagreements(
     }
     let mut ty = optional.unwrap_or(ty);
     let mut shape = &seen.shape;
-    loop {
-        let Some((name, type_args)) = head(ty) else {
-            break;
-        };
+    while let Some((name, type_args)) = head(ty) {
         match (name.as_str(), type_args.len()) {
             ("Vec" | "BTreeSet", 1) => {
                 match shape.element.as_deref().filter(|element| element.seen > 0) {

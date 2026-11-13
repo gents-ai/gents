@@ -8,8 +8,6 @@ use anyhow::Result;
 use std::{sync::Arc, time::Duration};
 
 mod generated_policy;
-mod request_row_writers;
-mod workspace_recovery;
 
 async fn claimed_owner_with_short_lease(
     node: &Arc<EmbeddedNode>,

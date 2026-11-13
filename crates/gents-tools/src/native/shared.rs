@@ -20,8 +20,7 @@ pub use command::command_validation::validate_command_policy;
 pub(super) use command::command_validation::validate_read_only_command;
 pub(crate) use command::{
     current_managed_command_credential_snapshot, default_lsp_network_mode,
-    effective_command_policy, lsp_sandbox_for_effective, normalize_workspace_lifecycle_state,
-    prepare_managed_command,
+    effective_command_policy, lsp_sandbox_for_effective, prepare_managed_command,
 };
 pub use command::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,

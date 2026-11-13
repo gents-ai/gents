@@ -1,0 +1,38 @@
+{
+  "bind": "fixtures/data",
+  "expect": {
+    "response": {
+      "alt": "Scatter chart. X axis: t, from 0 to 1,799. Y axis: value, from 0 to 160. 1 series. \"value\": 1800 points, y from 0 to 143, correlation 0.4072.",
+      "chart": "scatter",
+      "height": 480,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "correlation": 0.4072,
+          "gaps": 0,
+          "mark": "point",
+          "max": 143.0,
+          "min": 0.0,
+          "name": "value",
+          "points": 1800,
+          "x_max": 1799.0,
+          "x_min": 0.0
+        }
+      ],
+      "warnings": [
+        "the SVG is too long for a tool reply and is left out; use save to write it to a file"
+      ],
+      "width": 800
+    }
+  },
+  "input": {
+    "chart": "scatter",
+    "file": "big_line.csv",
+    "output": "svg",
+    "x": "t",
+    "y": [
+      "value"
+    ]
+  }
+}

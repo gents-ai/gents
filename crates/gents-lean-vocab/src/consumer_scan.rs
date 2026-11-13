@@ -273,8 +273,10 @@ pub fn consumer_sites(
             let calls: usize = [
                 "::replay(",
                 "::replay::<",
+                "::replay)",
                 "::cases(",
                 "::cases::<",
+                "::cases)",
                 " as family;",
             ]
             .iter()

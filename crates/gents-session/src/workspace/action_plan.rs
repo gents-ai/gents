@@ -49,6 +49,14 @@ impl CreationPolicy {
             Self::IsolatedClone => "isolated_clone",
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "git_worktree_diff" => Some(Self::GitWorktreeDiff),
+            "isolated_clone" => Some(Self::IsolatedClone),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

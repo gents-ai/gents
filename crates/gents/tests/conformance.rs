@@ -25,9 +25,8 @@ use admission_slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
 };
 use gents_lean_vocab::{
-    lean_contract_snapshot, lean_r6_backgrounding_case,
-    lean_r6_backgrounding_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
-    LeanLifecycleTransitionCase,
+    lean_contract_snapshot, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_recovery_sweep_cases,
 };
 use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
@@ -132,8 +131,9 @@ async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
 }
 
 #[tokio::test]
-async fn generated_request_transition_cases_cover_lifecycle_policy() {
-    request_lifecycle::generated_request_transition_cases_cover_lifecycle_policy().await;
+async fn legal_request_transitions_reach_their_target_through_production_writers() {
+    request_lifecycle::legal_request_transitions_reach_their_target_through_production_writers()
+        .await;
 }
 
 #[test]

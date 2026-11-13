@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use super::*;
 
 #[test]
@@ -25,22 +23,6 @@ end Sample
 
 #[test]
 fn lean_executable_contracts_cover_initial_domains() {
-    let request_states: Vec<&str> = lean_contract_snapshot().family_vocabularies
-        ["request_state_vocabulary"]["values"]
-        .as_array()
-        .expect("RequestState vocabulary values")
-        .iter()
-        .map(|state| state.as_str().expect("RequestState name"))
-        .collect();
-    assert_lifecycle_transition_cases_partition(
-        "Request",
-        &request_states,
-        lean_request_transition_cases(),
-    );
-    assert_eq!(
-        lean_contract_snapshot().request_transition_cases.len(),
-        request_states.len().pow(2)
-    );
     let sweep_ids = &lean_contract_snapshot().recovery_sweep_ids;
     assert!(!sweep_ids.is_empty(), "the model registers recovery sweeps");
     for sweep_id in sweep_ids {

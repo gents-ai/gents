@@ -1,0 +1,73 @@
+{
+  "input": {
+    "chart": "bar",
+    "title": "Revenue by region",
+    "y_label": "k$",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "region",
+        "q1",
+        "q2"
+      ],
+      "rows": [
+        [
+          "North",
+          12,
+          15
+        ],
+        [
+          "South",
+          8,
+          9
+        ],
+        [
+          "East",
+          14,
+          13
+        ],
+        [
+          "West",
+          18,
+          12
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Bar chart titled \"Revenue by region\". 4 categories of region, from North to West. Value axis: k$, from 0 to 20. 2 series. \"q1\" (bar): highest 18 at West, lowest 8 at South. \"q2\" (bar): highest 15 at North, lowest 9 at South.",
+      "chart": "bar",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 18.0,
+          "min": 8.0,
+          "name": "q1",
+          "points": 4,
+          "sum": 52.0
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 15.0,
+          "min": 9.0,
+          "name": "q2",
+          "points": 4,
+          "sum": 49.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Revenue by region</title><desc id=\"chart-desc\">Bar chart titled &quot;Revenue by region&quot;. 4 categories of region, from North to West. Value axis: k$, from 0 to 20. 2 series. &quot;q1&quot; (bar): highest 18 at West, lowest 8 at South. &quot;q2&quot; (bar): highest 15 at North, lowest 9 at South.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Revenue by region</text><line x1=\"53.24\" y1=\"240.5\" x2=\"498.65\" y2=\"240.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"177.5\" x2=\"498.65\" y2=\"177.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"113.5\" x2=\"498.65\" y2=\"113.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"69.57\" y=\"151.2\" width=\"38.59\" height=\"151.8\" fill=\"#0072b2\"><title>q1, North: 12</title></rect><text x=\"88.87\" y=\"147.2\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">12</text><rect x=\"180.93\" y=\"201.8\" width=\"38.59\" height=\"101.2\" fill=\"#0072b2\"><title>q1, South: 8</title></rect><text x=\"200.22\" y=\"197.8\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">8</text><rect x=\"292.28\" y=\"125.9\" width=\"38.59\" height=\"177.1\" fill=\"#0072b2\"><title>q1, East: 14</title></rect><text x=\"311.58\" y=\"121.9\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">14</text><rect x=\"403.64\" y=\"75.3\" width=\"38.59\" height=\"227.7\" fill=\"#0072b2\"><title>q1, West: 18</title></rect><text x=\"422.93\" y=\"71.3\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">18</text><rect x=\"109.66\" y=\"113.25\" width=\"38.59\" height=\"189.75\" fill=\"#e69f00\"><title>q2, North: 15</title></rect><text x=\"128.96\" y=\"109.25\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">15</text><rect x=\"221.02\" y=\"189.15\" width=\"38.59\" height=\"113.85\" fill=\"#e69f00\"><title>q2, South: 9</title></rect><text x=\"240.31\" y=\"185.15\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">9</text><rect x=\"332.37\" y=\"138.55\" width=\"38.59\" height=\"164.45\" fill=\"#e69f00\"><title>q2, East: 13</title></rect><text x=\"351.66\" y=\"134.55\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">13</text><rect x=\"443.73\" y=\"151.2\" width=\"38.59\" height=\"151.8\" fill=\"#e69f00\"><title>q2, West: 12</title></rect><text x=\"463.02\" y=\"147.2\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">12</text><line x1=\"53.24\" y1=\"303.5\" x2=\"498.65\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"52.74\" y1=\"50\" x2=\"52.74\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"109.5\" y1=\"303\" x2=\"109.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"108.91\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">North</text><line x1=\"220.5\" y1=\"303\" x2=\"220.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"220.27\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">South</text><line x1=\"332.5\" y1=\"303\" x2=\"332.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"331.62\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">East</text><line x1=\"443.5\" y1=\"303\" x2=\"443.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"442.98\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">West</text><line x1=\"49.24\" y1=\"303.5\" x2=\"53.24\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"49.24\" y1=\"240.5\" x2=\"53.24\" y2=\"240.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"243.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><line x1=\"49.24\" y1=\"177.5\" x2=\"53.24\" y2=\"177.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"180.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">10</text><line x1=\"49.24\" y1=\"113.5\" x2=\"53.24\" y2=\"113.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"117.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">15</text><line x1=\"49.24\" y1=\"50.5\" x2=\"53.24\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">20</text><text x=\"275.94\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">region</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">k$</text><rect x=\"512.65\" y=\"49\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"532.65\" y=\"59\" font-size=\"12\" fill=\"#1f2328\">q1</text><rect x=\"512.65\" y=\"67\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"532.65\" y=\"77\" font-size=\"12\" fill=\"#1f2328\">q2</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

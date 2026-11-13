@@ -341,13 +341,12 @@ pub(crate) async fn consume_folded_in_txn(
     use gents_protocol::document_query::{
         fields::agent_request as fields, Filter, Input, Selection, Update,
     };
+    let transition =
+        RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Superseded)?;
     let mutation = Update::doc(
         consumption.folded_request_doc_id.as_str(),
         Input::new()
-            .set(
-                fields::LIFECYCLE_STATE,
-                RequestLifecycleState::Superseded.as_str(),
-            )
+            .set(fields::LIFECYCLE_STATE, transition.to().as_str())
             .set(
                 fields::SUPERSEDED_BY_REQUEST,
                 consumption.head_request_id.as_str(),
@@ -365,7 +364,7 @@ pub(crate) async fn consume_folded_in_txn(
             .and(Filter::eq(fields::NODE_DID, consumption.node_did.as_str()))
             .and(Filter::eq(
                 fields::LIFECYCLE_STATE,
-                RequestLifecycleState::Pending.as_str(),
+                transition.from().as_str(),
             ))
             .and(Filter::is_null(fields::INTERRUPT_REQUESTED_AT)),
     )

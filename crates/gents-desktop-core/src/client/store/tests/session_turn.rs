@@ -89,9 +89,7 @@ fn modeled_rows(rows: &[family::Row<String>]) -> Vec<AgentRequestRow> {
 
 #[test]
 fn session_turn_selection_matches_the_lean_model() {
-    gents_lean_vocab::families::client_shell_contracts_session_turn_cases_selection::replay::<
-        String,
-    >(|input| {
+    family::replay::<String>(|input| {
         let rows = modeled_rows(&input.rows);
         let selected = rows
             .iter()

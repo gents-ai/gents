@@ -8,10 +8,12 @@ use gents_protocol::row::{
 use super::DefraWatcher;
 
 mod rows;
+mod scoped;
 use rows::{is_aged_background_completion_wakeup, is_pending, preclaim_signal, PreclaimSignal};
+use scoped::{merge_scoped_scans, ActorScan, ScopedScanCause, ScopedScanFailure};
 
 #[derive(Debug, thiserror::Error)]
-enum WatcherScanError {
+pub enum WatcherScanError {
     #[error("request scan for {actor} failed: {source}")]
     Query {
         actor: String,
@@ -22,6 +24,40 @@ enum WatcherScanError {
     Rows { actor: String, reason: String },
     #[error("request arrival scan for {actor} failed: {reason}")]
     Arrival { actor: String, reason: String },
+    #[error("request scan for {actor} was not observed")]
+    Unobserved { actor: String },
+}
+
+impl WatcherScanError {
+    pub fn actor(&self) -> &str {
+        match self {
+            Self::Query { actor, .. }
+            | Self::Rows { actor, .. }
+            | Self::Arrival { actor, .. }
+            | Self::Unobserved { actor } => actor,
+        }
+    }
+}
+
+fn scan_failure(failure: ScopedScanFailure<WatcherScanError>) -> WatcherScanError {
+    match failure.cause {
+        ScopedScanCause::MissingScan => WatcherScanError::Unobserved {
+            actor: failure.actor,
+        },
+        ScopedScanCause::Failed(error) => error,
+    }
+}
+
+#[derive(Debug)]
+pub struct PendingRequestScan {
+    pub requests: Vec<AgentRequest>,
+    pub failures: Vec<WatcherScanError>,
+}
+
+impl PendingRequestScan {
+    pub fn needs_rescan(&self) -> bool {
+        scoped::needs_rescan(&self.failures)
+    }
 }
 
 impl DefraWatcher {
@@ -34,12 +70,18 @@ impl DefraWatcher {
     }
 
     pub async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
+        let PendingRequestScan { requests, failures } = self.scan_pending_requests().await?;
+        match failures.into_iter().next() {
+            Some(failure) if requests.is_empty() => Err(failure.into()),
+            _ => Ok(requests),
+        }
+    }
+
+    pub async fn scan_pending_requests(&self) -> anyhow::Result<PendingRequestScan> {
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let node_did = gents_store::graphql::escape_graphql_string(&self.node_did);
-        let mut rows = Vec::new();
+        let mut scans = Vec::with_capacity(self.agents.len());
         let mut positions = rapidhash::RapidHashMap::default();
-        let mut seen = RapidHashSet::default();
-        let mut failure = None;
         let mut has_parked = false;
         let mut wait_metadata = rapidhash::RapidHashMap::default();
         for identity in &self.agents {
@@ -92,11 +134,14 @@ impl DefraWatcher {
                         source,
                     };
                     tracing::warn!(%error, "agent request scan failed");
-                    failure.get_or_insert(error);
+                    scans.push(ActorScan {
+                        actor: identity.did().to_owned(),
+                        outcome: Err(error),
+                    });
                     continue;
                 }
             };
-            let (mut observed, malformed) = match parse_active_runtime_rows(response.get("data")) {
+            let (observed, malformed) = match parse_active_runtime_rows(response.get("data")) {
                 Ok(rows) => rows,
                 Err(error) => {
                     let error = WatcherScanError::Rows {
@@ -104,7 +149,10 @@ impl DefraWatcher {
                         reason: format!("{error:#}"),
                     };
                     tracing::warn!(%error, "agent request scan failed");
-                    failure.get_or_insert(error);
+                    scans.push(ActorScan {
+                        actor: identity.did().to_owned(),
+                        outcome: Err(error),
+                    });
                     continue;
                 }
             };
@@ -156,28 +204,30 @@ impl DefraWatcher {
                         reason: format!("{error:#}"),
                     };
                     tracing::warn!(%error, "agent request scan failed");
-                    failure.get_or_insert(error);
+                    scans.push(ActorScan {
+                        actor: identity.did().to_owned(),
+                        outcome: Err(error),
+                    });
                     continue;
                 }
             };
             positions.extend(order);
-            observed.retain(|row| {
-                row.agent_did.as_deref() == Some(actor.as_str())
-                    && row
-                        .doc_id
-                        .as_ref()
-                        .is_some_and(|doc| seen.insert(doc.clone()))
+            scans.push(ActorScan {
+                actor: identity.did().to_owned(),
+                outcome: Ok(observed),
             });
-            rows.extend(observed);
         }
-        rows.sort_by(|a, b| {
-            (a.created_at.as_deref(), &a.request_id).cmp(&(b.created_at.as_deref(), &b.request_id))
-        });
-        rows.sort_by_key(|row| {
-            row.doc_id
-                .as_ref()
-                .and_then(|id| positions.get(id).copied())
-        });
+        let merged = merge_scoped_scans(
+            self.agents.iter().map(|identity| identity.did()),
+            scans,
+            &positions,
+        );
+        let rows = merged.rows;
+        let failures = merged
+            .failures
+            .into_iter()
+            .map(scan_failure)
+            .collect();
         self.has_parked
             .store(has_parked, std::sync::atomic::Ordering::Relaxed);
         let now = chrono::Utc::now();
@@ -187,12 +237,7 @@ impl DefraWatcher {
             .into_iter()
             .map(AgentRequest::try_from)
             .collect::<Result<Vec<_>, AgentRequestRowError>>()?;
-        if requests.is_empty() {
-            if let Some(error) = failure {
-                return Err(error.into());
-            }
-        }
-        Ok(requests)
+        Ok(PendingRequestScan { requests, failures })
     }
 
     /// Recovery of a parked request acts as the Agent that owns it: an expired

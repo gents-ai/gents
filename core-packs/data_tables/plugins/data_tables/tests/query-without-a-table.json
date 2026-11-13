@@ -1,0 +1,28 @@
+{
+  "expect": {
+    "columns": [
+      {
+        "name": "two",
+        "type": "int64"
+      },
+      {
+        "name": "s",
+        "type": "text"
+      }
+    ],
+    "markdown": "| two | s |\n| --- | --- |\n| 2 | a |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 1,
+    "rows": [
+      [
+        2,
+        "a"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT 1 + 1 AS two, 'a' AS s"
+  }
+}

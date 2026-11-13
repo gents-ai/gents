@@ -47,7 +47,6 @@ async fn managed_agent_with_binding(
 
 struct ManagedAgentFixture {
     pub user: gents_store::identity::KeyIdentity,
-    pub access: gents_store::config_client::ConfigAccess,
     pub agent: Arc<dyn NodeIdentity>,
     pub binding: gents_protocol::agent_identity::AgentIdentityBinding,
 }
@@ -104,7 +103,6 @@ async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
     let (agent, binding) = install_managed_agent(db, &access, &user, "Test agent").await;
     ManagedAgentFixture {
         user,
-        access,
         agent,
         binding,
     }
@@ -594,11 +592,9 @@ struct ChildRow {
     #[serde(rename = "_docID")]
     doc_id: String,
     request_id: String,
-    node_did: String,
     session_id: String,
     agent_did: Option<String>,
     caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
     caused_by_trigger_id: Option<String>,
     caused_by_trigger_kind: Option<String>,
     input: Option<serde_json::Value>,

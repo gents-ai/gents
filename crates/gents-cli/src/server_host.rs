@@ -71,9 +71,6 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
     let Some(Command::Init(mut args)) = cli.command else {
         unreachable!("standard provision argv must parse as init")
     };
-    // No terminal is owned here, so init must not ask on one: a default pack
-    // whose plugins request permissions is left uninstalled and reported.
-    args.unattended = true;
     args.no_default_packs = !options.default_packs;
     let initialized = crate::commands::init::init_home(args).await?;
     for pack in initialized["default_packs"]["not_installed"]

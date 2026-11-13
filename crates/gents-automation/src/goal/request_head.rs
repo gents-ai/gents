@@ -515,8 +515,6 @@ pub(super) const STALE_ASSIGNMENT_REASON: &str = "superseded by a newer Task Goa
 /// A pending Goal continuation that is not a member of the Goal's current
 /// assignment, with the request that supersedes it.
 pub(super) struct StaleContinuation {
-    pub(super) doc_id: String,
-    pub(super) request_id: String,
     pub(super) survivor_request_id: String,
     pub(super) survivor_doc_id: String,
 }
@@ -562,8 +560,7 @@ pub(super) fn stale_assignment_continuations(
     );
     let mut stale = Vec::new();
     for row in pending {
-        let doc = row
-            .doc_id
+        row.doc_id
             .as_deref()
             .context("Goal continuation has no document ID")?;
         let entry = authenticated_assignment_entry(
@@ -580,8 +577,6 @@ pub(super) fn stale_assignment_continuations(
             continue;
         }
         stale.push(StaleContinuation {
-            doc_id: doc.to_owned(),
-            request_id: row.request_id.clone(),
             survivor_request_id: entry.request_id.clone(),
             survivor_doc_id: root.to_owned(),
         });

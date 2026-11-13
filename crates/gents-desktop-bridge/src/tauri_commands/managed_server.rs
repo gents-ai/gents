@@ -331,10 +331,10 @@ where
     restart_managed_server(&app, request, &state, || async { Ok(()) }).await
 }
 
-/// Approves the Engineer's default packs named in `request` and installs
-/// them. A default pack is installed through the home's own store, as
-/// `init --engineer` installs it, and a running node holds that store, so
-/// the node is restarted around the install: stopped, the packs installed,
+/// Turns on the Engineer's core packs named in `request`, installing from
+/// the release one the home lacks. A core pack is enabled through the home's
+/// own store, as `init --engineer` installs it, and a running node holds that
+/// store, so the node is restarted around it: stopped, the packs enabled,
 /// started again. A pack that fails is reported and never keeps the node
 /// stopped.
 #[tauri::command]
@@ -363,10 +363,10 @@ where
                 "starter packs install into the local Node this desktop runs; start it first",
             )
         })?;
-    let approved: Vec<_> = request
+    let enabling: Vec<_> = request
         .packs
         .into_iter()
-        .map(|approval| (approval.pack, approval.digest))
+        .map(|approval| approval.pack)
         .collect();
     let outcome = std::sync::Arc::new(tokio::sync::Mutex::new(None));
     let restarted = restart_managed_server(&app, restart, &state, || {
@@ -374,7 +374,7 @@ where
         async move {
             *outcome.lock().await = Some(
                 super::packs::run::<serde_json::Value, _, _>(move || {
-                    gents_server::packs::approve_default_packs(home, approved, None)
+                    gents_server::packs::enable_core_packs(home, enabling)
                 })
                 .await,
             );
@@ -384,7 +384,7 @@ where
     .await;
     let report = outcome.lock().await.take();
     if let Err(mut error) = restarted {
-        // The packs were installed, or failed, before the node did not come
+        // The packs were enabled, or failed, before the node did not come
         // back: the restart error carries what happened to them.
         if let Some(Ok(report)) = &report {
             error.message = format!("{} {}", error.message, installed_before_restart(report));
@@ -392,22 +392,22 @@ where
         return Err(error);
     }
     let report = report
-        .ok_or_else(|| BridgeError::untyped("the node restarted without installing the packs"))??;
+        .ok_or_else(|| BridgeError::untyped("the node restarted without enabling the packs"))??;
     let failed = serde_json::from_value(report["failed"].clone())
         .map_err(|error| BridgeError::untyped(format!("invalid pack report: {error}")))?;
     let listed: crate::types::DefaultPacksView =
-        super::packs::run(move || gents_server::packs::default_packs(home, None)).await?;
+        super::packs::run(move || gents_server::packs::core_packs(home)).await?;
     Ok(crate::types::DefaultPacksApprovalView {
         packs: listed.packs,
         failed,
     })
 }
 
-/// What an approval did to the packs before its node restart failed. A
-/// failed pack the report marks `installed` has a home install record and
-/// nothing more is known of it: its own install may have stopped partway, or
-/// an older install may have been there before a refused approval. So it is
-/// said to be installed but not finished, with what finishes it.
+/// What enabling did to the packs before its node restart failed. A failed
+/// pack the report marks `installed` has a home install record and nothing
+/// more is known of it: its own enable may have stopped partway, or it may
+/// have been installed before. So it is said to be installed but not
+/// finished, with what finishes it.
 fn installed_before_restart(report: &serde_json::Value) -> String {
     let names = |packs: Vec<&serde_json::Value>| {
         packs
@@ -420,24 +420,24 @@ fn installed_before_restart(report: &serde_json::Value) -> String {
     let (unfinished, absent): (Vec<_>, Vec<_>) =
         listed("failed").partition(|pack| pack["installed"] == true);
     let (installed, unfinished, absent) = (
-        names(listed("installed").collect()),
+        names(listed("enabled").collect()),
         names(unfinished),
         names(absent),
     );
     let mut clauses = Vec::new();
     if !installed.is_empty() {
-        clauses.push(format!("these starter packs were installed: {installed}."));
+        clauses.push(format!("these starter packs were turned on: {installed}."));
     }
     if !unfinished.is_empty() {
         clauses.push(format!(
-            "these are installed but not finished: {unfinished}. Approve them again once the node starts."
+            "these are installed but not finished: {unfinished}. Turn them on again once the node starts."
         ));
     }
     if clauses.is_empty() {
-        clauses.push("no starter pack was installed.".to_owned());
+        clauses.push("no starter pack was turned on.".to_owned());
     }
     if !absent.is_empty() {
-        clauses.push(format!("these were not installed: {absent}."));
+        clauses.push(format!("these were not turned on: {absent}."));
     }
     let mut message = "Before the local node failed to start again,".to_owned();
     for (index, clause) in clauses.iter().enumerate() {

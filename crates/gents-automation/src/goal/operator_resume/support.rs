@@ -15,7 +15,7 @@ pub const SESSION: &str = "contract-session";
 pub(crate) const PARENT: &str = "contract-parent";
 pub(crate) const PROFILE: &str = "contract-behavior:inference";
 
-pub(crate) struct ClaudeAccounts {
+pub struct ClaudeAccounts {
     pub access: ConfigAccess,
     pub a: String,
     pub b: String,

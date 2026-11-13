@@ -1,0 +1,50 @@
+{
+  "input": {
+    "chart": "area",
+    "file": "data.csv",
+    "x": "month",
+    "y": [
+      "units"
+    ],
+    "save": {
+      "svg": "charts/a.svg",
+      "png": "charts/a.png"
+    },
+    "output": "svg",
+    "width": 300,
+    "height": 200
+  },
+  "bind": "save",
+  "expect": {
+    "response": {
+      "alt": "Area chart. X axis: month, from Jan to May. Y axis: units, from 0 to 60. 1 series. \"units\": 5 points, lowest 40 at Jan, highest 50 at Apr.",
+      "chart": "area",
+      "files": [
+        {
+          "bytes": 3589,
+          "path": "charts/a.svg"
+        },
+        {
+          "bytes": 4998,
+          "path": "charts/a.png"
+        }
+      ],
+      "height": 200,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "area",
+          "max": 50.0,
+          "min": 40.0,
+          "name": "units",
+          "points": 5
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"300\" height=\"200\" viewBox=\"0 0 300 200\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">area chart</title><desc id=\"chart-desc\">Area chart. X axis: month, from Jan to May. Y axis: units, from 0 to 60. 1 series. &quot;units&quot;: 5 points, lowest 40 at Jan, highest 50 at Apr.</desc><rect x=\"0\" y=\"0\" width=\"300\" height=\"200\" fill=\"#ffffff\"/><line x1=\"53.24\" y1=\"102.5\" x2=\"284\" y2=\"102.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"61.5\" x2=\"284\" y2=\"61.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><path d=\"M 76.31,143 L 76.31,61 L 122.46,52.8 L 168.62,58.95 L 214.77,40.5 L 260.92,46.65 L 260.92,143 Z\" fill=\"#0072b2\" fill-opacity=\"0.28\"/><path d=\"M 76.31,61 L 122.46,52.8 L 168.62,58.95 L 214.77,40.5 L 260.92,46.65\" fill=\"none\" stroke=\"#0072b2\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"76.31\" cy=\"61\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>units: Jan, 40</title></circle><circle cx=\"122.46\" cy=\"52.8\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>units: Feb, 44</title></circle><circle cx=\"168.62\" cy=\"58.95\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>units: Mar, 41</title></circle><circle cx=\"214.77\" cy=\"40.5\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>units: Apr, 50</title></circle><circle cx=\"260.92\" cy=\"46.65\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>units: May, 47</title></circle><line x1=\"53.24\" y1=\"143.5\" x2=\"284\" y2=\"143.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"52.74\" y1=\"20\" x2=\"52.74\" y2=\"143\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"76.5\" y1=\"143\" x2=\"76.5\" y2=\"147\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"76.31\" y=\"159\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Jan</text><line x1=\"122.5\" y1=\"143\" x2=\"122.5\" y2=\"147\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"122.46\" y=\"159\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Feb</text><line x1=\"169.5\" y1=\"143\" x2=\"169.5\" y2=\"147\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"168.62\" y=\"159\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Mar</text><line x1=\"215.5\" y1=\"143\" x2=\"215.5\" y2=\"147\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"214.77\" y=\"159\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Apr</text><line x1=\"261.5\" y1=\"143\" x2=\"261.5\" y2=\"147\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"260.92\" y=\"159\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">May</text><line x1=\"49.24\" y1=\"143.5\" x2=\"53.24\" y2=\"143.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"147\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"49.24\" y1=\"102.5\" x2=\"53.24\" y2=\"102.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"106\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">20</text><line x1=\"49.24\" y1=\"61.5\" x2=\"53.24\" y2=\"61.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"65\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">40</text><line x1=\"49.24\" y1=\"20.5\" x2=\"53.24\" y2=\"20.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"24\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">60</text><text x=\"168.62\" y=\"180\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">month</text><text x=\"27\" y=\"81.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 81.5)\">units</text></svg>",
+      "warnings": [],
+      "width": 300
+    }
+  }
+}

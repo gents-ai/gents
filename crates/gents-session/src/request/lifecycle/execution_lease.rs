@@ -1009,12 +1009,13 @@ async fn write_terminal_request(
     };
     let timestamp_gql = escape_graphql_string(timestamp);
     let reason = escape_graphql_string(reason);
-    let stopped_before_running = state.certifies_stopped_before_running(
-        effective_outcome.request_state(),
+    let transition = state.transition_to(effective_outcome.request_state())?;
+    let stopped_before_running = transition.from().certifies_stopped_before_running(
+        transition.to(),
         matches!(authority, TerminalAuthority::Owner(_)),
     );
-    let target = escape_graphql_string(effective_outcome.request_state().as_str());
-    let state = escape_graphql_string(state.as_str());
+    let target = escape_graphql_string(transition.to().as_str());
+    let state = escape_graphql_string(transition.from().as_str());
     let mutation = format!(
         r#"mutation($terminal_output: JSON) {{ update_AgentRequest(
                 docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},

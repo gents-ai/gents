@@ -1,0 +1,7 @@
+{
+  "node": {},
+  "tools": [
+    {"tools_id": "script-compute", "display_name": "JavaScript computation", "integrations": {"plugins": [{"plugin": "gents/script"}]}},
+    {"tools_id": "script-tools", "display_name": "JavaScript with caller tools", "integrations": {"plugins": [{"plugin": "gents/script", "tool_calls": true}]}}
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "assets": [
+    "README.md",
+    "pack_config.json",
+    "skills/automate/SKILL.md",
+    "skills/connect_data/SKILL.md",
+    "skills/control_access/SKILL.md",
+    "skills/delegate_work/SKILL.md",
+    "skills/design_page/SKILL.md",
+    "skills/diagnose_node/SKILL.md",
+    "skills/package_pack/SKILL.md",
+    "skills/plan_work/SKILL.md",
+    "skills/use_database/SKILL.md",
+    "skills/write_plugin/SKILL.md",
+    "tests/install.json"
+  ],
+  "authors": [
+    "gents contributors"
+  ],
+  "config": "pack_config.json",
+  "dependencies": [],
+  "description": "Skills that teach the Engineer to plan, build, package and diagnose apps on a Gents node.",
+  "inference_slots": [],
+  "kind": "documents",
+  "manifest_version": 1,
+  "name": "pack_builder",
+  "namespace": "gents",
+  "plugin_interface": 1,
+  "schemas": [],
+  "tags": [
+    "skills",
+    "engineer",
+    "authoring"
+  ],
+  "version": "0.7.1"
+}

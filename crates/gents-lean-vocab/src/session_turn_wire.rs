@@ -22,4 +22,3 @@ pub struct LeanSessionTurnRow {
     pub background_wake: bool,
     pub authored_input_materialized: bool,
 }
-

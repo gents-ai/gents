@@ -13,6 +13,11 @@ use super::{DriftPolicy, InstallReport};
 use crate::pack::archive::PackArchive;
 use gents_store::config_client::{ConfigAccess, PackApprovalScope, PackEffectApprover};
 
+pub struct HostedPackApproval {
+    pub scope: PackApprovalScope,
+    pub approver: Arc<dyn PackEffectApprover>,
+}
+
 pub struct HostedHomePublication {
     pub home: std::path::PathBuf,
     pub record: crate::pack::HomePackInstall,
@@ -128,8 +133,7 @@ impl HostedPackStage {
         self,
         access: &ConfigAccess,
         owner: &str,
-        scope: PackApprovalScope,
-        approver: Arc<dyn PackEffectApprover>,
+        approval: HostedPackApproval,
         policy: DriftPolicy,
         home_publication: Option<HostedHomePublication>,
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
@@ -140,8 +144,7 @@ impl HostedPackStage {
             self.apply_owned(
                 &access,
                 &owner,
-                scope,
-                approver,
+                approval,
                 policy,
                 home_publication,
                 profile_policy,
@@ -160,12 +163,12 @@ impl HostedPackStage {
         mut self,
         access: &ConfigAccess,
         owner: &str,
-        scope: PackApprovalScope,
-        approver: Arc<dyn PackEffectApprover>,
+        approval: HostedPackApproval,
         policy: DriftPolicy,
         home_publication: Option<HostedHomePublication>,
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
     ) -> std::result::Result<Vec<InstallReport>, HostedPackStageError> {
+        let HostedPackApproval { scope, approver } = approval;
         if !(owner == self.node_did
             && scope.node_did == self.node_did
             && scope.pack_digests == self.pack_digests

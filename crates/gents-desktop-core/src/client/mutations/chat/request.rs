@@ -1,13 +1,18 @@
+#[cfg(test)]
 use anyhow::Result;
+#[cfg(test)]
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
 use gents_session::request::lifecycle::TriggerLineage;
+#[cfg(test)]
 use gents_store::config_client::ConfigAccess;
 
+#[cfg(test)]
 use crate::client::store::ClientStore;
 
 #[cfg(test)]
 use super::super::graphql::normalize_required;
+#[cfg(test)]
 use prepare::prepare_request_submission;
 
 /// The request the runtime holds for a send. Replica observation may still be

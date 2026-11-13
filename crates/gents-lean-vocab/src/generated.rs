@@ -45,10 +45,6 @@ pub fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
     &lean_contract_snapshot().recovery_sweep_cases
 }
 
-pub fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
-    &lean_contract_snapshot().request_transition_cases
-}
-
 pub fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
     &lean_contract_snapshot().session_input_edit_cases
 }
@@ -458,10 +454,7 @@ pub struct LeanConfigurationSignedWriteRetryCase {
 pub struct LeanContractSnapshot {
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub generated_by: String,
-    pub trigger_delivery_latest_admission_cases: serde_json::Value,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
-    pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
-    pub request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub goal_client_start_cases: Vec<serde_json::Value>,
     pub causal_hop_default_max_request_hop: Option<u32>,
@@ -883,18 +876,6 @@ pub enum LeanIdentitySubject {
     Actor { actor: String },
     EntitySet { resource: String, id: String, target_relation: String },
     Object { resource: String, id: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanLifecycleTransitionCase {
-    pub stopped_before_running: bool,
-    pub name: String,
-    pub domain: String,
-    pub from: String,
-    pub to: String,
-    pub classification: String,
-    pub action: Option<String>,
-    pub boundary: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

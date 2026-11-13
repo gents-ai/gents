@@ -79,6 +79,8 @@ async fn drain_pending_session_requests_where_in_txn(
     );
     let rows: Vec<AgentRequestRow> = serde_json::from_value(pending.clone())?;
 
+    let transition =
+        RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Interrupted)?;
     let mut drained = Vec::new();
     for row in rows.into_iter().filter(should_drain) {
         let terminalized_at = chrono::Utc::now().to_rfc3339();
@@ -98,13 +100,13 @@ async fn drain_pending_session_requests_where_in_txn(
                     input: $input
                 ) {{ _docID }}
             }}"#,
-            pending = RequestLifecycleState::Pending.as_str(),
+            pending = transition.from().as_str(),
         );
         let response = txn
             .execute_client_signed_update(
                 &mutation,
                 &serde_json::json!({"input": {
-                    "lifecycle_state": RequestLifecycleState::Interrupted.as_str(),
+                    "lifecycle_state": transition.to().as_str(),
                     "failure_reason": reason,
                     "terminalized_at": terminalized_at,
                     "terminal_redrive_attempts": 0,

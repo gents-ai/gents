@@ -1,5 +1,4 @@
 use gents_store::graphql::escape_graphql_string;
-pub(super) use gents_store::graphql::{first_row, graphql_string_list_literal, rows};
 
 pub(super) fn graphql_nullable_string_literal(value: Option<&str>) -> String {
     value
