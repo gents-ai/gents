@@ -344,21 +344,26 @@ fn redrive_owed_deliveries<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn position(sweep_id: &str) -> usize {
-        PERIODIC_RECOVERY_SWEEP_METADATA
-            .iter()
-            .position(|metadata| metadata.sweep_ids.contains(&sweep_id))
-            .unwrap_or_else(|| panic!("{sweep_id} is not registered"))
-    }
+    use gents_lean_vocab::families::periodic_recovery_registry::{SweepInput, SweepOutput};
 
     #[test]
-    fn plugin_job_sweep_is_registered_after_the_session_message_sweep() {
-        let plugin_job = position("tool_call_lifecycle_recover_plugin_job_rows");
-        assert!(plugin_job > position("tool_call_lifecycle_recover_session_message_rows"));
-        assert_eq!(
-            PERIODIC_RECOVERY_SWEEP_METADATA[plugin_job].rust_function,
-            "plugin_job::recovery::redrive_running_jobs"
-        );
+    fn periodic_registry_matches_the_lean_tick_order() {
+        gents_lean_vocab::families::periodic_recovery_registry::replay(|input: &SweepInput| {
+            let metadata = periodic_recovery_sweep_metadata();
+            let position_of = |sweep_id: &str| {
+                metadata
+                    .iter()
+                    .position(|entry| entry.sweep_ids.iter().any(|id| *id == sweep_id))
+            };
+            let position = position_of(&input.sweep_id);
+            SweepOutput {
+                position: position.map(|index| index as u64),
+                rust_function: position.map(|index| metadata[index].rust_function.to_owned()),
+                runs_after_session_message: matches!(
+                    (position, position_of("tool_call_lifecycle_recover_session_message_rows")),
+                    (Some(index), Some(session)) if index > session
+                ),
+            }
+        });
     }
 }

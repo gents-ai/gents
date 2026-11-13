@@ -45,6 +45,72 @@ def wake (state : State) (input : Input) : Wake :=
 def observeChange (state : State) (change : Change) : State :=
   { state with feedOpen := state.feedOpen && change != .closed }
 
+structure DocumentChange where
+  collection : String
+  docId : String
+  deriving DecidableEq, Repr
+
+structure Batch where
+  changes : List DocumentChange
+  resyncRequired : Bool
+  deriving DecidableEq, Repr
+
+/-- A background wait watches its own tool row and, when known, its caller's
+request row. A change without a document id names nothing that can be ruled
+out, and a change in any other collection is not classified by this owner. -/
+structure Scope where
+  toolCollection : String
+  toolDocId : String
+  requestCollection : String
+  callerDocId : Option String
+  deriving DecidableEq, Repr
+
+def changeRelevant (scope : Scope) (c : DocumentChange) : Bool :=
+  if c.docId == "" then true
+  else if c.collection == scope.toolCollection then c.docId == scope.toolDocId
+  else if c.collection == scope.requestCollection then
+    match scope.callerDocId with
+    | none => true
+    | some caller => c.docId == caller
+  else true
+
+/-- The change one feed poll observes: a closed feed, an overflow that lost
+invalidations, a batch naming a watched row, or traffic of other rows. -/
+def classify (scope : Scope) : Option Batch → Change
+  | none => .closed
+  | some batch =>
+    if batch.resyncRequired then .overflow
+    else if batch.changes.any (changeRelevant scope) then .relevant
+    else .unrelated
+
+private def waitScope : Scope :=
+  { toolCollection := "tools", toolDocId := "tool", requestCollection := "requests"
+  , callerDocId := some "caller" }
+
+private def pending (change : Change) : Wake :=
+  wake { rescanAt := 1, feedOpen := true }
+    { now := 0, cancelled := false, deadlineAt := 1, change }
+
+theorem background_wait_filters_other_requests_and_tools_before_rereading :
+    pending (classify waitScope (some
+      { changes := [⟨"tools", "unrelated-physical-document"⟩,
+                    ⟨"requests", "unrelated-physical-document"⟩]
+      , resyncRequired := false })) = .wait ∧
+    pending (classify waitScope (some
+      { changes := [⟨"tools", "tool"⟩], resyncRequired := false })) = .changed ∧
+    pending (classify waitScope (some
+      { changes := [⟨"tools", "unrelated-physical-document"⟩], resyncRequired := true })) =
+      .changed := by
+  native_decide
+
+theorem unrelated_traffic_keeps_waiting (scope : Scope) (batch : Batch)
+    (live : batch.resyncRequired = false)
+    (unrelated : ∀ c ∈ batch.changes, changeRelevant scope c = false) :
+    classify scope (some batch) = .unrelated := by
+  have h : batch.changes.any (changeRelevant scope) = false := by
+    simpa [List.any_eq_false] using unrelated
+  simp [classify, live, h]
+
 theorem cancellation_precedes_all_wakes (state : State) (input : Input)
     (cancelled : input.cancelled = true) : wake state input = .cancel := by
   simp [wake, cancelled]

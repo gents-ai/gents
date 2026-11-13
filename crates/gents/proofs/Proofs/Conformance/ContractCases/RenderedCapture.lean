@@ -531,4 +531,130 @@ def renderedCaptureInlineVersion : Family CaptureInlineInput RenderedCapture.Inl
     , { captureVersion := 3, value := .bareJson } ]
   model := fun i => RenderedCapture.inlineDecode i.captureVersion i.value
 
+deriving instance Lean.ToJson for RenderedCapture.ScopeKind, RenderedCapture.Route,
+  RenderedCapture.Body, RenderedCapture.Source, RenderedCapture.RecordedFamily,
+  RenderedCapture.FailureStage, RenderedCapture.RecordedCapture,
+  RenderedCapture.SendObservation
+
+structure TransportSend where
+  kind : RenderedCapture.ScopeKind
+  route : RenderedCapture.Route
+  body : RenderedCapture.Body
+  deriving Lean.ToJson
+
+/-- One request scope whose main client may record a provider family and whose
+separately built compaction client may record its own; each send is armed for
+its kind and posted in order. -/
+structure TransportInput where
+  mainFamily : Bool
+  compactionFamily : Bool
+  sends : List TransportSend
+  deriving Lean.ToJson
+
+private def jsonSend (kind : RenderedCapture.ScopeKind) : TransportSend :=
+  { kind, route := .responses, body := .json }
+
+/-- What the capturing transport records and issues for each armed send. -/
+@[conformance_family]
+def renderedCaptureTransport :
+    Family TransportInput (List RenderedCapture.SendObservation) where
+  inputs :=
+    ([true, false].flatMap fun mainFamily => [true, false].flatMap fun compactionFamily =>
+      ([RenderedCapture.ScopeKind.inference, .compaction, .compactionFallback, .title, .oneshot,
+          .accessReview].map
+          fun kind => { mainFamily, compactionFamily, sends := [jsonSend kind] })
+        ++ [{ mainFamily, compactionFamily
+            , sends := [jsonSend .compaction, jsonSend .compactionFallback] }])
+    ++ ([.responses, .chatCompletions].flatMap fun route =>
+      [RenderedCapture.ScopeKind.inference, .compaction].map fun kind =>
+        { mainFamily := true, compactionFamily := true
+        , sends := [{ kind, route, body := .unparseable }] })
+    ++ [ { mainFamily := true, compactionFamily := false
+         , sends := [{ kind := .inference, route := .chatCompletions, body := .json }] }
+       , { mainFamily := true, compactionFamily := true
+         , sends := [ { kind := .inference, route := .chatCompletions, body := .unparseable }
+                    , jsonSend .inference ] } ]
+  model := fun i => i.sends.map fun send =>
+    RenderedCapture.transportSend send.kind send.route send.body i.mainFamily i.compactionFamily
+
+deriving instance Lean.ToJson for RenderedCapture.SinkPrior, RenderedCapture.SinkRefusal,
+  RenderedCapture.SinkDelivery, RenderedCapture.DecodeFailure
+
+/-- A delivery to the durable sink; `blockDeleted` means an earlier capture of
+the same body lost one of its blocks before this delivery reuses it. -/
+structure SinkInput where
+  prior : RenderedCapture.SinkPrior
+  blockDeleted : Bool
+  deriving Lean.ToJson
+
+/-- What `DefraRenderedRequestSink::capture` does with each delivery. A deleted
+block is only exercised on an unbound key: that is the write that references it. -/
+@[conformance_family]
+def renderedCaptureSinkDelivery : Family SinkInput RenderedCapture.SinkDelivery where
+  inputs :=
+    [RenderedCapture.SinkPrior.unbound, .sameRequest, .otherRoute, .otherBody].map (fun prior => { prior, blockDeleted := false })
+      ++ [{ prior := .unbound, blockDeleted := true }]
+  model := fun i => RenderedCapture.sinkDeliver RenderedCapture.sinkKey i.prior i.blockDeleted
+
+inductive StoredShape where
+  | delta
+  | manifest
+  deriving Lean.ToJson
+
+/-- How the store answers the reads a stored capture needs. `repinned`: the
+stored record pins another commit than the base carries; `foreignSession`: the
+base row belongs to another session, so it is not this capture's base; `short`:
+a block read returns fewer bytes under its pinned commit. -/
+inductive ReadFault where
+  | intact
+  | storeUnavailable
+  | absent
+  | rewritten
+  | repinned
+  | foreignSession
+  | short
+  deriving Lean.ToJson
+
+structure StoredDecodeInput where
+  shape : StoredShape
+  fault : ReadFault
+  deriving Lean.ToJson
+
+structure StoredDecodeOutput where
+  decodedRequest : Option Nat
+  failure : Option RenderedCapture.DecodeFailure
+  deriving Lean.ToJson
+
+private def storedDecodeStore : StoredShape → ReadFault → List RenderedCaptureStoreEntry
+  | .delta, fault =>
+      let pinned := if let .repinned := fault then 998 else 41
+      let base := match fault with
+        | .absent | .foreignSession => []
+        | .rewritten => [fullEntry 2 999 [99]]
+        | _ => [fullEntry 2 41 [99]]
+      deltaEntry 1 10 2 pinned 0 0 [7] :: base
+  | .manifest, fault =>
+      let first := match fault with
+        | .absent => []
+        | .rewritten => [fullEntry 2 999 [7]]
+        | .short => [fullEntry 2 41 []]
+        | _ => [fullEntry 2 41 [7]]
+      manifestEntry 1 10 [(2, 41), (3, 42)] :: first ++ [fullEntry 3 42 []]
+
+/-- What reading a stored capture back through the capture store yields. -/
+@[conformance_family]
+def renderedCaptureStoredDecode : Family StoredDecodeInput StoredDecodeOutput where
+  inputs :=
+    ([ReadFault.intact, .storeUnavailable, .absent, .rewritten, .repinned, .foreignSession].map
+        fun fault => { shape := .delta, fault })
+      ++ ([ReadFault.intact, .storeUnavailable, .absent, .rewritten, .short].map
+        fun fault => { shape := .manifest, fault })
+  model := fun i =>
+    let readable := match i.fault with
+      | .storeUnavailable => false
+      | _ => true
+    match RenderedCapture.decodeStored readable (storeOf (storedDecodeStore i.shape i.fault)) 9 1 10 with
+    | .ok request => { decodedRequest := some request.value, failure := none }
+    | .error failure => { decodedRequest := none, failure := some failure }
+
 end Conformance.ContractCases

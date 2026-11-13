@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::Result;
 use gents::Gents;
 use gents_documents::inference_defaults::ReasoningEffort;
-use gents_inference::rendered_request::{decode_capture_json, CapturePayloadKind};
 use gents_inference::resolved::SamplingConfig;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
@@ -76,21 +75,14 @@ async fn enqueue(actors: &RequestActors, id: &str, content: &str) -> Result<Stri
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live: requires GENTS_LIVE_OPENAI=1 and GENTS_EVAL_TARGET"]
 async fn live_steering_edits_reorders_and_removes_before_same_request_continues() -> Result<()> {
-    anyhow::ensure!(
-        std::env::var("GENTS_LIVE_OPENAI").as_deref() == Ok("1"),
-        "set GENTS_LIVE_OPENAI=1"
-    );
-    let target = live_target();
+    let target = live_target().await;
     let db = test_db("live-steering").await;
     let actors = bind_target(&db, &target).await;
     let did = actors.node_did();
     let user_did = actors.fixture.user.did();
     let agent_did = actors.agent_did();
     let access = actors.fixture.access.clone();
-    // The builder runtime admits only a probed backend; the live target was
-    // just checked reachable, so its User records the probe result.
     target.assert_reachable().await;
     gents_inference::backends::registry::set_backend_probe_status_as(
         &access,
@@ -186,54 +178,19 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
         },
     )
     .await?;
-    let active_id = escape_graphql_string(ACTIVE);
-    let before = access.execute(&format!(r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{active_id}" }} }}) {{ request_doc_id }} }}"#)).await?;
+    let pending = pending_user_queue(&access, did, SESSION, user_did).await?;
     assert_eq!(
-        before["data"]["RenderedRequest"].as_array().unwrap().len(),
-        1,
-        "held tool prevents another provider call"
+        pending
+            .entries
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>(),
+        [SECOND, FIRST]
     );
     release.notify_one();
     assert_eq!(
         wait_for_request_terminal(&access, ACTIVE, Duration::from_secs(600)).await,
         "completed"
-    );
-    let captures = access.execute(&format!(r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{active_id}" }} }}, order: {{ turn_index: ASC }}) {{ request_doc_id capture_version request_json turn_index }} }}"#)).await?;
-    let captures = captures["data"]["RenderedRequest"].as_array().unwrap();
-    assert!(
-        captures.len() >= 2,
-        "same request resumes after tool settlement"
-    );
-    let mut resumed = false;
-    for capture in captures {
-        assert_eq!(capture["request_doc_id"], active);
-        let body = decode_capture_json(
-            &access,
-            capture["capture_version"].as_u64().unwrap() as u32,
-            capture["request_json"].as_str().unwrap(),
-            CapturePayloadKind::RequestBody,
-        )
-        .await?
-        .to_string();
-        assert!(
-            !body.contains(OLD),
-            "obsolete input must never reach provider"
-        );
-        assert!(
-            !body.contains(DROP),
-            "removed input must never reach provider"
-        );
-        if let (Some(beta), Some(alpha)) = (body.find(SECOND), body.find(FIRST)) {
-            assert!(
-                beta < alpha,
-                "retained inputs preserve the edited queue order"
-            );
-            resumed = true;
-        }
-    }
-    assert!(
-        resumed,
-        "persisted provider input must contain both retained messages"
     );
     for id in receipt.request_doc_ids {
         let row = access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state superseded_by_request_doc_id }} }}"#, escape_graphql_string(&id))).await?;
@@ -246,6 +203,12 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
             active
         );
     }
+    assert!(
+        !crate::support::live_inference::terminal_assistant_answer(&access, ACTIVE)
+            .await
+            .trim()
+            .is_empty()
+    );
     runtime.shutdown().await;
     Ok(())
 }

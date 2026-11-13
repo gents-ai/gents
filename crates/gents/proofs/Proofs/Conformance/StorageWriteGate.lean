@@ -59,15 +59,38 @@ structure FinalizationInput where
   name : String
   independentlyScheduled : Bool
   storageReturns : Bool
+  consumerDrops : Bool
   deriving Lean.ToJson
 
-@[conformance_family]
-def streamFinalization : Conformance.Family FinalizationInput Bool where
-  inputs := (cases.filter fun c => !c.rollbackOwnerScheduled).map fun c =>
+structure FinalizationOutput where
+  gateHeld : Bool
+  guardDrops : Nat
+  finalizerFinished : Bool
+  deriving Lean.ToJson
+
+def finalizationInputs : List FinalizationInput :=
+  (cases.filter fun c => !c.rollbackOwnerScheduled).map fun c =>
     { name := c.name
       independentlyScheduled := c.independentlyScheduled
-      storageReturns := c.storageReturns }
+      storageReturns := c.storageReturns
+      consumerDrops := false }
+
+def consumerDropInput : FinalizationInput :=
+  { name := "consumer_drop_aborts_owned_finalizer"
+    independentlyScheduled := true
+    storageReturns := false
+    consumerDrops := true }
+
+@[conformance_family]
+def streamFinalization : Conformance.Family FinalizationInput FinalizationOutput where
+  inputs := finalizationInputs ++ [consumerDropInput]
   model := fun i =>
-    held (finalState ⟨i.name, i.independentlyScheduled, i.storageReturns, false, false⟩)
+    let c : Case := ⟨i.name, i.independentlyScheduled, i.storageReturns, false, false⟩
+    let final :=
+      if i.consumerDrops then run ⟨.storage, i.independentlyScheduled, false⟩ [.consumerDrop]
+      else finalState c
+    { gateHeld := held final
+      guardDrops := guardDropCount final
+      finalizerFinished := !i.consumerDrops && !held final }
 
 end Conformance.StorageWriteGateContracts

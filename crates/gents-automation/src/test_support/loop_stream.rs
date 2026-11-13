@@ -17,7 +17,6 @@ use gents_store::test_support::first_content;
 use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
 
 use gents_inference::rendered_request::{AssemblyBuildPath, AssemblyTrace};
-use rig::completion::{GetTokenUsage, Usage};
 
 use gents_inference::test_support::TestDb;
 use tokio::sync::Notify;
@@ -190,103 +189,6 @@ impl CompletionModel for ScriptedModel {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct UsageResponse {
-    pub usage: Option<Usage>,
-}
-
-impl GetTokenUsage for UsageResponse {
-    fn token_usage(&self) -> Option<Usage> {
-        self.usage
-    }
-}
-
-pub fn usage_response(input_tokens: u64, output_tokens: u64, total_tokens: u64) -> UsageResponse {
-    UsageResponse {
-        usage: Some(Usage {
-            input_tokens,
-            output_tokens,
-            total_tokens,
-            cached_input_tokens: 0,
-            cache_creation_input_tokens: 0,
-        }),
-    }
-}
-
-type UsageTurns = VecDeque<Vec<RawStreamingChoice<UsageResponse>>>;
-type SeenDispatch = (u64, Option<u64>);
-
-#[derive(Clone)]
-pub struct UsageScriptedModel {
-    turns: Arc<Mutex<UsageTurns>>,
-    seen_dispatches: Arc<Mutex<Vec<SeenDispatch>>>,
-}
-
-impl UsageScriptedModel {
-    pub fn new(turns: Vec<Vec<RawStreamingChoice<UsageResponse>>>) -> Self {
-        Self {
-            turns: Arc::new(Mutex::new(turns.into())),
-            seen_dispatches: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    pub async fn seen_dispatches(&self) -> Vec<(u64, Option<u64>)> {
-        self.seen_dispatches.lock().await.clone()
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for UsageScriptedModel {
-    type Response = ();
-    type StreamingResponse = UsageResponse;
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self::new(Vec::new())
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in loop_stream tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "test-model")
-            .await?;
-        self.seen_dispatches.lock().await.push((
-            u64::try_from(
-                completion_request_input_components(
-                    &request,
-                    &gents_loop::provider_input::ProviderInputCounter::new(
-                        gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
-                        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-                        "test-model",
-                    ),
-                )
-                .map(|projection| projection.estimated_input_tokens)
-                .unwrap_or(usize::MAX),
-            )
-            .unwrap_or(u64::MAX),
-            request.max_tokens,
-        ));
-        let turn = self.turns.lock().await.pop_front().unwrap_or_else(|| {
-            vec![RawStreamingChoice::FinalResponse(UsageResponse {
-                usage: None,
-            })]
-        });
-        let inner: rig::streaming::StreamingResult<UsageResponse> =
-            Box::pin(stream::iter(turn.into_iter().map(Ok)));
-        Ok(StreamingCompletionResponse::stream(inner))
-    }
-}
-
 pub struct EchoTool {
     pub name: String,
     pub output: String,
@@ -383,17 +285,6 @@ pub fn echo_tool_turn() -> Vec<RawStreamingChoice<()>> {
             serde_json::json!({}),
         )),
         RawStreamingChoice::FinalResponse(()),
-    ]
-}
-
-pub fn usage_echo_tool_turn(response: UsageResponse) -> Vec<RawStreamingChoice<UsageResponse>> {
-    vec![
-        RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-            "call-1".to_string(),
-            "echo".to_string(),
-            serde_json::json!({}),
-        )),
-        RawStreamingChoice::FinalResponse(response),
     ]
 }
 

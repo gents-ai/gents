@@ -4,16 +4,12 @@ mod support;
 mod cli_diagnose;
 #[path = "suites/cli_document.rs"]
 mod cli_document;
-#[path = "suites/cli_goal.rs"]
-mod cli_goal;
 #[path = "suites/cli_init.rs"]
 mod cli_init;
 #[path = "suites/cli_job.rs"]
 mod cli_job;
 #[path = "suites/cli_mailbox.rs"]
 mod cli_mailbox;
-#[path = "suites/cli_print.rs"]
-mod cli_print;
 #[path = "suites/cli_reconciliation.rs"]
 mod cli_reconciliation;
 #[path = "suites/cli_request.rs"]

@@ -5,6 +5,7 @@ import Proofs.Session.PromptAssembly.ClaudeBody
 import Proofs.Session.PromptAssembly.ClaudeCache
 import Proofs.Session.PromptAssembly.ClaudeOrigin
 import Proofs.Session.PromptAssembly.ClaudeWire
+import Proofs.Session.PromptAssembly.ClaudeSse
 
 namespace Conformance.ClaudePromptAssembly
 
@@ -103,6 +104,35 @@ def origin : Conformance.Family OriginInput OriginObservation where
     [false, true].map fun lost =>
       ({ origin := c.origin, prompts := 3, positionLost := lost } : OriginInput)
   model := OriginObservation.observe
+
+structure AgentHeaderInput where
+  origin : PromptAssembly.ClaudeOrigin.Origin
+  hasParent : Bool
+  deriving ToJson
+
+structure AgentHeaderObservation where
+  agentDid : Bool
+  parentAgentDid : Bool
+  agentType : Option String
+  requestClass : String
+  app : String
+  deriving ToJson
+
+/-- Each case is one captured request, so only turns of an agent that appends
+its system prompt are sent; the other kinds and prompt modes change neither the
+agent headers nor the request class. -/
+@[conformance_family]
+def agentHeaderSet : Conformance.Family AgentHeaderInput AgentHeaderObservation where
+  inputs := (Conformance.ContractCases.promptAssemblyClaudeOriginCases.filter fun c =>
+      c.origin.kind == .turn && c.origin.appendsSystemPrompt).flatMap fun c =>
+    [false, true].map fun hasParent => ({ origin := c.origin, hasParent } : AgentHeaderInput)
+  model := fun i =>
+    let headers := PromptAssembly.ClaudeOrigin.agentHeaders i.origin i.hasParent
+    { agentDid := headers.agentDid
+      parentAgentDid := headers.parentAgentDid
+      agentType := headers.agentType
+      requestClass := (PromptAssembly.ClaudeOrigin.wireMode i.origin).requestClass.name
+      app := PromptAssembly.ClaudeOrigin.app i.origin }
 
 deriving instance ToJson for PromptAssembly.ClaudeBody.ModelFacts
 
@@ -577,5 +607,157 @@ def bodyPlan : Conformance.Family BodyPlanInput BodyPlan where
         facts := PromptAssembly.ClaudeBody.sonnet5, maxTokens := 0
         thinking := BodyThinking.ofModel none, temperature := none, contextManagement := false
         bodyEffort := none, diagnostics := FieldDiagnostics.ofModel none, perTurnEffort := none }
+
+inductive SsePayloadKind where
+  | toolStart
+  | inputDelta
+  | thinkingStart
+  | thinkingDelta
+  | signatureDelta
+  | blockStop
+  | stopReason
+  | messageStop
+  deriving ToJson
+
+structure SsePayload where
+  kind : SsePayloadKind
+  index : Nat
+  id : Option Nat
+  name : Option String
+  text : Option String
+  signature : Option String
+  deriving ToJson
+
+structure SseInput where
+  surface : List String
+  requestId : Option String
+  payloads : List SsePayload
+  deriving ToJson
+
+structure SseEmitted where
+  kind : String
+  text : Option String
+  signature : Option String
+  id : Option Nat
+  name : Option String
+  arguments : Option String
+  deriving ToJson
+
+structure SseAudit where
+  kind : String
+  index : Nat
+  fragment : Option String
+  block : Option String
+  deriving ToJson
+
+structure SseStep where
+  emitted : List SseEmitted
+  audits : List SseAudit
+  deriving ToJson
+
+structure SseOutcome where
+  steps : List SseStep
+  finish : List SseEmitted
+  failure : Option String
+  deriving ToJson
+
+def SsePayload.toModel (p : SsePayload) : PromptAssembly.ClaudeSse.Payload :=
+  match p.kind with
+  | .toolStart => .toolStart p.index (p.id.getD 0) (p.name.getD "") p.text
+  | .inputDelta => .inputDelta p.index (p.text.getD "")
+  | .thinkingStart => .thinkingStart p.index (p.text.getD "") (p.signature.getD "")
+  | .thinkingDelta => .thinkingDelta p.index (p.text.getD "")
+  | .signatureDelta => .signatureDelta p.index (p.text.getD "")
+  | .blockStop => .blockStop p.index
+  | .stopReason => .stopReason (p.text.getD "")
+  | .messageStop => .messageStop
+
+def SseEmitted.ofModel : PromptAssembly.ClaudeSse.Emitted → SseEmitted
+  | .message text =>
+      { kind := "message", text := some text, signature := none, id := none, name := none
+        arguments := none }
+  | .reasoningDelta text =>
+      { kind := "reasoning_delta", text := some text, signature := none, id := none
+        name := none, arguments := none }
+  | .reasoning text signature =>
+      { kind := "reasoning", text := some text, signature := some signature, id := none
+        name := none, arguments := none }
+  | .toolCall id name arguments =>
+      { kind := "tool_call", text := none, signature := none, id := some id, name := some name
+        arguments := some arguments }
+  | .final =>
+      { kind := "final", text := none, signature := none, id := none, name := none
+        arguments := none }
+
+def SseAudit.ofModel : PromptAssembly.ClaudeSse.Audit → SseAudit
+  | .blockStart index kind =>
+      { kind := "block_start", index := index, fragment := none
+        block := some (match kind with | .thinking => "thinking" | .toolUse => "tool_use") }
+  | .thinkingText index fragment =>
+      { kind := "thinking_text", index := index, fragment := some fragment, block := none }
+  | .signature index fragment =>
+      { kind := "signature", index := index, fragment := some fragment, block := none }
+  | .blockStop index => { kind := "block_stop", index := index, fragment := none, block := none }
+
+/-- The fail-closed cause the parser reports: an unmapped name and an empty
+surface are one `tool_use` refusal, and thinking-block faults keep their
+model cause. -/
+def sseFailureName (requestId : Option String) : PromptAssembly.ClaudeSse.Failure → String
+  | .content .emptySurface | .content (.unmappedName _) => "tool_use"
+  | .content (.duplicateId id) => s!"duplicate_tool_use_id:{id}"
+  | .content (.overlappingBlock id) => s!"overlapping_tool_use:{id}"
+  | .content error => "malformed_thinking:" ++ PromptAssembly.ClaudeMap.errorName error
+  | .malformedToolInput _ => "malformed_tool_use"
+  | .refusal => "refusal:" ++ requestId.getD "-"
+
+private def ssePayload (kind : SsePayloadKind) (index : Nat) (text : Option String) : SsePayload :=
+  { kind, index, id := none, name := none, text, signature := none }
+
+private def sseTool (index id : Nat) (name input : String) : SsePayload :=
+  { kind := .toolStart, index, id := some id, name := some name, text := some input
+    signature := none }
+
+private def sseThinking (index : Nat) (text signature : String) : SsePayload :=
+  { kind := .thinkingStart, index, id := none, name := none, text := some text
+    signature := some signature }
+
+private def sseStop (index : Nat) : SsePayload := ssePayload .blockStop index none
+
+private def sseMessageStop : SsePayload := ssePayload .messageStop 0 none
+
+@[conformance_family]
+def sseDispatch : Conformance.Family SseInput SseOutcome where
+  inputs :=
+    [ ⟨["echo"], none, [sseTool 0 1 "echo" "{}", ssePayload .inputDelta 0 (some "{\"text\":"),
+        sseStop 0, sseMessageStop]⟩
+    , ⟨["echo"], none, [sseTool 0 1 "echo" "{}",
+        ssePayload .inputDelta 0 (some "{\"text\":\"hi\"}"), sseMessageStop]⟩
+    , ⟨["echo"], none, [sseTool 0 1 "echo" "{}", ssePayload .inputDelta 0 (some "{\"text\":"),
+        ssePayload .inputDelta 0 (some " \"hi\"}"), sseStop 0, sseMessageStop]⟩
+    , ⟨["echo"], none, [sseTool 0 1 "echo" "{\"text\":\"hi\"}", sseStop 0]⟩
+    , ⟨["echo"], none, [sseTool 0 1 "echo" "{}"]⟩
+    , ⟨["echo"], none, [sseTool 0 1 "Bash" "{}", sseStop 0]⟩
+    , ⟨[], none, [sseTool 0 1 "echo" "{}", sseStop 0]⟩
+    , ⟨["echo"], none, [sseTool 0 1 "echo" "{}", sseStop 0, sseTool 1 1 "echo" "{}", sseStop 1]⟩
+    , ⟨[], none, [sseThinking 0 "start" "initial", ssePayload .signatureDelta 0 (some "-delta"),
+        sseStop 0, sseMessageStop]⟩
+    , ⟨[], none, [sseThinking 0 "start" "initial", ssePayload .signatureDelta 0 (some "-delta")]⟩
+    , ⟨[], none, [sseThinking 0 "" "", ssePayload .thinkingDelta 0 (some "a"),
+        ssePayload .signatureDelta 0 (some "S"), sseStop 0]⟩
+    , ⟨[], none, [sseThinking 0 "body" "S", ssePayload .thinkingDelta 0 (some "late")]⟩
+    , ⟨[], none, [sseThinking 0 "body" "", sseStop 0]⟩
+    , ⟨["echo"], none, [sseThinking 0 "plan" "S", sseStop 0, sseTool 1 1 "echo" "{}", sseStop 1,
+        sseMessageStop]⟩
+    , ⟨[], none, [ssePayload .stopReason 0 (some "refusal"), sseMessageStop]⟩
+    , ⟨[], some "req_1", [ssePayload .stopReason 0 (some "refusal")]⟩
+    , ⟨[], none, [ssePayload .stopReason 0 (some "end_turn"), sseMessageStop]⟩ ]
+  model := fun i =>
+    let outcome := PromptAssembly.ClaudeSse.run (i.surface.foldr insert ∅)
+      (i.payloads.map SsePayload.toModel)
+    { steps := outcome.steps.map fun step =>
+        { emitted := step.emitted.map SseEmitted.ofModel
+          audits := step.audits.map SseAudit.ofModel }
+      finish := outcome.finish.map SseEmitted.ofModel
+      failure := outcome.failure.map (sseFailureName i.requestId) }
 
 end Conformance.ClaudePromptAssembly

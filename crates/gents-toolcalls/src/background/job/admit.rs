@@ -113,6 +113,10 @@ pub struct StepContext {
     pub control_targets: Vec<(String, Option<(ProcessControlScope, bool)>)>,
     pub resume_targets: Vec<ResumeTarget>,
     pub resume_facts: HostFacts,
+    /// Lean `localTarget`: the calling runtime's Node. A target on another
+    /// Node is refused, since a job stages its children only on its own
+    /// runtime; `None` admits every target's Node.
+    pub caller_node_did: Option<String>,
 }
 
 /// Lean `Refusal`.
@@ -169,6 +173,7 @@ pub struct AdmitRefusal {
 pub enum PolicyDenialDetail {
     DynamicCheck,
     TargetUnavailable,
+    PeerTarget,
 }
 
 impl PolicyDenialDetail {
@@ -181,6 +186,10 @@ impl PolicyDenialDetail {
             Self::TargetUnavailable => (
                 "The requested job target is unavailable in this caller's configured target scope.",
                 "Next: inspect this agent's Tools agents.target_ids and the job's agent_targets; select an available target or update an authorized Tools document. For the fields, call config with {\"argv\":[\"tools\",\"edit\",\"--help\",\"integrations\"]}.",
+            ),
+            Self::PeerTarget => (
+                "A job starts children only on this Node, and the requested target names an Agent hosted on a peer Node, so no child was started.",
+                "Next: for work on that peer Agent call agent_new with the same target and prompt; to run the job, choose one of its agent_targets hosted on this Node.",
             ),
         }
     }
@@ -721,9 +730,12 @@ fn spawn_refusal(
     job: &StepRow,
     spawn: &JobSpawn,
     target: &(String, String),
-) -> Option<Refusal> {
+) -> Option<AdmissionFailure> {
     if !effective_targets_permit(ctx, pin, target) {
-        return Some(Refusal::PolicyDenied);
+        return Some(AdmissionFailure {
+            refusal: Refusal::PolicyDenied,
+            detail: Some(PolicyDenialDetail::TargetUnavailable),
+        });
     }
     let hop = next_request_hop(
         RequestHopCause::CrossSession {
@@ -732,18 +744,27 @@ fn spawn_refusal(
         target_hop(ctx, target),
     );
     if !request_hop_within_bound(ctx.max_hop, hop) {
-        return Some(Refusal::DepthExceeded);
+        return Some(Refusal::DepthExceeded.into());
     }
-    if !cwd_admitted(ctx, pin, &spawn.cwd) {
-        return Some(Refusal::PolicyDenied);
+    if !cwd_admitted(ctx, pin, &spawn.cwd)
+        || spawn.slot.len() > 128
+        || !attempt_admitted(job, spawn)
+    {
+        return Some(Refusal::PolicyDenied.into());
     }
-    if spawn.slot.len() > 128 {
-        return Some(Refusal::PolicyDenied);
-    }
-    if !attempt_admitted(job, spawn) {
-        return Some(Refusal::PolicyDenied);
+    if !local_target(ctx, target) {
+        return Some(AdmissionFailure {
+            refusal: Refusal::PolicyDenied,
+            detail: Some(PolicyDenialDetail::PeerTarget),
+        });
     }
     None
+}
+
+fn local_target(ctx: &StepContext, target: &(String, String)) -> bool {
+    ctx.caller_node_did
+        .as_deref()
+        .is_none_or(|node| node == target.0)
 }
 
 fn panel_admitted(pin: &JobPin, eff: &JobCeiling, job: &StepRow, n: usize) -> bool {
@@ -834,12 +855,8 @@ fn admit_effects(
             refusal: Refusal::PolicyDenied,
             detail: Some(PolicyDenialDetail::TargetUnavailable),
         })?;
-        if let Some(refusal) = spawn_refusal(ctx, pin, job, spawn, target) {
-            return Err(AdmissionFailure {
-                refusal,
-                detail: (!effective_targets_permit(ctx, pin, target))
-                    .then_some(PolicyDenialDetail::TargetUnavailable),
-            });
+        if let Some(failure) = spawn_refusal(ctx, pin, job, spawn, target) {
+            return Err(failure);
         }
         fresh.push((spawn, target));
     }
@@ -1034,6 +1051,7 @@ mod tests {
             control_targets: Vec::new(),
             resume_targets: Vec::new(),
             resume_facts: facts(),
+            caller_node_did: None,
         }
     }
 
@@ -1357,6 +1375,27 @@ mod tests {
         assert_eq!(new.target, pair("a"));
         assert_eq!(new.retry_key, job_spawn_key("row", "s1", 0));
         assert_eq!(admitted.spent, 1);
+    }
+
+    /// Lean `peer_target_spawn_refused`: a target on another Node is refused
+    /// at admission with the peer guidance, before any child is staged.
+    #[test]
+    fn spawn_target_on_a_peer_node_is_refused_with_peer_guidance() {
+        let job = running_row(Vec::new());
+        let out = effects(vec![spawn("s1", 0, "a")], &[]);
+        let ctx = StepContext {
+            caller_node_did: Some("other-node".to_owned()),
+            ..base_context()
+        };
+        let refusal = admit_step(&ctx, &job, &out).unwrap_err();
+        assert_eq!(refusal.code(), DENIED);
+        assert_eq!(refusal.detail, Some(PolicyDenialDetail::PeerTarget));
+        assert!(refusal.closed_row().children.is_empty());
+        let local = StepContext {
+            caller_node_did: Some("node".to_owned()),
+            ..base_context()
+        };
+        assert!(admit_step(&local, &job, &out).is_ok());
     }
 
     #[test]

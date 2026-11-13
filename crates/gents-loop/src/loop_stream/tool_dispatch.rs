@@ -726,6 +726,7 @@ mod tests {
             tools: Arc::new(vec![Box::new(ReadyAfterWallDeadline {
                 deadline_at: Utc::now(),
                 called: Arc::new(AtomicBool::new(false)),
+                fails: false,
             })]),
             hook: hook.clone(),
             parent_internal_id: "parent".into(),
@@ -763,6 +764,7 @@ mod tests {
                 tools: Arc::new(vec![Box::new(ReadyAfterWallDeadline {
                     deadline_at: Utc::now(),
                     called: Arc::new(AtomicBool::new(false)),
+                    fails: false,
                 })]),
                 hook: hook.clone(),
                 parent_internal_id: "parent".into(),
@@ -803,6 +805,7 @@ mod tests {
     struct ReadyAfterWallDeadline {
         deadline_at: DateTime<Utc>,
         called: Arc<AtomicBool>,
+        fails: bool,
     }
 
     impl ToolDyn for ReadyAfterWallDeadline {
@@ -829,7 +832,14 @@ mod tests {
                 self.called.store(true, Ordering::SeqCst);
                 let remaining = (self.deadline_at - Utc::now()).to_std().unwrap_or_default();
                 std::thread::sleep(remaining + std::time::Duration::from_millis(10));
-                Ok("late success".into())
+                if self.fails {
+                    Err(ToolError::ReportedFailure {
+                        class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                        text: "tool failed".into(),
+                    })
+                } else {
+                    Ok("late success".into())
+                }
             })
         }
     }
@@ -842,29 +852,51 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn ready_tool_after_wall_deadline_is_timed_out() {
-        let deadline_at = Utc::now() + chrono::Duration::seconds(1);
-        let called = Arc::new(AtomicBool::new(false));
-        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(ReadyAfterWallDeadline {
-            deadline_at,
-            called: Arc::clone(&called),
-        })];
-        let outcome = scope_request_tool_execution(
-            Some(deadline_at),
-            tokio_util::sync::CancellationToken::new(),
-            dispatch_tool(&tools, "ready_after_wall_deadline", "{}".into(), None, None),
-        )
-        .await;
-        assert!(
-            called.load(Ordering::SeqCst),
-            "tool must reach the call-ready branch"
-        );
-        assert_eq!(
-            outcome,
-            ToolOutcome::TimedOut {
-                deadline_at: Some(deadline_at)
-            }
-        );
+    async fn deadline_dispatch_matches_the_lean_model() {
+        for case in gents_lean_vocab::families::tool_dispatch_dispatch_under_deadline::cases::<
+            ReadySettlement,
+        >() {
+            let now = Utc::now();
+            let (deadline_at, ready_at) = if case.input.expired_at_dispatch {
+                (now - chrono::Duration::seconds(1), now)
+            } else if case.input.ready_after_deadline {
+                let deadline_at = now + chrono::Duration::milliseconds(300);
+                (deadline_at, deadline_at)
+            } else {
+                (
+                    now + chrono::Duration::seconds(60),
+                    now - chrono::Duration::seconds(1),
+                )
+            };
+            let called = Arc::new(AtomicBool::new(false));
+            let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(ReadyAfterWallDeadline {
+                deadline_at: ready_at,
+                called: Arc::clone(&called),
+                fails: case.input.fails,
+            })];
+            let outcome = scope_request_tool_execution(
+                Some(deadline_at),
+                tokio_util::sync::CancellationToken::new(),
+                dispatch_tool(&tools, "ready_after_wall_deadline", "{}".into(), None, None),
+            )
+            .await;
+            let settlement = match outcome {
+                ToolOutcome::TimedOut {
+                    deadline_at: Some(recorded),
+                } if recorded == deadline_at => ReadySettlement::TimedOut,
+                ToolOutcome::Failed {
+                    class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                    denial: None,
+                    text,
+                } if text == "tool failed" => ReadySettlement::EarlyFailure,
+                ToolOutcome::Completed(_) => ReadySettlement::Completed,
+                other => panic!("{:?}: unexpected outcome {other:?}", case.input),
+            };
+            case.check(gents_lean_vocab::families::tool_dispatch_dispatch_under_deadline::DeadlineDispatch {
+                called: called.load(Ordering::SeqCst),
+                settlement,
+            });
+        }
     }
 
     #[tokio::test]
