@@ -353,6 +353,30 @@ impl ServedRuntimeHome {
         })
     }
 
+    pub async fn agent_value_for_create(
+        &self,
+        binding: &AgentIdentityBinding,
+        profile_id: &str,
+    ) -> serde_json::Value {
+        let context_id = format!("{}:context", binding.agent_did);
+        self.apply_as_user(
+            "test.served_runtime.agent_context",
+            vec![(
+                Collection::AgentContext,
+                serde_json::json!({
+                    "node_did": self.node_did(),
+                    "context_id": context_id,
+                    "system_prompt": "Follow the test user's request.",
+                }),
+            )],
+        )
+        .await;
+        let mut agent = self.agent_value(binding, profile_id);
+        agent["display_name"] = serde_json::json!("Fixture Agent");
+        agent["context_id"] = serde_json::json!(context_id);
+        agent
+    }
+
     /// A fresh DID that no Node or Agent on this store uses yet.
     pub async fn fresh_did(&self) -> String {
         let directory = tempfile::tempdir().unwrap();
