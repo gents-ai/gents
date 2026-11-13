@@ -1515,8 +1515,20 @@ def caseCoverage : List CoverageEntry :=
       "contracts_command_policy_validation")
       "command-policy" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "queue_deadline_conformance_cases"
-      "QueueDeadlineConformanceCases")
+      "family"
+      "contracts_queue_deadline_admission")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_queue_deadline_claim_deadline")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_queue_deadline_completion_delivery")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_queue_deadline_interrupt_scope")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"

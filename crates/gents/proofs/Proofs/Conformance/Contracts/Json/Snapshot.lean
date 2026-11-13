@@ -508,9 +508,6 @@ def snapshotRuntimeCasesJson : String :=
 
 def snapshotRecoveryCasesJson : String :=
   ""
-    ++ "\"queue_deadline_conformance_cases\":"
-      ++ jsonArray
-        (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","

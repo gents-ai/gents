@@ -105,10 +105,6 @@ pub fn lean_process_transition_cases() -> &'static [LeanLifecycleTransitionCase]
     &lean_contract_snapshot().process_transition_cases
 }
 
-pub fn lean_queue_deadline_cases() -> &'static [LeanQueueDeadlineConformanceCase] {
-    &lean_contract_snapshot().queue_deadline_conformance_cases
-}
-
 pub fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
     &lean_contract_snapshot().r6_backgrounding_cases
 }
@@ -1174,7 +1170,6 @@ pub struct LeanContractSnapshot {
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub deviations: Vec<LeanDeviation>,
     pub request_progress_cases: Vec<LeanRequestProgressCase>,
-    pub queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
@@ -3525,33 +3520,6 @@ pub struct LeanProcessStopCase {
     pub outcome: String,
     pub cancel_reply: String,
     pub durable_state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanQueueDeadlineConformanceCase {
-    pub name: String,
-    pub group: String,
-    pub action: String,
-    pub session_id: usize,
-    pub legal: bool,
-    pub pre_active_request_id: Option<usize>,
-    pub post_active_request_id: Option<usize>,
-    pub pre_pending_request_ids: Vec<usize>,
-    pub post_pending_request_ids: Vec<usize>,
-    pub claimed_request_id: Option<usize>,
-    pub blocked_by_active: bool,
-    pub superseded_request_ids: Vec<usize>,
-    pub queue_key: Option<String>,
-    pub post_coalesced_pending_count: usize,
-    pub automated_drained_request_ids: Vec<usize>,
-    pub preserved_user_pending_request_ids: Vec<usize>,
-    pub preserved_foreign_requester_request_ids: Vec<usize>,
-    pub preserved_foreign_owner_request_ids: Vec<usize>,
-    pub post_terminal_request_ids: Vec<usize>,
-    pub pre_request_deadline: Option<usize>,
-    pub synthesized_claim_deadline: Option<usize>,
-    pub post_deadline: Option<usize>,
-    pub explicit_deadline_preserved: bool,
 }
 
 #[derive(Debug, Deserialize)]

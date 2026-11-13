@@ -184,14 +184,6 @@ pub fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
         .unwrap_or_else(|| panic!("Lean ClientShell case {name:?} was not emitted"))
 }
 
-pub fn lean_queue_deadline_case(name: &str) -> &'static LeanQueueDeadlineConformanceCase {
-    lean_contract_snapshot()
-        .queue_deadline_conformance_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean queue/deadline case {name:?} was not emitted"))
-}
-
 pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
     lean_contract_snapshot()
         .recovery_sweep_cases

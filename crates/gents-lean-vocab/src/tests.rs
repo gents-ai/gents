@@ -274,7 +274,6 @@ fn lean_executable_contracts_cover_initial_domains() {
         lean_contract_snapshot().frontend_client_shell_cases.len(),
         31
     );
-    assert_eq!(lean_queue_deadline_cases().len(), 5);
     let sweep_ids = &lean_contract_snapshot().recovery_sweep_ids;
     assert!(!sweep_ids.is_empty(), "the model registers recovery sweeps");
     for sweep_id in sweep_ids {
