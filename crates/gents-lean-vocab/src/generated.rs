@@ -325,14 +325,6 @@ pub fn lean_persistence_failure_policy_cases() -> &'static [LeanPersistenceFailu
     &lean_contract_snapshot().persistence_failure_policy_cases
 }
 
-pub fn lean_plugin_calls_route_cases() -> &'static [LeanPluginCallsRouteCase] {
-    &lean_contract_snapshot().plugin_calls_route_cases
-}
-
-pub fn lean_plugin_data_cases() -> &'static LeanPluginDataCases {
-    &lean_contract_snapshot().plugin_data_cases
-}
-
 pub fn lean_plugin_job_admission_cases() -> &'static [LeanPluginJobAdmissionCase] {
     &lean_contract_snapshot().plugin_job_admission_cases
 }
@@ -355,14 +347,6 @@ pub fn lean_plugin_job_key_cases() -> &'static [LeanPluginJobKeyCase] {
 
 pub fn lean_plugin_job_lineage_cases() -> &'static [LeanPluginJobLineageCase] {
     &lean_contract_snapshot().plugin_job_lineage_cases
-}
-
-pub fn lean_plugin_job_recovery_cases() -> &'static [LeanPluginJobRecoveryCase] {
-    &lean_contract_snapshot().plugin_job_recovery_cases
-}
-
-pub fn lean_plugin_job_wake_cases() -> &'static [LeanPluginJobWakeCase] {
-    &lean_contract_snapshot().plugin_job_wake_cases
 }
 
 pub fn lean_plugin_job_wire_cases() -> &'static [LeanPluginJobWireCase] {
@@ -2764,7 +2748,6 @@ pub struct LeanContractSnapshot {
     pub goal_request_ancestry_cases: Vec<LeanGoalRequestAncestryCase>,
     pub goal_first_request_binding_cases: Vec<LeanGoalFirstRequestBindingCase>,
     pub goal_continuation_assignment_cases: Vec<LeanGoalContinuationAssignmentCase>,
-    pub plugin_job_commit_kill_cases: Vec<LeanPluginJobCommitKillCase>,
     pub client_process_claim_cases: Vec<serde_json::Value>,
     pub client_process_receipt_cases: Vec<LeanClientProcessReceiptCase>,
     pub client_control_grant_cases: Vec<serde_json::Value>,
@@ -2814,21 +2797,12 @@ pub struct LeanContractSnapshot {
     pub plugin_resource_consent_cases: serde_json::Value,
     pub plugin_resource_budget_cases: serde_json::Value,
     pub plugin_resource_publication_cases: serde_json::Value,
-    pub plugin_resource_tool_call_cases: serde_json::Value,
     pub plugin_resource_child_admission_cases: serde_json::Value,
-    pub plugin_resource_tool_effect_cases: serde_json::Value,
-    pub plugin_resource_tool_effect_receipt_cases: serde_json::Value,
     pub plugin_resource_tool_effect_terminal_cases: serde_json::Value,
     pub plugin_resource_tool_effect_accounting_cases: serde_json::Value,
     pub plugin_resource_model_slot_cases: serde_json::Value,
     pub plugin_resource_network_cases: serde_json::Value,
-    pub plugin_resource_call_access_cases: serde_json::Value,
-    pub plugin_resource_invocation_cases: serde_json::Value,
-    pub plugin_resource_receipt_cases: serde_json::Value,
-    pub plugin_resource_scratch_cases: serde_json::Value,
     pub plugin_resource_host_import_cases: serde_json::Value,
-    pub plugin_data_cases: LeanPluginDataCases,
-    pub plugin_calls_route_cases: Vec<LeanPluginCallsRouteCase>,
     pub plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,
     pub plugin_job_adoption_cases: Vec<LeanPluginJobAdoptionCase>,
     pub plugin_job_key_cases: Vec<LeanPluginJobKeyCase>,
@@ -2836,8 +2810,6 @@ pub struct LeanContractSnapshot {
     pub plugin_job_authority_cases: Vec<LeanPluginJobAuthorityCase>,
     pub plugin_job_wire_cases: Vec<LeanPluginJobWireCase>,
     pub plugin_job_lineage_cases: Vec<LeanPluginJobLineageCase>,
-    pub plugin_job_recovery_cases: Vec<LeanPluginJobRecoveryCase>,
-    pub plugin_job_wake_cases: Vec<LeanPluginJobWakeCase>,
     pub mailbox_notification_cases: Vec<LeanMailboxNotificationCase>,
     pub mailbox_reply_cases: Vec<LeanMailboxReplyCase>,
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
@@ -7247,150 +7219,6 @@ pub struct LeanPluginApprovalCaseStepsItemExpected {
     pub present: bool,
 }
 
-/// `Conformance.PluginResources.routeCasesJson`: `PluginCalls.childAdmissible`
-/// over `routeOf staticHookOwned jobBound`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginCallsRouteCase {
-    pub static_hook_owned: bool,
-    pub job_bound: bool,
-    pub selected: bool,
-    pub admitted: bool,
-    pub expected: bool,
-}
-
-/// `Conformance.PluginResources.dataCasesJson`: `PluginData.admitted` and
-/// `refusal` over one write, `queryAdmitted`, `substituteCallerDid` and
-/// `insertNote`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginDataCases {
-    pub writes: Vec<LeanPluginDataWriteCase>,
-    pub queries: Vec<LeanPluginDataQueryCase>,
-    pub filters: Vec<LeanPluginDataFilterCase>,
-    pub notes: Vec<LeanPluginDataNoteCase>,
-}
-
-/// A filter maps each field to a literal or the `$caller.did` placeholder.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginDataFilterCase {
-    pub caller_did: String,
-    pub filter: BTreeMap<String, String>,
-    pub expected: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanPluginDataInsertOutcome {
-    Inserted,
-    Unchanged,
-    AbortStep,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanPluginDataInvocation {
-    ToolCall,
-    JobStep,
-    Callback,
-    Ux,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginDataNoteCase {
-    #[serde(deserialize_with = "required_nullable")]
-    pub existing: Option<String>,
-    pub new: String,
-    pub on_conflict: LeanPluginDataOnConflict,
-    pub expected: LeanPluginDataInsertOutcome,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanPluginDataOnConflict {
-    Ignore,
-    Fail,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanPluginDataOperation {
-    Create,
-    Update,
-    Delete,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginDataQueryCase {
-    pub limit: u32,
-    pub in_own_sdl: bool,
-    pub runtime_or_protected: bool,
-    pub query_granted: bool,
-    pub expected: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanPluginDataRefusal {
-    StampUnavailable {
-        stamp: LeanPluginDataStamp,
-        invocation: LeanPluginDataInvocation,
-    },
-    Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanPluginDataStamp {
-    CallerDid,
-    SessionId,
-    RequestDocId,
-    ToolCallDocId,
-    JobRowDocId,
-    ChainRootDocId,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginDataWriteCase {
-    pub op: LeanPluginDataOperation,
-    pub in_own_sdl: bool,
-    pub runtime_or_protected: bool,
-    pub actor_is_invoker: bool,
-    pub op_granted: bool,
-    pub stamped_supplied_by_guest: bool,
-    pub invocation: LeanPluginDataInvocation,
-    /// The manifest's `data.stamped` map: field to host fact.
-    #[serde(deserialize_with = "ordered_pairs")]
-    pub declared_stamps: Vec<(String, LeanPluginDataStamp)>,
-    pub collection_fields: Vec<String>,
-    pub write: LeanPluginDataWriteFacts,
-    /// `applicableStamps`: the declared stamps of the written collection's fields.
-    #[serde(deserialize_with = "ordered_pairs")]
-    pub applicable: Vec<(String, LeanPluginDataStamp)>,
-    pub admitted: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub refusal: Option<LeanPluginDataRefusal>,
-}
-
-/// `ToolPolicy.ApplicationWrite.Observation`.
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginDataWriteFacts {
-    pub granted: bool,
-    pub application: bool,
-    pub blocked: bool,
-    pub credential: bool,
-    pub bounded: bool,
-    pub targets: u32,
-    pub limit: u32,
-    pub preview: bool,
-    pub digest_matches: bool,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPluginJobAddressExpected {
@@ -7562,196 +7390,6 @@ pub struct LeanPluginJobChild {
     pub target: LeanPluginJobTarget,
     pub state: String,
     pub messages: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCase {
-    pub cause: String,
-    pub committed: LeanPluginJobCommitKillCaseCommitted,
-    pub initial: LeanPluginJobCommitKillCaseInitial,
-    pub kills: Vec<LeanPluginJobCommitKillCaseKillsItem>,
-    pub output: LeanPluginJobCommitKillCaseOutput,
-    pub row_state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseCommitted {
-    pub call: LeanPluginJobCommitKillCaseCommittedCall,
-    pub caller_cwd: String,
-    pub caller_hop: u64,
-    pub caller_session: String,
-    pub children: Vec<LeanPluginJobCommitKillCaseCommittedChildrenItem>,
-    pub consecutive_failures: u64,
-    pub handle: String,
-    pub observed_terminal: u64,
-    pub pin: LeanPluginJobCommitKillCaseCommittedPin,
-    pub resume: Option<serde_json::Value>,
-    pub root: String,
-    pub root_call: Option<serde_json::Value>,
-    pub row_doc_id: String,
-    pub spent: u64,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseCommittedCall {
-    pub agent_budget: Option<serde_json::Value>,
-    pub args: Option<serde_json::Value>,
-    pub argv: Vec<String>,
-    pub script: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseCommittedChildrenItem {
-    pub attempt: u64,
-    pub messages: u64,
-    pub retry_key: String,
-    pub slot: String,
-    pub state: String,
-    pub target: LeanPluginJobCommitKillCaseCommittedChildrenItemTarget,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseCommittedChildrenItemTarget {
-    pub agent: String,
-    pub node: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseCommittedPin {
-    pub adopted_at: u64,
-    pub agent_budget: u64,
-    pub args_digest: String,
-    pub ceiling_at_pin: LeanPluginJobCommitKillCaseCommittedPinCeilingAtPin,
-    pub chain_root: String,
-    pub cwd: String,
-    pub engine_digest: String,
-    pub handle: String,
-    pub origin: String,
-    pub plugin_ref: String,
-    pub replayed_from: Option<serde_json::Value>,
-    pub resume_of: Option<serde_json::Value>,
-    pub script_id: String,
-    pub source_digest: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseCommittedPinCeilingAtPin {
-    pub max_live: u64,
-    pub max_messages_per_slot: u64,
-    pub max_spawns: u64,
-    pub max_wall_secs: u64,
-    pub result_bytes: u64,
-    pub targets: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseInitial {
-    pub call: LeanPluginJobCommitKillCaseInitialCall,
-    pub caller_cwd: String,
-    pub caller_hop: u64,
-    pub caller_session: String,
-    pub children: Vec<serde_json::Value>,
-    pub consecutive_failures: u64,
-    pub handle: String,
-    pub observed_terminal: u64,
-    pub pin: LeanPluginJobCommitKillCaseInitialPin,
-    pub resume: Option<serde_json::Value>,
-    pub root: String,
-    pub root_call: Option<serde_json::Value>,
-    pub row_doc_id: String,
-    pub spent: u64,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseInitialCall {
-    pub agent_budget: Option<serde_json::Value>,
-    pub args: Option<serde_json::Value>,
-    pub argv: Vec<String>,
-    pub script: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseInitialPin {
-    pub adopted_at: u64,
-    pub agent_budget: u64,
-    pub args_digest: String,
-    pub ceiling_at_pin: LeanPluginJobCommitKillCaseInitialPinCeilingAtPin,
-    pub chain_root: String,
-    pub cwd: String,
-    pub engine_digest: String,
-    pub handle: String,
-    pub origin: String,
-    pub plugin_ref: String,
-    pub replayed_from: Option<serde_json::Value>,
-    pub resume_of: Option<serde_json::Value>,
-    pub script_id: String,
-    pub source_digest: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseInitialPinCeilingAtPin {
-    pub max_live: u64,
-    pub max_messages_per_slot: u64,
-    pub max_spawns: u64,
-    pub max_wall_secs: u64,
-    pub result_bytes: u64,
-    pub targets: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseKillsItem {
-    pub action: String,
-    pub slot: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseOutput {
-    pub extras: LeanPluginJobCommitKillCaseOutputExtras,
-    pub interrupts: Vec<serde_json::Value>,
-    pub kind: String,
-    pub messages: Vec<serde_json::Value>,
-    pub pin: Option<serde_json::Value>,
-    pub resume: Option<serde_json::Value>,
-    pub spawns: Vec<LeanPluginJobCommitKillCaseOutputSpawnsItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseOutputExtras {
-    pub progress: bool,
-    pub scratch: Vec<serde_json::Value>,
-    pub writes: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseOutputSpawnsItem {
-    pub attempt: u64,
-    pub cwd: Option<serde_json::Value>,
-    pub slot: String,
-    pub target: LeanPluginJobCommitKillCaseOutputSpawnsItemTarget,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobCommitKillCaseOutputSpawnsItemTarget {
-    pub agent: String,
-    pub node: String,
 }
 
 /// The host facts one step reads, tabulated over the documents and working
@@ -8122,24 +7760,6 @@ pub struct LeanPluginJobRecord {
     pub via: Option<String>,
 }
 
-/// `Conformance.PluginJob.recoveryCasesJson`: plugin-job rows, the registered
-/// sweep's staleness verdict and measures, and the row after one tick
-/// (`pluginJobRecover ∘ pluginJobRecover`).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobRecoveryCase {
-    pub name: String,
-    pub sweep_id: String,
-    pub rust_function: String,
-    pub row: LeanPluginJobRecoveryRow,
-    pub stale: bool,
-    pub measure_before: u32,
-    pub measure_after: u32,
-    pub step_commit_allowed: bool,
-    pub step_invocation_allowed: bool,
-    pub expected_row: LeanPluginJobRecoveryRow,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPluginJobRecoveryRow {
@@ -8314,31 +7934,6 @@ pub struct LeanPluginJobValidExpected {
     pub valid: bool,
 }
 
-/// `Conformance.PluginJob.wakeCasesJson`: the step in flight on a row, a wake
-/// or immediate step of a row, and `ExecutionIdentity.wakeOutcome`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobWakeCase {
-    pub name: String,
-    pub running: LeanPluginJobWork,
-    pub wake: LeanPluginJobWork,
-    pub expected: LeanPluginJobWakeExpected,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobWakeExpected {
-    pub outcome: LeanPluginJobWakeOutcome,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanPluginJobWakeOutcome {
-    Independent,
-    Coalesced,
-    Refused,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPluginJobWireBinding {
@@ -8392,13 +7987,6 @@ pub struct LeanPluginJobWireTargetsExpected {
 pub struct LeanPluginJobWithin {
     pub base: String,
     pub cwd: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobWork {
-    pub document: String,
-    pub agent: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

@@ -973,62 +973,63 @@ mod bound {
 
 #[tokio::test]
 async fn generated_plugin_invocation_retry_revalidates_current_installation() {
-    let cases = gents_lean_vocab::lean_contract_snapshot();
-    for case in cases.plugin_resource_invocation_cases.as_array().unwrap() {
+    for case in gents_lean_vocab::families::plugin_resources_invocations::cases() {
         let (home, original) = installed_plugin(ECHO_WAT, Some(gents_pack::pack::BindAccess::Read));
         let mut executor = PluginExecutor::new(Some(home.path().to_owned()));
         executor
             .call(&original, serde_json::json!({"attempt":"first"}))
             .await
             .unwrap();
-        if case["restart"] == true {
+        if case.input.restart {
             executor = PluginExecutor::new(Some(home.path().to_owned()));
         }
         let mut current = original.clone();
-        if case["current"].is_null() {
-            store::remove_record(home.path(), &original.namespace, &original.name).unwrap();
-        } else {
-            let snapshot = &case["current"];
-            match snapshot["digest"].as_str().unwrap() {
-                "artifact" => {}
-                "replacement" => current.digest = format!("sha256:{}", "0".repeat(64)),
-                other => panic!("unknown modeled artifact {other}"),
+        match &case.input.current {
+            None => {
+                store::remove_record(home.path(), &original.namespace, &original.name).unwrap();
             }
-            match snapshot["grant"].as_str().unwrap() {
-                "sealed" => {}
-                "changed" => current.granted = Some(gents_pack::plugin::Manifold::sealed()),
-                other => panic!("unknown modeled grant {other}"),
+            Some(snapshot) => {
+                match snapshot.digest.as_str() {
+                    "artifact" => {}
+                    "replacement" => current.digest = format!("sha256:{}", "0".repeat(64)),
+                    other => panic!("unknown modeled artifact {other}"),
+                }
+                match snapshot.grant.as_str() {
+                    "sealed" => {}
+                    "changed" => current.granted = Some(gents_pack::plugin::Manifold::sealed()),
+                    other => panic!("unknown modeled grant {other}"),
+                }
+                match snapshot.declaration.as_str() {
+                    "original" => {}
+                    "changed" => current.declaration.description.push_str(" updated"),
+                    other => panic!("unknown modeled declaration {other}"),
+                }
+                match snapshot.binding.as_str() {
+                    "original" => {}
+                    "changed" => current.instructions = Some("updated instructions".into()),
+                    other => panic!("unknown modeled binding {other}"),
+                }
+                store::write_record(home.path(), &current).unwrap();
             }
-            match snapshot["declaration"].as_str().unwrap() {
-                "original" => {}
-                "changed" => current.declaration.description.push_str(" updated"),
-                other => panic!("unknown modeled declaration {other}"),
-            }
-            match snapshot["binding"].as_str().unwrap() {
-                "original" => {}
-                "changed" => current.instructions = Some("updated instructions".into()),
-                other => panic!("unknown modeled binding {other}"),
-            }
-            store::write_record(home.path(), &current).unwrap();
         }
-        let reusable = !case["current"].is_null() && executor.cached_admission_matches(&current);
-        assert_eq!(reusable, case["reusable"].as_bool().unwrap(), "{case}");
+        let reusable = case.input.current.is_some() && executor.cached_admission_matches(&current);
         let input = serde_json::json!({"attempt":"retry"});
-        let result = if case["bound"] == true {
+        let result = if case.input.bound {
             let directory = tempfile::tempdir().unwrap();
             let bound = gents_pack::plugin::BoundDir::new(directory.path(), None).unwrap();
             executor.call_bound(&original, input.clone(), bound).await
         } else {
             executor.call(&original, input.clone()).await
         };
-        assert_eq!(
-            result.is_ok(),
-            case["admitted"].as_bool().unwrap(),
-            "{case}: {result:?}"
-        );
-        if let Ok(call) = result {
-            assert_eq!(call.outcome.output["attempt"], input["attempt"], "{case}");
+        if let Ok(call) = &result {
+            assert_eq!(call.outcome.output["attempt"], input["attempt"]);
         }
+        case.check(
+            gents_lean_vocab::families::plugin_resources_invocations::InvocationOutput {
+                admitted: result.is_ok(),
+                reusable,
+            },
+        );
     }
 }
 

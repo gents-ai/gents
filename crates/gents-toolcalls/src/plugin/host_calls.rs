@@ -387,53 +387,38 @@ mod tests {
 
     #[test]
     fn invocation_lifetimes_conform_to_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_call_cases
-            ["host_call_lifetime"];
-        for case in cases.as_array().unwrap() {
-            let actual = wall_clock_for_invocation(
-                Duration::from_secs(case["declared"].as_u64().unwrap()),
-                case["background"].as_bool().unwrap(),
-                case["remaining"].as_u64().map(Duration::from_secs),
-            );
-            assert_eq!(
-                actual.as_secs(),
-                case["expected"].as_u64().unwrap(),
-                "{case}"
-            );
-        }
+        gents_lean_vocab::families::plugin_resources_host_call_lifetimes::replay(|i| {
+            gents_lean_vocab::families::plugin_resources_host_call_lifetimes::LifetimeOutput {
+                host_call_lifetime: wall_clock_for_invocation(
+                    Duration::from_secs(i.declared),
+                    i.background,
+                    i.remaining.map(Duration::from_secs),
+                )
+                .as_secs(),
+            }
+        });
     }
 
     #[test]
     fn compute_allowances_conform_to_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_call_cases
-            ["compute_allowance"];
-        for case in cases.as_array().unwrap() {
-            let actual = compute_allowance(
-                Duration::from_secs(case["declared"].as_u64().unwrap()),
-                Duration::from_secs(case["remaining"].as_u64().unwrap()),
-                case["stopped"].as_bool().unwrap(),
-            );
-            assert_eq!(
-                actual.as_secs(),
-                case["expected"].as_u64().unwrap(),
-                "{case}"
-            );
-        }
+        gents_lean_vocab::families::plugin_resources_compute_allowances::replay(|i| {
+            gents_lean_vocab::families::plugin_resources_compute_allowances::AllowanceOutput {
+                compute_allowance: compute_allowance(
+                    Duration::from_secs(i.declared),
+                    Duration::from_secs(i.remaining),
+                    i.stopped,
+                )
+                .as_secs(),
+            }
+        });
     }
 
     #[test]
     fn sleep_bounds_conform_to_lean() {
-        let cases =
-            &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_call_cases["sleep"];
-        for case in cases.as_array().unwrap() {
-            assert_eq!(
-                sleep_admissible(
-                    case["milliseconds"].as_u64().unwrap(),
-                    Duration::from_millis(case["remaining"].as_u64().unwrap())
-                ),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
+        gents_lean_vocab::families::plugin_resources_sleeps::replay(|i| {
+            gents_lean_vocab::families::plugin_resources_sleeps::SleepOutput {
+                sleep: sleep_admissible(i.milliseconds, Duration::from_millis(i.remaining)),
+            }
+        });
     }
 }

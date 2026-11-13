@@ -12,9 +12,7 @@ use gents_lean_vocab::{
     lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases, lean_plugin_job_control_cases,
     LeanPluginJobAdoptionCase, LeanPluginJobControlCase,
 };
-use gents_lean_vocab::{
-    lean_plugin_job_recovery_cases, lean_recovery_sweep_cases, LeanPluginJobRecoveryRow,
-};
+use gents_lean_vocab::{lean_recovery_sweep_cases, LeanPluginJobRecoveryRow};
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState, JobStepOutput};
 use std::collections::BTreeSet;
 
@@ -519,6 +517,23 @@ pub(super) fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPlugin
     (action, after)
 }
 
+fn observed_row(
+    row: &LeanPluginJobRecoveryRow,
+) -> gents_lean_vocab::families::plugin_job_recoveries::PluginJobRow {
+    gents_lean_vocab::families::plugin_job_recoveries::PluginJobRow {
+        running: row.running,
+        session_stopped: row.session_stopped,
+        terminal_children: u64::from(row.terminal_children),
+        observed: u64::from(row.observed),
+        live: u64::from(row.live),
+        step_new: u64::from(row.step_new),
+        deadline_expired: row.deadline_expired,
+        available: row.available,
+        stepped: row.stepped,
+        step_in_flight: row.step_in_flight,
+    }
+}
+
 /// Lean `pluginJobRecoverySweep` ticks (`pluginJobStale`, then
 /// `pluginJobRecover ∘ pluginJobRecover`) through the owner's first-application
 /// decision `plugin_job::recovery::tick_action`, which
@@ -527,55 +542,38 @@ pub(super) fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPlugin
 /// Lean's measures stay with its own `recovery_regressions`.
 #[tokio::test]
 async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
-    let cases = lean_plugin_job_recovery_cases();
-    assert_eq!(
-        cases.len(),
-        13,
-        "Lean should emit the plugin-job recovery rows"
-    );
-    let sweep_cases = lean_recovery_sweep_cases()
-        .iter()
-        .filter(|case| case.sweep_id == PLUGIN_JOB_SWEEP_ID)
-        .map(|case| case.name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        sweep_cases,
-        cases
-            .iter()
-            .map(|case| case.name.as_str())
-            .collect::<Vec<_>>(),
-        "the registered sweep's witnesses are the plugin-job tick rows"
-    );
-    for case in cases {
-        let name = case.name.as_str();
-        assert_eq!(case.sweep_id, PLUGIN_JOB_SWEEP_ID, "{name}");
-        assert_eq!(
-            case.rust_function, "plugin_job::recovery::redrive_running_jobs",
-            "{name}"
-        );
-        let (action, after) = tick_row(case.row);
-        assert_eq!(
-            matches!(action, TickAction::Untouched),
-            !case.stale,
-            "{name}: stale flag"
-        );
-        assert_eq!(after, case.expected_row, "{name}: row after one tick");
-        assert_eq!(
-            case.step_commit_allowed,
-            step_invocation_allowed(true, case.row.session_stopped),
-            "{name}: model-driven step commit gate"
-        );
-        assert_eq!(
-            case.step_invocation_allowed,
-            step_invocation_allowed(case.row.running, case.row.session_stopped),
-            "{name}: model-driven guest invocation gate"
-        );
-        if case.row.session_stopped {
+    let mut names = Vec::new();
+    for case in gents_lean_vocab::families::plugin_job_recoveries::cases() {
+        let name = case.input.name.clone();
+        let before: LeanPluginJobRecoveryRow = gents_lean_vocab::family::recode(&case.input.before);
+        let (action, after) = tick_row(before);
+        if before.session_stopped {
             assert_eq!(
                 action,
                 TickAction::Kill(crate::background::job::control::KillCause::Stop),
                 "{name}"
             );
         }
+        case.check(
+            gents_lean_vocab::families::plugin_job_recoveries::RecoveryOutput {
+                stale: !matches!(action, TickAction::Untouched),
+                row: observed_row(&after),
+                step_commit_allowed: step_invocation_allowed(true, before.session_stopped),
+                step_invocation_allowed: step_invocation_allowed(
+                    before.running,
+                    before.session_stopped,
+                ),
+            },
+        );
+        names.push(name);
     }
+    let sweep_cases = lean_recovery_sweep_cases()
+        .iter()
+        .filter(|case| case.sweep_id == PLUGIN_JOB_SWEEP_ID)
+        .map(|case| case.name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sweep_cases, names,
+        "the registered sweep's witnesses are the plugin-job tick rows"
+    );
 }

@@ -53,7 +53,8 @@ pub fn interactive() -> bool {
     INTERACTIVE.try_with(|_| ()).is_ok()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Consent {
     Ask,
     Deny,

@@ -1687,28 +1687,37 @@ def caseCoverage : List CoverageEntry :=
       "PluginNetworkCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_call_access_cases"
-      "PluginCallAccessCases")
+      "family"
+      "plugin_resources_call_bindings")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_invocation_cases"
-      "PluginInvocationCases")
+      "family"
+      "plugin_resources_call_admissions")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "family"
+      "plugin_resources_call_admissions_unreached"
+      "model-production-gap: a declaration naming write fields under read access fails validation, so no installed plugin carries it and bind admission never runs for it.")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_invocations")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_publication_cases"
       "ToolPolicy.PluginPublication")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_receipt_cases"
-      "PluginReceiptCases")
+      "family"
+      "plugin_receipt_commits")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "plugin_resource_child_admission_cases"
       "PluginChildAdmissionCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_tool_effect_cases"
-      "PluginEffectCases")
+      "family"
+      "plugin_effects_admissions")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_tool_effect_terminal_cases"
@@ -1719,8 +1728,44 @@ def caseCoverage : List CoverageEntry :=
       "PluginEffectAccountingCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_tool_call_cases"
-      "PluginToolCallCases")
+      "family"
+      "plugin_resources_host_call_lifetimes")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_compute_allowances")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_sleeps")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_supported_routes")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_availabilities")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_spawned_dispatchers")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_reservations")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_result_sizes")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_settlements")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_consents")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_job_admission_cases"
@@ -1764,12 +1809,12 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobLineageCases")
       "plugin-jobs" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "plugin_job_recovery_cases"
-      "PluginJobRecoveryCases")
+      "family"
+      "plugin_job_recoveries")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_wake_cases"
-      "PluginJobWakeCases")
+      "family"
+      "plugin_job_wakes")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"
@@ -1780,20 +1825,32 @@ def caseCoverage : List CoverageEntry :=
       "R6BackgroundingCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_data_cases"
-      "PluginDataCases")
+      "family"
+      "plugin_resources_data_writes")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_scratch_cases"
-      "PluginScratchCases")
+      "family"
+      "plugin_resources_data_queries")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_data_filters")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_data_notes")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_scratch_admissions")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_host_import_cases"
       "PluginHostImportCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_calls_route_cases"
-      "PluginCallsRouteCases")
+      "family"
+      "plugin_resources_child_routes")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "self_config_cases"
@@ -1884,8 +1941,8 @@ def caseCoverage : List CoverageEntry :=
       "DurableObservationCases")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_commit_kill_cases"
-      "PluginJobCommitKillCases")
+      "family"
+      "plugin_job_commit_kills")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_process_claim_cases"

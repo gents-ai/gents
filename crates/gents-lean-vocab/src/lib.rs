@@ -113,22 +113,6 @@ pub struct LeanPluginHostImportCase {
     pub answer: Option<String>,
 }
 
-/// `plugin_resource_scratch_cases`: `scratchAdmitted`. `handle` is not an
-/// owner input; rows that differ only in it share a path.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginScratchCase {
-    pub cwd: String,
-    pub cwd_allowed: bool,
-    pub tool_call_id: String,
-    pub handle: String,
-    pub name: String,
-    pub size: u64,
-    pub count: u32,
-    #[serde(deserialize_with = "required_nullable")]
-    pub expected: Option<String>,
-}
-
 impl LeanSurface {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -206,16 +190,6 @@ pub fn lean_plugin_host_import_cases() -> &'static [LeanPluginHostImportCase] {
         lean_plugin_resource_group(
             "plugin_resource_host_import_cases",
             &lean_contract_snapshot().plugin_resource_host_import_cases,
-        )
-    })
-}
-
-pub fn lean_plugin_scratch_cases() -> &'static [LeanPluginScratchCase] {
-    static CASES: OnceLock<Vec<LeanPluginScratchCase>> = OnceLock::new();
-    CASES.get_or_init(|| {
-        lean_plugin_resource_group(
-            "plugin_resource_scratch_cases",
-            &lean_contract_snapshot().plugin_resource_scratch_cases,
         )
     })
 }

@@ -312,3 +312,12 @@ async fn a_call_with_nobody_listening_fails_at_once_naming_the_command() {
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(pending(home.path()).unwrap().is_empty());
 }
+
+#[test]
+fn composed_consent_routes_conform_to_lean() {
+    gents_lean_vocab::families::plugin_resources_consents::replay::<super::Consent>(|i| {
+        gents_lean_vocab::families::plugin_resources_consents::ConsentOutput {
+            consent: super::consent(i.interactive),
+        }
+    });
+}

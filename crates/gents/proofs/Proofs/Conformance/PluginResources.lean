@@ -110,83 +110,253 @@ private def networkJson : Json := toJson <| grants.flatMap fun g =>
 
 end Network
 
-private def callAccessJson : Json := toJson <| [PluginAccess.read, .readWrite].flatMap fun declared =>
+deriving instance ToJson for PluginAccess
+
+structure CallAccessInput where
+  declared : PluginAccess
+  writeFields : Bool
+  setsWriteField : Bool
+  granted : Option PluginAccess
+  deriving ToJson
+
+private def callAccessInputs : List CallAccessInput :=
+  [PluginAccess.read, .readWrite].flatMap fun declared =>
   [false, true].flatMap fun writeFields =>
   [false, true].flatMap fun setsWriteField =>
-  [none, some PluginAccess.read, some .readWrite].map fun granted => Json.mkObj [
-    ("declared", toJson declared.spelling), ("write_fields", toJson writeFields),
-    ("sets_write_field", toJson setsWriteField),
-    ("granted", match granted with | none => Json.null | some access => toJson access.spelling),
-    ("valid", toJson (pluginBindingValid declared writeFields)),
-    ("call", toJson (pluginCallAccess declared writeFields setsWriteField).spelling),
-    ("admitted", toJson (pluginCallAdmitted declared granted writeFields setsWriteField))]
+  [none, some PluginAccess.read, some .readWrite].map fun granted =>
+    { declared, writeFields, setsWriteField, granted }
 
-private def invocationJson : Json :=
-  let original : PluginInvocation.Record := ⟨"artifact", "sealed", "original", "original"⟩
-  toJson <| ["same", "removed", "replaced", "grant", "declaration", "binding"].flatMap fun change =>
+structure BindingOutput where
+  valid : Bool
+  call : PluginAccess
+  deriving ToJson
+
+/-- The declaration's validity and the access a call needs are decided on the
+declaration alone, so every declared shape is replayed. -/
+@[conformance_family]
+def callBindings : Family CallAccessInput BindingOutput where
+  inputs := callAccessInputs
+  model := fun i =>
+    { valid := pluginBindingValid i.declared i.writeFields
+      call := pluginCallAccess i.declared i.writeFields i.setsWriteField }
+
+structure AdmissionOutput where
+  admitted : Bool
+  deriving ToJson
+
+/-- An installed plugin's bind admission. Only a valid declaration is installed,
+so only valid shapes reach it. -/
+@[conformance_family]
+def callAdmissions : Family CallAccessInput AdmissionOutput where
+  inputs := callAccessInputs.filter fun i => pluginBindingValid i.declared i.writeFields
+  model := fun i =>
+    { admitted := pluginCallAdmitted i.declared i.granted i.writeFields i.setsWriteField }
+
+/-- model-production-gap: a declaration that names write fields under read
+access fails validation, so no plugin with it is installed and bind admission
+is never reached for it; the model still decides its admission. -/
+@[conformance_family]
+def callAdmissionsUnreached : Family CallAccessInput AdmissionOutput where
+  inputs := callAccessInputs.filter fun i => !pluginBindingValid i.declared i.writeFields
+  model := fun i =>
+    { admitted := pluginCallAdmitted i.declared i.granted i.writeFields i.setsWriteField }
+
+deriving instance ToJson for PluginInvocation.Record
+
+structure InvocationInput where
+  current : Option PluginInvocation.Record
+  restart : Bool
+  bound : Bool
+  deriving ToJson
+
+structure InvocationOutput where
+  admitted : Bool
+  reusable : Bool
+  deriving ToJson
+
+private def originalInvocation : PluginInvocation.Record :=
+  ⟨"artifact", "sealed", "original", "original"⟩
+
+@[conformance_family]
+def invocations : Family InvocationInput InvocationOutput where
+  inputs := ["same", "removed", "replaced", "grant", "declaration", "binding"].flatMap fun change =>
     [false, true].flatMap fun restart =>
     [false, true].map fun bound =>
       let current : Option PluginInvocation.Record := match change with
         | "removed" => none
-        | "replaced" => some { original with digest := "replacement" }
-        | "grant" => some { original with grant := "changed" }
-        | "declaration" => some { original with declaration := "changed" }
-        | "binding" => some { original with binding := "changed" }
-        | _ => some original
-      Json.mkObj [
-        ("current", match current with
-          | none => Json.null
-          | some record => Json.mkObj [("digest", toJson record.digest),
-              ("grant", toJson record.grant), ("declaration", toJson record.declaration),
-              ("binding", toJson record.binding)]),
-        ("restart", toJson restart), ("bound", toJson bound),
-        ("admitted", toJson (PluginInvocation.admitted current original.digest
-          (if bound then some original else none))),
-        ("reusable", toJson (!restart && match current with
-          | none => false
-          | some current => PluginInvocation.reusable original current))]
+        | "replaced" => some { originalInvocation with digest := "replacement" }
+        | "grant" => some { originalInvocation with grant := "changed" }
+        | "declaration" => some { originalInvocation with declaration := "changed" }
+        | "binding" => some { originalInvocation with binding := "changed" }
+        | _ => some originalInvocation
+      { current, restart, bound }
+  model := fun i =>
+    { admitted := PluginInvocation.admitted i.current originalInvocation.digest
+        (if i.bound then some originalInvocation else none)
+      reusable := !i.restart && match i.current with
+        | none => false
+        | some current => PluginInvocation.reusable originalInvocation current }
 
-private def toolCallsJson : Json := Json.mkObj [
-  ("host_call_lifetime", toJson <| [(300, false, none), (300, false, some 100),
-      (300, false, some 600), (300, true, some 36000), (300, true, some 0)].map
-    fun (declared, background, remaining) => Json.mkObj [
-      ("declared", toJson declared), ("background", toJson background),
-      ("remaining", toJson remaining),
-      ("expected", toJson (PluginCalls.hostCallLifetime declared background remaining))]),
-  ("compute_allowance", toJson <| [(300, 36000, false), (300, 100, false), (300, 0, false),
-      (300, 36000, true), (0, 10, false)].map
-    fun (declared, remaining, stopped) => Json.mkObj [
-      ("declared", toJson declared), ("remaining", toJson remaining),
-      ("stopped", toJson stopped),
-      ("expected", toJson (PluginCalls.computeAllowance declared remaining stopped))]),
-  ("sleep", toJson <| [(0, 0), (1, 0), (0, 1), (30, 30), (31, 30), (1000, 60000)].map
-    fun (milliseconds, remaining) => Json.mkObj [
-      ("milliseconds", toJson milliseconds), ("remaining", toJson remaining),
-      ("expected", toJson (PluginCalls.sleepAdmissible milliseconds remaining))]),
-  ("supported", toJson <| [("ordinary", PluginCalls.DispatchRoute.ordinary),
-    ("hook_owned", .hookOwned)].map fun (route, value) =>
-      Json.mkObj [("route", toJson route), ("expected", toJson (PluginCalls.supported value))]),
-  ("availability", toJson <| [false, true].flatMap fun grant =>
-    [("live", true), ("absent", false), ("child", PluginCalls.childDispatcher)].map fun (scope, live) =>
-      Json.mkObj [("grant", toJson grant), ("dispatcher", toJson scope),
-        ("expected", toJson (PluginCalls.available grant live))]),
-  ("spawned_dispatcher", toJson <| [("accepted", PluginCalls.Origin.spawnedByAccepted),
-    ("plugin_child", .spawnedByPluginChild)].map fun (spawner, origin) =>
-      Json.mkObj [("spawner", toJson spawner),
-        ("expected", toJson (PluginCalls.dispatcherFor origin))]),
-  ("reservation", toJson <| [0, 1, 63, 64, 65, 1000].map fun used => Json.mkObj [
-    ("used", toJson used), ("expected", toJson (PluginCalls.reserve used))]),
-  ("result_bytes", toJson <| [0, 1048575, 1048576, 1048577].map fun bytes => Json.mkObj [
-    ("bytes", toJson bytes), ("expected", toJson (PluginCalls.resultFits bytes))]),
-  ("settlement", toJson <| [("completed", PluginCalls.ChildOutcome.completed), ("failed", .failed),
-    ("unavailable", .unavailable), ("timed_out", .timedOut), ("cancelled", .cancelled),
-    ("fatal", .fatal)].map fun (name, outcome) => Json.mkObj [("outcome", toJson name),
-      ("expected", toJson (match PluginCalls.settle outcome with
-        | .result => "result" | .guestError => "guest_error" | .parentFatal => "parent_fatal"))]),
-  ("consent", toJson <| [false, true].flatMap fun interactive => [false, true].map fun composed =>
-    Json.mkObj [("interactive", toJson interactive), ("composed", toJson composed),
-      ("expected", toJson (match PluginCalls.consentRoute interactive composed with
-        | .ask => "ask" | .deny => "deny"))])]
+section ToolCalls
+open PluginCalls
+
+deriving instance ToJson for DispatchRoute, ChildOutcome, Settlement, ConsentRoute
+
+structure LifetimeInput where
+  declared : Nat
+  background : Bool
+  remaining : Option Nat
+  deriving ToJson
+
+structure LifetimeOutput where
+  hostCallLifetime : Nat
+  deriving ToJson
+
+@[conformance_family]
+def hostCallLifetimes : Family LifetimeInput LifetimeOutput where
+  inputs := [(300, false, none), (300, false, some 100), (300, false, some 600),
+    (300, true, some 36000), (300, true, some 0)].map
+      fun (declared, background, remaining) => { declared, background, remaining }
+  model := fun i => { hostCallLifetime := hostCallLifetime i.declared i.background i.remaining }
+
+structure AllowanceInput where
+  declared : Nat
+  remaining : Nat
+  stopped : Bool
+  deriving ToJson
+
+structure AllowanceOutput where
+  computeAllowance : Nat
+  deriving ToJson
+
+@[conformance_family]
+def computeAllowances : Family AllowanceInput AllowanceOutput where
+  inputs := [(300, 36000, false), (300, 100, false), (300, 0, false), (300, 36000, true),
+    (0, 10, false)].map fun (declared, remaining, stopped) => { declared, remaining, stopped }
+  model := fun i => { computeAllowance := computeAllowance i.declared i.remaining i.stopped }
+
+structure SleepInput where
+  milliseconds : Nat
+  remaining : Nat
+  deriving ToJson
+
+structure SleepOutput where
+  sleep : Bool
+  deriving ToJson
+
+@[conformance_family]
+def sleeps : Family SleepInput SleepOutput where
+  inputs := [(0, 0), (1, 0), (0, 1), (30, 30), (31, 30), (1000, 60000)].map
+    fun (milliseconds, remaining) => { milliseconds, remaining }
+  model := fun i => { sleep := sleepAdmissible i.milliseconds i.remaining }
+
+structure RouteInput where
+  route : DispatchRoute
+  deriving ToJson
+
+structure SupportedOutput where
+  supported : Bool
+  deriving ToJson
+
+@[conformance_family]
+def supportedRoutes : Family RouteInput SupportedOutput where
+  inputs := [.ordinary, .hookOwned].map fun route => { route }
+  model := fun i => { supported := supported i.route }
+
+/-- `dispatcher` names the scope a call runs in: `live` under the model's
+dispatcher, `absent` with none, `child` inside a plugin child's scope. -/
+structure AvailabilityInput where
+  grant : Bool
+  dispatcher : String
+  deriving ToJson
+
+structure AvailabilityOutput where
+  availability : Bool
+  deriving ToJson
+
+private def dispatcherScopes : List (String × Bool) :=
+  [("live", true), ("absent", false), ("child", childDispatcher)]
+
+@[conformance_family]
+def availabilities : Family AvailabilityInput AvailabilityOutput where
+  inputs := [false, true].flatMap fun grant =>
+    dispatcherScopes.map fun (dispatcher, _) => { grant, dispatcher }
+  model := fun i =>
+    { availability := available i.grant ((dispatcherScopes.lookup i.dispatcher).getD false) }
+
+/-- `spawner` is what spawned the background invocation: `accepted` (the
+model's own call) or `plugin_child`. -/
+structure SpawnerInput where
+  spawner : String
+  deriving ToJson
+
+structure SpawnedOutput where
+  spawnedDispatcher : Bool
+  deriving ToJson
+
+@[conformance_family]
+def spawnedDispatchers : Family SpawnerInput SpawnedOutput where
+  inputs := ["accepted", "plugin_child"].map fun spawner => { spawner }
+  model := fun i =>
+    { spawnedDispatcher := dispatcherFor
+        (if i.spawner == "plugin_child" then .spawnedByPluginChild else .spawnedByAccepted) }
+
+structure ReservationInput where
+  used : Nat
+  deriving ToJson
+
+structure ReservationOutput where
+  reservation : Option Nat
+  deriving ToJson
+
+@[conformance_family]
+def reservations : Family ReservationInput ReservationOutput where
+  inputs := [0, 1, 63, 64, 65, 1000].map fun used => { used }
+  model := fun i => { reservation := reserve i.used }
+
+structure BytesInput where
+  bytes : Nat
+  deriving ToJson
+
+structure BytesOutput where
+  resultBytes : Bool
+  deriving ToJson
+
+@[conformance_family]
+def resultSizes : Family BytesInput BytesOutput where
+  inputs := [0, 1048575, 1048576, 1048577].map fun bytes => { bytes }
+  model := fun i => { resultBytes := resultFits i.bytes }
+
+structure SettlementInput where
+  outcome : ChildOutcome
+  deriving ToJson
+
+structure SettlementOutput where
+  settlement : Settlement
+  deriving ToJson
+
+@[conformance_family]
+def settlements : Family SettlementInput SettlementOutput where
+  inputs := [.completed, .failed, .unavailable, .timedOut, .cancelled, .fatal].map
+    fun outcome => { outcome }
+  model := fun i => { settlement := settle i.outcome }
+
+structure ConsentInput where
+  interactive : Bool
+  composed : Bool
+  deriving ToJson
+
+structure ConsentOutput where
+  consent : ConsentRoute
+  deriving ToJson
+
+@[conformance_family]
+def consents : Family ConsentInput ConsentOutput where
+  inputs := [false, true].flatMap fun interactive => [false, true].map
+    fun composed => { interactive, composed }
+  model := fun i => { consent := consentRoute i.interactive i.composed }
+
+end ToolCalls
 
 private def childAdmissionJson : Json := toJson <| [false, true].flatMap fun selected =>
   [("ordinary", PluginCalls.DispatchRoute.ordinary), ("hook_owned", .hookOwned)].flatMap
@@ -246,10 +416,22 @@ def scratchCases : List ScratchCase :=
 def scratchVerdict (c : ScratchCase) : Option String :=
   scratchAdmitted scratchCwd (fun _ => c.cwdAllowed) c.toolCallId c.name c.size c.count
 
-private def scratchJson : Json := toJson <| scratchCases.map fun c => Json.mkObj [
-  ("cwd", toJson scratchCwd), ("cwd_allowed", toJson c.cwdAllowed),
-  ("tool_call_id", toJson c.toolCallId), ("handle", toJson c.handle), ("name", toJson c.name),
-  ("size", toJson c.size), ("count", toJson c.count), ("expected", toJson (scratchVerdict c))]
+structure ScratchInput where
+  cwd : String
+  cwdAllowed : Bool
+  toolCallId : String
+  handle : String
+  name : String
+  size : Nat
+  count : Nat
+  deriving ToJson
+
+@[conformance_family]
+def scratchAdmissions : Family ScratchInput (Option String) where
+  inputs := scratchCases.map fun c =>
+    { cwd := scratchCwd, cwdAllowed := c.cwdAllowed, toolCallId := c.toolCallId,
+      handle := c.handle, name := c.name, size := c.size, count := c.count }
+  model := fun i => scratchVerdict ⟨i.cwdAllowed, i.toolCallId, i.handle, i.name, i.size, i.count⟩
 
 theorem job_resource_regressions :
     scratchCases.map scratchVerdict =
@@ -336,62 +518,110 @@ def dataNoteCases : List (Option Fingerprint × Fingerprint × OnConflict) :=
 def dataNoteVerdict (c : Option Fingerprint × Fingerprint × OnConflict) : InsertOutcome :=
   insertNote c.1 c.2.1 c.2.2
 
-private def opSpelling : ApplicationWrite.Operation → String
-  | .create => "create" | .update => "update" | .delete => "delete"
+deriving instance ToJson for ApplicationWrite.Operation, ApplicationWrite.Observation, Invocation,
+  Stamp, OnConflict, InsertOutcome
 
-private def invocationSpelling : Invocation → String
-  | .toolCall => "tool_call" | .jobStep => "job_step" | .callback => "callback" | .ux => "ux"
+structure StampField where
+  field : String
+  stamp : Stamp
+  deriving ToJson
 
-private def stampSpelling : Stamp → String
-  | .callerDid => "caller_did" | .sessionId => "session_id" | .requestDocId => "request_doc_id"
-  | .toolCallDocId => "tool_call_doc_id" | .jobRowDocId => "job_row_doc_id"
-  | .chainRootDocId => "chain_root_doc_id"
+private def stampFields (stamps : List (String × Stamp)) : List StampField :=
+  stamps.map fun (field, stamp) => { field, stamp }
 
-private def stampsJson (stamps : List (String × Stamp)) : Json :=
-  Json.mkObj (stamps.map fun (field, s) => (field, toJson (stampSpelling s)))
+structure WriteInput where
+  op : ApplicationWrite.Operation
+  inOwnSdl : Bool
+  runtimeOrProtected : Bool
+  actorIsInvoker : Bool
+  opGranted : Bool
+  stampedSuppliedByGuest : Bool
+  invocation : Invocation
+  declaredStamps : List StampField
+  collectionFields : List String
+  write : ApplicationWrite.Observation
+  deriving ToJson
 
-private def refusalJson : Option Refusal → Json
-  | none => Json.null
-  | some (.stampUnavailable s inv) => Json.mkObj [("kind", toJson "stamp_unavailable"),
-      ("stamp", toJson (stampSpelling s)), ("invocation", toJson (invocationSpelling inv))]
-  | some .other => Json.mkObj [("kind", toJson "other")]
+/-- `kind` is `stamp_unavailable` (with its stamp and invocation) or `other`. -/
+structure RefusalWire where
+  kind : String
+  stamp : Option Stamp
+  invocation : Option Invocation
+  deriving ToJson
 
-private def writeJson (w : ApplicationWrite.Observation) : Json := Json.mkObj [
-  ("granted", toJson w.granted), ("application", toJson w.application),
-  ("blocked", toJson w.blocked), ("credential", toJson w.credential),
-  ("bounded", toJson w.bounded), ("targets", toJson w.targets), ("limit", toJson w.limit),
-  ("preview", toJson w.preview), ("digest_matches", toJson w.digestMatches)]
+private def refusalWire : Refusal → RefusalWire
+  | .stampUnavailable s inv => ⟨"stamp_unavailable", some s, some inv⟩
+  | .other => ⟨"other", none, none⟩
+
+structure WriteOutput where
+  applicable : List StampField
+  admitted : Bool
+  refusal : Option RefusalWire
+  deriving ToJson
+
+@[conformance_family]
+def dataWrites : Family WriteInput WriteOutput where
+  inputs := dataWriteCases.map fun c =>
+    { op := c.op, inOwnSdl := c.inOwnSdl, runtimeOrProtected := c.runtimeOrProtected,
+      actorIsInvoker := c.actorIsInvoker, opGranted := c.opGranted,
+      stampedSuppliedByGuest := c.stampedSuppliedByGuest, invocation := c.invocation,
+      declaredStamps := stampFields declaredStamps, collectionFields := c.collectionFields,
+      write := c.write }
+  model := fun i =>
+    let (applicable, ok, refused) := dataWriteVerdict
+      { op := i.op, inOwnSdl := i.inOwnSdl, runtimeOrProtected := i.runtimeOrProtected,
+        actorIsInvoker := i.actorIsInvoker, opGranted := i.opGranted,
+        stampedSuppliedByGuest := i.stampedSuppliedByGuest, invocation := i.invocation,
+        collectionFields := i.collectionFields, write := i.write }
+    { applicable := stampFields applicable, admitted := ok, refusal := refused.map refusalWire }
+
+structure QueryInput where
+  limit : Nat
+  inOwnSdl : Bool
+  runtimeOrProtected : Bool
+  queryGranted : Bool
+  deriving ToJson
+
+@[conformance_family]
+def dataQueries : Family QueryInput Bool where
+  inputs := dataQueryCases.map fun (limit, inOwnSdl, runtimeOrProtected, queryGranted) =>
+    { limit, inOwnSdl, runtimeOrProtected, queryGranted }
+  model := fun i => dataQueryVerdict (i.limit, i.inOwnSdl, i.runtimeOrProtected, i.queryGranted)
 
 /-- `$caller.did` is the placeholder's wire spelling. -/
-private def filterJson (f : Filter) : Json := Json.mkObj <| f.map fun (field, value) =>
-  (field, toJson (match value with | .literal v => v | .callerDid => "$caller.did"))
+structure FilterEntry where
+  field : String
+  value : String
+  deriving ToJson
 
-private def insertOutcomeSpelling : InsertOutcome → String
-  | .inserted => "inserted" | .unchanged => "unchanged" | .abortStep => "abort_step"
+private def filterEntries (f : Filter) : List FilterEntry :=
+  f.map fun (field, value) =>
+    { field, value := match value with | .literal v => v | .callerDid => "$caller.did" }
 
-def dataCasesJson : String := (Json.mkObj [
-  ("writes", toJson <| dataWriteCases.map fun c =>
-    let (applicable, ok, refused) := dataWriteVerdict c
-    Json.mkObj [("op", toJson (opSpelling c.op)), ("in_own_sdl", toJson c.inOwnSdl),
-      ("runtime_or_protected", toJson c.runtimeOrProtected),
-      ("actor_is_invoker", toJson c.actorIsInvoker), ("op_granted", toJson c.opGranted),
-      ("stamped_supplied_by_guest", toJson c.stampedSuppliedByGuest),
-      ("invocation", toJson (invocationSpelling c.invocation)),
-      ("declared_stamps", stampsJson declaredStamps),
-      ("collection_fields", toJson c.collectionFields), ("write", writeJson c.write),
-      ("applicable", stampsJson applicable), ("admitted", toJson ok),
-      ("refusal", refusalJson refused)]),
-  ("queries", toJson <| dataQueryCases.map fun c => Json.mkObj [
-    ("limit", toJson c.1), ("in_own_sdl", toJson c.2.1),
-    ("runtime_or_protected", toJson c.2.2.1), ("query_granted", toJson c.2.2.2),
-    ("expected", toJson (dataQueryVerdict c))]),
-  ("filters", toJson <| dataFilterCases.map fun f => Json.mkObj [
-    ("caller_did", toJson callerDid), ("filter", filterJson f),
-    ("expected", filterJson (dataFilterVerdict f))]),
-  ("notes", toJson <| dataNoteCases.map fun c => Json.mkObj [
-    ("existing", toJson c.1), ("new", toJson c.2.1),
-    ("on_conflict", toJson (match c.2.2 with | .ignore => "ignore" | .fail => "fail")),
-    ("expected", toJson (insertOutcomeSpelling (dataNoteVerdict c)))])]).compress
+private def filterOf (entries : List FilterEntry) : Filter :=
+  entries.map fun e =>
+    (e.field, if e.value == "$caller.did" then .callerDid else .literal e.value)
+
+structure FilterInput where
+  callerDid : String
+  filter : List FilterEntry
+  deriving ToJson
+
+@[conformance_family]
+def dataFilters : Family FilterInput (List FilterEntry) where
+  inputs := dataFilterCases.map fun f => { callerDid, filter := filterEntries f }
+  model := fun i => filterEntries (substituteCallerDid (filterOf i.filter) i.callerDid)
+
+structure NoteInput where
+  existing : Option String
+  new : String
+  onConflict : OnConflict
+  deriving ToJson
+
+@[conformance_family]
+def dataNotes : Family NoteInput InsertOutcome where
+  inputs := dataNoteCases.map fun (existing, new, onConflict) => { existing, new, onConflict }
+  model := fun i => dataNoteVerdict (i.existing, i.new, i.onConflict)
 
 private def noteStamps : List (String × Stamp) :=
   [("job_row_doc_id", .jobRowDocId), ("chain_root_doc_id", .chainRootDocId)]
@@ -426,16 +656,27 @@ def routeCases : List (Bool × Bool × Bool × Bool) :=
 def routeVerdict (c : Bool × Bool × Bool × Bool) : Bool :=
   PluginCalls.childAdmissible c.2.2.1 (PluginCalls.routeOf c.1 c.2.1) c.2.2.2
 
-def routeCasesJson : String := (toJson <| routeCases.map fun c => Json.mkObj [
-  ("static_hook_owned", toJson c.1), ("job_bound", toJson c.2.1),
-  ("selected", toJson c.2.2.1), ("admitted", toJson c.2.2.2),
-  ("expected", toJson (routeVerdict c))]).compress
-
 theorem route_regressions :
     routeCases.map routeVerdict =
       [ false, false, false, true, false, false, false, true
       , false, false, false, true, false, false, false, true ] := by
   native_decide
+
+structure ChildRouteInput where
+  staticHookOwned : Bool
+  jobBound : Bool
+  selected : Bool
+  admitted : Bool
+  deriving ToJson
+
+/-- The child route a plugin's tool call takes: a static hook-owned or
+job-bound tool still runs only when it is on the selected surface and its own
+admission accepts the call. -/
+@[conformance_family]
+def childRoutes : Family ChildRouteInput Bool where
+  inputs := routeCases.map fun (staticHookOwned, jobBound, selected, admitted) =>
+    { staticHookOwned, jobBound, selected, admitted }
+  model := fun i => routeVerdict (i.staticHookOwned, i.jobBound, i.selected, i.admitted)
 
 def pluginResourceConsentCasesJson : String :=
   consentJson.compress
@@ -446,17 +687,8 @@ def pluginResourceBudgetCasesJson : String :=
 def pluginResourcePublicationCasesJson : String :=
   publicationJson.compress
 
-def pluginResourceToolCallCasesJson : String :=
-  toolCallsJson.compress
-
 def pluginResourceChildAdmissionCasesJson : String :=
   childAdmissionJson.compress
-
-def pluginResourceToolEffectCasesJson : String :=
-  PluginEffects.casesJson.compress
-
-def pluginResourceToolEffectReceiptCasesJson : String :=
-  PluginEffects.receiptCasesJson.compress
 
 def pluginResourceToolEffectTerminalCasesJson : String :=
   PluginEffects.terminalCasesJson.compress
@@ -469,18 +701,6 @@ def pluginResourceModelSlotCasesJson : String :=
 
 def pluginResourceNetworkCasesJson : String :=
   networkJson.compress
-
-def pluginResourceCallAccessCasesJson : String :=
-  callAccessJson.compress
-
-def pluginResourceInvocationCasesJson : String :=
-  invocationJson.compress
-
-def pluginResourceReceiptCasesJson : String :=
-  Conformance.PluginReceipt.casesJson.compress
-
-def pluginResourceScratchCasesJson : String :=
-  scratchJson.compress
 
 def pluginResourceHostImportCasesJson : String :=
   hostImportJson.compress
