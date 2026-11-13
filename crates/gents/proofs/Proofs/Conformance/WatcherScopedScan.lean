@@ -21,6 +21,7 @@ structure ScanWire where
 structure BatchInput where
   name : String
   activeAgents : List String
+  disabledAgents : List String
   scans : List ScanWire
   legacyOrder : List String
   arrivalOrder : List String
@@ -47,10 +48,11 @@ def ScanWire.toModel (scan : ScanWire) : ScopedScan :=
 @[conformance_family]
 def batch : Family BatchInput BatchOutput where
   inputs := cases.map fun c =>
-    { name := c.name, activeAgents := c.activeAgents, scans := c.scans.map ScanWire.ofModel,
+    { name := c.name, activeAgents := c.activeAgents, disabledAgents := c.disabledAgents,
+      scans := c.scans.map ScanWire.ofModel,
       legacyOrder := c.legacyOrder, arrivalOrder := c.arrivalOrder }
   model := fun i =>
-    let collected := scopedCandidates i.activeAgents (i.scans.map ScanWire.toModel)
+    let collected := scopedCandidates i.activeAgents i.disabledAgents (i.scans.map ScanWire.toModel)
       i.legacyOrder i.arrivalOrder
     { rows := collected.rows, failures := collected.failures,
       needsRescan := scopedNeedsRescan collected }
