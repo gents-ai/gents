@@ -76,8 +76,13 @@ env:
   TARGET_TRIPLE: aarch64-apple-darwin
 
 jobs:
+  # The Engineer's core packs, built and tested once; the CLI embeds them.
+  core-packs:
+    uses: ./.github/workflows/core-packs.yml
+
   build-sign-package:
     name: Build, sign, and package macOS CLI and desktop
+    needs: core-packs
     # Release artifacts live in this job's RUNNER_TEMP target tree, so every
     # release links from a clean tree and never sees PR-built artifacts.
     # SCCACHE_RECACHE stays enabled above: rustc invocations still cannot
@@ -330,14 +335,22 @@ jobs:
             exit 1
           fi
 
+      - name: Download core packs
+        uses: actions/download-artifact@v7
+        with:
+          name: core-packs
+          path: target/core-packs
+
       - name: Build release binary
         env:
           # dsymutil needs the local symbol table and object-file debug map.
           # The next step extracts the dSYM and restores the normal stripped
           # release footprint before signing or packaging.
           CARGO_PROFILE_RELEASE_STRIP: "false"
+          GENTS_REQUIRE_CORE_PACKS: "1"
         run: |
           set -euo pipefail
+          (cd target/core-packs && shasum -a 256 -c SHA256SUMS-core-packs.txt)
           rustc -Vv
           host_triple="$(rustc -Vv | awk '/^host:/ { print $2 }')"
           if [[ "${host_triple}" != "${TARGET_TRIPLE}" ]]; then
