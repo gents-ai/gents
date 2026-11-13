@@ -3,6 +3,8 @@ import Proofs.Automation.GoalAutomation
 import Proofs.Automation.GoalAutomation.ReadinessGate
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -145,47 +147,19 @@ def goalDecisionCases : List GoalDecisionCase :=
       requestIsWrapup := true, infrastructureRetries := 0
       wrapupRequested := true, wrapupCompleted := false })
 
-def goalDecisionCaseJson (w : GoalDecisionCase) : String :=
-  let decision := Goals.decide w.status w.terminal w.sessionIdle w.childExists
+deriving instance Lean.ToJson for Goals.RequestTerminal, GoalDecisionCase
+
+@[conformance_family]
+def goalDecision : Family GoalDecisionCase Goals.Decision where
+  inputs := goalDecisionCases
+  model := fun w => Goals.decide w.status w.terminal w.sessionIdle w.childExists
     w.budgetReached w.hasActivity w.requestIsWrapup w.infrastructureRetries
     w.wrapupRequested w.wrapupCompleted
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"status\":" ++ jsonString w.status.toDefraDB ++ ","
-    ++ "\"terminal\":" ++ jsonString (terminalName w.terminal) ++ ","
-    ++ "\"session_idle\":" ++ boolString w.sessionIdle ++ ","
-    ++ "\"child_exists\":" ++ boolString w.childExists ++ ","
-    ++ "\"budget_reached\":" ++ boolString w.budgetReached ++ ","
-    ++ "\"has_activity\":" ++ boolString w.hasActivity ++ ","
-    ++ "\"request_is_wrapup\":" ++ boolString w.requestIsWrapup ++ ","
-    ++ "\"infrastructure_retries\":" ++ toString w.infrastructureRetries ++ ","
-    ++ "\"wrapup_requested\":" ++ boolString w.wrapupRequested ++ ","
-    ++ "\"wrapup_completed\":" ++ boolString w.wrapupCompleted ++ ","
-    ++ "\"expected_decision\":" ++ jsonString (decisionName decision)
-    ++ "}"
-
-def goalDecisionCasesJson : String :=
-  jsonArray (goalDecisionCases.map goalDecisionCaseJson)
 
 structure GoalTransitionCase where
   name : String
   pre : Goals.State
   action : Goals.Action
-
-def goalActionName : Goals.Action → String
-  | .pause => "pause"
-  | .resume => "resume"
-  | .stop => "stop"
-  | .complete => "complete"
-  | .blockedAudit .sameRequest => "blocked_audit_same_request"
-  | .blockedAudit .sameCondition => "blocked_audit_same_condition"
-  | .blockedAudit .newCondition => "blocked_audit_new_condition"
-  | .operatorBlock => "operator_block"
-  | .usageLimit => "usage_limit"
-  | .budgetExhausted => "budget_exhausted"
-  | .wrapupFinished => "wrapup_finished"
-  | .wrapupAbandoned => "wrapup_abandoned"
-  | .cleanTurn => "clean_turn"
 
 def goalCaseState (status : Goals.Status) (audits : Nat := 0)
     (requested : Bool := false) (completed : Bool := false) : Goals.State :=
@@ -249,25 +223,85 @@ def goalTransitionCases : List GoalTransitionCase :=
       action := .cleanTurn }
   ]
 
-def goalTransitionCaseJson (w : GoalTransitionCase) : String :=
-  let result := Goals.step? w.pre w.action
-  let post := result.getD w.pre
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"pre_status\":" ++ jsonString w.pre.status.toDefraDB ++ ","
-    ++ "\"pre_blocked_audits\":" ++ toString w.pre.blockedAudits ++ ","
-    ++ "\"pre_wrapup_requested\":" ++ boolString w.pre.wrapupRequested ++ ","
-    ++ "\"pre_wrapup_completed\":" ++ boolString w.pre.wrapupCompleted ++ ","
-    ++ "\"action\":" ++ jsonString (goalActionName w.action) ++ ","
-    ++ "\"accepted\":" ++ boolString result.isSome ++ ","
-    ++ "\"expected_status\":" ++ jsonString post.status.toDefraDB ++ ","
-    ++ "\"expected_blocked_audits\":" ++ toString post.blockedAudits ++ ","
-    ++ "\"expected_wrapup_requested\":" ++ boolString post.wrapupRequested ++ ","
-    ++ "\"expected_wrapup_completed\":" ++ boolString post.wrapupCompleted
-    ++ "}"
+inductive GoalActionWire where
+  | pause
+  | resume
+  | stop
+  | complete
+  | blockedAuditSameRequest
+  | blockedAuditSameCondition
+  | blockedAuditNewCondition
+  | operatorBlock
+  | usageLimit
+  | budgetExhausted
+  | wrapupFinished
+  | wrapupAbandoned
+  | cleanTurn
+  deriving Lean.ToJson
 
-def goalTransitionCasesJson : String :=
-  jsonArray (goalTransitionCases.map goalTransitionCaseJson)
+def GoalActionWire.ofModel : Goals.Action → GoalActionWire
+  | .pause => .pause
+  | .resume => .resume
+  | .stop => .stop
+  | .complete => .complete
+  | .blockedAudit .sameRequest => .blockedAuditSameRequest
+  | .blockedAudit .sameCondition => .blockedAuditSameCondition
+  | .blockedAudit .newCondition => .blockedAuditNewCondition
+  | .operatorBlock => .operatorBlock
+  | .usageLimit => .usageLimit
+  | .budgetExhausted => .budgetExhausted
+  | .wrapupFinished => .wrapupFinished
+  | .wrapupAbandoned => .wrapupAbandoned
+  | .cleanTurn => .cleanTurn
+
+def GoalActionWire.toModel : GoalActionWire → Goals.Action
+  | .pause => .pause
+  | .resume => .resume
+  | .stop => .stop
+  | .complete => .complete
+  | .blockedAuditSameRequest => .blockedAudit .sameRequest
+  | .blockedAuditSameCondition => .blockedAudit .sameCondition
+  | .blockedAuditNewCondition => .blockedAudit .newCondition
+  | .operatorBlock => .operatorBlock
+  | .usageLimit => .usageLimit
+  | .budgetExhausted => .budgetExhausted
+  | .wrapupFinished => .wrapupFinished
+  | .wrapupAbandoned => .wrapupAbandoned
+  | .cleanTurn => .cleanTurn
+
+structure GoalTransitionInput where
+  name : String
+  preStatus : Goals.Status
+  preBlockedAudits : Nat
+  preWrapupRequested : Bool
+  preWrapupCompleted : Bool
+  action : GoalActionWire
+  deriving Lean.ToJson
+
+/-- A rejected step leaves the goal as it was, so the observed state after a
+rejection is the state before it. -/
+structure GoalTransitionOutput where
+  accepted : Bool
+  status : Goals.Status
+  blockedAudits : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalTransition : Family GoalTransitionInput GoalTransitionOutput where
+  inputs := goalTransitionCases.map fun w =>
+    { name := w.name, preStatus := w.pre.status, preBlockedAudits := w.pre.blockedAudits
+    , preWrapupRequested := w.pre.wrapupRequested, preWrapupCompleted := w.pre.wrapupCompleted
+    , action := GoalActionWire.ofModel w.action }
+  model := fun i =>
+    let pre : Goals.State :=
+      { status := i.preStatus, blockedAudits := i.preBlockedAudits
+      , wrapupRequested := i.preWrapupRequested, wrapupCompleted := i.preWrapupCompleted }
+    let result := Goals.step? pre i.action.toModel
+    let post := result.getD pre
+    { accepted := result.isSome, status := post.status, blockedAudits := post.blockedAudits
+    , wrapupRequested := post.wrapupRequested, wrapupCompleted := post.wrapupCompleted }
 
 structure GoalCreateCase where
   name : String
@@ -477,62 +511,100 @@ def taskGoalRecoveryCases : List TaskGoalRecoveryCase :=
       durableGoalPresent := false, creationClaimPresent := false }
   ]
 
-def taskFireRecoveryDispositionName : GoalAutomation.TaskFireRecoveryDisposition → String
-  | .absent => "absent"
-  | .recovered => "recovered"
-  | .conflict => "conflict"
+structure TaskGoalRecoveryInput where
+  name : String
+  nodeDid : String
+  agentDid : String
+  taskId : String
+  fireKey : String
+  requestPresent : Bool
+  observedNodeDid : Option String
+  observedAgentDid : Option String
+  observedSessionId : Option String
+  observedRequestId : Option String
+  observedRetryKey : Option String
+  durableGoalPresent : Bool
+  creationClaimPresent : Bool
+  deriving Lean.ToJson
 
-def taskGoalRecoveryCaseJson (w : TaskGoalRecoveryCase) : String :=
-  let expected := GoalAutomation.expectedTaskGoalRequestBinding
-    w.nodeDid w.agentDid w.taskId w.fireKey
-  let decision := GoalAutomation.decideTaskFireRecovery expected
-    ⟨w.request, w.durableGoalPresent, w.creationClaimPresent⟩
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"node_did\":" ++ jsonString w.nodeDid ++ ","
-    ++ "\"agent_did\":" ++ jsonString w.agentDid ++ ","
-    ++ "\"task_id\":" ++ jsonString w.taskId ++ ","
-    ++ "\"fire_key\":" ++ jsonString w.fireKey ++ ","
-    ++ "\"request_present\":" ++ boolString w.request.isSome ++ ","
-    ++ "\"request_binding_matches\":" ++ boolString (w.request == some expected) ++ ","
-    ++ "\"observed_node_did\":" ++ goalOptionalStringJson (w.request.map (·.nodeDid)) ++ ","
-    ++ "\"observed_agent_did\":" ++ goalOptionalStringJson (w.request.map (·.agentDid)) ++ ","
-    ++ "\"observed_session_id\":" ++ goalOptionalStringJson (w.request.map (·.sessionId)) ++ ","
-    ++ "\"observed_request_id\":" ++ goalOptionalStringJson (w.request.map (·.requestId)) ++ ","
-    ++ "\"observed_retry_key\":" ++ goalOptionalStringJson (w.request.map (·.retryKey)) ++ ","
-    ++ "\"durable_goal_present\":" ++ boolString w.durableGoalPresent ++ ","
-    ++ "\"creation_claim_present\":" ++ boolString w.creationClaimPresent ++ ","
-    ++ "\"expected_disposition\":" ++ jsonString
-      (taskFireRecoveryDispositionName decision.disposition) ++ ","
-    ++ "\"expected_recovered_request_id\":" ++
-      goalOptionalStringJson decision.recoveredRequestId ++ ","
-    ++ "\"expected_checkpointable\":" ++ boolString decision.checkpointable
-    ++ "}"
+def TaskGoalRecoveryInput.ofCase (w : TaskGoalRecoveryCase) : TaskGoalRecoveryInput :=
+  { name := w.name, nodeDid := w.nodeDid, agentDid := w.agentDid, taskId := w.taskId
+  , fireKey := w.fireKey, requestPresent := w.request.isSome
+  , observedNodeDid := w.request.map (·.nodeDid)
+  , observedAgentDid := w.request.map (·.agentDid)
+  , observedSessionId := w.request.map (·.sessionId)
+  , observedRequestId := w.request.map (·.requestId)
+  , observedRetryKey := w.request.map (·.retryKey)
+  , durableGoalPresent := w.durableGoalPresent, creationClaimPresent := w.creationClaimPresent }
 
-def taskGoalRecoveryCasesJson : String :=
-  jsonArray (taskGoalRecoveryCases.map taskGoalRecoveryCaseJson)
+def TaskGoalRecoveryInput.request (i : TaskGoalRecoveryInput) :
+    Option GoalAutomation.TaskGoalRequestBinding :=
+  if i.requestPresent then
+    some { nodeDid := i.observedNodeDid.getD "", agentDid := i.observedAgentDid.getD ""
+         , sessionId := i.observedSessionId.getD "", requestId := i.observedRequestId.getD ""
+         , retryKey := i.observedRetryKey.getD "" }
+  else none
+
+deriving instance Lean.ToJson for GoalAutomation.TaskFireRecoveryDisposition
+
+structure TaskGoalRecoveryOutput where
+  requestBindingMatches : Bool
+  disposition : GoalAutomation.TaskFireRecoveryDisposition
+  recoveredRequestId : Option String
+  checkpointable : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def taskGoalRecovery : Family TaskGoalRecoveryInput TaskGoalRecoveryOutput where
+  inputs := taskGoalRecoveryCases.map TaskGoalRecoveryInput.ofCase
+  model := fun i =>
+    let expected := GoalAutomation.expectedTaskGoalRequestBinding
+      i.nodeDid i.agentDid i.taskId i.fireKey
+    let decision := GoalAutomation.decideTaskFireRecovery expected
+      ⟨i.request, i.durableGoalPresent, i.creationClaimPresent⟩
+    { requestBindingMatches := i.request == some expected
+    , disposition := decision.disposition
+    , recoveredRequestId := decision.recoveredRequestId
+    , checkpointable := decision.checkpointable }
 
 structure GoalSubmissionCase where
   name : String
   state : GoalAutomation.SubmissionState
   action : GoalAutomation.SubmissionAction
 
-def runtimeGoalPublicationCasesJson : String :=
-  let cases : List (String × String × String × String × String × String × String × String × Bool × Bool) :=
-    [("created", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true),
-     ("aborted", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, false),
-     ("foreign-actor", "other", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true),
-     ("wrong-session", "agent", "agent", "agent", "other", "session", "agent-doc", "agent-doc", true, true),
-     ("wrong-agent", "agent", "agent", "agent", "session", "session", "other", "agent-doc", true, true),
-     ("duplicate-after-revocation", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", false, true)]
-  (Lean.toJson (cases.map fun (name, actor, signer, selected, session, observedSession, agent, observedAgent, fresh, commit) =>
+structure RuntimeGoalOpeningInput where
+  name : String
+  actor : String
+  signer : String
+  selected : String
+  targetSession : String
+  observedSession : String
+  targetAgent : String
+  observedAgent : String
+  fresh : Bool
+  commit : Bool
+  deriving Lean.ToJson
+
+deriving instance Lean.ToJson for GoalAutomation.RuntimeGoalPublication
+
+/-- Each opening runs on its own served node. A duplicate (`fresh = false`)
+first opens the goal and then revokes the request's relationships, which is
+the state the model starts a duplicate from. -/
+@[conformance_family]
+def goalBackedRuntime : Family RuntimeGoalOpeningInput GoalAutomation.RuntimeGoalPublication where
+  inputs :=
+    [ ⟨"created", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true⟩
+    , ⟨"aborted", "agent", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, false⟩
+    , ⟨"foreign-actor", "other", "agent", "agent", "session", "session", "agent-doc", "agent-doc", true, true⟩
+    , ⟨"wrong-session", "agent", "agent", "agent", "other", "session", "agent-doc", "agent-doc", true, true⟩
+    , ⟨"wrong-agent", "agent", "agent", "agent", "session", "session", "other", "agent-doc", true, true⟩
+    , ⟨"duplicate-after-revocation", "agent", "agent", "agent", "session", "session", "agent-doc",
+        "agent-doc", false, true⟩ ]
+  model := fun i =>
     let before : GoalAutomation.RuntimeGoalPublication :=
-      if fresh then ⟨false, false, false, false⟩ else ⟨true, true, true, false⟩
-    let result := GoalAutomation.commitRuntimeGoalOpening before actor signer selected
-      session observedSession agent observedAgent fresh commit
-    Lean.Json.mkObj [("name", Lean.toJson name), ("session", Lean.toJson result.session),
-      ("goal", Lean.toJson result.goal), ("request", Lean.toJson result.request),
-      ("grants", Lean.toJson result.grants)])).compress
+      if i.fresh then ⟨false, false, false, false⟩ else ⟨true, true, true, false⟩
+    GoalAutomation.commitRuntimeGoalOpening before i.actor i.signer i.selected
+      i.targetSession i.observedSession i.targetAgent i.observedAgent i.fresh i.commit
 
 def goalSubmissionCases : List GoalSubmissionCase :=
   [ { name := "stage_goal_not_visible", state := ⟨false, false, false, false⟩,
@@ -549,27 +621,31 @@ def goalSubmissionCases : List GoalSubmissionCase :=
       action := .commit }
   ]
 
-def submissionActionName : GoalAutomation.SubmissionAction → String
-  | .stageGoal => "stage_goal" | .stageRequest => "stage_request"
-  | .commit => "commit" | .abort => "abort" | .crash => "crash"
+deriving instance Lean.ToJson for GoalAutomation.SubmissionState,
+  GoalAutomation.SubmissionAction, GoalSubmissionCase
 
-def goalSubmissionCaseJson (w : GoalSubmissionCase) : String :=
-  let post := GoalAutomation.submissionStep w.state w.action
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"durable_goal\":" ++ boolString w.state.durableGoal ++ ","
-    ++ "\"runnable_request\":" ++ boolString w.state.runnableRequest ++ ","
-    ++ "\"staged_goal\":" ++ boolString w.state.stagedGoal ++ ","
-    ++ "\"staged_request\":" ++ boolString w.state.stagedRequest ++ ","
-    ++ "\"action\":" ++ jsonString (submissionActionName w.action) ++ ","
-    ++ "\"expected_durable_goal\":" ++ boolString post.durableGoal ++ ","
-    ++ "\"expected_runnable_request\":" ++ boolString post.runnableRequest ++ ","
-    ++ "\"expected_staged_goal\":" ++ boolString post.stagedGoal ++ ","
-    ++ "\"expected_staged_request\":" ++ boolString post.stagedRequest
-    ++ "}"
+@[conformance_family]
+def goalSubmission : Family GoalSubmissionCase GoalAutomation.SubmissionState where
+  inputs := goalSubmissionCases
+  model := fun w => GoalAutomation.submissionStep w.state w.action
 
-def goalSubmissionCasesJson : String :=
-  jsonArray (goalSubmissionCases.map goalSubmissionCaseJson)
+structure GoalSubmissionPublication where
+  durableGoal : Bool
+  runnableRequest : Bool
+  deriving Lean.ToJson
+
+/-- A served node exposes only committed submissions: staged rows live inside
+the publishing transaction and a crash discards them, so the publishing
+scenario can build only the committed case. -/
+def goalSubmissionPublishedCases : List GoalSubmissionCase :=
+  goalSubmissionCases.filter fun w => w.name ∈ ["commit_both_atomically"]
+
+@[conformance_family]
+def goalSubmissionPublished : Family GoalSubmissionCase GoalSubmissionPublication where
+  inputs := goalSubmissionPublishedCases
+  model := fun w =>
+    let post := GoalAutomation.submissionStep w.state w.action
+    { durableGoal := post.durableGoal, runnableRequest := post.runnableRequest }
 
 structure GoalContinuationMaterializationCase where
   name : String
@@ -584,25 +660,46 @@ def goalContinuationMaterializationCases : List GoalContinuationMaterializationC
   , { name := "restart_does_not_duplicate_child", phase := .childPresent, action := .reconcile }
   ]
 
-def continuationPhaseName : GoalAutomation.ContinuationPhase → String
-  | .unclaimed => "unclaimed" | .claimed => "claimed" | .childPresent => "child_present"
+inductive ContinuationActionWire where
+  | claimEligible
+  | claimIneligible
+  | materialize
+  | reconcile
+  | crash
+  deriving Lean.ToJson
 
-def continuationActionName : GoalAutomation.ContinuationAction → String
-  | .claim true => "claim_eligible" | .claim false => "claim_ineligible"
-  | .materialize => "materialize" | .reconcile => "reconcile" | .crash => "crash"
+def ContinuationActionWire.ofModel : GoalAutomation.ContinuationAction → ContinuationActionWire
+  | .claim true => .claimEligible
+  | .claim false => .claimIneligible
+  | .materialize => .materialize
+  | .reconcile => .reconcile
+  | .crash => .crash
 
-def goalContinuationMaterializationCaseJson
-    (w : GoalContinuationMaterializationCase) : String :=
-  let post := GoalAutomation.continuationStep w.phase w.action
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"phase\":" ++ jsonString (continuationPhaseName w.phase) ++ ","
-    ++ "\"action\":" ++ jsonString (continuationActionName w.action) ++ ","
-    ++ "\"expected_phase\":" ++ jsonString (continuationPhaseName post)
-    ++ "}"
+def ContinuationActionWire.toModel : ContinuationActionWire → GoalAutomation.ContinuationAction
+  | .claimEligible => .claim true
+  | .claimIneligible => .claim false
+  | .materialize => .materialize
+  | .reconcile => .reconcile
+  | .crash => .crash
 
-def goalContinuationMaterializationCasesJson : String :=
-  jsonArray (goalContinuationMaterializationCases.map goalContinuationMaterializationCaseJson)
+deriving instance Lean.ToJson for GoalAutomation.ContinuationPhase
+
+structure ContinuationMaterializationInput where
+  name : String
+  phase : GoalAutomation.ContinuationPhase
+  action : ContinuationActionWire
+  deriving Lean.ToJson
+
+structure ContinuationMaterializationOutput where
+  phase : GoalAutomation.ContinuationPhase
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalContinuationMaterialization :
+    Family ContinuationMaterializationInput ContinuationMaterializationOutput where
+  inputs := goalContinuationMaterializationCases.map fun w =>
+    { name := w.name, phase := w.phase, action := ContinuationActionWire.ofModel w.action }
+  model := fun i => { phase := GoalAutomation.continuationStep i.phase i.action.toModel }
 
 section ReadinessGate
 
@@ -680,55 +777,122 @@ def goalReadinessGateCases : List GoalReadinessGateCase :=
       settled := true, cause := .attempt, input := activeInput .completed (idle := false) }
   ]
 
-def readinessObservationName : Observation → String
-  | .ready _ => "ready"
-  | .backendRecovering => "backend_recovering"
-  | .unavailable => "unavailable"
-  | .unassigned => "unassigned"
-  | .unknown => "unknown"
+inductive ObservationWire where
+  | ready
+  | backendRecovering
+  | unavailable
+  | unassigned
+  | unknown
+  deriving Lean.ToJson
 
-def readinessName : Readiness → String
-  | .ready => "ready"
-  | .waiting => "waiting"
-  | .unavailable => "unavailable"
+def ObservationWire.ofModel : Observation → ObservationWire
+  | .ready _ => .ready
+  | .backendRecovering => .backendRecovering
+  | .unavailable => .unavailable
+  | .unassigned => .unassigned
+  | .unknown => .unknown
 
-def readinessCauseName : Cause → String
-  | .attempt => "attempt"
-  | .agentUnavailable => "agent_unavailable"
-  | .goalControlUnavailable => "goal_control_unavailable"
+def ObservationWire.toModel (newerThanTerminal : Bool) : ObservationWire → Observation
+  | .ready => .ready newerThanTerminal
+  | .backendRecovering => .backendRecovering
+  | .unavailable => .unavailable
+  | .unassigned => .unassigned
+  | .unknown => .unknown
 
-def gatedName : Gated → String
-  | .decided decision => decisionName decision
-  | .awaitReadiness => "await_readiness"
-  | .agentUnavailable => "agent_unavailable"
+inductive GatedWire where
+  | none
+  | continue
+  | retry
+  | pause
+  | wrapup
+  | abandonWrapup
+  | awaitReadiness
+  | agentUnavailable
+  deriving Lean.ToJson
 
-def goalReadinessGateCaseJson (w : GoalReadinessGateCase) : String :=
-  let readiness := observe w.observation w.settled
-  let gated := gate w.observation w.settled w.cause w.input
-  let i := w.input
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"observation\":" ++ jsonString (readinessObservationName w.observation) ++ ","
-    ++ "\"newer_than_terminal\":" ++ boolString w.observation.newerThanTerminal ++ ","
-    ++ "\"settled\":" ++ boolString w.settled ++ ","
-    ++ "\"cause\":" ++ jsonString (readinessCauseName w.cause) ++ ","
-    ++ "\"status\":" ++ jsonString i.status.toDefraDB ++ ","
-    ++ "\"terminal\":" ++ jsonString (terminalName i.terminal) ++ ","
-    ++ "\"session_idle\":" ++ boolString i.sessionIdle ++ ","
-    ++ "\"child_exists\":" ++ boolString i.childExists ++ ","
-    ++ "\"budget_reached\":" ++ boolString i.budgetReached ++ ","
-    ++ "\"has_activity\":" ++ boolString i.hasActivity ++ ","
-    ++ "\"request_is_wrapup\":" ++ boolString i.requestIsWrapup ++ ","
-    ++ "\"infrastructure_retries\":" ++ toString i.retries ++ ","
-    ++ "\"wrapup_requested\":" ++ boolString i.wrapupRequested ++ ","
-    ++ "\"wrapup_completed\":" ++ boolString i.wrapupCompleted ++ ","
-    ++ "\"expected_readiness\":" ++ jsonString (readinessName readiness) ++ ","
-    ++ "\"expected_gate\":" ++ jsonString (gatedName gated) ++ ","
-    ++ "\"expected_retries\":" ++ toString (nextRetries w.cause i gated)
-    ++ "}"
+def GatedWire.ofModel : Gated → GatedWire
+  | .decided .none => .none
+  | .decided .continue => .continue
+  | .decided .retry => .retry
+  | .decided .pause => .pause
+  | .decided .wrapup => .wrapup
+  | .decided .abandonWrapup => .abandonWrapup
+  | .awaitReadiness => .awaitReadiness
+  | .agentUnavailable => .agentUnavailable
 
-def goalReadinessGateCasesJson : String :=
-  jsonArray (goalReadinessGateCases.map goalReadinessGateCaseJson)
+deriving instance Lean.ToJson for Readiness, Cause
+
+structure ReadinessGateInput where
+  name : String
+  observation : ObservationWire
+  newerThanTerminal : Bool
+  settled : Bool
+  cause : Cause
+  status : Goals.Status
+  terminal : Goals.RequestTerminal
+  sessionIdle : Bool
+  childExists : Bool
+  budgetReached : Bool
+  hasActivity : Bool
+  requestIsWrapup : Bool
+  infrastructureRetries : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  deriving Lean.ToJson
+
+def ReadinessGateInput.ofCase (w : GoalReadinessGateCase) : ReadinessGateInput :=
+  { name := w.name, observation := ObservationWire.ofModel w.observation
+  , newerThanTerminal := w.observation.newerThanTerminal, settled := w.settled, cause := w.cause
+  , status := w.input.status, terminal := w.input.terminal, sessionIdle := w.input.sessionIdle
+  , childExists := w.input.childExists, budgetReached := w.input.budgetReached
+  , hasActivity := w.input.hasActivity, requestIsWrapup := w.input.requestIsWrapup
+  , infrastructureRetries := w.input.retries, wrapupRequested := w.input.wrapupRequested
+  , wrapupCompleted := w.input.wrapupCompleted }
+
+def ReadinessGateInput.toObservation (i : ReadinessGateInput) : Observation :=
+  i.observation.toModel i.newerThanTerminal
+
+def ReadinessGateInput.toInput (i : ReadinessGateInput) : Input :=
+  { status := i.status, terminal := i.terminal, sessionIdle := i.sessionIdle
+  , childExists := i.childExists, budgetReached := i.budgetReached, hasActivity := i.hasActivity
+  , requestIsWrapup := i.requestIsWrapup, retries := i.infrastructureRetries
+  , wrapupRequested := i.wrapupRequested, wrapupCompleted := i.wrapupCompleted }
+
+structure ReadinessGateOutput where
+  readiness : Readiness
+  gate : GatedWire
+  retries : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def goalReadinessGate : Family ReadinessGateInput ReadinessGateOutput where
+  inputs := goalReadinessGateCases.map ReadinessGateInput.ofCase
+  model := fun i =>
+    let gated := GoalAutomation.ReadinessGate.gate i.toObservation i.settled i.cause i.toInput
+    { readiness := observe i.toObservation i.settled
+    , gate := GatedWire.ofModel gated
+    , retries := nextRetries i.cause i.toInput gated }
+
+structure ReadinessGateGoalWrite where
+  gate : GatedWire
+  retries : Nat
+  deriving Lean.ToJson
+
+/-- The goal source reads readiness from the node readiness document and the
+reconcile phase, in order, on one active goal after one completed attempt: only
+the attempt cases whose observation that document and phase can publish are
+built, and the goal paused by the last one ends the sequence. -/
+def goalReadinessGateServedCases : List GoalReadinessGateCase :=
+  goalReadinessGateCases.filter fun w => w.name ∈
+    [ "missing_readiness_defers_continuation", "backend_recovery_defers_even_when_settled"
+    , "unsettled_invalid_agent_defers", "settled_invalid_agent_stops_active_goal" ]
+
+@[conformance_family]
+def goalReadinessGateServed : Family ReadinessGateInput ReadinessGateGoalWrite where
+  inputs := goalReadinessGateServedCases.map ReadinessGateInput.ofCase
+  model := fun i =>
+    let gated := GoalAutomation.ReadinessGate.gate i.toObservation i.settled i.cause i.toInput
+    { gate := GatedWire.ofModel gated, retries := nextRetries i.cause i.toInput gated }
 
 end ReadinessGate
 

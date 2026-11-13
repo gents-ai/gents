@@ -1,17 +1,32 @@
 import Proofs.Automation.GoalAutomation.OperatorResume
 import Proofs.Conformance.ContractTypes
 import Lean.Data.Json.FromToJson
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Family
 namespace Conformance.GoalOperatorResumeContracts
 open GoalAutomation.OperatorResume Conformance.Contracts
 
-def publicationCasesJson : String :=
-  let cases : List (String × Bool × Bool × Bool) :=
-    [("pending-failed", true, true, false), ("pending-completed", true, true, true),
-     ("completed-no-replay", false, true, false)]
-  (Lean.toJson (cases.map fun (name, pending, authorized, granted) => Lean.Json.mkObj
-    [("name", Lean.toJson name), ("pending", Lean.toJson pending),
-     ("authorized", Lean.toJson authorized), ("granted", Lean.toJson granted),
-     ("expected_pending", Lean.toJson (publicationPending pending authorized granted))])).compress
+structure PublicationInput where
+  name : String
+  pending : Bool
+  authorized : Bool
+  granted : Bool
+  deriving Lean.ToJson
+
+structure PublicationOutput where
+  pending : Bool
+  deriving Lean.ToJson
+
+/-- One client resume on one served goal: its relationships first fail to
+publish, a later resume completes them, and a resume after the relationships
+are revoked must not replay them. -/
+@[conformance_family]
+def publication : Family PublicationInput PublicationOutput where
+  inputs :=
+    [ { name := "pending-failed", pending := true, authorized := true, granted := false }
+    , { name := "pending-completed", pending := true, authorized := true, granted := true }
+    , { name := "completed-no-replay", pending := false, authorized := true, granted := false } ]
+  model := fun i => { pending := publicationPending i.pending i.authorized i.granted }
 
 def parentBinding : Binding :=
   ⟨1, "owner", "session", 10, 100, some "graph-correlation", some "source",
@@ -85,6 +100,20 @@ def configCases : List (Goals.Status × Goals.Status × Bool) :=
 theorem configCases_match :
   ∀ c ∈ configCases, configMaySetStatus c.1 c.2.1 = c.2.2 := by decide
 
+structure ConfigInput where
+  current : Goals.Status
+  target : Goals.Status
+  deriving Lean.ToJson
+
+structure ConfigOutput where
+  allowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def config : Family ConfigInput ConfigOutput where
+  inputs := configCases.map fun c => { current := c.1, target := c.2.1 }
+  model := fun i => { allowed := configMaySetStatus i.current i.target }
+
 private def b (x : Bool) : String := if x then "true" else "false"
 private def n : Option Nat → String | none => "null" | some x => toString x
 private def str : Option String → String | none => "null" | some x => jsonString x
@@ -127,6 +156,4 @@ def resumeOnCasesJson : String := jsonArray (resumeOnCases.map fun c =>
   ",\"target_available\":" ++ b c.targetAvailable ++
   ",\"expected\":" ++ snapshotJson c.expected ++
   ",\"outcome\":" ++ jsonString (outcome c.outcome) ++ "}")
-def configCasesJson : String := jsonArray (configCases.map fun c =>
-  "{\"current\":" ++ status c.1 ++ ",\"target\":" ++ status c.2.1 ++ ",\"allowed\":" ++ b c.2.2 ++ "}")
 end Conformance.GoalOperatorResumeContracts

@@ -5,63 +5,39 @@ use crate::goal::{
     GoalAgentObservation, GoalAgentReadiness, GoalAuditObservation, GoalContinuationAction,
     GoalContinuationFacts, GoalContinuationPhase, GoalCreateDisposition, GoalCreateRequest,
     GoalCreationFingerprint, GoalDecision, GoalFailureCause, GoalGatedDecision,
-    GoalRequestTerminal, GoalState, GoalSubmissionAction, GoalSubmissionState,
+    GoalRequestTerminal, GoalState, GoalSubmissionState,
 };
-use gents_lean_vocab::{
-    lean_goal_continuation_materialization_cases, lean_goal_create_cases, lean_goal_decision_cases,
-    lean_goal_readiness_gate_cases, lean_goal_submission_cases, lean_goal_transition_cases,
-    lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
-};
+use gents_lean_vocab::{lean_goal_create_cases, lean_task_goal_publication_cases};
 use gents_protocol::goal_status::GoalStatus;
-
-fn parse_goal_decision(name: &str) -> Option<GoalDecision> {
-    Some(match name {
-        "none" => GoalDecision::None,
-        "continue" => GoalDecision::Continue,
-        "retry" => GoalDecision::Retry,
-        "pause" => GoalDecision::Pause,
-        "wrapup" => GoalDecision::Wrapup,
-        "abandon_wrapup" => GoalDecision::AbandonWrapup,
-        _ => return None,
-    })
-}
 
 #[test]
 fn generated_goal_decision_cases_fence_runtime_controller() {
-    let cases = lean_goal_decision_cases();
-    assert_eq!(cases.len(), 30, "the durable-goal decision matrix drifted");
-    for case in cases {
-        let status = GoalStatus::parse(&case.status)
-            .unwrap_or_else(|| panic!("unknown status in Lean case {}", case.name));
-        let terminal = GoalRequestTerminal::parse(&case.terminal)
-            .unwrap_or_else(|| panic!("unknown terminal in Lean case {}", case.name));
-        let actual = decide_goal_continuation(
-            status,
-            terminal,
+    gents_lean_vocab::families::contracts_goal_decision::replay(|case| {
+        decide_goal_continuation(
+            case.status,
+            case.terminal,
             case.session_idle,
             case.child_exists,
             case.budget_reached,
             case.has_activity,
             case.request_is_wrapup,
-            case.infrastructure_retries,
+            i64::try_from(case.infrastructure_retries).expect("modeled retries fit i64"),
             case.wrapup_requested,
             case.wrapup_completed,
-        );
-        let expected = parse_goal_decision(&case.expected_decision).unwrap_or_else(|| {
-            panic!(
-                "unknown decision {:?} in Lean case {}",
-                case.expected_decision, case.name
-            )
-        });
-        assert_eq!(actual, expected, "Lean case {}", case.name);
-    }
+        )
+    });
 }
 
 #[test]
 fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
-    let cases = lean_goal_readiness_gate_cases();
-    assert_eq!(cases.len(), 25, "the goal readiness gate matrix drifted");
-    for case in cases {
+    gents_lean_vocab::families::contracts_goal_readiness_gate::replay::<
+        GoalFailureCause,
+        String,
+        String,
+        GoalAgentReadiness,
+        GoalRequestTerminal,
+        GoalStatus,
+    >(|case| {
         let observation = match case.observation.as_str() {
             "ready" => GoalAgentObservation::Ready {
                 newer_than_terminal: case.newer_than_terminal,
@@ -72,69 +48,48 @@ fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
             "unknown" => GoalAgentObservation::Unknown,
             other => panic!("unknown observation {other:?} in Lean case {}", case.name),
         };
-        let cause = match case.cause.as_str() {
-            "attempt" => GoalFailureCause::Attempt,
-            "agent_unavailable" => GoalFailureCause::AgentUnavailable,
-            "goal_control_unavailable" => GoalFailureCause::GoalControlUnavailable,
-            other => panic!("unknown cause {other:?} in Lean case {}", case.name),
-        };
-        let readiness = observe_goal_agent_readiness(observation, case.settled);
-        let readiness_name = match readiness {
-            GoalAgentReadiness::Ready => "ready",
-            GoalAgentReadiness::Waiting => "waiting",
-            GoalAgentReadiness::Unavailable => "unavailable",
-        };
-        assert_eq!(
-            readiness_name, case.expected_readiness,
-            "Lean case {}",
-            case.name
-        );
         let facts = GoalContinuationFacts {
-            status: GoalStatus::parse(&case.status)
-                .unwrap_or_else(|| panic!("unknown status in Lean case {}", case.name)),
-            terminal: GoalRequestTerminal::parse(&case.terminal)
-                .unwrap_or_else(|| panic!("unknown terminal in Lean case {}", case.name)),
+            status: case.status,
+            terminal: case.terminal,
             session_idle: case.session_idle,
             child_exists: case.child_exists,
             budget_reached: case.budget_reached,
             has_activity: case.has_activity,
             request_is_wrapup: case.request_is_wrapup,
-            infrastructure_retries: case.infrastructure_retries,
+            infrastructure_retries: i64::try_from(case.infrastructure_retries)
+                .expect("modeled retries fit i64"),
             wrapup_requested: case.wrapup_requested,
             wrapup_completed: case.wrapup_completed,
         };
-        let gated = gate_goal_continuation(observation, case.settled, cause, &facts);
-        let expected = match case.expected_gate.as_str() {
-            "await_readiness" => GoalGatedDecision::AwaitReadiness,
-            "agent_unavailable" => GoalGatedDecision::AgentUnavailable,
-            other => GoalGatedDecision::Decided(
-                parse_goal_decision(other)
-                    .unwrap_or_else(|| panic!("unknown gate {other:?} in Lean case {}", case.name)),
-            ),
-        };
-        assert_eq!(gated, expected, "Lean case {}", case.name);
-        assert_eq!(
-            next_goal_infrastructure_retries(cause, &facts, gated),
-            case.expected_retries,
-            "Lean case {}",
-            case.name
-        );
+        let gated = gate_goal_continuation(observation, case.settled, case.cause, &facts);
+        gents_lean_vocab::families::contracts_goal_readiness_gate::ReadinessGateOutput {
+            readiness: observe_goal_agent_readiness(observation, case.settled),
+            gate: gated_wire(gated).to_owned(),
+            retries: u64::try_from(next_goal_infrastructure_retries(case.cause, &facts, gated))
+                .expect("retries are never negative"),
+        }
+    });
+}
+
+fn gated_wire(gated: GoalGatedDecision) -> &'static str {
+    match gated {
+        GoalGatedDecision::Decided(GoalDecision::None) => "none",
+        GoalGatedDecision::Decided(GoalDecision::Continue) => "continue",
+        GoalGatedDecision::Decided(GoalDecision::Retry) => "retry",
+        GoalGatedDecision::Decided(GoalDecision::Pause) => "pause",
+        GoalGatedDecision::Decided(GoalDecision::Wrapup) => "wrapup",
+        GoalGatedDecision::Decided(GoalDecision::AbandonWrapup) => "abandon_wrapup",
+        GoalGatedDecision::AwaitReadiness => "await_readiness",
+        GoalGatedDecision::AgentUnavailable => "agent_unavailable",
     }
 }
 
 #[test]
 fn generated_goal_transition_cases_fence_runtime_state_machine() {
-    let cases = lean_goal_transition_cases();
-    assert_eq!(
-        cases.len(),
-        27,
-        "the durable-goal transition matrix drifted"
-    );
-    for case in cases {
+    gents_lean_vocab::families::contracts_goal_transition::replay::<String, GoalStatus>(|case| {
         let pre = GoalState {
-            status: GoalStatus::parse(&case.pre_status)
-                .unwrap_or_else(|| panic!("unknown pre-status in Lean case {}", case.name)),
-            blocked_audits: case.pre_blocked_audits,
+            status: case.pre_status,
+            blocked_audits: i64::try_from(case.pre_blocked_audits).expect("modeled audits fit i64"),
             wrapup_requested: case.pre_wrapup_requested,
             wrapup_completed: case.pre_wrapup_completed,
         };
@@ -160,32 +115,16 @@ fn generated_goal_transition_cases_fence_runtime_state_machine() {
             "clean_turn" => GoalAction::CleanTurn,
             other => panic!("unknown action {other:?} in Lean case {}", case.name),
         };
-        let actual = pre.step(action);
-        assert_eq!(actual.is_some(), case.accepted, "Lean case {}", case.name);
-        if let Some(actual) = actual {
-            assert_eq!(
-                actual.status.as_str(),
-                case.expected_status,
-                "Lean case {}",
-                case.name
-            );
-            assert_eq!(
-                actual.blocked_audits, case.expected_blocked_audits,
-                "Lean case {}",
-                case.name
-            );
-            assert_eq!(
-                actual.wrapup_requested, case.expected_wrapup_requested,
-                "Lean case {}",
-                case.name
-            );
-            assert_eq!(
-                actual.wrapup_completed, case.expected_wrapup_completed,
-                "Lean case {}",
-                case.name
-            );
+        let stepped = pre.step(action);
+        let post = stepped.unwrap_or(pre);
+        gents_lean_vocab::families::contracts_goal_transition::GoalTransitionOutput {
+            accepted: stepped.is_some(),
+            status: post.status,
+            blocked_audits: u64::try_from(post.blocked_audits).expect("audits are never negative"),
+            wrapup_requested: post.wrapup_requested,
+            wrapup_completed: post.wrapup_completed,
         }
-    }
+    });
 }
 
 #[test]
@@ -284,9 +223,7 @@ fn generated_task_goal_cases_fence_declaration_and_identity() {
 
 #[test]
 fn generated_task_goal_recovery_cases_fence_request_witness() {
-    let cases = lean_task_goal_recovery_cases();
-    assert_eq!(cases.len(), 10, "the Task goal recovery matrix drifted");
-    for case in cases {
+    gents_lean_vocab::families::contracts_task_goal_recovery::replay(|case| {
         let identity =
             crate::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
         let expected = crate::goal::TaskGoalRequestBinding {
@@ -320,116 +257,48 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
                     .clone()
                     .expect("present request must emit retry_key"),
             });
-        assert_eq!(
-            observed.as_ref() == Some(&expected),
-            case.request_binding_matches,
-            "Lean case {} binding classification",
-            case.name
-        );
         let actual = crate::goal::decide_task_goal_fire_recovery(&expected, observed.as_ref());
-        let disposition = match actual.disposition {
-            crate::goal::TaskGoalFireRecoveryDisposition::Absent => "absent",
-            crate::goal::TaskGoalFireRecoveryDisposition::Recovered => "recovered",
-            crate::goal::TaskGoalFireRecoveryDisposition::Conflict => "conflict",
-        };
-        assert_eq!(
-            disposition, case.expected_disposition,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.recovered_request_id, case.expected_recovered_request_id,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.checkpointable, case.expected_checkpointable,
-            "Lean case {}",
-            case.name
-        );
-        if !case.durable_goal_present
-            && !case.creation_claim_present
-            && case.request_binding_matches
-        {
-            assert!(
-                actual.checkpointable,
-                "Lean case {} lost a matching request when goal metadata was deleted",
-                case.name
-            );
+        gents_lean_vocab::families::contracts_task_goal_recovery::TaskGoalRecoveryOutput {
+            request_binding_matches: observed.as_ref() == Some(&expected),
+            disposition: actual.disposition,
+            recovered_request_id: actual.recovered_request_id,
+            checkpointable: actual.checkpointable,
         }
-        if case.request_present && !case.request_binding_matches {
-            assert_eq!(
-                disposition, "conflict",
-                "Lean case {} accepted a mismatched binding",
-                case.name
-            );
-        }
-    }
+    });
 }
 
 #[test]
 fn generated_goal_submission_cases_fence_atomic_visibility() {
-    let cases = lean_goal_submission_cases();
-    assert_eq!(cases.len(), 6, "the goal submission matrix drifted");
-    for case in cases {
-        let action = match case.action.as_str() {
-            "stage_goal" => GoalSubmissionAction::StageGoal,
-            "stage_request" => GoalSubmissionAction::StageRequest,
-            "commit" => GoalSubmissionAction::Commit,
-            "abort" => GoalSubmissionAction::Abort,
-            "crash" => GoalSubmissionAction::Crash,
-            other => panic!(
-                "unknown submission action {other:?} in Lean case {}",
-                case.name
-            ),
-        };
+    gents_lean_vocab::families::contracts_goal_submission::replay(|case| {
         let actual = goal_submission_step(
             GoalSubmissionState {
-                durable_goal: case.durable_goal,
-                runnable_request: case.runnable_request,
-                staged_goal: case.staged_goal,
-                staged_request: case.staged_request,
+                durable_goal: case.state.durable_goal,
+                runnable_request: case.state.runnable_request,
+                staged_goal: case.state.staged_goal,
+                staged_request: case.state.staged_request,
             },
-            action,
-        );
-        assert_eq!(
-            actual.durable_goal, case.expected_durable_goal,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.runnable_request, case.expected_runnable_request,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.staged_goal, case.expected_staged_goal,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.staged_request, case.expected_staged_request,
-            "Lean case {}",
-            case.name
+            case.action,
         );
         assert!(
             !actual.runnable_request || actual.durable_goal,
             "Lean case {} exposed a runnable request without its durable goal",
             case.name
         );
-    }
+        gents_lean_vocab::families::contracts_goal_submission::SubmissionState {
+            durable_goal: actual.durable_goal,
+            runnable_request: actual.runnable_request,
+            staged_goal: actual.staged_goal,
+            staged_request: actual.staged_request,
+        }
+    });
 }
 
 #[test]
 fn generated_goal_continuation_materialization_cases_fence_restart_idempotency() {
-    let cases = lean_goal_continuation_materialization_cases();
-    assert_eq!(
-        cases.len(),
-        5,
-        "the continuation materialization matrix drifted"
-    );
-    for case in cases {
-        let phase = parse_continuation_phase(&case.phase, &case.name);
+    gents_lean_vocab::families::contracts_goal_continuation_materialization::replay::<
+        String,
+        GoalContinuationPhase,
+    >(|case| {
         let action = match case.action.as_str() {
             "claim_eligible" => GoalContinuationAction::Claim(true),
             "claim_ineligible" => GoalContinuationAction::Claim(false),
@@ -441,17 +310,8 @@ fn generated_goal_continuation_materialization_cases_fence_restart_idempotency()
                 case.name
             ),
         };
-        let actual = goal_continuation_materialization_step(phase, action);
-        let expected = parse_continuation_phase(&case.expected_phase, &case.name);
-        assert_eq!(actual, expected, "Lean case {}", case.name);
-    }
-}
-
-fn parse_continuation_phase(value: &str, case_name: &str) -> GoalContinuationPhase {
-    match value {
-        "unclaimed" => GoalContinuationPhase::Unclaimed,
-        "claimed" => GoalContinuationPhase::Claimed,
-        "child_present" => GoalContinuationPhase::ChildPresent,
-        other => panic!("unknown continuation phase {other:?} in Lean case {case_name}"),
-    }
+        gents_lean_vocab::families::contracts_goal_continuation_materialization::ContinuationMaterializationOutput {
+            phase: goal_continuation_materialization_step(case.phase, action),
+        }
+    });
 }

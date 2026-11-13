@@ -209,15 +209,16 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
 async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
     use gents_toolcalls::call::lifecycle::admission_fixture::published_admission_with_owner;
 
-    let modeled = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_goal_submission_cases()
-            .iter()
-            .find(|case| case.name == "commit_both_atomically")
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap();
+    let [modeled] = <[_; 1]>::try_from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::families::contracts_goal_submission_published::cases::<
+                crate::goal::GoalSubmissionAction,
+            >()
+        })
+        .await
+        .unwrap(),
+    )
+    .unwrap_or_else(|_| panic!("the publishing scenario builds one committed submission"));
     let (mut admission, request) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "agent-new-goal-atomic".into(),
         real_identity: true,
@@ -332,8 +333,12 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
     let requests = rows["data"]["AgentRequest"].as_array().unwrap();
     let goals = rows["data"]["Goal"].as_array().unwrap();
     let claims = rows["data"]["GoalCreationClaim"].as_array().unwrap();
-    assert_eq!(!goals.is_empty(), modeled.expected_durable_goal);
-    assert_eq!(!requests.is_empty(), modeled.expected_runnable_request);
+    modeled.check(
+        gents_lean_vocab::families::contracts_goal_submission_published::GoalSubmissionPublication {
+            durable_goal: !goals.is_empty(),
+            runnable_request: !requests.is_empty(),
+        },
+    );
     assert_eq!(sessions.len(), 1);
     assert_eq!(requests.len(), 1);
     assert_eq!(goals.len(), 1);

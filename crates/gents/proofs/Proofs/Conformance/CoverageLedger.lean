@@ -637,20 +637,24 @@ def caseCoverage : List CoverageEntry :=
       "TriggerDispatch")
       "triggers" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "goal_decision_cases"
-      "GoalDecisionCases")
+      "family"
+      "contracts_goal_decision")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_readiness_gate_cases"
-      "GoalReadinessGateCases")
+      "family"
+      "contracts_goal_readiness_gate")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_goal_readiness_gate_served")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_claimed_readiness_cases"
       "GoalClaimedReadinessCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_transition_cases"
-      "GoalTransitionCases")
+      "family"
+      "contracts_goal_transition")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_create_cases"
@@ -666,16 +670,24 @@ def caseCoverage : List CoverageEntry :=
       "The consumer checks the production declaration validator and fire identity. Atomic task/goal/request publication needs the shared publication owner; fixture-only booleans are not an implementation check.")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "task_goal_recovery_cases"
-      "TaskGoalRecoveryCases")
+      "family"
+      "contracts_task_goal_recovery")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_submission_cases"
-      "GoalSubmissionCases")
+      "family"
+      "contracts_goal_backed_runtime")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_continuation_materialization_cases"
-      "GoalContinuationMaterializationCases")
+      "family"
+      "contracts_goal_submission")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_goal_submission_published")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_goal_continuation_materialization")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_closure_cases"
@@ -872,8 +884,8 @@ def caseCoverage : List CoverageEntry :=
       "Model-derived missing, unknown and explicit purpose wire inputs require a strict native decoder and signed-field selection. No native consumer is bound; absent purpose must never default to normal.")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_decision_cases"
-      "GoalDecisionCases")
+      "family"
+      "contracts_goal_decision")
       "durable-goals" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "runtime_reconcile_cases"
@@ -2046,8 +2058,29 @@ def caseCoverage : List CoverageEntry :=
       "GoalOperatorResumeOnCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_config_reactivation_cases"
-      "GoalConfigReactivationCases")
+      "family"
+      "goal_claimed_publication_contracts_claimed_target")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_claimed_publication_contracts_identity_candidate")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_claimed_publication_contracts_identity_staged")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "goal_claimed_publication_contracts_identity_staged_unreached"
+      "model-production-gap: no production scenario stages a claimed continuation from a parent request owned by another identity; the goal source never offers such a parent and the staging fixture has no foreign parent request.")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_operator_resume_contracts_publication")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_operator_resume_contracts_config")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_reset_resume_cases"

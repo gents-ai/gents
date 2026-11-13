@@ -245,12 +245,10 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
 
 #[tokio::test]
 async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_config_reactivation_cases;
-    assert_eq!(cases.len(), 7);
-    let mut seen = std::collections::BTreeSet::new();
-    for case in cases {
-        assert!(seen.insert((case.current.clone(), case.target.clone())));
-        let before = json!({"status":&case.current,"blocked_audits":2,"wrapup_requested":false,
+    for case in
+        gents_lean_vocab::families::goal_operator_resume_contracts_config::cases::<GoalStatus>()
+    {
+        let before = json!({"status":case.input.current,"blocked_audits":2,"wrapup_requested":false,
             "wrapup_completed":false,"sequence":0,"last_continued_from":null,"latest_request":10,
             "children":[],"tokens_used":37,"token_budget":1000});
         let f = Fixture::new(&before).await;
@@ -261,26 +259,24 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             f.identity.did(),
             SESSION,
             None,
-            Some(GoalStatus::parse(&case.target).unwrap()),
+            Some(case.input.target),
             None,
             None,
         )
         .await;
-        assert_eq!(
-            result.is_ok(),
-            case.allowed,
-            "{} -> {}: {result:?}",
-            case.current,
-            case.target
-        );
-        if let Err(error) = result {
+        if let Err(error) = &result {
             assert!(format!("{error:#}").contains("requires goal resume-request"));
         }
         let mut expected = before;
-        if case.allowed {
-            expected["status"] = json!(case.target);
+        if result.is_ok() {
+            expected["status"] = json!(case.input.target);
         }
         assert_eq!(f.observe().await, expected);
+        case.check(
+            gents_lean_vocab::families::goal_operator_resume_contracts_config::ConfigOutput {
+                allowed: result.is_ok(),
+            },
+        );
         f.node.shutdown().await.expect("node shutdown");
     }
 }
