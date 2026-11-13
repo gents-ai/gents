@@ -33,8 +33,13 @@ import {
   resetRuntimeDoor,
 } from "@/contrib/runtime-door";
 import { PLUGIN_PAGE_AREA } from "@/contrib/types";
-import { pluginWindowStart, useClosesWhenPluginGone } from "@/app/pluginWindow";
-import { resetUxDoors } from "@/hooks/useUxHost";
+import {
+  pluginWindowStart,
+  useClosesWhenPluginGone,
+  useNavigationFromPluginWindows,
+} from "@/app/pluginWindow";
+import { buildUxHost, resetUxDoors } from "@/hooks/useUxHost";
+import { href } from "@/lib/router";
 import { PluginPageScreen } from "@/screens/PluginPageScreen";
 import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
@@ -47,18 +52,24 @@ const shell = vi.hoisted(() => {
   const listeners = new Map<string, (event: { payload: unknown }) => void>();
   const open = new Set<string>();
   const closed = vi.fn();
+  /* which window this is */
+  const here = { label: "main" };
   return {
+    here,
     open,
     closed,
     tell: (event: string, payload: unknown) => listeners.get(event)?.({ payload }),
     reset: () => {
+      here.label = "main";
       listeners.clear();
       open.clear();
       closed.mockClear();
     },
     module: {
       getCurrentWindow: () => ({
-        label: "main",
+        get label() {
+          return here.label;
+        },
         listen: async (event: string, heard: (event: { payload: unknown }) => void) => {
           listeners.set(event, heard);
           return () => listeners.delete(event);
@@ -296,6 +307,51 @@ describe("the page while it has a window of its own", () => {
     await act(async () => {});
     expect(screen.getByTestId("board-page")).toBeInTheDocument();
     expect(screen.queryByTestId("plugin-page-elsewhere")).toBeNull();
+  });
+});
+
+describe("a place a windowed page asks to go to", () => {
+  it("stays in the window within its own page, and opens in the main window otherwise", async () => {
+    const app = testApp({ deployments: [deployment] });
+    const host = buildUxHost(
+      app,
+      () => ({ name: "plugin", pluginId: "board" }),
+      "board",
+    );
+
+    host.shell.navigate({ name: "plugin", pluginId: "board", path: "items/42" });
+    await act(async () => {});
+    expect(invoke).not.toHaveBeenCalled();
+
+    host.shell.navigate({ name: "session", nodeDid: "did:key:z6Mk", sessionId: "s1" });
+    host.shell.navigate({ name: "plugin", pluginId: "other" });
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    expect(invoke.mock.calls).toEqual([
+      [
+        "desktop_plugin_window_navigate",
+        { path: href({ name: "session", nodeDid: "did:key:z6Mk", sessionId: "s1" }) },
+      ],
+      ["desktop_plugin_window_navigate", { path: "/plugins/other" }],
+    ]);
+  });
+
+  it("is gone to by the main window, and by no other", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    const go = vi.fn();
+    const main = renderHook(() => useNavigationFromPluginWindows(go));
+    await act(async () => {});
+    act(() => shell.tell("desktop://plugin-navigate", { path: "/packs/acme%2Ftools" }));
+    expect(go).toHaveBeenLastCalledWith({ name: "packs", item: "acme/tools" });
+    act(() => shell.tell("desktop://plugin-navigate", { path: 7 }));
+    expect(go).toHaveBeenCalledTimes(1);
+    main.unmount();
+
+    shell.reset();
+    shell.here.label = "gents-view-2";
+    renderHook(() => useNavigationFromPluginWindows(go));
+    await act(async () => {});
+    act(() => shell.tell("desktop://plugin-navigate", { path: "/packs" }));
+    expect(go).toHaveBeenCalledTimes(1);
   });
 });
 

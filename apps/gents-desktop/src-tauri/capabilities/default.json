@@ -20,6 +20,7 @@
     "gents-desktop-bridge:full",
     "native-swipe",
     "open-plugin-window",
+    "plugin-prompt-to-main",
     "native-browser"
   ]
 }

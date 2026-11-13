@@ -16,7 +16,12 @@ import type {
   PluginApprovalDecision,
   PluginApprovalRequest,
 } from "@source-inc/gents-desktop-client";
-import { inNativeShell, listenToWindow } from "../../lib/nativeShell";
+import {
+  bringPluginPromptForward,
+  inNativeShell,
+  listenToWindow,
+  windowLabel,
+} from "../../lib/nativeShell";
 import { useApp } from "@/app/AppContext";
 import { errorText } from "../../lib/errorText";
 
@@ -118,6 +123,15 @@ export function PluginAccessPrompt() {
       void subscription?.then(unregister, () => {});
     };
   }, [actions, refresh]);
+
+  /* A question is answered here. While a plugin's page has focus in a
+     window of its own, the person would not see it, so the main window
+     comes forward; it stays where it is otherwise. */
+  const asked = question?.id ?? null;
+  useEffect(() => {
+    if (asked === null || !inNativeShell() || windowLabel() !== "main") return;
+    void bringPluginPromptForward().catch(() => {});
+  }, [asked]);
 
   async function answer(decision: PluginApprovalDecision) {
     if (!question || answering.current) return;

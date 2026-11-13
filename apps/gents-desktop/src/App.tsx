@@ -38,6 +38,7 @@ import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
 import {
   pluginWindowStart,
   useClosesWhenPluginGone,
+  useNavigationFromPluginWindows,
   type PluginWindowStart,
 } from "./ui/app/pluginWindow";
 import { useFirstRun } from "./ui/app/useFirstRun";
@@ -210,6 +211,7 @@ function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge 
   useManagedServerTrayControls(app);
   /* the UX plugin host and its doors: reads the stores, re-renders nothing */
   useUxHost(app, bridge.listenToUpdates);
+  useNavigationFromPluginWindows();
   return <NodeNavigationGuard />;
 }
 
