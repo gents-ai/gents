@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 use super::{home::StoreLock, store_key::StoreKey};
 
 const MARKER: &str = ".gents-private-backend-v1";
+pub(crate) const PROVENANCE_MARKER: &str = MARKER;
 const DOMAIN: &[u8] = b"gents private backend fresh store v1\0";
 type MarkerMac = Hmac<Sha256>;
 
@@ -32,6 +33,10 @@ pub enum BackendProtectionError {
     MissingProvenance,
     #[error("legacy backend policy binding is missing or incompatible")]
     InvalidBinding,
+    /// Decided on a copy before the store itself was opened, so nothing in
+    /// the home was written.
+    #[error("the store was checked on a copy and not opened")]
+    Incompatible(#[source] gents_protocol::operations::install_repair::IncompatibleStore),
     #[error("backend protection refers to a different native node")]
     WrongNode,
     #[error(
@@ -49,6 +54,17 @@ pub enum BackendProtectionError {
     Join(#[from] tokio::task::JoinError),
     #[error("the started node could not take its composition root's attachments")]
     Composition(#[from] crate::node_extension::ExtensionError),
+}
+
+impl BackendProtectionError {
+    pub fn incompatible(
+        &self,
+    ) -> Option<&gents_protocol::operations::install_repair::IncompatibleStore> {
+        match self {
+            Self::Incompatible(store) => Some(store),
+            _ => None,
+        }
+    }
 }
 
 type Result<T> = std::result::Result<T, BackendProtectionError>;
@@ -172,6 +188,24 @@ impl<'a> ProtectedBackendStore<'a> {
         let did = node_did
             .filter(|did| !did.is_empty())
             .ok_or(BackendProtectionError::InvalidProvenance)?;
+        let stamped = super::store_compat::stamped(&self.data);
+        if !stamped {
+            match super::store_compat::check_copy(&self.data, key).await {
+                Ok(None) => {}
+                Ok(Some(kind)) => {
+                    return Err(BackendProtectionError::Incompatible(
+                        gents_protocol::operations::install_repair::IncompatibleStore {
+                            kind,
+                            data_path: self.data.clone(),
+                        },
+                    ))
+                }
+                Err(error) => tracing::warn!(
+                    error = %gents_protocol::error_chain::ErrorChain(&error),
+                    "could not check a copy of the store first; opening it directly"
+                ),
+            }
+        }
         let mut builder = super::store_key::persistent_builder(&self.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         builder = builder
@@ -182,6 +216,9 @@ impl<'a> ProtectedBackendStore<'a> {
         let shutdown = node.shutdown().await;
         checked?;
         shutdown?;
+        if !stamped {
+            super::store_compat::record_compatible(&self.data)?;
+        }
         Ok(PreflightProtectedBackendStore {
             store: self,
             node_did: did.to_owned(),
@@ -292,8 +329,14 @@ async fn require_node_acp_enabled(node: &defra_node::Node) -> Result<()> {
 }
 
 async fn validate_binding(node: &defra_node::Node) -> Result<()> {
-    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, INFERENCE_BACKEND_NAME};
     require_node_acp_enabled(node).await?;
+    validate_policy_binding(node).await
+}
+
+/// The collection binding alone, for a copy of a store opened without its
+/// node's identity, which [`require_node_acp_enabled`] needs.
+pub(crate) async fn validate_policy_binding(node: &defra_node::Node) -> Result<()> {
+    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, INFERENCE_BACKEND_NAME};
     let current = node
         .get_collection(INFERENCE_BACKEND_NAME)?
         .ok_or(BackendProtectionError::InvalidBinding)?;

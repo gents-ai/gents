@@ -21,7 +21,7 @@ use gents_service::home_state::resolve_home_dir;
 pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let node_name = resolve_provision_node_name(&args);
-    let owner = gents_service::home_state::load_client_identity().await?;
+    let owner = gents_service::home_state::client_identity_for(&home_dir).await?;
     let identity = ensure_home_identity(
         &home_dir,
         owner.did(),

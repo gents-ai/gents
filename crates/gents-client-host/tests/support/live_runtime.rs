@@ -1,4 +1,5 @@
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +10,7 @@ use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
@@ -144,58 +146,77 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         .as_str()
         .context("initialized node DID")?;
     let port = ports::allocate_port()?;
-    let stderr = tokio::fs::File::create(root.join("runtime.err"))
-        .await?
-        .into_std()
-        .await;
-    let mut runtime = Command::new(&runtime_binary)
+    let mut server = Command::new(&runtime_binary);
+    server
         .current_dir(root)
         .envs(homes.env())
         .env_remove("GENTS_SYSTEM_LOG")
         .args(["server", "--home"])
         .arg(&home)
         .arg("--http-port")
-        .arg(port.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::from(stderr))
-        .kill_on_drop(true)
-        .spawn()?;
-    let mut lines = BufReader::new(runtime.stdout.take().context("runtime stdout")?).lines();
-    let mut log = tokio::fs::File::create(root.join("runtime.log")).await?;
-    let ready = tokio::time::timeout(WAIT, async {
-        let mut output = String::new();
-        while let Some(line) = lines.next_line().await? {
-            log.write_all(line.as_bytes()).await?;
-            log.write_all(b"\n").await?;
-            output.push_str(&line);
-            output.push('\n');
-            if let Some(start) = output.find('{') {
-                if let Some(Ok(value)) = serde_json::Deserializer::from_str(&output[start..])
-                    .into_iter::<Value>()
-                    .next()
-                {
-                    if value["status"] == "serving" {
-                        return Ok::<_, anyhow::Error>(value);
+        .arg(port.to_string());
+    #[cfg(unix)]
+    let (mut runtime, ready, drain) = {
+        let stderr = tokio::fs::File::create(root.join("runtime.err"))
+            .await?
+            .into_std()
+            .await;
+        let mut runtime = server
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::from(stderr))
+            .kill_on_drop(true)
+            .spawn()?;
+        let mut lines = BufReader::new(runtime.stdout.take().context("runtime stdout")?).lines();
+        let mut log = tokio::fs::File::create(root.join("runtime.log")).await?;
+        let ready = tokio::time::timeout(WAIT, async {
+            let mut output = String::new();
+            while let Some(line) = lines.next_line().await? {
+                log.write_all(line.as_bytes()).await?;
+                log.write_all(b"\n").await?;
+                output.push_str(&line);
+                output.push('\n');
+                if let Some(start) = output.find('{') {
+                    if let Some(Ok(value)) = serde_json::Deserializer::from_str(&output[start..])
+                        .into_iter::<Value>()
+                        .next()
+                    {
+                        if value["status"] == "serving" {
+                            return Ok::<_, anyhow::Error>(value);
+                        }
                     }
                 }
             }
-        }
-        anyhow::bail!("runtime output ended before readiness")
-    })
-    .await
-    .context("runtime readiness notification deadline")??;
+            anyhow::bail!("runtime output ended before readiness")
+        })
+        .await
+        .context("runtime readiness notification deadline")??;
+        let drain = tokio::spawn(async move {
+            while let Some(line) = lines.next_line().await? {
+                log.write_all(line.as_bytes()).await?;
+                log.write_all(b"\n").await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        (runtime, ready, drain)
+    };
+    // Ctrl-C reaches a Windows runtime only through its own console, which
+    // owns and drains the output; readiness is read from the served status.
+    #[cfg(windows)]
+    let (mut runtime, ready, drain) = {
+        let mut runtime =
+            super::console::ConsoleChild::spawn(server.as_std(), &root.join("runtime.log"))?;
+        let ready = super::wait_for_status(&mut runtime, &runtime_binary, &home, port).await?;
+        (
+            runtime,
+            ready,
+            tokio::spawn(async { Ok::<_, anyhow::Error>(()) }),
+        )
+    };
     ensure!(
         ready["node_did"] == node,
         "runtime readiness belongs to the initialized node: {ready}"
     );
-    let drain = tokio::spawn(async move {
-        while let Some(line) = lines.next_line().await? {
-            log.write_all(line.as_bytes()).await?;
-            log.write_all(b"\n").await?;
-        }
-        Ok::<_, anyhow::Error>(())
-    });
     let paths = DesktopPaths::from_root(root.join("client"));
     let seed = Arc::new(
         ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
