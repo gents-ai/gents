@@ -5,7 +5,7 @@ import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
-open Conformance.ContractCases
+open Conformance.ContractCases SessionQueue
 
 def readinessPublicationTrace (previous : Option Nat) : List Nat → List Bool
   | [] => []
@@ -26,77 +26,312 @@ def readinessPublication : Family ReadinessPublicationInput ReadinessPublication
   inputs := [ { states := [0, 0, 0, 1, 1, 2] }, { states := [0, 1, 0, 0, 2] } ]
   model := fun i => { publishes := readinessPublicationTrace none i.states }
 
-def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
-  "{"
-    ++ "\"requested_agent\":" ++ jsonOptionalNat witness.requestedAgent ++ ","
-    ++ "\"pre_default_agent\":" ++ toString witness.preDefaultAgent ++ ","
-    ++ "\"pre_session_agent\":" ++ jsonOptionalNat witness.preSessionAgent ++ ","
-    ++ "\"pre_runnable\":" ++ jsonArray (witness.preRunnable.map toString) ++ ","
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"action\":" ++ jsonString witness.action ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal ++ ","
-    ++ "\"pre_phase\":" ++ jsonString witness.prePhase ++ ","
-    ++ "\"post_phase\":" ++ jsonString witness.postPhase ++ ","
-    ++ "\"pre_active_generation\":" ++ toString witness.preActiveGeneration ++ ","
-    ++ "\"post_active_generation\":" ++ toString witness.postActiveGeneration ++ ","
-    ++ "\"pre_router_generation\":" ++ toString witness.preRouterGeneration ++ ","
-    ++ "\"post_router_generation\":" ++ toString witness.postRouterGeneration ++ ","
-    ++ "\"pre_ready_generation_count\":" ++ toString witness.preReadyGenerationCount ++ ","
-    ++ "\"post_ready_generation_count\":" ++ toString witness.postReadyGenerationCount ++ ","
-    ++ "\"pre_live_generation_count\":" ++ toString witness.preLiveGenerationCount ++ ","
-    ++ "\"post_live_generation_count\":" ++ toString witness.postLiveGenerationCount ++ ","
-    ++ "\"pre_in_flight_count\":" ++ toString witness.preInFlightCount ++ ","
-    ++ "\"post_in_flight_count\":" ++ toString witness.postInFlightCount ++ ","
-    ++ "\"tracked_request_id\":" ++ toString witness.trackedRequestId ++ ","
-    ++ "\"tracked_session_id\":" ++ toString witness.trackedSessionId ++ ","
-    ++ "\"tracked_request_generation\":" ++ toString witness.trackedRequestGeneration ++ ","
-    ++ "\"tracked_request_session\":" ++ toString witness.trackedRequestSession ++ ","
-    ++ "\"tracked_request_agent\":" ++ toString witness.trackedRequestAgent ++ ","
-    ++ "\"tracked_session_agent\":" ++ toString witness.trackedSessionAgent
-    ++ "}"
+structure ReconcileInput where
+  name : String
+  action : String
+  requestedAgent : Option Nat
+  preDefaultAgent : Nat
+  preSessionAgent : Option Nat
+  preRunnable : List Nat
+  prePhase : String
+  preActiveGeneration : Nat
+  preRouterGeneration : Nat
+  preReadyGenerationCount : Nat
+  preLiveGenerationCount : Nat
+  preInFlightCount : Nat
+  trackedRequestId : Nat
+  trackedSessionId : Nat
+  deriving Lean.ToJson
 
-def queueDeadlineConformanceCaseJson
-    (witness : QueueDeadlineConformanceCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"group\":" ++ jsonString witness.group ++ ","
-    ++ "\"action\":" ++ jsonString witness.action ++ ","
-    ++ "\"session_id\":" ++ toString witness.sessionId ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal ++ ","
-    ++ "\"pre_active_request_id\":"
-      ++ jsonOptionalNat witness.preActiveRequestId ++ ","
-    ++ "\"post_active_request_id\":"
-      ++ jsonOptionalNat witness.postActiveRequestId ++ ","
-    ++ "\"pre_pending_request_ids\":"
-      ++ jsonArray (witness.prePendingRequestIds.map toString) ++ ","
-    ++ "\"post_pending_request_ids\":"
-      ++ jsonArray (witness.postPendingRequestIds.map toString) ++ ","
-    ++ "\"claimed_request_id\":"
-      ++ jsonOptionalNat witness.claimedRequestId ++ ","
-    ++ "\"blocked_by_active\":" ++ boolString witness.blockedByActive ++ ","
-    ++ "\"superseded_request_ids\":"
-      ++ jsonArray (witness.supersededRequestIds.map toString) ++ ","
-    ++ "\"queue_key\":" ++ jsonOptionalString witness.queueKey ++ ","
-    ++ "\"post_coalesced_pending_count\":"
-      ++ toString witness.postCoalescedPendingCount ++ ","
-    ++ "\"automated_drained_request_ids\":"
-      ++ jsonArray (witness.automatedDrainedRequestIds.map toString) ++ ","
-    ++ "\"preserved_foreign_requester_request_ids\":"
-    ++ jsonArray (witness.preservedForeignRequesterRequestIds.map toString) ++ ","
-    ++ "\"preserved_foreign_owner_request_ids\":"
-    ++ jsonArray (witness.preservedForeignOwnerRequestIds.map toString) ++ ","
-    ++ "\"preserved_user_pending_request_ids\":"
-      ++ jsonArray (witness.preservedUserPendingRequestIds.map toString) ++ ","
-    ++ "\"post_terminal_request_ids\":"
-      ++ jsonArray (witness.postTerminalRequestIds.map toString) ++ ","
-    ++ "\"pre_request_deadline\":"
-      ++ jsonOptionalNat witness.preRequestDeadline ++ ","
-    ++ "\"synthesized_claim_deadline\":"
-      ++ jsonOptionalNat witness.synthesizedClaimDeadline ++ ","
-    ++ "\"post_deadline\":" ++ jsonOptionalNat witness.postDeadline ++ ","
-    ++ "\"explicit_deadline_preserved\":"
-      ++ boolString witness.explicitDeadlinePreserved
-    ++ "}"
+structure ReconcileOutput where
+  legal : Bool
+  postPhase : String
+  postActiveGeneration : Nat
+  postRouterGeneration : Nat
+  postReadyGenerationCount : Nat
+  postLiveGenerationCount : Nat
+  postInFlightCount : Nat
+  trackedRequestGeneration : Nat
+  trackedRequestSession : Nat
+  trackedRequestAgent : Nat
+  trackedSessionAgent : Nat
+  deriving Lean.ToJson
+
+structure ReconcileSelectionOutput where
+  legal : Bool
+  deriving Lean.ToJson
+
+structure ReconcileStatusOutput where
+  postPhase : String
+  postActiveGeneration : Nat
+  postRouterGeneration : Nat
+  deriving Lean.ToJson
+
+structure ReconcileRouterOutput where
+  legal : Bool
+  postRouterGeneration : Nat
+  deriving Lean.ToJson
+
+structure ReconcileSupervisorOutput where
+  postPhase : String
+  postActiveGeneration : Nat
+  deriving Lean.ToJson
+
+private def reconcileCase (name : String) : RuntimeReconcileCase :=
+  (runtimeReconcileCases.find? fun c => c.name == name).getD
+    (runtimeCaseFromStep "" "applyFailed" runtimeBoot .applyFailed)
+
+private def reconcileInput (c : RuntimeReconcileCase) : ReconcileInput :=
+  { name := c.name, action := c.action, requestedAgent := c.requestedAgent
+    preDefaultAgent := c.preDefaultAgent, preSessionAgent := c.preSessionAgent
+    preRunnable := c.preRunnable, prePhase := c.prePhase
+    preActiveGeneration := c.preActiveGeneration, preRouterGeneration := c.preRouterGeneration
+    preReadyGenerationCount := c.preReadyGenerationCount
+    preLiveGenerationCount := c.preLiveGenerationCount, preInFlightCount := c.preInFlightCount
+    trackedRequestId := c.trackedRequestId, trackedSessionId := c.trackedSessionId }
+
+private def reconcileInputs (names : List String) : List ReconcileInput :=
+  (runtimeReconcileCases.filter fun c => c.name ∈ names).map reconcileInput
+
+/-- Agent resolution reads the session's bound Agent and the requested Agent;
+the private-session fixture binds a session to one of two readable Agents, so
+it builds the explicit selections between two runnable Agents on a ready
+runtime. -/
+def selectionNames : List String :=
+  ["default-A-explicit-B-binds-B", "existing-A-requested-B-rejected",
+    "existing-A-requested-A-accepted"]
+
+@[conformance_family]
+def runtimeReconcileSelection : Family ReconcileInput ReconcileSelectionOutput where
+  inputs := reconcileInputs selectionNames
+  model := fun i => { legal := (reconcileCase i.name).legal }
+
+/-- The runtime status handle persists a published generation and a router
+observation, so it builds the publish and router-observe steps. -/
+def statusNames : List String :=
+  ["publish_changed_snapshot", "router_observe_published_generation"]
+
+@[conformance_family]
+def runtimeReconcileStatus : Family ReconcileInput ReconcileStatusOutput where
+  inputs := reconcileInputs statusNames
+  model := fun i =>
+    let c := reconcileCase i.name
+    { postPhase := c.postPhase, postActiveGeneration := c.postActiveGeneration
+      postRouterGeneration := c.postRouterGeneration }
+
+/-- The router observes the active snapshot's generation and holds a request
+until that generation is the one it routes with, so it builds the router
+observation and the accept after it. -/
+def routerNames : List String :=
+  ["router_observe_published_generation", "accept_request_after_router_observe"]
+
+@[conformance_family]
+def runtimeReconcileRouter : Family ReconcileInput ReconcileRouterOutput where
+  inputs := reconcileInputs routerNames
+  model := fun i =>
+    let c := reconcileCase i.name
+    { legal := c.legal, postRouterGeneration := c.postRouterGeneration }
+
+/-- The generation supervisor applies a proposed snapshot or keeps the
+previous generation when the proposal fails to apply. -/
+def supervisorNames : List String :=
+  ["publish_changed_snapshot", "apply_failed_clears_pending"]
+
+@[conformance_family]
+def runtimeReconcileSupervisor : Family ReconcileInput ReconcileSupervisorOutput where
+  inputs := reconcileInputs supervisorNames
+  model := fun i =>
+    let c := reconcileCase i.name
+    { postPhase := c.postPhase, postActiveGeneration := c.postActiveGeneration }
+
+example : (reconcileCase "publish_changed_snapshot").legal = true ∧
+    (reconcileCase "apply_failed_clears_pending").legal = true := by native_decide
+
+/-- model-production-gap: no production scenario drives a request finish
+releasing its generation, a replayed accept, retiring an unobserved
+generation, a resolve over a snapshot with a missing dependency, an unknown or
+demoted explicit selection, or an explicit request before the router observes
+the published generation; the served runtime fixtures cannot seed these
+pre-states. -/
+@[conformance_family]
+def runtimeReconcileUnreached : Family ReconcileInput ReconcileOutput where
+  inputs := (runtimeReconcileCases.filter fun c =>
+    !(selectionNames ++ statusNames ++ routerNames ++ supervisorNames).contains c.name).map
+      reconcileInput
+  model := fun i =>
+    let c := reconcileCase i.name
+    { legal := c.legal, postPhase := c.postPhase
+      postActiveGeneration := c.postActiveGeneration
+      postRouterGeneration := c.postRouterGeneration
+      postReadyGenerationCount := c.postReadyGenerationCount
+      postLiveGenerationCount := c.postLiveGenerationCount
+      postInFlightCount := c.postInFlightCount
+      trackedRequestGeneration := c.trackedRequestGeneration
+      trackedRequestSession := c.trackedRequestSession
+      trackedRequestAgent := c.trackedRequestAgent
+      trackedSessionAgent := c.trackedSessionAgent }
+
+structure QueueAdmissionInput where
+  name : String
+  sessionId : Nat
+  queueKey : Option String
+  preActiveRequestId : Option Nat
+  prePendingRequestIds : List Nat
+  deriving Lean.ToJson
+
+structure QueueAdmissionOutput where
+  legal : Bool
+  postActiveRequestId : Option Nat
+  postPendingRequestIds : List Nat
+  postTerminalRequestIds : List Nat
+  postCoalescedPendingCount : Nat
+  claimedRequestId : Option Nat
+  blockedByActive : Bool
+  automatedDrainedRequestIds : List Nat
+  preservedUserPendingRequestIds : List Nat
+  deriving Lean.ToJson
+
+def queueDeadlineCase? (name : String) : Option QueueDeadlineConformanceCase :=
+  queueDeadlineConformanceCases.find? (·.name == name)
+
+/-- The request-row runtime drives the queue claims and the cancellation
+drain; the background completion notification creates no request row, and
+the explicit-deadline claim is observed on its own row. -/
+@[conformance_family]
+def queueDeadlineAdmission : Family QueueAdmissionInput QueueAdmissionOutput where
+  inputs := (queueDeadlineConformanceCases.filter fun c =>
+      c.name ∈ ["active_request_blocks_later_same_session_claim",
+        "terminal_active_allows_next_pending_same_session_claim",
+        "cancel_drains_automated_wakeups_preserves_user_pending"]).map fun c =>
+    { name := c.name, sessionId := c.sessionId, queueKey := c.queueKey
+      preActiveRequestId := c.preActiveRequestId, prePendingRequestIds := c.prePendingRequestIds }
+  model := fun i => match queueDeadlineCase? i.name with
+    | some c =>
+        { legal := c.legal, postActiveRequestId := c.postActiveRequestId
+          postPendingRequestIds := c.postPendingRequestIds
+          postTerminalRequestIds := c.postTerminalRequestIds
+          postCoalescedPendingCount := c.postCoalescedPendingCount
+          claimedRequestId := c.claimedRequestId, blockedByActive := c.blockedByActive
+          automatedDrainedRequestIds := c.automatedDrainedRequestIds
+          preservedUserPendingRequestIds := c.preservedUserPendingRequestIds }
+    | none =>
+        { legal := false, postActiveRequestId := none, postPendingRequestIds := []
+          postTerminalRequestIds := [], postCoalescedPendingCount := 0, claimedRequestId := none
+          blockedByActive := false, automatedDrainedRequestIds := []
+          preservedUserPendingRequestIds := [] }
+
+structure ClaimDeadlineInput where
+  name : String
+  sessionId : Nat
+  claimedRequestId : Option Nat
+  preRequestDeadline : Option Nat
+  synthesizedClaimDeadline : Option Nat
+  deriving Lean.ToJson
+
+structure ClaimDeadlineOutput where
+  legal : Bool
+  explicitDeadlinePreserved : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def queueDeadlineClaimDeadline : Family ClaimDeadlineInput ClaimDeadlineOutput where
+  inputs := (queueDeadlineConformanceCases.filter (·.group == "claim_deadline")).map fun c =>
+    { name := c.name, sessionId := c.sessionId, claimedRequestId := c.claimedRequestId
+      preRequestDeadline := c.preRequestDeadline
+      synthesizedClaimDeadline := c.synthesizedClaimDeadline }
+  model := fun i => match queueDeadlineCase? i.name with
+    | some c => { legal := c.legal, explicitDeadlinePreserved := c.explicitDeadlinePreserved }
+    | none => { legal := false, explicitDeadlinePreserved := false }
+
+structure CompletionDeliveryInput where
+  name : String
+  sessionId : Nat
+  queueKey : Option String
+  prePendingRequestIds : List Nat
+  deriving Lean.ToJson
+
+structure CompletionDeliveryOutput where
+  postCoalescedPendingCount : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def queueDeadlineCompletionDelivery :
+    Family CompletionDeliveryInput CompletionDeliveryOutput where
+  inputs := (queueDeadlineConformanceCases.filter (·.group == "completion_delivery")).map fun c =>
+    { name := c.name, sessionId := c.sessionId, queueKey := c.queueKey
+      prePendingRequestIds := c.prePendingRequestIds }
+  model := fun i =>
+    { postCoalescedPendingCount :=
+        ((queueDeadlineCase? i.name).map (·.postCoalescedPendingCount)).getD 0 }
+
+example : backgroundCompletionCreatesNoAgentRequestCase.group = "completion_delivery" ∧
+    backgroundCompletionCreatesNoAgentRequestCase.action = "appendNotification" ∧
+    backgroundCompletionCreatesNoAgentRequestCase.legal = true ∧
+    backgroundCompletionCreatesNoAgentRequestCase.preActiveRequestId =
+      backgroundCompletionCreatesNoAgentRequestCase.postActiveRequestId ∧
+    backgroundCompletionCreatesNoAgentRequestCase.postPendingRequestIds = [] := by
+  native_decide
+
+structure InterruptScopeInput where
+  sessionId : Nat
+  queueKey : Option String
+  automatedRequestIds : List Nat
+  userRequestIds : List Nat
+  foreignRequesterRequestIds : List Nat
+  foreignOwnerRequestIds : List Nat
+  deriving Lean.ToJson
+
+structure InterruptScopeOutput where
+  automatedDrainedRequestIds : List Nat
+  preservedUserPendingRequestIds : List Nat
+  preservedForeignRequesterRequestIds : List Nat
+  preservedForeignOwnerRequestIds : List Nat
+  deriving Lean.ToJson
+
+def interruptScope (i : InterruptScopeInput) : InterruptScopeOutput :=
+  let key := i.sessionId
+  let own := queueState i.sessionId none
+    ((i.automatedRequestIds.map fun id => backgroundCompletionEntry id 10 key) ++
+      i.userRequestIds.map fun id => userEntry id 11 none)
+  let drain := fun (s : SessionQueueState) =>
+    (SessionQueue.scopedStep? own.scope s (.drainAutomated .backgroundCompletion (some key))).getD s
+  let post := drain own
+  let requesterPending := i.foreignRequesterRequestIds.map fun id =>
+    backgroundCompletionEntry id 12 key
+  let ownerPending := i.foreignOwnerRequestIds.map fun id => backgroundCompletionEntry id 13 key
+  let requester := drain (SessionQueueState.mk ⟨1, i.sessionId, some 2⟩ own.active
+    requesterPending own.terminal own.folding)
+  let owner := drain (SessionQueueState.mk ⟨2, i.sessionId, none⟩ own.active
+    ownerPending own.terminal own.folding)
+  { automatedDrainedRequestIds := terminalIds (i.automatedRequestIds ++ i.userRequestIds) post
+    preservedUserPendingRequestIds := i.userRequestIds.filter fun id =>
+      if id ∈ requestIds post.pending then true else false
+    preservedForeignRequesterRequestIds := requestIds requester.pending
+    preservedForeignOwnerRequestIds := requestIds owner.pending }
+
+def interruptScopeInput : InterruptScopeInput :=
+  { sessionId := 900, queueKey := some (queueKeyLabel QueueSource.backgroundCompletion 900)
+    automatedRequestIds := [301], userRequestIds := [302]
+    foreignRequesterRequestIds := [303], foreignOwnerRequestIds := [304] }
+
+/-- The interrupt latch drains the automated wake-up of its own owner and
+requester scope; the user's pending row and the same-session rows of a
+foreign requester or owner stay pending. -/
+@[conformance_family]
+def queueDeadlineInterruptScope : Family InterruptScopeInput InterruptScopeOutput where
+  inputs := [interruptScopeInput]
+  model := interruptScope
+
+example :
+    (interruptScope interruptScopeInput).automatedDrainedRequestIds =
+      cancelDrainsAutomatedPreservesUserCase.automatedDrainedRequestIds ∧
+    (interruptScope interruptScopeInput).preservedUserPendingRequestIds =
+      cancelDrainsAutomatedPreservesUserCase.preservedUserPendingRequestIds ∧
+    (interruptScope interruptScopeInput).preservedForeignRequesterRequestIds =
+      cancelDrainsAutomatedPreservesUserCase.preservedForeignRequesterRequestIds ∧
+    (interruptScope interruptScopeInput).preservedForeignOwnerRequestIds =
+      cancelDrainsAutomatedPreservesUserCase.preservedForeignOwnerRequestIds := by
+  native_decide
 
 deriving instance Lean.ToJson for RuntimeReconcile.StartupReadiness.BuildOutcome
 

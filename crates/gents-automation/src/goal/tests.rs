@@ -413,7 +413,28 @@ async fn goal_and_claim_publication_links_match_lean() {
             .is_empty()
     }
 
-    for case in &gents_lean_vocab::lean_contract_snapshot().goal_link_cases {
+    #[derive(Debug, Clone, Copy)]
+    struct LinkObservation {
+        linked: bool,
+        reader: bool,
+        agent: bool,
+    }
+
+    struct LinkRun {
+        owner: Option<&'static str>,
+        initial: LinkObservation,
+        after: Vec<LinkObservation>,
+        after_revocation: Option<LinkObservation>,
+        repair_allowed: Option<bool>,
+    }
+
+    async fn run_link_case(
+        collection: &str,
+        actor_name: &str,
+        mode: &str,
+        commit: bool,
+        steps: &[[bool; 3]],
+    ) -> LinkRun {
         let (db, user, user_access, binding) =
             crate::test_support::signed_test_node("goal-links").await;
         let node = db.node.clone();
@@ -526,16 +547,16 @@ async fn goal_and_claim_publication_links_match_lean() {
             reader_sees(&reader_access, &session_query, "AgentSession").await,
             "modeled reader must be able to query its granted session"
         );
-        let (actor, access) = match case.actor.as_str() {
+        let (actor, access) = match actor_name {
             "user" => (user.did(), &user_access),
             "agent" => (agent.did(), &agent_access),
             other => panic!("unknown model actor {other}"),
         };
         let input = json!({"goal_id": "model-goal", "creation_key": "model-claim", "node_did": runtime.did(),
             "session_id": "links-session", "session_doc_id": session_doc, "requester_did": user.did(),
-            "agent_did": agent.did(), "creator_did": actor, "parent_linked": case.mode == "fresh",
+            "agent_did": agent.did(), "creator_did": actor, "parent_linked": mode == "fresh",
             "objective": "Finish work", "created_at": "2026-11-04T00:00:00Z"});
-        let author_access = if case.mode == "foreign" {
+        let author_access = if mode == "foreign" {
             &agent_access
         } else {
             access
@@ -546,14 +567,14 @@ async fn goal_and_claim_publication_links_match_lean() {
             let runtime = &runtime;
             let staged_doc = &staged_doc;
             Box::pin(async move {
-                let doc = if case.mode == "fresh" {
+                let doc = if mode == "fresh" {
                     let staged = stage_goal_and_claim(
                         txn, runtime.did(), "links-session", "Finish work", None,
                         GoalState { status: GoalStatus::Active, blocked_audits: 0,
                             wrapup_requested: false, wrapup_completed: false },
                         "2026-11-04T00:00:00Z", None, None,
                     ).await?;
-                    if case.collection == "Goal" {
+                    if collection == "Goal" {
                         staged.goal.doc_id
                     } else {
                         let response = txn.execute("{ GoalCreationClaim { _docID } }").await?;
@@ -561,28 +582,28 @@ async fn goal_and_claim_publication_links_match_lean() {
                             .as_str().unwrap().to_owned()
                     }
                 } else {
-                    let schema = match case.collection.as_str() {
+                    let schema = match collection {
                         "Goal" => gents_protocol::schemas::GOAL,
                         "GoalCreationClaim" => gents_protocol::schemas::GOAL_CREATION_CLAIM,
                         other => panic!("unknown modeled collection {other}"),
                     };
                     let mutation = format!(
                         "mutation($input: {}MutationInputArg!) {{ create_{}(input: $input) {{ _docID }} }}",
-                        case.collection, case.collection,
+                        collection, collection,
                     );
                     let written = txn.execute_client_signed_create(
                         &mutation, &json!({"input": input}), schema,
                     ).await?;
-                    gents_store::graphql::created_doc_id(&written, &case.collection)?
+                    gents_store::graphql::created_doc_id(&written, collection)?
                 };
                 *staged_doc.lock().unwrap() = Some(doc.clone());
-                if !case.commit {
+                if !commit {
                     anyhow::bail!("test requested publication rollback");
                 }
                 Ok::<_, anyhow::Error>(doc)
             })
         }).await;
-        let doc = if case.commit {
+        let doc = if commit {
             outcome.unwrap()
         } else {
             assert_eq!(
@@ -591,10 +612,10 @@ async fn goal_and_claim_publication_links_match_lean() {
             );
             staged_doc.into_inner().unwrap().unwrap()
         };
-        if case.mode == "foreign" {
+        if mode == "foreign" {
             agent_access
                 .add_actor_relationship(
-                    &case.collection,
+                    collection,
                     &doc,
                     "reader",
                     &identity::Did::new(actor).unwrap(),
@@ -602,57 +623,51 @@ async fn goal_and_claim_publication_links_match_lean() {
                 .await
                 .unwrap();
         }
-        if case.mode == "partial" {
+        if mode == "partial" {
             access
-                .add_resource_relationship(
-                    &case.collection,
-                    &doc,
-                    "parent",
-                    "sessions",
-                    &session_doc,
-                )
+                .add_resource_relationship(collection, &doc, "parent", "sessions", &session_doc)
                 .await
                 .unwrap();
         }
         let query = format!(
             r#"{{ {}(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID parent_linked}} }}"#,
-            case.collection,
+            collection,
             escape_graphql_string(&doc)
         );
+        let observe = || {
+            let query = &query;
+            let reader_access = &reader_access;
+            let agent_access = &agent_access;
+            async move {
+                let rows = access.execute(query).await.unwrap();
+                LinkObservation {
+                    linked: rows["data"][collection]
+                        .as_array()
+                        .unwrap()
+                        .first()
+                        .is_some_and(|row| row["parent_linked"] == true),
+                    reader: reader_sees(reader_access, query, collection).await,
+                    agent: !agent_access.execute(query).await.unwrap()["data"][collection]
+                        .as_array()
+                        .unwrap()
+                        .is_empty(),
+                }
+            }
+        };
         let rows = access.execute(&query).await.unwrap();
-        if case.owner.is_none() {
-            assert!(rows["data"][&case.collection]
-                .as_array()
-                .unwrap()
-                .is_empty());
-            assert!(!reader_sees(&reader_access, &query, &case.collection).await);
-            assert!(case.steps.is_empty());
+        if rows["data"][collection].as_array().unwrap().is_empty() {
+            let initial = observe().await;
             node.shutdown().await.expect("node shutdown");
-            continue;
+            return LinkRun {
+                owner: None,
+                initial,
+                after: Vec::new(),
+                after_revocation: None,
+                repair_allowed: None,
+            };
         }
-        if case.mode == "foreign" {
-            assert_eq!(case.owner.as_deref(), Some("agent"));
-            assert!(!case.repair_allowed);
-            assert!(crate::goal::creation::finish_goal_relationships(
-                access,
-                runtime.did(),
-                "links-session",
-            )
-            .await
-            .is_err());
-            let current = access.execute(&query).await.unwrap();
-            assert_eq!(
-                current["data"][&case.collection][0]["parent_linked"],
-                case.initial.linked
-            );
-            assert!(!reader_sees(&reader_access, &query, &case.collection).await);
-            node.shutdown().await.expect("node shutdown");
-            continue;
-        }
-        assert_eq!(case.owner.as_deref(), Some(case.actor.as_str()));
-        let owners = access
+        let owners = author_access
             .transact_readonly("test.goal_links.owner", |txn| {
-                let collection = &case.collection;
                 let doc = &doc;
                 Box::pin(async move {
                     txn.document_owners(collection, std::slice::from_ref(doc))
@@ -661,26 +676,33 @@ async fn goal_and_claim_publication_links_match_lean() {
             })
             .await
             .unwrap();
-        assert_eq!(
-            owners[0].owner.as_ref().map(|did| did.as_str()),
-            Some(actor)
-        );
-        assert_eq!(
-            rows["data"][&case.collection][0]["parent_linked"],
-            case.initial.linked
-        );
-        let initial_reader = reader_sees(&reader_access, &query, &case.collection).await;
-        assert_eq!(initial_reader, case.initial.parent);
-        if case.actor == "user" {
-            let initial_agent = !agent_access.execute(&query).await.unwrap()["data"]
-                [&case.collection]
-                .as_array()
-                .unwrap()
-                .is_empty();
-            assert_eq!(initial_agent, case.initial.worker || case.initial.parent);
+        let owner = match owners[0].owner.as_ref().map(|did| did.as_str()) {
+            Some(did) if did == user.did() => Some("user"),
+            Some(did) if did == agent.did() => Some("agent"),
+            other => panic!("unexpected goal link owner {other:?}"),
+        };
+        if mode == "foreign" {
+            let repair_allowed = crate::goal::creation::finish_goal_relationships(
+                access,
+                runtime.did(),
+                "links-session",
+            )
+            .await
+            .is_ok();
+            let initial = observe().await;
+            node.shutdown().await.expect("node shutdown");
+            return LinkRun {
+                owner,
+                initial,
+                after: Vec::new(),
+                after_revocation: None,
+                repair_allowed: Some(repair_allowed),
+            };
         }
-        for step in &case.steps {
-            if step.parent_ok && step.worker_ok && step.mark_ok {
+        let initial = observe().await;
+        let mut after = Vec::new();
+        for &[parent_ok, worker_ok, mark_ok] in steps {
+            if parent_ok && worker_ok && mark_ok {
                 crate::goal::creation::finish_goal_relationships(
                     access,
                     runtime.did(),
@@ -695,10 +717,10 @@ async fn goal_and_claim_publication_links_match_lean() {
                         let session_doc = &session_doc;
                         let agent = &agent;
                         Box::pin(async move {
-                            if step.parent_ok {
+                            if parent_ok {
                                 attempt
                                     .add_resource_relationship(
-                                        &case.collection,
+                                        collection,
                                         doc,
                                         "parent",
                                         "sessions",
@@ -706,10 +728,10 @@ async fn goal_and_claim_publication_links_match_lean() {
                                     )
                                     .await?;
                             }
-                            if step.worker_ok {
+                            if worker_ok {
                                 attempt
                                     .add_actor_relationship(
-                                        &case.collection,
+                                        collection,
                                         doc,
                                         "working_agent",
                                         &identity::Did::new(agent.did())?,
@@ -725,51 +747,88 @@ async fn goal_and_claim_publication_links_match_lean() {
                     "test requested relationship rollback"
                 );
             }
-            let current = access.execute(&query).await.unwrap();
-            assert_eq!(
-                current["data"][&case.collection][0]["parent_linked"],
-                step.after.linked
-            );
-            let reader_visible = reader_sees(&reader_access, &query, &case.collection).await;
-            assert_eq!(reader_visible, step.after.parent);
-            if case.actor == "user" {
-                let agent_visible = !agent_access.execute(&query).await.unwrap()["data"]
-                    [&case.collection]
-                    .as_array()
-                    .unwrap()
-                    .is_empty();
-                assert_eq!(agent_visible, step.after.worker || step.after.parent);
-            }
+            after.push(observe().await);
         }
         access
-            .delete_resource_relationship(
-                &case.collection,
-                &doc,
-                "parent",
-                "sessions",
-                &session_doc,
-            )
+            .delete_resource_relationship(collection, &doc, "parent", "sessions", &session_doc)
             .await
             .unwrap();
         crate::goal::creation::finish_goal_relationships(access, runtime.did(), "links-session")
             .await
             .unwrap();
-        let reader_visible = reader_sees(&reader_access, &query, &case.collection).await;
-        assert_eq!(reader_visible, case.after_revocation.parent);
-        let current = access.execute(&query).await.unwrap();
-        assert_eq!(
-            current["data"][&case.collection][0]["parent_linked"],
-            case.after_revocation.linked
-        );
-        if case.actor == "user" {
-            let agent_visible = !agent_access.execute(&query).await.unwrap()["data"]
-                [&case.collection]
-                .as_array()
-                .unwrap()
-                .is_empty();
-            assert_eq!(agent_visible, case.after_revocation.worker);
-        }
+        let after_revocation = observe().await;
         node.shutdown().await.expect("node shutdown");
+        LinkRun {
+            owner,
+            initial,
+            after,
+            after_revocation: Some(after_revocation),
+            repair_allowed: None,
+        }
+    }
+
+    for case in gents_lean_vocab::families::goal_links_user_owned::cases() {
+        let i = &case.input;
+        let steps: Vec<[bool; 3]> = i
+            .steps
+            .iter()
+            .map(|step| [step.parent_ok, step.worker_ok, step.mark_ok])
+            .collect();
+        let run = run_link_case(&i.collection, &i.actor, &i.mode, i.commit, &steps).await;
+        let observed = |o: LinkObservation| {
+            gents_lean_vocab::families::goal_links_user_owned::UserObservation {
+                linked: o.linked,
+                parent: o.reader,
+                agent_visible: o.agent,
+            }
+        };
+        case.check(
+            gents_lean_vocab::families::goal_links_user_owned::UserOutput {
+                owner: run.owner.map(str::to_owned),
+                initial: observed(run.initial),
+                after: run.after.into_iter().map(observed).collect(),
+                after_revocation: run.after_revocation.map(observed),
+            },
+        );
+    }
+    for case in gents_lean_vocab::families::goal_links_agent_owned::cases() {
+        let i = &case.input;
+        let steps: Vec<[bool; 3]> = i
+            .steps
+            .iter()
+            .map(|step| [step.parent_ok, step.worker_ok, step.mark_ok])
+            .collect();
+        let run = run_link_case(&i.collection, &i.actor, &i.mode, i.commit, &steps).await;
+        let observed = |o: LinkObservation| {
+            gents_lean_vocab::families::goal_links_agent_owned::AgentObservation {
+                linked: o.linked,
+                parent: o.reader,
+            }
+        };
+        case.check(
+            gents_lean_vocab::families::goal_links_agent_owned::AgentOutput {
+                owner: run.owner.map(str::to_owned),
+                initial: observed(run.initial),
+                after: run.after.into_iter().map(observed).collect(),
+                after_revocation: run.after_revocation.map(observed),
+            },
+        );
+    }
+    for case in gents_lean_vocab::families::goal_links_foreign::cases() {
+        let i = &case.input;
+        let steps: Vec<[bool; 3]> = i
+            .steps
+            .iter()
+            .map(|step| [step.parent_ok, step.worker_ok, step.mark_ok])
+            .collect();
+        let run = run_link_case(&i.collection, &i.actor, &i.mode, i.commit, &steps).await;
+        case.check(
+            gents_lean_vocab::families::goal_links_foreign::ForeignOutput {
+                owner: run.owner.map(str::to_owned),
+                repair_allowed: run.repair_allowed.expect("a foreign row attempts repair"),
+                linked: run.initial.linked,
+                parent: run.initial.reader,
+            },
+        );
     }
 }
-

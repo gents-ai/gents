@@ -15,8 +15,13 @@ pub async fn live_canonical_message(
     gents_protocol::output::TranscriptMessage,
     gents_protocol::message::Message,
 )> {
-    match gents_session::session::load_canonical_message(access, header_doc_id, node_did, requester_did)
-        .await
+    match gents_session::session::load_canonical_message(
+        access,
+        header_doc_id,
+        node_did,
+        requester_did,
+    )
+    .await
     {
         Ok(message) => Some(message),
         Err(error)

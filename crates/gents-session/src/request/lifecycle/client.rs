@@ -1490,35 +1490,30 @@ mod tests {
     async fn client_signature_binds_modeled_physical_targets() {
         let home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let cases = &gents_lean_vocab::lean_contract_snapshot().cross_actor_authorization_cases;
-        let baseline = cases
-            .iter()
-            .find(|case| case.name == "committed_claim")
-            .unwrap();
-        let mut request = AgentRequestCreate::base(
-            RequestPurpose::Normal,
-            "request",
-            user.did(),
-            user.did(),
-            "agent",
-            "session",
-            "hello",
-            "interactive",
-            "2026-11-04T00:00:00Z",
-            AgentRequestAdmissionRecord::client(user.did()),
-        );
-        request.session_doc_id = Some(baseline.intent.session.clone());
-        request.agent_doc_id = Some(baseline.intent.agent_document.clone());
-        crate::request::admission::sign_agent_request_create(&user, &mut request)
-            .await
-            .unwrap();
-        for name in ["wrong_session", "wrong_agent_document"] {
-            let case = cases.iter().find(|case| case.name == name).unwrap();
+        for case in
+            gents_lean_vocab::families::cross_actor_authorization_request_signed_targets::cases()
+        {
+            let input = &case.input;
+            let mut request = AgentRequestCreate::base(
+                RequestPurpose::Normal,
+                "request",
+                user.did(),
+                user.did(),
+                "agent",
+                "session",
+                "hello",
+                "interactive",
+                "2026-11-04T00:00:00Z",
+                AgentRequestAdmissionRecord::client(user.did()),
+            );
+            request.session_doc_id = Some(input.signed_session.clone());
+            request.agent_doc_id = Some(input.signed_agent_document.clone());
+            crate::request::admission::sign_agent_request_create(&user, &mut request)
+                .await
+                .unwrap();
             let mut changed = request.clone();
-            changed.session_doc_id = Some(case.observation.session.clone());
-            changed.agent_doc_id = Some(case.observation.agent_document.clone());
-            // A changed payload is rejected by the identity owner either as
-            // Ok(false) or as a verification error; only Ok(true) verifies.
+            changed.session_doc_id = Some(input.session.clone());
+            changed.agent_doc_id = Some(input.agent_document.clone());
             let verified = matches!(
                 user.verify(
                     user.did(),
@@ -1528,20 +1523,8 @@ mod tests {
                 .await,
                 Ok(true)
             );
-            assert_eq!(
-                verified,
-                case.decision == gents_lean_vocab::LeanCrossActorDecision::Claimed,
-                "{name}"
-            );
+            case.check(verified);
         }
-        assert!(user
-            .verify(
-                user.did(),
-                &request.signing_payload(),
-                &request.admission.signature
-            )
-            .await
-            .unwrap());
     }
 
     #[test]
@@ -1853,32 +1836,48 @@ mod tests {
         crate::request::admission::sign_agent_request_create(&user, &mut first)
             .await
             .unwrap();
-        let (result, fired) = gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
-            Some("request.client.submit"), submit_client_request(&access, &first),
-        ).await;
-        assert!(fired && result.unwrap_err().is_unconfirmed());
-        let committed = gents_lean_vocab::lean_contract_snapshot()
-            .identity_atomic_client_request_cases
-            .iter()
-            .find(|case| case["name"] == "created")
-            .unwrap();
-        let pending = access
-            .execute("{ AgentRequest { relationships_pending } }")
-            .await
-            .unwrap();
-        assert_eq!(
-            pending["data"]["AgentRequest"][0]["relationships_pending"],
-            committed["pending"]
-        );
-        assert!(reconcile_client_request(&access, &first).await.unwrap());
-        let rows = access
-            .execute("{ AgentRequest { _docID relationships_pending } }")
-            .await
-            .unwrap();
-        assert_eq!(
-            rows["data"]["AgentRequest"][0]["relationships_pending"],
-            committed["pending"]
-        );
+        let (observed_access, request_grantee) = (&access, agent.agent_did.as_str());
+        let observe = move || async move {
+            let rows = observed_access
+                .execute("{ AgentRequest { _docID relationships_pending } }")
+                .await
+                .unwrap();
+            let row = rows["data"]["AgentRequest"].as_array().unwrap().first().cloned();
+            let grants = match &row {
+                Some(row) => observed_access
+                    .list_document_relationships("AgentRequest", row["_docID"].as_str().unwrap())
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|relationship| {
+                        relationship.relation == "working_agent"
+                            && relationship.subject == request_grantee
+                    }),
+                None => false,
+            };
+            gents_lean_vocab::families::session_child_atomic_client_request_unconfirmed::ClientRequestPublication {
+                committed: row.is_some(),
+                pending: row
+                    .as_ref()
+                    .is_some_and(|row| row["relationships_pending"].as_bool().unwrap()),
+                grants,
+            }
+        };
+        for case in gents_lean_vocab::families::session_child_atomic_client_request_unconfirmed::cases() {
+            assert!(case.input.fresh && case.input.commit, "{}", case.input.name);
+            let (result, fired) = gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+                Some("request.client.submit"), submit_client_request(&access, &first),
+            ).await;
+            assert!(fired && result.unwrap_err().is_unconfirmed());
+            let unconfirmed = observe().await;
+            assert!(reconcile_client_request(&access, &first).await.unwrap());
+            let reconciled = observe().await;
+            assert_eq!(
+                (unconfirmed.committed, unconfirmed.pending, unconfirmed.grants),
+                (reconciled.committed, reconciled.pending, reconciled.grants)
+            );
+            case.check(reconciled);
+        }
         assert!(reconcile_client_request(&access, &first).await.unwrap());
         let wrong = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap());
         assert!(reconcile_client_request(&wrong, &first).await.is_err());

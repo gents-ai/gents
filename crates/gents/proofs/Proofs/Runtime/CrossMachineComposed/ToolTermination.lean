@@ -227,4 +227,69 @@ theorem all_tools_terminal_admits_processing_continuation
     intro ⟨t, h_in, _h_fg, h_nt⟩
     exact h_nt (h_all_terminal t h_in)
 
+/-- What a request stop does to one linked tool. A request past its deadline
+cancels a pending tool and times out a running one; both record the deadline
+cause, and the timeout records an external failure because the tool did not
+finish on its own. An interrupted request cancels a live tool with the
+interrupted cause. A terminal tool, or a request neither late nor interrupted,
+is left alone. -/
+structure Termination where
+  state : ToolExecution.ToolCallState
+  cancelCause : Option ToolExecution.CancelCause
+  failureClass : Option ToolExecution.FailureClass
+  deriving DecidableEq, Repr
+
+def linkedTermination (request : RequestContext) (tool : ToolExecution.ToolCallContext) :
+    Option Termination :=
+  if request.deadlineExceeded then
+    match tool.state with
+    | .pending => some ⟨.cancelled, some .deadline, none⟩
+    | .running => some ⟨.timedOut, some .deadline, some .external⟩
+    | _ => none
+  else if request.state = .interrupted then
+    match tool.state with
+    | .pending | .running => some ⟨.cancelled, some .interrupted, none⟩
+    | _ => none
+  else none
+
+theorem linkedTermination_reachable_from_initial
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext} {termination : Termination}
+    (h_reach     : Trace initial pre)
+    (h_in        : toolPre ∈ pre.tools)
+    (h_live_kind : ¬ IsDetached toolPre)
+    (h_step      : linkedTermination pre.request toolPre = some termination) :
+    ∃ post toolPost,
+      Trace pre post ∧
+      post.request = pre.request ∧
+      toolPost ∈ post.tools ∧
+      toolPost.state = termination.state ∧
+      toolPost.requestId = pre.requestId := by
+  unfold linkedTermination at h_step
+  by_cases h_deadline : pre.request.deadlineExceeded
+  · rw [if_pos h_deadline] at h_step
+    cases h_state : toolPre.state <;> rw [h_state] at h_step <;> simp at h_step
+    · subst h_step
+      obtain ⟨post, toolPost, h_trace, h_req, _, h_mem, h_post, h_id⟩ :=
+        deadline_exceeded_request_cancels_pending_tools_from_initial
+          h_reach h_in h_live_kind h_state h_deadline
+      exact ⟨post, toolPost, h_trace, h_req, h_mem, h_post, h_id⟩
+    · subst h_step
+      obtain ⟨post, toolPost, h_trace, h_mem, h_req, h_post, h_id⟩ :=
+        deadline_exceeded_request_timesOut_running_tools_from_initial
+          h_reach h_in h_live_kind h_state h_deadline
+      exact ⟨post, toolPost, h_trace, h_req, h_mem, h_post, h_id⟩
+  · rw [if_neg h_deadline] at h_step
+    by_cases h_interrupted : pre.request.state = .interrupted
+    · rw [if_pos h_interrupted] at h_step
+      have h_live : toolPre.cancellable ∧ termination.state = .cancelled := by
+        cases h_state : toolPre.state <;> rw [h_state] at h_step <;> simp at h_step
+        · exact ⟨Or.inl h_state, by rw [← h_step]⟩
+        · exact ⟨Or.inr h_state, by rw [← h_step]⟩
+      obtain ⟨post, toolPost, h_trace, h_req, _, h_mem, h_post, h_id⟩ :=
+        interrupted_request_cancels_live_linked_tools_from_initial
+          h_reach h_in h_live_kind h_interrupted h_live.1
+      exact ⟨post, toolPost, h_trace, h_req, h_mem, h_post.trans h_live.2.symm, h_id⟩
+    · rw [if_neg h_interrupted] at h_step
+      cases h_step
+
 end ComposedState

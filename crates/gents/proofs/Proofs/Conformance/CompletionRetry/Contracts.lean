@@ -6,10 +6,6 @@ namespace CompletionRetry.Contracts
 
 open Conformance.Contracts
 
-def failureClassVocabulary : List String :=
-  ["transport", "parse_bad_request", "reasoning_rejected", "context_overflow",
-   "account_limited", "permanent"]
-
 def failureClassName : FailureClass → String
   | .emptySample => "empty_sample"
   | .transport => "transport"

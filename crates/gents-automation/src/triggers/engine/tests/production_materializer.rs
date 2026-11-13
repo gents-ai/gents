@@ -651,28 +651,13 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     let session = &rows["data"]["AgentSession"][0];
     let request = &rows["data"]["AgentRequest"][0];
     assert_eq!(session["agent_did"], agent_did);
-    let goal_links = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .goal_link_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    for collection in ["Goal", "GoalCreationClaim"] {
-        let modeled_link = goal_links
-            .iter()
-            .find(|case| {
-                case.collection == collection
-                    && case.actor == "agent"
-                    && case.mode == "fresh"
-                    && case.commit
-            })
-            .unwrap();
+    for case in gents_lean_vocab::families::goal_links_task_fire::cases() {
+        let collection = case.input.collection.as_str();
         let row = &rows["data"][collection][0];
         assert_eq!(row["session_doc_id"], session["_docID"]);
         assert_eq!(row["agent_did"], agent_did);
         assert_eq!(row["creator_did"], agent_did);
-        assert_eq!(row["parent_linked"], modeled_link.initial.linked);
+        case.check(row["parent_linked"].as_bool().unwrap());
         let doc = row["_docID"].as_str().unwrap().to_owned();
         let owners = access
             .transact_readonly("test.task_goal_owner", |txn| {
@@ -818,86 +803,95 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         "clearing terminal controller state must not replay the Task fire"
     );
 
-    let modeled = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_task_goal_publication_cases()
-            .iter()
-            .find(|case| case.name == "positive_budget_uses_atomic_goal_publication")
-            .unwrap()
-            .clone()
-    })
+    for case in tokio::task::spawn_blocking(
+        gents_lean_vocab::families::contracts_task_goal_publication_materialized::cases::<String>,
+    )
     .await
-    .unwrap();
-    assert_eq!(modeled.expected_mode, "atomic_goal_backed");
-    let scheduled = ResolvedTask {
-        emit_outcome: false,
-        task_id: modeled.task_id.clone(),
-        name: Some("scheduled Goal".into()),
-        agent_did: agent_did.clone(),
-        prompt_template: "scheduled work".into(),
-        goal_objective_template: modeled.goal_objective.clone(),
-        goal_token_budget: modeled
-            .goal_token_budget
-            .map(|budget| i64::try_from(budget).unwrap()),
-        output_schema_ref: None,
-        hooks: Vec::new(),
-    };
-    let scheduled_identity =
-        crate::goal::task_goal_fire_identity(&node_did, &scheduled.task_id, &modeled.fire_key);
-    let request_id = materializer
-        .materialize(
-            &scheduled,
-            Some("schedule-goal"),
-            TriggerKind::Schedule,
-            Some("schedule-goal-doc"),
-            None,
-            None,
-            None,
-            "scheduled work",
-            modeled.goal_objective.as_deref(),
-            &modeled.fire_key,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(request_id, scheduled_identity.request_id);
-    let session = escape_graphql_string(&scheduled_identity.session_id);
-    let rows = access.execute(&format!(r#"{{
-        AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID agent_did }}
-        AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID lifecycle_state }}
-        Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked assignment_root_request_doc_id }}
-        GoalCreationClaim(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked }}
-    }}"#)).await.unwrap();
-    let sessions = rows["data"]["AgentSession"].as_array().unwrap();
-    let requests = rows["data"]["AgentRequest"].as_array().unwrap();
-    let goals = rows["data"]["Goal"].as_array().unwrap();
-    let claims = rows["data"]["GoalCreationClaim"].as_array().unwrap();
-    assert_eq!(!requests.is_empty(), modeled.expected_runnable_request);
-    assert_eq!(!goals.is_empty(), modeled.expected_durable_goal);
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(requests.len(), 1);
-    assert_eq!(goals.len(), 1);
-    assert_eq!(claims.len(), 1);
-    assert_eq!(sessions[0]["agent_did"], agent_did);
-    assert_eq!(requests[0]["lifecycle_state"], "pending");
-    for (collection, child) in [("Goal", &goals[0]), ("GoalCreationClaim", &claims[0])] {
-        let modeled_link = goal_links
-            .iter()
-            .find(|case| {
-                case.collection == collection
-                    && case.actor == "agent"
-                    && case.mode == "fresh"
-                    && case.commit
-            })
-            .unwrap();
-        assert_eq!(child["session_doc_id"], sessions[0]["_docID"]);
-        assert_eq!(child["creator_did"], agent_did);
-        assert_eq!(child["parent_linked"], modeled_link.initial.linked);
+    .unwrap()
+    {
+        let modeled = &case.input;
+        let scheduled = ResolvedTask {
+            emit_outcome: false,
+            task_id: modeled.task_id.clone(),
+            name: Some("scheduled Goal".into()),
+            agent_did: agent_did.clone(),
+            prompt_template: "scheduled work".into(),
+            goal_objective_template: modeled.goal_objective.clone(),
+            goal_token_budget: modeled.goal_token_budget.as_ref().map(|budget| {
+                budget
+                    .0
+                    .as_i64()
+                    .expect("the materialized budget fits the Task document")
+            }),
+            output_schema_ref: None,
+            hooks: Vec::new(),
+        };
+        let scheduled_identity =
+            crate::goal::task_goal_fire_identity(&node_did, &scheduled.task_id, &modeled.fire_key);
+        let published = materializer
+            .materialize(
+                &scheduled,
+                Some("schedule-goal"),
+                TriggerKind::Schedule,
+                Some("schedule-goal-doc"),
+                None,
+                None,
+                None,
+                "scheduled work",
+                modeled.goal_objective.as_deref(),
+                &modeled.fire_key,
+                None,
+                None,
+            )
+            .await;
+        let published_ok = published.is_ok();
+        let request_id = published.unwrap();
+        assert_eq!(request_id, scheduled_identity.request_id);
+        let session = escape_graphql_string(&scheduled_identity.session_id);
+        let rows = access.execute(&format!(r#"{{
+            AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID agent_did }}
+            AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID lifecycle_state }}
+            Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked assignment_root_request_doc_id }}
+            GoalCreationClaim(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked }}
+        }}"#)).await.unwrap();
+        let sessions = rows["data"]["AgentSession"].as_array().unwrap();
+        let requests = rows["data"]["AgentRequest"].as_array().unwrap();
+        let goals = rows["data"]["Goal"].as_array().unwrap();
+        let claims = rows["data"]["GoalCreationClaim"].as_array().unwrap();
+        case.check(
+            gents_lean_vocab::families::contracts_task_goal_publication_materialized::TaskGoalPublicationMaterialized {
+                mode: match (requests.is_empty(), goals.is_empty()) {
+                    (false, false) => "atomic_goal_backed",
+                    (false, true) => "ordinary",
+                    (true, _) => "invalid",
+                }
+                .to_owned(),
+                published: published_ok,
+                runnable_request: !requests.is_empty(),
+                durable_goal: !goals.is_empty(),
+            },
+        );
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(goals.len(), 1);
+        assert_eq!(claims.len(), 1);
+        assert_eq!(sessions[0]["agent_did"], agent_did);
+        assert_eq!(requests[0]["lifecycle_state"], "pending");
+        for link in gents_lean_vocab::families::goal_links_scheduled_task_fire::cases() {
+            let child = match link.input.collection.as_str() {
+                "Goal" => &goals[0],
+                "GoalCreationClaim" => &claims[0],
+                other => panic!("unknown modeled collection {other}"),
+            };
+            assert_eq!(child["session_doc_id"], sessions[0]["_docID"]);
+            assert_eq!(child["creator_did"], agent_did);
+            link.check(child["parent_linked"].as_bool().unwrap());
+        }
+        assert_eq!(
+            goals[0]["assignment_root_request_doc_id"],
+            requests[0]["_docID"]
+        );
     }
-    assert_eq!(
-        goals[0]["assignment_root_request_doc_id"],
-        requests[0]["_docID"]
-    );
 }
 
 #[tokio::test]
@@ -1966,25 +1960,14 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     let session = escape_graphql_string(rows[0]["session_id"].as_str().unwrap());
     let goal = access.execute(&format!(r#"{{Goal(filter: {{session_id: {{_eq: "{session}"}}}}) {{creator_did parent_linked assignment_root_request_doc_id}}}}"#)).await.unwrap();
     assert_eq!(goal["data"]["Goal"][0]["creator_did"], agent_did);
-    let modeled_link = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .goal_link_cases
-            .iter()
-            .find(|case| {
-                case.collection == "Goal"
-                    && case.actor == "agent"
-                    && case.mode == "fresh"
-                    && case.commit
-            })
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap();
-    assert_eq!(
-        goal["data"]["Goal"][0]["parent_linked"],
-        modeled_link.initial.linked
-    );
+    for case in gents_lean_vocab::families::goal_links_workspace_task_fire::cases() {
+        let collection = case.input.collection.as_str();
+        case.check(
+            goal["data"][collection][0]["parent_linked"]
+                .as_bool()
+                .unwrap(),
+        );
+    }
     assert_eq!(
         goal["data"]["Goal"][0]["assignment_root_request_doc_id"],
         rows[0]["_docID"]
@@ -2404,7 +2387,8 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
             let rows: Vec<gents_protocol::row::AgentRequestRow> =
                 serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
             let mut claim_owners = Vec::new();
-            for case in gents_lean_vocab::families::trigger_delivery_queue_dispatch_claims::cases() {
+            for case in gents_lean_vocab::families::trigger_delivery_queue_dispatch_claims::cases()
+            {
                 let request_id = match case.input.identity.source_doc_id.as_str() {
                     "a" => identity.request_id(),
                     "b" => queued_id.clone(),

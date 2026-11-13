@@ -231,73 +231,34 @@ fn contract_number(prefix: &str, id: &str) -> u64 {
         .unwrap_or_else(|| panic!("{id:?} is not a contract {prefix} id"))
 }
 
-fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String> {
-    docs.iter()
-        .map(|doc| {
-            rows.iter()
-                .find(|row| row.doc_id.as_deref() == Some(format!("doc-{doc}").as_str()))
-                .expect("expected doc is a case row")
-                .request_id
-                .clone()
-        })
+fn modeled_doc(doc: Option<&str>) -> u64 {
+    contract_number("doc-", doc.expect("projection names a physical request"))
+}
+
+fn queued_docs(snapshot: &crate::types::DesktopSessionSnapshot) -> Vec<u64> {
+    snapshot
+        .queued_turns
+        .iter()
+        .map(|turn| modeled_doc(turn.request_doc_id.as_deref()))
         .collect()
 }
 
 #[test]
-fn display_owner_binds_generated_session_turn_cases() {
-    for case in gents_lean_vocab::lean_client_session_turn_cases() {
-        let rows = lean_session_rows("session-1", &case.rows);
+fn session_snapshot_projection_matches_the_lean_model() {
+    gents_lean_vocab::families::client_shell_contracts_session_turn_cases_projection::replay::<
+        String,
+    >(|input| {
+        let modeled: Vec<gents_lean_vocab::LeanSessionTurnRow> =
+            gents_lean_vocab::family::recode(&input.rows);
+        let rows = lean_session_rows("session-1", &modeled);
         let selected = rows
             .iter()
             .find(|row| {
-                row.doc_id.as_deref() == Some(format!("doc-{}", case.selected_doc).as_str())
+                row.doc_id.as_deref() == Some(format!("doc-{}", input.selected_doc).as_str())
             })
             .expect("selected case row");
         let refs = rows.iter().collect::<Vec<_>>();
-        assert_eq!(
-            gents_desktop_core::client::session_display_request(&refs, selected).doc_id,
-            Some(format!("doc-{}", case.expected_display_turn_doc)),
-            "{}",
-            case.name
-        );
-    }
-}
-
-#[test]
-fn session_snapshot_binds_generated_session_turn_cases() {
-    let cases = gents_lean_vocab::lean_client_session_turn_cases();
-    assert_eq!(cases.len(), 43);
-    let public_cases = cases
-        .iter()
-        .filter(|case| {
-            case.rows
-                .iter()
-                .any(|row| row.doc == case.selected_doc && row.public_input)
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(public_cases.len(), 42);
-    for case in public_cases {
-        let rows = lean_session_rows("session-1", &case.rows);
-        let selected = rows
-            .iter()
-            .find(|row| {
-                row.doc_id.as_deref() == Some(format!("doc-{}", case.selected_doc).as_str())
-            })
-            .expect("selected case row");
-        let refs = rows.iter().collect::<Vec<_>>();
-        assert_eq!(
-            gents_desktop_core::client::session_turn_request(&refs, selected).doc_id,
-            Some(format!("doc-{}", case.expected_turn_doc)),
-            "{}",
-            case.name
-        );
         let answer = gents_desktop_core::client::request_answer_owner(&refs, selected);
-        assert_eq!(
-            answer.doc_id,
-            Some(format!("doc-{}", case.expected_answer_doc)),
-            "{}",
-            case.name
-        );
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
                 "session-1",
@@ -309,93 +270,43 @@ fn session_snapshot_binds_generated_session_turn_cases() {
         });
         let snapshot =
             build_session_snapshot_from_store(&store, "session-1", None).expect("snapshot");
-        assert_eq!(
-            snapshot.latest_request_id,
-            request_ids_for_docs(&rows, &[case.expected_display_turn_doc]).pop(),
-            "{}",
-            case.name
-        );
         let summaries =
             session_summaries(&store.sessions, &store.requests, CONTRACT_NODE, &[], &[]);
+        let display_turn_doc = modeled_doc(summaries[0].latest_request_doc_id.as_deref());
         assert_eq!(
             summaries[0].latest_request_id, snapshot.latest_request_id,
             "{}",
-            case.name
+            input.name
         );
         assert_eq!(
-            summaries[0].latest_request_doc_id,
-            Some(format!("doc-{}", case.expected_display_turn_doc)),
+            snapshot.latest_request_id,
+            rows.iter()
+                .find(|row| row.doc_id == summaries[0].latest_request_doc_id)
+                .map(|row| row.request_id.clone()),
             "{}",
-            case.name
+            input.name
         );
         assert_eq!(
             summaries[0].turn_state, snapshot.turn_state,
             "{}",
-            case.name
+            input.name
         );
-        if let Some(background) = case.rows.iter().find(|row| row.background_wake) {
+        if let Some(background) = modeled.iter().find(|row| row.background_wake) {
             let request_id = contract_request_id(background.request);
             let tracked = build_session_snapshot_from_store(&store, "session-1", Some(&request_id))
                 .expect("tracked background snapshot");
             assert_eq!(
                 tracked.latest_request_id, snapshot.latest_request_id,
                 "{}",
-                case.name
+                input.name
             );
-            assert_eq!(tracked.turn_state, snapshot.turn_state, "{}", case.name);
+            assert_eq!(tracked.turn_state, snapshot.turn_state, "{}", input.name);
         }
-        assert_eq!(
-            snapshot
-                .queued_turns
-                .iter()
-                .map(|turn| turn.request_id.clone())
-                .collect::<Vec<_>>(),
-            request_ids_for_docs(&rows, &case.expected_queued_docs),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            snapshot
-                .folded_inputs
-                .iter()
-                .map(|input| input.request_id.clone())
-                .collect::<Vec<_>>(),
-            case.expected_folded_requests
-                .iter()
-                .copied()
-                .map(contract_request_id)
-                .collect::<Vec<_>>(),
-            "{}",
-            case.name
-        );
-
-        let read_docs = case
-            .expected_read_docs
+        let read_docs = input
+            .read_docs
             .iter()
             .map(|doc| format!("doc-{doc}"))
             .collect::<rapidhash::RapidHashSet<_>>();
-        let selected_requester = case
-            .rows
-            .iter()
-            .find(|row| row.doc == case.selected_doc)
-            .unwrap()
-            .requester;
-        for row in case
-            .rows
-            .iter()
-            .filter(|row| row.requester == selected_requester && row.public_input)
-        {
-            if !read_docs.contains(&format!("doc-{}", row.doc)) {
-                assert!(
-                    row.completed
-                        && row.public_input
-                        && row.authored_input_materialized
-                        && row.retry_parent_doc.is_none(),
-                    "{} omitted a request without the modeled durable-prompt premise: {row:?}",
-                    case.name
-                );
-            }
-        }
         let bounded_rows = rows
             .iter()
             .filter(|row| {
@@ -405,18 +316,12 @@ fn session_snapshot_binds_generated_session_turn_cases() {
             })
             .cloned()
             .collect::<Vec<_>>();
-        assert_eq!(
-            bounded_rows.len(),
-            case.expected_read_docs.len(),
-            "{} read closure has each expected physical row once",
-            case.name
-        );
         let bounded_refs = bounded_rows.iter().collect::<Vec<_>>();
         assert_eq!(
             gents_desktop_core::client::request_answer_owner(&bounded_refs, selected).doc_id,
             answer.doc_id,
-            "{} bounded read closure retains the modeled answer owner",
-            case.name
+            "{} bounded read closure retains the answer owner",
+            input.name
         );
         let bounded_store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
@@ -432,36 +337,37 @@ fn session_snapshot_binds_generated_session_turn_cases() {
         assert_eq!(
             bounded.latest_request_id, snapshot.latest_request_id,
             "{}",
-            case.name
+            input.name
         );
-        assert_eq!(bounded.turn_state, snapshot.turn_state, "{}", case.name);
+        assert_eq!(bounded.turn_state, snapshot.turn_state, "{}", input.name);
         assert_eq!(
-            bounded
-                .queued_turns
-                .iter()
-                .map(|turn| &turn.request_doc_id)
-                .collect::<Vec<_>>(),
-            snapshot
-                .queued_turns
-                .iter()
-                .map(|turn| &turn.request_doc_id)
-                .collect::<Vec<_>>(),
-            "{} physical queue owners survive the generated read closure",
-            case.name
+            queued_docs(&bounded),
+            queued_docs(&snapshot),
+            "{} physical queue owners survive the read closure",
+            input.name
         );
         assert_eq!(
             serde_json::to_value(&bounded.queued_turns).unwrap(),
             serde_json::to_value(&snapshot.queued_turns).unwrap(),
-            "{} queue output survives the generated read closure",
-            case.name
+            "{} queue output survives the read closure",
+            input.name
         );
         assert_eq!(
             serde_json::to_value(&bounded.folded_inputs).unwrap(),
             serde_json::to_value(&snapshot.folded_inputs).unwrap(),
-            "{} complete fold output survives the generated read closure",
-            case.name
+            "{} complete fold output survives the read closure",
+            input.name
         );
-    }
+        gents_lean_vocab::families::client_shell_contracts_session_turn_cases_projection::ProjectionOutput {
+            display_turn_doc,
+            queued_docs: queued_docs(&snapshot),
+            folded_requests: snapshot
+                .folded_inputs
+                .iter()
+                .map(|folded| contract_number("req-", &folded.request_id))
+                .collect(),
+        }
+    });
 }
 
 #[test]

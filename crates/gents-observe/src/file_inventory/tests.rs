@@ -19,24 +19,22 @@ use gents_tools::native::file_tools::write_file::WriteFileTool;
 use gents_tools::native::shared::ToolContext;
 use serde_json::Value;
 
-fn text(value: &Value) -> String {
-    value.as_str().unwrap().to_owned()
-}
-
 // These labels exercise the metadata representation only. Native snapshot
 // admission still binds database-created document IDs and current ACP owners.
-fn document(value: &Value) -> String {
-    format!("document-{:020}", value.as_u64().unwrap())
+fn document(value: u64) -> String {
+    format!("document-{value:020}")
 }
 
-fn metadata(value: &Value) -> FileImageMetadata {
-    match value["kind"].as_str().unwrap() {
+fn metadata(
+    value: &gents_lean_vocab::families::file_inventory_contracts_direct_reader_snapshot::ImageWire,
+) -> FileImageMetadata {
+    match value.kind.as_str() {
         "missing" => FileImageMetadata::Missing {},
         "file" => FileImageMetadata::File {
-            content_hash: text(&value["content_hash"]),
+            content_hash: value.content_hash.clone().unwrap(),
         },
         "unavailable" => FileImageMetadata::Unavailable {
-            reason: match value["reason"].as_str().unwrap() {
+            reason: match value.reason.as_deref().unwrap() {
                 "read_failed" => ImageFailure::ReadFailed,
                 "changed_during_read" => ImageFailure::ChangedDuringRead,
                 "too_large" => ImageFailure::TooLarge,
@@ -86,22 +84,15 @@ fn metadata_wire_erases_and_rejects_image_bytes() {
 
 #[tokio::test]
 async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
+    use gents_lean_vocab::families::file_inventory_contracts_direct_reader_snapshot as direct_reader;
     use gents_store::config_client::ConfigAccess;
     use gents_toolcalls::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
     use serde_json::json;
-    let contracts: Value =
-        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
-            .await
-            .unwrap()
-            .unwrap();
-    let cases = contracts["file_inventory_direct_reader_cases"]
-        .as_array()
-        .unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
+    for case in gents_lean_vocab::families::file_inventory_contracts_direct_reader_snapshot::cases()
+    {
+        let name = case.input.name.as_str();
         let (fixture, _) = published_admission_with_owner(PublishedAdmissionOptions {
             name: format!("inventory-direct-{name}"),
             real_identity: true,
@@ -175,20 +166,19 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
             },
             session_doc_id: session.doc_id,
         };
-        let model_tool = &case["source"]["tools"][0];
-        for projection in case["source"]["projections"].as_array().unwrap() {
-            let changes = projection["changes"]
-                .as_array()
-                .unwrap()
+        let model_tool = &case.input.source.tools[0];
+        for projection in &case.input.source.projections {
+            let changes = projection
+                .changes
                 .iter()
                 .map(|change| FileChangeMetadata {
-                    root: text(&change["root"]),
-                    path: text(&change["path"]),
-                    before: metadata(&change["before"]),
-                    after: metadata(&change["after"]),
+                    root: change.root.clone(),
+                    path: change.path.clone(),
+                    before: metadata(&change.before),
+                    after: metadata(&change.after),
                 })
                 .collect::<Vec<_>>();
-            let projection_access = if projection["owner"] == model_tool["agent_did"] {
+            let projection_access = if projection.owner == model_tool.agent_did {
                 tool.access().unwrap()
             } else {
                 admin.clone()
@@ -198,7 +188,7 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                 "request_doc_id": tool.request_doc_id().unwrap(),
                 "node_did": tool.node_did(), "session_id": tool.session_id(),
                 "requester_did": tool.requester_did(),
-                "observation_doc_id": document(&projection["observation"]),
+                "observation_doc_id": document(projection.observation.unwrap()),
                 "changes": changes,
             });
             let id = projection_access
@@ -225,9 +215,13 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                 .unwrap();
             }
         }
-        let denies_session = case["source"]["catalog"]["session_reads"]
-            .as_array()
-            .is_some_and(|reads| reads.iter().any(|read| read["visible"] == false));
+        let denies_session = case
+            .input
+            .source
+            .catalog
+            .session_reads
+            .iter()
+            .any(|read| !read.visible);
         if denies_session {
             gents_store::test_support::relationships::actor_in_txn(
                 &fixture.client,
@@ -240,48 +234,47 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
             .await
             .unwrap();
         }
-        let access = if case["actor"] == "" {
+        let access = if case.input.actor.is_empty() {
             ConfigAccess::local(node.clone())
-        } else if case["actor"] != case["admission"]["requester"]
-            || case["source"]["boundary"] != "reader_bound"
+        } else if case.input.actor != case.input.admission.requester
+            || case.input.source.boundary != "reader_bound"
         {
             ConfigAccess::local_as(node.clone(), fixture.node_did.parse().unwrap())
         } else {
             reader_access
         };
         let result = FileInventorySnapshot::load_on(&access, &admission).await;
-        assert_eq!(
-            result.is_ok(),
-            case["expected"]["kind"] == "selected",
-            "{name}: {result:?}"
-        );
-        if let Ok(snapshot) = result {
-            let page = snapshot.page(None).unwrap();
-            assert_eq!(
-                serde_json::to_value(&page.binding.coverage).unwrap(),
-                case["page"]["binding"]["coverage"],
-                "{name}"
-            );
-            assert_eq!(
-                page.entries.len(),
-                case["page"]["entries"].as_array().unwrap().len(),
-                "{name}"
-            );
-            for entry in &page.entries {
-                assert_eq!(entry.scope.requester_did, tool.requester_did().unwrap());
-                assert_eq!(entry.tool_call_doc_id, tool.doc_id().unwrap());
+        let selected = result.is_ok();
+        let (coverage, entries) = match result {
+            Ok(snapshot) => {
+                let page = snapshot.page(None).unwrap();
+                for entry in &page.entries {
+                    assert_eq!(entry.scope.requester_did, tool.requester_did().unwrap());
+                    assert_eq!(entry.tool_call_doc_id, tool.doc_id().unwrap());
+                }
+                (
+                    Some(direct_reader::Coverage {
+                        entries: page.binding.coverage.entries,
+                        pending: page.binding.coverage.pending,
+                        unknown: page.binding.coverage.unknown,
+                    }),
+                    Some(page.entries.len() as u64),
+                )
             }
-        }
+            Err(_) => (None, None),
+        };
         let original_session_doc_id = admission.session_doc_id.clone();
         admission.session_doc_id = "wrong-physical-session".into();
-        assert_eq!(
-            FileInventorySnapshot::load_on(&access, &admission)
-                .await
-                .is_ok(),
-            case["wrong_physical_expected"]["kind"] == "selected",
-            "{name}"
-        );
-        if case["expected"]["kind"] == "selected" {
+        let wrong_physical_selected = FileInventorySnapshot::load_on(&access, &admission)
+            .await
+            .is_ok();
+        case.check(direct_reader::DirectReaderOutput {
+            selected,
+            wrong_physical_selected,
+            coverage,
+            entries,
+        });
+        if selected {
             let direct = gents_protocol::file_inventory::DirectFileInventoryRequest {
                 node_did: tool.node_did().to_owned(),
                 session_id: tool.session_id().to_owned(),

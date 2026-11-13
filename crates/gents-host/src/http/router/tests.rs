@@ -302,6 +302,97 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
 }
 
 #[tokio::test]
+async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
+    use gents_lean_vocab::families::contracts_pack_installation_operator_wire as operator_wire;
+    use gents_pack::pack::plugin_wire::{WireCommand, WireRequest, WIRE_PATH};
+    let home = crate::test_support::ClientHome::new().await;
+    let identity = home.home.identity.clone();
+    let owner = identity.did().to_owned();
+    let binding = home.agent("fixture").await;
+    home.mark_backend_healthy(&binding).await;
+    let runtime = gents::Gents::builder()
+        .node(home.node().clone())
+        .backend_admission(home.home.backend_admission())
+        .identity(identity.clone())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
+        .agent("fixture")
+        .identity_binding(binding.clone())
+        .backend_id(format!("{}:backend", binding.agent_did))
+        .model_name("test-model")
+        .done()
+        .build()
+        .await
+        .unwrap();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for case in gents_lean_vocab::families::contracts_pack_installation_operator_wire::cases() {
+        let (activation_runtime, activation_observation) = empty_activation_state();
+        if case.input.ready {
+            assert!(activation_runtime.set(runtime.clone()).is_ok());
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let graphql = format!("http://{addr}/api/v0/graphql");
+        let app = runtime_contract_router(
+            graphql.clone(),
+            GraphqlEndpoint::anonymous(graphql.clone()),
+            "operator-wire".into(),
+            owner.clone(),
+            "readwrite".into(),
+            Ok(None),
+            Vec::new(),
+            case.input
+                .home
+                .then(|| plugin_home.path().display().to_string()),
+            None,
+            None,
+            None,
+            None,
+            crate::http::enrollment::empty_issuer_handle(),
+            crate::http::enrollment::empty_decision_service_handle(),
+            activation_runtime,
+            activation_observation,
+            Default::default(),
+            Default::default(),
+        )
+        .contract;
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let request = client
+            .post(format!("http://{addr}{WIRE_PATH}"))
+            .json(&WireCommand {
+                node_did: owner.clone(),
+                request: WireRequest {
+                    plugin: "acme/tool".into(),
+                    agent: "fixture".into(),
+                    targets_from: Vec::new(),
+                    remove: false,
+                    preview: true,
+                    dynamic_consent: false,
+                    tool_calls_consent: false,
+                },
+            });
+        let request = if case.input.operator {
+            GraphqlEndpoint::as_principal(&graphql, identity.did())
+                .with_client_signing_capability(identity.client_signing_capability().unwrap())
+                .unwrap()
+                .authorize(request)
+                .unwrap()
+        } else {
+            request
+        };
+        let status = request.send().await.unwrap().status();
+        case.check(operator_wire::OperatorWireOutput {
+            allowed: !matches!(
+                status,
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::SERVICE_UNAVAILABLE
+            ),
+        });
+    }
+}
+
+#[tokio::test]
 async fn operator_inventory_authenticates_and_reads_native_metadata() {
     use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::file_inventory::{

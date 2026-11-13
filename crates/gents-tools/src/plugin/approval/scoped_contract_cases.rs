@@ -1,25 +1,24 @@
 use super::*;
 use gents_loop::tool_policy::workspace_permissions as policy;
 
-#[derive(Debug, Deserialize)]
-pub(super) struct Case {
-    kind: policy::ApprovalKind,
-    available: Vec<policy::Scope<u64>>,
-    expected: policy::Grant<u64, u64>,
-    deliveries: Vec<Delivery>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Delivery {
-    available: Vec<policy::Scope<u64>>,
-    received: policy::Grant<u64, u64>,
-    expected: Option<bool>,
-}
-
 fn key(root: &Path, id: u64) -> workspace::WorkspaceKey {
     let path = root.join(format!("workspace-{id}"));
     std::fs::create_dir_all(&path).unwrap();
     workspace::WorkspaceKey::canonical("node", "requester", "agent", &path).unwrap()
+}
+
+fn kind_of(approval: &str) -> policy::ApprovalKind {
+    serde_json::from_value(serde_json::Value::String(approval.to_owned())).unwrap()
+}
+
+fn expected_grant() -> policy::Grant<u64, u64> {
+    policy::Grant {
+        scope: policy::Scope {
+            workspace: 1,
+            revision: 2,
+        },
+        action: 3,
+    }
 }
 
 fn binding(
@@ -61,8 +60,8 @@ fn binding(
     }
 }
 
-fn entries(target: &Path, folder: &Path, state: &State) -> Vec<allowed::AllowedDir> {
-    [(target, state.path_grant), (folder, state.folder_grant)]
+fn entries(target: &Path, folder: &Path, grants: &Grants) -> Vec<allowed::AllowedDir> {
+    [(target, grants.path_grant), (folder, grants.folder_grant)]
         .into_iter()
         .filter_map(|(path, grant)| {
             grant.map(|write| allowed::AllowedDir {
@@ -73,15 +72,15 @@ fn entries(target: &Path, folder: &Path, state: &State) -> Vec<allowed::AllowedD
         .collect()
 }
 
-fn observe(
+fn observe_settings(
     home: &Path,
     root: &Path,
     available: &[policy::Scope<u64>],
-    expected: &policy::Grant<u64, u64>,
     target: &Path,
     folder: &Path,
-    state: &State,
+    grants: &Grants,
 ) {
+    let expected = expected_grant();
     let settings: Vec<_> = available
         .iter()
         .map(|scope| workspace::Settings {
@@ -93,7 +92,7 @@ fn observe(
             },
             command_grants: Vec::new(),
             dirs: if scope.workspace == expected.scope.workspace {
-                entries(target, folder, state)
+                entries(target, folder, grants)
             } else {
                 Vec::new()
             },
@@ -106,158 +105,169 @@ fn observe(
     .unwrap();
 }
 
-fn assert_scoped_state(
-    home: &Path,
-    target: &Path,
-    folder: &Path,
-    expected: &State,
-    binding: &workspace::Binding,
-    context: &str,
-) {
-    assert_eq!(
-        Queue::Workspace.request_file(home, "q1").exists(),
-        expected.present,
-        "{context}"
-    );
-    let decision = std::fs::read(Queue::Workspace.decision_file(home, "q1"))
-        .ok()
-        .map(|bytes| serde_json::from_slice::<Decision>(&bytes).unwrap().allow);
-    assert_eq!(decision, expected.decision, "{context}");
-    assert!(
-        allowed::list(home).unwrap().is_empty(),
-        "workspace answers must not widen global grants: {context}"
-    );
-    let dirs = workspace::resolve(home, &binding.scope.workspace, None)
-        .unwrap()
-        .map(|settings| settings.dirs)
-        .unwrap_or_default();
-    assert_eq!(
-        dirs.len(),
-        usize::from(expected.path_grant.is_some()) + usize::from(expected.folder_grant.is_some()),
-        "{context}"
-    );
-    for (path, grant) in [
-        (target, expected.path_grant),
-        (folder, expected.folder_grant),
-    ] {
-        assert_eq!(
-            dirs.iter()
-                .find(|entry| entry.path == path)
-                .map(|entry| entry.access),
-            grant.map(access),
-            "{context}"
-        );
-    }
+fn scopes(available: &[(u64, u64)]) -> Vec<policy::Scope<u64>> {
+    available
+        .iter()
+        .map(|(workspace, revision)| policy::Scope {
+            workspace: *workspace,
+            revision: *revision,
+        })
+        .collect()
 }
 
-pub(super) fn run(index: usize, case: &super::Case, scoped: &Case) {
-    let home = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
-    let folder = outside.path().canonicalize().unwrap();
-    let target = folder.join("document.txt");
-    std::fs::write(&target, "operator document").unwrap();
-    let resolved = allowed::Resolved {
-        target: if case.directory {
-            folder.clone()
-        } else {
-            target.clone()
-        },
-        is_dir: case.directory,
-    };
+fn workspace_request(
+    fixture: &Paths,
+    kind: policy::ApprovalKind,
+    write: bool,
+) -> (workspace::Binding, Request) {
     let expected_binding = binding(
-        &folder,
-        &scoped.expected,
-        &resolved,
-        access(case.write),
-        scoped.kind,
+        &fixture.folder,
+        &expected_grant(),
+        &fixture.resolved,
+        access(write),
+        kind,
     );
     let mut request = Request::for_binding(expected_binding.clone(), None);
     request.id = "q1".into();
     request.created_at_ms = 10;
     request.expires_at_ms = 20;
-    observe(
-        home.path(),
-        &folder,
-        &scoped.available,
-        &scoped.expected,
-        &target,
-        &folder,
-        &case.initial,
-    );
-    write_atomic(
-        &Queue::Workspace.request_file(home.path(), "q1"),
-        &serde_json::to_vec(&request).unwrap(),
-    )
-    .unwrap();
-    let mut state = &case.initial;
-    for (step_index, step) in case.steps.iter().enumerate() {
-        let context = format!("scoped case {index}, step {step_index}: {step:?}");
-        state = match step {
-            Step::Decide {
-                id,
-                now,
-                answer: choice,
-                accepted,
-                expected,
-            } => {
-                assert_eq!(
-                    decide_with_clock(home.path(), id, answer(choice), || *now).is_ok(),
-                    *accepted,
-                    "{context}"
-                );
-                expected
-            }
-            Step::Cancel { accepted, expected } => {
-                assert!(*accepted, "{context}");
-                drop(Cleanup {
-                    home: home.path(),
-                    id: "q1",
-                    queue: Queue::Workspace,
-                });
-                expected
-            }
-        };
-        assert_scoped_state(
-            home.path(),
-            &target,
-            &folder,
-            state,
-            &expected_binding,
-            &context,
+    (expected_binding, request)
+}
+
+#[test]
+fn generated_scoped_approval_steps_drive_native_workspace_queue() {
+    use gents_lean_vocab::families::plugin_approval_scoped_step as modeled;
+    for case in gents_lean_vocab::families::plugin_approval_scoped_step::cases() {
+        let input = &case.input;
+        let fixture = paths(input.directory);
+        let home = fixture.home.path();
+        let kind = kind_of(&input.approval);
+        let available = scopes(
+            &input
+                .available
+                .iter()
+                .map(|scope| (scope.workspace, scope.revision))
+                .collect::<Vec<_>>(),
         );
+        let (expected_binding, request) = workspace_request(&fixture, kind, input.write);
+        observe_settings(
+            home,
+            &fixture.folder,
+            &available,
+            &fixture.target,
+            &fixture.folder,
+            &Grants {
+                path_grant: input.initial.path_grant,
+                folder_grant: input.initial.folder_grant,
+            },
+        );
+        if input.initial.present {
+            write_atomic(
+                &Queue::Workspace.request_file(home, "q1"),
+                &serde_json::to_vec(&request).unwrap(),
+            )
+            .unwrap();
+        }
+        settle(home, input.initial.decision);
+        let accepted = act(
+            home,
+            Queue::Workspace,
+            &input.kind,
+            &input.id,
+            input.now,
+            &input.answer,
+        );
+        assert!(
+            allowed::list(home).unwrap().is_empty(),
+            "workspace answers must not widen global grants"
+        );
+        let dirs = workspace::resolve(home, &expected_binding.scope.workspace, None)
+            .unwrap()
+            .map(|settings| settings.dirs)
+            .unwrap_or_default();
+        let observed = observe_queue(
+            home,
+            Queue::Workspace,
+            grants_of(&dirs, &fixture.target, &fixture.folder),
+        );
+        case.check(modeled::StepOutput {
+            accepted,
+            expected: modeled::StateWire {
+                present: observed.present,
+                decision: observed.decision,
+                path_grant: observed.grants.path_grant,
+                folder_grant: observed.grants.folder_grant,
+            },
+        });
     }
-    let decision = std::fs::read(Queue::Workspace.decision_file(home.path(), "q1")).ok();
-    for (delivery_index, delivery) in scoped.deliveries.iter().enumerate() {
-        observe(
-            home.path(),
-            &folder,
-            &delivery.available,
-            &scoped.expected,
-            &target,
-            &folder,
-            state,
+}
+
+#[test]
+fn generated_approval_deliveries_recheck_the_workspace_grant() {
+    use gents_lean_vocab::families::plugin_approval_delivery as modeled;
+    for case in gents_lean_vocab::families::plugin_approval_delivery::cases() {
+        let input = &case.input;
+        let fixture = paths(input.directory);
+        let home = fixture.home.path();
+        let kind = kind_of(&input.approval);
+        let (_, request) = workspace_request(&fixture, kind, input.write);
+        let none = Grants {
+            path_grant: None,
+            folder_grant: None,
+        };
+        observe_settings(
+            home,
+            &fixture.folder,
+            &[expected_grant().scope],
+            &fixture.target,
+            &fixture.folder,
+            &none,
         );
-        if let Some(bytes) = &decision {
-            let mut delivered: Decision = serde_json::from_slice(bytes).unwrap();
+        write_atomic(
+            &Queue::Workspace.request_file(home, "q1"),
+            &serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+        settle(home, input.decision);
+        observe_settings(
+            home,
+            &fixture.folder,
+            &scopes(
+                &input
+                    .available
+                    .iter()
+                    .map(|scope| (scope.workspace, scope.revision))
+                    .collect::<Vec<_>>(),
+            ),
+            &fixture.target,
+            &fixture.folder,
+            &none,
+        );
+        if let Ok(bytes) = std::fs::read(Queue::Workspace.decision_file(home, "q1")) {
+            let mut delivered: Decision = serde_json::from_slice(&bytes).unwrap();
             delivered.binding = Some(binding(
-                &folder,
-                &delivery.received,
-                &resolved,
-                access(case.write),
-                scoped.kind,
+                &fixture.folder,
+                &policy::Grant {
+                    scope: policy::Scope {
+                        workspace: input.received.scope.workspace,
+                        revision: input.received.scope.revision,
+                    },
+                    action: input.received.action,
+                },
+                &fixture.resolved,
+                access(input.write),
+                kind,
             ));
             write_atomic(
-                &Queue::Workspace.decision_file(home.path(), "q1"),
+                &Queue::Workspace.decision_file(home, "q1"),
                 &serde_json::to_vec(&delivered).unwrap(),
             )
             .unwrap();
         }
-        let actual = read_decision(home.path(), &request);
-        let context = format!("scoped case {index}, delivery {delivery_index}");
-        if delivery.expected.is_none() && decision.is_some() {
-            assert!(actual.is_err(), "{context}: {actual:?}");
-        } else {
-            assert_eq!(actual.unwrap(), delivery.expected, "{context}");
-        }
+        let (delivered, refused) = match read_decision(home, &request) {
+            Ok(delivered) => (delivered, false),
+            Err(_) => (None, true),
+        };
+        case.check(modeled::DeliveryOutput { delivered, refused });
     }
 }

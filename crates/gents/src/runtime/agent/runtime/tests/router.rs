@@ -3,7 +3,7 @@ use super::*;
 use crate::runtime::agent::runtime::router::session_selection::UNRESOLVED_SESSION_ATTEMPT_BOUND;
 use crate::runtime::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
 use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
-use gents_lean_vocab::lean_runtime_reconcile_case;
+use gents_lean_vocab::families::contracts_runtime_reconcile_router::ReconcileInput;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 struct CountingWatcher {
@@ -566,11 +566,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     node.shutdown().await.expect("node shutdown");
 }
 
-#[tokio::test]
-async fn router_holds_request_during_generation_handoff_and_dispatches_after_alignment() {
-    let accept = lean_runtime_reconcile_case("accept_request_after_router_observe");
-    assert!(accept.legal);
-
+async fn accept_after_generation_handoff(input: &ReconcileInput) -> (bool, u64) {
     let node_did = "did:test:router-latest-snapshot";
     let initial_snapshot = Arc::new(
         gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
@@ -595,7 +591,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     );
     let updated_snapshot = Arc::new(
         gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-            generation: 2,
+            generation: input.pre_active_generation,
             node: None,
             local_did: String::new(),
             default_agent_did: "code".to_string(),
@@ -629,7 +625,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     admission_gate.open().await;
     let mut admission_rx = admission_gate.subscribe();
     let (_readiness_tx, mut readiness_rx) = watch::channel(
-        crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(2, []),
+        crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(input.pre_active_generation, []),
     );
     let mut pending_request = None;
     let mut deferred = Default::default();
@@ -663,29 +659,24 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
             .expect("request should be returned")
     };
 
-    assert_eq!(request.request_id, "req-router");
-    assert_eq!(routed_observation.source_generation(), 2);
-    assert_eq!(routed_snapshot.generation, 2);
-    assert_eq!(routed_snapshot.default_agent_did, "code");
     assert_eq!(
-        active_snapshot.generation,
-        accept.post_router_generation as u64
+        routed_observation.source_generation(),
+        input.pre_active_generation
     );
+    assert_eq!(routed_snapshot.generation, input.pre_active_generation);
+    assert_eq!(routed_snapshot.default_agent_did, "code");
     assert_eq!(active_snapshot.default_agent_did, "code");
+    (request.request_id == "req-router", active_snapshot.generation)
 }
 
-#[tokio::test]
-async fn router_publishes_observed_generation_without_waiting_for_request() {
-    let router = lean_runtime_reconcile_case("router_observe_published_generation");
-    assert!(router.legal);
-
+async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) {
     let (db, _user, _user_access, binding) =
         crate::test_support::root::signed_test_node("runtime-router").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
     let initial_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-        generation: 1,
+        generation: input.pre_router_generation,
         node: None,
         local_did: String::new(),
         default_agent_did: agent_did.clone(),
@@ -710,7 +701,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         agent_executor_queue_capacities: RapidHashMap::new(),
     });
     let updated_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-        generation: 2,
+        generation: input.pre_active_generation,
         node: None,
         local_did: String::new(),
         default_agent_did: agent_did.clone(),
@@ -796,7 +787,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         node_did = escape_graphql_string(&node_did),
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
-    loop {
+    let published = loop {
         let response = node.execute(&query).await;
         assert!(
             !response.has_errors(),
@@ -814,19 +805,35 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
             .and_then(|snapshot| serde_json::from_str::<NodeReadinessSnapshot>(snapshot).ok())
             .map(|snapshot| snapshot.router_generation)
             .unwrap_or_default();
-        if router_generation == router.post_router_generation as u64 {
-            break;
+        if router_generation != input.pre_router_generation
+            || tokio::time::Instant::now() >= deadline
+        {
+            break router_generation;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "router generation did not advance to {}; last value={router_generation}",
-            router.post_router_generation
-        );
         tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    };
 
     let _ = shutdown_tx.send(true);
     assert!(router_task.await.unwrap().unwrap().is_none());
     runtime_status_owner.close().await.unwrap();
+    node.shutdown().await.expect("node shutdown");
+    (published != input.pre_router_generation, published)
+}
+
+#[tokio::test]
+async fn router_generation_steps_match_lean_runtime_reconcile_cases() {
+    for case in gents_lean_vocab::families::contracts_runtime_reconcile_router::cases() {
+        let (legal, post_router_generation) = match case.input.action.as_str() {
+            "routerObserve" => observed_generation_publication(&case.input).await,
+            "acceptRequest" => accept_after_generation_handoff(&case.input).await,
+            other => panic!("the router fixture cannot drive {other}"),
+        };
+        case.check(
+            gents_lean_vocab::families::contracts_runtime_reconcile_router::ReconcileRouterOutput {
+                legal,
+                post_router_generation,
+            },
+        );
+    }
 }

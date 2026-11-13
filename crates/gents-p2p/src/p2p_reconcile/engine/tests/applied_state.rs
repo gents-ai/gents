@@ -144,7 +144,6 @@ fn nullable_graphql_arrays_emit_null_when_empty() {
 
 #[tokio::test]
 async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> anyhow::Result<()> {
-    use gents_lean_vocab::lean_contract_snapshot;
     use gents_store::config_client::{
         ConfigAccess, GraphqlEndpoint, NodePermission, PairingObservation, PairingReadReason,
     };
@@ -154,6 +153,8 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     let mut read = std::collections::BTreeMap::new();
     let mut managed = std::collections::BTreeMap::new();
     let mut updated = std::collections::BTreeMap::new();
+    let mut reader_granted = std::collections::BTreeMap::new();
+    let mut partition = std::collections::BTreeMap::new();
     let directory = tempfile::tempdir()?;
     let runtime = Arc::new(gents_store::identity::KeyIdentity::load_or_create(
         directory.path().join("runtime"),
@@ -217,7 +218,10 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         }
     }
     runtime_access
-        .grant_node_permission(&identity::Did::new(user.did())?, NodePermission::CollectionGet)
+        .grant_node_permission(
+            &identity::Did::new(user.did())?,
+            NodePermission::CollectionGet,
+        )
         .await?;
     let http = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
@@ -288,14 +292,6 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
             .as_bool()
             .expect("parent_linked marker"),
     );
-    let reader_cases = &lean_contract_snapshot().identity_pairing_reader_cases;
-    let reader_expected = |name: &str| -> bool {
-        reader_cases
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap()
-            .expected_granted
-    };
     let agent_did = identity::Did::new(agent.did())?;
     let agent_access = http(&agent)?;
     let sibling_access = http(&sibling)?;
@@ -329,10 +325,10 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         .await;
     assert!(aborted.is_err());
     let after_abort = agent_access.execute(&query).await?;
-    assert_eq!(
+    reader_granted.insert(
+        "aborted-grant",
         !gents_protocol::graphql::graphql_rows_from_response(&after_abort, "PeerPairingApplied")
             .is_empty(),
-        reader_expected("aborted-grant")
     );
     user_access
         .set_native_pairing_reader(
@@ -348,13 +344,35 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
             .is_empty()
     };
     let granted_read = visible_to_agent(&agent_access.execute(&query).await?);
-    assert_eq!(granted_read, reader_expected("initial-grant"));
+    reader_granted.insert("initial-grant", granted_read);
     read.insert("agent", granted_read);
     read.insert(
         "sibling",
         visible_to_agent(&sibling_access.execute(&query).await?),
     );
     assert!(!visible_to_agent(&outsider_access.execute(&query).await?));
+    let aborted_revoke = user_access
+        .transact_write("test.pairing.reader_abort_revoke", |txn| {
+            let doc = &doc;
+            let agent_did = &agent_did;
+            Box::pin(async move {
+                txn.set_native_pairing_reader(
+                    PairingObservation::Applied,
+                    doc,
+                    PairingReadReason::RouteAdmission,
+                    agent_did,
+                    false,
+                )
+                .await?;
+                Err::<(), anyhow::Error>(anyhow::anyhow!("abort staged revocation"))
+            })
+        })
+        .await;
+    assert!(aborted_revoke.is_err());
+    reader_granted.insert(
+        "aborted-revoke",
+        visible_to_agent(&agent_access.execute(&query).await?),
+    );
 
     // Exercise the authenticated server boundary directly; a local signed-update
     // preparation error would not demonstrate the native write denial.
@@ -413,9 +431,9 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
             false,
         )
         .await?;
-    assert_eq!(
+    reader_granted.insert(
+        "explicit-revocation",
         visible_to_agent(&agent_access.execute(&query).await?),
-        reader_expected("explicit-revocation")
     );
     user_access
         .set_native_pairing_reader(
@@ -520,17 +538,20 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     };
     store.persist_applied("other-peer", &other).await?;
     let selected = store.load_applied("peer").await?;
-    let partition = &lean_contract_snapshot().identity_pairing_partition_cases;
-    for (name, candidate) in [("local", doc.as_str()), ("foreign", foreign.as_str())] {
-        let modeled = partition
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap()
-            .selected;
-        assert_eq!(
+    let other_doc = store
+        .load_applied("other-peer")
+        .await?
+        .doc_id
+        .expect("the other peer's pairing row");
+    for (name, candidate) in [
+        ("local", doc.as_str()),
+        ("foreign", foreign.as_str()),
+        ("other-peer", other_doc.as_str()),
+    ] {
+        partition.insert(
+            name,
             selected.doc_id.as_deref() == Some(candidate)
                 || selected.duplicate_doc_ids.iter().any(|id| id == candidate),
-            modeled
         );
     }
     assert!(selected.duplicate_doc_ids.is_empty());
@@ -545,14 +566,9 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         gents_store::graphql::escape_graphql_string(&forged)
     );
     let forged_before = user_access.execute(&forged_query).await?;
-    let forged_expected = partition
-        .iter()
-        .find(|case| case.name == "forged")
-        .unwrap()
-        .selected;
-    assert_eq!(
+    partition.insert(
+        "forged",
         store.load_applied("forged").await?.doc_id.is_some(),
-        forged_expected
     );
     assert!(store.persist_applied("forged", &other).await.is_err());
     assert_eq!(user_access.execute(&forged_query).await?, forged_before);
@@ -710,8 +726,40 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
             },
         );
     }
+    for case in gents_lean_vocab::families::identity_operations_pairing_partition::cases() {
+        let selected = partition
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| {
+                panic!(
+                    "the applied-pairing scenario never reached {}",
+                    case.input.name
+                )
+            });
+        case.check(
+            gents_lean_vocab::families::identity_operations_pairing_partition::Selected {
+                selected,
+            },
+        );
+    }
+    for case in gents_lean_vocab::families::identity_operations_pairing_reader_grant::cases() {
+        let granted = reader_granted
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| {
+                panic!(
+                    "the applied-pairing scenario never reached {}",
+                    case.input.name
+                )
+            });
+        case.check(
+            gents_lean_vocab::families::identity_operations_pairing_reader_grant::ReaderGranted {
+                granted,
+            },
+        );
+    }
     assert!(
         linked.is_empty()
+            && partition.is_empty()
+            && reader_granted.is_empty()
             && granted.is_empty()
             && read.is_empty()
             && updated.is_empty()
@@ -758,12 +806,7 @@ impl NativePairingReader for gents_store::config_client::ConfigAccess {
         grant: bool,
     ) -> Result<(), gents_store::config_client::ConfigClientError> {
         gents_store::test_support::relationships::actor_in_txn(
-            self,
-            collection,
-            doc_id,
-            relation,
-            agent,
-            !grant,
+            self, collection, doc_id, relation, agent, !grant,
         )
         .await
     }

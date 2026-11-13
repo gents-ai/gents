@@ -1,5 +1,7 @@
 use super::*;
-use crate::goal::continuation::{goal_continuation_identity, prepare_goal_continuation};
+use crate::goal::continuation::{
+    goal_continuation_identity, prepare_goal_continuation, ContinuationRefusal,
+};
 use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;
 use gents_session::request::lifecycle::materialize::{sign_request, RequestSigner};
@@ -49,10 +51,12 @@ async fn resume_goal_request_inner<'a>(
     from_request_id: &'a str,
     required_backend: Option<&'a str>,
 ) -> Result<GoalResumeReceipt> {
-    anyhow::ensure!(
-        access.actor_did().as_deref() == Some(identity.did()),
-        "goal resume signer must match the authenticated client actor"
-    );
+    if access.actor_did().as_deref() != Some(identity.did()) {
+        return Err(ContinuationRefusal::Denied(
+            "goal resume signer must match the authenticated client actor",
+        )
+        .into());
+    }
     // Concurrent resumes of one predecessor conflict on the Goal; the loser
     // rebuilds, re-reads and returns the winner's receipt instead of failing.
     let receipt = access
@@ -447,24 +451,29 @@ pub(super) fn decide_idle_resume(
     now: DateTime<Utc>,
     session_hop: u32,
 ) -> Result<IdleResume> {
-    anyhow::ensure!(
-        parent_row
-            .lifecycle_state
-            .is_some_and(RequestLifecycleState::is_terminal),
-        "resume predecessor must be terminal"
-    );
-    anyhow::ensure!(
-        latest_goal_request(goal, requests).is_some_and(|row| row.doc_id == parent_row.doc_id),
-        "resume predecessor is no longer the latest request"
-    );
-    anyhow::ensure!(
-        goal_session_is_idle(requests),
-        "goal session still has unfinished requests"
-    );
+    if !parent_row
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
+    {
+        return Err(ContinuationRefusal::Illegal("resume predecessor must be terminal").into());
+    }
+    if !latest_goal_request(goal, requests).is_some_and(|row| row.doc_id == parent_row.doc_id) {
+        return Err(ContinuationRefusal::Illegal(
+            "resume predecessor is no longer the latest request",
+        )
+        .into());
+    }
+    if !goal_session_is_idle(requests) {
+        return Err(
+            ContinuationRefusal::Illegal("goal session still has unfinished requests").into(),
+        );
+    }
     let state = goal.state().context("goal has an unknown status")?;
     let post = state
         .step(GoalAction::Resume)
-        .context("goal status does not allow operator resume")?;
+        .ok_or(ContinuationRefusal::Illegal(
+            "goal status does not allow operator resume",
+        ))?;
     let sequence = goal
         .continuation_sequence()
         .checked_add(1)
@@ -500,10 +509,12 @@ pub(super) fn resume_predecessor<'a>(
         .iter()
         .filter(|row| row.request_id == from_request_id)
         .collect();
-    anyhow::ensure!(
-        parents.len() == 1,
-        "resume predecessor must uniquely belong to the goal owner and session"
-    );
+    if parents.len() != 1 {
+        return Err(ContinuationRefusal::Denied(
+            "resume predecessor must uniquely belong to the goal owner and session",
+        )
+        .into());
+    }
     verify_request_receipt_signature(parents[0])?;
     Ok(parents[0])
 }

@@ -1,10 +1,9 @@
 import Proofs.Session.Workspace.PathCapability
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.Family
 
 namespace Conformance.WorkspacePathCapabilityContracts
-open Workspace.PathCapability Conformance.Contracts
-private def boolString (b : Bool) := if b then "true" else "false"
+open Workspace.PathCapability
 private def cap : WorkspacePathCapability := .exactPaths ["src/main.rs", "src/new.rs"]
 private def workspace : IsolatedWorkspace :=
   {workspaceId := "workspace-1", workUnitId := "work-1", repositoryId := "repo-1",
@@ -84,44 +83,91 @@ def cases : List Case :=
 theorem cases_replay : ∀ c ∈ cases,
     execute c.before c.operation c.evidence = (c.expected,c.disposition) := by decide
 
-private def capJson : WorkspacePathCapability → String
-  | .unrestrictedCompatibility => "{\"mode\":\"unrestrictedCompatibility\"}"
-  | .exactPaths paths => "{\"mode\":\"exactPaths\",\"paths\":" ++ jsonArray (paths.map jsonString) ++ "}"
-private def bindingJson (b : Binding) :=
-  "{\"workspace_id\":" ++ jsonString b.workspaceId ++ ",\"owner\":" ++ jsonString b.owner ++
-  ",\"base\":" ++ jsonString b.base ++ ",\"capability\":" ++ capJson b.capability ++
-  ",\"tree\":" ++ jsonString b.tree ++ "}"
-private def receiptJson : Option Binding → String | none => "null" | some b => bindingJson b
-private def snapshotJson (s : Snapshot) :=
-  "{\"workspace_id\":" ++ jsonString s.workspace.workspaceId ++
-  ",\"owner\":" ++ jsonString s.workspace.ownerNodeDid ++
-  ",\"base\":" ++ jsonString s.workspace.baseSha ++
-  ",\"state\":" ++ jsonString s.workspace.state.toDefraDB ++
-  ",\"capability\":" ++ capJson s.workspace.pathCapability ++
-  ",\"seal\":" ++ jsonOptionalString s.workspace.sealHash ++
-  ",\"writer\":" ++ receiptJson s.writer ++ ",\"integrator\":" ++ receiptJson s.integrator ++
-  ",\"trunk_effects\":" ++ toString s.trunkEffects ++ "}"
-private def kind : EntryKind → String | .regular => "regular" | .symlink => "symlink" | .gitlink => "gitlink"
-private def changeJson (c : Change) :=
-  "{\"path\":" ++ jsonString c.path ++ ",\"kind\":" ++ jsonString (kind c.kind) ++
-  ",\"canonical\":" ++ boolString c.canonical ++ "}"
-private def evidenceJson (e : Evidence) :=
-  "{\"expected\":" ++ bindingJson e.expected ++ ",\"delta\":" ++ jsonArray (e.delta.map changeJson) ++
-  ",\"manifest_canonical\":" ++ boolString e.manifestCanonical ++
-  ",\"checkout_present\":" ++ boolString e.checkoutPresent ++
-  ",\"existing_identity_matches\":" ++ boolString e.existingIdentityMatches ++
-  ",\"captured_base_matches\":" ++ boolString e.capturedBaseMatches ++
-  ",\"applied_snapshot_matches\":" ++ boolString e.appliedSnapshotMatches ++ "}"
-private def operation : Operation → String
+private def operationWire : Operation → String
   | .provision => "provision" | .seal => "seal" | .integrate => "integrate"
   | .replaySeal => "replay_seal" | .replayIntegrate => "replay_integrate"
-private def disposition : Disposition → String
-  | .accepted => "accepted" | .recovered => "recovered" | .denied => "denied"
-private def caseJson (c : Case) :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"before\":" ++ snapshotJson c.before ++
-  ",\"operation\":" ++ jsonString (operation c.operation) ++ ",\"evidence\":" ++ evidenceJson c.evidence ++
-  ",\"expected\":" ++ snapshotJson c.expected ++ ",\"disposition\":" ++ jsonString (disposition c.disposition) ++ "}"
-def casesJson := jsonArray (cases.map caseJson)
+
+private def capabilityWire :
+    WorkspacePathCapability → Conformance.OperatorBaseFreezeContracts.CapabilityWire
+  | .exactPaths paths => { mode := "exactPaths", paths := some paths }
+  | .unrestrictedCompatibility => { mode := "unrestrictedCompatibility", paths := none }
+
+structure CaseInput where
+  name : String
+  operation : String
+  state : String
+  capability : Conformance.OperatorBaseFreezeContracts.CapabilityWire
+  checkoutPresent : Bool
+  manifestCanonical : Bool
+  existingIdentityMatches : Bool
+  deriving Lean.ToJson
+
+private def caseInput (c : Case) : CaseInput :=
+  { name := c.name, operation := operationWire c.operation
+    state := c.before.workspace.state.toDefraDB
+    capability := capabilityWire c.before.workspace.pathCapability
+    checkoutPresent := c.evidence.checkoutPresent
+    manifestCanonical := c.evidence.manifestCanonical
+    existingIdentityMatches := c.evidence.existingIdentityMatches }
+
+structure Observation where
+  state : String
+  disposition : Disposition
+  writerReceipt : Bool
+  integratorReceipt : Bool
+  trunkEffects : Nat
+  deriving Lean.ToJson
+
+structure Outcome where
+  disposition : Disposition
+  deriving Lean.ToJson
+
+private def observe (c : Case) : Observation :=
+  let (after, disposition) := execute c.before c.operation c.evidence
+  { state := after.workspace.state.toDefraDB, disposition
+    writerReceipt := after.writer.isSome, integratorReceipt := after.integrator.isSome
+    trunkEffects := after.trunkEffects - c.before.trunkEffects }
+
+private def observeCase (i : CaseInput) : Observation :=
+  match cases.find? (·.name == i.name) with
+  | some c => observe c
+  | none => { state := "", disposition := .denied, writerReceipt := false,
+              integratorReceipt := false, trunkEffects := 0 }
+
+private def outcomeCase (i : CaseInput) : Outcome :=
+  { disposition := (observeCase i).disposition }
+
+/-- The noncanonical delta is a raw Git tree entry (`../outside`) that a
+checkout cannot hold, so it is driven through the tree-delta validator rather
+than a seal of a working checkout. -/
+def noncanonicalCases : List Case := cases.filter (·.name == "noncanonical_delta_rejected")
+
+/-- The wire input names its case; the model executes the case's own snapshot
+and evidence, whose capability and bindings carry arguments the wire cannot. -/
+@[conformance_family]
+def provision : Family CaseInput Outcome where
+  inputs := (cases.filter (·.operation == .provision)).map caseInput
+  model := outcomeCase
+
+@[conformance_family]
+def sealing : Family CaseInput Observation where
+  inputs := (cases.filter fun c => c.operation == .seal && !noncanonicalCases.contains c).map caseInput
+  model := observeCase
+
+@[conformance_family]
+def treeDelta : Family CaseInput Outcome where
+  inputs := noncanonicalCases.map caseInput
+  model := outcomeCase
+
+@[conformance_family]
+def integrate : Family CaseInput Observation where
+  inputs := (cases.filter (·.operation == .integrate)).map caseInput
+  model := observeCase
+
+@[conformance_family]
+def replay : Family CaseInput Observation where
+  inputs := (cases.filter fun c => c.operation == .replaySeal || c.operation == .replayIntegrate).map caseInput
+  model := observeCase
 
 structure AliasCase where
   name : String

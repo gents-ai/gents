@@ -808,61 +808,10 @@ impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_lean_vocab::{
-        assert_state_machine_contract_is_complete, lean_state_machine_contract,
-    };
 
     #[test]
-    fn request_state_machine_contract_is_complete() {
-        assert_state_machine_contract_is_complete("Request");
-    }
-
-    #[test]
-    fn persisted_lifecycle_terminal_partition_matches_lean_contract() {
-        let request_machine = lean_state_machine_contract("Request");
-        let nonterminal = RequestLifecycleState::ALL
-            .iter()
-            .copied()
-            .filter(|state| !state.is_terminal())
-            .map(|state| state.as_str())
-            .collect::<Vec<_>>();
-        let terminal = RequestLifecycleState::ALL
-            .iter()
-            .copied()
-            .filter(|state| state.is_terminal())
-            .map(|state| state.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            nonterminal,
-            request_machine
-                .nonterminal_states
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            terminal,
-            request_machine
-                .terminal_states
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        );
+    fn persisted_lifecycle_lists_and_execution_origins_parse() {
         assert!(RequestLifecycleState::Interrupted.is_terminal());
-        let expected_nonterminal_graphql_list = format!(
-            "[{}]",
-            request_machine
-                .nonterminal_states
-                .iter()
-                .map(|state| format!(r#""{state}""#))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        assert_eq!(
-            RequestLifecycleState::nonterminal_graphql_list(),
-            expected_nonterminal_graphql_list
-        );
         assert_eq!(
             RequestLifecycleState::active_runtime_graphql_list(),
             r#"["pending", "claimed", "processing", "waitingForBackend", "resumingBackend"]"#
