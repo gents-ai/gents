@@ -166,8 +166,9 @@ async fn client_cancel_races_completion_without_replacing_terminal_state() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn client_cancel_and_completion_preserve_each_winning_terminal() {
-    for cancel_first in [false, true] {
+async fn process_control_terminal_order_matches_lean_model() {
+    for case in gents_lean_vocab::families::process_control_terminal_order::cases() {
+        let cancel_first = case.input.cancel_first;
         let (admission, request_owner) =
             published_admission_with_owner(PublishedAdmissionOptions {
                 name: format!("operator-terminal-order-{cancel_first}"),
@@ -197,7 +198,7 @@ async fn client_cancel_and_completion_preserve_each_winning_terminal() {
                 token.clone(),
             )
             .unwrap();
-        if cancel_first {
+        let (stop, completion) = if cancel_first {
             let process = gents_session::exec::ownership::test_support::OwnedTestProcess::spawn(
                 Some(registry.process_recorder(&request.tool_call_id, &request.tool_call_doc_id)),
             )
@@ -207,38 +208,47 @@ async fn client_cancel_and_completion_preserve_each_winning_terminal() {
                 process.finish().await;
                 drop(reservation);
             });
-            assert_eq!(
-                client_stop(&request_owner, &registry, &request)
-                    .await
-                    .unwrap(),
-                ProcessControlOutcome::Cancelled {
-                    live_execution_cancelled: true
-                },
-            );
+            let stop = client_stop(&request_owner, &registry, &request)
+                .await
+                .unwrap();
             worker.await.unwrap();
-            let late = tool.complete("late completion").await.unwrap_err();
-            assert!(late
-                .to_string()
-                .contains("terminal raw tool result is not an exact extension"));
+            let late = tool.complete("late completion").await;
+            (stop, late)
         } else {
-            tool.complete("first completion").await.unwrap();
+            let completion = tool.complete("first completion").await;
             drop(reservation);
-            assert_eq!(
-                client_stop(&request_owner, &registry, &request)
-                    .await
-                    .unwrap(),
-                ProcessControlOutcome::AlreadyTerminal {
-                    state: "completed".into()
-                },
-            );
-        }
-        let terminal = if cancel_first {
-            "cancelled"
-        } else {
-            "completed"
+            let stop = client_stop(&request_owner, &registry, &request)
+                .await
+                .unwrap();
+            (stop, completion)
+        };
+        let (stop_cancelled, live_execution_cancelled, already_terminal_state) = match stop {
+            ProcessControlOutcome::Cancelled {
+                live_execution_cancelled,
+            } => (true, Some(live_execution_cancelled), None),
+            ProcessControlOutcome::AlreadyTerminal { state } => (false, None, Some(state)),
+            other => panic!("unexpected control outcome: {other:?}"),
+        };
+        let (completion_accepted, completion_refused_terminal) = match completion {
+            Ok(_) => (true, false),
+            Err(error) => (
+                false,
+                error
+                    .to_string()
+                    .contains("terminal raw tool result is not an exact extension"),
+            ),
         };
         let row = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
-        assert_eq!(row.state().as_str(), terminal);
+        case.check(
+            gents_lean_vocab::families::process_control_terminal_order::RaceOutput {
+                stop_cancelled,
+                live_execution_cancelled,
+                already_terminal_state,
+                completion_accepted,
+                completion_refused_terminal,
+                terminal_state: row.state().as_str().to_owned(),
+            },
+        );
         drop(request_owner);
         node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(admission.path);

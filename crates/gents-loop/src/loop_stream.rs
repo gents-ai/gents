@@ -1889,3 +1889,6 @@ fn replace_core_chat_history(
     .expect("assembled prompt makes chat history nonempty");
     Ok(())
 }
+
+#[cfg(test)]
+mod candidate_conformance;

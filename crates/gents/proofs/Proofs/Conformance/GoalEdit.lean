@@ -75,20 +75,61 @@ example : apply? {base with status := .paused} {base with status := .paused}
 example : apply? base {base with status := .paused} ⟨some "verify", none⟩ .client = none := by
   native_decide
 
+structure Preference where
+  name : String
+  observed : Assignment
+  current : Assignment
+  stored : Option Bool
+  fields : Fields
+  autoResume : Option Bool
+  deriving Repr
+
+def completeBase : Assignment := {base with status := .complete}
+def pausedBase : Assignment := {base with status := .paused}
+
+private def preferenceCases : List Preference :=
+  [ ⟨"auto_resume_on", base, base, none, ⟨none, none⟩, some true⟩
+  , ⟨"auto_resume_off", base, base, some true, ⟨none, none⟩, some false⟩
+  , ⟨"auto_resume_retry", base, base, some true, ⟨none, none⟩, some true⟩
+  , ⟨"auto_resume_with_budget", base, base, none, ⟨none, some 200⟩, some true⟩
+  , ⟨"auto_resume_stale_epoch", base, {base with sequence := 3}, none, ⟨none, none⟩, some true⟩
+  , ⟨"auto_resume_on_complete", completeBase, completeBase, none, ⟨none, none⟩, some true⟩
+  , ⟨"auto_resume_complete_objective", completeBase, completeBase, none, ⟨some "verify", none⟩, some true⟩
+  , ⟨"budget_keeps_auto_resume", base, base, some true, ⟨none, some 10⟩, none⟩
+  , ⟨"objective_keeps_auto_resume", base, base, some true, ⟨some "ship more", none⟩, none⟩
+  , ⟨"paused_budget_keeps_auto_resume", pausedBase, pausedBase, some true, ⟨none, some 10⟩, none⟩
+  , ⟨"paused_objective_keeps_auto_resume_off", pausedBase, pausedBase, some false, ⟨some "verify", none⟩, none⟩
+  ]
+
 structure EditInput where
   name : String
   origin : Origin
   observed : Assignment
   current : Assignment
+  storedAutoResume : Option Bool
   fields : Fields
+  autoResume : Option Bool
   deriving ToJson
 
+structure Edited where
+  assignment : Assignment
+  autoResume : Option Bool
+  deriving ToJson
+
+private def originPrefix (origin : Origin) : String :=
+  if origin == .agent then "agent_" else "client_"
+
 @[conformance_family]
-def edit : Family EditInput (Option Assignment) where
-  inputs := cases.map fun (origin, c) =>
-    { name := (if origin == .agent then "agent_" else "client_") ++ c.name, origin,
-      observed := c.observed, current := c.current, fields := c.fields }
-  model := fun i => apply? i.observed i.current i.fields i.origin
+def edit : Family EditInput (Option Edited) where
+  inputs := (cases.map fun (origin, c) =>
+    { name := originPrefix origin ++ c.name, origin, observed := c.observed, current := c.current,
+      storedAutoResume := none, fields := c.fields, autoResume := none }) ++
+    ([Origin.agent, .client].flatMap fun origin => preferenceCases.map fun c =>
+      { name := originPrefix origin ++ c.name, origin, observed := c.observed, current := c.current,
+        storedAutoResume := c.stored, fields := c.fields, autoResume := c.autoResume })
+  model := fun i =>
+    (applyPreference? i.observed i.current i.storedAutoResume i.fields i.autoResume i.origin).map
+      fun (assignment, autoResume) => { assignment, autoResume }
 
 def whitespaceCodepointsJson : String :=
   jsonArray (TextNormalization.objectiveWhitespaceCodepoints.map toString)
