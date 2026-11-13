@@ -102,6 +102,9 @@ fn definition_refused(error: anyhow::Error) -> anyhow::Error {
 }
 
 /// A definition that is missing, invalid, tampered with or does not parse.
+///
+/// External premise: a definition that does not parse surfaces only as a
+/// `serde_json::Error` in the erased chain.
 fn unresolvable(error: &anyhow::Error) -> bool {
     freeze_refused(error).is_some() || error.chain().any(|cause| cause.is::<serde_json::Error>())
 }
