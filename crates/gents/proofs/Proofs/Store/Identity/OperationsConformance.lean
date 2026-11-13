@@ -54,13 +54,6 @@ def preflightCasesJson : String := (toJson (bindingCases.map fun (name, binding)
 
 def recoveryCasesJson : String := (toJson (recoveryCases.map recoveryCaseJson)).compress
 
-def secretPublicationCasesJson : String :=
-  let before : State := { objects := [], relations := [], enrolled := [] }
-  let after := publishSecret before "user" "runtime" "secret" "node" true false true true
-  (toJson [Json.mkObj [("name", toJson "missing-node"),
-    ("expected_created", toJson (after.objects.any (fun object =>
-      object.resource == "secret_configuration" && object.id == "secret")))]]).compress
-
 structure DeferredCase where
   name : String
   before : DeferredOperation

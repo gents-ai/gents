@@ -2,6 +2,7 @@ import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Conformance.ContractCases.Enrollment
 import Proofs.Session.Compaction.State
 import Lean
+import Proofs.Conformance.Family
 
 namespace Conformance.TitleAdmission
 
@@ -150,77 +151,147 @@ private theorem emitted_symbol_ids_remain_bounded :
     cases.all (fun c => (emittedModelLabels c).all (· < 65536)) = true := by
   native_decide
 
-private def rowJson (r : _root_.AuxiliaryAdmission.RequestRowEvidence) : Json :=
-  Json.mkObj
-    [ ("physical_request", toJson r.physicalRequest)
-    , ("logical_request", toJson r.logicalRequest)
-    , ("model_signed_fields_hex", toJson (r.signedFields.map Enrollment.utf8HexString))
-    , ("physical_binding_current", toJson r.physicalBindingCurrent)
-    , ("branch_fields_exact", toJson r.branchFieldsExact)
-    , ("pending_deadline_absent", toJson r.pendingDeadlineAbsent) ]
+inductive SignedFor where
+  | title
+  | accessReview
+  | nothing
+  deriving ToJson, DecidableEq
 
-private def symbolJson (value : Nat) : Json := toJson (toString value)
-private def optionalSymbolJson (value : Option Nat) : Json :=
-  value.map symbolJson |>.getD Json.null
+/-- The scenario knobs of one join case: which signed request the runtime
+observes, which request the row's signed fields were produced for, and the
+row and world facts. `admissionCase` names the admission case the request was
+signed as. -/
+structure JoinInput where
+  name : String
+  admissionCase : String
+  observationAvailable : Bool
+  accessReview : Bool
+  rowSignedFor : SignedFor
+  rowPhysicalRequest : String
+  rowLogicalRequest : String
+  physicalBindingCurrent : Bool
+  branchFieldsExact : Bool
+  pendingDeadlineAbsent : Bool
+  worldOwnPhysical : String
+  activeNormal : Bool
+  deriving ToJson
 
-private def bindingJson (b : Handover.AuxiliaryBinding) : Json :=
-  Json.mkObj
-    [ ("purpose", toJson b.purpose.toWire)
-    , ("physical_request", symbolJson b.physicalRequest)
-    , ("logical_request", symbolJson b.logicalRequest)
-    , ("parent_physical", symbolJson b.parentPhysical)
-    , ("parent_logical", symbolJson b.parentLogical)
-    , ("node", symbolJson b.node)
-    , ("session", symbolJson b.session)
-    , ("authenticated", toJson b.authenticated) ]
+structure BindingObservation where
+  purpose : String
+  physicalRequest : Nat
+  logicalRequest : Nat
+  parentPhysical : Nat
+  parentLogical : Nat
+  node : Nat
+  session : Nat
+  authenticated : Bool
+  deriving ToJson, DecidableEq
 
-private def caseJson (c : Case) : Json :=
+structure StartObservation where
+  ownPhysical : Nat
+  purpose : String
+  session : Nat
+  nodeDid : Nat
+  queueScopeNode : Nat
+  queueScopeSession : Nat
+  queueActive : Option Nat
+  leasePending : Bool
+  leaseVacant : Bool
+  leaseNow : Nat
+  claimedAbsent : Bool
+  terminalSelectionAbsent : Bool
+  gateIndependent : Bool
+  gateSiblingWaiting : Bool
+  deriving ToJson, DecidableEq
+
+structure JoinObservation where
+  start : StartObservation
+  activation : Option BindingObservation
+  claimed : Bool
+  leaseActive : Bool
+  claimedBinding : Option BindingObservation
+  queueActive : Option Nat
+  queueUnchanged : Bool
+  ownPhysical : Nat
+  deriving ToJson, DecidableEq
+
+private def BindingObservation.ofModel (b : Handover.AuxiliaryBinding) : BindingObservation :=
+  { purpose := b.purpose.toWire, physicalRequest := b.physicalRequest
+    logicalRequest := b.logicalRequest, parentPhysical := b.parentPhysical
+    parentLogical := b.parentLogical, node := b.node, session := b.session
+    authenticated := b.authenticated }
+
+private def observe (c : Case) : JoinObservation :=
   let start := world c
-  let decision := activation c
   let result := claimed c
-  Json.mkObj
-    [ ("name", toJson c.name)
-    , ("admission_case", toJson c.admissionCase)
-    , ("observation_available", toJson c.available)
-    , ("row", rowJson c.row)
-    , ("world", Json.mkObj
-      [ ("own_physical", toJson c.ownPhysical)
-      , ("model_own_physical", symbolJson start.requestId)
-      , ("purpose", toJson start.purpose.toWire)
-      , ("session", symbolJson start.sessionId)
-      , ("node_did", symbolJson start.nodeDid)
-      , ("queue_scope_node", symbolJson start.queue.scope.node)
-      , ("queue_scope_session", symbolJson start.queue.scope.session)
-      , ("queue_active", optionalSymbolJson start.queue.active)
-      , ("lease_pending", toJson (start.lease.request == .pending))
-      , ("lease_vacant", toJson (start.lease.lease == .vacant))
-      , ("lease_now", toJson start.lease.now)
-      , ("claimed_absent", toJson start.claimed.isNone)
-      , ("terminal_selection_absent", toJson start.terminalSelection.isNone)
-      , ("gate_actor", toJson (9 : Nat))
-      , ("gate_phase", toJson "storage")
-      , ("gate_independent", toJson start.gateSchedule.independent)
-      , ("gate_sibling_waiting", toJson start.gateSchedule.siblingWaiting) ])
-    , ("generation", toJson (7 : Nat))
-    , ("duration", toJson (20 : Nat))
-    , ("deadline", toJson (30 : Nat))
-    , ("now", toJson (1 : Nat))
-    , ("expected_activation", decision.map (fun value => bindingJson value.binding)
-        |>.getD Json.null)
-    , ("expected_claimed", toJson result.isSome)
-    , ("expected_lease_active", toJson (match result with
-        | some after => match after.lease.lease with
-          | .active _ _ _ => true
-          | _ => false
-        | none => false))
-    , ("expected_claimed_binding", (result.bind (·.claimed)).map (fun binding =>
-        match binding.evidence with
-        | .auxiliary title => bindingJson title
-        | _ => Json.null) |>.getD Json.null)
-    , ("expected_queue_active", optionalSymbolJson ((result.getD start).queue.active))
-    , ("expected_queue_unchanged", toJson ((result.getD start).queue == start.queue))
-    , ("expected_own_physical", symbolJson ((result.getD start).requestId)) ]
+  { start :=
+      { ownPhysical := start.requestId, purpose := start.purpose.toWire
+        session := start.sessionId, nodeDid := start.nodeDid
+        queueScopeNode := start.queue.scope.node, queueScopeSession := start.queue.scope.session
+        queueActive := start.queue.active
+        leasePending := start.lease.request == .pending
+        leaseVacant := start.lease.lease == .vacant
+        leaseNow := start.lease.now
+        claimedAbsent := start.claimed.isNone
+        terminalSelectionAbsent := start.terminalSelection.isNone
+        gateIndependent := start.gateSchedule.independent
+        gateSiblingWaiting := start.gateSchedule.siblingWaiting }
+    activation := (activation c).map fun value => BindingObservation.ofModel value.binding
+    claimed := result.isSome
+    leaseActive := match result with
+      | some after => match after.lease.lease with
+        | .active _ _ _ => true
+        | _ => false
+      | none => false
+    claimedBinding := (result.bind (·.claimed)).bind fun binding =>
+      match binding.evidence with
+      | .auxiliary title => some (BindingObservation.ofModel title)
+      | _ => none
+    queueActive := (result.getD start).queue.active
+    queueUnchanged := (result.getD start).queue == start.queue
+    ownPhysical := (result.getD start).requestId }
 
-def casesJson : String := (toJson (cases.map caseJson)).compress
+private def signedFor (row : _root_.AuxiliaryAdmission.RequestRowEvidence) : SignedFor :=
+  if row.signedFields == baseRow.signedFields then .title
+  else if row.signedFields == reviewRow.signedFields then .accessReview
+  else .nothing
+
+private def JoinInput.ofCase (c : Case) : JoinInput :=
+  { name := c.name, admissionCase := c.admissionCase, observationAvailable := c.available
+    accessReview := c.request.purpose == .accessReview, rowSignedFor := signedFor c.row
+    rowPhysicalRequest := c.row.physicalRequest, rowLogicalRequest := c.row.logicalRequest
+    physicalBindingCurrent := c.row.physicalBindingCurrent
+    branchFieldsExact := c.row.branchFieldsExact
+    pendingDeadlineAbsent := c.row.pendingDeadlineAbsent
+    worldOwnPhysical := c.ownPhysical, activeNormal := c.activeNormal }
+
+private def JoinInput.toCase (i : JoinInput) : Case :=
+  { name := i.name, available := i.observationAvailable
+    request := if i.accessReview then reviewRequest else baseRequest
+    admission := if i.accessReview then reviewAdmission else baseAdmission
+    admissionCase := i.admissionCase
+    row :=
+      { baseRow with
+        physicalRequest := i.rowPhysicalRequest, logicalRequest := i.rowLogicalRequest
+        signedFields := match i.rowSignedFor with
+          | .title => baseRow.signedFields
+          | .accessReview => reviewRow.signedFields
+          | .nothing => []
+        physicalBindingCurrent := i.physicalBindingCurrent
+        branchFieldsExact := i.branchFieldsExact
+        pendingDeadlineAbsent := i.pendingDeadlineAbsent }
+    ownPhysical := i.worldOwnPhysical, activeNormal := i.activeNormal }
+
+example : cases.all (fun c => observe (JoinInput.toCase (JoinInput.ofCase c)) == observe c) = true := by
+  native_decide
+
+/-- model-production-gap: the join is executed only through the Lean title
+activation and claim owner; no production scenario materializes the observed
+row and own-lease world for the title or access-review claim, so neither the
+native watcher admission nor the claim owner replays these cases. -/
+@[conformance_family]
+def joinUnreached : Conformance.Family JoinInput JoinObservation where
+  inputs := cases.map JoinInput.ofCase
+  model := fun i => observe (JoinInput.toCase i)
 
 end Conformance.TitleAdmission

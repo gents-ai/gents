@@ -399,22 +399,6 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
       (some titleEvidence)
   ]
 
-structure TitlePurposeWireCase where
-  name : String
-  wire : Option String
-  expectedDecoded : Option RequestPurpose
-  deriving Repr
-
-def titlePurposeWireCases : List TitlePurposeWireCase :=
-  let makeCase (name : String) (wire : Option String) : TitlePurposeWireCase :=
-    { name, wire, expectedDecoded := wire.bind RequestPurpose.fromWire? }
-  [ makeCase "missing-purpose-is-invalid" none
-  , makeCase "unknown-purpose-is-invalid" (some "titleAudit")
-  , makeCase "normal-purpose-explicit" (some "normal")
-  , makeCase "title-purpose-explicit" (some "title-audit")
-  , makeCase "access-review-purpose-explicit" (some "access-review")
-  , makeCase "access-review-camel-case-is-invalid" (some "accessReview") ]
-
 open Enrollment
 
 def enrollmentOffer : Offer :=

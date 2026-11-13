@@ -101,7 +101,8 @@ pub use authored_document::{
     create_authored_document, AuthoredDocumentCreateError, DocumentSchemaSource,
 };
 pub use client_agent_publication::{
-    AgentPublicationObserver, ClientAgentJournal, PublicationStage, PublicationStatus,
+    recovery_disposition, AgentPublicationObserver, ClientAgentJournal, PublicationStage,
+    PublicationStatus, RecoveryDisposition,
 };
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 pub use node_deferred_operation::recover_deferred_node_operations;

@@ -482,27 +482,23 @@ def stateMachineCoverage : List CoverageEntry :=
   ]
 
 def caseCoverage : List CoverageEntry :=
-  [ tagged (followUpCoverage
-      "identity_client_agent_recovery_cases" "IdentityClientAgentRecoveryCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  [ tagged (consumerCoverage "family" "client_agent_journal_recovery")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "network_protocol_resource")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "identity_secret_publication_cases" "IdentitySecretPublicationCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  , tagged (consumerCoverage "family" "identity_secret_publication_creation")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "remote_agent_delivery_recovery_cases" "RemoteAgentDeliveryRecoveryCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  , tagged (boundaryCoverage
+      "family"
+      "remote_delivery_recovery_unreached"
+      "model-production-gap: remote Agent delivery is refused before any send until the authenticated HTTP delivery path exists, so no production tool call reserves a signed remote intent, records an attempt or retains a target receipt.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "remote_agent_delivery_response_cases" "RemoteAgentDeliveryResponseCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  , tagged (boundaryCoverage
+      "family"
+      "remote_delivery_response_unreached"
+      "model-production-gap: remote Agent delivery is refused before any send, so production never verifies a target-signed terminal response against a retained receipt.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "scope_collection_rules" "ScopeCollectionRules"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  , tagged (consumerCoverage "family" "scope_collection_rules_template_rules")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -578,10 +574,10 @@ def caseCoverage : List CoverageEntry :=
       "RequestExecutionLeaseCases"
       "#1571 explicit-renewal input/expected-state cases supersede the retired response/progress policy adapter. Bind the generated actions to native claim, due-only deadline CAS, producer admission and terminal/recovery owners; decoding fixtures is not native coverage.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "request_execution_lease_trace_cases"
-      "RequestExecutionLeaseTraceCases"
-      "#1571 generated bounded-renewal, expiry/drop, stale-owner and terminal-effect traces require native execution, including independent timer polling and suspend/resume. No scheduler fairness or wall-clock continuity is proved.")
+  , tagged (boundaryCoverage
+      "family"
+      "request_execution_lease_contracts_lease_trace_unreached"
+      "model-production-gap: native lease owners take one database-backed action at a time under the wall clock; no production path replays a multi-action renewal, expiry, recovery or stale-owner trace over a logical clock. No scheduler fairness or wall-clock continuity is proved.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "process_transition_cases"
@@ -821,10 +817,10 @@ def caseCoverage : List CoverageEntry :=
       "queued_steering_agent_message_outcome"
       "Binds outcome selection; physical-head binding and notification replay need native flow coverage.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "queued_steering_guard_cases"
-      "QueuedSteeringGuardCases"
-      "Wrong-head claim, incoherent supplied-owner and interrupted publication guards are checked by the Lean owner and generated decoder/conformance structural tests only. The exact physical interrupt latch, like native interrupt_request_by_doc_id, permits terminal rows and preserves an existing stamp; lifecycle terminalization is separate. Bind each guard to the native queue/owned-execution rejection path before claiming native conformance.")
+  , tagged (boundaryCoverage
+      "family"
+      "contracts_queued_steering_guard_unreached"
+      "model-production-gap: wrong-head claim, incoherent supplied owner and interrupted publication are rejected by the native queue and owned-execution owners only on persisted rows no production scenario builds; the exact physical interrupt latch, like native interrupt_request_by_doc_id, permits terminal rows and preserves an existing stamp.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "aggregate_token_budget_cases"
@@ -878,10 +874,9 @@ def caseCoverage : List CoverageEntry :=
       "TitleRequestAdmissionCases"
       "Model-derived signed title-purpose admission and pending-disposition inputs cover exact runtime-local-control parent-only provenance, forbidden request controls, unavailable observation retry, authoritative denial, and unchanged Pending on admit. Bind the generated rows to native signing, watcher admission, pending rejection and crash rediscovery owners before claiming native coverage.")
       "authenticated-enrollment" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "title_request_purpose_wire_cases"
-      "TitleRequestPurposeWireCases"
-      "Model-derived missing, unknown and explicit purpose wire inputs require a strict native decoder and signed-field selection. No native consumer is bound; absent purpose must never default to normal.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_title_purpose_wire")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1170,10 +1165,10 @@ def caseCoverage : List CoverageEntry :=
       "inference_visibility_cases"
       "InferenceVisibilityCases")
       "client-shell" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "client_optimistic_send_cases"
+  , tagged (consumerWithFollowUp
+      "Proofs.Conformance.ClientOptimisticSend"
       "ClientOptimisticSendCases"
-      "The desktop chat-send replay was removed when desktop sends moved onto the shared request handler; the replay must be rebuilt against that handler.")
+      "The desktop optimistic-send test replays the views and traces from Proofs/Conformance/ClientOptimisticSend.lean except the runtime turn count; the native idempotent-send replay must be rebuilt against the shared request handler.")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_telemetry_cases"
@@ -2052,10 +2047,9 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "goal_session_observation_contracts_presentation")
       "durable-goals" [Surface.operatorUi]
-  , tagged (followUpCoverage
-      "goal_session_fold_cases"
-      "GoalSessionFoldCases"
-      "The desktop Goal view test replays these folds from GoalSessionObservationConformance.lean; nothing reads the snapshot's copy.")
+  , tagged (consumerCoverage
+      "Proofs.Conformance.GoalSessionObservation"
+      "GoalSessionFoldCases")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "plugin_approval_cases"
@@ -2269,10 +2263,10 @@ def caseCoverage : List CoverageEntry :=
       "title_text_cases"
       "TitleTextCases")
       "canonical-output" [Surface.operatorUi, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "title_admission_join_cases"
-      "TitleAdmissionJoinCases"
-      "Model-derived row observation and independent title-world inputs exercise admitted direct own-lease claim, exact physical/logical row binding, active normal queue preservation, unavailable retry and invalid preclaim facts. The executable join calls the existing title activation/claim owner and checks non-vacuity, but its exported projections do not serialize a full application trace or bind native materialization, renewal, recovery or output capture.")
+  , tagged (boundaryCoverage
+      "family"
+      "title_admission_join_unreached"
+      "model-production-gap: the join of the observed request row with the own-lease title or access-review world runs only through the Lean activation and claim owner; no production scenario materializes those rows for the native watcher admission and claim owners, nor renewal, recovery or output capture.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "canonical_payload_presentation_cases"
@@ -2748,8 +2742,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "session_document_retry_cases" "SessionDocumentCases"
       "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "background_wake_row_cases" "BackgroundWakeRowCases"
-      "Consume exact physical-parent and cross-requester authoritative rows through background publication after its owner migrates. Existing DB wake tests do not establish every generated row verdict.")
+  , tagged (boundaryCoverage "family" "contracts_background_wake_rows_unreached"
+      "model-production-gap: background publication still redrives a failed wake through its pre-migration owner; no production path publishes the successor from exact physical-parent and cross-requester authoritative rows. Existing DB wake tests do not establish these row verdicts.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "family" "configuration_scope_context_bounds"
       "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")
@@ -2763,8 +2757,10 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp "family" "configuration_scope_oauth_account"
       "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")
       "apply-reconcile" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "discovery_scope_cases" "DiscoveryScopeCases"
-      "Exercise backend-owner and credential-scoped catalog selection in the production discovery owner, including shared/OAuth and foreign-owner rejection.")
+  , tagged (consumerCoverage "family" "configuration_scope_discovery")
+      "apply-reconcile" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "family" "configuration_scope_discovery_unreached"
+      "model-production-gap: a backend observation carries no owner; production reaches a catalog only through the owner-qualified backend document that holds it, so no production call is handed a foreign owner's same-labelled catalog.")
       "apply-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "initialization_initial_inference")
       "apply-reconcile" [Surface.operatorCli]
@@ -2799,11 +2795,9 @@ def followUpHookCoverage : List CoverageEntry :=
       "prompt-assembly" []
   ]
 
-def followUpHookIds : List String :=
-  followUpHookCoverage.map (fun entry => entry.domain)
-
-def followUpHooksJson : String :=
-  jsonArray (followUpHookIds.map jsonString)
+example : followUpHookCoverage.all (fun entry =>
+    ["RuntimeReconcile", "ToolExecution", "CommandPolicy"].all fun owner =>
+      (entry.domain.splitOn owner).length == 1) = true := by native_decide
 
 def externalPremiseCoverage : List CoverageEntry :=
   [ tagged (boundaryCoverage "premise" "boundary.inference-slots.running-row-derived"

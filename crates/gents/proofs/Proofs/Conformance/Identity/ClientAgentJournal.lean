@@ -5,7 +5,7 @@ namespace Conformance.ClientAgentJournal
 
 open Lean Identity.ClientAgentJournal
 
-deriving instance ToJson for Stage, Status, Journal
+deriving instance ToJson for Stage, Status, Journal, RecoveryDisposition
 
 inductive ActionKind where
   | record | dispatch | finish | restart | saveUnrelated
@@ -65,5 +65,26 @@ def publicationTraces : Family Input (List Step) where
   inputs := Identity.ClientAgentJournal.cases.map fun (name, actions) =>
     { name, initial := Identity.ClientAgentJournal.initial, actions := actions.map stepOf }
   model := fun i => run i.initial (i.actions.map actionOf)
+
+structure RecoveryInput where
+  name : String
+  actorMatches : Bool
+  recordPresent : Bool
+  bindingMatches : Bool
+  commit : Status
+  parent : Status
+  executor : Status
+  deriving ToJson
+
+@[conformance_family]
+def recovery : Family RecoveryInput RecoveryDisposition where
+  inputs := recoveryCases.map fun c =>
+    { name := c.name, actorMatches := c.actorMatches, recordPresent := c.recordPresent
+      bindingMatches := c.bindingMatches, commit := c.commit, parent := c.parent
+      executor := c.executor }
+  model := fun i =>
+    recoveryDisposition i.actorMatches i.recordPresent i.bindingMatches
+      { Identity.ClientAgentJournal.initial with
+        commit := i.commit, parent := i.parent, executor := i.executor }
 
 end Conformance.ClientAgentJournal

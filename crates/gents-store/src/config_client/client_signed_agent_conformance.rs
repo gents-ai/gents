@@ -137,6 +137,34 @@ fn modeled_publication_journal_traces_drive_the_native_owner() {
     });
 }
 
+#[test]
+fn modeled_publication_recovery_drives_the_native_disposition() {
+    use super::client_agent_publication::{
+        recovery_disposition, ClientAgentJournal, PublicationStatus, RecoveryDisposition,
+    };
+
+    gents_lean_vocab::families::client_agent_journal_recovery::replay::<
+        RecoveryDisposition,
+        PublicationStatus,
+    >(|i| {
+        let mut journal = ClientAgentJournal::new(
+            "client".into(),
+            "agent".into(),
+            "node".into(),
+            "agent-doc".into(),
+            "node-doc".into(),
+        );
+        journal.commit = i.commit;
+        journal.parent = i.parent;
+        journal.executor = i.executor;
+        recovery_disposition(
+            i.actor_matches,
+            i.record_present.then_some(&journal),
+            i.binding_matches,
+        )
+    });
+}
+
 #[tokio::test]
 async fn modeled_agent_create_route_drives_the_transaction_route() {
     use gents_lean_vocab::families::client_agent_creation_agent_route as family;

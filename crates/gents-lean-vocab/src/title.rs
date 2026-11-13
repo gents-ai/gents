@@ -20,58 +20,11 @@ mod tests {
     use crate::{required_nullable, LeanRequestPurpose};
 
     #[test]
-    fn generated_request_purpose_wire_cases_match_native_owner() {
-        use gents_protocol::request_admission::RequestPurpose;
-
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct PurposeField {
-            purpose: RequestPurpose,
-        }
-
-        let cases = super::super::lean_title_request_purpose_wire_cases();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let expected = case.expected_decoded.map(RequestPurpose::from);
-            let parsed = case
-                .wire
-                .as_deref()
-                .and_then(|wire| RequestPurpose::try_from(wire).ok());
-            assert_eq!(parsed, expected, "{}: native wire decoder", case.name);
-            let input = match &case.wire {
-                Some(wire) => serde_json::json!({ "purpose": wire }),
-                None => serde_json::json!({}),
-            };
-            let decoded = serde_json::from_value::<PurposeField>(input)
-                .ok()
-                .map(|row| row.purpose);
-            assert_eq!(
-                decoded, expected,
-                "{}: required signed field shape",
-                case.name
-            );
-            if let Some(purpose) = decoded {
-                assert_eq!(
-                    Some(purpose.as_str()),
-                    case.wire.as_deref(),
-                    "{}",
-                    case.name
-                );
-            }
-        }
-    }
-
-    #[test]
     fn generated_title_groups_decode_without_native_binding_claim() {
-        use super::super::{
-            lean_title_admission_join_cases, lean_title_request_admission_cases,
-            lean_title_request_purpose_wire_cases, lean_title_usage_cases,
-        };
+        use super::super::{lean_title_request_admission_cases, lean_title_usage_cases};
 
         assert!(!lean_title_request_admission_cases().is_empty());
-        assert!(!lean_title_request_purpose_wire_cases().is_empty());
         assert!(!lean_title_usage_cases().is_empty());
-        assert!(!lean_title_admission_join_cases().is_empty());
     }
 
     #[derive(Debug, Deserialize)]

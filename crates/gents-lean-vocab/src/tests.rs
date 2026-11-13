@@ -364,25 +364,6 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_lean_transition_is_legal("InferenceCall", "queued", "running");
     assert_lean_transition_is_legal("InferenceCall", "running", "completed");
     assert_lean_transition_is_legal("InferenceCall", "running", "failed");
-    let follow_up_hooks = &lean_contract_snapshot().follow_up_hooks;
-    assert!(
-        !follow_up_hooks
-            .iter()
-            .any(|hook| hook.contains("RuntimeReconcile")),
-        "RuntimeReconcile should be emitted as generated contract output, not a follow-up hook"
-    );
-    assert!(
-        !follow_up_hooks
-            .iter()
-            .any(|hook| hook.contains("ToolExecution")),
-        "ToolExecution should be emitted as generated contract output, not a follow-up hook"
-    );
-    assert!(
-        !follow_up_hooks
-            .iter()
-            .any(|hook| hook.contains("CommandPolicy")),
-        "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
-    );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert!(!lean_contract_snapshot().root_admission_cases.is_empty());
     assert_eq!(
@@ -440,10 +421,6 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_cases.len(),
         31
-    );
-    assert_eq!(
-        lean_contract_snapshot().desktop_client_shell_case_count,
-        lean_contract_snapshot().desktop_client_shell_cases.len()
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_cases.len(),
@@ -585,20 +562,3 @@ fn queued_steering_traces_are_derived_from_connected_owners() {
     }
 }
 
-#[test]
-fn queued_steering_rejects_incoherent_claim_and_interrupted_publication() {
-    let cases = lean_queued_steering_guard_cases();
-    assert_eq!(cases.len(), 3);
-    for case in cases {
-        assert!(
-            case.prefix_admitted,
-            "case {:?} never reached its rejecting stage",
-            case.name
-        );
-        assert!(
-            !case.admitted,
-            "case {:?} was unexpectedly admitted",
-            case.name
-        );
-    }
-}

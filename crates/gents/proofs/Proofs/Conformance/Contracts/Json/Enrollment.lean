@@ -1,6 +1,7 @@
 import Proofs.Conformance.ContractCases.Enrollment
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.P2P.Enrollment.AutoRenewal
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -348,11 +349,24 @@ def titleRequestAdmissionCaseJson (case : TitleRequestAdmissionCase) : String :=
 def titleRequestAdmissionCasesJson : String :=
   jsonArray (titleRequestAdmissionCases.map titleRequestAdmissionCaseJson)
 
-def titlePurposeWireCasesJson : String :=
-  jsonArray (titlePurposeWireCases.map fun case =>
-    "{" ++ "\"name\":" ++ jsonString case.name ++ ","
-      ++ "\"wire\":" ++ jsonOptionalString case.wire ++ ","
-      ++ "\"expected_decoded\":" ++
-        jsonOptionalString (case.expectedDecoded.map RequestPurpose.toWire) ++ "}")
+structure TitlePurposeWireInput where
+  name : String
+  wire : Option String
+  deriving Lean.ToJson
+
+deriving instance Lean.ToJson for RequestPurpose
+
+attribute [conformance_vocabulary] RequestPurpose.toWire
+
+@[conformance_family]
+def titlePurposeWire : Conformance.Family TitlePurposeWireInput (Option RequestPurpose) where
+  inputs :=
+    [ { name := "missing-purpose-is-invalid", wire := none }
+    , { name := "unknown-purpose-is-invalid", wire := some "titleAudit" }
+    , { name := "normal-purpose-explicit", wire := some "normal" }
+    , { name := "title-purpose-explicit", wire := some "title-audit" }
+    , { name := "access-review-purpose-explicit", wire := some "access-review" }
+    , { name := "access-review-camel-case-is-invalid", wire := some "accessReview" } ]
+  model := fun i => i.wire.bind RequestPurpose.fromWire?
 
 end Conformance.Contracts

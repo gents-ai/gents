@@ -484,3 +484,52 @@ async fn upgraded_rows_keep_their_identity_and_fill_the_key_on_first_refresh() {
         assert_eq!(resolved.as_ref(), Some(&after));
     }
 }
+
+#[tokio::test]
+async fn secret_creation_follows_the_lean_publication_model() {
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "secret-publication",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
+    let node = db.node.clone();
+    let did = db.node_identity.did().to_owned();
+    let access = super::rows::runtime_credential_access(&node, &did).unwrap();
+    for case in gents_lean_vocab::families::identity_secret_publication_creation::cases() {
+        let parent = if case.input.node_registered {
+            did.clone()
+        } else {
+            "did:key:z6MkunregisteredSecretParentNode".to_owned()
+        };
+        let credential: OAuthCredential = serde_json::from_value(json!({
+            "credential_id": format!("secret-publication:{}", case.input.name),
+            "node_did": parent,
+            "provider": XAI_OAUTH_PROVIDER,
+            "access_token": "placeholder-access",
+            "refresh_token": "placeholder-refresh",
+            "is_fedramp": false,
+            "access_token_expires_at": "2020-01-01T00:00:00Z",
+            "enabled": true,
+        }))
+        .unwrap();
+        let written = access
+            .transact_write("test.secret_publication", |txn| {
+                let credential = credential.clone();
+                Box::pin(
+                    async move { super::rows::create_credential_in_txn(txn, &credential).await },
+                )
+            })
+            .await;
+        let stored =
+            super::rows::lookup_oauth_credential_by_id_on(&access, &credential.credential_id)
+                .await
+                .unwrap();
+        assert_eq!(written.is_ok(), stored.is_some(), "{:?}", case.input);
+        case.check(
+            gents_lean_vocab::families::identity_secret_publication_creation::Creation {
+                created: stored.is_some(),
+            },
+        );
+    }
+    node.shutdown().await.expect("shut down test node");
+}

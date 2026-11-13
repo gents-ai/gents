@@ -742,6 +742,65 @@ mod tests {
         assert!(chat.contains("ChatCompletions"));
         assert!(responses.contains("Responses"));
     }
+
+    #[test]
+    fn backend_catalog_selects_the_modeled_discovery_catalog() {
+        use gents_lean_vocab::families::configuration_scope_discovery::CatalogObservation;
+
+        gents_lean_vocab::families::configuration_scope_discovery::replay(|i| {
+            assert!(
+                i.requested_credentials
+                    .as_deref()
+                    .is_none_or(|node| node == i.requested_owner),
+                "{i:?}: a node OAuth backend is scoped to its owner node"
+            );
+            let auth = match i.requested_credentials {
+                Some(_) => serde_json::json!({"kind": "node_oauth"}),
+                None => serde_json::json!({"kind": "api_key", "key": "shared"}),
+            };
+            let backend: gents_documents::InferenceBackend =
+                serde_json::from_value(serde_json::json!({
+                    "node_did": i.requested_owner,
+                    "backend_id": i.requested_backend,
+                    "name": "Backend",
+                    "provider_kind": "OpenAiCompatible",
+                    "endpoint": "https://backend.example",
+                    "auth": auth,
+                }))
+                .unwrap();
+            let observation: gents_documents::InferenceBackendObservation =
+                serde_json::from_value(serde_json::json!({
+                    "backend_id": "backend",
+                    "catalogs": [{
+                        "node_did": i.observed_credentials,
+                        "observed_at": "2026-01-01T00:00:00Z",
+                        "models": [{
+                            "model_name": "advertised",
+                            "display_name": null,
+                            "context_window": null,
+                            "max_context_window": null,
+                            "max_output_tokens": null,
+                            "reasoning_efforts": null,
+                        }],
+                    }],
+                    "probe_status": null,
+                    "last_probe": null,
+                }))
+                .unwrap();
+            backend_catalog(&backend, Some(&observation))
+                .unwrap()
+                .map(|catalog| CatalogObservation {
+                    backend_id: observation.backend_id.clone(),
+                    credential_node: catalog.node_did.clone(),
+                    model_names_with_unknown_capabilities: catalog
+                        .models
+                        .iter()
+                        .filter(|model| model.reasoning_efforts.is_none())
+                        .map(|model| model.model_name.clone())
+                        .collect(),
+                })
+        });
+    }
 }
 
 #[cfg(test)]

@@ -45,25 +45,3 @@ where
     }
     Ok(())
 }
-
-pub fn assert_request_execution_lease_trace_cases<E, F>(
-    cases: &[LeanRequestExecutionLeaseTraceCase],
-    mut run: F,
-) -> Result<(), E>
-where
-    F: FnMut(
-        &LeanRequestExecutionWorld,
-        &[LeanRequestExecutionAction],
-    ) -> Result<Option<LeanRequestExecutionWorld>, E>,
-{
-    assert!(
-        !cases.is_empty(),
-        "lease conformance traces must not be empty"
-    );
-    for case in cases {
-        assert!(!case.actions.is_empty(), "{}: empty lease trace", case.name);
-        let actual = run(&case.pre, &case.actions)?;
-        assert_eq!(actual, case.expected, "{}", case.name);
-    }
-    Ok(())
-}

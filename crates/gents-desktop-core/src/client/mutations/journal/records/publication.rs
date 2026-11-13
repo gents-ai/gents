@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use anyhow::{bail, ensure, Context, Result};
 use gents_store::config_client::{
-    AgentPublicationObserver, ClientAgentJournal, ConfigAccess, ConfigClientError,
-    ConfigRelationshipGrant, IdempotentTransactionRetry, PublicationStage, PublicationStatus,
+    recovery_disposition, AgentPublicationObserver, ClientAgentJournal, ConfigAccess,
+    ConfigClientError, ConfigRelationshipGrant, IdempotentTransactionRetry, PublicationStage,
+    PublicationStatus, RecoveryDisposition,
 };
 use gents_store::graphql::escape_graphql_string;
 
@@ -392,25 +393,28 @@ pub(crate) async fn ensure_recovered(
     agent_did: &str,
 ) -> Result<()> {
     super::require_client_signer(node, client)?;
-    ensure!(
-        access.actor_did().as_deref() == Some(client),
-        "Agent publication actor changed"
-    );
-    let Some(record) = lookup(node, client, node_did, agent_did).await? else {
-        return Ok(());
-    };
-    ensure!(
+    let actor_matches = access.actor_did().as_deref() == Some(client);
+    ensure!(actor_matches, "Agent publication actor changed");
+    let record = lookup(node, client, node_did, agent_did).await?;
+    let binding_matches = record.as_ref().is_some_and(|record| {
         record.journal.client == client
             && record.journal.node_did == node_did
-            && record.journal.agent_did == agent_did,
-        "retained Agent publication identity changed"
+            && record.journal.agent_did == agent_did
+    });
+    let disposition = recovery_disposition(
+        actor_matches,
+        record.as_ref().map(|record| &record.journal),
+        binding_matches,
     );
-    if record.journal.commit == PublicationStatus::Failed || record.terminal() {
+    let Some(record) = record else {
         return Ok(());
+    };
+    match disposition {
+        RecoveryDisposition::Proceed => Ok(()),
+        RecoveryDisposition::BindingMismatch => bail!("retained Agent publication identity changed"),
+        RecoveryDisposition::CommitUnknown => bail!("Agent {agent_did} creation for document {} has an unknown outcome; inspect its retained publication before repair", record.journal.agent_doc),
+        RecoveryDisposition::ExplicitRepair => bail!("Agent {agent_did} document {} has unfinished relationships (parent: {:?}, executor: {:?}); current parent and ownership bindings cannot be verified atomically, so inspect and repair them explicitly", record.journal.agent_doc, record.journal.parent, record.journal.executor),
     }
-    ensure!(record.journal.commit == PublicationStatus::Succeeded,
-        "Agent {agent_did} creation for document {} has an unknown outcome; inspect its retained publication before repair", record.journal.agent_doc);
-    bail!("Agent {agent_did} document {} has unfinished relationships (parent: {:?}, executor: {:?}); current parent and ownership bindings cannot be verified atomically, so inspect and repair them explicitly", record.journal.agent_doc, record.journal.parent, record.journal.executor)
 }
 
 #[cfg(test)]

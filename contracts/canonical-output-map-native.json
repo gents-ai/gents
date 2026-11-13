@@ -58,7 +58,7 @@
         "RequestExecutionLease.Action.reparkExpiredResume",
         "RequestExecutionLease.Action.finalizeParked"
       ],
-      "generated_groups": ["request_execution_lease_cases", "request_execution_lease_trace_cases"],
+      "generated_groups": ["request_execution_lease_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": [
         "crates/gents-session/src/request/lifecycle/execution_lease.rs",

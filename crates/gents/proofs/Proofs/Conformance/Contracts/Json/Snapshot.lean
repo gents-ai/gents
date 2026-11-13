@@ -53,6 +53,7 @@ import Proofs.Conformance.LspConsent
 import Proofs.Conformance.ConfigurationDiscovery
 import Proofs.Conformance.P2pAdministration
 import Proofs.Conformance.Views
+import Proofs.Conformance.RemoteDelivery
 import Proofs.Conformance.AgentViews
 import Proofs.Conformance.InferenceViews
 import Proofs.Conformance.PluginGrantDeclaration
@@ -298,19 +299,14 @@ import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
 import Proofs.Documents.ScopeTemplates.Derivation
+import Proofs.Conformance.ScopeCollectionRules
+import Proofs.Conformance.Identity.SecretPublication
 import Proofs.Conformance.LspServerStart
 import Proofs.Conformance.WorkspacePermissions
 
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
-
-def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
-  jsonArray (rules.map fun rule =>
-    "{\"collection\":" ++ jsonString rule.collection
-      ++ ",\"field\":" ++ jsonString rule.field
-      ++ ",\"source\":" ++ jsonString (match rule.source with
-          | .localDid => "localDid" | .homeDid => "homeDid") ++ "}")
 
 def nodeRouteCasesJson : String :=
   jsonArray (([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
@@ -417,8 +413,6 @@ def snapshotCaptureTailJson : String :=
 
 def snapshotCoverageTailJson : String :=
   ""
-    ++ "\"follow_up_hooks\":"
-      ++ followUpHooksJson ++ ","
     ++ "\"trigger_delivery_admission_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryAdmissionCasesJson ++ ","
     ++ "\"trigger_delivery_queue_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryQueueCasesJson ++ ","
     ++ "\"trigger_delivery_assignment_root_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryAssignmentRootCasesJson ++ ","
@@ -498,7 +492,6 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
-    ++ "\"goal_session_fold_cases\":" ++ Conformance.GoalSessionObservationContracts.foldCasesJson ++ ","
     ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
     ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
     ++ "\"operator_path_cases\":" ++ Conformance.OperatorPaths.casesJson.compress ++ ","
@@ -524,8 +517,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.RequestExecutionLeaseContracts.leaseCasesJson ++ ","
     ++ "\"request_execution_lease_observed_cases\":"
       ++ Conformance.RequestExecutionLeaseContracts.observedLeaseCasesJson ++ ","
-    ++ "\"request_execution_lease_trace_cases\":"
-      ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"interrupt_queue_cases\":"
@@ -602,33 +593,25 @@ def snapshotSessionCasesJson : String :=
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
       ++ enrollmentDigestCasesJson ++ ","
-    ++ "\"discovery_scope_cases\":" ++ Conformance.ConfigurationScope.discoveryCasesJson ++ ","
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
     ++ "\"session_document_reference_encoding\":" ++ sessionDocumentReferenceEncodingJson ++ ","
     ++ "\"session_document_retry_cases\":" ++ sessionDocumentRetryCasesJson ++ ","
     ++ "\"plugin_job_opening_cases\":" ++ pluginJobOpeningCasesJson ++ ","
     ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","
-    ++ "\"background_wake_row_cases\":" ++ backgroundWakeRowsCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
     ++ "\"title_request_admission_cases\":"
       ++ titleRequestAdmissionCasesJson ++ ","
-    ++ "\"title_request_purpose_wire_cases\":"
-      ++ titlePurposeWireCasesJson ++ ","
     ++ "\"title_text_cases\":" ++ Conformance.TitleText.casesJson ++ ","
     ++ "\"title_usage_cases\":"
       ++ Conformance.TitleUsage.casesJson ++ ","
     ++ "\"provider_usage_cases\":"
       ++ Conformance.ProviderUsage.casesJson ++ ","
-    ++ "\"title_admission_join_cases\":"
-      ++ Conformance.TitleAdmission.casesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
-    ++ "\"desktop_client_shell_case_count\":"
-      ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"client_telemetry_cases\":" ++ Conformance.ClientTelemetry.casesJson ++ ","
@@ -670,10 +653,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
     ++ "\"identity_private_journal_policy\":"
       ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
-    ++ "\"client_optimistic_send_cases\":"
-      ++ ClientOptimisticSend.casesJson ++ ","
-    ++ "\"identity_client_agent_recovery_cases\":"
-      ++ Identity.ClientAgentJournal.recoveryCasesJson ++ ","
     ++ "\"client_publication_protected_collection\":"
       ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
     ++ "\"identity_bootstrap_cases\":"
@@ -690,8 +669,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OptimizationPromotion.casesJson ++ ","
     ++ "\"identity_readiness_preflight_cases\":"
       ++ Identity.OperationsConformance.preflightCasesJson ++ ","
-    ++ "\"identity_secret_publication_cases\":"
-      ++ Identity.OperationsConformance.secretPublicationCasesJson ++ ","
     ++ "\"identity_deferred_operation_cases\":"
       ++ Identity.OperationsConformance.deferredCasesJson ++ ","
     ++ "\"identity_pairing_partition_cases\":"
@@ -838,15 +815,11 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (pendingUserTurnCases.map pendingUserTurnCaseJson) ++ ","
     ++ "\"queued_steering_trace_cases\":"
       ++ jsonArray (QueuedSteering.traceObservations.map queuedSteeringTraceJson) ++ ","
-    ++ "\"queued_steering_guard_cases\":"
-      ++ jsonArray (QueuedSteering.guardObservations.map queuedSteeringGuardJson) ++ ","
     ++ "\"agent_delivery_cases\":"
       ++ jsonArray (QueuedSteering.agentDeliveryCases.map agentDeliveryCaseJson) ++ ","
     ++ "\"remote_agent_delivery_cases\":" ++ Request.RemoteDelivery.casesJson ++ ","
-    ++ "\"remote_agent_delivery_recovery_cases\":" ++ Request.RemoteDelivery.recoveryCasesJson ++ ","
     ++ "\"remote_agent_delivery_claim_cases\":" ++ Request.RemoteDelivery.claimCasesJson ++ ","
     ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
-    ++ "\"remote_agent_delivery_response_cases\":" ++ Request.RemoteDelivery.responseCasesJson ++ ","
 
 def snapshotRecoveryCasesJson : String :=
   ""
@@ -932,10 +905,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_job_lineage_cases\":" ++ Conformance.PluginJob.lineageCasesJson ++ ","
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
-    ++ "\"scope_collection_rules\":{"
-      ++ "\"machineRules\":"
-        ++ scopeRulesJson ScopeTemplates.machineRules
-      ++ "},"
     ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
     ++ "\"scope_template_cases\":" ++ scopeTemplateCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"

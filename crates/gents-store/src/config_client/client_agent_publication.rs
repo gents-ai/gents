@@ -154,3 +154,43 @@ impl ClientAgentJournal {
         self.permit = None;
     }
 }
+
+/// What a client may do with a retained publication before it publishes again.
+/// A committed publication with an unfinished relationship is never resumed
+/// automatically, because its parent and ownership bindings cannot be verified
+/// atomically.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryDisposition {
+    Proceed,
+    BindingMismatch,
+    CommitUnknown,
+    ExplicitRepair,
+}
+
+pub fn recovery_disposition(
+    actor_matches: bool,
+    retained: Option<&ClientAgentJournal>,
+    binding_matches: bool,
+) -> RecoveryDisposition {
+    if !actor_matches {
+        return RecoveryDisposition::BindingMismatch;
+    }
+    let Some(journal) = retained else {
+        return RecoveryDisposition::Proceed;
+    };
+    if !binding_matches {
+        return RecoveryDisposition::BindingMismatch;
+    }
+    if journal.commit == PublicationStatus::Failed
+        || (journal.commit == PublicationStatus::Succeeded
+            && journal.parent == PublicationStatus::Succeeded
+            && journal.executor == PublicationStatus::Succeeded)
+    {
+        return RecoveryDisposition::Proceed;
+    }
+    if journal.commit != PublicationStatus::Succeeded {
+        return RecoveryDisposition::CommitUnknown;
+    }
+    RecoveryDisposition::ExplicitRepair
+}

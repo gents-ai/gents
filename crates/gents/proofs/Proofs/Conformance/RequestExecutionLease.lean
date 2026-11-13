@@ -1,5 +1,7 @@
 import Proofs.Session.RequestExecutionLease
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Session
 
 namespace Conformance.RequestExecutionLeaseContracts
 
@@ -542,14 +544,6 @@ def leaseCaseJson (testCase : LeaseCase) : String :=
 
 def leaseCasesJson : String := jsonArray (leaseCases.map leaseCaseJson)
 
-def leaseTraceCaseJson (testCase : LeaseTraceCase) : String :=
-  "{" ++ "\"name\":" ++ jsonString testCase.name ++
-    ",\"pre\":" ++ worldJson testCase.pre ++
-    ",\"actions\":" ++ jsonArray (testCase.actions.map actionJson) ++
-    ",\"expected\":" ++ optionalWorldJson testCase.expected ++ "}"
-
-def leaseTraceCasesJson : String := jsonArray (leaseTraceCases.map leaseTraceCaseJson)
-
 structure ProviderEofCase where
   sawExplicitFinal : Bool
   expectedFailure : Bool
@@ -623,5 +617,211 @@ def observedLeaseCaseJson (testCase : ObservedLeaseCase) : String :=
     ",\"expected\":" ++ optionalWorldJson (observedLeaseExpected testCase) ++ "}"
 
 def observedLeaseCasesJson : String := jsonArray (observedLeaseCases.map observedLeaseCaseJson)
+
+deriving instance Lean.ToJson for Boundary, ProducerDecision
+
+inductive LeaseStatus where
+  | vacant
+  | active
+  | recoverable
+  | terminal
+  deriving Lean.ToJson
+
+structure LeaseWire where
+  status : LeaseStatus
+  generation : Option Nat
+  duration : Option Nat
+  explicitDeadline : Option Nat
+  outcome : Option Outcome
+  deriving Lean.ToJson
+
+def LeaseWire.ofModel : Lease Generation → LeaseWire
+  | .vacant => ⟨.vacant, none, none, none, none⟩
+  | .active generation duration deadline =>
+    ⟨.active, some generation, some duration, some deadline, none⟩
+  | .recoverable generation duration deadline =>
+    ⟨.recoverable, some generation, some duration, some deadline, none⟩
+  | .terminal generation outcome => ⟨.terminal, some generation, none, none, some outcome⟩
+
+def LeaseWire.toModel (lease : LeaseWire) : Lease Generation :=
+  match lease.status with
+  | .vacant => .vacant
+  | .active =>
+    .active (lease.generation.getD 0) (lease.duration.getD 0) (lease.explicitDeadline.getD 0)
+  | .recoverable =>
+    .recoverable (lease.generation.getD 0) (lease.duration.getD 0)
+      (lease.explicitDeadline.getD 0)
+  | .terminal => .terminal (lease.generation.getD 0) (lease.outcome.getD .failed)
+
+/-- `effectiveExpiry` is derived from the lease and ignored when a wire world is
+read back as a model world. -/
+structure WorldWire where
+  request : RequestState
+  lease : LeaseWire
+  usedGenerations : List Nat
+  now : Nat
+  effectiveExpiry : Nat
+  continuationRequired : Bool
+  tokenChargeRequired : Bool
+  continuationCount : Nat
+  tokenChargeCount : Nat
+  deriving Lean.ToJson
+
+def WorldWire.ofModel (value : World Generation) : WorldWire :=
+  { request := value.request, lease := .ofModel value.lease
+    usedGenerations := value.usedGenerations, now := value.now
+    effectiveExpiry := RequestExecutionLease.effectiveExpiry value
+    continuationRequired := value.continuationRequired
+    tokenChargeRequired := value.tokenChargeRequired
+    continuationCount := value.continuationCount, tokenChargeCount := value.tokenChargeCount }
+
+def WorldWire.toModel (value : WorldWire) : World Generation :=
+  { request := value.request, lease := value.lease.toModel
+    usedGenerations := value.usedGenerations, now := value.now
+    continuationRequired := value.continuationRequired
+    tokenChargeRequired := value.tokenChargeRequired
+    continuationCount := value.continuationCount, tokenChargeCount := value.tokenChargeCount }
+
+inductive ActionKind where
+  | claim
+  | parkBackend
+  | resumeBackend
+  | reparkExpiredResume
+  | finalizeParked
+  | begin
+  | appendOutput
+  | renew
+  | authorizeProducerDecision
+  | socketTraffic
+  | noOp
+  | advanceTime
+  | drop
+  | recoverExpired
+  | recoverDropped
+  | finalize
+  | policyRevoke
+  | recoverExpiredAndFail
+  | recoverExpiredTerminal
+  | recoverDroppedAndFail
+  deriving Lean.ToJson
+
+/-- Each action carries only the parameters its constructor takes; the others
+are absent. -/
+structure ActionWire where
+  kind : ActionKind
+  boundary : Option Boundary := none
+  generation : Option Nat := none
+  expectedGeneration : Option Nat := none
+  freshGeneration : Option Nat := none
+  duration : Option Nat := none
+  explicitDeadline : Option Nat := none
+  expectedDeadline : Option Nat := none
+  now : Option Nat := none
+  outcome : Option Outcome := none
+  decision : Option ProducerDecision := none
+  closed : Option Bool := none
+  wake : Option Bool := none
+  deriving Lean.ToJson
+
+def ActionWire.ofModel : Action Generation → ActionWire
+  | .claim b g d e =>
+    { kind := .claim, boundary := some b, generation := some g, duration := some d
+      explicitDeadline := some e }
+  | .parkBackend b g closed =>
+    { kind := .parkBackend, boundary := some b, generation := some g, closed := some closed }
+  | .resumeBackend b g d e wake =>
+    { kind := .resumeBackend, boundary := some b, generation := some g, duration := some d
+      explicitDeadline := some e, wake := some wake }
+  | .reparkExpiredResume b g e =>
+    { kind := .reparkExpiredResume, boundary := some b, generation := some g
+      expectedDeadline := some e }
+  | .finalizeParked b g o =>
+    { kind := .finalizeParked, boundary := some b, generation := some g, outcome := some o }
+  | .begin b g => { kind := .begin, boundary := some b, generation := some g }
+  | .appendOutput b g => { kind := .appendOutput, boundary := some b, generation := some g }
+  | .renew b g e =>
+    { kind := .renew, boundary := some b, generation := some g, expectedDeadline := some e }
+  | .authorizeProducerDecision b g decision =>
+    { kind := .authorizeProducerDecision, boundary := some b, generation := some g
+      decision := some decision }
+  | .socketTraffic g => { kind := .socketTraffic, generation := some g }
+  | .noOp g => { kind := .noOp, generation := some g }
+  | .advanceTime now => { kind := .advanceTime, now := some now }
+  | .drop b g => { kind := .drop, boundary := some b, generation := some g }
+  | .recoverExpired b expected fresh d e =>
+    { kind := .recoverExpired, boundary := some b, expectedGeneration := some expected
+      freshGeneration := some fresh, duration := some d, explicitDeadline := some e }
+  | .recoverDropped b expected fresh d e =>
+    { kind := .recoverDropped, boundary := some b, expectedGeneration := some expected
+      freshGeneration := some fresh, duration := some d, explicitDeadline := some e }
+  | .finalize b g o =>
+    { kind := .finalize, boundary := some b, generation := some g, outcome := some o }
+  | .policyRevoke b expected fresh o =>
+    { kind := .policyRevoke, boundary := some b, expectedGeneration := some expected
+      freshGeneration := some fresh, outcome := some o }
+  | .recoverExpiredAndFail b expected fresh =>
+    { kind := .recoverExpiredAndFail, boundary := some b, expectedGeneration := some expected
+      freshGeneration := some fresh }
+  | .recoverExpiredTerminal b expected fresh o =>
+    { kind := .recoverExpiredTerminal, boundary := some b, expectedGeneration := some expected
+      freshGeneration := some fresh, outcome := some o }
+  | .recoverDroppedAndFail b expected fresh =>
+    { kind := .recoverDroppedAndFail, boundary := some b, expectedGeneration := some expected
+      freshGeneration := some fresh }
+
+def ActionWire.toModel (a : ActionWire) : Action Generation :=
+  let b := a.boundary.getD .observingReplica
+  let g := a.generation.getD 0
+  let expected := a.expectedGeneration.getD 0
+  let fresh := a.freshGeneration.getD 0
+  let d := a.duration.getD 0
+  let e := a.explicitDeadline.getD 0
+  let o := a.outcome.getD .failed
+  match a.kind with
+  | .claim => .claim b g d e
+  | .parkBackend => .parkBackend b g (a.closed.getD false)
+  | .resumeBackend => .resumeBackend b g d e (a.wake.getD false)
+  | .reparkExpiredResume => .reparkExpiredResume b g (a.expectedDeadline.getD 0)
+  | .finalizeParked => .finalizeParked b g o
+  | .begin => .begin b g
+  | .appendOutput => .appendOutput b g
+  | .renew => .renew b g (a.expectedDeadline.getD 0)
+  | .authorizeProducerDecision =>
+    .authorizeProducerDecision b g (a.decision.getD .closeOrRetract)
+  | .socketTraffic => .socketTraffic g
+  | .noOp => .noOp g
+  | .advanceTime => .advanceTime (a.now.getD 0)
+  | .drop => .drop b g
+  | .recoverExpired => .recoverExpired b expected fresh d e
+  | .recoverDropped => .recoverDropped b expected fresh d e
+  | .finalize => .finalize b g o
+  | .policyRevoke => .policyRevoke b expected fresh o
+  | .recoverExpiredAndFail => .recoverExpiredAndFail b expected fresh
+  | .recoverExpiredTerminal => .recoverExpiredTerminal b expected fresh o
+  | .recoverDroppedAndFail => .recoverDroppedAndFail b expected fresh
+
+example : leaseTraceCases.all (fun testCase =>
+    (testCase.actions.map ActionWire.ofModel).map ActionWire.toModel == testCase.actions &&
+      (WorldWire.ofModel testCase.pre).toModel == testCase.pre) = true := by
+  native_decide
+
+structure LeaseTraceInput where
+  name : String
+  pre : WorldWire
+  actions : List ActionWire
+  deriving Lean.ToJson
+
+/-- model-production-gap: the native lease owners take one database-backed
+action at a time under the wall clock (the generated drop cases drive
+`relinquish_execution_lease`); no production path replays a multi-action trace
+over a logical clock, so these traces of renewal, expiry, recovery and stale
+owners are not reached. -/
+@[conformance_family]
+def leaseTraceUnreached : Conformance.Family LeaseTraceInput (Option WorldWire) where
+  inputs := leaseTraceCases.map fun testCase =>
+    { name := testCase.name, pre := .ofModel testCase.pre
+      actions := testCase.actions.map ActionWire.ofModel }
+  model := fun i =>
+    (replay? i.pre.toModel (i.actions.map ActionWire.toModel)).map WorldWire.ofModel
 
 end Conformance.RequestExecutionLeaseContracts
