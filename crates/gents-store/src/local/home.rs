@@ -409,12 +409,17 @@ pub const INIT_PENDING_FILE_NAME: &str = "init-pending";
 /// leaves a home whose initialization fails on the non-empty store it finds
 /// rather than bootstrapping again.
 pub const BOOTSTRAP_CONSUMED_FILE_NAME: &str = ".node-bootstrap-consumed";
+/// Written by setup before it finishes the home's settings and removed once
+/// it has installed its core packs, so a setup stopped in between is offered
+/// to continue. Holds the JSON list of those packs.
+pub const SETUP_UNFINISHED_FILE_NAME: &str = "setup-unfinished.json";
 
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
     INIT_CONFIG_FILE_NAME,
     INIT_PENDING_FILE_NAME,
     BOOTSTRAP_CONSUMED_FILE_NAME,
+    SETUP_UNFINISHED_FILE_NAME,
     KEYS_DIR_NAME,
     RUNTIME_STATE_FILE_NAME,
     NETWORK_CONFIG_FILE_NAME,
@@ -453,6 +458,14 @@ pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
 /// reset would strand a running helper; it authenticates the node/build again
 /// before retirement, so retained receipts confer no authority on a fresh node.
 pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] = &[SERVICE_UPDATES_DIR_NAME];
+
+/// The core packs a setup stopped before installing, as setup recorded them
+/// in [`SETUP_UNFINISHED_FILE_NAME`]; `None` once its setup finished. The
+/// CLI's repair and the desktop's bootstrap both ask this.
+pub fn unfinished_setup(home_dir: &Path) -> Option<Vec<String>> {
+    let recorded = std::fs::read(home_dir.join(SETUP_UNFINISHED_FILE_NAME)).ok()?;
+    Some(serde_json::from_slice(&recorded).unwrap_or_default())
+}
 
 pub fn default_data_dir(home_dir: &Path) -> PathBuf {
     home_dir.join(DATA_DIR_NAME)

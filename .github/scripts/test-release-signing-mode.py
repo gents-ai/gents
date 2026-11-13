@@ -8,7 +8,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = yaml.safe_load((ROOT / ".github/workflows/release-macos.yml").read_text())
-STEPS = next(iter(WORKFLOW["jobs"].values()))["steps"]
+STEPS = WORKFLOW["jobs"]["build-sign-package"]["steps"]
 SCRIPT = next(step["run"] for step in STEPS if step.get("name") == "Validate release signing mode")
 
 

@@ -5,7 +5,7 @@ use serde_json::json;
 
 #[test]
 fn install_repair_home_classification_matches_lean() {
-    for case in families::install_repair_classification::cases::<String>() {
+    for case in families::install_repair_classification::cases::<String, String>() {
         let input = serde_json::from_value(serde_json::to_value(&case.input).unwrap()).unwrap();
         let actual = home::classify_observation(&input);
         case.check(serde_json::from_value(serde_json::to_value(actual).unwrap()).unwrap());
@@ -14,7 +14,9 @@ fn install_repair_home_classification_matches_lean() {
 
 #[test]
 fn install_repair_plans_match_lean() {
-    for case in families::install_repair_plans::cases::<String, String, String, String, String>() {
+    for case in
+        families::install_repair_plans::cases::<String, String, String, String, String, String>()
+    {
         let input: RepairObservation =
             serde_json::from_value(serde_json::to_value(&case.input).unwrap()).unwrap();
         let actual = planning::plan(&input);
@@ -101,10 +103,20 @@ fn install_repair_service_plans_match_lean() {
                 ServiceAction::SwitchProgram { start_after, answered, .. } => ("switch",start_after,false,answered),
                 ServiceAction::RefreshLog { restart } => ("refresh_log",restart,false,false),
                 ServiceAction::Restart => ("restart",false,false,false),
+                ServiceAction::RewriteDefinition => ("rewrite_definition",false,false,false),
             };
             json!({"action":action,"start_after":start_after,"replace_program":replace_program,"answered":answered})
         }).collect();
         case.check(serde_json::from_value(json!(actual)).unwrap());
+    }
+}
+
+#[test]
+fn install_repair_client_identities_match_lean() {
+    for case in families::install_repair_client_identities::cases::<String>() {
+        let input = serde_json::from_value(serde_json::to_value(&case.input).unwrap()).unwrap();
+        let actual = crate::home_state::client_identity_action(&input);
+        case.check(serde_json::from_value(serde_json::to_value(actual).unwrap()).unwrap());
     }
 }
 

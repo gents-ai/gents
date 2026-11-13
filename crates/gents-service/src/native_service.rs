@@ -535,6 +535,10 @@ where
         &self.config.home
     }
 
+    pub fn definition_path(&self) -> PathBuf {
+        self.config.definition_path(self.platform)
+    }
+
     pub fn install(&self) -> Result<()> {
         self.install_environment(None)
     }
