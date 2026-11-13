@@ -92,7 +92,12 @@ impl Fixture {
         // so optimization can prove the installed baseline.
         install(&admin, owner_documents).await;
         install_baseline(&admin, &owner, &pack, &binding).await;
-        set_default_agent(&ctx.access, &owner, &binding.agent_did).await;
+        gents_documents::test_support::set_test_default_agent_as(
+            &ctx.access,
+            &owner,
+            &binding.agent_did,
+        )
+        .await;
         Self {
             ctx,
             pack,
@@ -409,37 +414,6 @@ async fn install_baseline(
     )
     .await
     .unwrap();
-}
-
-async fn set_default_agent(access: &ConfigAccess, owner: &str, agent_did: &str) {
-    access
-        .transact_write("cli.eval.test_default_agent", |txn| {
-            Box::pin(async move {
-                let (_, mut node) = gents_documents::read_desired_state_record_in_txn(
-                    txn,
-                    Collection::Node,
-                    owner,
-                    owner,
-                )
-                .await?
-                .expect("fixture Node");
-                node["default_agent_did"] = json!(agent_did);
-                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: Collection::Node,
-                    add: node.clone(),
-                    update: node,
-                }])?;
-                apply_desired_state_plan(
-                    txn,
-                    &plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-                .map(|_| ())
-            })
-        })
-        .await
-        .unwrap();
 }
 
 async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
