@@ -81,7 +81,8 @@ pub(crate) async fn load_runtime_status_output(
         .unwrap_or(Value::Null);
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
-    let p2p_status = gents_host::p2p_status::load_live_http_p2p_status(home, graphql).await;
+    let p2p_status =
+        gents_host::p2p_status::load_live_http_p2p_status(Some(&home_dir), graphql).await;
     let background_completion =
         match gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
             &ConfigAccess::Graphql(graphql.clone()),

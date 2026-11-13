@@ -66,7 +66,10 @@ pub(super) async fn load_p2p_metrics_for_scrape(state: &RuntimeHttpState) -> P2p
         .ok()
         .and_then(|guard| guard.clone());
 
-    let fetch = crate::p2p_status::fetch_live_http_p2p_status(None, &state.p2p_graphql);
+    let fetch = crate::p2p_status::fetch_live_http_p2p_status(
+        state.home.as_deref().map(std::path::Path::new),
+        &state.p2p_graphql,
+    );
     match tokio::time::timeout(P2P_METRICS_FETCH_BUDGET, fetch).await {
         Ok(Ok(status)) => {
             let mut snap = p2p_metrics_from_status(&status, state.p2p_admission.as_ref());

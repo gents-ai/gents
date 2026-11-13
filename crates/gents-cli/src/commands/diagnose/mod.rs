@@ -159,7 +159,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                 Some(endpoint),
                 args.home.as_deref(),
             )?;
-            gents_host::p2p_status::load_live_http_p2p_status(args.home.as_deref(), &endpoint).await
+            gents_host::p2p_status::load_live_http_p2p_status(Some(&home_dir), &endpoint).await
         }
         None => gents_host::p2p_status::persisted_p2p_status(matching_runtime_state),
     };

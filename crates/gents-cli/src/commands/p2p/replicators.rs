@@ -78,8 +78,8 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
         )?,
     )
     .await?;
-    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
+    let p2p = fetch_live_http_p2p_status(Some(&home_dir), &graphql).await?;
     let filters_json: serde_json::Map<String, Value> = request
         .filters
         .iter()

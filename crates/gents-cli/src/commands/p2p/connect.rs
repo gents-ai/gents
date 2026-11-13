@@ -25,8 +25,8 @@ pub(super) async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
         )?,
     )
     .await?;
-    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
+    let p2p = fetch_live_http_p2p_status(Some(&home_dir), &graphql).await?;
     let mut output = json!({
         "status": "connect_requested",
         "home": home_dir,
@@ -45,7 +45,8 @@ pub(super) async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
 pub(super) async fn p2p_diagnose(args: P2pAccessArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
-    let p2p = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let p2p = load_live_http_p2p_status(Some(&home_dir), &graphql).await;
     let checks = json!({
         "info": p2p_probe_get(&graphql, &format!("{api_base}/p2p/info")).await,
         "shareable_address": p2p_probe_get(&graphql, &format!("{api_base}/p2p/shareable-address")).await,
@@ -58,7 +59,6 @@ pub(super) async fn p2p_diagnose(args: P2pAccessArgs) -> Result<()> {
         map.values()
             .all(|value| value.get("ok") == Some(&Value::Bool(true)))
     });
-    let home_dir = resolve_home_dir(args.home.as_deref());
     let mut output = json!({
         "status": if ok { "ok" } else { "degraded" },
         "home": home_dir,
