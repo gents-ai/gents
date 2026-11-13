@@ -1,0 +1,4 @@
+---- MODULE MCNativeCompletionHandshakeLostWakeup ----
+EXTENDS NativeCompletionHandshake
+
+====

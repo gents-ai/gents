@@ -23,6 +23,7 @@ pub(super) struct NativeOperationState {
 pub(super) struct NativeOperationTracker {
     pub(super) state: StdMutex<NativeOperationState>,
     idle: tokio::sync::Notify,
+    abandoned: tokio::sync::Notify,
 }
 
 impl NativeOperationTracker {
@@ -46,6 +47,7 @@ impl NativeOperationTracker {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .abandoned = true;
+        self.abandoned.notify_waiters();
     }
 
     pub(super) fn is_abandoned(&self) -> bool {
@@ -53,6 +55,23 @@ impl NativeOperationTracker {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .abandoned
+    }
+
+    /// The abandonment counterpart of `wait_idle`: resolves once the caller
+    /// guard has poisoned this registry. `notify_waiters` keeps no permit, so
+    /// the waiter registers before it reads the flag and an abandonment that
+    /// lands first is still observed.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub(super) async fn wait_abandoned(&self) {
+        loop {
+            let notified = self.abandoned.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_abandoned() {
+                return;
+            }
+            notified.await;
+        }
     }
 
     pub(super) async fn wait_idle(&self) {
@@ -148,14 +167,21 @@ where
         .try_with(|fault| fault.native_pause.clone())
         .ok()
         .flatten();
+    #[cfg(any(test, feature = "test-fixtures"))]
+    if let Some(observation) = native_pause
+        .as_ref()
+        .and_then(|pause| pause.observation.as_ref())
+    {
+        observation.publish(&tracker);
+    }
     let dispatched_at = Instant::now();
     tokio::spawn(
         async move {
             record_slow_native_phase(operation, "execute-dispatch", dispatched_at.elapsed());
             #[cfg(any(test, feature = "test-fixtures"))]
-            if let Some((reached, release)) = native_pause {
-                reached.notify_one();
-                release.notified().await;
+            if let Some(pause) = native_pause {
+                pause.reached.notify_one();
+                pause.release.notified().await;
             }
             let native_started = Instant::now();
             let result = match operation {

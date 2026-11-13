@@ -202,6 +202,23 @@ See `../README.md` for how this fits the broader formal-verification model.
   the read without a listener and registration is dropped and the view stays a version
   behind); `ListenFailure`, `PendingNoEvent` and `SupersededMismatch` each
   drop one remaining guard.
+- `NativeCompletionHandshake` — the scheduling handshake around the embedded
+  transaction owner's caller-timeout step (Lean `NativeCompletion`
+  `callerTimedOut`), which fixes the event order but not which party may act
+  when. The caller takes its native permit, spawns the native task and arms
+  the storage-step deadline in one uninterrupted step, the native operation
+  reports entry and parks, and a driver pauses the virtual clock and advances
+  it to expire that deadline; the expiry abandons the tracker and a telemetry
+  record may follow. The model has no real-time step, so a behavior that never
+  observes the timeout is one a driver can only finish by waiting on wall
+  time. `AdvanceFollowsArm`, `ObservationImpliesAbandonment` and
+  `ObservableWithoutRealTime` hold when the driver advances only after the
+  native entry it waited for and observes the tracker's own abandonment under
+  notify-permit semantics. `UnarmedAdvance` drops the entry precondition and
+  advances under the deadline the caller later computes; `TelemetrySignal`
+  waits on the `pending_native` write-attempt event, a projection the attempt
+  may skip once it holds a terminal outcome; `LostWakeup` drops permit
+  semantics, the lost wakeup an enable-then-check wait avoids.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -498,6 +515,10 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCRuntimeConnectionBreakBeforeMake.cfg` | as green, `MakeBeforeBreak = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: Connected while the renewal re-arm has no subscription armed | 3,854 distinct states before counterexample; 16,871 generated | — | <1s |
 | `MCRuntimeConnectionRenewalFlap.cfg` | as green, `RenewalAsFailure = TRUE` | `RenewalNeverDisconnects` intentionally VIOLATED: arm, ready, renewal, failure notice, Disconnected with the runtime reachable | 2,433 distinct states before counterexample; 9,253 generated | — | <1s |
 | `MCRuntimeConnectionNoEndpoint.cfg` | as green, `NamedNoEndpoint = FALSE` | `NoEndpointNamed` intentionally VIOLATED: the peer loses its endpoint and reconcile leaves no status | 46 distinct states before counterexample; 116 generated | — | <1s |
+| `MCNativeCompletionHandshake.cfg` | `Timeout = 1`, `MaxAdvance = 1`, `RequireArmed = TRUE`, `ObserveTelemetry = FALSE`, `PermitSemantics = TRUE` | Passes `TypeOK`, `AdvanceFollowsArm`, `ObservationImpliesAbandonment`, `ObservableWithoutRealTime` | 51 distinct states; 104 generated | 10 | <1s (OpenJDK 26) |
+| `MCNativeCompletionHandshakeUnarmedAdvance.cfg` | as green, `RequireArmed = FALSE` | `AdvanceFollowsArm` intentionally VIOLATED: DriverPause, DriverAdvance before the caller is polled (`ObservableWithoutRealTime` fails on the same schedule) | 44 distinct states before counterexample; 81 generated | 6 | <1s (OpenJDK 26) |
+| `MCNativeCompletionHandshakeTelemetrySignal.cfg` | as green, `ObserveTelemetry = TRUE` | `ObservableWithoutRealTime` intentionally VIOLATED: SuppressRecord, DriverAdvance, CallerExpire leaves the awaited event unemitted | 45 distinct states; 94 generated | 10 | <1s (OpenJDK 26) |
+| `MCNativeCompletionHandshakeLostWakeup.cfg` | as green, `PermitSemantics = FALSE` | `ObservableWithoutRealTime` intentionally VIOLATED: CallerExpire lands before DriverWait and never wakes it | 48 distinct states; 99 generated | 10 | <1s (OpenJDK 26) |
 | `MCRuntimeConnectionStaleGeneration.cfg` | as green, `GenerationCheck = FALSE` | `StaleNoticeInert` intentionally VIOLATED: the replaced source's queued notice moves the new source's status | 220 distinct states before counterexample; 603 generated | — | <1s |
 | `MCRuntimeConnectionEarlyReady.cfg` | as green, `ArmBeforeReady = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: ready before any subscription is armed, snapshot, Connected | 911 distinct states before counterexample; 2,844 generated | — | <1s |
 | `MCWindowIndependence.cfg` | `Windows = {w1, w2}`, `Nodes = {n1, n2}`, `MaxWrites = 2`, `MaxSwitch = 3`, per-window fallback, cancel on switch | Passes `TypeOK`, `NoCrossDelivery`, `Converges`, `WatchFollowsSelection` | 126,444 distinct states; 753,497 generated | 20 | 10s |

@@ -7447,6 +7447,7 @@ pub struct LeanNativeCompletionCaseObservationsItem {
     pub renewal_attempt_returned: bool,
     pub retry_started: bool,
     pub rollback_returned: bool,
+    pub caller_abandonment_observed: bool,
 }
 
 #[derive(Debug, Deserialize)]
