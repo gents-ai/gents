@@ -533,9 +533,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_link_cases" "GoalLinks"
       "A detached relationship operation already in flight is not fenced by a concurrent revocation.")
       "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "identity_parent_publication_cases" "ParentPublication"
-      "Callback repair assumes trusted authored Agent metadata; forged or missing authenticated creator traces need an ownership-bound native consumer.")
+  , tagged (consumerCoverage
+      "family" "identity_publication_parent")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family" "callback_parent_actor")

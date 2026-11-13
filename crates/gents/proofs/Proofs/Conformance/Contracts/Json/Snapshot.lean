@@ -151,7 +151,6 @@ import Proofs.Conformance.CompactionCheckpoint
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry
 import Proofs.Conformance.InferenceObservation
-import Proofs.Store.Identity.PublicationConformance
 import Proofs.Conformance.Identity.Publication
 import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
@@ -449,8 +448,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
     ++ "\"client_publication_protected_collection\":"
       ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
-    ++ "\"identity_parent_publication_cases\":"
-      ++ Identity.PublicationConformance.parentCasesJson ++ ","
     ++ "\"identity_readiness_preflight_cases\":"
       ++ Identity.OperationsConformance.preflightCasesJson ++ ","
     ++ "\"identity_pairing_partition_cases\":"

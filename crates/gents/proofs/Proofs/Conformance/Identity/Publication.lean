@@ -65,4 +65,53 @@ def sessionRecovery : Family Trace Bool where
   model := fun i =>
     ((afterSteps beginPublication i.steps).getLast?.map (·.pending)).getD beginPublication.pending
 
+deriving instance ToJson for ParentPublication
+
+structure ParentStep where
+  nativeOwner : Option String
+  claimedCreator : Option String
+  authenticatedCreator : Option String
+  grantOk : Bool
+  markOk : Bool
+  revokeParent : Bool
+  deriving ToJson
+
+structure ParentTrace where
+  name : String
+  steps : List ParentStep
+  deriving ToJson
+
+def applyParentStep (state : ParentPublication) (step : ParentStep) : ParentPublication :=
+  let repaired := recoverParent state step.nativeOwner step.claimedCreator
+    step.authenticatedCreator step.grantOk step.markOk
+  if step.revokeParent then ownerRevokesLinkedParent repaired else repaired
+
+def afterParentSteps : ParentPublication → List ParentStep → List ParentPublication
+  | _, [] => []
+  | state, step :: rest =>
+    let next := applyParentStep state step
+    next :: afterParentSteps next rest
+
+def parentTraces : List ParentTrace :=
+  [⟨"grant_failure_then_recovery", [⟨some "agent", some "agent", some "agent", false, true, false⟩,
+      ⟨some "agent", some "agent", some "agent", true, true, false⟩]⟩,
+   ⟨"marker_failure_then_recovery", [⟨some "agent", some "agent", some "agent", true, false, false⟩,
+      ⟨some "agent", some "agent", some "agent", false, true, false⟩]⟩,
+   ⟨"forged_creator", [⟨some "agent", some "other", some "agent", true, true, false⟩]⟩,
+   ⟨"missing_authenticated_creator", [⟨some "agent", some "agent", none, true, true, false⟩]⟩,
+   ⟨"revoked_after_completion", [⟨some "agent", some "agent", some "agent", true, true, false⟩,
+      ⟨some "agent", some "agent", some "agent", true, true, true⟩]⟩]
+
+structure ParentOutput where
+  initial : ParentPublication
+  after : List ParentPublication
+  deriving ToJson
+
+@[conformance_family]
+def parent : Family ParentTrace ParentOutput where
+  inputs := parentTraces
+  model := fun i =>
+    { initial := beginParentPublication
+      after := afterParentSteps beginParentPublication i.steps }
+
 end Conformance.IdentityPublication

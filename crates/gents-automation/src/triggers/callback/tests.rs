@@ -3396,22 +3396,23 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
     );
     let parents = access.execute("{ Agent { _docID } }").await.unwrap();
     let parent = parents["data"]["Agent"][0]["_docID"].as_str().unwrap();
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_parent_publication_cases;
-    let mut consumed = 0;
-    for case in cases.iter().filter(|case| {
-        matches!(
-            case.name.as_str(),
-            "marker_failure_then_recovery" | "revoked_after_completion"
-        )
-    }) {
-        consumed += 1;
-        let invocation = format!("modeled-parent-{}", case.name);
+    let foreign = KeyIdentity::load_or_create(home.path().join("foreign.key"), None).unwrap();
+    let anonymous = gents_store::config_client::ConfigAccess::local(node.clone());
+    for case in gents_lean_vocab::families::identity_publication_parent::cases() {
+        let name = case.input.name.as_str();
+        let did_of = |creator: Option<&str>| match creator {
+            Some("agent") => agent.clone(),
+            Some("other") => foreign.did().to_owned(),
+            other => panic!("unknown modeled creator {other:?}"),
+        };
+        let creator = did_of(case.input.steps[0].claimed_creator.as_deref());
+        let invocation = format!("modeled-parent-{name}");
         let result = CallbackResultDoc {
             result_id: format!("result-{invocation}"),
             invocation_id: invocation.clone(),
             binding_id: None,
             owner_node_did: owner.into(),
-            agent_did: agent.clone(),
+            agent_did: creator.clone(),
             workspace_id: None,
             work_unit_id: None,
             caused_by_correlation: None,
@@ -3430,16 +3431,37 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
             r#"{{ CallbackResult(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID parent_linked}} }}"#,
             gents_store::graphql::escape_graphql_string(&doc)
         );
-        assert!(case.initial.committed);
-        assert!(!case.initial.parent_granted);
-        assert_eq!(
-            access.execute(&query).await.unwrap()["data"]["CallbackResult"][0]["parent_linked"],
-            case.initial.parent_linked
-        );
-        for step in &case.steps {
+        let observe = || {
+            let query = &query;
+            let access = &access;
+            let user_access = &user_access;
+            async move {
+                let rows = access.execute(query).await.unwrap()["data"]["CallbackResult"]
+                    .as_array()
+                    .unwrap()
+                    .clone();
+                gents_lean_vocab::families::identity_publication_parent::ParentPublication {
+                    committed: rows.len() == 1,
+                    parent_granted: !user_access.execute(query).await.unwrap()["data"]
+                        ["CallbackResult"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty(),
+                    parent_linked: rows.first().is_some_and(|row| row["parent_linked"] == true),
+                }
+            }
+        };
+        let initial = observe().await;
+        let mut after = Vec::new();
+        for step in &case.input.steps {
             assert_eq!(step.native_owner.as_deref(), Some("agent"));
-            assert_eq!(step.claimed_creator.as_deref(), Some("agent"));
-            assert_eq!(step.authenticated_creator.as_deref(), Some("agent"));
+            let claimed = did_of(step.claimed_creator.as_deref());
+            let recovery_access = match step.authenticated_creator.as_deref() {
+                Some("agent") => &access,
+                None => &anonymous,
+                other => panic!("unknown modeled authenticated creator {other:?}"),
+            };
+            let granted = observe().await.parent_granted;
             if step.grant_ok && !step.mark_ok {
                 // The grant has committed when the process stops before its marker write.
                 // Outside a transaction the Agent creator is refused: it holds
@@ -3459,11 +3481,8 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
                 )
                 .await
                 .unwrap();
-            } else if step.mark_ok {
-                // Only the authenticated Agent creator repairs an unlinked parent.
-                let linked = access.execute(&query).await.unwrap()["data"]["CallbackResult"][0]
-                    ["parent_linked"]
-                    == true;
+            } else if step.mark_ok && (step.grant_ok || granted) {
+                let linked = observe().await.parent_linked;
                 assert!(
                     linked
                         || super::documents::ensure_callback_parent(
@@ -3472,21 +3491,20 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
                             "CallbackResult",
                             &invocation,
                             owner,
-                            &agent,
+                            &claimed,
                         )
                         .await
                         .is_err()
                 );
-                super::documents::ensure_callback_parent(
+                let _ = super::documents::ensure_callback_parent(
                     &node,
-                    &access,
+                    recovery_access,
                     "CallbackResult",
                     &invocation,
                     owner,
-                    &agent,
+                    &claimed,
                 )
-                .await
-                .unwrap();
+                .await;
             }
             if step.revoke_parent {
                 gents_store::test_support::relationships::resource_in_txn(
@@ -3502,29 +3520,23 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
                 .unwrap();
                 super::documents::ensure_callback_parent(
                     &node,
-                    &access,
+                    recovery_access,
                     "CallbackResult",
                     &invocation,
                     owner,
-                    &agent,
+                    &claimed,
                 )
                 .await
                 .unwrap();
             }
-            let observed = access.execute(&query).await.unwrap();
-            assert_eq!(
-                observed["data"]["CallbackResult"][0]["parent_linked"], step.after.parent_linked,
-                "{}",
-                case.name
-            );
-            let visible = !user_access.execute(&query).await.unwrap()["data"]["CallbackResult"]
-                .as_array()
-                .unwrap()
-                .is_empty();
-            assert_eq!(visible, step.after.parent_granted, "{}", case.name);
-            assert!(step.after.committed);
+            after.push(observe().await);
         }
+        case.check(
+            gents_lean_vocab::families::identity_publication_parent::ParentOutput {
+                initial,
+                after,
+            },
+        );
     }
-    assert_eq!(consumed, 2);
     node.shutdown().await.expect("node shutdown");
 }
