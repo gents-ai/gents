@@ -18,6 +18,50 @@ pub struct AccountSummary {
     pub connected_at: Option<DateTime<Utc>>,
 }
 
+/// A stored row as account management shows it: any provider, no tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAccount {
+    pub credential_id: String,
+    pub node_did: String,
+    pub provider: String,
+    pub account_ref: Option<String>,
+    pub label: String,
+    pub identity: Option<String>,
+    pub plan: Option<String>,
+    pub enabled: bool,
+    pub access_token_expires_at: DateTime<Utc>,
+    pub last_refresh: Option<DateTime<Utc>>,
+}
+
+impl From<&OAuthCredential> for StoredAccount {
+    fn from(row: &OAuthCredential) -> Self {
+        Self {
+            credential_id: row.credential_id.clone(),
+            node_did: row.node_did.clone(),
+            provider: row.provider.clone(),
+            account_ref: row.account_ref.clone(),
+            label: effective_account_label(row),
+            identity: account_display_label(row),
+            plan: row.chatgpt_plan_type.clone(),
+            enabled: row.enabled,
+            access_token_expires_at: row.access_token_expires_at,
+            last_refresh: row.last_refresh,
+        }
+    }
+}
+
+/// Every row the node owns, in the resolver's order.
+pub async fn list_stored_accounts(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+) -> Result<Vec<StoredAccount>> {
+    Ok(list_oauth_credentials_on(access, node_did)
+        .await?
+        .iter()
+        .map(StoredAccount::from)
+        .collect())
+}
+
 pub fn enabled_accounts_note(provider: &str, accounts: &[AccountSummary]) -> String {
     let product = sign_in_product(provider);
     let name = product.as_ref().map_or(provider, |product| product.name);

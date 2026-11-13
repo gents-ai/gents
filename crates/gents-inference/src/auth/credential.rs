@@ -20,7 +20,7 @@ pub use account_backend::preset_account_backend;
 use account_backend::sync_account_backend;
 pub use accounts::{
     enabled_accounts_note, list_accounts, no_switch_candidate_note, remove_account_in_txn,
-    set_account_enabled, set_account_label, AccountSummary,
+    list_stored_accounts, set_account_enabled, set_account_label, AccountSummary, StoredAccount,
 };
 pub use auth_error::account_failure;
 use auth_error::MOVE_OFF_ACCOUNT;
@@ -46,7 +46,7 @@ use labels::{ensure_label_free, next_free_label, sign_in_product};
 use resolve::resolver_order;
 pub use resolve::{
     account_pick, pick_oauth_credential, pick_oauth_pool, resolve_oauth_credential,
-    resolve_oauth_pool, AccountPick,
+    resolve_oauth_pool, AccountPick, NodeOAuthAccounts,
 };
 pub use resolve::{provider_default_account_ref, resolve_oauth_credential_in_txn};
 pub(crate) use resolve::{

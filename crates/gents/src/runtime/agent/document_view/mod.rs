@@ -10,7 +10,7 @@ pub(crate) use load::load_document_runtime_view_as;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
 use gents_documents::*;
-use gents_inference::auth::credential::OAuthCredential;
+use gents_inference::auth::credential::NodeOAuthAccounts;
 use rapidhash::RapidHashMap;
 
 #[derive(Debug, Clone)]
@@ -44,7 +44,7 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) tool_services: RapidHashMap<String, DocumentRecord<ToolServiceRegistry>>,
     pub(crate) backend_observations: RapidHashMap<String, InferenceBackendObservation>,
     pub(crate) unknown_kind_backends: RapidHashMap<String, String>,
-    pub(crate) oauth_credentials: RapidHashMap<String, DocumentRecord<OAuthCredential>>,
+    pub(crate) oauth_accounts: NodeOAuthAccounts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,17 +65,8 @@ impl DocumentRuntimeView {
         provider: &str,
         pick: gents_inference::auth::credential::AccountPick<'_>,
     ) -> bool {
-        gents_inference::auth::credential::pick_oauth_credential(
-            self.oauth_rows(),
-            &self.node.value.node_did,
-            provider,
-            pick,
-        )
-        .is_some()
-    }
-
-    fn oauth_rows(&self) -> impl Iterator<Item = &OAuthCredential> {
-        self.oauth_credentials.values().map(|record| &record.value)
+        self.oauth_accounts
+            .resolves(&self.node.value.node_did, provider, pick)
     }
 
     /// The enabled accounts a backend rotates, as credential ids in rotation
@@ -85,14 +76,10 @@ impl DocumentRuntimeView {
         if !matches!(backend.auth, BackendAuth::NodeOAuthPool { .. }) {
             return Vec::new();
         }
-        gents_inference::auth::credential::pick_oauth_pool(
-            self.oauth_rows(),
+        self.oauth_accounts.pool_ids(
             &self.node.value.node_did,
             gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         )
-        .into_iter()
-        .map(|row| row.credential_id.clone())
-        .collect()
     }
 
     pub(crate) fn has_unresolved_agent_references(&self) -> bool {
