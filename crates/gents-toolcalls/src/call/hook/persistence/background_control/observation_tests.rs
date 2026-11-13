@@ -1,29 +1,19 @@
 use super::*;
 
-fn decode<T>(wire: &str) -> T
-where
-    T: serde::de::DeserializeOwned,
-{
-    serde_json::from_value(serde_json::Value::String(wire.to_owned())).unwrap()
-}
-
 #[test]
 fn generated_observation_cases_preserve_deadlines_and_closed_feed_recovery() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().durable_observation_cases;
-    assert!(!cases.is_empty());
     let origin = tokio::time::Instant::now();
-    for case in cases {
-        let at = |offset| origin + std::time::Duration::from_millis(offset);
-        let change = decode::<Change>(&case.change);
-        let mut state = Observation::new(at(case.rescan_at), case.feed_open);
-        assert_eq!(
-            state.wake(at(case.now), at(case.deadline_at), case.cancelled, change),
-            decode::<Wake>(&case.expected_wake),
-        );
-        state.observe_change(change);
-        assert_eq!(state.feed_open(), case.expected_feed_open);
-        assert_eq!(state.rescan_at(), at(case.expected_rescan_at));
-    }
+    let at = |offset| origin + std::time::Duration::from_millis(offset);
+    gents_lean_vocab::families::native_refinement_observation::replay::<Change, Wake>(|i| {
+        let mut state = Observation::new(at(i.rescan_at), i.feed_open);
+        let wake = state.wake(at(i.now), at(i.deadline_at), i.cancelled, i.change);
+        state.observe_change(i.change);
+        gents_lean_vocab::families::native_refinement_observation::ObservationOutput {
+            wake,
+            feed_open: state.feed_open(),
+            rescan_at: u64::try_from((state.rescan_at() - origin).as_millis()).unwrap(),
+        }
+    });
 }
 
 #[tokio::test(start_paused = true)]

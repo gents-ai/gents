@@ -1,5 +1,7 @@
 import Proofs.ToolCalls.TaskHooks
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Session
 
 namespace Conformance.TaskHooksContracts
 open TaskHooks Conformance.Contracts
@@ -121,12 +123,33 @@ def admissionCases : List AdmissionCase :=
 theorem admissionCases_replay : ∀ c ∈ admissionCases,
     (admitHooks c.hooks).isSome = c.expectedAdmitted := by decide
 
-private def admissionCaseJson (c : AdmissionCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"hooks\":" ++ jsonArray (c.hooks.map hookJson) ++
-    ",\"expected_admitted\":" ++ boolJson c.expectedAdmitted ++ "}"
+deriving instance Lean.ToJson for HookPhase
+deriving instance Lean.ToJson for TaskHook
 
-def admissionCasesJson : String := jsonArray (admissionCases.map admissionCaseJson)
+structure AdmissionInput where
+  name : String
+  taskHooks : List TaskHook
+  deriving Lean.ToJson
+
+structure AdmissionOutput where
+  admitted : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def admission : Family AdmissionInput AdmissionOutput where
+  inputs := admissionCases.map fun c => { name := c.name, taskHooks := c.hooks }
+  model := fun i => { admitted := (admitHooks i.taskHooks).isSome }
+
+structure TimeoutOutput where
+  effectiveTimeoutSecs : Nat
+  deriving Lean.ToJson
+
+/-- Every hook of every admission case, admitted or not: production resolves
+the timeout of a hook before validation decides admission. -/
+@[conformance_family]
+def effectiveTimeout : Family TaskHook TimeoutOutput where
+  inputs := admissionCases.flatMap (·.hooks)
+  model := fun h => { effectiveTimeoutSecs := h.effectiveTimeout }
 
 structure ScriptedResult where
   hookId : String
@@ -412,20 +435,62 @@ theorem recoveryCases_replay : ∀ c ∈ recoveryCases,
     (recoveryOf c).1 = Recovery.recoveredRequestState c.interruptRequested ∧
       (recoveryOf c).2.map HookAttempt.hookId = c.expectedRemaining := by decide
 
-private def recoveryCaseJson (c : RecoveryCase) : String :=
-  let result := recoveryOf c
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"interrupt_requested\":" ++ boolJson c.interruptRequested ++
-    ",\"started\":" ++ boolJson c.started ++
-    ",\"hooks\":" ++ jsonArray (c.hooks.map hookJson) ++
-    ",\"observed\":" ++ jsonArray (c.observed.map attemptJson) ++
-    ",\"script\":" ++ jsonArray (c.script.map (fun s =>
-      "{\"hook_id\":" ++ jsonString s.hookId ++
-        ",\"result\":" ++ commandResultJson s.result ++ "}")) ++
-    ",\"expected_remaining\":" ++ jsonStringArray c.expectedRemaining ++
-    ",\"attempted\":" ++ jsonArray (result.2.map attemptJson) ++
-    ",\"expected_request_state\":" ++ jsonString result.1.toDefraDB ++ "}"
+structure CommandResultWire where
+  kind : String
+  code : Option Int
+  deriving Lean.ToJson
 
-def recoveryCasesJson : String := jsonArray (recoveryCases.map recoveryCaseJson)
+def CommandResultWire.ofModel : CommandResult → CommandResultWire
+  | .exited code => { kind := "exited", code := some code }
+  | .launchFailed => { kind := "launch_failed", code := none }
+  | .timedOut => { kind := "timed_out", code := none }
+  | .interrupted => { kind := "interrupted", code := none }
+
+def CommandResultWire.toModel (wire : CommandResultWire) : CommandResult :=
+  match wire.kind, wire.code with
+  | "exited", some code => .exited code
+  | "launch_failed", _ => .launchFailed
+  | "timed_out", _ => .timedOut
+  | _, _ => .interrupted
+
+example : recoveryCases.all (fun c =>
+    (c.observed ++ c.script.map (fun s => ({ hookId := s.hookId, result := s.result } : HookAttempt))).all fun a =>
+      (CommandResultWire.ofModel a.result).toModel == a.result) := by native_decide
+
+structure AttemptWire where
+  hookId : String
+  result : CommandResultWire
+  deriving Lean.ToJson
+
+structure RecoveryInput where
+  name : String
+  interruptRequested : Bool
+  started : Bool
+  hooks : List TaskHook
+  observed : List AttemptWire
+  script : List AttemptWire
+  deriving Lean.ToJson
+
+structure RecoveryOutput where
+  admitted : Bool
+  remaining : List String
+  requestState : RequestState
+  deriving Lean.ToJson
+
+@[conformance_family]
+def recovery : Family RecoveryInput RecoveryOutput where
+  inputs := recoveryCases.map fun c =>
+    { name := c.name, interruptRequested := c.interruptRequested, started := c.started
+      hooks := c.hooks
+      observed := c.observed.map fun a => { hookId := a.hookId, result := .ofModel a.result }
+      script := c.script.map fun s => { hookId := s.hookId, result := .ofModel s.result } }
+  model := fun i =>
+    let result := recoverInterrupted i.interruptRequested i.started i.hooks
+      (i.observed.map fun a => ({ hookId := a.hookId, result := a.result.toModel } : HookAttempt))
+      (scriptedExec (i.script.map fun s =>
+        ({ hookId := s.hookId, result := s.result.toModel } : ScriptedResult)))
+    { admitted := (admitHooks i.hooks).isSome
+      remaining := result.2.map HookAttempt.hookId
+      requestState := result.1 }
 
 end Conformance.TaskHooksContracts

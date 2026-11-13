@@ -396,16 +396,12 @@ def snapshotCaptureTailJson : String :=
       ++ captureOrderCasesJson ++ ","
     ++ "\"aggregate_token_budget_cases\":"
       ++ aggregateTokenBudgetCasesJson ++ ","
-    ++ "\"task_hook_admission_cases\":"
-      ++ Conformance.TaskHooksContracts.admissionCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
     ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
     ++ "\"task_hook_run_cases\":"
       ++ Conformance.TaskHooksContracts.runCasesJson ++ ","
-    ++ "\"task_hook_recovery_cases\":"
-      ++ Conformance.TaskHooksContracts.recoveryCasesJson ++ ","
     ++ "\"compaction_reducer_cases\":"
       ++ jsonArray
         (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","
@@ -503,8 +499,6 @@ def snapshotGoalCasesJson : String :=
       ++ Conformance.GoalRequestAncestryContracts.scopeCasesJson ++ ","
     ++ "\"goal_request_ancestry_cases\":"
       ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
-    ++ "\"durable_observation_cases\":"
-      ++ Conformance.NativeRefinement.observationCasesJson ++ ","
     ++ "\"client_process_claim_cases\":"
       ++ Conformance.NativeRefinement.clientProcessClaimCasesJson ++ ","
     ++ "\"client_process_receipt_cases\":"
@@ -517,14 +511,6 @@ def snapshotGoalCasesJson : String :=
       ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
     ++ "\"delegated_finality_cases\":"
       ++ Identity.DelegatedFinality.casesJson ++ ","
-    ++ "\"client_signed_control_cases\":"
-      ++ Conformance.NativeRefinement.clientSignedControlCasesJson ++ ","
-    ++ "\"process_stop_action_cases\":"
-      ++ Conformance.NativeRefinement.processStopActionCasesJson ++ ","
-    ++ "\"background_process_identity_cases\":"
-      ++ Conformance.NativeRefinement.processIdentityCasesJson ++ ","
-    ++ "\"plugin_target_resolution_cases\":"
-      ++ Conformance.NativeRefinement.targetCasesJson ++ ","
 
 def snapshotGoalMutationCasesJson : String :=
   ""
@@ -934,10 +920,6 @@ def snapshotRecoveryCasesJson : String :=
       ++ jsonArray (QueuedSteering.boundaryCases.map boundaryCaseJson) ++ ","
     ++ "\"agent_steer_reachability_cases\":"
       ++ jsonArray (QueuedSteering.agentSteerReachabilityCases.map agentSteerReachabilityCaseJson) ++ ","
-    ++ "\"agent_folded_binding_cases\":"
-      ++ jsonArray (QueuedSteering.foldedBindingCases.map foldedBindingCaseJson) ++ ","
-    ++ "\"agent_message_outcome_cases\":"
-      ++ jsonArray (QueuedSteering.agentMessageOutcomeCases.map agentMessageOutcomeCaseJson) ++ ","
     ++ "\"queue_deadline_conformance_cases\":"
       ++ jsonArray
         (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
@@ -957,17 +939,8 @@ def snapshotRecoveryCasesJson : String :=
           | some facts => "{\"terminal\":" ++ toString facts.terminal
               ++ ",\"this_runtime\":" ++ toString facts.thisRuntime ++ "}")
           ++ ",\"observation\":" ++ jsonString observation.toContract ++ "}") ++ ","
-    ++ "\"restart_disposition_cases\":"
-      ++ jsonArray
-        (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
     ++ "\"r4c_background_work_cases\":"
       ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
-    ++ "\"tool_output_paging_cases\":"
-      ++ jsonArray
-        (toolOutputPagingCases.map toolOutputPagingCaseJson) ++ ","
-    ++ "\"interrupt_disposition_cases\":"
-      ++ jsonArray
-        (interruptDispositionCases.map interruptDispositionCaseJson) ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
@@ -1074,9 +1047,6 @@ def snapshotFileCasesJson : String :=
     ++ "\"callback_recovery_cases\":" ++ callbackRecoveryCasesJson ++ ","
     ++ "\"callback_cases\":"
       ++ callbackCasesJson ++ ","
-    ++ "\"r6_background_theorem_witnesses\":"
-      ++ jsonArray
-        (r6BackgroundTheoremWitnesses.map backgroundTheoremWitnessJson) ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

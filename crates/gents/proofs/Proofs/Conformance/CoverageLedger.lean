@@ -800,13 +800,13 @@ def caseCoverage : List CoverageEntry :=
       "Binds the physical target selected in the message publication transaction; cross-node replication remains a separate boundary.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_folded_binding_cases"
-      "AgentFoldedBindingCases"
+      "family"
+      "contracts_agent_folded_binding"
       "Binds requester and physical-head outcome checks; cross-node replication races remain to be exercised.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_message_outcome_cases"
-      "AgentMessageOutcomeCases"
+      "family"
+      "queued_steering_agent_message_outcome"
       "Binds outcome selection; physical-head binding and notification replay need native flow coverage.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage
@@ -820,8 +820,12 @@ def caseCoverage : List CoverageEntry :=
       "Exercises charged-usage summation and the owned loop budget ledger. Database selection of restart rows and missing-usage rejection still need completion-owner observations.")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "task_hook_admission_cases"
-      "TaskHookAdmissionCases")
+      "family"
+      "task_hooks_contracts_admission")
+      "task-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "task_hooks_contracts_effective_timeout")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "task_hook_run_cases"
@@ -834,8 +838,8 @@ def caseCoverage : List CoverageEntry :=
       "Every generated trace runs through the production orchestration and managed host execution with real commands: each scripted result is produced by a real process (an exit status, a nonexistent executable, a command outliving its model-resolved timeout, or a held command cancelled through the interrupt or shutdown source its phase uses). The processes' own invocation log, with the owned work's entry, is compared against the emitted invocationTrace, excluding only occurrences that could not launch; attempts, outcomes and the terminal request state are compared too. The daemon placement of the before gate at claim and the after phases ahead of terminalization is fenced by daemon tests, not these traces.")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "task_hook_recovery_cases"
-      "TaskHookRecoveryCases")
+      "family"
+      "task_hooks_contracts_recovery")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "request_progress_cases"
@@ -1817,8 +1821,8 @@ def caseCoverage : List CoverageEntry :=
       "plugin_job_wakes")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "restart_disposition_cases"
-      "RestartDispositionCases")
+      "family"
+      "contracts_restart_plugin_job")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_backgrounding_cases"
@@ -1937,8 +1941,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_queue_assignment_contracts_steer_decision")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "durable_observation_cases"
-      "DurableObservationCases")
+      "family"
+      "native_refinement_observation")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1957,20 +1961,20 @@ def caseCoverage : List CoverageEntry :=
       "ClientControlGrantCases")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_signed_control_cases"
-      "ClientSignedControlCases")
+      "family"
+      "native_refinement_signed_control")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "process_stop_action_cases"
-      "ProcessStopActionCases")
+      "family"
+      "native_refinement_stop_action")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "background_process_identity_cases"
-      "BackgroundProcessIdentityCases")
+      "family"
+      "native_refinement_process_identity")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_target_resolution_cases"
-      "PluginTargetResolutionCases")
+      "family"
+      "native_refinement_target_resolution")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2050,12 +2054,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalResetResumeCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "restart_disposition_cases"
-      "RestartDispositionCases")
+      "family"
+      "contracts_restart_native")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "restart_disposition_cases"
-      "RestartDispositionCases")
+      "family"
+      "contracts_restart_session_message")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "r6_backgrounding_cases"
@@ -2078,8 +2082,12 @@ def caseCoverage : List CoverageEntry :=
       "The generated caller-interrupt dispatch case supplies the accepted Running foreground wait's cancelled state and unchanged background state; the native test separately asserts exact canonical cancellation text. The observer case supplies the only structured alternative. This finite race check does not establish a deterministic winner or scheduler fairness.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "restart_disposition_cases"
-      "RestartDispositionCases")
+      "family"
+      "contracts_restart_missing_parent")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_restart_classification")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "recovery_sweep_cases"
@@ -2115,8 +2123,12 @@ def caseCoverage : List CoverageEntry :=
       "Covers four persisted tool recovery/cancellation outcomes through canonical accepted admission and physical request/tool rows. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
       "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "r6_background_theorem_witnesses"
-      "BackgroundBudgetBoundedTheoremWitness")
+      "family"
+      "contracts_background_admission_bound")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_background_receipt_contention")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r4c_background_work_cases"
@@ -2128,12 +2140,16 @@ def caseCoverage : List CoverageEntry :=
       "#1571: replace the retired state/registry dispatch consumer with canonical_source_reconstruction over physical tool segments; migrate the generated witness schema. Generic paging coverage below is unchanged.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "tool_output_paging_cases"
-      "ToolOutputPagingCases")
+      "family"
+      "contracts_tool_output_paging")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "interrupt_disposition_cases"
-      "InterruptDispositionCases")
+      "family"
+      "contracts_interrupt_disposition")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_interrupt_in_flight")
       "background-tools" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "transcript_conformance_cases"

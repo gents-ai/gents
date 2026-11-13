@@ -133,24 +133,25 @@ async fn tool_delivery_rows(
 
 #[tokio::test]
 async fn spawn_receipt_survives_modeled_publication_contention() {
-    let witness = gents_lean_vocab::lean_r6_background_theorem_witnesses()
-        .iter()
-        .find(|w| w.witness_kind == "receipt_contention")
-        .expect("executable receipt contention witness");
-    let (node, path, mut tool) = published_spawn_parent("receipt-contention").await;
-    let doc_id = tool.doc_id().unwrap().to_owned();
-    let before = tool_delivery_rows(&tool).await.len();
-    for _ in 0..witness.numeric_bound {
-        fail_next_terminal_for_test(&doc_id);
+    for case in gents_lean_vocab::families::contracts_background_receipt_contention::cases() {
+        let (node, path, mut tool) = published_spawn_parent("receipt-contention").await;
+        let doc_id = tool.doc_id().unwrap().to_owned();
+        let before = tool_delivery_rows(&tool).await.len();
+        for _ in 0..case.input.numeric_bound {
+            fail_next_terminal_for_test(&doc_id);
+        }
+        let committed = tool.complete_owned("receipt", None).await.unwrap();
+        assert!(!terminal_failure_pending_for_test(&doc_id));
+        if committed {
+            assert_eq!(tool.state, ToolCallState::Completed);
+            assert_eq!(tool_delivery_rows(&tool).await.len(), before + 1);
+            assert!(tool.complete_owned("receipt", None).await.is_err());
+            assert_eq!(tool_delivery_rows(&tool).await.len(), before + 1);
+        }
+        case.check(committed);
+        node.shutdown().await.expect("shut down test node");
+        let _ = std::fs::remove_dir_all(path);
     }
-    assert!(tool.complete_owned("receipt", None).await.unwrap());
-    assert!(!terminal_failure_pending_for_test(&doc_id));
-    assert_eq!(tool.state, ToolCallState::Completed);
-    assert_eq!(tool_delivery_rows(&tool).await.len(), before + 1);
-    assert!(tool.complete_owned("receipt", None).await.is_err());
-    assert_eq!(tool_delivery_rows(&tool).await.len(), before + 1);
-    node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(path);
 }
 
 #[tokio::test]

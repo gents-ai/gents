@@ -306,18 +306,6 @@ pub fn lean_composed_invariant_witness_by_scenario(
         })
 }
 
-pub fn lean_r6_background_theorem_witness(
-    theorem_name: &str,
-) -> &'static LeanBackgroundTheoremWitness {
-    lean_contract_snapshot()
-        .r6_background_theorem_witnesses
-        .iter()
-        .find(|witness| witness.theorem_name == theorem_name)
-        .unwrap_or_else(|| {
-            panic!("Lean R6 background theorem witness {theorem_name:?} was not emitted")
-        })
-}
-
 pub fn lean_transcript_case(name: &str) -> &'static LeanTranscriptCase {
     lean_contract_snapshot()
         .transcript_conformance_cases

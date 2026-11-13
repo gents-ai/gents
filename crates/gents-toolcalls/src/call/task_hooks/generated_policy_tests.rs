@@ -1,9 +1,7 @@
 use crate::call::task_hooks::effective_timeout_secs;
 use crate::call::task_hooks::test_support::lean_hook_phase;
-use gents_documents::{Task, TaskHook};
-use gents_lean_vocab::{
-    lean_task_hook_admission_cases, lean_task_hook_recovery_cases, lean_task_hook_run_cases,
-};
+use gents_documents::{Task, TaskHook, TaskHookPhase};
+use gents_lean_vocab::lean_task_hook_run_cases;
 
 fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
     Task {
@@ -26,59 +24,60 @@ fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
     }
 }
 
+fn modeled_hook(
+    hook: &gents_lean_vocab::families::task_hooks_contracts_effective_timeout::TaskHook<TaskHookPhase>,
+) -> TaskHook {
+    TaskHook {
+        hook_id: hook.hook_id.clone(),
+        phase: hook.phase,
+        command: hook.command.clone(),
+        timeout_secs: hook.timeout_secs,
+        skip_exit_codes: hook.skip_exit_codes.clone(),
+    }
+}
+
+#[test]
+fn generated_task_hook_timeouts_follow_the_model() {
+    gents_lean_vocab::families::task_hooks_contracts_effective_timeout::replay::<TaskHookPhase>(
+        |hook| gents_lean_vocab::families::task_hooks_contracts_effective_timeout::TimeoutOutput {
+            effective_timeout_secs: effective_timeout_secs(&modeled_hook(hook)),
+        },
+    );
+}
+
 #[test]
 fn generated_task_hook_admission_cases_fence_production_validation() {
-    let cases = lean_task_hook_admission_cases();
-    assert!(
-        !cases.is_empty(),
-        "task hook admission conformance cases must not be empty"
-    );
-    for case in cases {
-        for generated in &case.hooks {
-            assert_eq!(
-                effective_timeout_secs(&crate::call::task_hooks::test_support::native_task_hook(
-                    generated
-                )),
-                generated.effective_timeout_secs,
-                "{}: production timeout resolution disagrees with the model for {:?}",
-                case.name,
-                generated.hook_id
-            );
-        }
+    gents_lean_vocab::families::task_hooks_contracts_admission::replay::<TaskHookPhase>(|case| {
         let task = task_with_hooks(
             &case.name,
-            case.hooks
+            case.task_hooks
                 .iter()
-                .map(|hook| crate::call::task_hooks::test_support::native_task_hook(hook))
+                .map(|hook| TaskHook {
+                    hook_id: hook.hook_id.clone(),
+                    phase: hook.phase,
+                    command: hook.command.clone(),
+                    timeout_secs: hook.timeout_secs,
+                    skip_exit_codes: hook.skip_exit_codes.clone(),
+                })
                 .collect(),
         );
-        assert_eq!(
-            task.validate().is_ok(),
-            case.expected_admitted,
-            "{}: production Task::validate disagrees with TaskHooks.admitHooks ({:?})",
-            case.name,
-            task.validate().err(),
-        );
-    }
+        gents_lean_vocab::families::task_hooks_contracts_admission::AdmissionOutput {
+            admitted: task.validate().is_ok(),
+        }
+    });
 }
 
 #[test]
 fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
     let run_cases = lean_task_hook_run_cases();
-    let recovery_cases = lean_task_hook_recovery_cases();
     assert!(
         !run_cases.is_empty(),
         "task hook run cases must not be empty"
-    );
-    assert!(
-        !recovery_cases.is_empty(),
-        "task hook recovery cases must not be empty"
     );
 
     let emitted: std::collections::BTreeSet<&str> = run_cases
         .iter()
         .flat_map(|case| case.hooks.iter())
-        .chain(recovery_cases.iter().flat_map(|case| case.hooks.iter()))
         .map(|generated| generated.phase.as_str())
         .collect();
     assert_eq!(
@@ -95,7 +94,6 @@ fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
     for (name, hooks) in run_cases
         .iter()
         .map(|case| (&case.name, &case.hooks))
-        .chain(recovery_cases.iter().map(|case| (&case.name, &case.hooks)))
     {
         let task = task_with_hooks(
             name,

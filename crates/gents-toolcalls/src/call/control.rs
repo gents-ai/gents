@@ -497,29 +497,32 @@ mod tests {
     /// Adapted from Ivan's #3264 stop races onto the owning cancellation path.
     #[tokio::test]
     async fn generated_stop_actions_select_the_durable_transition() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().process_stop_action_cases;
-        assert_eq!(cases.len(), 6);
-        for case in cases {
-            let state = case["state"].as_str().unwrap();
-            let (fixture, owner, mut child) = spawned_child(&format!("stop-action-{state}")).await;
-            if state != "pending" {
+        use gents_session::session::tool_call_state::ToolCallState;
+        for case in gents_lean_vocab::families::native_refinement_stop_action::cases::<
+            String,
+            ToolCallState,
+        >() {
+            let state = case.input.state;
+            let wire = serde_json::to_value(state).unwrap().as_str().unwrap().to_owned();
+            let (fixture, owner, mut child) = spawned_child(&format!("stop-action-{wire}")).await;
+            if state != ToolCallState::Pending {
                 child.start_running().await.unwrap();
             }
             match state {
-                "completed" => child.complete("done").await.unwrap(),
-                "failed" => child
+                ToolCallState::Completed => child.complete("done").await.unwrap(),
+                ToolCallState::Failed => child
                     .fail(
                         "failed",
                         gents_loop::tool_call_lifecycle::FailureClass::External,
                     )
                     .await
                     .unwrap(),
-                "timedOut" => assert!(child.timeout().await.unwrap()),
-                "cancelled" => assert!(child
+                ToolCallState::TimedOut => assert!(child.timeout().await.unwrap()),
+                ToolCallState::Cancelled => assert!(child
                     .cancel_during_run(CancelCause::UserCancelled)
                     .await
                     .unwrap()),
-                _ => {}
+                ToolCallState::Pending | ToolCallState::Running => {}
             }
             let registry = BackgroundExecutionRegistry::default();
             let token = CancellationToken::new();
@@ -547,44 +550,32 @@ mod tests {
             )
             .await
             .unwrap();
-            match case["expected"].as_str().unwrap() {
-                "cancel_before_dispatch" => {
-                    assert_eq!(
-                        outcome,
-                        CancelBackgroundToolCallOutcome::Cancelled {
-                            live_execution_cancelled: false
-                        },
-                        "{case}"
-                    );
-                    assert!(!token.is_cancelled(), "{case}");
-                    assert!(child.start_running().await.is_err(), "{case}");
-                    assert!(reload(&child, &fixture.node).await.is_cancelled(), "{case}");
+            let action = match outcome {
+                CancelBackgroundToolCallOutcome::Cancelled {
+                    live_execution_cancelled: false,
+                } => {
+                    assert!(!token.is_cancelled(), "{state:?}");
+                    assert!(child.start_running().await.is_err(), "{state:?}");
+                    assert!(reload(&child, &fixture.node).await.is_cancelled(), "{state:?}");
                     worker.abort();
+                    "cancel_before_dispatch"
                 }
-                "stop_process" => {
-                    assert_eq!(
-                        outcome,
-                        CancelBackgroundToolCallOutcome::Cancelled {
-                            live_execution_cancelled: true
-                        },
-                        "{case}"
-                    );
+                CancelBackgroundToolCallOutcome::Cancelled {
+                    live_execution_cancelled: true,
+                } => {
                     worker.await.unwrap();
-                    assert!(reload(&child, &fixture.node).await.is_cancelled(), "{case}");
+                    assert!(reload(&child, &fixture.node).await.is_cancelled(), "{state:?}");
+                    "stop_process"
                 }
-                "report_terminal" => {
-                    assert_eq!(
-                        outcome,
-                        CancelBackgroundToolCallOutcome::AlreadyTerminal {
-                            state: state.into()
-                        },
-                        "{case}"
-                    );
-                    assert!(!token.is_cancelled(), "{case}");
+                CancelBackgroundToolCallOutcome::AlreadyTerminal { state: terminal } => {
+                    assert_eq!(terminal, wire, "{state:?}");
+                    assert!(!token.is_cancelled(), "{state:?}");
                     worker.abort();
+                    "report_terminal"
                 }
-                expected => panic!("unexpected stop action {expected}: {case}"),
-            }
+                other => panic!("unexpected stop outcome {other:?}: {state:?}"),
+            };
+            case.check(action.to_owned());
             drop(owner);
             fixture.node.shutdown().await.expect("shut down test node");
             let _ = std::fs::remove_dir_all(&fixture.path);

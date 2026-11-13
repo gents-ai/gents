@@ -814,41 +814,23 @@ mod tests {
             RecoveryOutcome::SessionStopped => "sessionStopped",
         };
         let mut checked = 0;
-        for case in gents_lean_vocab::lean_restart_disposition_cases() {
-            // A missing parent defers classification; every resolvable
-            // parent observation reaches the orphan classifier alike.
-            if !matches!(
-                case.parent_observation.as_str(),
-                "live" | "interrupted" | "cleanlyCompleted" | "otherTerminal"
-            ) {
-                continue;
-            }
-            if case.await_mode != "background"
-                || case.kind != gents_lean_vocab::LeanRestartRowKind::Native
-            {
-                continue;
-            }
+        for case in
+            gents_lean_vocab::families::contracts_restart_classification::cases::<String, String>()
+        {
             let outcome = classify_orphaned_background_tool(
-                &row(case.deadline_expired),
-                verdict(&case.process_outcome),
+                &row(case.input.deadline_expired),
+                verdict(&case.input.process_outcome),
                 false,
                 false,
                 Utc::now(),
             );
-            assert_eq!(
-                outcome.map(lean_cause),
-                case.cause.as_deref(),
-                "{}",
-                case.name
+            case.check(
+                gents_lean_vocab::families::contracts_restart_classification::Classified {
+                    cause: outcome.map(lean_cause).map(str::to_owned),
+                    notification_reason: outcome
+                        .map(|outcome| outcome.notification_reason().to_owned()),
+                },
             );
-            if let Some(outcome) = outcome {
-                assert_eq!(
-                    Some(outcome.notification_reason()),
-                    case.notification_reason.as_deref(),
-                    "{}",
-                    case.name
-                );
-            }
             checked += 1;
         }
         for case in gents_lean_vocab::lean_recovery_sweep_cases() {
