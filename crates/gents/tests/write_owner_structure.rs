@@ -1991,12 +1991,6 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 /// for in an adapter classifier instead. This list only shrinks.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    // CreateGoalForSessionError in create_goal_for_session_inner
-    ("crates/gents-automation/src/goal/creation.rs", 2),
-    // MaterializeBudgetExhausted in fire_result_from_materialize; MaterializeDuplicate in fire_result_from_materialize
-    ("crates/gents-automation/src/triggers/engine/mod.rs", 2),
-    // Error in below
-    ("crates/gents-cli/src/commands/eval/manage.rs", 1),
     // HistoryUnlockRequired in Provider::failed
     ("crates/gents-client-host/src/editor_store.rs", 1),
     // Error in Listener::bind
@@ -2015,8 +2009,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
     // ModelDiscoveryHttpError in classify_discovery_failure
     ("crates/gents-desktop-core/src/inference.rs", 1),
-    // BaselineMismatch in freeze_job
-    ("crates/gents-eval/src/optimization/driver.rs", 1),
     // ClosureDrift in drift_of
     ("crates/gents-eval/src/optimization/promote.rs", 1),
     // ActorBackendDiscoveryError in unavailable
@@ -2025,43 +2017,29 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-host/src/http/router/accounts.rs", 1),
     // ControlFailure in refusal_reason
     ("crates/gents-host/src/prepare_runtime.rs", 1),
-    // CaptureStoreReadError in preload_isolate_verification_failures
-    ("crates/gents-inference/src/rendered_request/mod.rs", 2),
     // RegistryError in offline_pack_error
     ("crates/gents-pack/src/pack/resolve.rs", 1),
-    // NotLinkable in bind
-    ("crates/gents-pack/src/plugin/allowed.rs", 2),
     // InternalAddress in send_error
     ("crates/gents-pack/src/plugin/http_calls.rs", 1),
     // E in any_error
     ("crates/gents-pack/src/plugin/store.rs", 1),
-    // InvalidQueuePosition in verify_request_input
-    ("crates/gents-session/src/request/admission.rs", 1),
     // ReconstructionError in recover_expired_generation_with_access_and_facts; ReconstructionError in validate_selection
     ("crates/gents-session/src/request/lifecycle/canonical_recovery.rs", 2),
     // PendingQueueChanged in RequestLifecycle::finish_natural_turn; ReconstructionError in select_terminal_output
     ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 2),
-    // RenewalAdmissionExpired in renew_once_with_time
-    ("crates/gents-session/src/request/lifecycle/execution_renewal.rs", 1),
-    // InvalidQueuePosition in effective_slots
-    ("crates/gents-session/src/request/lifecycle/queue/position.rs", 1),
     // ReconstructionError in definitive_output_corruption; RecoveryPlanError in definitive_output_corruption
     ("crates/gents-session/src/request/lifecycle/recovery.rs", 2),
     // PendingInputChanged in DefraStreamWriter::try_publish_steering_message
     ("crates/gents-session/src/request/streaming.rs", 1),
     // ReplayEvidenceViolation in load_canonical_assistant_candidates_using
     ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
-    // CaptureStoreReadError in replay_capture_from_row
-    ("crates/gents-session/src/session/output/replay_capture.rs", 1),
     // CanonicalOutputReadError in validated_canonical_replay_boundary
     ("crates/gents-session/src/session/output/replay_request.rs", 1),
     // CanonicalOutputReadError in classify_terminal_read_error; ReconstructionError in classify_terminal_read_error
     ("crates/gents-session/src/session/request_output.rs", 2),
     // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
     ("crates/gents-store/src/local/storage_backend.rs", 3),
-    // StepFailure in JobDriver::step_once
-    ("crates/gents-toolcalls/src/background/job/driver.rs", 1),
-    // GuestTrap in step_on; RecordError in step_on
+    // GuestTrap in try_step_on; RecordError in try_step_on
     ("crates/gents-toolcalls/src/background/job/driver/step.rs", 2),
     // ReconstructionError in caused_request_terminals_in_txn
     ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
@@ -2073,36 +2051,22 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminal_effects.rs", 1),
     // PluginWritesFailed in ToolCallLifecycle::terminalize_with_options_at
     ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
-    // WriteRecovery in WriteTool::call
-    ("crates/gents-toolcalls/src/plugin/application_write/mod.rs", 1),
     // GuestTrap in PluginExecutor::run; PluginAttemptError in plugin_attempt_error
     ("crates/gents-toolcalls/src/plugin/executor.rs", 2),
-    // CollectionDiscoveryError in DefraQueryTool::call
-    ("crates/gents-tools/src/builtin/defra_query/mod.rs", 1),
     // EnrollmentDecisionRefusal in P2pTool::call_one
     ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    // SchemaDigestMismatch in SchemaTool::call_one; SchemaSdlFailure in SchemaTool::call_one
-    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 2),
     // BatchFailure in ConfigCommandTool::call
     ("crates/gents-tools/src/builtin/self_config/command.rs", 1),
     // CommandGuidance in ConfigCommandTool::failure_guidance; MissingAgent in ConfigCommandTool::failure_guidance; MissingConfigDocument in ConfigCommandTool::failure_guidance; MissingReference in ConfigCommandTool::failure_guidance; OutcomeSourceSchemaError in ConfigCommandTool::failure_guidance
     ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
     // MissingReference in ConfigCommandTool::validate_saved
     ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
-    // PathChanged in pending_requests; SelectionChanged in pending_requests
-    ("crates/gents-tools/src/plugin/approval.rs", 2),
     // ExecutionOwnershipLost in drive_inference_stream
     ("crates/gents/src/runtime/agent/daemon/inference/drive.rs", 1),
     // ExecutionOwnershipLost in lost_execution_ownership
     ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
     // StaleCompactionGeneration in is_stale_compaction_generation
     ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
-    // UnselectedDisabledBackend in resolve_agent_factories
-    ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
-    // ActiveSnapshotReceiverClosed in GenerationSupervisor::handle_proposal
-    ("crates/gents/src/runtime/agent/reconcile.rs", 1),
-    // FatalNodeReadinessWrite in is_fatal_node_readiness_write
-    ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
     // ReplayEvidenceViolation in replay_resolution_error
     ("crates/gents/src/turn/provider_input/replay.rs", 1),
 ];
@@ -2132,7 +2096,6 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
     ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
     ("crates/gents-session/src/request/seam_error.rs", &["RuntimeSeamError::recover"]),
-    ("crates/gents-session/src/session/fork.rs", &["fork_error"]),
     ("crates/gents-store/src/config_client/retry.rs", &["access_error_in", "rerun_request_in"]),
     ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
     ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
@@ -2179,7 +2142,6 @@ const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", &["classify_error_text"]),
     ("crates/gents-migration/src/engine.rs", &["collection_already_exists"]),
     ("crates/gents-observe/src/observe/trace_export.rs", &["looks_like_deadline_or_inference_failure"]),
-    ("crates/gents-pack/src/plugin/install.rs", &["is_not_found"]),
     ("crates/gents-protocol/src/graphql/response.rs", &["is_collection_missing_error_message"]),
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_error_in_chain"]),
     ("crates/gents-protocol/src/node_readiness.rs", &["is_behavior_unavailable_rejection"]),
