@@ -81,6 +81,7 @@ import Proofs.Conformance.BaseFreezeRecovery
 import Proofs.Conformance.Identity.ReceiverGrant
 import Proofs.Conformance.Identity.WorkspaceRoot
 import Proofs.Conformance.Identity.WorkspaceAndFileRequests
+import Proofs.Conformance.Identity.WorkspaceCapability
 import Proofs.Conformance.Identity.MailboxAccess
 import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
 import Proofs.Conformance.Identity.NodeProvisioning
@@ -360,12 +361,6 @@ def snapshotCaptureTailJson : String :=
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
     ++ "\"task_hook_run_cases\":"
       ++ Conformance.TaskHooksContracts.runCasesJson ++ ","
-    ++ "\"compaction_reducer_cases\":"
-      ++ jsonArray
-        (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","
-    ++ "\"compaction_cursor_cases\":"
-      ++ jsonArray
-        (Compaction.compactionCursorCases.map compactionCursorCaseJson) ++ ","
     ++ "\"backend_probe_schedule_cases\":"
       ++ jsonArray
         (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","
@@ -562,15 +557,10 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"mailbox_runtime_notice_case\":" ++ Identity.MailboxAccess.runtimeNoticeCasesJson ++ ","
     ++ "\"mailbox_claimed_recipient_cases\":" ++ Identity.MailboxAccess.claimedRecipientCasesJson ++ ","
     ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
-    ++ "\"workspace_child_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildCasesJson ++ ","
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
     ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
-    ++ "\"workspace_child_revocation_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildRevocationCasesJson ++ ","
-    ++ "\"workspace_admission_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAdmissionCasesJson ++ ","
-    ++ "\"workspace_cleanup_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceCleanupCasesJson ++ ","
-    ++ "\"workspace_publication_cases\":" ++ Identity.WorkspaceAndFileRequests.workspacePublicationCasesJson ++ ","
     ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
     ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
@@ -708,14 +698,8 @@ def snapshotRuntimeCasesJson : String :=
 
 def snapshotRecoveryCasesJson : String :=
   ""
-    ++ "\"agent_steer_disposition_cases\":"
-      ++ jsonArray (QueuedSteering.agentSteerDispositionCases.map agentSteerDispositionCaseJson) ++ ","
-    ++ "\"agent_steer_target_cases\":"
-      ++ jsonArray (QueuedSteering.agentSteerTargetCases.map agentSteerTargetCaseJson) ++ ","
     ++ "\"agent_steering_boundary_cases\":"
       ++ jsonArray (QueuedSteering.boundaryCases.map boundaryCaseJson) ++ ","
-    ++ "\"agent_steer_reachability_cases\":"
-      ++ jsonArray (QueuedSteering.agentSteerReachabilityCases.map agentSteerReachabilityCaseJson) ++ ","
     ++ "\"queue_deadline_conformance_cases\":"
       ++ jsonArray
         (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
@@ -758,8 +742,6 @@ def snapshotRecoveryCasesJson : String :=
       ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
-    ++ "\"repeated_tool_failure_cases\":"
-      ++ Conformance.RepeatedToolFailureContracts.casesJson ++ ","
 
 def snapshotPluginCasesJson : String :=
   ""
@@ -859,14 +841,8 @@ def snapshotFileCasesJson : String :=
       ++ promptAssemblyAssistantOrderCasesJson ++ ","
     ++ "\"prompt_assembly_mode_sanitize_cases\":"
       ++ promptAssemblyModeSanitizeCasesJson ++ ","
-    ++ "\"prompt_assembly_layer_cases\":"
-      ++ promptAssemblyLayerCasesJson ++ ","
     ++ "\"prompt_assembly_repair_cases\":"
       ++ promptAssemblyRepairCasesJson ++ ","
-    ++ "\"prompt_assembly_budget_cases\":"
-      ++ promptAssemblyBudgetCasesJson ++ ","
-    ++ "\"prompt_assembly_turn_budget_cases\":"
-      ++ promptAssemblyTurnBudgetCasesJson ++ ","
 
 def snapshotJson : String :=
   "{"

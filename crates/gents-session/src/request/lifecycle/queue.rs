@@ -65,10 +65,8 @@ pub use input::row_is_automated_wakeup;
 pub(crate) use input::{background_wake_queue, is_automated_wakeup, row_queue};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use intake::pending_in_txn;
-pub use intake::steer_reachable;
-pub(crate) use intake::{
-    pending_ids_in_txn, pending_with_new_candidate_in_txn, SteerAdmissionRefusal,
-};
+pub use intake::{steer_reachable, SteerAdmissionRefusal};
+pub(crate) use intake::{pending_ids_in_txn, pending_with_new_candidate_in_txn};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use intake::{pending_rows_in_txn, steering_compatible};
 pub use intake::{steering_inputs, steering_snapshot};

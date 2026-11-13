@@ -1,8 +1,8 @@
 import Proofs.Shared.CompletionRetry.RepeatedToolFailure
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.RepeatedToolFailureContracts
-open CompletionRetry.RepeatedToolFailure Conformance.Contracts
+open Lean CompletionRetry.RepeatedToolFailure
 
 structure Case where
   name : String
@@ -38,33 +38,24 @@ def cases : List Case :=
   , ⟨"suppression_charges_the_invalid_allowance",
       (List.range 7).map (fun call => invalidArgs (call + 1)) ++ List.replicate 5 (fail 0 0)⟩ ]
 
-private def endingJson : Option Ending → String
-  | none => "null"
-  | some ending => jsonString (endingName ending)
+deriving instance ToJson for CompletionRetry.InvalidToolProgress.Outcome, Event, Action, Ending
 
-private def outcomeString : CompletionRetry.InvalidToolProgress.Outcome → String
-  | .invalidArguments => "invalidArguments"
-  | .policyDenied => "policyDenied"
-  | .unknownTool => "unknownTool"
-  | .success => "success"
-  | .ordinaryFailure => "ordinaryFailure"
-  | .skipped => "skipped"
-  | .backgroundCompletion => "backgroundCompletion"
+structure Input where
+  events : List Event
+  deriving ToJson
 
-private def eventJson (event : Event) : String :=
-  "{\"call\":" ++ toString event.call ++
-  ",\"outcome\":" ++ jsonString (outcomeString event.outcome) ++
-  ",\"error\":" ++ jsonOptionalNat event.error ++ "}"
+structure Output where
+  actions : List Action
+  ending : Option Ending
+  invalidUsed : Nat
+  deriving ToJson
 
-private def caseJson (c : Case) : String :=
-  let (actions, ending) := run {} c.events
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"events\":" ++ jsonArray (c.events.map eventJson) ++
-  ",\"expected_actions\":" ++ jsonArray (actions.map (jsonString ∘ actionName)) ++
-  ",\"expected_ending\":" ++ endingJson ending ++
-  ",\"expected_invalid_used\":" ++ toString (invalidUsed {} c.events) ++ "}"
-
-def casesJson := jsonArray (cases.map caseJson)
+@[conformance_family]
+def ownedLoop : Family Input Output where
+  inputs := cases.map fun c => { events := c.events }
+  model := fun i =>
+    let (actions, ending) := run {} i.events
+    { actions, ending, invalidUsed := invalidUsed {} i.events }
 
 theorem cases_cover_every_action_and_ending :
     let runs := cases.map fun c => run {} c.events

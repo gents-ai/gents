@@ -339,14 +339,6 @@ impl LeanQueueManagementState {
     }
 }
 
-pub fn lean_compaction_reducer_case(name: &str) -> &'static LeanCompactionReducerCase {
-    lean_contract_snapshot()
-        .compaction_reducer_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean compaction-reducer case {name:?} was not emitted"))
-}
-
 pub fn lean_command_policy_case(name: &str) -> &'static LeanCommandPolicyCase {
     lean_contract_snapshot()
         .command_policy_cases

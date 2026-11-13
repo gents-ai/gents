@@ -818,13 +818,13 @@ def caseCoverage : List CoverageEntry :=
       "PackInstallUpgradeCases")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_steer_disposition_cases"
-      "AgentSteerDispositionCases"
+      "family"
+      "contracts_agent_steer_disposition"
       "Binds refusal of incompatible contexts; signed cross-requester and workspace integration remain to be exercised.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "agent_steer_target_cases"
-      "AgentSteerTargetCases")
+      "family"
+      "contracts_agent_steer_target")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "agent_steering_boundary_cases"
@@ -832,8 +832,8 @@ def caseCoverage : List CoverageEntry :=
       "Binds ordered boundary selection; held-tool delivery and exact replay need native flow coverage.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_steer_reachability_cases"
-      "AgentSteerReachabilityCases"
+      "family"
+      "contracts_agent_steer_reachability"
       "Binds admission against the ordered boundary owner, including compatible earlier steers.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1525,8 +1525,8 @@ def caseCoverage : List CoverageEntry :=
       "Checks explicit workflow selection and action-plan replay; native workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_child_cases"
-      "WorkspaceChildCases"
+      "family"
+      "workspace_capability_child_access"
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
@@ -1559,23 +1559,23 @@ def caseCoverage : List CoverageEntry :=
       "User publication fences on native Node update and commits the physical parent; raw direct creates remain outside the writer-fencing premise.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "workspace_child_revocation_cases"
-      "WorkspaceChildRevocationCases"
+      "family"
+      "workspace_capability_child_revocation"
       "Documents the completeness limit after explicitly granting a child owner native relationship deletion.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "workspace_admission_cases"
-      "WorkspaceAdmissionCases"
+      "family"
+      "workspace_capability_admission"
       "Exercises competing canonical exclusive admissions; native conflict fencing needs central validation.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_cleanup_cases"
-      "WorkspaceCleanupCases"
+      "family"
+      "workspace_capability_cleanup"
       "Cleanup claims the parent with native update permission after checking the canonical binding inventory.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_publication_cases"
-      "WorkspacePublicationCases"
+      "family"
+      "workspace_capability_publication"
       "Checks duplicate publication after revocation and a stale retry after cleanup has begun.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1746,8 +1746,8 @@ def caseCoverage : List CoverageEntry :=
       "InvalidToolProgressCases")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "repeated_tool_failure_cases"
-      "RepeatedToolFailureCases")
+      "family"
+      "repeated_tool_failure_contracts_owned_loop")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2512,20 +2512,36 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyResponsesEffortCases"
       "The generated cases drive loop_config and the loop's own ProviderInputCounter projection, comparing the projected reasoning.effort. Premise: OpenAiCompatible on the Responses wire; kind and wire are not modelled, so these cases cannot catch a wrong kind/wire guard (pinned by inference_setup::tests::sent_reasoning_effort_leaves_other_kinds_and_wires_alone).")
       "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_compaction_reducer_gate")
+      "compaction" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_compaction_reducer_apply")
+      "compaction" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_compaction_reducer_gate_open")
+      "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
-      "compaction_reducer_cases"
-      "CompactionReducerCases"
-      "Strip/provider-view and immutable publication-gate cases are executable Lean witnesses. The native compaction owner must migrate its reducer gate and checkpoint execution before this is consumer coverage.")
+      "family"
+      "contracts_compaction_reducer_apply_unreached"
+      "model-production-gap: production summarizes by a token budget and no production reducer applies the model's fixed split index; the identity reducer exists only in the model. Summarize and identity message counts, pair and order preservation, identity and idempotence have no native observation.")
+      "compaction" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_compaction_reducer_identity_gate_unreached"
+      "model-production-gap: the identity reducer exists only in the model; no production compaction path evaluates its validity gate.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "protected_replay_compaction_cases"
       "ProtectedReplayCompactionCases"
       "Native replay association and reduction ceilings preserve the entire captured prefix of required reasoning. A nonempty required set refuses summarization with CannotFit; an empty set preserves the ordinary retention policy. Retirement of older requirements remains deferred. Generated cases bind modeled assistant blocks to native ceiling and split selection; the summary-provider refusal has separate native coverage.")
       "compaction" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "compaction_cursor_cases"
-      "CompactionCursorCases"
-      "The cursor fixtures share the migrated immutable compaction contract; the native bridge has not yet been regenerated.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_compaction_cursor")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2549,20 +2565,20 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblySanitizeCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_layer_cases"
-      "PromptAssemblyLayerCases")
+      "family"
+      "contracts_prompt_assembly_layer")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "prompt_assembly_repair_cases"
       "PromptAssemblyRepairCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_budget_cases"
-      "PromptAssemblyBudgetCases")
+      "family"
+      "contracts_prompt_assembly_budget")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "prompt_assembly_turn_budget_cases"
-      "PromptAssemblyTurnBudgetCases")
+      "family"
+      "contracts_prompt_assembly_turn_budget")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "prompt_assembly_compaction_trigger_cases"

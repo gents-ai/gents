@@ -16,9 +16,9 @@ async fn steer_reachability_matches_lean() {
         gents_automation::lifecycle_hooks::composition(),
     )
     .await;
-    let cases = &gents_lean_vocab::lean_contract_snapshot().agent_steer_reachability_cases;
-    for case in cases {
+    for case in gents_lean_vocab::families::contracts_agent_steer_reachability::cases::<String>() {
         let rows = case
+            .input
             .inputs
             .iter()
             .map(|item| {
@@ -65,14 +65,15 @@ async fn steer_reachability_matches_lean() {
                 }
             })
             .collect();
-        let actual = gents_session::request::lifecycle::queue::steer_reachable(
-            &head,
-            rows,
-            &case.target.to_string(),
-            chrono::Utc::now(),
-        )
-        .is_ok();
-        assert_eq!(actual, case.expected, "{case:?}");
+        case.check(
+            gents_session::request::lifecycle::queue::steer_reachable(
+                &head,
+                rows,
+                &case.input.target.to_string(),
+                chrono::Utc::now(),
+            )
+            .is_ok(),
+        );
     }
     message
         .admission
@@ -121,6 +122,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
     };
     let stale = make_plan().await;
     set_state(&owner(&message), &caused.doc_id, "completed").await;
+    let idle = make_plan().await;
     let (cause_ref, stale_ref) = (&cause, &stale);
     let result = message
         .admission
@@ -234,37 +236,60 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         root_request_doc_id: None,
     });
     contexts.push(("goal", goal));
-    let modeled = gents_lean_vocab::lean_contract_snapshot()
-        .agent_steer_disposition_cases
-        .iter()
-        .find(|case| case.active && !case.compatible)
-        .unwrap();
-    for case in &gents_lean_vocab::lean_contract_snapshot().agent_steer_target_cases {
+    for case in gents_lean_vocab::families::contracts_agent_steer_target::cases() {
         let mut head = caused.clone();
-        if case.planned_head != case.active_head {
+        if case.input.planned_head != case.input.active_head {
             head.request_id = "a-later-turn".to_owned();
         }
-        assert_eq!(
+        case.check(
             gents_session::request::lifecycle::queue::steering_compatible(
                 &head,
                 candidate,
-                chrono::Utc::now()
+                chrono::Utc::now(),
             ),
-            case.expected,
-            "{case:?}"
         );
     }
-    for (name, head) in contexts {
-        let disposition = if gents_session::request::lifecycle::queue::steering_compatible(
-            &head,
-            candidate,
+    let publication = |head: &gents_protocol::row::AgentRequest| {
+        match gents_session::request::lifecycle::queue::steer_reachable(
+            head,
+            snapshot.clone(),
+            &receipt.doc_id,
             chrono::Utc::now(),
         ) {
-            "steer"
+            Ok(()) => "steer".to_owned(),
+            Err(gents_session::request::lifecycle::queue::SteerAdmissionRefusal::Incompatible) => {
+                "refuse".to_owned()
+            }
+            Err(other) => panic!("steer publication did not reach the active turn: {other}"),
+        }
+    };
+    let planned = |plan: &Plan| match &plan.write {
+        gents_session::session::message::plan::PlannedWrite::Request { delivery, .. } => *delivery,
+        gents_session::session::message::plan::PlannedWrite::Goal { .. } => {
+            panic!("a steer without a Goal planned a Goal request")
+        }
+    };
+    let refusals = contexts
+        .iter()
+        .map(|(_, head)| publication(head))
+        .collect::<Vec<_>>();
+    assert!(
+        refusals.windows(2).all(|pair| pair[0] == pair[1]),
+        "{refusals:?}"
+    );
+    for case in gents_lean_vocab::families::contracts_agent_steer_disposition::cases::<String>() {
+        let disposition = if !case.input.active {
+            assert_eq!(planned(&idle), Delivery::Request);
+            "start".to_owned()
         } else {
-            "refuse"
+            assert_eq!(planned(&current), Delivery::Steering);
+            if case.input.compatible {
+                publication(&caused)
+            } else {
+                refusals[0].clone()
+            }
         };
-        assert_eq!(disposition, modeled.expected, "{name}");
+        case.check(disposition);
     }
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();

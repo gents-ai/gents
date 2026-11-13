@@ -44,13 +44,20 @@ def interruptDelivery : Family InterruptDeliveryInput InterruptDeliveryOutput wh
       goalPaused :=
         (QueuedSteering.interruptDeliveryGoal true ⟨.active, 0, false, false⟩).status == .paused }
 
-def agentSteerDispositionCaseJson (input : Bool × Bool) : String :=
-  let result := match QueuedSteering.agentSteerDisposition input.1 input.2 with
-    | .start => "start"
-    | .steer => "steer"
-    | .refuse => "refuse"
-  "{\"active\":" ++ boolString input.1 ++ ",\"compatible\":" ++ boolString input.2 ++
-    ",\"expected\":" ++ jsonString result ++ "}"
+deriving instance Lean.ToJson for QueuedSteering.AgentSteerDisposition,
+  QueuedSteering.BoundaryInputKind
+
+structure AgentSteerDispositionInput where
+  active : Bool
+  compatible : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def agentSteerDisposition :
+    Family AgentSteerDispositionInput QueuedSteering.AgentSteerDisposition where
+  inputs := QueuedSteering.agentSteerDispositionCases.map fun (active, compatible) =>
+    { active, compatible }
+  model := fun i => QueuedSteering.agentSteerDisposition i.active i.compatible
 
 private def boundaryKindJson : QueuedSteering.BoundaryInputKind → String
   | .queued => jsonString "queued"
@@ -58,15 +65,34 @@ private def boundaryKindJson : QueuedSteering.BoundaryInputKind → String
   | .agentSteer => jsonString "agent_steer"
   | .blocked => jsonString "blocked"
 
-def agentSteerTargetCaseJson (input : Nat × Nat) : String :=
-  "{\"planned_head\":" ++ toString input.1 ++ ",\"active_head\":" ++ toString input.2 ++
-    ",\"expected\":" ++ boolString (QueuedSteering.agentSteerTargets input.1 input.2) ++ "}"
+structure AgentSteerTargetInput where
+  plannedHead : Nat
+  activeHead : Nat
+  deriving Lean.ToJson
 
-def agentSteerReachabilityCaseJson (input : List (Nat × QueuedSteering.BoundaryInputKind × Bool) × Nat) : String :=
-  let entryJson := fun entry => "{\"id\":" ++ toString entry.1 ++
-    ",\"kind\":" ++ boundaryKindJson entry.2.1 ++ ",\"compatible\":" ++ boolString entry.2.2 ++ "}"
-  "{\"inputs\":" ++ jsonArray (input.1.map entryJson) ++ ",\"target\":" ++ toString input.2 ++
-    ",\"expected\":" ++ boolString (QueuedSteering.agentSteerReachable input.2 input.1) ++ "}"
+@[conformance_family]
+def agentSteerTarget : Family AgentSteerTargetInput Bool where
+  inputs := QueuedSteering.agentSteerTargetCases.map fun (plannedHead, activeHead) =>
+    { plannedHead, activeHead }
+  model := fun i => QueuedSteering.agentSteerTargets i.plannedHead i.activeHead
+
+structure AgentSteerEntry where
+  id : Nat
+  kind : QueuedSteering.BoundaryInputKind
+  compatible : Bool
+  deriving Lean.ToJson
+
+structure AgentSteerReachabilityInput where
+  inputs : List AgentSteerEntry
+  target : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def agentSteerReachability : Family AgentSteerReachabilityInput Bool where
+  inputs := QueuedSteering.agentSteerReachabilityCases.map fun (entries, target) =>
+    { inputs := entries.map fun (id, kind, compatible) => { id, kind, compatible }, target }
+  model := fun i =>
+    QueuedSteering.agentSteerReachable i.target (i.inputs.map fun e => (e.id, e.kind, e.compatible))
 
 def boundaryCaseJson (inputs : List (Nat × QueuedSteering.BoundaryInputKind)) : String :=
   let entryJson := fun entry => "{\"id\":" ++ toString entry.1 ++
@@ -517,49 +543,158 @@ def auxiliaryOutputCaseJson
     ",\"public_view\":" ++ outputViewJson (StreamingResponse.project observation) ++
     "}}"
 
-def compactionInputRowJson (row : Transcript.MessageRow) : String :=
-  let role := match row.role with | .user => "user" | .assistant => "assistant"
-  let body := match row.kind with
-    | .ordinary => "\"kind\":\"ordinary\",\"text\":" ++ jsonString s!"ordinary-{row.messageId}"
-    | .assistantToolCalls calls =>
-        "\"kind\":\"assistant_tool_calls\",\"call_ids\":" ++
-          jsonArray ((calls.sort (· ≤ ·)).map (fun call => jsonString (Compaction.fixtureNativeCallKey call)))
-    | .toolResult call _ =>
-        "\"kind\":\"tool_result\",\"call_id\":" ++ jsonString (Compaction.fixtureNativeCallKey call)
-  "{\"role\":" ++ jsonString role ++ "," ++ body ++ "}"
+structure CompactionRowWire where
+  role : String
+  kind : String
+  text : Option String
+  callIds : List String
+  callId : Option String
+  deriving Lean.ToJson
 
-def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"group\":" ++ jsonString witness.group ++ ","
-    ++ "\"reducer\":" ++ jsonString witness.reducer ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal ++ ","
-    ++ "\"input_rows\":" ++ jsonArray (witness.inputRows.map compactionInputRowJson) ++ ","
-    ++ "\"projected_prefix_ready\":" ++ boolString witness.projectedPrefixReady ++ ","
-    ++ "\"pre_message_count\":" ++ toString witness.preMessageCount ++ ","
-    ++ "\"post_message_count\":" ++ toString witness.postMessageCount ++ ","
-    ++ "\"preserves_pairs\":" ++ boolString witness.preservesPairs ++ ","
-    ++ "\"preserves_order\":" ++ boolString witness.preservesOrder ++ ","
-    ++ "\"gate_open\":" ++ jsonOptionalBool witness.gateOpen ++ ","
-    ++ "\"publication_ready\":" ++ boolString witness.publicationReady ++ ","
-    ++ "\"provider_fixpoint\":" ++ boolString witness.providerFixpoint ++ ","
-    ++ "\"turn_boundary\":" ++ boolString witness.turnBoundary ++ ","
-    ++ "\"safe_to_reduce\":" ++ boolString witness.safeToReduce ++ ","
-    ++ "\"reducer_is_identity\":"
-      ++ boolString witness.reducerIsIdentity ++ ","
-    ++ "\"reducer_is_idempotent\":"
-      ++ boolString witness.reducerIsIdempotent ++ ","
-    ++ "\"split_index\":" ++ toString witness.splitIndex ++ ","
-    ++ "\"safe_boundary\":" ++ toString witness.safeBoundary ++ ","
-    ++ "\"retained_count\":" ++ toString witness.retainedCount
-    ++ "}"
+def CompactionRowWire.ofModel (row : Transcript.MessageRow) : CompactionRowWire :=
+  match row.kind with
+  | .ordinary =>
+      { role := row.role.toDefraDB, kind := "ordinary", text := some s!"ordinary-{row.messageId}"
+        callIds := [], callId := none }
+  | .assistantToolCalls calls =>
+      { role := row.role.toDefraDB, kind := "assistant_tool_calls", text := none
+        callIds := (calls.sort (· ≤ ·)).map Compaction.fixtureNativeCallKey, callId := none }
+  | .toolResult call _ =>
+      { role := row.role.toDefraDB, kind := "tool_result", text := none, callIds := []
+        callId := some (Compaction.fixtureNativeCallKey call) }
 
-def compactionCursorCaseJson (witness : Compaction.CompactionCursorCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"compacted\":" ++ toString witness.compacted ++ ","
-    ++ "\"expected_cursor\":" ++ jsonOptionalNat witness.expectedCursor
-    ++ "}"
+def compactionCallSymbol (key : String) : Nat :=
+  if key == "2" then Compaction.fixtureSecondCallSymbol else Compaction.fixtureCallSymbol
+
+def CompactionRowWire.toModel (index : Nat) (row : CompactionRowWire) : Transcript.MessageRow :=
+  { messageId := index, sessionId := 0, sequence := index
+    role := (Transcript.MessageRole.fromDefraDB? row.role).getD .user
+    kind := match row.kind with
+      | "assistant_tool_calls" => .assistantToolCalls (row.callIds.map compactionCallSymbol).toFinset
+      | "tool_result" => .toolResult (compactionCallSymbol (row.callId.getD "")) ⟨0, 0, 37⟩
+      | _ => .ordinary }
+
+def compactionRowsToModel (rows : List CompactionRowWire) : List Transcript.MessageRow :=
+  ((List.range rows.length).zip rows).map fun (index, row) => row.toModel index
+
+example : Compaction.compactionReducerCases.all fun c =>
+    decide (compactionRowsToModel (c.inputRows.map CompactionRowWire.ofModel) = c.inputRows) := by
+  native_decide
+
+example : Compaction.compactionReducerCases.all (·.legal) := by native_decide
+
+deriving instance Lean.ToJson for Compaction.Reducer
+
+structure CompactionReducerInput where
+  name : String
+  legal : Bool
+  reducer : Compaction.Reducer
+  inputRows : List CompactionRowWire
+  splitIndex : Nat
+  publicationReady : Bool
+  deriving Lean.ToJson
+
+def compactionReducerOfName : String → Compaction.Reducer
+  | "strip" => .strip
+  | "summarize" => .summarize
+  | "provider_view" => .providerView
+  | _ => .identity
+
+def compactionReducerInputs : List CompactionReducerInput :=
+  Compaction.compactionReducerCases.map fun c =>
+    { name := c.name, legal := c.legal, reducer := compactionReducerOfName c.reducer
+      inputRows := c.inputRows.map CompactionRowWire.ofModel, splitIndex := c.splitIndex
+      publicationReady := c.publicationReady }
+
+example : Compaction.compactionReducerCases.all fun c =>
+    (compactionReducerOfName c.reducer).name == c.reducer := by
+  native_decide
+
+def compactionModelCase (i : CompactionReducerInput) : Compaction.CompactionReducerCase :=
+  Compaction.reducerCase i.name "" i.reducer 0 i.splitIndex i.publicationReady
+    (some (compactionRowsToModel i.inputRows))
+
+def compactionSummarizes (i : CompactionReducerInput) : Bool :=
+  match i.reducer with
+  | .summarize => true
+  | _ => false
+
+def compactionIdentity (i : CompactionReducerInput) : Bool :=
+  match i.reducer with
+  | .identity => true
+  | _ => false
+
+structure CompactionReducerGateOutput where
+  projectedPrefixReady : Bool
+  preMessageCount : Nat
+  turnBoundary : Bool
+  providerFixpoint : Bool
+  safeToReduce : Bool
+  safeBoundary : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def compactionReducerGate : Family CompactionReducerInput CompactionReducerGateOutput where
+  inputs := compactionReducerInputs
+  model := fun i =>
+    let c := compactionModelCase i
+    { projectedPrefixReady := c.projectedPrefixReady, preMessageCount := c.preMessageCount
+      turnBoundary := c.turnBoundary, providerFixpoint := c.providerFixpoint
+      safeToReduce := c.safeToReduce, safeBoundary := c.safeBoundary }
+
+structure CompactionReducerApplyOutput where
+  postMessageCount : Nat
+  retainedCount : Nat
+  preservesPairs : Bool
+  preservesOrder : Bool
+  reducerIsIdentity : Bool
+  reducerIsIdempotent : Bool
+  deriving Lean.ToJson
+
+def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReducerApplyOutput :=
+  let c := compactionModelCase i
+  { postMessageCount := c.postMessageCount, retainedCount := c.retainedCount
+    preservesPairs := c.preservesPairs, preservesOrder := c.preservesOrder
+    reducerIsIdentity := c.reducerIsIdentity, reducerIsIdempotent := c.reducerIsIdempotent }
+
+@[conformance_family]
+def compactionReducerApply : Family CompactionReducerInput CompactionReducerApplyOutput where
+  inputs := compactionReducerInputs.filter fun i =>
+    !compactionSummarizes i && !compactionIdentity i
+  model := compactionReducerApplyOutput
+
+/-- model-production-gap: production summarizes by a token budget
+(`split_for_summary`); no production reducer applies the model's fixed split
+index, and the identity reducer exists only in the model. The message counts,
+pair and order preservation, identity and idempotence of a summarize or
+identity step have no native observation. -/
+@[conformance_family]
+def compactionReducerApplyUnreached :
+    Family CompactionReducerInput CompactionReducerApplyOutput where
+  inputs := compactionReducerInputs.filter fun i =>
+    compactionSummarizes i || compactionIdentity i
+  model := compactionReducerApplyOutput
+
+@[conformance_family]
+def compactionReducerGateOpen : Family CompactionReducerInput (Option Bool) where
+  inputs := compactionReducerInputs.filter fun i => !compactionIdentity i
+  model := fun i => (compactionModelCase i).gateOpen
+
+/-- model-production-gap: the identity reducer exists only in the model; no
+production compaction path evaluates its validity gate. -/
+@[conformance_family]
+def compactionReducerIdentityGateUnreached : Family CompactionReducerInput (Option Bool) where
+  inputs := compactionReducerInputs.filter compactionIdentity
+  model := fun i => (compactionModelCase i).gateOpen
+
+structure CompactionCursorInput where
+  compacted : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def compactionCursor : Family CompactionCursorInput (Option Nat) where
+  inputs := Compaction.compactionCursorCases.map fun c => { compacted := c.compacted }
+  model := fun i => Compaction.findCursor Compaction.cursorFixture i.compacted
 
 def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
   "{"

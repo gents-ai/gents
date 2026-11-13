@@ -241,13 +241,6 @@ def callbackWorkspacePublishable (existing desired : String) : Bool :=
 theorem callback_retry_does_not_reopen_cleaning :
     callbackWorkspacePublishable "cleaning" "ready" = false := by decide
 
-def workspacePublicationCasesJson : String :=
-  (Lean.Json.mkObj [("revoked_writer_restored", Lean.toJson (reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true))).writer),
-    ("revoked_reader_restored", Lean.toJson (reuseWorkspace (revokeWorkspaceReader (publishWorkspace true))).reader),
-    ("stale_publication_allowed", Lean.toJson (callbackWorkspacePublishable "cleaning" "ready")),
-    ("aborted_document_visible", Lean.toJson (publishWorkspace false).document),
-    ("effect_after_failed_reservation", Lean.toJson (mayProvisionWorkspace false))]).compress
-
 def workspacePublicationFixture : Household.State :=
   { objects := [⟨"agents", "agent-doc", "user"⟩,
       ⟨"workspaces", "workspace", "creator"⟩,
@@ -269,12 +262,6 @@ theorem selected_agents_see_the_same_binding :
     workspaceChildPermission "reader" "update" = false ∧
     workspaceChildPermission "other" "read" = false := by native_decide
 
-def workspaceChildCasesJson : String :=
-  (Lean.toJson (["user", "creator", "writer", "integrator", "reader", "other"].flatMap fun actor =>
-    ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
-      [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
-       ("expected", Lean.toJson (workspaceChildPermission actor permission))])).compress
-
 /-- ACP1 allows a child owner with native relation-delete capability to unlink
 a binding. Its former parent readers then cannot distinguish the hidden child
 from absence. Canonical Agent capability provisioning does not grant that
@@ -282,11 +269,6 @@ delete operation; granting it explicitly invalidates inventory completeness. -/
 def revokedWorkspaceChildFixture : Household.State :=
   Household.apply workspacePublicationFixture
     (.revoke ⟨"workspace_children", "binding", "parent", .object "workspaces" "workspace"⟩)
-
-def workspaceChildRevocationCasesJson : String :=
-  (Lean.toJson (["user", "creator", "writer", "integrator", "reader", "other"].map fun actor =>
-    Lean.Json.mkObj [("actor", Lean.toJson actor),
-      ("read", Lean.toJson (Household.allowed 8 revokedWorkspaceChildFixture actor "workspace_children" "binding" "read"))])).compress
 
 /-- Exclusive admission reads the complete published-child set and commits a
 new child together with a write to the shared workspace revision. The shared
@@ -306,18 +288,6 @@ theorem cleanup_without_native_update_cannot_begin :
     mayBeginCleanup false true false = false := by rfl
 theorem cleanup_with_active_binding_cannot_begin :
     mayBeginCleanup true true true = false := by rfl
-
-def workspaceCleanupCasesJson : String :=
-  let cases : List (String × Bool × Bool) :=
-    [("active", true, true), ("unauthorized", false, false), ("available", true, false)]
-  (Lean.toJson (cases.map fun (name, allowed, active) => Lean.Json.mkObj
-    [("name", Lean.toJson name), ("allowed", Lean.toJson allowed),
-      ("active", Lean.toJson active), ("begins", Lean.toJson (mayBeginCleanup allowed true active))])).compress
-
-def workspaceAdmissionCasesJson : String :=
-  (Lean.toJson ([false, true].map fun occupied =>
-    Lean.Json.mkObj [("complete", Lean.toJson true), ("occupied", Lean.toJson occupied),
-      ("admitted", Lean.toJson (admitExclusive true occupied))])).compress
 
 /-- The user-authored RepositoryPlacement and selected Agent reader grants
 commit together. Reusing an existing placement does not restore a revoked
