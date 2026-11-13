@@ -1207,7 +1207,6 @@ pub struct LeanContractSnapshot {
     pub identity_atomic_client_request_cases: Vec<serde_json::Value>,
     pub identity_derivation_cases: Vec<LeanIdentityDerivationCase>,
     pub identity_contracts: Vec<LeanIdentityContract>,
-    pub pack_operator_wire_cases: Vec<LeanPackOperatorWireCase>,
     pub recovery_sweep_ids: Vec<String>,
 }
 
@@ -2886,15 +2885,6 @@ pub struct LeanOutputTarget {
     pub coordinate: LeanCanonicalCoordinate,
     pub writer: LeanCanonicalWriter,
     pub message_id: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPackOperatorWireCase {
-    pub allowed: bool,
-    pub home: bool,
-    pub operator: bool,
-    pub ready: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

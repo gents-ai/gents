@@ -155,11 +155,6 @@ async fn resolved_identity_permission_cases_drive_defra_acp() -> anyhow::Result<
 }
 
 #[test]
-fn pack_operator_wire_contract_cases_parse_through_typed_snapshot() {
-    assert!(!lean_contract_snapshot().pack_operator_wire_cases.is_empty());
-}
-
-#[test]
 fn lean_executable_contracts_cover_initial_domains() {
     for domain in [
         "Request",
