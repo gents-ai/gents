@@ -423,13 +423,15 @@ def vocabularyCoverage : List CoverageEntry :=
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
-  [ tagged (consumerCoverage
+  [ tagged (followUpCoverage
       "state_machine"
-      "Request")
+      "Request"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through request_state_terminal.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "Process")
+      "Process"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
@@ -451,34 +453,50 @@ def stateMachineCoverage : List CoverageEntry :=
       "StorageObservation.failOpen"
       "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
       "storage-observation" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "RuntimeReconcile")
+      "RuntimeReconcile"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "runtime-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "SessionRecovery")
+      "SessionRecovery"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "session-recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "InferenceCall")
+      "InferenceCall"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "inference-call" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "ToolCall")
+      "ToolCall"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through tool_execution_tool_call_state_terminal.")
       "tool-call" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "ManagedExec")
+      "ManagedExec"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "managed-exec" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "Goal")
+      "Goal"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "Mailbox")
+      "Mailbox"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through mailbox_status_terminal.")
       "mailbox" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "state_machines_catalog_unreached"
+      "model-production-gap: production has no transition function over the state-machine catalogs; each owner writes its transitions inline, so only the terminal partitions are replayed.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_state_terminal")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "tool_execution_tool_call_state_terminal")
+      "tool-call" [Surface.agentFacing, Surface.runtimeInternal]
   ]
 
 def caseCoverage : List CoverageEntry :=
@@ -3094,9 +3112,10 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "tool_execution_cancel_cause_vocabulary")
       "interrupt-and-cancel" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "Request")
+      "Request"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through request_state_terminal.")
       "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"

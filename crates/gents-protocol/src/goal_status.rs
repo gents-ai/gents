@@ -61,7 +61,7 @@ mod conformance {
     }
 
     #[test]
-    fn rust_goal_status_vocabulary_and_machine_match_lean_contract() {
+    fn rust_goal_status_vocabulary_matches_lean_contract() {
         let rust = [
             GoalStatus::Active,
             GoalStatus::Paused,
@@ -73,6 +73,5 @@ mod conformance {
         ]
         .map(GoalStatus::as_str);
         assert_eq!(gents_lean_vocab::lean_vocabulary_values("GoalStatus"), rust);
-        gents_lean_vocab::assert_state_machine_contract_is_complete("Goal");
     }
 }

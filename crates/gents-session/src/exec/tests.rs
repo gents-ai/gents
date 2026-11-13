@@ -7,10 +7,7 @@ use chrono::Utc;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use gents_lean_vocab::{
-    assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete, LeanContractVocabulary,
-};
+use gents_lean_vocab::{assert_lean_contract_vocabulary_matches, LeanContractVocabulary};
 
 #[test]
 fn rust_managed_exec_state_vocabulary_matches_lean_model() {
@@ -24,14 +21,6 @@ fn rust_managed_exec_state_vocabulary_matches_lean_model() {
         rust_source: "ManagedExecState::ALL",
         rust_values: &rust_states,
     });
-}
-
-#[test]
-fn managed_exec_state_machine_contract_is_complete() {
-    assert_state_machine_contract_is_complete("ManagedExec");
-    assert_lean_transition_is_legal("ManagedExec", "pendingSpawn", "running");
-    assert_lean_transition_is_legal("ManagedExec", "running", "killSignaled");
-    assert_lean_transition_is_legal("ManagedExec", "killSignaled", "killed");
 }
 
 #[cfg(unix)]

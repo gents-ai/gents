@@ -120,7 +120,6 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
-    assert_lean_transition_is_legal("Request", "pending", "interrupted");
 
     let snap = fetch_request_snapshot(&actors, &doc_id).await;
     assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
@@ -173,8 +172,6 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
 
     let snap = fetch_request_snapshot(&actors, &doc_id).await;
     assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
-    assert_lean_transition_is_legal("Request", "processing", "interrupted");
-    assert_lean_transition_is_illegal("Request", "interrupted", "failed");
 }
 
 #[tokio::test]
@@ -438,7 +435,6 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         ClaimOutcome::Claimed,
         "manual pending row must be claimable exactly once"
     );
-    assert_lean_transition_is_legal("Request", "pending", "claimed");
 
     let snap = fetch_request_snapshot(&agent_access, &doc_id).await;
     assert_eq!(snap.lifecycle_state, RequestLifecycleState::Claimed);

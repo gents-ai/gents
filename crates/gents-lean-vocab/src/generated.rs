@@ -1119,7 +1119,6 @@ pub struct LeanContractSnapshot {
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub generated_by: String,
     pub vocabularies: Vec<LeanVocabularyContract>,
-    pub state_machines: Vec<LeanStateMachineContract>,
     pub goal_claimed_publication_cases: Vec<LeanGoalClaimedPublicationCase>,
     pub goal_operator_resume_cases: Vec<LeanGoalOperatorResumeCase>,
     pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,
@@ -2764,13 +2763,6 @@ pub enum LeanMessageRole {
     Assistant,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanNamedTransition {
-    pub name: String,
-    pub from: String,
-    pub to: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanNativeClaimLifetimeCase {
@@ -4083,19 +4075,6 @@ pub struct LeanSessionTurnRow {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanStateMachineContract {
-    pub domain: String,
-    pub states: Vec<String>,
-    pub state_count: usize,
-    pub terminal_states: Vec<String>,
-    pub nonterminal_states: Vec<String>,
-    pub actions: Vec<String>,
-    pub legal_transitions: Vec<LeanTransitionPair>,
-    pub illegal_transitions: Vec<LeanTransitionPair>,
-    pub named_transitions: Vec<LeanNamedTransition>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanStorageObservationRuntimeCase {
     pub name: String,
     pub policy: String,
@@ -4220,12 +4199,6 @@ pub struct LeanTranscriptCase {
     pub expected_ordered: bool,
     pub expected_duplicate_reused_sequence: bool,
     pub expected_strong_drain: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanTransitionPair {
-    pub from: String,
-    pub to: String,
 }
 
 #[derive(Debug, Deserialize)]

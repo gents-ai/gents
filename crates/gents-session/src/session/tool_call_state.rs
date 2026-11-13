@@ -96,6 +96,13 @@ mod conformance {
     }
 
     #[test]
+    fn tool_call_terminal_partition_matches_the_lean_tool_call_states() {
+        gents_lean_vocab::families::tool_execution_tool_call_state_terminal::replay::<ToolCallState>(
+            |i| i.state.is_terminal(),
+        );
+    }
+
+    #[test]
     fn cancel_causes_are_the_lean_cancel_causes() {
         gents_lean_vocab::families::tool_execution_cancel_cause_vocabulary::replay(
             CancelCause::ALL,

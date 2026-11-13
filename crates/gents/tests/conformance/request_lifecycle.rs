@@ -1029,7 +1029,6 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    assert_lean_transition_is_legal("Request", "pending", "claimed");
 
     assert_eq!(
         fetch_request_snapshot(&actors, &doc_id).await,
@@ -1119,8 +1118,6 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     crate::support::begin_owned_execution(&mut lifecycle, &db.node)
         .await
         .unwrap();
-    assert_lean_transition_is_legal("Request", "claimed", "processing");
-    assert_lean_transition_is_legal("Request", "processing", "processing");
 
     assert_eq!(
         fetch_request_snapshot(&actors, &doc_id).await,
@@ -1185,7 +1182,6 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
         )
         .await
         .unwrap();
-    assert_lean_transition_is_legal("Request", "claimed", "failed");
 
     assert_eq!(
         fetch_request_snapshot(&actors, &doc_id).await,

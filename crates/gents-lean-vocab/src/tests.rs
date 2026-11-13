@@ -30,12 +30,6 @@ end Sample
     ));
 }
 
-#[test]
-fn runtime_reconcile_state_machine_contract_is_complete() {
-    assert_state_machine_contract_is_complete("RuntimeReconcile");
-    assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
-}
-
 const IDENTITY_PERMISSION_POLICY_ID: &str = "identity-permission-cases";
 const IDENTITY_PERMISSION_RESOURCE_NAME: &str = "row";
 
@@ -161,70 +155,6 @@ fn pack_operator_wire_contract_cases_parse_through_typed_snapshot() {
 
 #[test]
 fn lean_executable_contracts_cover_initial_domains() {
-    for domain in [
-        "Request",
-        "Process",
-        "Persistence.failClosed",
-        "Persistence.failOpen",
-        "StorageObservation.failClosed",
-        "StorageObservation.failOpen",
-        "RuntimeReconcile",
-        "SessionRecovery",
-        "InferenceCall",
-    ] {
-        assert_state_machine_contract_is_complete(domain);
-    }
-
-    assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
-    assert_lean_transition_is_legal("RuntimeReconcile", "idle", "debouncing");
-    assert_lean_transition_is_legal("Persistence.failClosed", "committing", "uncommitted");
-    assert_lean_transition_is_legal("Persistence.failOpen", "committing", "lost");
-    assert_lean_transition_is_legal("StorageObservation.failClosed", "noMutation", "inFlight");
-    assert_lean_transition_is_legal(
-        "StorageObservation.failClosed",
-        "inFlight",
-        "successAcknowledged",
-    );
-    assert_lean_transition_is_legal(
-        "StorageObservation.failClosed",
-        "inFlight",
-        "mutationFailed",
-    );
-    assert_lean_transition_is_legal(
-        "StorageObservation.failClosed",
-        "mutationFailed",
-        "noMutation",
-    );
-    assert_lean_transition_is_legal(
-        "StorageObservation.failOpen",
-        "mutationFailed",
-        "lostAcknowledged",
-    );
-    assert_lean_transition_is_legal(
-        "StorageObservation.failClosed",
-        "successAcknowledged",
-        "staleObserved",
-    );
-    assert_lean_transition_is_legal(
-        "StorageObservation.failClosed",
-        "successAcknowledged",
-        "readVisible",
-    );
-    assert_lean_transition_is_legal(
-        "StorageObservation.failClosed",
-        "staleObserved",
-        "readVisible",
-    );
-    assert_lean_transition_is_illegal(
-        "StorageObservation.failClosed",
-        "mutationFailed",
-        "lostAcknowledged",
-    );
-    assert_lean_transition_is_illegal(
-        "StorageObservation.failOpen",
-        "mutationFailed",
-        "noMutation",
-    );
     assert_eq!(
         lean_vocabulary_values("SessionRecoveryLatestRequestState"),
         vec![
@@ -246,13 +176,6 @@ fn lean_executable_contracts_cover_initial_domains() {
         &lean_vocabulary_values("RequestState"),
         lean_request_transition_cases(),
     );
-    assert_lean_transition_is_legal("SessionRecovery", "failed", "pending");
-    assert_lean_transition_is_illegal("SessionRecovery", "dead", "pending");
-    assert_lean_transition_is_illegal("SessionRecovery", "superseded", "pending");
-    assert_lean_transition_is_illegal("SessionRecovery", "interrupted", "pending");
-    assert_lean_transition_is_legal("InferenceCall", "queued", "running");
-    assert_lean_transition_is_legal("InferenceCall", "running", "completed");
-    assert_lean_transition_is_legal("InferenceCall", "running", "failed");
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert_eq!(
         lean_contract_snapshot().request_transition_cases.len(),
