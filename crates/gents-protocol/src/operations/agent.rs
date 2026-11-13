@@ -195,7 +195,12 @@ pub enum AgentOperationError {
     CloneSourceNotEnabled,
     #[error("agent {0:?} does not exist")]
     AgentMissing(String),
-    #[error("creating or cloning an agent and choosing the default agent need the agent catalog (manage_agents on the Node), which this actor does not hold; a Node owner or administrator grants it with nodes#agent_manager")]
+    #[error(
+        "creating or cloning an agent and choosing the default agent need {} on the Node, which this actor does not hold and cannot grant itself; the Node's owner or an {} adds this actor as {} on the Node",
+        CATALOG_REFUSAL_WORDS[0],
+        CATALOG_REFUSAL_WORDS[1],
+        CATALOG_REFUSAL_WORDS[2]
+    )]
     CatalogNotHeld,
     #[error("this actor may not configure agent {0:?}: it holds no update grant on that Agent; configure an agent it created or its own, or ask a User who administers {0:?} to make the change")]
     AgentNotHeld(String),
@@ -249,6 +254,11 @@ pub enum AgentOperationError {
     #[error(transparent)]
     Passthrough(Box<dyn Error + Send + Sync>),
 }
+
+/// Lean `SelfConfig.catalogRefusalWords`: the names of the Household policy
+/// the catalog refusal gives, the permission then the relations that confer
+/// it. The policy tool accepts each of them.
+pub const CATALOG_REFUSAL_WORDS: [&str; 3] = ["manage_agents", "administrator", "agent_manager"];
 
 impl AgentOperationError {
     /// The call that lets the caller correct this failure of `operation`.

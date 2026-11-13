@@ -1,3 +1,4 @@
+use super::policy_names::{self, HouseholdName};
 use super::*;
 use gents_session::session::output_render::ordered;
 
@@ -6,6 +7,25 @@ use gents_store::config_client::{ConfigAccess, ConfigClientError, NodePermission
 use gents_store::identity::GrantSet;
 
 const VERBS: [&str; 5] = ["get", "check", "explain", "grant", "revoke"];
+
+/// What `--permission`, `--collection`, `--doc` and `--relation` name, before
+/// a Household name is placed on its document.
+#[derive(Debug)]
+enum NamedTarget {
+    Node(NodePermission),
+    Relation {
+        collection: String,
+        doc_id: String,
+        relation: String,
+    },
+    /// Lean `SelfConfig.resolvePolicyName`: a word of the Household policy,
+    /// on the named document or, without one, on this Node.
+    Household {
+        word: String,
+        names: Vec<HouseholdName>,
+        document: Option<(String, String)>,
+    },
+}
 
 #[derive(Debug)]
 enum PolicyTarget {
@@ -17,12 +37,53 @@ enum PolicyTarget {
     },
 }
 
+/// A permission of the Household policy on one document. The policy derives it
+/// from relations and ownership, so it is checked, never granted.
+#[derive(Debug)]
+struct DocumentPermission {
+    collection: String,
+    doc_id: String,
+    name: HouseholdName,
+}
+
+impl DocumentPermission {
+    fn words(&self) -> String {
+        format!(
+            "permission {} on {} document {}",
+            self.name.name, self.collection, self.doc_id
+        )
+    }
+
+    /// How the document policy gives it, in the policy's own words.
+    fn sources(&self) -> String {
+        if self.name.expr.is_empty() {
+            "to the document's owner only".to_owned()
+        } else {
+            format!("through {}, and to the document's owner", self.name.expr)
+        }
+    }
+
+    fn check_argv(&self, verb: &str) -> Value {
+        json!({"argv": [
+            "policy", verb, "--collection", self.collection, "--doc", self.doc_id,
+            "--permission", self.name.name,
+        ]})
+    }
+}
+
+/// A named target placed on its document.
+enum Placed {
+    Target(PolicyTarget),
+    Permission(DocumentPermission),
+}
+
 #[derive(Debug)]
 struct PolicyCall {
     subject: ::identity::Did,
     is_self: bool,
     subject_given: bool,
     target: Option<PolicyTarget>,
+    permission: Option<DocumentPermission>,
 }
 
 fn guidance(message: impl Into<String>, next_call: Value) -> anyhow::Error {
@@ -62,29 +123,42 @@ fn ensure_options(parsed: &ParsedArgs, verb: &str) -> Result<()> {
     Ok(())
 }
 
-/// A node permission (`--permission`) or one document relationship
-/// (`--collection`, `--doc`, `--relation`); never both.
-fn parse_target(parsed: &ParsedArgs) -> Result<Option<PolicyTarget>> {
+/// A node permission or a word of the Household policy (`--permission`, the
+/// latter with or without `--collection` and `--doc`), or one document
+/// relationship (`--collection`, `--doc`, `--relation`).
+fn parse_target(parsed: &ParsedArgs) -> Result<Option<NamedTarget>> {
     let permission = parsed.one("permission")?;
     let collection = parsed.one("collection")?;
     let doc_id = parsed.one("doc")?;
     let relation = parsed.one("relation")?;
     match (permission, collection, doc_id, relation) {
         (None, None, None, None) => Ok(None),
-        (Some(name), None, None, None) => match NodePermission::parse(name) {
-            Some(permission) => Ok(Some(PolicyTarget::Node(permission))),
-            None => Err(guidance(
-                format!("unknown node permission {name:?}; names are the ones policy get lists, e.g. read-document"),
-                json!({"argv": ["policy", "get"]}),
-            )),
-        },
-        (None, Some(collection), Some(doc_id), Some(relation)) => Ok(Some(PolicyTarget::Relation {
+        (Some(name), None, None, None) if NodePermission::parse(name).is_some() => {
+            Ok(NodePermission::parse(name).map(NamedTarget::Node))
+        }
+        (Some(word), collection, doc_id, None) if collection.is_some() == doc_id.is_some() => {
+            let names = policy_names::resolve(word)?;
+            if names.is_empty() {
+                return Err(guidance(
+                    format!("unknown permission {word:?}; --permission takes a node permission (policy get lists the ones held, e.g. read-document) or a relation or permission of the document policy, bare or as resource#name (e.g. manage_agents, nodes#agent_manager)"),
+                    json!({"argv": ["policy", "get"]}),
+                ));
+            }
+            Ok(Some(NamedTarget::Household {
+                word: word.to_owned(),
+                names,
+                document: collection
+                    .zip(doc_id)
+                    .map(|(collection, doc_id)| (collection.to_owned(), doc_id.to_owned())),
+            }))
+        }
+        (None, Some(collection), Some(doc_id), Some(relation)) => Ok(Some(NamedTarget::Relation {
             collection: collection.to_owned(),
             doc_id: doc_id.to_owned(),
             relation: relation.to_owned(),
         })),
         _ => Err(guidance(
-            "name one target: --permission PERMISSION for a node permission, or all of --collection, --doc and --relation for a document relationship",
+            "name one target: --permission NAME for a node permission or a relation or permission of this Node; --collection, --doc and --permission NAME for one of another document; or --collection, --doc and --relation for a document relationship",
             json!({"argv": ["policy", "--help"]}),
         )),
     }
@@ -206,7 +280,248 @@ fn permission_ways(provenance: &[PermissionProvenance], permission: NodePermissi
         .collect()
 }
 
+/// A relationship check needs the document's relationships, which DefraDB
+/// lists only for its owner or a manager of its relations. The refusal names
+/// the permissions the relation gives, which this agent can check for itself.
+fn relationships_unreadable(
+    collection: &str,
+    doc_id: &str,
+    relation: &str,
+    error: &ConfigClientError,
+) -> anyhow::Error {
+    let given = gents_protocol::schemas::identity_policy_resource(collection)
+        .and_then(|resource| policy_names::permissions_given_by(resource, relation).ok())
+        .unwrap_or_default();
+    let unreadable = format!("cannot read the relationships of {collection} {doc_id}: {error}");
+    match given.first() {
+        Some(permission) => guidance(
+            format!(
+                "{unreadable}. Only the document's owner or a manager of its relations lists them. {relation} gives {}; policy check with that permission answers whether you hold it",
+                given.join(", ")
+            ),
+            json!({"argv": [
+                "policy", "check", "--collection", collection, "--doc", doc_id,
+                "--permission", permission,
+            ]}),
+        ),
+        None => guidance(unreadable, json!({"argv": ["policy", "get"]})),
+    }
+}
+
+/// A Household word that the named document's policy resource does not
+/// declare, or that no document was named for.
+fn misplaced_name(word: &str, names: &[HouseholdName], collection: Option<&str>) -> anyhow::Error {
+    let mut resources = names
+        .iter()
+        .map(|name| name.resource.as_str())
+        .collect::<Vec<_>>();
+    resources.dedup();
+    let kind = names.first().map_or("name", HouseholdName::kind);
+    let bare = names.first().map_or(word, |name| name.name.as_str());
+    let message = match collection {
+        Some(collection) => format!(
+            "{collection} documents have no {kind} {bare:?} in the document policy; it belongs to {} documents",
+            resources.join(", ")
+        ),
+        None => format!(
+            "{word:?} is a {kind} of {} documents, not of the Node; name the document with --collection COLLECTION --doc DOC_ID --permission {bare}",
+            resources.join(", ")
+        ),
+    };
+    guidance(message, json!({"argv": ["policy", "--help"]}))
+}
+
 impl ConfigCommandTool {
+    /// Lean `SelfConfig.resolvePolicyName`, placed: a word of the Household
+    /// policy stands on the named document, or on this Node when none is
+    /// named. A relation is the direct relationship; a permission is checked
+    /// as native ACP answers it.
+    async fn place_target(&self, named: NamedTarget) -> Result<Placed> {
+        let (word, names, document) = match named {
+            NamedTarget::Node(permission) => {
+                return Ok(Placed::Target(PolicyTarget::Node(permission)))
+            }
+            NamedTarget::Relation {
+                collection,
+                doc_id,
+                relation,
+            } => {
+                return Ok(Placed::Target(PolicyTarget::Relation {
+                    collection,
+                    doc_id,
+                    relation,
+                }))
+            }
+            NamedTarget::Household {
+                word,
+                names,
+                document,
+            } => (word, names, document),
+        };
+        let (collection, doc_id) = match document {
+            Some(document) => document,
+            None if names.iter().any(|name| name.resource == "nodes") => {
+                ("Node".to_owned(), self.node_document().await?)
+            }
+            None => return Err(misplaced_name(&word, &names, None)),
+        };
+        let resource = gents_protocol::schemas::identity_policy_resource(&collection);
+        let Some(name) = names
+            .iter()
+            .find(|name| Some(name.resource.as_str()) == resource)
+            .cloned()
+        else {
+            return Err(misplaced_name(&word, &names, Some(collection.as_str())));
+        };
+        Ok(if name.is_permission {
+            Placed::Permission(DocumentPermission {
+                collection,
+                doc_id,
+                name,
+            })
+        } else {
+            Placed::Target(PolicyTarget::Relation {
+                collection,
+                doc_id,
+                relation: name.name,
+            })
+        })
+    }
+
+    /// What this agent natively holds of `permissions` on one document, or on
+    /// this Node's document when none is named.
+    async fn own_document_permissions(
+        &self,
+        document: Option<(&str, &str)>,
+        permissions: &[String],
+    ) -> Result<gents_store::identity::ObservedDocumentPermissions> {
+        gents_store::identity::observe_document_permissions(
+            &self.core.node_handle(),
+            &self.node_did,
+            &self.core.identity()?,
+            document,
+            permissions,
+        )
+        .await?
+        .ok_or_else(|| {
+            guidance(
+                "this node's Node document is not available to the runtime; name the document with --collection Node --doc DOC_ID",
+                json!({"argv": ["policy", "--help"]}),
+            )
+        })
+    }
+
+    async fn node_document(&self) -> Result<String> {
+        Ok(self.own_document_permissions(None, &[]).await?.doc_id)
+    }
+
+    /// The Node's permissions in the Household policy, each with whether this
+    /// agent holds it.
+    async fn node_document_permissions(&self) -> Result<Vec<(String, bool)>> {
+        let names = policy_names::household_names()?
+            .into_iter()
+            .filter(|name| name.is_permission && name.resource == "nodes")
+            .map(|name| name.name)
+            .collect::<Vec<_>>();
+        let observed = self.own_document_permissions(None, &names).await?;
+        Ok(names.into_iter().zip(observed.held).collect())
+    }
+
+    /// Who can give a permission this agent lacks, and with which call.
+    fn permission_grant_path(call: &PolicyCall, permission: &DocumentPermission) -> String {
+        let relations = permission.name.granting_relations();
+        let given = format!(
+            "The document policy gives {} on {} documents {}.",
+            permission.name.name,
+            permission.name.resource,
+            permission.sources()
+        );
+        if relations.is_empty() {
+            return format!("{given} No relationship on this document grants it.");
+        }
+        format!(
+            "{given} An actor cannot add a relationship for itself unless it already manages that relation: the document's owner or a manager of the relation grants one with policy grant --subject {} --collection {} --doc {} --relation RELATION, where RELATION is {}.",
+            call.subject.as_str(),
+            permission.collection,
+            permission.doc_id,
+            relations.join(" or ")
+        )
+    }
+
+    async fn permission_answer(
+        &self,
+        call: &PolicyCall,
+        permission: &DocumentPermission,
+    ) -> Result<String> {
+        if !call.is_self {
+            return Err(guidance(
+                format!(
+                    "a document permission is answered for this agent only; for another subject list the direct relationships of {} document {}",
+                    permission.collection, permission.doc_id
+                ),
+                json!({"argv": [
+                    "policy", "get", "--collection", permission.collection, "--doc", permission.doc_id,
+                ]}),
+            ));
+        }
+        let held = self
+            .own_document_permissions(
+                Some((permission.collection.as_str(), permission.doc_id.as_str())),
+                std::slice::from_ref(&permission.name.name),
+            )
+            .await?
+            .held
+            == [true];
+        let (answer, how) = if held {
+            (
+                format!("yes: you hold {}.", permission.words()),
+                format!("The document policy gives it {}.", permission.sources()),
+            )
+        } else {
+            (
+                format!("no: you do not hold {}.", permission.words()),
+                Self::permission_grant_path(call, permission),
+            )
+        };
+        ordered! {
+            "answer": answer,
+            "how_to_proceed": how,
+            "metadata": json!({
+                "subject_did": call.subject.as_str(),
+                "target": {
+                    "kind": "document_permission",
+                    "collection": permission.collection,
+                    "doc_id": permission.doc_id,
+                    "resource": permission.name.resource,
+                    "permission": permission.name.name,
+                },
+            }),
+        }
+        .pretty()
+    }
+
+    /// A permission is derived, so a grant or revoke of it names the
+    /// relations that give it and the call that explains who grants them.
+    fn derived_permission(verb: &str, permission: &DocumentPermission) -> anyhow::Error {
+        let relations = permission.name.granting_relations();
+        let instead = if relations.is_empty() {
+            "no relationship on the document gives it".to_owned()
+        } else {
+            format!(
+                "policy {verb} a relation that gives it instead: {}",
+                relations.join(" or ")
+            )
+        };
+        guidance(
+            format!(
+                "{} is derived by the document policy ({}) and is never granted or revoked itself; {instead}",
+                permission.words(),
+                permission.sources()
+            ),
+            permission.check_argv("explain"),
+        )
+    }
+
     pub(super) async fn policy(&self, argv: &[String]) -> Result<String> {
         let verb = argv.first().map(String::as_str).unwrap_or_default();
         if !VERBS.contains(&verb) {
@@ -220,19 +535,29 @@ impl ConfigCommandTool {
         ensure_options(&parsed, verb)?;
         let call = self.policy_call(&parsed, verb).await?;
         let access = self.core.access()?;
-        match verb {
-            "get" => self.policy_get(&access, &parsed, &call).await,
-            "check" | "explain" => self.policy_answer(&access, &call, verb == "explain").await,
-            _ => self.policy_change(&access, &call, verb == "grant").await,
+        match (verb, &call.permission) {
+            ("get", _) => self.policy_get(&access, &parsed, &call).await,
+            ("check" | "explain", Some(permission)) => {
+                self.permission_answer(&call, permission).await
+            }
+            ("check" | "explain", None) => {
+                self.policy_answer(&access, &call, verb == "explain").await
+            }
+            (_, Some(permission)) => Err(Self::derived_permission(verb, permission)),
+            (_, None) => self.policy_change(&access, &call, verb == "grant").await,
         }
     }
 
     async fn policy_call(&self, parsed: &ParsedArgs, verb: &str) -> Result<PolicyCall> {
         let actor = self.core.identity()?;
-        let target = if verb == "get" {
-            None
-        } else {
-            parse_target(parsed)?
+        let (target, permission) = match parse_target(parsed) {
+            _ if verb == "get" => (None, None),
+            Ok(Some(named)) => match self.place_target(named).await? {
+                Placed::Target(target) => (Some(target), None),
+                Placed::Permission(permission) => (None, Some(permission)),
+            },
+            Ok(None) => (None, None),
+            Err(error) => return Err(error),
         };
         let subject_given = parsed.one("subject")?.is_some();
         let (subject, is_self) = match parsed.one("subject")? {
@@ -254,6 +579,7 @@ impl ConfigCommandTool {
             is_self,
             subject_given,
             target,
+            permission,
         })
     }
 
@@ -292,8 +618,42 @@ impl ConfigCommandTool {
                 permissions.keys().cloned().collect::<Vec<_>>().join(", ")
             )
         };
+        let node_document = if call.is_self {
+            Some(self.node_document_permissions().await)
+        } else {
+            None
+        };
+        let answer = match &node_document {
+            Some(Ok(permissions)) => {
+                let names = |held: bool| {
+                    let names = permissions
+                        .iter()
+                        .filter(|(_, holds)| *holds == held)
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>();
+                    if names.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        names.join(", ")
+                    }
+                };
+                format!(
+                    "{answer} On this Node's document you hold: {}; you do not hold: {}.",
+                    names(true),
+                    names(false)
+                )
+            }
+            _ => answer,
+        };
+        let node_document = node_document.map(|permissions| match permissions {
+            Ok(permissions) => json!(permissions
+                .into_iter()
+                .map(|(permission, held)| json!({"permission": permission, "held": held}))
+                .collect::<Vec<_>>()),
+            Err(error) => json!({"unavailable": format!("{error:#}")}),
+        });
         let next = if call.is_self {
-            "policy check --permission NAME to test one; policy grant --subject AGENT --permission NAME to delegate a permission you hold."
+            "policy check --permission NAME to test one, a node permission or a relation or permission of this Node's document; policy grant --subject AGENT --permission NAME to delegate a permission you hold."
         } else {
             "policy check --subject AGENT --permission NAME to test one permission."
         };
@@ -334,6 +694,7 @@ impl ConfigCommandTool {
                 "permission": entry.permission.as_str(),
                 "via": via_words(&entry.via),
             })).collect::<Vec<_>>(),
+            "node_document_permissions": node_document,
             "document_relationships": relation_rows,
             "metadata": json!({
                 "subject_did": call.subject.as_str(),
@@ -370,12 +731,7 @@ impl ConfigCommandTool {
                     .list_document_relationships(collection, doc_id)
                     .await
                     .map_err(|error| {
-                        guidance(
-                            format!(
-                                "cannot read the relationships of {collection} {doc_id}: {error}"
-                            ),
-                            json!({"argv": ["policy", "get"]}),
-                        )
+                        relationships_unreadable(collection, doc_id, relation, &error)
                     })?;
                 let subject = call.subject.as_str();
                 let ways = rows
@@ -662,7 +1018,7 @@ mod tests {
         assert!(parse_target(&parsed(&[])).unwrap().is_none());
         assert!(matches!(
             parse_target(&parsed(&["--permission", "read-document"])).unwrap(),
-            Some(PolicyTarget::Node(NodePermission::DocumentRead))
+            Some(NamedTarget::Node(NodePermission::DocumentRead))
         ));
         assert!(matches!(
             parse_target(&parsed(&[
@@ -674,7 +1030,7 @@ mod tests {
                 "config_writer"
             ]))
             .unwrap(),
-            Some(PolicyTarget::Relation { .. })
+            Some(NamedTarget::Relation { .. })
         ));
         assert!(parse_target(&parsed(&[
             "--permission",
@@ -689,16 +1045,11 @@ mod tests {
     #[test]
     fn a_grant_names_the_revoke_of_the_same_target() {
         let subject = ::identity::Did::new("did:key:z6MkSubject".to_owned()).unwrap();
-        let target = parse_target(&parsed(&[
-            "--collection",
-            "AgentSession",
-            "--doc",
-            "bae-1",
-            "--relation",
-            "reader",
-        ]))
-        .unwrap()
-        .unwrap();
+        let target = PolicyTarget::Relation {
+            collection: "AgentSession".to_owned(),
+            doc_id: "bae-1".to_owned(),
+            relation: "reader".to_owned(),
+        };
         assert_eq!(
             change_argv("revoke", &subject, &target),
             json!({"argv": [
@@ -727,6 +1078,28 @@ mod tests {
         gents_lean_vocab::families::contracts_policy_resource_exposure::replay(|i| {
             let categories = i.categories.iter().cloned().collect::<BTreeSet<_>>();
             model_resources(&categories, false).contains(&"policy")
+        });
+    }
+
+    #[test]
+    fn contracts_policy_tool_words_matches_lean() {
+        use gents_lean_vocab::families::contracts_policy_tool_words as family;
+        family::replay(|i| {
+            let names = match parse_target(&parsed(&["--permission", &i.word])) {
+                Ok(Some(NamedTarget::Household { names, .. })) => names,
+                _ => Vec::new(),
+            };
+            family::PolicyWordOutput {
+                names: names
+                    .into_iter()
+                    .map(|name| family::PolicyWordName {
+                        resource: name.resource,
+                        is_permission: name.is_permission,
+                    })
+                    .collect(),
+                catalog_refusal: gents_protocol::operations::agent::CATALOG_REFUSAL_WORDS
+                    .contains(&i.word.as_str()),
+            }
         });
     }
 
