@@ -8,12 +8,15 @@ import { useEffect, useRef } from "react";
 import type { DesktopApp, DesktopBridge } from "../../hooks/desktopApp";
 import { nodeOf } from "../../hooks/fleetStore";
 import { fleetNodes } from "@/lib/scope";
-import { navigate, useRoute, type Route } from "@/lib/router";
+import { href, navigate, useRoute, type Route } from "@/lib/router";
 import {
   confirmPluginMessage,
+  navigateMainWindow,
   pickDirectory,
   revealInFolder,
 } from "../../lib/nativeShell";
+import { errorText } from "../../lib/errorText";
+import { toast } from "sonner";
 import { discoverBundledUxPlugins } from "@/contrib/bundled";
 import { emitClientUpdated } from "@/contrib/events";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
@@ -49,7 +52,26 @@ function notifyRouteChanged() {
 /* one per window, so a plugin's rate holds across the host's rebuilds */
 let pluginNotifier: ReturnType<typeof createPluginNotifier> | null = null;
 
-export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
+/* A plugin's own window shows its page and nothing else: a place within
+   that page is gone to there, and any other opens in the main window, which
+   comes forward. */
+function navigateFromPage(page: string): (to: Route) => void {
+  return (to) => {
+    if (to.name === "plugin" && to.pluginId === page) return navigate(to);
+    void Promise.resolve()
+      .then(() => navigateMainWindow(href(to)))
+      .catch((error) =>
+        toast.error(`Couldn't open that in the main window: ${errorText(error)}`),
+      );
+  };
+}
+
+/** `page`: the plugin whose page fills this window, in a window of its own */
+export function buildUxHost(
+  app: DesktopApp,
+  route: () => Route,
+  page?: string,
+): UxHost {
   let confirmingMessage = false;
   const selection = () => app.stores.selection.getState();
   const fleet = () => app.stores.fleet.getState();
@@ -60,7 +82,7 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
   return {
     shell: {
       route,
-      navigate,
+      navigate: page === undefined ? navigate : navigateFromPage(page),
       deployments: () => fleetNodes(fleet()),
       selectedDeployment: selectedNode,
       selectedSessionId: () => selection().sessionId,
@@ -153,8 +175,9 @@ let opened = false;
 let following: Array<() => void> = [];
 
 /* idempotent: the doors open once per webview, however often the shell
-   re-renders or HMR re-evaluates the caller */
-export function openUxDoors(app: DesktopApp): void {
+   re-renders or HMR re-evaluates the caller. `page`: the plugin whose page
+   this window is, the only one it runs. */
+export function openUxDoors(app: DesktopApp, page?: string): void {
   if (opened) return;
   opened = true;
   /* page documents are read from the selected node, by the same rule the
@@ -169,8 +192,9 @@ export function openUxDoors(app: DesktopApp): void {
     list: (node) => app.actions.listUxPlugins(node),
     source: (id, node) => app.actions.readUxPluginSource(id, node),
     node: nodeDid,
+    only: page,
   });
-  discoverBundledUxPlugins();
+  discoverBundledUxPlugins(page);
   void scanRuntimeUxPlugins();
   /* another node's pages replace this one's when the selection moves */
   const followNode = () => void followSelectedUxNode().catch(() => undefined);
@@ -185,9 +209,11 @@ export function openUxDoors(app: DesktopApp): void {
 const showsPages = (route: Route): boolean =>
   route.name === "plugin" || route.name === "packs";
 
+/** `page`: the plugin whose page fills this window, in a window of its own */
 export function useUxHost(
   app: DesktopApp,
   listenToUpdates: DesktopBridge["listenToUpdates"],
+  page?: string,
 ): void {
   const route = useRoute();
   const routeRef = useRef(route);
@@ -197,9 +223,9 @@ export function useUxHost(
     if (showsPages(route)) rescanRuntimeUxPluginsSoon();
   }, [route]);
   useEffect(() => {
-    installUxHost(buildUxHost(app, () => routeRef.current));
-    openUxDoors(app);
-  }, [app]);
+    installUxHost(buildUxHost(app, () => routeRef.current, page));
+    openUxDoors(app, page);
+  }, [app, page]);
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;

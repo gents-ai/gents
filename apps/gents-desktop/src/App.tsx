@@ -38,6 +38,7 @@ import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
 import {
   pluginWindowStart,
   useClosesWhenPluginGone,
+  useNavigationFromPluginWindows,
   type PluginWindowStart,
 } from "./ui/app/pluginWindow";
 import { useFirstRun } from "./ui/app/useFirstRun";
@@ -152,8 +153,9 @@ function AppHost({
   );
 }
 
-/* A plugin page's own window: the client and the plugin host, and the node
-   it was opened from. Startup and recovery stay with the main window. */
+/* A plugin page's own window: the client, the plugin host running that one
+   plugin, and the node it was opened from. Startup and recovery stay with
+   the main window. */
 function PluginWindowReactions({
   app,
   bridge,
@@ -165,7 +167,7 @@ function PluginWindowReactions({
 }) {
   useClientRuntime(app, bridge.listenToUpdates);
   usePlatformSetup();
-  useUxHost(app, bridge.listenToUpdates);
+  useUxHost(app, bridge.listenToUpdates, start.pluginId);
   const { selectNode } = app.actions;
   useEffect(() => {
     if (start.nodeDid) selectNode(start.nodeDid);
@@ -209,6 +211,7 @@ function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge 
   useManagedServerTrayControls(app);
   /* the UX plugin host and its doors: reads the stores, re-renders nothing */
   useUxHost(app, bridge.listenToUpdates);
+  useNavigationFromPluginWindows();
   return <NodeNavigationGuard />;
 }
 

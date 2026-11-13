@@ -1,8 +1,10 @@
 //! A UX plugin's page in a window of its own. The window loads the app
 //! with a start address the UI reads, and gets only the `plugin-window`
-//! capability: the client's snapshot and lifecycle, the node list, the
-//! page's own plugin reads and calls, and the notifications its plugin
-//! raises while this window speaks for it.
+//! capability: the client's snapshot and start, the node list, the page's
+//! own plugin reads and calls, a place it opens in the main view, and the
+//! notifications its plugin raises while this window speaks for it. It can
+//! neither quit the app nor shut its client down, and closing it closes
+//! only that window.
 use std::fmt::Write;
 
 use std::collections::BTreeMap;
@@ -24,6 +26,75 @@ pub const PLUGIN_WINDOW_EVENT: &str = "desktop://plugin-window";
 struct PluginWindowChange<'a> {
     plugin_id: &'a str,
     open: bool,
+}
+
+/// Sent to the main view with the place a plugin's page, in its own window,
+/// asked to go to: that window shows the page and nothing else.
+pub const PLUGIN_NAVIGATE_EVENT: &str = "desktop://plugin-navigate";
+const MAX_PLACE: usize = 2048;
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+struct PluginNavigation<'a> {
+    path: &'a str,
+}
+
+/// Whether `label` is a plugin's own window.
+pub(super) fn is_page_window(label: &str) -> bool {
+    label.starts_with(LABEL_PREFIX)
+}
+
+fn checked_place(from: &str, path: &str) -> Result<(), String> {
+    if !is_page_window(from) {
+        return Err("only a plugin's own window sends a place to the main view".into());
+    }
+    if !path.starts_with('/') || path.len() > MAX_PLACE {
+        return Err("a place in the app is a path of at most 2048 bytes".into());
+    }
+    Ok(())
+}
+
+/// Opens a place in the main view, for a plugin's page in a window of its
+/// own, and brings the main view forward. The path only names a place; the
+/// main view reads it as it reads any of its own.
+#[tauri::command]
+pub fn desktop_plugin_window_navigate<R>(
+    window: tauri::WebviewWindow<R>,
+    path: String,
+) -> Result<(), String>
+where
+    R: Runtime,
+{
+    checked_place(window.label(), &path)?;
+    let app = window.app_handle();
+    super::show_main_window(app);
+    app.emit_to(
+        "main",
+        PLUGIN_NAVIGATE_EVENT,
+        PluginNavigation { path: &path },
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// A plugin's question is answered in the main view. While a plugin's own
+/// window has focus the person would not see it, so the main view asks to
+/// come forward; it stays where it is otherwise. Whether it came forward.
+#[tauri::command]
+pub fn desktop_plugin_prompt_to_main<R>(window: tauri::WebviewWindow<R>) -> Result<bool, String>
+where
+    R: Runtime,
+{
+    if window.label() != "main" {
+        return Err("only the main view comes forward for a plugin's question".into());
+    }
+    let app = window.app_handle();
+    let page_focused = app
+        .webview_windows()
+        .iter()
+        .any(|(label, page)| is_page_window(label) && page.is_focused().unwrap_or(false));
+    if page_focused {
+        super::show_main_window(app);
+    }
+    Ok(page_focused)
 }
 
 fn tell_main<R>(app: &AppHandle<R>, plugin_id: &str, open: bool)
@@ -372,6 +443,9 @@ mod tests {
                 .all(|c| c.is_ascii_hexdigit()));
         }
         assert_eq!(label_for("a/b"), "gents-plugin-612f62");
+        assert!(is_page_window(&a));
+        assert!(!is_page_window("main"));
+        assert!(!is_page_window("gents-view-1"));
     }
 
     #[test]
@@ -396,6 +470,21 @@ mod tests {
     }
 
     #[test]
+    fn only_a_plugin_window_sends_a_bounded_place_to_the_main_view() {
+        let page = label_for("acme/board");
+        assert!(checked_place(&page, "/sessions/s1").is_ok());
+        assert!(checked_place("main", "/sessions/s1").is_err());
+        assert!(checked_place("gents-view-2", "/sessions/s1").is_err());
+        assert!(checked_place(&page, "sessions").is_err());
+        assert!(checked_place(&page, "").is_err());
+        assert!(checked_place(&page, &format!("/{}", "x".repeat(MAX_PLACE))).is_err());
+        assert_eq!(
+            serde_json::to_value(PluginNavigation { path: "/packs" }).unwrap(),
+            serde_json::json!({ "path": "/packs" })
+        );
+    }
+
+    #[test]
     fn requests_are_bounded() {
         assert!(checked("", None, None).is_err());
         assert!(checked(&"x".repeat(MAX_ID + 1), None, None).is_err());
@@ -416,7 +505,9 @@ mod tests {
             .map(|p| p.as_str().unwrap())
             .collect();
         for needed in [
-            "gents-desktop-bridge:default",
+            "gents-desktop-bridge:core",
+            "gents-desktop-bridge:allow-desktop-client-start",
+            "gents-desktop-bridge:allow-desktop-set-selected-node",
             "gents-desktop-bridge:ux-plugins-read",
             "gents-desktop-bridge:ux-plugins-call",
             "notification:default",
@@ -430,6 +521,13 @@ mod tests {
             .unwrap()
             .contains(&serde_json::json!("gents-plugin-*")));
         for withheld in [
+            /* the bridge's default and its client lifecycle carry quitting
+            the app and shutting the client down, which stay with the app's
+            own views */
+            "gents-desktop-bridge:default",
+            "gents-desktop-bridge:client-lifecycle",
+            "gents-desktop-bridge:allow-desktop-app-quit",
+            "gents-desktop-bridge:allow-desktop-client-shutdown",
             "gents-desktop-bridge:full",
             "gents-desktop-bridge:runtime-admin",
             "gents-desktop-bridge:config-write",
@@ -456,6 +554,34 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("plugin-window")));
+    }
+
+    #[test]
+    fn a_place_goes_to_the_main_view_and_a_question_brings_it_forward() {
+        let permission = include_str!("../../permissions/plugin-window.toml");
+        for command in [
+            "desktop_plugin_window_navigate",
+            "desktop_plugin_prompt_to_main",
+        ] {
+            assert!(permission.contains(&format!("\"{command}\"")), "{command}");
+        }
+        let grants = |file: &str| -> Vec<String> {
+            let path = format!("{}/capabilities/{file}.json", env!("CARGO_MANIFEST_DIR"));
+            let capability: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            capability["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p.as_str().unwrap().to_owned())
+                .collect()
+        };
+        let page = grants("plugin-window");
+        let main = grants("default");
+        assert!(page.contains(&"plugin-window-navigate".to_owned()));
+        assert!(!page.contains(&"plugin-prompt-to-main".to_owned()));
+        assert!(main.contains(&"plugin-prompt-to-main".to_owned()));
+        assert!(!main.contains(&"plugin-window-navigate".to_owned()));
     }
 
     /* the app has permissions of its own, so a command none of them allows

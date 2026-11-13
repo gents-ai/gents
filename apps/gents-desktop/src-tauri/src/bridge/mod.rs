@@ -124,6 +124,8 @@ pub fn run() {
         swipe::swipe_scroll_edges,
         links::desktop_take_links,
         plugin_window::desktop_open_plugin_window,
+        plugin_window::desktop_plugin_window_navigate,
+        plugin_window::desktop_plugin_prompt_to_main,
         notifications::desktop_post_notification,
         browser::browser_open,
         browser::browser_select,
@@ -140,6 +142,8 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         links::desktop_take_links,
         plugin_window::desktop_open_plugin_window,
+        plugin_window::desktop_plugin_window_navigate,
+        plugin_window::desktop_plugin_prompt_to_main,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
         product_telemetry::product_telemetry_set_enabled
@@ -180,6 +184,7 @@ pub fn run() {
             let action = window_close::close_action(
                 cfg!(target_os = "macos"),
                 window.label() == "main",
+                plugin_window::is_page_window(window.label()),
                 active,
                 other_views,
                 main_hidden,

@@ -65,6 +65,11 @@ export interface UxDoorApi {
   ) => Promise<{ plugins: UxPluginListing[]; pagesError?: string | null }>;
   source: (id: string, nodeDid: string | null) => Promise<UxPluginSource>;
   node?: () => string | null;
+  /** The one plugin this window runs, for a plugin's own window: its page's
+      plugin and no other. Each window that runs a plugin holds a copy of what
+      the plugin stored, so a copy nothing here shows would only fall behind
+      the main window's. */
+  only?: string;
 }
 
 let doors: UxDoorApi | null = null;
@@ -79,6 +84,12 @@ function doorApi(): UxDoorApi {
 }
 
 const selectedNode = (): string | null => doorApi().node?.() ?? null;
+
+/* whether this window runs a listing: every one, or only its own plugin's */
+function wanted(entry: UxPluginListing): boolean {
+  const only = doorApi().only;
+  return only === undefined || declaredPluginId(entry) === only;
+}
 
 const isDocument = (entry: UxPluginListing) => entry.door === "document";
 
@@ -378,7 +389,7 @@ async function reconcile(reloadKnown: boolean, reloadPack?: string): Promise<voi
   const pagesError = left ? null : (answer.pagesError ?? null);
   if (!left) showPagesError(pagesError);
   const listings = answer.plugins
-    .filter((entry) => !(left && isDocument(entry)))
+    .filter((entry) => wanted(entry) && !(left && isDocument(entry)))
     .map((entry) => scanned(entry, node, epoch));
   const seen = new Set(listings.map((entry) => entry.key));
   /* what left the disk goes first, so an id it owned is free for a listing

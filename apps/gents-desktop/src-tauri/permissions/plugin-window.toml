@@ -2,3 +2,13 @@
 identifier = "open-plugin-window"
 description = "Allow the main view to open a UX plugin's page in a window of its own."
 commands.allow = ["desktop_open_plugin_window"]
+
+[[permission]]
+identifier = "plugin-window-navigate"
+description = "Allow a UX plugin's own window to open a place in the main view."
+commands.allow = ["desktop_plugin_window_navigate"]
+
+[[permission]]
+identifier = "plugin-prompt-to-main"
+description = "Allow the main view to come forward for a plugin's question while a plugin's own window has focus."
+commands.allow = ["desktop_plugin_prompt_to_main"]
