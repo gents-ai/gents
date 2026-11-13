@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents_pack::pack::core_packs::{self, CorePack, Origin, Wiring};
+use gents_pack::pack::core_packs::{self, CorePack, EnableRoute, Origin, Wiring};
 use gents_store::local::home::SETUP_UNFINISHED_FILE_NAME;
 use serde_json::{json, Value};
 
@@ -48,6 +48,15 @@ fn enable_command(home: &Path, pack: CorePack) -> String {
         "gents config pack starter --enable {} --home {}",
         pack.coordinate(),
         home.display()
+    )
+}
+
+/// How to stop the node serving `home` for each way it runs, then `then`,
+/// then start it again.
+fn stop_the_node(home: &Path, then: &str) -> String {
+    let home = home.display();
+    format!(
+        "Stop the node first: a background service with `gents runtime service stop --home {home}`, or a `gents runtime server --home {home}` you started by stopping that process (Ctrl-C). Then run `{then}`, and start the node again with `gents runtime service start --home {home}` or `gents runtime server --home {home}`"
     )
 }
 
@@ -147,9 +156,8 @@ pub(crate) async fn install_missing(home: &Path, archives: Archives<'_>) -> Resu
     let engineer = match access.local_node() {
         Some(_) => engineer_of(&access, &owner).await,
         None => Err(anyhow::anyhow!(
-            "a runtime is serving this home, and a core pack is installed through the home's own store. Nothing was changed. Stop the runtime (gents service stop --home {}), then run `gents --home {}` again",
-            home.display(),
-            home.display()
+            "a runtime is serving this home, and a core pack is installed through the home's own store. Nothing was changed. {}",
+            stop_the_node(home, &format!("gents --home {}", home.display()))
         )),
     };
     release(access).await;
@@ -301,6 +309,10 @@ async fn observed_wiring(
             .all(|(_, skill)| context.skill_ids.contains(&skill));
     let wired = skills_attached && selections.iter().all(Option::is_some);
     let selections: Vec<_> = selections.into_iter().flatten().collect();
+    let agents_active = pack_agents(access, owner, &record.coordinate)
+        .await?
+        .iter()
+        .all(|(_, enabled)| *enabled);
     Ok(Wiring {
         wired,
         tool_calls: !selections.is_empty() && selections.iter().all(|plugin| plugin.tool_calls),
@@ -311,6 +323,7 @@ async fn observed_wiring(
                 .is_some_and(|job| job.policy.dynamic == gents_protocol::job::DynamicMode::Run)
         }),
         root_readers: false,
+        agents_active,
     })
 }
 
@@ -413,26 +426,33 @@ pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<Pa
 
 /// Enables each of `packs` for `home`'s Engineer: the user's explicit
 /// operation. A pack the home lacks is installed from `archives`, without
-/// asking, and each is left as Lean `enabledWiring` says. The home's own
-/// store is opened, so a runtime serving the home is refused before anything
-/// is written. Returns `{enabled, failed}`; a pack that fails leaves the
-/// others enabled and is retried by enabling it again.
+/// asking, and each is left as Lean `enabledWiring` says. Each is written
+/// where Lean `enableRoute` says: through the runtime serving the home, or
+/// through the home's own store when none does; a pack the home lacks while
+/// a runtime serves it is refused before anything is written. Returns
+/// `{enabled, failed}`; a pack that fails leaves the others enabled and is
+/// retried by enabling it again.
 pub(crate) async fn enable(
     home: &Path,
     archives: Archives<'_>,
     packs: &[CorePack],
 ) -> Result<Value> {
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
-    let engineer = match access.local_node() {
-        Some(_) => engineer_of(&access, &owner).await,
-        None => Err(anyhow::anyhow!(
-            "a runtime is serving this home, and a core pack is enabled through the home's own store. Nothing was changed. Stop the runtime (gents service stop --home {}), enable it again, then start it",
-            home.display()
-        )),
-    };
+    let served = access.local_node().is_none();
+    let engineer = engineer_of(&access, &owner).await;
     release(access).await;
     let engineer = engineer?
         .context("this home's default agent is not the Engineer, so it has no core packs")?;
+    for &pack in packs {
+        let installed = gents_pack::pack::read_home_install(home, pack.coordinate())?.is_some();
+        if core_packs::enable_route(served, installed) == EnableRoute::StopFirst {
+            anyhow::bail!(
+                "{} is not installed on this home, and it is installed as the Engineer through the home's own store, which the running node holds. Nothing was changed. {}",
+                pack.coordinate(),
+                stop_the_node(home, &enable_command(home, pack))
+            );
+        }
+    }
     let mut enabled = Vec::new();
     let mut failed = Vec::new();
     for &pack in packs {
@@ -586,11 +606,19 @@ async fn apply(
         } else {
             Vec::new()
         };
-        Ok::<_, anyhow::Error>((wired, skills, readers))
+        let agents = set_pack_agents_active(&access, &owner, coordinate, wiring.agents_active)
+            .await
+            .with_context(|| {
+                format!(
+                    "{coordinate} is installed, but its agents were not turned {}",
+                    if wiring.agents_active { "on" } else { "off" }
+                )
+            })?;
+        Ok::<_, anyhow::Error>((wired, skills, readers, agents))
     }
     .await;
     release(access).await;
-    let (wired, skills, host_tool_roots) = applied?;
+    let (wired, skills, host_tool_roots, agents) = applied?;
     Ok(json!({
         "pack": coordinate,
         "version": source.manifest().version,
@@ -600,7 +628,66 @@ async fn apply(
         "wired": wired,
         "skills": skills,
         "host_tool_roots": host_tool_roots,
+        "agents": agents,
     }))
+}
+
+/// The agents the installed pack `coordinate` ships, each with whether it is
+/// enabled.
+async fn pack_agents(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<Vec<(String, bool)>> {
+    let mut agents = Vec::new();
+    for (collection, agent_did) in
+        gents_pack::pack::installed_pack_documents(access, owner, coordinate).await?
+    {
+        if collection != gents_store::collection::Collection::Agent {
+            continue;
+        }
+        let enabled = access
+            .read_view(
+                &gents_documents::views::agents::AgentList::new(owner)
+                    .agent_did(&agent_did)
+                    .limit(1),
+            )
+            .await?
+            .first()
+            .with_context(|| format!("{coordinate} lists agent {agent_did}, which is missing"))?
+            .agent
+            .enabled;
+        agents.push((agent_did, enabled));
+    }
+    Ok(agents)
+}
+
+/// Enables or disables every agent the installed pack `coordinate` ships, as
+/// Lean `Wiring.agentsActive` says, through the agent operation every front
+/// end uses. Returns `[{agent, enabled}]`.
+async fn set_pack_agents_active(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+    active: bool,
+) -> Result<Vec<Value>> {
+    let mut agents = Vec::new();
+    for (agent_did, enabled) in pack_agents(access, owner, coordinate).await? {
+        if enabled != active {
+            gents::operations::agent::edit(
+                access,
+                owner,
+                &agent_did,
+                &gents_protocol::operations::agent::AgentEdit {
+                    enabled: Some(active),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        }
+        agents.push(json!({"agent": agent_did, "enabled": active}));
+    }
+    Ok(agents)
 }
 
 /// `gents config pack starter`: the Engineer's core packs as this home has

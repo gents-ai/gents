@@ -66,7 +66,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                         })
                     })
                     .collect::<Vec<_>>();
-                let observed_ready = unavailable.is_empty();
+                let observed_ready = summary.is_ready();
                 (
                     serde_json::to_value(&summary.snapshot).unwrap_or(Value::Null),
                     json!({
