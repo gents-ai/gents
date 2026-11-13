@@ -619,11 +619,11 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
             let query = &query;
             async move {
                 gents_lean_vocab::families::identity_publication_receipt::Observation {
-                    pending: agent_access.execute(&query).await.unwrap()["data"]
+                    pending: agent_access.execute(query).await.unwrap()["data"]
                         ["AgentSessionGoalReceipt"][0]["relationships_pending"]
                         .as_bool()
                         .unwrap(),
-                    visible: !user_access.execute(&query).await.unwrap()["data"]
+                    visible: !user_access.execute(query).await.unwrap()["data"]
                         ["AgentSessionGoalReceipt"]
                         .as_array()
                         .unwrap()
