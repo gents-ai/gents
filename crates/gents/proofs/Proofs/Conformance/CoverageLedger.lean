@@ -2135,8 +2135,20 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobAdmissionCases")
       "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_adoption_cases"
-      "PluginJobAdoptionCases")
+      "family"
+      "plugin_job_adoption_step0")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_adoption_host_pin")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_adoption_handle")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_adoption_address")
       "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "plugin_job_control_cases"

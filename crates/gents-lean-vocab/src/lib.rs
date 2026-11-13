@@ -63,17 +63,6 @@ pub struct LeanContractVocabulary<'a> {
     pub rust_values: &'a [&'a str],
 }
 
-impl LeanPluginJobAdoptionCase {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Step0 { name, .. }
-            | Self::HostPin { name, .. }
-            | Self::Handle { name, .. }
-            | Self::Address { name, .. } => name,
-        }
-    }
-}
-
 impl LeanPluginJobControlCase {
     pub fn name(&self) -> &str {
         match self {

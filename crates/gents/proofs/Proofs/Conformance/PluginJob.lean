@@ -575,50 +575,109 @@ theorem adoption_regressions :
       [ some ("job-session:5:row-13:1:a1:0", "call-7"), some ("session-1", "call-1"), none ] := by
   native_decide
 
-private def deliveryJson : Option Delivery → Json
-  | some .inline => toJson "inline"
-  | some .continuation => toJson "continuation"
-  | none => Json.null
+structure ToolCallWire where
+  state : String
+  operation : String
+  awaitMode : String
+  deriving ToJson
 
-private def callJson (c : ToolExecution.ToolCallContext) : Json :=
-  Json.mkObj [("state", toJson c.state.toDefraDB), ("operation", toJson c.operation.toDefraDB),
-    ("await_mode", toJson c.awaitMode.toDefraDB)]
+def ToolCallWire.ofModel (c : ToolExecution.ToolCallContext) : ToolCallWire :=
+  { state := c.state.toDefraDB, operation := c.operation.toDefraDB
+    awaitMode := c.awaitMode.toDefraDB }
 
-private def renderStep0 (c : Step0Case) : Json :=
+structure Step0Input where
+  name : String
+  toolCall : ToolCallWire
+  context : Json
+  job : Json
+  output : Json
+  deriving ToJson
+
+structure ReceiptWire where
+  terminalDecision : String
+  lateDecision : String
+  deriving ToJson
+
+structure Step0Output where
+  admitted : Bool
+  code : Option String
+  job : Option Json
+  toolCall : ToolCallWire
+  delivery : Option String
+  continuationAppended : Bool
+  receipt : Option ReceiptWire
+  deriving ToJson
+
+def step0Named (name : String) : Option Step0Case := step0Cases.find? (·.name == name)
+
+theorem step0_names_are_unique :
+    (step0Cases.map (·.name)).eraseDups.length = step0Cases.length := by native_decide
+
+private def step0Output (c : Step0Case) : Step0Output :=
   let (call, delivery) := adoptedCall c
   let (first, late) := receiptDecisions
   let (code, admitted) := match admitStep c.ctx c.job c.out with
     | .ok j => ((none : Option String), some j)
     | .error r => (r.code, none)
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "step0"), ("tool_call", callJson c.row),
-    ("context", contextJson c.ctx), ("job", jobJson c.job),
-    ("output", outputJson c.out),
-    ("expected", Json.mkObj [("admitted", toJson admitted.isSome), ("code", toJson code),
-      ("job", toJson (admitted.map jobJson)), ("tool_call", callJson call),
-      ("delivery", deliveryJson delivery),
-      ("continuation_appended", toJson (delivery == some .continuation)),
-      ("receipt", toJson (admitted.map fun _ => Json.mkObj
-        [("terminal_decision", toJson first.spelling), ("late_decision", toJson late.spelling)])),
-      ("next_resume_valid", toJson (admitted.any (nextResumeValid c)))])]
+  { admitted := admitted.isSome, code, job := admitted.map jobJson, toolCall := ToolCallWire.ofModel call
+    delivery := match delivery with
+      | some .inline => some "inline"
+      | some .continuation => some "continuation"
+      | none => none
+    continuationAppended := delivery == some .continuation
+    receipt := admitted.map fun _ =>
+      { terminalDecision := first.spelling, lateDecision := late.spelling } }
 
-private def renderHostPin (c : HostPinCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "host_pin"),
-    ("claimed", pinJson c.claimed), ("facts", hostFactsJson c.facts),
-    ("expected", Json.mkObj [("pin", pinJson (hostPin (guestOf c.claimed) c.facts))])]
+/-- `adopt` and `adoptTerminal` on a step-zero output: the adopted row and
+call, inline delivery of a pinned terminal, and the receipt compare-and-set. -/
+@[conformance_family]
+def adoptionStep0 : Family Step0Input (Option Step0Output) where
+  inputs := step0Cases.map fun c =>
+    { name := c.name, toolCall := ToolCallWire.ofModel c.row, context := contextJson c.ctx
+      job := jobJson c.job, output := outputJson c.out }
+  model := fun i => (step0Named i.name).map step0Output
 
-private def renderHandle (c : HandleCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "handle"), ("taken", toJson c.taken),
-    ("handle", toJson c.handle),
-    ("expected", Json.mkObj [("handle", toJson (uniqueHandle c.taken c.handle))])]
+structure HostPinInput where
+  name : String
+  claimed : Json
+  facts : Json
+  deriving ToJson
 
-private def renderAddress (c : AddressCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "address"), ("address", toJson c.address),
-    ("expected", Json.mkObj [("split", toJson ((splitAddress c.address).map fun (s, t) =>
-      Json.mkObj [("session_id", toJson s), ("tool_call_id", toJson t)]))])]
+def hostPinNamed (name : String) : Option HostPinCase := hostPinCases.find? (·.name == name)
 
-def adoptionCasesJson : String :=
-  (toJson (step0Cases.map renderStep0 ++ hostPinCases.map renderHostPin ++
-    handleCases.map renderHandle ++ addressCases.map renderAddress)).compress
+/-- `hostPin` keeps only the guest fields of a claimed pin. -/
+@[conformance_family]
+def adoptionHostPin : Family HostPinInput (Option Json) where
+  inputs := hostPinCases.map fun c =>
+    { name := c.name, claimed := pinJson c.claimed, facts := hostFactsJson c.facts }
+  model := fun i => (hostPinNamed i.name).map fun c => pinJson (hostPin (guestOf c.claimed) c.facts)
+
+structure HandleInput where
+  name : String
+  taken : List String
+  handle : String
+  deriving ToJson
+
+@[conformance_family]
+def adoptionHandle : Family HandleInput String where
+  inputs := handleCases.map fun c => { name := c.name, taken := c.taken, handle := c.handle }
+  model := fun i => uniqueHandle i.taken i.handle
+
+structure AddressInput where
+  name : String
+  address : String
+  deriving ToJson
+
+structure SplitWire where
+  sessionId : String
+  toolCallId : String
+  deriving ToJson
+
+@[conformance_family]
+def adoptionAddress : Family AddressInput (Option SplitWire) where
+  inputs := addressCases.map fun c => { name := c.name, address := c.address }
+  model := fun i => (splitAddress i.address).map fun (session, call) =>
+    { sessionId := session, toolCallId := call }
 
 structure KeyCase where
   name : String

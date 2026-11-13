@@ -11,7 +11,7 @@ use gents_lean_vocab::{
     LeanPluginJobGuestPin, LeanPluginJobHostFacts, LeanPluginJobKill, LeanPluginJobObservation,
     LeanPluginJobOutput, LeanPluginJobPin, LeanPluginJobPolicy, LeanPluginJobProcessScope,
     LeanPluginJobResume, LeanPluginJobRootCall, LeanPluginJobRow, LeanPluginJobScope,
-    LeanPluginJobTarget, LeanPluginJobToolCall,
+    LeanPluginJobTarget,
 };
 use gents_protocol::job::{
     DataOp, DataWrite, JobBudget, JobCeiling, JobControlEcho, JobControlRequest, JobEffects,
@@ -395,17 +395,17 @@ pub fn context(
     }
 }
 
-pub fn tool_call(c: &LeanPluginJobToolCall) -> ToolCallView {
+pub fn tool_call(state: &str, operation: &str, await_mode: &str) -> ToolCallView {
     ToolCallView {
-        state: ToolCallState::from_persisted(&c.state)
-            .unwrap_or_else(|| panic!("unknown Lean tool call state {}", c.state)),
-        kind: match c.operation.as_str() {
+        state: ToolCallState::from_persisted(state)
+            .unwrap_or_else(|| panic!("unknown Lean tool call state {state}")),
+        kind: match operation {
             "nativeCommand" => ToolRowKind::Native,
             "pluginJob" => ToolRowKind::PluginJob,
             other => panic!("unknown Lean tool operation {other}"),
         },
-        await_mode: AwaitMode::from_persisted(&c.await_mode)
-            .unwrap_or_else(|| panic!("unknown Lean await mode {}", c.await_mode)),
+        await_mode: AwaitMode::from_persisted(await_mode)
+            .unwrap_or_else(|| panic!("unknown Lean await mode {await_mode}")),
     }
 }
 
@@ -471,4 +471,99 @@ pub fn control_echo(e: &LeanPluginJobControlEcho) -> JobControlEcho {
         kind: spelled(&e.kind),
         payload: e.payload.as_ref().map(resume),
     }
+}
+
+/// A native enum's own serde spelling, the inverse of [`spelled`].
+pub fn spelling<T>(value: &T) -> serde_json::Value
+where
+    T: serde::Serialize,
+{
+    serde_json::to_value(value).expect("native spelling encodes")
+}
+
+pub fn ceiling_wire(c: &JobCeiling) -> serde_json::Value {
+    serde_json::json!({
+        "targets": c.targets,
+        "max_live": c.max_live,
+        "max_spawns": c.max_spawns,
+        "max_messages_per_slot": c.max_messages_per_slot,
+        "result_bytes": c.result_bytes,
+        "max_wall_secs": c.max_wall_secs,
+    })
+}
+
+/// The Lean pin a native pin stands for, the inverse of [`pin`].
+pub fn pin_wire(p: &JobPin) -> serde_json::Value {
+    serde_json::json!({
+        "script_id": p.script_id,
+        "source_digest": p.source_digest,
+        "engine_digest": p.engine_digest,
+        "plugin_ref": p.plugin_ref,
+        "handle": p.handle,
+        "cwd": p.cwd,
+        "args_digest": p.args_digest,
+        "chain_root": p.chain_root_doc_id,
+        "origin": spelling(&p.origin),
+        "agent_budget": p.agent_budget,
+        "adopted_at": p.adopted_at,
+        "resume_of": p.resume_of,
+        "replayed_from": p.replayed_from,
+        "ceiling_at_pin": ceiling_wire(&p.ceiling_at_pin),
+    })
+}
+
+/// The Lean job a native step row stands for, the inverse of [`row`].
+pub fn row_wire(r: &StepRow) -> serde_json::Value {
+    serde_json::json!({
+        "root": r.root,
+        "row_doc_id": r.row_doc_id,
+        "caller_session": r.caller_session,
+        "caller_cwd": r.caller_cwd,
+        "handle": r.handle,
+        "caller_hop": r.caller_hop,
+        "call": {
+            "argv": r.call.argv,
+            "args": r.call.args,
+            "script": r.call.script,
+            "agent_budget": r.call.agent_budget,
+        },
+        "root_call": r.root_call.as_ref().map(|c| serde_json::json!({
+            "argv": c.argv,
+            "args": c.args,
+            "agent_budget": c.agent_budget,
+        })),
+        "resume": r.resume.as_ref().map(|resume| serde_json::json!({
+            "row_doc_id": resume.row_doc_id,
+            "engine_current": resume.engine == Some(JobResumeEngine::Current),
+            "answer": resume.answer,
+            "budget": resume.budget,
+        })),
+        "pin": r.pin.as_ref().map(pin_wire),
+        "children": r.children.iter().map(|c| serde_json::json!({
+            "retry_key": c.retry_key,
+            "slot": c.slot,
+            "attempt": c.attempt,
+            "target": {"node": c.target.0, "agent": c.target.1},
+            "state": spelling(&c.state),
+            "messages": c.messages,
+        })).collect::<Vec<_>>(),
+        "spent": r.spent,
+        "observed_terminal": r.observed_terminal,
+        "consecutive_failures": r.consecutive_failures,
+        "state": spelling(&r.state),
+    })
+}
+
+/// The Lean tool call a native call view stands for, the inverse of [`tool_call`].
+pub fn tool_call_wire(c: &ToolCallView) -> (String, String, String) {
+    let operation = match c.kind {
+        ToolRowKind::Native => "nativeCommand",
+        ToolRowKind::PluginJob => "pluginJob",
+        other => panic!("tool row kind {other:?} has no Lean operation"),
+    };
+    (
+        c.state.as_str().to_owned(),
+        operation.to_owned(),
+        c.await_mode.as_str().to_owned(),
+    )
 }

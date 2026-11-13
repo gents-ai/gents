@@ -73,10 +73,6 @@ pub fn lean_plugin_job_admission_cases() -> &'static [LeanPluginJobAdmissionCase
     &lean_contract_snapshot().plugin_job_admission_cases
 }
 
-pub fn lean_plugin_job_adoption_cases() -> &'static [LeanPluginJobAdoptionCase] {
-    &lean_contract_snapshot().plugin_job_adoption_cases
-}
-
 pub fn lean_plugin_job_control_cases() -> &'static [LeanPluginJobControlCase] {
     &lean_contract_snapshot().plugin_job_control_cases
 }
@@ -980,7 +976,6 @@ pub struct LeanContractSnapshot {
     pub count_carrier_cases: serde_json::Value,
     pub schema_argument_repair_cases: Vec<LeanSchemaArgumentRepairCase>,
     pub plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,
-    pub plugin_job_adoption_cases: Vec<LeanPluginJobAdoptionCase>,
     pub plugin_job_control_cases: Vec<LeanPluginJobControlCase>,
     pub identity_publication_cases: Vec<LeanIdentityPublicationCase>,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
@@ -2864,19 +2859,6 @@ pub struct LeanPluginApprovalCaseStepsItemExpected {
     pub present: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobAddressExpected {
-    pub split: Option<LeanPluginJobAddressSplit>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobAddressSplit {
-    pub session_id: String,
-    pub tool_call_id: String,
-}
-
 /// `Conformance.PluginJob.admissionCases`: one `admitStep` row, its context,
 /// job and step output as the model holds them, and the verdict
 /// `settleStep` computes from them.
@@ -2900,38 +2882,6 @@ pub struct LeanPluginJobAdmissionExpected {
     pub job: Option<LeanPluginJobRow>,
     pub row_state: String,
     pub kill: Vec<LeanPluginJobKill>,
-}
-
-/// `Conformance.PluginJob.adoptionCasesJson`: the step-0 adoption rows and the
-/// pure pin, handle and address rows, tagged by `kind`.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanPluginJobAdoptionCase {
-    Step0 {
-        name: String,
-        tool_call: Box<LeanPluginJobToolCall>,
-        context: Box<LeanPluginJobContext>,
-        job: Box<LeanPluginJobRow>,
-        output: Box<LeanPluginJobOutput>,
-        expected: Box<LeanPluginJobStep0Expected>,
-    },
-    HostPin {
-        name: String,
-        claimed: Box<LeanPluginJobPin>,
-        facts: Box<LeanPluginJobHostFacts>,
-        expected: Box<LeanPluginJobHostPinExpected>,
-    },
-    Handle {
-        name: String,
-        taken: Vec<String>,
-        handle: String,
-        expected: Box<LeanPluginJobHandleExpected>,
-    },
-    Address {
-        name: String,
-        address: String,
-        expected: Box<LeanPluginJobAddressExpected>,
-    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -3099,12 +3049,6 @@ pub struct LeanPluginJobGuestPin {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanPluginJobHandleExpected {
-    pub handle: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanPluginJobHostFacts {
     pub engine_digest: String,
     pub plugin_ref: String,
@@ -3116,12 +3060,6 @@ pub struct LeanPluginJobHostFacts {
     pub resume_of: Option<String>,
     pub replayed_from: Option<String>,
     pub ceiling_at_pin: LeanPluginJobCeiling,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobHostPinExpected {
-    pub pin: LeanPluginJobPin,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3211,13 +3149,6 @@ pub struct LeanPluginJobProcessScope {
     pub session_id: String,
     pub node_did: String,
     pub requester_did: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobReceiptDecisions {
-    pub terminal_decision: String,
-    pub late_decision: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -3330,19 +3261,6 @@ pub struct LeanPluginJobSpawn {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanPluginJobStep0Expected {
-    pub admitted: bool,
-    pub code: Option<String>,
-    pub job: Option<LeanPluginJobRow>,
-    pub tool_call: LeanPluginJobToolCall,
-    pub delivery: Option<String>,
-    pub continuation_appended: bool,
-    pub receipt: Option<LeanPluginJobReceiptDecisions>,
-    pub next_resume_valid: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanPluginJobStepFailureExpected {
     pub row_state: String,
     pub consecutive_failures: u32,
@@ -3362,14 +3280,6 @@ pub struct LeanPluginJobTarget {
 pub struct LeanPluginJobTargetHop {
     pub target: LeanPluginJobTarget,
     pub hop: u32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobToolCall {
-    pub state: String,
-    pub operation: String,
-    pub await_mode: String,
 }
 
 #[derive(Debug, Deserialize)]
