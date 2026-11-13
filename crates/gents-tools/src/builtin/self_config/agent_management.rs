@@ -1122,16 +1122,7 @@ async fn agent_apply_in_txn(
             }
         }
         admit(
-            agent::materialize_agent(
-                &view,
-                &actor,
-                &op,
-                &id,
-                args.make_default,
-                &candidate,
-                owner,
-            )
-            .is_some(),
+            agent::candidate_resolution(&candidate, owner, &id, true).commits(),
             AgentOperationError::CandidateDoesNotResolve,
         )?;
     }

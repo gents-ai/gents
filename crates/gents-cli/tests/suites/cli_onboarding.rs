@@ -509,3 +509,188 @@ async fn every_client_command_decides_its_identity_by_the_selected_home() -> Res
     }
     Ok(())
 }
+
+const FIRST_RUN_HOME_ENV: &str = "GENTS_TEST_FIRST_RUN_HOME";
+const FIRST_RUN_STEP_ENV: &str = "GENTS_TEST_FIRST_RUN_STEP";
+const FIRST_RUN_GRAPHQL_ENV: &str = "GENTS_TEST_FIRST_RUN_GRAPHQL";
+
+fn first_run_step(user_home: &Path, home: &Path, step: &str, graphql: &str) -> Result<()> {
+    let output = Command::new(std::env::current_exe()?)
+        .args([
+            "cli_onboarding::desktop_first_run_in_fixture_home",
+            "--exact",
+            "--include-ignored",
+            "--nocapture",
+        ])
+        .env("HOME", user_home)
+        .env_remove("GENTS_HOME")
+        .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
+        .env(FIRST_RUN_HOME_ENV, home)
+        .env(FIRST_RUN_STEP_ENV, step)
+        .env(FIRST_RUN_GRAPHQL_ENV, graphql)
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "first-run step {step} failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+/// The desktop's first run on a new machine with no inference provider: its
+/// provisioning call sets up the home and its Engineer, the node is served,
+/// and the desktop's own writes then reach that Engineer, whose backend is
+/// still disabled (Lean `SelfConfig.candidateResolution`: deferred).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let user_home = tempdir.path();
+    let home = user_home.join(".gents");
+    first_run_step(user_home, &home, "provision", "")?;
+    let stored = gents_service::home_state::read_init_config(&home)?
+        .context("the desktop's provisioning initialized no home")?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let (mut server, _) = spawn_server_with_ready_json(
+        user_home,
+        port,
+        &["--home", home.to_str().context("home path")?],
+        &[],
+    )?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(
+        &graphql,
+        &stored.node_did,
+        std::time::Duration::from_secs(60),
+    )
+    .await?;
+    first_run_step(user_home, &home, "desktop", &graphql)?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "run by desktop_first_run_without_inference_sets_up_the_engineer in the fixture's HOME"]
+async fn desktop_first_run_in_fixture_home() -> Result<()> {
+    let home = PathBuf::from(std::env::var_os(FIRST_RUN_HOME_ENV).context("fixture home")?);
+    let step = std::env::var(FIRST_RUN_STEP_ENV).context("fixture step")?;
+    if step == "provision" {
+        let root = home.with_file_name("root");
+        fs::create_dir_all(&root)?;
+        return gents_server::server_host::ensure_standard_home(
+            &gents_store::test_support::runtime_handle(),
+            gents_server::server_host::ProvisionOptions {
+                home,
+                node_name: "Forge".to_owned(),
+                tool_ceiling: gents_service::args::ToolCeilingArg::Readwrite,
+                tool_root: Some(fs::canonicalize(root)?),
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                default_packs: true,
+            },
+        )
+        .await;
+    }
+    let graphql = std::env::var(FIRST_RUN_GRAPHQL_ENV).context("fixture graphql")?;
+    let stored = gents_service::home_state::read_init_config(&home)?.context("initialized home")?;
+    let owner = stored.node_did.as_str();
+    let user = gents_service::home_state::client_identity_for(&home).await?;
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, user.did())
+            .with_client_signing_capability(
+                gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+                    user.private_key_bytes(),
+                )?,
+            )?
+            .with_client_signed_agent_creates(),
+    );
+    let agents = access
+        .read_view(&gents_documents::views::agents::AgentList::new(owner))
+        .await?;
+    let engineer = agents
+        .iter()
+        .find(|row| {
+            row.agent
+                .tags
+                .iter()
+                .any(|tag| tag == gents_tools::builtin::self_config::ENGINEER_AGENT_TAG)
+        })
+        .with_context(|| format!("no Engineer among {agents:?}"))?
+        .agent
+        .clone();
+    anyhow::ensure!(
+        engineer.enabled && engineer.display_name.as_deref() == Some("The Engineer"),
+        "the Engineer is not set up: {engineer:?}"
+    );
+    let engineer_did = engineer.agent_did.clone();
+    let read = |agent_did: String| {
+        let access = access.clone();
+        async move {
+            access
+                .transact_readonly("test.first_run.engineer", |txn| {
+                    let agent_did = agent_did.clone();
+                    Box::pin(async move {
+                        gents_documents::load_agent_context_and_tools_in_txn(txn, owner, &agent_did)
+                            .await
+                    })
+                })
+                .await
+        }
+    };
+    let (context, tools) = read(engineer_did.clone()).await?;
+    anyhow::ensure!(
+        context.as_ref().and_then(|c| c.system_prompt.as_deref())
+            == Some(gents_protocol::ENGINEER_PROMPT),
+        "the Engineer's prompt is not the shared one: {context:?}"
+    );
+    anyhow::ensure!(
+        tools.as_ref().and_then(|t| t.self_config.as_ref())
+            == Some(&gents_tools::builtin::self_config::engineer_self_config()),
+        "the Engineer's tools lack its self-configuration: {tools:?}"
+    );
+    let backends: Vec<gents_documents::InferenceBackend> = access
+        .transact_readonly("test.first_run.backends", |txn| {
+            Box::pin(async move {
+                let refs = gents_documents::ConfigReferences::load_in_txn(txn, owner).await?;
+                refs.documents()
+                    .filter(|((collection, _), _)| {
+                        *collection == gents_store::collection::Collection::InferenceBackend
+                    })
+                    .map(|(_, value)| Ok(serde_json::from_value(value.clone())?))
+                    .collect::<anyhow::Result<Vec<_>>>()
+            })
+        })
+        .await?;
+    anyhow::ensure!(
+        !backends.is_empty() && backends.iter().all(|backend| !backend.enabled),
+        "the node must have no enabled inference: {backends:?}"
+    );
+    gents_desktop_core::client::patch_config_components_on(
+        &access,
+        owner,
+        &[(
+            gents_documents::patch::SelfConfigTarget::Agent,
+            engineer_did.clone(),
+            vec![(
+                "display_name".to_owned(),
+                Some(serde_json::json!("Forge's Engineer")),
+            )],
+        )],
+    )
+    .await
+    .context("the desktop's edit of the Engineer before inference")?;
+    let renamed = access
+        .read_view(
+            &gents_documents::views::agents::AgentList::new(owner)
+                .agent_did(&engineer_did)
+                .limit(1),
+        )
+        .await?;
+    anyhow::ensure!(
+        renamed
+            .first()
+            .and_then(|row| row.agent.display_name.as_deref())
+            == Some("Forge's Engineer"),
+        "the Engineer's edit was not applied: {renamed:?}"
+    );
+    Ok(())
+}
