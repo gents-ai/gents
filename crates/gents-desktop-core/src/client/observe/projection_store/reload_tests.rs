@@ -219,13 +219,17 @@ fn node_publications_match_the_lean_model() {
                         .snapshot(&did(node))
                         .sessions
                         .iter()
-                        .map(|row| node_family::NodeRow {
-                            node: row
-                                .node_did
-                                .strip_prefix("did:node:")
-                                .and_then(|shown| shown.parse().ok())
-                                .expect("modeled node DID"),
-                            value: row.title.as_ref().unwrap().text.clone(),
+                        .map(|row| {
+                            assert_eq!(
+                                row.node_did,
+                                did(node),
+                                "{}: node {node} shows only its own rows",
+                                case.name
+                            );
+                            node_family::NodeRow {
+                                node,
+                                value: row.title.as_ref().unwrap().text.clone(),
+                            }
                         })
                         .collect::<Vec<_>>()
                 })
