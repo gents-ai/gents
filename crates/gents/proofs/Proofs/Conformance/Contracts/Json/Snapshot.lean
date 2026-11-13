@@ -152,6 +152,7 @@ import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry
 import Proofs.Conformance.InferenceObservation
 import Proofs.Conformance.Identity.Publication
+import Proofs.Conformance.Identity.GoalLinks
 import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Conformance.Identity.CallbackParent
@@ -355,8 +356,6 @@ def snapshotCaptureTailJson : String :=
   ""
     ++ "\"compaction_canonical_projection_cases\":"
       ++ compactionCanonicalProjectionCasesJson ++ ","
-    ++ "\"goal_link_cases\":"
-      ++ Identity.SessionChild.goalLinkCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
     ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","

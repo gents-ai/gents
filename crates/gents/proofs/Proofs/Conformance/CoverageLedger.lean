@@ -530,8 +530,41 @@ def caseCoverage : List CoverageEntry :=
       "Native transaction-bound requester document and node authorization is unavailable; cross-actor execution remains blocked. Bind these cases to native transaction and claim owners when supported.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "goal_link_cases" "GoalLinks"
+      "family" "goal_links_user_owned"
       "A detached relationship operation already in flight is not fenced by a concurrent revocation.")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_agent_owned")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_foreign")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_session_goal")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_client_session_goal")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_seeded_goal")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_goal_backed_submission")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_task_fire")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_scheduled_task_fire")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_workspace_task_fire")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_agent_target")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_closeout_goal")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family" "identity_publication_parent")
