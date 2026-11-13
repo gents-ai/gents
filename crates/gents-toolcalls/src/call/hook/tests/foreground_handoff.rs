@@ -800,7 +800,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     assert!(registry.process_record("failed-handoff", &doc).is_some());
     let row = fetch_tool_call_row(&hook, &session, "failed-handoff").await;
     assert_eq!(row["await_mode"], "foreground");
-    assert_eq!(row["lifecycle_state"], "running");
+    assert_eq!(row["lifecycle_state"], transfer.terminal_state.as_str());
     let request_doc = hook.active_request_doc_id().await.unwrap();
     let escaped = gents_store::graphql::escape_graphql_string(&request_doc);
     gents_store::config_client::ConfigAccess::local_managed_agent(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.as_ref()).unwrap().write("test.terminal_parent_with_retained_process", &format!(

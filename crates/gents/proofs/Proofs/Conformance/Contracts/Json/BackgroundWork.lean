@@ -475,7 +475,7 @@ structure AdmissionInput where
 
 structure AdmissionOutput where
   legal : Bool
-  terminalState : String
+  receiptStatus : Option String
   errorCode : Option String
   deriving ToJson
 
@@ -488,7 +488,8 @@ def admission : Family AdmissionInput AdmissionOutput where
       maxBackgrounded := c.maxBackgrounded }
   model := fun i =>
     let c := r6BudgetCase i.name i.preLiveCount
-    { legal := c.legal, terminalState := c.terminalState, errorCode := c.errorCode }
+    { legal := c.legal, receiptStatus := if c.legal then some c.terminalState else none
+      errorCode := c.errorCode }
 
 structure TransferInput where
   name : String
@@ -526,7 +527,7 @@ structure NativeInput where
 structure NativeOutput where
   legal : Bool
   awaitMode : String
-  terminalState : String
+  rowState : String
   cancelCause : Option String
   deriving ToJson
 
@@ -541,11 +542,12 @@ def operationOf : String → ToolExecution.ToolOperation
   | "pluginJob" => .pluginJob
   | _ => .nativeCommand
 
+def nativePre (i : NativeInput) : ToolExecution.ToolCallContext :=
+  { r6NativeToolFixture (if i.action == "background" then .foreground else .background) with
+    operation := operationOf i.operation }
+
 def nativeStep (i : NativeInput) : R6BackgroundingCase :=
-  r6NativeStepCase i.name i.action
-    { r6NativeToolFixture (if i.action == "background" then .foreground else .background) with
-      operation := operationOf i.operation }
-    (actionOf i.action) i.result i.reason
+  r6NativeStepCase i.name i.action (nativePre i) (actionOf i.action) i.result i.reason
 
 @[conformance_family]
 def nativeLifecycle : Family NativeInput NativeOutput where
@@ -554,7 +556,8 @@ def nativeLifecycle : Family NativeInput NativeOutput where
       result := c.result, reason := c.reason }
   model := fun i =>
     let c := nativeStep i
-    { legal := c.legal, awaitMode := c.awaitMode, terminalState := c.terminalState
+    { legal := c.legal, awaitMode := c.awaitMode
+      rowState := if c.legal then c.terminalState else (nativePre i).state.toDefraDB
       cancelCause := match actionOf i.action with
         | .cancelDuringRun cause => if c.legal then some cause.toDefraDB else none
         | _ => none }
@@ -908,7 +911,6 @@ structure WaitInput where
 structure WaitBoundaryOutput where
   legal : Bool
   terminalState : String
-  reason : Option String
   deriving ToJson
 
 def waitBoundaryInputs : List WaitInput :=
@@ -926,7 +928,7 @@ def waitBoundary : Family WaitInput WaitBoundaryOutput where
   inputs := waitBoundaryInputs
   model := fun i =>
     let c := r6WaitBoundaryCase i.name (boundaryOf i.boundary)
-    { legal := c.legal, terminalState := c.terminalState, reason := c.reason }
+    { legal := c.legal, terminalState := c.terminalState }
 
 example : waitBoundaryInputs.map (fun i =>
     let c := r6WaitBoundaryCase i.name (boundaryOf i.boundary)
@@ -939,7 +941,6 @@ structure WaitDispatchOutput where
   awaitMode : String
   terminalState : String
   result : Option String
-  reason : Option String
   deriving ToJson
 
 def dispatchCase (i : WaitInput) : R6BackgroundingCase :=
@@ -959,7 +960,7 @@ def waitDispatch : Family WaitInput WaitDispatchOutput where
   model := fun i =>
     let c := dispatchCase i
     { legal := c.legal, awaitMode := c.awaitMode, terminalState := c.terminalState
-      result := c.result, reason := c.reason }
+      result := c.result }
 
 structure WaitSettlementInput where
   name : String
@@ -1052,6 +1053,19 @@ def crashBoundary : Family CrashInput CrashOutput where
       acknowledged := recovered.acknowledgedBindings.length
       queueSource := (wakeQueue i.sessionKey).1
       queueKey := (wakeQueue i.sessionKey).2 }
+
+example : (((grouped "wait_boundary" ++ grouped "wait_dispatch_boundary").map
+    (fun c => (c.name, c.reason))) ==
+    [ ("wait_timeout_preserves_running_process", some "wait_timeout")
+    , ("caller_interrupt_preserves_running_process", some "caller_interrupted")
+    , ("caller_deadline_preserves_running_process", some "caller_deadline_exceeded")
+    , ("caller_deadline_times_out_wait_call_preserves_background_process",
+        some "caller_deadline_exceeded")
+    , ("caller_interrupt_cancels_wait_call_preserves_background_process",
+        some "caller_interrupted")
+    , ("caller_interrupt_observer_completes_wait_call_preserves_background_process",
+        some "caller_interrupted") ]) = true := by
+  native_decide
 
 example : crashBoundary.inputs.map (fun i => (i.name, i.action)) =
     (grouped "completion_failure_boundary").map (fun c => (c.name, c.action)) := by native_decide

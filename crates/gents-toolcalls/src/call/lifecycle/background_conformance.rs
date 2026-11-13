@@ -32,8 +32,7 @@ async fn teardown(admission: PublishedAdmission) {
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
-/// A foreground flip that the owner refuses is reported as `rejected`, the
-/// row staying as it was; the row kind's own decision core must agree.
+/// The row kind's own decision core must agree with a foreground flip.
 #[tokio::test]
 async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
     for case in gents_lean_vocab::families::contracts_r6_native_lifecycle::cases() {
@@ -84,13 +83,6 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
 
         let actual = row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(actual["request_doc_id"], request_doc_id, "{name}");
-        let lifecycle_state = actual["lifecycle_state"].as_str().unwrap().to_owned();
-        if !legal {
-            assert_eq!(
-                lifecycle_state, "running",
-                "{name}: a refused step leaves the row"
-            );
-        }
         if let Some(payload) = input.result.as_deref() {
             let presentation =
                 gents_session::tool_call::query::result::load_tool_call_presentation(
@@ -115,11 +107,7 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
         let observed = gents_lean_vocab::families::contracts_r6_native_lifecycle::NativeOutput {
             legal,
             await_mode: actual["await_mode"].as_str().unwrap().to_owned(),
-            terminal_state: if legal {
-                lifecycle_state
-            } else {
-                "rejected".to_owned()
-            },
+            row_state: actual["lifecycle_state"].as_str().unwrap().to_owned(),
             cancel_cause: actual["cancel_cause"].as_str().map(str::to_owned),
         };
         teardown(admission).await;

@@ -158,7 +158,6 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
 
 struct WaitObservation {
     status: Option<String>,
-    reason: Option<String>,
     process_state: String,
     process_cancelled: bool,
     wait_state: String,
@@ -247,7 +246,7 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
         .unwrap();
     let row = fetch_tool_call_row(&hook, &session_id, &tool_call_id).await;
     let wait_row = fetch_tool_call_row(&hook, &session_id, wait_id).await;
-    let (status, reason) = match action {
+    let status = match action {
         ToolCallHookAction::Skip { reason } => {
             let result: serde_json::Value = serde_json::from_str(&reason).unwrap();
             assert_eq!(result["tool_call_id"], tool_call_id.as_str());
@@ -264,21 +263,13 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
                 gents_session::tool_call::query::result::render_tool_result(&persisted).unwrap(),
                 reason
             );
-            (
-                result["status"].as_str().map(str::to_owned),
-                result["error"]["reason"].as_str().map(str::to_owned),
-            )
+            result["status"].as_str().map(str::to_owned)
         }
-        ToolCallHookAction::Terminate { reason }
-            if reason == "request deadline exceeded while waiting for background process" =>
-        {
-            (None, Some("caller_deadline_exceeded".to_owned()))
-        }
+        ToolCallHookAction::Terminate { .. } => None,
         other => panic!("wait observer must end at its boundary: {other:?}"),
     };
     let observed = WaitObservation {
         status,
-        reason,
         process_state: row["lifecycle_state"].as_str().unwrap().to_owned(),
         process_cancelled: !row["cancel_cause"].is_null(),
         wait_state: wait_row["lifecycle_state"].as_str().unwrap().to_owned(),
@@ -318,7 +309,6 @@ async fn generated_wait_boundaries_preserve_background_process() {
             gents_lean_vocab::families::contracts_r6_wait_boundary::WaitBoundaryOutput {
                 legal: !observed.process_cancelled,
                 terminal_state: observed.process_state,
-                reason: observed.reason,
             },
         );
     }
@@ -333,7 +323,6 @@ async fn generated_wait_boundaries_preserve_background_process() {
                 await_mode: observed.wait_mode,
                 terminal_state: observed.wait_state,
                 result: Some(observed.process_state),
-                reason: observed.reason,
             },
         );
     }

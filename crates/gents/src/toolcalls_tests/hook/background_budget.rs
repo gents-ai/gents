@@ -175,7 +175,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
             live as u64,
             gents_lean_vocab::families::contracts_r6_admission::AdmissionOutput {
                 legal,
-                terminal_state: if legal { "running" } else { "rejected" }.to_owned(),
+                receipt_status: receipt["status"].as_str().map(str::to_owned),
                 error_code: receipt["code"].as_str().map(str::to_owned),
             },
         ));
