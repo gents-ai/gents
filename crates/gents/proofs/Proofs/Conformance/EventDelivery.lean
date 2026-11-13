@@ -28,7 +28,7 @@ structure GroupEvaluationOutput where
   readsAfterRestart : Nat
   deriving Lean.ToJson
 
-def quiesceReasonWire : _root_.EventDelivery.Group.QuiesceReason → String
+def quiesceReasonWire : _root_.EventDelivery.Group.CountQuiesceReason → String
   | .exceedsExpectedCount => "exceeds_expected_count"
 
 @[conformance_family] def groupEvaluation : Conformance.Family GroupEvaluationInput GroupEvaluationOutput :=
@@ -36,7 +36,7 @@ def quiesceReasonWire : _root_.EventDelivery.Group.QuiesceReason → String
     let key : Triggers.Groups.EventGroupKey := ⟨"node", .trigger "trigger", "config", "run"⟩
     let after := (⟨key, 0, none⟩ : _root_.EventDelivery.Group.EventGroupState).evaluate i.members i.expected 1
     ⟨after.quiescedAt.isSome,
-     (_root_.EventDelivery.Group.quiesceReason i.members i.expected).map quiesceReasonWire,
+     (_root_.EventDelivery.Group.countQuiesceReason i.members i.expected).map quiesceReasonWire,
      _root_.EventDelivery.Group.membershipReads none,
      _root_.EventDelivery.Group.membershipReads (some after)⟩⟩
 

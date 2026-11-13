@@ -35,7 +35,7 @@ structure Step where
 def facts (i : TraceInput) (now : Nat) : ResetFacts :=
   ⟨true, some resetAt, 0, now,
     (AccountFacts.mk i.kind i.inferenceNamesAccount i.compactionNamesAccount i.connectedAt).profileNamesAccount 0,
-    true, true⟩
+    true, true, true⟩
 
 def run (i : TraceInput) : Snapshot → List Nat → List Step
   | _, [] => []
