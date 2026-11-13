@@ -26,11 +26,28 @@ fi
 
 case "${suite}" in
   runtime)
-    packages=(gents gents-eval gents-loop)
+    packages=(
+      gents
+      gents-eval
+      gents-loop
+      gents-store
+      gents-documents
+      gents-inference
+      gents-p2p
+      gents-pack
+      gents-session
+      gents-tools
+      gents-toolcalls
+      gents-automation
+      gents-observe
+    )
     ;;
   cli)
     packages=(
       gents-cli
+      gents-service
+      gents-host
+      gents-core-packs
     )
     ;;
   support)
