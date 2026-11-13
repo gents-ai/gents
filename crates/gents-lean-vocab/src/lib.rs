@@ -176,14 +176,6 @@ pub fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileC
         .unwrap_or_else(|| panic!("Lean runtime-reconcile case {name:?} was not emitted"))
 }
 
-pub fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
-    lean_contract_snapshot()
-        .frontend_client_shell_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean ClientShell case {name:?} was not emitted"))
-}
-
 pub fn lean_queue_deadline_case(name: &str) -> &'static LeanQueueDeadlineConformanceCase {
     lean_contract_snapshot()
         .queue_deadline_conformance_cases

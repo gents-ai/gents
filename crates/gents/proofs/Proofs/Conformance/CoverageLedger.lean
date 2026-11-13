@@ -1423,8 +1423,8 @@ def caseCoverage : List CoverageEntry :=
       "client_request_cache_identity_merge")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "frontend_client_shell_cases"
-      "FrontendClientShellCases")
+      "family"
+      "client_shell_contracts_frontend")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"

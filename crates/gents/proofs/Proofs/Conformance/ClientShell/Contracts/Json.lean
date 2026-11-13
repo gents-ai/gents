@@ -4,83 +4,6 @@ namespace Conformance.ClientShellContracts
 
 open Conformance.Contracts
 
-def jsonNatList (values : List Nat) : String :=
-  "[" ++ String.intercalate "," (values.map toString) ++ "]"
-
-def ClientShellContractCase.toJson (witness : ClientShellContractCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"property\":" ++ jsonString witness.property ++ ","
-    ++ "\"input\":" ++ jsonString witness.input ++ ","
-    ++ "\"pre_selection_node\":" ++ jsonNatOption witness.preSelectionNode ++ ","
-    ++ "\"pre_selection_session\":" ++ jsonNatOption witness.preSelectionSession ++ ","
-    ++ "\"post_selection_node\":" ++ jsonNatOption witness.postSelectionNode ++ ","
-    ++ "\"post_selection_session\":" ++ jsonNatOption witness.postSelectionSession ++ ","
-    ++ "\"pre_workflow_kind\":" ++ jsonString witness.preWorkflowKind ++ ","
-    ++ "\"pre_workflow_session\":" ++ jsonNatOption witness.preWorkflowSession ++ ","
-    ++ "\"pre_workflow_request\":" ++ jsonNatOption witness.preWorkflowRequest ++ ","
-    ++ "\"post_workflow_kind\":" ++ jsonString witness.postWorkflowKind ++ ","
-    ++ "\"post_workflow_session\":" ++ jsonNatOption witness.postWorkflowSession ++ ","
-    ++ "\"post_workflow_request\":" ++ jsonNatOption witness.postWorkflowRequest ++ ","
-    ++ "\"selection_preserved\":" ++ boolJson witness.selectionPreserved ++ ","
-    ++ "\"workflow_advanced\":" ++ boolJson witness.workflowAdvanced ++ ","
-    ++ "\"transport_noop\":" ++ boolJson witness.transportNoop ++ ","
-    ++ "\"can_submit_before\":" ++ boolJson witness.canSubmitBefore ++ ","
-    ++ "\"can_submit_after\":" ++ boolJson witness.canSubmitAfter ++ ","
-    ++ "\"selection_health\":" ++ jsonString witness.selectionHealth ++ ","
-    ++ "\"projection_turn_state\":" ++ jsonStringOption witness.projectionTurnState ++ ","
-    ++ "\"projection_workflow_kind\":" ++ jsonString witness.projectionWorkflowKind ++ ","
-    ++ "\"projection_workflow_session\":" ++ jsonNatOption witness.projectionWorkflowSession ++ ","
-    ++ "\"projection_workflow_request\":" ++ jsonNatOption witness.projectionWorkflowRequest ++ ","
-    ++ "\"send_decision\":" ++ jsonString witness.sendDecision ++ ","
-    ++ "\"send_blocked_reason\":" ++ jsonStringOption witness.sendBlockedReason ++ ","
-    ++ "\"frontend_client_available\":" ++ boolJson witness.frontendClientAvailable ++ ","
-    ++ "\"frontend_selected_node_did\":" ++ jsonNatOption witness.frontendSelectedNodeDid ++ ","
-    ++ "\"frontend_selected_session_id\":" ++ jsonNatOption witness.frontendSelectedSessionId ++ ","
-    ++ "\"frontend_sending\":" ++ boolJson witness.frontendSending ++ ","
-    ++ "\"frontend_session_present\":" ++ boolJson witness.frontendSessionPresent ++ ","
-    ++ "\"frontend_session_id\":" ++ jsonNatOption witness.frontendSessionId ++ ","
-    ++ "\"frontend_session_latest_request_id\":" ++ jsonNatOption witness.frontendSessionLatestRequestId ++ ","
-    ++ "\"frontend_session_turn_state\":" ++ jsonStringOption witness.frontendSessionTurnState ++ ","
-    ++ "\"frontend_session_pending_request_id\":" ++ jsonNatOption witness.frontendSessionPendingRequestId ++ ","
-    ++ "\"frontend_session_queued_request_ids\":" ++ jsonNatList witness.frontendSessionQueuedRequestIds ++ ","
-    ++ "\"frontend_session_pending_queue_request_ids\":" ++ jsonNatList witness.frontendSessionPendingQueueRequestIds ++ ","
-    ++ "\"frontend_session_folded_request_ids\":" ++ jsonNatList witness.frontendSessionFoldedRequestIds ++ ","
-    ++ "\"frontend_local_workflow_kind\":" ++ jsonString witness.frontendLocalWorkflowKind ++ ","
-    ++ "\"frontend_local_workflow_session\":" ++ jsonNatOption witness.frontendLocalWorkflowSession ++ ","
-    ++ "\"frontend_local_workflow_request\":" ++ jsonNatOption witness.frontendLocalWorkflowRequest ++ ","
-    ++ "\"frontend_local_workflow_turn_state\":" ++ jsonStringOption witness.frontendLocalWorkflowTurnState ++ ","
-    ++ "\"frontend_expected_workflow_kind\":" ++ jsonString witness.frontendExpectedWorkflowKind ++ ","
-    ++ "\"frontend_expected_workflow_session\":" ++ jsonNatOption witness.frontendExpectedWorkflowSession ++ ","
-    ++ "\"frontend_expected_workflow_request\":" ++ jsonNatOption witness.frontendExpectedWorkflowRequest ++ ","
-    ++ "\"frontend_expected_workflow_turn_state\":" ++ jsonStringOption witness.frontendExpectedWorkflowTurnState ++ ","
-    ++ "\"frontend_expected_workflow_reason\":" ++ jsonStringOption witness.frontendExpectedWorkflowReason ++ ","
-    ++ "\"frontend_expected_send_status\":" ++ jsonString witness.frontendExpectedSendStatus ++ ","
-    ++ "\"frontend_expected_send_blocked_reason\":" ++ jsonStringOption witness.frontendExpectedSendBlockedReason ++ ","
-    ++ "\"frontend_expected_active_request_id\":" ++ jsonNatOption witness.frontendExpectedActiveRequestId ++ ","
-    ++ "\"frontend_expected_turn_state\":" ++ jsonStringOption witness.frontendExpectedTurnState ++ ","
-    ++ "\"desktop_selected_session_id\":" ++ jsonNatOption witness.desktopSelectedSessionId ++ ","
-    ++ "\"desktop_snapshot_present\":" ++ boolJson witness.desktopSnapshotPresent ++ ","
-    ++ "\"desktop_preferred_request_id\":" ++ jsonNatOption witness.desktopPreferredRequestId ++ ","
-    ++ "\"desktop_observed_request_id\":" ++ jsonNatOption witness.desktopObservedRequestId ++ ","
-    ++ "\"desktop_observed_turn_state\":" ++ jsonStringOption witness.desktopObservedTurnState ++ ","
-    ++ "\"desktop_queued_request_ids\":" ++ jsonNatList witness.desktopQueuedRequestIds ++ ","
-    ++ "\"desktop_folded_request_ids\":" ++ jsonNatList witness.desktopFoldedRequestIds ++ ","
-    ++ "\"desktop_rows\":" ++ SessionTurnCases.rowsJson witness.desktopRows ++ ","
-    ++ "\"desktop_expected_latest_request_id\":" ++ jsonNatOption witness.desktopExpectedLatestRequestId ++ ","
-    ++ "\"desktop_expected_turn_state\":" ++ jsonStringOption witness.desktopExpectedTurnState ++ ","
-    ++ "\"desktop_expect_pending_turn\":" ++ jsonBoolOption witness.desktopExpectPendingTurn
-    ++ "}"
-
-def frontendClientShellCases : List ClientShellContractCase :=
-  clientShellCases
-
-def frontendClientShellCasesJson : String :=
-  jsonArray (frontendClientShellCases.map ClientShellContractCase.toJson)
-
-def frontendClientShellCaseCount : Nat :=
-  frontendClientShellCases.length
-
 def desktopClientShellCases : List ClientShellContractCase :=
   clientShellCases.filter (fun witness => witness.desktopSelectedSessionId.isSome)
 
@@ -88,6 +11,142 @@ def turnOfName (name : Option String) : Option ClientTurnState :=
   name.bind fun name =>
     [ClientTurnState.waitingForClaim, .running, .completed, .failed, .superseded, .interrupted].find?
       (clientTurnStateName · == name)
+
+structure FrontendInput where
+  name : String
+  frontendClientAvailable : Bool
+  frontendSelectedNodeDid : Option Nat
+  frontendSelectedSessionId : Option Nat
+  frontendSending : Bool
+  frontendSessionPresent : Bool
+  frontendSessionId : Option Nat
+  frontendSessionLatestRequestId : Option Nat
+  frontendSessionTurnState : Option String
+  frontendSessionPendingRequestId : Option Nat
+  frontendSessionQueuedRequestIds : List Nat
+  frontendSessionPendingQueueRequestIds : List Nat
+  frontendSessionFoldedRequestIds : List Nat
+  frontendLocalWorkflowKind : String
+  frontendLocalWorkflowSession : Option Nat
+  frontendLocalWorkflowRequest : Option Nat
+  frontendLocalWorkflowTurnState : Option String
+  deriving Lean.ToJson
+
+structure FrontendOutput where
+  frontendExpectedWorkflowKind : String
+  frontendExpectedWorkflowSession : Option Nat
+  frontendExpectedWorkflowRequest : Option Nat
+  frontendExpectedWorkflowTurnState : Option String
+  frontendExpectedWorkflowReason : Option String
+  frontendExpectedSendStatus : String
+  frontendExpectedSendBlockedReason : Option String
+  frontendExpectedActiveRequestId : Option Nat
+  frontendExpectedTurnState : Option String
+  deriving Lean.ToJson, BEq
+
+def frontendInputOf (c : ClientShellContractCase) : FrontendInput :=
+  { name := c.name
+    frontendClientAvailable := c.frontendClientAvailable
+    frontendSelectedNodeDid := c.frontendSelectedNodeDid
+    frontendSelectedSessionId := c.frontendSelectedSessionId
+    frontendSending := c.frontendSending
+    frontendSessionPresent := c.frontendSessionPresent
+    frontendSessionId := c.frontendSessionId
+    frontendSessionLatestRequestId := c.frontendSessionLatestRequestId
+    frontendSessionTurnState := c.frontendSessionTurnState
+    frontendSessionPendingRequestId := c.frontendSessionPendingRequestId
+    frontendSessionQueuedRequestIds := c.frontendSessionQueuedRequestIds
+    frontendSessionPendingQueueRequestIds := c.frontendSessionPendingQueueRequestIds
+    frontendSessionFoldedRequestIds := c.frontendSessionFoldedRequestIds
+    frontendLocalWorkflowKind := c.frontendLocalWorkflowKind
+    frontendLocalWorkflowSession := c.frontendLocalWorkflowSession
+    frontendLocalWorkflowRequest := c.frontendLocalWorkflowRequest
+    frontendLocalWorkflowTurnState := c.frontendLocalWorkflowTurnState }
+
+/-- The one session snapshot the frontend holds: the selected session as the
+client observed it, owned by the selected node and the contract agent. -/
+def frontendStore (i : FrontendInput) : LocalStore :=
+  storeWith (if i.frontendSessionPresent then
+    [{ sessionId := i.frontendSessionId.getD 0
+       nodeDid := i.frontendSelectedNodeDid.getD contractNode
+       agentDid := some contractAgent
+       latestObservedRequest := i.frontendSessionLatestRequestId
+       latestTurn := turnOfName i.frontendSessionTurnState
+       queuedRequests := i.frontendSessionQueuedRequestIds
+       pendingQueueRequests := i.frontendSessionPendingQueueRequestIds
+       foldedRequests := i.frontendSessionFoldedRequestIds }]
+  else [])
+
+/-- The frontend's own workflow as a shell workflow. A turn already in
+progress is the idle workflow over a non-terminal observed turn; the client
+keeps no blocked workflow without its reason, so no case starts blocked. -/
+def frontendWorkflow (i : FrontendInput) : SubmissionWorkflow :=
+  match i.frontendLocalWorkflowKind with
+  | "submittingRequest" =>
+      .submitting (i.frontendSelectedNodeDid.getD contractNode) i.frontendLocalWorkflowSession
+  | "awaitingObservation" =>
+      .awaiting (i.frontendLocalWorkflowSession.getD 0) (i.frontendLocalWorkflowRequest.getD 0)
+  | _ => .idle
+
+def frontendShell (i : FrontendInput) : ShellState :=
+  { selection :=
+      { peer := some contractPeer
+        node := i.frontendSelectedNodeDid
+        session := i.frontendSelectedSessionId }
+    workflow := frontendWorkflow i }
+
+/-- The frontend reconciles its workflow with the selection and the snapshot
+it holds: selecting a session drops a workflow for another session
+(`workflowAfterSelectSession`), and the snapshot retires an awaited request it
+observes (`snapshotAdvanceWorkflow`). -/
+def frontendReconciled (shell : ShellState) (store : LocalStore) : ShellState :=
+  let selected :=
+    match shell.selection.session with
+    | some sid => workflowAfterSelectSession sid shell.workflow
+    | none => shell.workflow
+  { shell with workflow := snapshotAdvanceWorkflow selected store }
+
+def frontendProjection (i : FrontendInput) : FrontendOutput :=
+  let store := frontendStore i
+  let ctx : SubmitContext :=
+    { clientAvailable := i.frontendClientAvailable, requestedAgent := some contractAgent }
+  let shell := frontendShell i
+  let reconciled := frontendReconciled shell store
+  let chat := projectChat reconciled store ctx
+  let obs := selectedObservation shell store
+  let active := activeRequestForFrontend shell.selection obs shell.workflow
+  let workflow := frontendWorkflowFromProjection reconciled store ctx active
+  { frontendExpectedWorkflowKind := workflow.kind
+    frontendExpectedWorkflowSession := workflow.sessionId
+    frontendExpectedWorkflowRequest := workflow.requestId
+    frontendExpectedWorkflowTurnState := workflow.turnState
+    frontendExpectedWorkflowReason := workflow.reason
+    frontendExpectedSendStatus := frontendSendStatus chat.sendDecision
+    frontendExpectedSendBlockedReason := frontendSendReason chat.sendDecision
+    frontendExpectedActiveRequestId := active
+    frontendExpectedTurnState := turnStateOptionName (obs.bind (·.latestTurn)) }
+
+@[conformance_family]
+def frontend : Family FrontendInput FrontendOutput where
+  inputs := clientShellCases.map frontendInputOf
+  model := frontendProjection
+
+/-- The frontend projection agrees with every stepped ClientShell scenario. -/
+example : clientShellCases.all fun c =>
+    frontend.model (frontendInputOf c) ==
+      { frontendExpectedWorkflowKind := c.frontendExpectedWorkflowKind
+        frontendExpectedWorkflowSession := c.frontendExpectedWorkflowSession
+        frontendExpectedWorkflowRequest := c.frontendExpectedWorkflowRequest
+        frontendExpectedWorkflowTurnState := c.frontendExpectedWorkflowTurnState
+        frontendExpectedWorkflowReason := c.frontendExpectedWorkflowReason
+        frontendExpectedSendStatus := c.frontendExpectedSendStatus
+        frontendExpectedSendBlockedReason := c.frontendExpectedSendBlockedReason
+        frontendExpectedActiveRequestId := c.frontendExpectedActiveRequestId
+        frontendExpectedTurnState := c.frontendExpectedTurnState } := by native_decide
+
+example : frontend.inputs.any (!·.frontendSessionFoldedRequestIds.isEmpty) := by native_decide
+
+example : frontend.inputs.any (!·.frontendSessionQueuedRequestIds.isEmpty) := by native_decide
 
 structure DesktopInput where
   name : String

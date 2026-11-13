@@ -1002,41 +1002,6 @@ pub struct LeanClientDataPublicationCasesScopedReplacementItemLookupsItem {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanClientShellCase {
-    pub name: String,
-    pub property: String,
-    pub input: String,
-    pub pre_selection_session: Option<usize>,
-    pub post_selection_session: Option<usize>,
-    pub pre_workflow_kind: String,
-    pub pre_workflow_request: Option<usize>,
-    pub post_workflow_kind: String,
-    pub post_workflow_request: Option<usize>,
-    pub selection_preserved: bool,
-    pub workflow_advanced: bool,
-    pub transport_noop: bool,
-    pub can_submit_before: bool,
-    pub can_submit_after: bool,
-    pub send_decision: String,
-    pub send_blocked_reason: Option<String>,
-    pub frontend_expected_workflow_kind: String,
-    pub frontend_expected_send_status: String,
-    pub frontend_expected_send_blocked_reason: Option<String>,
-    pub frontend_expected_active_request_id: Option<usize>,
-    pub desktop_selected_session_id: Option<usize>,
-    pub desktop_snapshot_present: bool,
-    pub desktop_preferred_request_id: Option<usize>,
-    pub desktop_observed_request_id: Option<usize>,
-    pub desktop_observed_turn_state: Option<String>,
-    pub desktop_queued_request_ids: Vec<usize>,
-    pub desktop_folded_request_ids: Vec<usize>,
-    pub desktop_rows: Vec<LeanSessionTurnRow>,
-    pub desktop_expected_latest_request_id: Option<usize>,
-    pub desktop_expected_turn_state: Option<String>,
-    pub desktop_expect_pending_turn: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanCompletionRetryCase {
     pub name: String,
@@ -1161,8 +1126,6 @@ pub struct LeanContractSnapshot {
     pub plugin_approval_cases: Vec<LeanPluginApprovalCase>,
     pub task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
     pub causal_hop_default_max_request_hop: Option<u32>,
-    pub frontend_client_shell_case_count: usize,
-    pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub client_session_turn_cases: Vec<LeanSessionTurnCase>,
     pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,

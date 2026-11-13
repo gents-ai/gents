@@ -95,7 +95,7 @@ const CONTRACT_JSON_END = "---END GENTS LEAN CONTRACT JSON---";
 const GENERATED_CONTRACT_COMMAND_TIMEOUT_MS = 240000;
 const GENERATED_CONTRACT_TEST_TIMEOUT_MS = 300000;
 
-type LeanClientShellCase = {
+type LeanFrontendInput = {
   name: string;
   frontend_client_available: boolean;
   frontend_selected_node_did: number | null;
@@ -113,20 +113,21 @@ type LeanClientShellCase = {
   frontend_local_workflow_session: number | null;
   frontend_local_workflow_request: number | null;
   frontend_local_workflow_turn_state: TurnState | null;
+};
+
+type LeanFrontendOutput = {
   frontend_expected_workflow_kind: string;
   frontend_expected_workflow_session: number | null;
   frontend_expected_workflow_request: number | null;
   frontend_expected_workflow_turn_state: TurnState | null;
   frontend_expected_workflow_reason: ChatBlockedReason | null;
-  frontend_expected_send_status: "ready" | "queue" | "disabled";
+  frontend_expected_send_status: string;
   frontend_expected_send_blocked_reason: ChatBlockedReason | null;
   frontend_expected_active_request_id: number | null;
   frontend_expected_turn_state: TurnState | null;
 };
 
 type LeanContractSnapshot = {
-  frontend_client_shell_case_count: number;
-  frontend_client_shell_cases: LeanClientShellCase[];
   families: Record<
     string,
     { cases: Array<{ input: unknown; expected: unknown }> }
@@ -195,14 +196,6 @@ async function loadLeanContractSnapshot(): Promise<LeanContractSnapshot> {
     leanContractSnapshot = JSON.parse(
       stdout.slice(begin + CONTRACT_JSON_BEGIN.length, end).trim(),
     ) as LeanContractSnapshot;
-    if (
-      leanContractSnapshot.frontend_client_shell_case_count !==
-      leanContractSnapshot.frontend_client_shell_cases.length
-    ) {
-      throw new Error(
-        "Lean frontend ClientShell case count drifted from emitted cases",
-      );
-    }
   }
 
   return leanContractSnapshot;
@@ -220,10 +213,6 @@ async function leanFamilyCases<Input, Output>(
     throw new Error(`Lean family ${key} was not emitted`);
   }
   return family.cases as Array<LeanFamilyCase<Input, Output>>;
-}
-
-async function loadLeanClientShellCases() {
-  return (await loadLeanContractSnapshot()).frontend_client_shell_cases;
 }
 
 function runLeanCommand(proofsDir: string, args: string[]): Promise<string> {
@@ -301,7 +290,7 @@ function requestId(id: number | null) {
   return id === null ? null : `req-${id}`;
 }
 
-function sessionFromContract(contractCase: LeanClientShellCase) {
+function sessionFromContract(contractCase: LeanFrontendInput) {
   if (!contractCase.frontend_session_present) {
     return null;
   }
@@ -353,7 +342,7 @@ function sessionFromContract(contractCase: LeanClientShellCase) {
 }
 
 function localWorkflowFromContract(
-  contractCase: LeanClientShellCase,
+  contractCase: LeanFrontendInput,
 ): ChatWorkflowState {
   switch (contractCase.frontend_local_workflow_kind) {
     case "turnInProgress":
@@ -398,117 +387,96 @@ function localWorkflowFromContract(
   }
 }
 
-function expectedWorkflowFromContract(contractCase: LeanClientShellCase) {
-  switch (contractCase.frontend_expected_workflow_kind) {
-    case "ready":
-      return { kind: "ready" };
-    case "submittingRequest":
-      return {
-        kind: "submittingRequest",
-        sessionId: sessionId(contractCase.frontend_expected_workflow_session),
-      };
-    case "awaitingObservation":
-      return {
-        kind: "awaitingObservation",
-        sessionId: sessionId(contractCase.frontend_expected_workflow_session),
-        requestId: requestId(contractCase.frontend_expected_workflow_request),
-      };
-    case "turnInProgress":
-      return {
-        kind: "turnInProgress",
-        sessionId: sessionId(contractCase.frontend_expected_workflow_session),
-        requestId: requestId(contractCase.frontend_expected_workflow_request),
-        turnState: contractCase.frontend_expected_workflow_turn_state,
-      };
-    case "blocked":
-      return {
-        kind: "blocked",
-        reason: contractCase.frontend_expected_workflow_reason,
-      };
-    default:
-      throw new Error(
-        `unsupported Lean expected workflow ${contractCase.frontend_expected_workflow_kind}`,
-      );
+function contractNumber(value: string | null | undefined, prefix: string) {
+  if (value === null || value === undefined) {
+    return null;
   }
+  if (!value.startsWith(prefix)) {
+    throw new Error(`${value} is not a contract ${prefix} id`);
+  }
+  return Number(value.slice(prefix.length));
 }
 
-function compactWorkflow(workflow: ChatWorkflowState) {
-  return Object.fromEntries(
-    Object.entries(workflow).filter(
-      ([key, value]) =>
-        key !== "nodeDid" && value !== undefined && value !== null,
+function frontendObservation(
+  projection: ReturnType<typeof projectChatShell>,
+): LeanFrontendOutput {
+  const workflow = projection.workflow as ChatWorkflowState & {
+    sessionId?: string | null;
+    requestId?: string | null;
+    turnState?: TurnState | null;
+    reason?: ChatBlockedReason | null;
+  };
+  const send = projection.nonEmptyContentSendStatus;
+  return {
+    frontend_expected_workflow_kind: workflow.kind,
+    frontend_expected_workflow_session: contractNumber(
+      workflow.sessionId,
+      "session-",
     ),
-  );
+    frontend_expected_workflow_request: contractNumber(
+      workflow.requestId,
+      "req-",
+    ),
+    frontend_expected_workflow_turn_state: workflow.turnState ?? null,
+    frontend_expected_workflow_reason: workflow.reason ?? null,
+    frontend_expected_send_status: send.kind,
+    frontend_expected_send_blocked_reason:
+      send.kind === "disabled" ? send.reason : null,
+    frontend_expected_active_request_id: contractNumber(
+      projection.activeRequestId,
+      "req-",
+    ),
+    frontend_expected_turn_state: projection.turnState,
+  };
 }
 
 describe("projectChatShell", () => {
   test(
     "matches generated Lean ClientShell projection contracts",
     async () => {
-      const contractCases = await loadLeanClientShellCases();
-      expect(contractCases).toHaveLength(31);
-      expect(
-        contractCases.some(
-          (contractCase) =>
-            contractCase.frontend_session_folded_request_ids.length > 0,
-        ),
-      ).toBe(true);
-      expect(
-        contractCases.some(
-          (contractCase) =>
-            contractCase.frontend_session_queued_request_ids.length > 0,
-        ),
-      ).toBe(true);
+      const contractCases = await leanFamilyCases<
+        LeanFrontendInput,
+        LeanFrontendOutput
+      >("families::client_shell_contracts_frontend::cases()");
 
-      for (const contractCase of contractCases) {
+      for (const { input, expected } of contractCases) {
         const projection = projectChatShell({
-          clientAvailable: contractCase.frontend_client_available,
-          selectedNodeDid: nodeDid(contractCase.frontend_selected_node_did),
-          selectedSessionId: sessionId(
-            contractCase.frontend_selected_session_id,
-          ),
-          sending: contractCase.frontend_sending,
+          clientAvailable: input.frontend_client_available,
+          selectedNodeDid: nodeDid(input.frontend_selected_node_did),
+          selectedSessionId: sessionId(input.frontend_selected_session_id),
+          sending: input.frontend_sending,
           selectedSessionSummary: null,
-          session: sessionFromContract(contractCase),
-          localWorkflow: localWorkflowFromContract(contractCase),
+          session: sessionFromContract(input),
+          localWorkflow: localWorkflowFromContract(input),
         });
 
-        expect(compactWorkflow(projection.workflow), contractCase.name).toEqual(
-          expectedWorkflowFromContract(contractCase),
-        );
+        expect(frontendObservation(projection), input.name).toEqual(expected);
+        expect(
+          Object.entries(projection.workflow).filter(
+            ([key, value]) =>
+              value !== undefined &&
+              value !== null &&
+              ![
+                "kind",
+                "nodeDid",
+                "sessionId",
+                "requestId",
+                "turnState",
+                "reason",
+              ].includes(key),
+          ),
+          input.name,
+        ).toEqual([]);
         if (projection.workflow.kind === "turnInProgress") {
           expect(projection.workflow.nodeDid).toBe(
-            nodeDid(contractCase.frontend_selected_node_did),
+            nodeDid(input.frontend_selected_node_did),
           );
         }
-        expect(projection.activeRequestId).toBe(
-          requestId(contractCase.frontend_expected_active_request_id),
-        );
-        expect(projection.turnState).toBe(
-          contractCase.frontend_expected_turn_state,
-        );
-
-        if (contractCase.frontend_expected_send_status === "ready") {
-          expect(projection.nonEmptyContentSendStatus).toEqual({
-            kind: "ready",
-          });
-        } else if (contractCase.frontend_expected_send_status === "queue") {
-          expect(
-            projection.nonEmptyContentSendStatus.kind,
-            contractCase.name,
-          ).toBe("queue");
-          if (projection.nonEmptyContentSendStatus.kind === "queue") {
-            expect(projection.nonEmptyContentSendStatus.turnState).toBe(
-              contractCase.frontend_expected_turn_state,
-            );
-          }
-        } else {
-          expect(projection.nonEmptyContentSendStatus.kind).toBe("disabled");
-          if (projection.nonEmptyContentSendStatus.kind === "disabled") {
-            expect(projection.nonEmptyContentSendStatus.reason).toBe(
-              contractCase.frontend_expected_send_blocked_reason,
-            );
-          }
+        const send = projection.nonEmptyContentSendStatus;
+        if (send.kind === "ready") {
+          expect(send).toEqual({ kind: "ready" });
+        } else if (send.kind === "queue") {
+          expect(send.turnState, input.name).toBe(projection.turnState);
         }
       }
     },

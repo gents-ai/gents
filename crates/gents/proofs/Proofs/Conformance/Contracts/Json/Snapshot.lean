@@ -439,10 +439,6 @@ def snapshotRequestCasesJson : String :=
 def snapshotSessionCasesJson : String :=
   ""
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
-    ++ "\"frontend_client_shell_case_count\":"
-      ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
-    ++ "\"frontend_client_shell_cases\":"
-      ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
 
 def snapshotIdentityCasesJson : String :=
   ""
