@@ -9,6 +9,45 @@ use serde_json::Value;
 /// the client route. `null` means the runtime could not read its own node yet.
 pub const STATUS_REPLICATED_SCHEMA_FIELD: &str = "replicated_schema";
 
+pub fn is_managed_collection(name: &str) -> bool {
+    crate::schemas::ALL_COLLECTION_NAMES.contains(&name)
+        || crate::schemas::RUNTIME_COLLECTION_NAMES.contains(&name)
+}
+
+pub const P2P_PAIRING_SOURCE_PURPOSE: &str = "p2p-pairing";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppCollectionFacts {
+    pub managed: bool,
+    pub has_policy: bool,
+    pub is_view: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AppCollectionRefusal {
+    #[error("protocol, runtime and credential collections never replicate as application data")]
+    Managed,
+    #[error(
+        "a collection with a document policy cannot replicate: its replicas are owned by \
+         their signer on the peer and grants do not replicate, so only that signer could read them"
+    )]
+    PolicyProtected,
+    #[error("a view is derived from other collections and cannot carry its own document policy")]
+    View,
+}
+
+pub fn decide_app_collection(facts: AppCollectionFacts) -> Result<(), AppCollectionRefusal> {
+    if facts.managed {
+        Err(AppCollectionRefusal::Managed)
+    } else if facts.is_view {
+        Err(AppCollectionRefusal::View)
+    } else if facts.has_policy {
+        Err(AppCollectionRefusal::PolicyProtected)
+    } else {
+        Ok(())
+    }
+}
+
 /// What a merge depends on for one collection: DefraDB's content-addressed
 /// active version ID, plus the branchable and policy settings that version
 /// ID does not cover.
@@ -49,3 +88,25 @@ impl ReplicatedCollectionIdentity {
 
 /// Active identities by collection name, as read from one node.
 pub type ReplicatedSchema = BTreeMap<String, ReplicatedCollectionIdentity>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents_lean_vocab::families;
+
+    #[test]
+    fn app_collection_admission_follows_the_model() {
+        for case in families::application_pairing_collection_admission_cases::cases::<String>() {
+            let actual = decide_app_collection(AppCollectionFacts {
+                managed: case.input.managed,
+                has_policy: case.input.has_policy,
+                is_view: case.input.is_view,
+            });
+            case.check(actual.err().map(|refusal| match refusal {
+                AppCollectionRefusal::Managed => "managed".to_owned(),
+                AppCollectionRefusal::PolicyProtected => "policy_protected".to_owned(),
+                AppCollectionRefusal::View => "view".to_owned(),
+            }));
+        }
+    }
+}

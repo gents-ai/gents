@@ -1,11 +1,13 @@
-use gents_protocol::peer_schema::{ReplicatedCollectionIdentity, ReplicatedSchema};
-use std::collections::BTreeMap;
+use gents_protocol::peer_schema::{
+    decide_app_collection, is_managed_collection, AppCollectionFacts, AppCollectionRefusal,
+    ReplicatedCollectionIdentity, ReplicatedSchema,
+};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
 pub use p2p::ReplicationFilter as FilterPredicate;
 
-/// Every protocol route pushes; no surviving template subscribes or replicates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
     Push,
@@ -134,6 +136,7 @@ const MACHINE_RULES: &[CollectionRule] = &[CollectionRule {
 
 pub const MACHINE_TEMPLATE: &str = "machine";
 pub const CLIENT_TEMPLATE: &str = "client";
+pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
 
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
@@ -146,6 +149,12 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
         id: CLIENT_TEMPLATE,
         collections: CLIENT_COLLECTIONS,
         scope: Scope::ClientRoute,
+        delivery: Delivery::Push,
+    },
+    ScopeTemplate {
+        id: APP_COLLECTIONS_TEMPLATE,
+        collections: &[],
+        scope: Scope::PerCollection(&[]),
         delivery: Delivery::Push,
     },
 ];
@@ -167,13 +176,87 @@ pub async fn read_replicated_schema(
     let access = gents_store::config_client::ConfigAccess::local(node);
     let mut schema = ReplicatedSchema::new();
     for name in collections {
-        let identity = access
-            .collection_version(name)
+        let (identity, _) = local_collection_facts(&access, name)
             .await?
-            .as_ref()
-            .and_then(ReplicatedCollectionIdentity::from_collection_version)
             .ok_or_else(|| anyhow::anyhow!("collection {name} is not registered"))?;
         schema.insert((*name).to_string(), identity);
+    }
+    Ok(schema)
+}
+
+async fn local_collection_facts(
+    access: &gents_store::config_client::ConfigAccess,
+    name: &str,
+) -> Result<
+    Option<(ReplicatedCollectionIdentity, bool)>,
+    gents_store::config_client::ConfigClientError,
+> {
+    Ok(access.collection_version(name).await?.and_then(|version| {
+        let is_view = version.get("Query").is_some_and(|query| !query.is_null());
+        ReplicatedCollectionIdentity::from_collection_version(&version)
+            .map(|identity| (identity, is_view))
+    }))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AppCollectionAdmissionError {
+    #[error("collection {collection:?}: {refusal}")]
+    Refused {
+        collection: String,
+        refusal: AppCollectionRefusal,
+    },
+    #[error("collection {collection:?} is not registered on this node")]
+    NotRegistered { collection: String },
+    #[error("collection {collection:?} could not be read")]
+    Unreadable {
+        collection: String,
+        #[source]
+        source: gents_store::config_client::ConfigClientError,
+    },
+}
+
+pub async fn admit_app_collections(
+    node: std::sync::Arc<defra_node::Node>,
+    requested: &BTreeSet<String>,
+) -> Result<ReplicatedSchema, AppCollectionAdmissionError> {
+    admit_app_collections_with(
+        &gents_store::config_client::ConfigAccess::local(node),
+        requested,
+    )
+    .await
+}
+
+pub async fn admit_app_collections_with(
+    access: &gents_store::config_client::ConfigAccess,
+    requested: &BTreeSet<String>,
+) -> Result<ReplicatedSchema, AppCollectionAdmissionError> {
+    let mut schema = ReplicatedSchema::new();
+    for collection in requested {
+        if is_managed_collection(collection) {
+            return Err(AppCollectionAdmissionError::Refused {
+                collection: collection.clone(),
+                refusal: AppCollectionRefusal::Managed,
+            });
+        }
+        let (identity, is_view) = local_collection_facts(access, collection)
+            .await
+            .map_err(|source| AppCollectionAdmissionError::Unreadable {
+                collection: collection.clone(),
+                source,
+            })?
+            .ok_or_else(|| AppCollectionAdmissionError::NotRegistered {
+                collection: collection.clone(),
+            })?;
+        decide_app_collection(AppCollectionFacts {
+            managed: false,
+            has_policy: identity.policy_resource.is_some(),
+            is_view,
+        })
+        .map_err(|refusal| AppCollectionAdmissionError::Refused {
+            collection: collection.clone(),
+            refusal,
+        })?;
+        schema.insert(collection.clone(), identity);
     }
     Ok(schema)
 }

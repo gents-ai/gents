@@ -17,6 +17,7 @@
 #[cfg(test)]
 mod agent_signer_conformance;
 mod application_failure;
+mod application_pairing;
 pub mod authored_document;
 mod client_agent_publication;
 mod client_pack_evidence;

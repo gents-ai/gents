@@ -8,13 +8,15 @@ use gents_protocol::document_query::{
 use gents_protocol::enrollment::AuthorizationLease;
 use gents_protocol::graphql::graphql_rows_from_response;
 use gents_protocol::operations::p2p::{
-    pairing_connected, pairing_replicating, pairing_subscribed, Pairing, PairingLease,
-    PairingReaderTarget, PairingReaderTargets,
+    pairing_connected, pairing_replicating, pairing_subscribed, ApplicationPairing,
+    ApplicationPairingError, ApplicationPairingRemoved, Pairing, PairingLease, PairingReaderTarget,
+    PairingReaderTargets,
 };
 use gents_store::config_client::{ConfigAccess, ConfigClientError};
 use serde_json::Value;
 
 use super::{optional_string, string_list};
+use crate::p2p_reconcile::overlay_binding::operator_pairing_statuses;
 use crate::p2p_reconcile::{resolve_template, Delivery, TransportEndpoint};
 
 #[derive(Debug, thiserror::Error)]
@@ -262,5 +264,38 @@ pub async fn pairing_reader_targets(
     Ok(PairingReaderTargets {
         desired: targets("PeerPairingDesired")?,
         applied: targets("PeerPairingApplied")?,
+    })
+}
+
+fn application_passthrough(error: impl Into<anyhow::Error>) -> ApplicationPairingError {
+    ApplicationPairingError::Passthrough(
+        error
+            .into()
+            .reallocate_into_boxed_dyn_error_without_backtrace(),
+    )
+}
+
+pub async fn list_application_pairings(
+    access: &ConfigAccess,
+) -> Result<Vec<ApplicationPairing>, ApplicationPairingError> {
+    operator_pairing_statuses(access)
+        .await
+        .map_err(application_passthrough)?
+        .into_iter()
+        .map(|row| serde_json::from_value(row).map_err(ApplicationPairingError::Malformed))
+        .collect()
+}
+
+pub async fn remove_application_pairing(
+    access: &ConfigAccess,
+    peer_id: &str,
+) -> Result<ApplicationPairingRemoved, ApplicationPairingError> {
+    let removed = access
+        .remove_application_pairing(peer_id)
+        .await
+        .map_err(application_passthrough)?;
+    Ok(ApplicationPairingRemoved {
+        peer_id: peer_id.to_owned(),
+        removed,
     })
 }
