@@ -323,7 +323,6 @@ function MountedAgentPicker({
         <AgentSheet
           deployment={deployment}
           open={creating}
-          enabled
           onClose={(agentDid) => {
             setCreating(false);
             if (agentDid) onChange(agentDid);

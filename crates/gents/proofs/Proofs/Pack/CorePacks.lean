@@ -105,6 +105,50 @@ theorem only_script_calls_tools (pack : CorePack) :
 theorem enabling_consents_dynamic :
     (enabledWiring .dynamicWorkflows).consentDynamic = true := rfl
 
+/-- What the install reads of the profile a pack's inference slot is bound to:
+the profile with an enabled backend, with a disabled one, or with none. -/
+inductive ProfileState
+  | serving
+  | backendDisabled
+  | backendMissing
+  deriving DecidableEq, Repr
+
+inductive SlotBinding
+  | bound
+  /-- Bound to a profile that cannot serve yet; the pack's agents on it resolve
+  to `Configuration.ResolveError.disabledBackend` and serve no request until
+  its backend is enabled (`SelfConfig.deferred_agent_serves_no_request`). -/
+  | deferred
+  | refused
+  deriving DecidableEq, Repr
+
+/-- Whether an install binds a slot to the profile named for it.
+
+Decision (maintainer, 2026-11-13, desktop first run on #3670): installing
+Gents implies its core packs, and a node is set up before any inference
+provider exists, its backend disabled. So `init` names the Engineer's own
+profile for every required slot of a core pack, and a named profile whose
+backend is disabled is bound and deferred, as the Engineer itself is
+(`SelfConfig.candidateResolution`): the setup's inference step enables that
+backend in place. A profile with no backend is refused. A slot nobody names is
+still bound automatically only to a serving profile. -/
+def slotBinding : ProfileState → SlotBinding
+  | .serving => .bound
+  | .backendDisabled => .deferred
+  | .backendMissing => .refused
+
+def SlotBinding.installs : SlotBinding → Bool
+  | .refused => false
+  | _ => true
+
+theorem init_binds_before_inference : (slotBinding .backendDisabled).installs = true := rfl
+
+theorem missing_backend_refused : slotBinding .backendMissing = .refused := rfl
+
+theorem installs_iff (state : ProfileState) :
+    (slotBinding state).installs = true ↔ state ≠ .backendMissing := by
+  cases state <;> simp [slotBinding, SlotBinding.installs]
+
 /-- The plugin interface this runtime implements, and the oldest version it
 still loads. Raise `current` when a host import, the call ABI or a manifest
 field the runtime reads changes incompatibly; raise `oldest` when the runtime

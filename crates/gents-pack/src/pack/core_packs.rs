@@ -256,6 +256,53 @@ pub fn check_plugin_interface(
     }
 }
 
+/// Lean `Pack.CorePacks.ProfileState`: what an install reads of the profile
+/// a pack's inference slot is bound to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileState {
+    Serving,
+    BackendDisabled,
+    BackendMissing,
+}
+
+impl ProfileState {
+    pub fn of(option: &crate::pack::inference::PackInferenceProfileOption) -> Self {
+        match (option.usable, option.backend_name.is_some()) {
+            (true, _) => Self::Serving,
+            (false, true) => Self::BackendDisabled,
+            (false, false) => Self::BackendMissing,
+        }
+    }
+}
+
+/// Lean `Pack.CorePacks.SlotBinding`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlotBinding {
+    Bound,
+    /// Bound to a profile whose backend is disabled: the pack's agents on it
+    /// serve no request until that backend is enabled.
+    Deferred,
+    Refused,
+}
+
+impl SlotBinding {
+    pub fn installs(self) -> bool {
+        self != Self::Refused
+    }
+}
+
+/// Lean `Pack.CorePacks.slotBinding`: whether an install binds a slot to the
+/// profile named for it.
+pub fn slot_binding(state: ProfileState) -> SlotBinding {
+    match state {
+        ProfileState::Serving => SlotBinding::Bound,
+        ProfileState::BackendDisabled => SlotBinding::Deferred,
+        ProfileState::BackendMissing => SlotBinding::Refused,
+    }
+}
+
 #[cfg(test)]
 mod conformance {
     use gents_lean_vocab::families;
@@ -267,5 +314,10 @@ mod conformance {
         families::pack_core_packs_approval_required::replay(|input| {
             approval_required(input.origin, input.grants)
         });
+    }
+
+    #[test]
+    fn slot_binding_matches_the_lean_model() {
+        families::pack_core_packs_slot_binding::replay(|input| slot_binding(input.profile_state));
     }
 }

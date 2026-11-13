@@ -511,6 +511,18 @@ async fn apply(
             enable_command(home, pack)
         );
         if installed.is_none() {
+            let profile = agent_identity_row(&access, &owner, engineer)
+                .await?
+                .agent
+                .inference_profile_id;
+            let slots: Vec<String> = source
+                .manifest()
+                .metadata
+                .inference_slots
+                .iter()
+                .filter(|slot| !slot.optional)
+                .map(|slot| format!("{}={profile}", slot.name))
+                .collect();
             install_as_engineer(
                 &access,
                 &owner,
@@ -518,6 +530,7 @@ async fn apply(
                 engineer,
                 &format!("{coordinate}@{}", source.manifest().version),
                 source.digest(),
+                &slots,
             )
             .await?;
         }
@@ -632,7 +645,9 @@ pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
 /// documents are the Engineer's: it reads them, references them and removes
 /// the pack again. The consent to what the plugins ask for is the caller's;
 /// the Engineer's pack authority is what grants it (Lean
-/// `installerProvenance`), so the install records `operator`.
+/// `installerProvenance`), so the install records `operator`. Each required
+/// inference slot is bound to the Engineer's own profile, deferred while its
+/// backend is disabled (Lean `Pack.CorePacks.slotBinding`).
 async fn install_as_engineer(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
@@ -640,10 +655,15 @@ async fn install_as_engineer(
     engineer: &str,
     package: &str,
     digest: &str,
+    slots: &[String],
 ) -> Result<Value> {
+    let mut argv = vec!["pack", "install", package, "--digest", digest];
+    for slot in slots {
+        argv.extend(["--inference-slot", slot.as_str()]);
+    }
     let receipt = engineer_config(access, owner, home, engineer)
         .await?
-        .call(json!({"argv": ["pack", "install", package, "--digest", digest]}).to_string())
+        .call(json!({ "argv": argv }).to_string())
         .await
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     serde_json::from_str(&receipt).context("the Engineer's install receipt is not JSON")
@@ -655,7 +675,18 @@ async fn agent_identity_binding(
     owner: &str,
     agent_did: &str,
 ) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
-    let row = access
+    Ok(agent_identity_row(access, owner, agent_did)
+        .await?
+        .agent
+        .identity_binding())
+}
+
+async fn agent_identity_row(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+    agent_did: &str,
+) -> Result<gents_documents::views::agents::AgentRow> {
+    access
         .read_view(
             &gents_documents::views::agents::AgentList::new(owner)
                 .agent_did(agent_did)
@@ -664,8 +695,7 @@ async fn agent_identity_binding(
         .await?
         .into_iter()
         .next()
-        .with_context(|| format!("agent {agent_did:?} missing for {owner:?}"))?;
-    Ok(row.agent.identity_binding())
+        .with_context(|| format!("agent {agent_did:?} missing for {owner:?}"))
 }
 
 /// The config tool as the runtime gives it to the Engineer `engineer`, with
@@ -994,6 +1024,45 @@ mod tests {
             listed.iter().all(|pack| pack.state == PackState::Installed),
             "{listed:?}"
         );
+    }
+
+    /// A home set up before any inference provider exists, as the desktop
+    /// sets one up: every core pack is installed, a required inference slot
+    /// bound to the Engineer's own profile while its backend is disabled
+    /// (Lean `Pack.CorePacks.slotBinding`), and dynamic workflows waits to be
+    /// turned on.
+    #[tokio::test]
+    async fn init_without_inference_installs_every_core_pack() {
+        let archives = fixture_archives().await;
+        let archives = borrowed(&archives);
+        let home = tempfile::tempdir().unwrap();
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--store-key-custody",
+            "file",
+            "--engineer",
+            "--home",
+            home.path().to_str().unwrap(),
+        ])
+        .unwrap();
+        let Some(crate::cli::Command::Init(args)) = cli.command else {
+            panic!("expected init")
+        };
+        let initialized = crate::commands::init::init_home_with_core_packs(args, &archives)
+            .await
+            .unwrap();
+        let report = &initialized["default_packs"];
+        assert_eq!(report["not_installed"], json!([]), "{report}");
+        let listed = status(home.path(), &archives).await.unwrap();
+        for pack in &listed {
+            let expected = if pack.pack == CorePack::DynamicWorkflows.coordinate() {
+                PackState::NotEnabled
+            } else {
+                PackState::Installed
+            };
+            assert_eq!(pack.state, expected, "{listed:?}");
+        }
     }
 
     /// A core pack is installed as the Engineer, so what it ships is the

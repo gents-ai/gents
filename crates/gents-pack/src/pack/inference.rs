@@ -111,7 +111,10 @@ pub(crate) async fn inspect_pack_inference_bindings_with_node_binding(
                 )
             })?;
         anyhow::ensure!(
-            profile.usable,
+            crate::pack::core_packs::slot_binding(crate::pack::core_packs::ProfileState::of(
+                profile
+            ))
+            .installs(),
             "inference slot {slot:?} profile {profile_id:?} is unavailable: {}",
             profile
                 .unavailable_reason
@@ -259,7 +262,10 @@ pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
         .iter()
         .filter(|slot| !slot.optional)
         .collect::<Vec<_>>();
-    if required.is_empty() {
+    if required
+        .iter()
+        .all(|slot| requested.contains_key(&slot.name))
+    {
         return Ok(preview);
     }
     let usable = preview
