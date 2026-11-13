@@ -4,25 +4,30 @@ import type { SharingState } from "../../../hooks/sharing";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useSharing } from "@/hooks/useSharing";
 import { historyNote } from "../sharing/History";
-import { InvitationAction } from "../sharing/Invitation";
+import { InvitationButton } from "../sharing/Invitation";
 import { RequestsStrip } from "../sharing/Requests";
 import { missingText, SharingTabs } from "../sharing/SharingTabs";
 
-/** Who may use the node: an invitation to ask to join, requests waiting for
-    a decision, then who has access and what was decided, one at a time. The
-    desktop decides
-    for the node it runs; what the node's runtime doesn't offer yet is named
-    in one line rather than shown empty. */
+/** Who may use the node: requests waiting for a decision at the top, then
+    who has access and what was decided, one at a time, with an invitation to
+    ask to join beside the heading. The desktop decides for the node it runs;
+    what the node's runtime doesn't offer yet is named in one line rather than
+    shown empty. */
 export function SharingPanel({ deployment }: { deployment: NodeView }) {
   const name = deployment.node.displayName ?? deployment.label;
   const view = useSharing(deployment.nodeDid);
   return (
     <div data-testid="sharing-panel">
-      <header className="mb-6">
-        <h2 className="font-heading text-lg text-heading">Sharing</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Who can use {name}, and how they got in.
-        </p>
+      <header className="mb-6 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="font-heading text-lg text-heading">Sharing</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Who can use {name}, and how they got in.
+          </p>
+        </div>
+        {view.status === "ready" && (
+          <InvitationButton nodeDid={deployment.nodeDid} name={name} />
+        )}
       </header>
       {view.status === "loading" ? (
         <SharingLoading />
@@ -58,7 +63,6 @@ function Shared({
     requests.length + members.length + history.length === 0 && historyLeftOut === null;
   return (
     <>
-      <InvitationAction nodeDid={nodeDid} name={name} />
       <RequestsStrip nodeDid={nodeDid} nodeName={name} requests={requests} />
       {nothing ? (
         <>

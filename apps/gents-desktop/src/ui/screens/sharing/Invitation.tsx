@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, Link2 } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
-import { FieldRows } from "@gents/ui/components/field";
+import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import type { SharingInvitation } from "../../../hooks/sharing";
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { useSharingActions } from "@/hooks/useSharing";
 import { useCopied } from "@/lib/clipboard";
 import { fullTime, shortTime } from "../TranscriptMarker";
@@ -14,11 +15,13 @@ type Making =
   | { status: "made"; invitation: SharingInvitation }
   | { status: "error"; message: string };
 
-/** Create invitation, and the invitation it made: its link to copy, when it
-    expires, and another once it has. Each one admits one node's request to
-    join; approving it stays here. */
-export function InvitationAction({ nodeDid, name }: { nodeDid: string; name: string }) {
+/** Create invitation, opening onto the invitation it made: its link to copy,
+    when it expires, and another. Opening it again keeps an invitation that
+    still works. Each one admits one node's request to join; approving it
+    stays here. */
+export function InvitationButton({ nodeDid, name }: { nodeDid: string; name: string }) {
   const sharing = useSharingActions();
+  const popover = useExclusivePopover();
   const [making, setMaking] = useState<Making>({ status: "idle" });
   const make = async () => {
     setMaking({ status: "making" });
@@ -28,106 +31,116 @@ export function InvitationAction({ nodeDid, name }: { nodeDid: string; name: str
       setMaking({ status: "error", message: errorMessage(cause) });
     }
   };
+  const onOpenChange = (open: boolean) => {
+    popover.onOpenChange(open);
+    const working =
+      making.status === "making" ||
+      (making.status === "made" &&
+        Date.parse(making.invitation.expiresAt) > Date.now());
+    if (open && !working) void make();
+  };
   return (
-    <section aria-label="Invitation" className="mb-6">
-      {making.status === "made" ? (
-        <InvitationCard
-          name={name}
-          invitation={making.invitation}
-          onAnother={() => void make()}
-          onDone={() => setMaking({ status: "idle" })}
-        />
-      ) : (
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={making.status === "making"}
-            onClick={() => void make()}
-          >
+    <Popover
+      open={popover.open}
+      onOpenChange={onOpenChange}
+      onOpenChangeComplete={popover.onOpenChangeComplete}
+    >
+      <PopoverTrigger
+        render={
+          <Button size="sm" variant="outline" className="shrink-0">
             <Link2 aria-hidden />
-            {making.status === "making" ? "Creating…" : "Create invitation"}
+            Create invitation
           </Button>
-          {making.status === "error" ? (
+        }
+      />
+      <PopoverContent
+        ref={popover.popupRef}
+        aria-label="Invitation"
+        align="end"
+        className="w-96 max-w-[calc(100vw-2rem)] gap-3"
+      >
+        <p className="font-medium">Invitation to {name}</p>
+        {making.status === "made" ? (
+          <Made
+            name={name}
+            invitation={making.invitation}
+            onAnother={() => void make()}
+          />
+        ) : making.status === "error" ? (
+          <>
             <p role="alert" className="text-xs break-words text-destructive">
               Couldn't create an invitation: {making.message}
             </p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              A link another node uses to ask to join {name}.
-            </p>
-          )}
-        </div>
-      )}
-    </section>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-fit"
+              onClick={() => void make()}
+            >
+              Try again
+            </Button>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">Creating…</p>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
-function InvitationCard({
+function Made({
   name,
   invitation,
   onAnother,
-  onDone,
 }: {
   name: string;
   invitation: SharingInvitation;
   onAnother: () => void;
-  onDone: () => void;
 }) {
   const expired = useExpired(invitation.expiresAt);
   const { copied, copy } = useCopied();
   const until = shortTime(invitation.expiresAt);
   return (
-    <FieldRows className="min-w-0">
-      {/* the column may not grow to the link's width, so the link shortens
-          and its buttons stay in view */}
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-3 px-5 py-4">
-        <p className="text-sm font-medium">Invitation to {name}</p>
-        <div className="flex items-center gap-2">
-          <code
-            aria-label="Invitation link"
-            className="min-w-0 flex-1 truncate rounded-md bg-muted px-2.5 py-1.5 font-mono text-xs select-all"
-            title={invitation.link}
-          >
-            {invitation.link}
-          </code>
-          <Button
-            size="sm"
-            className="shrink-0"
-            disabled={expired}
-            onClick={() => copy(invitation.link)}
-          >
-            {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-            {copied ? "Copied" : "Copy link"}
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          {expired ? (
-            <>
-              This invitation expired
-              {until && <span title={fullTime(invitation.expiresAt)}> at {until}</span>}
-              . Create another to send.
-            </>
-          ) : (
-            <>
-              The node that opens it can ask to join {name}
-              {until && (
-                <span title={fullTime(invitation.expiresAt)}> until {until}</span>
-              )}
-              . It works for one node; you approve its request here.
-            </>
-          )}
-        </p>
-        <div className="flex justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={onAnother}>
-            Create another
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onDone}>
-            Done
-          </Button>
-        </div>
+    <>
+      <div className="flex min-w-0 items-center gap-2">
+        <code
+          aria-label="Invitation link"
+          className="min-w-0 flex-1 truncate rounded-md bg-muted px-2.5 py-1.5 font-mono text-xs select-all"
+          title={invitation.link}
+        >
+          {invitation.link}
+        </code>
+        <Button
+          size="sm"
+          className="shrink-0"
+          disabled={expired}
+          onClick={() => copy(invitation.link)}
+        >
+          {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+          {copied ? "Copied" : "Copy link"}
+        </Button>
       </div>
-    </FieldRows>
+      <p className="text-xs text-muted-foreground">
+        {expired ? (
+          <>
+            This invitation expired
+            {until && <span title={fullTime(invitation.expiresAt)}> at {until}</span>}.
+            Create another to send.
+          </>
+        ) : (
+          <>
+            The node that opens it can ask to join {name}
+            {until && (
+              <span title={fullTime(invitation.expiresAt)}> until {until}</span>
+            )}
+            . It works for one node; you approve its request here.
+          </>
+        )}
+      </p>
+      <Button size="sm" variant="outline" className="w-fit" onClick={onAnother}>
+        Create another
+      </Button>
+    </>
   );
 }
 
