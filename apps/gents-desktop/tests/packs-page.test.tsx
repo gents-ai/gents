@@ -355,6 +355,30 @@ describe("the Packs page", () => {
     );
   });
 
+  it("updates every pack that has an update, one after another", async () => {
+    const updated: string[] = [];
+    let running = 0;
+    show(undefined, {
+      listInstalledPacks: async () => ({
+        packs: [
+          research,
+          { ...research, pack: "acme/notes" },
+          { ...research, pack: "acme/current", latest: "1.0.0", outdated: false },
+        ],
+      }),
+      updatePack: async (pack: string) => {
+        expect(running).toBe(0);
+        running += 1;
+        await Promise.resolve();
+        updated.push(pack);
+        running -= 1;
+      },
+    });
+    await screen.findByRole("list", { name: "Installed packs" });
+    fireEvent.click(screen.getByRole("button", { name: "Update all" }));
+    await waitFor(() => expect(updated).toEqual([RESEARCH, "acme/notes"]));
+  });
+
   it("says a registry pack has no version yet, in place of Install", async () => {
     show(undefined, {
       searchPacks: async () => ({
