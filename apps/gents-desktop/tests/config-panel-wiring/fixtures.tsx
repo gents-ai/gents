@@ -384,5 +384,6 @@ export const bootstrap: BootstrapSummary = {
   diagnosticsHint: "native logging",
   nodeHomeExists: true,
   clientStateExists: false,
+  localSetupUnfinished: false,
   savedPeers: [],
 };

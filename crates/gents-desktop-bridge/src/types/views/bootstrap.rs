@@ -55,6 +55,9 @@ pub struct DesktopBootstrapSummary {
     pub diagnostics_hint: String,
     pub node_home_exists: bool,
     pub client_state_exists: bool,
+    /// The configured home holds a committed node name but never served or
+    /// paired, so setup can offer to continue it or start over.
+    pub local_setup_unfinished: bool,
     pub saved_peers: Vec<SavedPeerView>,
 }
 

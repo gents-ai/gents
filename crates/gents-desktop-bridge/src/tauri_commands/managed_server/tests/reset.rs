@@ -40,6 +40,7 @@ fn archive_moves_the_home_and_client_state_to_a_sibling_backup_and_spares_other_
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -151,6 +152,7 @@ fn delete_removes_only_the_home_and_client_state_it_previewed() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -203,6 +205,7 @@ fn keeping_the_home_is_a_preview_that_touches_nothing() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let _ = plan.preview();
@@ -227,6 +230,7 @@ fn starting_fresh_from_a_refused_client_store_retires_its_paired_home_before_rel
         &desktop,
         not_the_user_home(),
         ClientBinding::BoundToHome,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -269,7 +273,8 @@ fn orphaned_client_state_is_archived_without_touching_any_home() {
             None,
             &desktop,
             not_the_user_home(),
-            ClientBinding::Unbound
+            ClientBinding::Unbound,
+            false
         )
         .is_err(),
         "healthy client state alone is not retired"
@@ -281,6 +286,7 @@ fn orphaned_client_state_is_archived_without_touching_any_home() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Orphaned,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -594,6 +600,7 @@ fn a_refused_client_store_alone_retires_only_client_state() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -640,6 +647,7 @@ fn backups_user_files_and_unknown_homes_are_retained_and_shown() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -682,6 +690,7 @@ fn a_confirmation_authorizes_only_the_previewed_set() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap()
     .preview();
@@ -694,6 +703,7 @@ fn a_confirmation_authorizes_only_the_previewed_set() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     for (supplied, disposition) in [
@@ -743,6 +753,7 @@ fn delete_removes_only_this_homes_key_and_keeps_other_keys() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let preview = plan.preview();

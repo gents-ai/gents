@@ -505,6 +505,13 @@ impl LiveBridgeFixture {
             diagnostics_hint: gents::runtime::native_logging::diagnostics_hint().to_string(),
             node_home_exists: self.node_home.exists(),
             client_state_exists: self.desktop_paths.client_state_exists(),
+            local_setup_unfinished: gents_desktop_core::home_reset::local_setup_unfinished(
+                &self.node_home,
+                non_empty_clone(&self.init_summary.node_did).as_deref(),
+                self.bootstrap_saved_peers
+                    .iter()
+                    .map(|peer| peer.node_did.as_str()),
+            ),
             saved_peers: self.bootstrap_saved_peers.clone(),
         }
     }
