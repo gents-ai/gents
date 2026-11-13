@@ -174,51 +174,11 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "content": "make research the default",
         "lifecycle_state": "completed"
     });
-    let snapshot_data = |default_agent_did: &str| {
-        let mut data = serde_json::json!({
-            "nodes": [{
-                "node_did": NODE_DID,
-                "display_name": "Amy",
-                "enabled": true
-            }],
-            "default_agent_selections": [{
-                "node_did": NODE_DID,
-                "default_agent_did": default_agent_did
-            }]
-        });
-        for key in [
-            "agents",
-            "runtimes",
-            "node_readiness",
-            "requests",
-            "mailbox_items",
-            "goals",
-            "sessions",
-            "tools",
-            "contexts",
-            "compactions",
-            "triggers",
-            "tasks",
-            "schedules",
-            "skills",
-            "inference_backends",
-            "backend_observations",
-            "inference_profiles",
-            "inference_sampling",
-            "inference_execution",
-            "tool_service_registries",
-            "event_sources",
-            "agent_targets",
-            "datastore_tool_surfaces",
-        ] {
-            data[key] = serde_json::json!([]);
-        }
-        data
-    };
     let runtime_default = Arc::new(std::sync::Mutex::new("did:test:hosted-amy:default"));
     let store = core.stores().ensure(NODE_DID);
     let response_request = completed_request.clone();
     let response_session = serde_json::json!({
+        "_docID": "remote-terminal-session-doc",
         "session_id": "session-terminal-config",
         "node_did": NODE_DID,
         "requester_did": NODE_DID,
@@ -226,6 +186,9 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "created_at": "2026-07-24T00:00:00Z"
     });
     let served_default = Arc::clone(&runtime_default);
+    let terminal = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fencing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (served_terminal, served_fencing) = (Arc::clone(&terminal), Arc::clone(&fencing));
     Mock::given(method("POST"))
         .and(path("/api/v0/tx"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -241,26 +204,34 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     Mock::given(method("POST"))
         .and(path("/api/v0/graphql"))
         .respond_with(move |request: &wiremock::Request| {
-            let body = String::from_utf8_lossy(&request.body);
-            let data = if body.contains("DesktopSelectedSession") {
-                serde_json::json!({"AgentSession": [response_session.clone()]})
-            } else if body.contains("DesktopSelectedRequest") {
-                serde_json::json!({"AgentRequest": [response_request.clone()]})
-            } else if body.contains("DesktopSessionRequestSeeds") {
-                // Invalidate the captured read while a later owner query is in
-                // flight so the selected patch must be rejected at publication.
+            use std::sync::atomic::Ordering;
+            let body: serde_json::Value = request.body_json().unwrap();
+            let query = body["query"].as_str().unwrap_or_default();
+            // Invalidate the captured read while an owner query of the selected
+            // request is in flight so its patch must be rejected at publication.
+            if served_fencing.load(Ordering::SeqCst) && query.contains(": AgentRequest(") {
                 store.invalidate_projection(true);
-                serde_json::json!({"seeds_0": [], "newest_0": []})
-            } else if body.contains("RequestDependencies") {
-                serde_json::json!({"r0": []})
-            } else if body.contains("DesktopRequestSessionContext") {
-                serde_json::json!({"goals_0": []})
-            } else if body.contains("DesktopSnapshot") {
-                snapshot_data(*served_default.lock().unwrap())
-            } else {
-                serde_json::json!({})
-            };
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": data}))
+            }
+            let mut rows = serde_json::json!({
+                "Node": [{
+                    "_docID": "remote-node-doc",
+                    "node_did": NODE_DID,
+                    "display_name": "Amy",
+                    "enabled": true
+                }],
+                "DefaultAgentSelection": [{
+                    "_docID": "remote-selection-doc",
+                    "node_did": NODE_DID,
+                    "default_agent_did": *served_default.lock().unwrap()
+                }],
+            });
+            if served_terminal.load(Ordering::SeqCst) {
+                rows["AgentSession"] = serde_json::json!([response_session.clone()]);
+                rows["AgentRequest"] = serde_json::json!([response_request.clone()]);
+            }
+            ResponseTemplate::new(200).set_body_json(
+                gents_store::test_support::wire_database::answer(&rows, query),
+            )
         })
         .mount(&server)
         .await;
@@ -283,17 +254,21 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
 
     // The terminal request changed the runtime's default Agent.
     *runtime_default.lock().unwrap() = "did:test:hosted-amy:research";
+    terminal.store(true, std::sync::atomic::Ordering::SeqCst);
+    fencing.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut updates = core.store_updates();
-    assert!(
-        core.refresh_local_request(
+    let refreshed = core
+        .refresh_local_request(
             NODE_DID,
             "session-terminal-config",
             Some(REQUEST_ID),
             None,
             &[],
         )
-        .await?
-        .is_none(),
+        .await?;
+    fencing.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        refreshed.is_none(),
         "the in-flight request-event fence must reject direct publication"
     );
     timeout(Duration::from_secs(5), async {
