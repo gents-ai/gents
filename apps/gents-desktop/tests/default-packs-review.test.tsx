@@ -90,7 +90,7 @@ describe("the starter packs card", () => {
     renderIn(local(api), <StarterPacksCard />);
     const dialog = await card();
     expect(within(dialog).getByText("Starter packs")).toBeInTheDocument();
-    expect(within(dialog).getByText("They come with Gents.")).toBeTruthy();
+    expect(within(dialog).getByText("The packs the Engineer starts with. They come with Gents.")).toBeTruthy();
     const rows = within(within(dialog).getByRole("list", { name: "Starter packs" }))
       .getAllByRole("listitem")
       .filter((row) => row.parentElement?.getAttribute("aria-label"));
