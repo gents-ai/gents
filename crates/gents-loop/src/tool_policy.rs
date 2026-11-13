@@ -548,7 +548,16 @@ fn shell_join_display(argv: &[String]) -> String {
 
 #[cfg(test)]
 mod conformance {
-    use super::CommandExecutionMode;
+    use super::{CommandExecutionMode, WorkspaceAuthority};
+
+    #[test]
+    fn workspace_authorities_are_the_lean_binding_authorities() {
+        gents_lean_vocab::families::binding_authority_vocabulary::replay(&[
+            WorkspaceAuthority::ReadOnly,
+            WorkspaceAuthority::ReadWrite,
+            WorkspaceAuthority::Integrate,
+        ]);
+    }
 
     #[test]
     fn command_policy_execution_mode_meet_matches_lean() {

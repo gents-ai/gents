@@ -89,22 +89,46 @@ impl CycleFixture {
         .expect("the backend was not probed before the periodic interval");
     }
 
-    async fn scheduled(
-        &self,
-        health: &BackendHealthMap,
-        schedule: &mut ProbeSchedule,
-        periodic: bool,
-    ) -> ProbeCycleOutcome {
-        run_scheduled_backend_probe_cycle(
+    async fn grant_removal(&self) {
+        let admin = gents_store::config_client::ConfigAccess::local_as(
             self.db.node.clone(),
-            &reqwest::Client::new(),
-            health,
-            &probe_options(),
-            self.db.node_identity.did(),
-            Some((schedule, periodic)),
-            None,
-        )
-        .await
+            self.db.node_identity.did().parse().unwrap(),
+        );
+        let user = self.user.actor_did().unwrap().parse().unwrap();
+        for permission in [
+            gents_store::config_client::NodePermission::DocumentDelete,
+            gents_store::config_client::NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&user, permission)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn remove(&self, backend: &InferenceBackend) {
+        let plan = gents_documents::DesiredStateApplyPlan::new(Vec::new())
+            .unwrap()
+            .with_removals(vec![(
+                gents_store::collection::Collection::InferenceBackend,
+                backend.node_did.clone(),
+                backend.backend_id.clone(),
+            )])
+            .unwrap();
+        self.user
+            .transact_write("test.backend.remove", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
     }
 }
 
@@ -153,160 +177,6 @@ async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
         .await
         .expect("the prober did not cancel")
         .unwrap();
-    node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn scheduled_cycles_preserve_health_across_observations_and_unrelated_edits() {
-    let fixture = CycleFixture::new().await;
-    let node = fixture.db.node.clone();
-    let listener = ModelsListener::start();
-    let mut reachable = fixture.backend("reachable", listener.endpoint());
-    let failing = fixture.backend("failing", format!("{}/missing", listener.endpoint()));
-    fixture.seed(&reachable, "unknown").await;
-    fixture.seed(&failing, "unknown").await;
-    let health = BackendHealthMap::new();
-    let mut schedule = ProbeSchedule::default();
-    fixture.scheduled(&health, &mut schedule, true).await;
-    let reachable_before = health.get("reachable").await.unwrap();
-    let failing_before = health.get("failing").await.unwrap();
-    assert_modeled_probe(None, &reachable_before, "probeSuccess");
-    assert_modeled_probe(None, &failing_before, "probeFail");
-    let observation = fixture.observation(&reachable).await;
-    assert_eq!(observation.probe_status.as_deref(), Some("healthy"));
-    assert_eq!(observation.catalogs.len(), 1);
-
-    fixture.scheduled(&health, &mut schedule, false).await;
-    fixture
-        .runtime
-        .transact_write("test.health.catalog", |txn| {
-            let catalog = observation.catalogs[0].clone();
-            let reachable = &reachable;
-            Box::pin(async move {
-                crate::backends::registry::record_model_catalog_in_txn(txn, reachable, catalog)
-                    .await
-            })
-        })
-        .await
-        .unwrap();
-    crate::backends::registry::set_backend_probe_status_as(
-        &fixture.runtime,
-        &failing.node_did,
-        &failing.backend_id,
-        "healthy",
-    )
-    .await
-    .unwrap();
-    reachable.name = "Renamed".into();
-    reachable.tags = vec!["tagged".into()];
-    reachable.max_concurrent = Some(2);
-    fixture.seed(&reachable, "healthy").await;
-    fixture.scheduled(&health, &mut schedule, false).await;
-    assert_eq!(listener.requests(), 1);
-    assert_eq!(
-        health.get("reachable").await.unwrap().last_probe_at,
-        reachable_before.last_probe_at
-    );
-    let unchanged = health.get("failing").await.unwrap();
-    assert_eq!(unchanged.failure_count, failing_before.failure_count);
-    assert_eq!(unchanged.last_probe_at, failing_before.last_probe_at);
-
-    let replacement = ModelsListener::start();
-    reachable.endpoint = replacement.endpoint();
-    fixture.seed(&reachable, "healthy").await;
-    fixture.scheduled(&health, &mut schedule, false).await;
-    assert_eq!(replacement.requests(), 1);
-    assert_eq!(
-        health.get("failing").await.unwrap().last_probe_at,
-        failing_before.last_probe_at
-    );
-    fixture.scheduled(&health, &mut schedule, true).await;
-    assert_eq!(replacement.requests(), 2);
-    assert_modeled_probe(
-        Some(&failing_before),
-        &health.get("failing").await.unwrap(),
-        "probeFail",
-    );
-    node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() {
-    let fixture = CycleFixture::new().await;
-    let node = fixture.db.node.clone();
-    let listener = ModelsListener::start();
-    let mut value = fixture.backend("returning", format!("{}/missing", listener.endpoint()));
-    let health = BackendHealthMap::new();
-    let mut schedule = ProbeSchedule::default();
-    fixture.seed(&value, "unknown").await;
-    fixture.scheduled(&health, &mut schedule, true).await;
-    assert_modeled_probe(
-        None,
-        &health.get(&value.backend_id).await.unwrap(),
-        "probeFail",
-    );
-
-    value.enabled = false;
-    fixture.seed(&value, "unknown").await;
-    fixture.scheduled(&health, &mut schedule, false).await;
-    assert!(health.get(&value.backend_id).await.is_none());
-    assert!(!schedule.known.contains_key(&value.backend_id));
-    value.enabled = true;
-    fixture.seed(&value, "unknown").await;
-    fixture.scheduled(&health, &mut schedule, false).await;
-    assert_modeled_probe(
-        None,
-        &health.get(&value.backend_id).await.unwrap(),
-        "probeFail",
-    );
-
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        fixture.db.node_identity.did().parse().unwrap(),
-    );
-    let user = fixture.user.actor_did().unwrap().parse().unwrap();
-    for permission in [
-        gents_store::config_client::NodePermission::DocumentDelete,
-        gents_store::config_client::NodePermission::DacRelationDelete,
-    ] {
-        admin
-            .grant_node_permission(&user, permission)
-            .await
-            .unwrap();
-    }
-    let plan = gents_documents::DesiredStateApplyPlan::new(Vec::new())
-        .unwrap()
-        .with_removals(vec![(
-            gents_store::collection::Collection::InferenceBackend,
-            value.node_did.clone(),
-            value.backend_id.clone(),
-        )])
-        .unwrap();
-    fixture
-        .user
-        .transact_write("test.backend.remove", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-    fixture.scheduled(&health, &mut schedule, false).await;
-    assert!(health.get(&value.backend_id).await.is_none());
-    assert!(!schedule.known.contains_key(&value.backend_id));
-    fixture.seed(&value, "unknown").await;
-    fixture.scheduled(&health, &mut schedule, false).await;
-    assert_modeled_probe(
-        None,
-        &health.get(&value.backend_id).await.unwrap(),
-        "probeFail",
-    );
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -601,34 +471,6 @@ async fn cycle_never_probes_or_demotes_chatgpt_codex_backends() {
 }
 
 #[tokio::test]
-async fn cycle_drops_entries_for_backends_no_longer_enabled() {
-    let options = probe_options();
-    let client = reqwest::Client::new();
-    let health_map = BackendHealthMap::new();
-    health_map
-        .set_for_test("retired", BackendHealthState::Unhealthy, 5)
-        .await;
-
-    let fixture = CycleFixture::new().await;
-    let node = fixture.db.node.clone();
-    let listener = ModelsListener::start();
-    let backends = vec![fixture.backend("current", listener.endpoint())];
-    fixture.write(&backends[0]).await;
-    probe_backends_cycle(
-        &node,
-        &client,
-        &backends,
-        Utc::now(),
-        &health_map,
-        &options,
-        None,
-    )
-    .await;
-
-    assert!(health_map.get("retired").await.is_none());
-    assert!(health_map.get("current").await.is_some());
-}
-#[tokio::test]
 async fn probe_shutdown_cancels_pending_backend_without_pruning_or_failure() {
     use tokio::io::AsyncReadExt;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -700,78 +542,237 @@ async fn probe_shutdown_cancels_pending_backend_without_pruning_or_failure() {
     node.shutdown().await.expect("node shutdown");
 }
 
-#[tokio::test]
-async fn probe_shutdown_prevents_new_backend_probes_and_pruning() {
-    let fixture = CycleFixture::new().await;
-    let node = fixture.db.node.clone();
-    let health = BackendHealthMap::new();
-    health
-        .set_for_test("unobserved", BackendHealthState::Healthy, 0)
-        .await;
-    let cancel = CancellationToken::new();
-    cancel.cancel();
-    let outcome = probe_selected_backends(
-        &node,
-        &reqwest::Client::new(),
-        &[fixture.backend("pending", "http://127.0.0.1:1/v1".into())],
-        ProbeEnv {
-            now: Utc::now(),
-            health_map: &health,
-            options: &probe_options(),
-            cancel: Some(&cancel),
-        },
-        None,
-        None,
-    )
-    .await;
-    assert!(outcome.flipped.is_empty() && outcome.promotable.is_empty());
-    assert!(health.get("pending").await.is_none());
-    assert!(health.get("unobserved").await.is_some());
-    node.shutdown().await.expect("node shutdown");
+fn backend_index(backend_id: &str) -> u64 {
+    backend_id
+        .strip_prefix("backend-")
+        .and_then(|index| index.parse().ok())
+        .unwrap_or_else(|| panic!("unexpected backend id {backend_id}"))
+}
+
+fn backend_indexes(backend_ids: impl IntoIterator<Item = String>) -> Vec<u64> {
+    backend_ids
+        .into_iter()
+        .map(|backend_id| backend_index(&backend_id))
+        .collect()
+}
+
+async fn measured_entries(health: &BackendHealthMap) -> Vec<(u64, BackendHealthState, u64)> {
+    let mut entries = health
+        .snapshot()
+        .await
+        .into_values()
+        .map(|snapshot| {
+            (
+                backend_index(&snapshot.backend_id),
+                snapshot.state,
+                u64::from(snapshot.failure_count),
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.0);
+    entries
 }
 
 #[tokio::test]
 async fn cycle_retention_matches_the_lean_model() {
     let fixture = CycleFixture::new().await;
     let node = fixture.db.node.clone();
-    for case in gents_lean_vocab::families::backend_health_retention_cycle::cases() {
+    let listener = ModelsListener::start();
+    for case in gents_lean_vocab::families::backend_health_retention_cycle::cases::<
+        BackendHealthState,
+        String,
+    >() {
         let health = BackendHealthMap::new();
-        for id in &case.input.entries {
+        for entry in &case.input.entries {
             health
-                .set_for_test(format!("backend-{id}"), BackendHealthState::Healthy, 0)
+                .set_for_test(
+                    format!("backend-{}", entry.id),
+                    entry.state,
+                    u32::try_from(entry.failure_count).unwrap(),
+                )
                 .await;
         }
-        let backends = case
-            .input
-            .observed
-            .iter()
-            .map(|id| fixture.backend(&format!("backend-{id}"), "http://127.0.0.1:1/v1".into()))
-            .collect::<Vec<_>>();
+        let mut backends = Vec::new();
+        for wire in &case.input.backends {
+            let endpoint = match wire.target.as_str() {
+                "unreachable" => format!("{}/missing", listener.endpoint()),
+                _ => listener.endpoint(),
+            };
+            let mut backend = fixture.backend(&format!("backend-{}", wire.id), endpoint);
+            if wire.target == "node_oauth" {
+                backend.provider_kind =
+                    crate::backends::provider::BackendProviderKind::ClaudeCliSubscription;
+                backend.auth = gents_documents::BackendAuth::NodeOAuth { account_ref: None };
+            } else {
+                fixture
+                    .seed(
+                        &backend,
+                        if wire.status_unknown {
+                            "unknown"
+                        } else {
+                            "healthy"
+                        },
+                    )
+                    .await;
+            }
+            backends.push(backend);
+        }
         let cancel = CancellationToken::new();
         if case.input.cancelled {
             cancel.cancel();
         }
-        probe_selected_backends(
+        let options = BackendProberOptions {
+            failure_threshold_k: u32::try_from(case.input.threshold_k).unwrap(),
+            ..probe_options()
+        };
+        let outcome = probe_selected_backends(
             &node,
             &reqwest::Client::new(),
             &backends,
             ProbeEnv {
                 now: Utc::now(),
                 health_map: &health,
-                options: &probe_options(),
+                options: &options,
                 cancel: Some(&cancel),
             },
             None,
             None,
         )
         .await;
-        let mut retained = Vec::new();
-        for id in 0..3u64 {
-            if health.get(&format!("backend-{id}")).await.is_some() {
-                retained.push(id);
-            }
-        }
-        case.check(retained);
+        case.check(
+            gents_lean_vocab::families::backend_health_retention_cycle::CycleOutput {
+                entries: measured_entries(&health)
+                    .await
+                    .into_iter()
+                    .map(|(id, state, failure_count)| {
+                        gents_lean_vocab::families::backend_health_retention_cycle::EntryWire {
+                            id,
+                            state,
+                            failure_count,
+                        }
+                    })
+                    .collect(),
+                flipped: backend_indexes(outcome.flipped),
+                promotable: backend_indexes(outcome.promotable),
+            },
+        );
     }
     node.shutdown().await.expect("node shutdown");
+}
+
+#[tokio::test]
+async fn scheduled_cycles_match_the_lean_trace() {
+    for case in
+        gents_lean_vocab::families::backend_health_retention_trace::cases::<BackendHealthState>()
+    {
+        let fixture = CycleFixture::new().await;
+        fixture.grant_removal().await;
+        let node = fixture.db.node.clone();
+        for bootstrap in crate::backends::registry::list_enabled_backends_for_runtime(
+            &node,
+            fixture.db.node_identity.did(),
+        )
+        .await
+        .unwrap()
+        {
+            fixture
+                .write(&InferenceBackend {
+                    enabled: false,
+                    ..bootstrap
+                })
+                .await;
+        }
+        // A revision names the endpoint alone, so a revision change is an endpoint change.
+        let listeners = [ModelsListener::start(), ModelsListener::start()];
+        let health = BackendHealthMap::new();
+        let mut schedule = ProbeSchedule::default();
+        let options = BackendProberOptions {
+            failure_threshold_k: u32::try_from(case.input.threshold_k).unwrap(),
+            ..probe_options()
+        };
+        let mut present: Vec<InferenceBackend> = Vec::new();
+        let mut observations = Vec::new();
+        for (index, step) in case.input.steps.iter().enumerate() {
+            let mut current = Vec::new();
+            for wire in &step.backends {
+                let listener = &listeners[usize::try_from(wire.revision).unwrap()];
+                let endpoint = if wire.reachable {
+                    listener.endpoint()
+                } else {
+                    format!("{}/missing", listener.endpoint())
+                };
+                let mut backend = fixture.backend(&format!("backend-{}", wire.id), endpoint);
+                backend.enabled = wire.enabled;
+                backend.name = format!("step-{index}");
+                backend.tags = vec![format!("step-{index}")];
+                backend.max_concurrent = Some(1 + i64::try_from(index).unwrap());
+                fixture.write(&backend).await;
+                current.push(backend);
+            }
+            for removed in present.iter().filter(|backend| {
+                !current
+                    .iter()
+                    .any(|now| now.backend_id == backend.backend_id)
+            }) {
+                fixture.remove(removed).await;
+            }
+            present = current;
+            let before = health.snapshot().await;
+            let outcome = run_scheduled_backend_probe_cycle(
+                node.clone(),
+                &reqwest::Client::new(),
+                &health,
+                &options,
+                fixture.db.node_identity.did(),
+                Some((&mut schedule, step.periodic)),
+                None,
+            )
+            .await;
+            let mut probed = health
+                .snapshot()
+                .await
+                .into_values()
+                .filter(|after| {
+                    before
+                        .get(&after.backend_id)
+                        .is_none_or(|previous| previous.last_probe_at != after.last_probe_at)
+                })
+                .map(|after| backend_index(&after.backend_id))
+                .collect::<Vec<_>>();
+            probed.sort_unstable();
+            let mut known = backend_indexes(schedule.known.keys().cloned());
+            known.sort_unstable();
+            let mut documents = Vec::new();
+            for backend in &present {
+                let observation = fixture.observation(backend).await;
+                documents.push(gents_lean_vocab::families::backend_health_retention_trace::DocumentObservation {
+                    id: backend_index(&backend.backend_id),
+                    healthy: observation.probe_status.as_deref() == Some("healthy"),
+                    catalogued: !observation.catalogs.is_empty(),
+                });
+            }
+            observations.push(
+                gents_lean_vocab::families::backend_health_retention_trace::StepOutput {
+                    entries: measured_entries(&health)
+                        .await
+                        .into_iter()
+                        .map(|(id, state, failure_count)| {
+                            gents_lean_vocab::families::backend_health_retention_trace::EntryWire {
+                                id,
+                                state,
+                                failure_count,
+                            }
+                        })
+                        .collect(),
+                    probed,
+                    known,
+                    flipped: backend_indexes(outcome.flipped),
+                    promotable: backend_indexes(outcome.promotable),
+                    documents,
+                },
+            );
+        }
+        case.check(observations);
+        node.shutdown().await.expect("node shutdown");
+    }
 }

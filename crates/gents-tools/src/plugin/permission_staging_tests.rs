@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 struct World {
@@ -28,36 +29,72 @@ fn allowed_file(home: &Path) -> PathBuf {
     home.join(gents_store::local::home::ALLOWED_DIRS_FILE_NAME)
 }
 
+fn staged_object(directory: &Path) -> PathBuf {
+    std::fs::read_dir(directory)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+}
+
 #[test]
-fn staged_permission_objects_are_rejected_by_native_paths_and_plugin_mounts() {
-    use std::io::Write;
+fn staged_objects_refusal_matches_the_lean_model() {
+    gents_lean_vocab::families::staged_permission_objects_refusal::replay::<String>(|i| {
+        let world = world();
+        let directory = world
+            .gents
+            .join(gents_store::local::home::PERMISSION_STAGING_DIR_NAME);
+        let context = crate::native::ToolContext::new(world.root.clone(), false).unwrap();
+        let mut observed = None;
+        gents_pack::plugin::allowed::write_permission_file(
+            &world.gents,
+            &allowed_file(&world.gents),
+            |output| {
+                output.write_all(b"new permissions")?;
+                let (target, mount) = match i.object.as_str() {
+                    "staged" => (staged_object(&directory), directory.clone()),
+                    "staged_alias" => {
+                        let alias = world.root.join("work/permission-alias");
+                        std::fs::hard_link(staged_object(&directory), &alias)?;
+                        (alias, world.root.join("work"))
+                    }
+                    "ordinary" => {
+                        let ordinary = world.gents.join("plugins/source.txt");
+                        std::fs::write(&ordinary, "plugin source")?;
+                        (ordinary, world.gents.join("plugins"))
+                    }
+                    other => panic!("unknown staged object {other}"),
+                };
+                let text = target.to_str().unwrap();
+                let resolved = context.resolve_path(text);
+                observed = Some(
+                    gents_lean_vocab::families::staged_permission_objects_refusal::RefusalOutput {
+                        resolve_refused: resolved.is_err(),
+                        resolved_verbatim: resolved
+                            .as_ref()
+                            .is_ok_and(|path| path == &target),
+                        allow_create_refused: context.resolve_path_allow_create(text).is_err(),
+                        mount_refused: gents_pack::plugin::allowed::ensure_mount_safe(&mount)
+                            .is_err(),
+                    },
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+        observed.unwrap()
+    });
 
     let world = world();
     let directory = world
         .gents
         .join(gents_store::local::home::PERMISSION_STAGING_DIR_NAME);
-    let context = crate::native::ToolContext::new(world.root.clone(), false).unwrap();
     gents_pack::plugin::allowed::write_permission_file(
         &world.gents,
         &allowed_file(&world.gents),
         |output| {
             output.write_all(b"new permissions")?;
-            let staged = std::fs::read_dir(&directory)?.next().unwrap()?.path();
-            let alias = world.root.join("work/permission-alias");
-            std::fs::hard_link(&staged, &alias)?;
-            assert!(context.resolve_path(staged.to_str().unwrap()).is_err());
-            assert!(context.resolve_path(alias.to_str().unwrap()).is_err());
-            assert!(context
-                .resolve_path_allow_create(staged.to_str().unwrap())
-                .is_err());
-            assert!(context
-                .resolve_path_allow_create(alias.to_str().unwrap())
-                .is_err());
-            assert!(gents_pack::plugin::allowed::ensure_mount_safe(&directory).is_err());
-            assert!(
-                gents_pack::plugin::allowed::ensure_mount_safe(&world.root.join("work")).is_err()
-            );
-            std::fs::remove_file(alias)?;
             Ok(())
         },
     )
@@ -67,10 +104,4 @@ fn staged_permission_objects_are_rejected_by_native_paths_and_plugin_mounts() {
         b"new permissions"
     );
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
-    let ordinary = world.gents.join("plugins/source.txt");
-    std::fs::write(&ordinary, "plugin source").unwrap();
-    assert_eq!(
-        context.resolve_path(ordinary.to_str().unwrap()).unwrap(),
-        ordinary
-    );
 }

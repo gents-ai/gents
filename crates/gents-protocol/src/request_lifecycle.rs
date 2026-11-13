@@ -310,4 +310,37 @@ mod conformance {
     fn lifecycle_states_are_the_lean_request_states() {
         gents_lean_vocab::families::request_state_vocabulary::replay(&RequestLifecycleState::ALL);
     }
+
+    #[test]
+    fn causal_hop_step_admission_matches_lean_model() {
+        use super::{next_request_hop, request_hop_within_bound, RequestHopCause};
+        use gents_lean_vocab::families::causal_hop_contracts_step_admission::StepOutput;
+        gents_lean_vocab::families::causal_hop_contracts_step_admission::replay(|case| {
+            let cause = match case.cause.as_str() {
+                "root" => RequestHopCause::Root,
+                "cross_session" => RequestHopCause::CrossSession {
+                    cause_hop: u32::try_from(
+                        case.cause_hop
+                            .expect("cross-session step names its cause hop"),
+                    )
+                    .expect("cause hop fits a request hop"),
+                },
+                "return" => RequestHopCause::Return,
+                "continuation" => RequestHopCause::Continuation,
+                other => panic!("unknown Lean causal-hop cause {other:?}"),
+            };
+            let hop = next_request_hop(
+                cause,
+                u32::try_from(case.own_predecessor_hop).expect("predecessor hop fits u32"),
+            );
+            StepOutput {
+                hop: hop.into(),
+                admitted: request_hop_within_bound(
+                    case.max_request_hop
+                        .map(|bound| u32::try_from(bound).expect("bound fits u32")),
+                    hop,
+                ),
+            }
+        });
+    }
 }

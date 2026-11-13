@@ -695,13 +695,61 @@ async fn interrupting_a_before_hook_skips_the_agent_and_still_cleans_up() {
 }
 
 #[tokio::test]
-async fn a_request_bound_to_a_missing_task_fails_closed() {
-    let harness = Harness::new().await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert!(reason(&row).contains("no longer exists"), "{row}");
+async fn task_bindings_follow_the_lean_model() {
+    use gents_toolcalls::call::task_hooks::TaskBindingRefusal;
+    for case in gents_lean_vocab::families::task_hooks_hookless_bound_request::cases::<
+        String,
+        gents_protocol::request_lifecycle::RequestLifecycleState,
+        String,
+    >() {
+        let harness = Harness::new().await;
+        if case.input.binding != "missing" {
+            harness.install_task(json!([])).await;
+        }
+        let request = harness.create_request(Lineage::ManualFire, false).await;
+        if case.input.binding == "disabled" {
+            harness
+                .apply(vec![(
+                    Collection::Task,
+                    json!({
+                        "node_did": harness.owner(),
+                        "task_id": TASK_ID,
+                        "agent_did": harness.agent_config.agent_did,
+                        "prompt_template": "run the gate",
+                        "enabled": false,
+                    }),
+                )])
+                .await;
+        }
+        let row = harness.run(request, false).await;
+        let refusals = [
+            (
+                "missing",
+                TaskBindingRefusal::Missing {
+                    task_id: TASK_ID.into(),
+                },
+            ),
+            (
+                "disabled",
+                TaskBindingRefusal::Disabled {
+                    task_id: TASK_ID.into(),
+                },
+            ),
+        ];
+        let refusal = refusals
+            .iter()
+            .filter(|(_, refusal)| reason(&row).contains(&refusal.to_string()))
+            .map(|(name, _)| (*name).to_owned())
+            .next();
+        case.check(
+            gents_lean_vocab::families::task_hooks_hookless_bound_request::BoundRequest {
+                agent_ran: harness.calls() > 0,
+                request_state: serde_json::from_value(row["lifecycle_state"].clone())
+                    .expect("persisted lifecycle state"),
+                refusal,
+            },
+        );
+    }
 }
 
 async fn install_workspace(harness: &Harness, host_path: &Path) {
@@ -1114,29 +1162,6 @@ async fn shutdown_before_any_hook_launches_leaves_no_record_to_recover() {
         )
         .await;
     assert!(outcome.task_hooks.unwrap() == 0);
-}
-
-#[tokio::test]
-async fn a_request_bound_to_a_disabled_hookless_task_fails_closed() {
-    let harness = Harness::new().await;
-    harness.install_task(json!([])).await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    harness
-        .apply(vec![(
-            Collection::Task,
-            json!({
-                "node_did": harness.owner(),
-                "task_id": TASK_ID,
-                "agent_did": harness.agent_config.agent_did,
-                "prompt_template": "run the gate",
-                "enabled": false,
-            }),
-        )])
-        .await;
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert!(reason(&row).contains("disabled"), "{row}");
 }
 
 #[tokio::test]

@@ -358,6 +358,7 @@ pub fn context(
             .map(|w| (w.base.clone(), w.cwd.clone()))
             .collect(),
         script_digest: c.script_digest.clone(),
+        caller_node_did: None,
         adoption_facts: host_facts(&c.adoption_facts),
         caller_scope: process_scope(&c.caller_scope),
         control_targets: c

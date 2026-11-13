@@ -11,6 +11,10 @@ use crate::request::lifecycle::queue::drain_automated_wakeups_in_txn;
 use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 mod scoped;
+
+pub const INTERRUPT_DRAIN_REASON: &str =
+    "automated wake-up drained because active request was interrupted";
+
 pub use scoped::fetch_interrupt_requested_at_scoped;
 pub use scoped::observe_interrupt_requested_at_with_access;
 
@@ -194,7 +198,7 @@ async fn interrupt_request_matching_in_txn(
         session_id,
         node_did,
         row["requester_did"].as_str(),
-        "automated wake-up drained because active request was interrupted",
+        INTERRUPT_DRAIN_REASON,
     )
     .await
 }

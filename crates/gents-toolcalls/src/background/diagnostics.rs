@@ -636,32 +636,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_epoch_surfaces_backoff_and_unacknowledged_notification() {
-        let now = DateTime::parse_from_rfc3339("2026-08-12T00:00:06Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let diagnostics = summarize(
-            vec![wake("wake-1", None, "failed", 0, 3)],
-            vec![notification("wake-1", "child-1")],
-            head("wake-1"),
-            now,
-        );
-
-        assert_eq!(diagnostics.pending_notifications, 1);
-        assert_eq!(diagnostics.acknowledged_notifications, 0);
-        assert_eq!(diagnostics.stranded_notifications, 0);
-        assert_eq!(diagnostics.oldest_pending_age_seconds, Some(6));
-        let epoch = &diagnostics.epochs[0];
-        assert_eq!(epoch.state, "retry_backoff");
-        assert_eq!(epoch.attempt_count, 1);
-        assert_eq!(epoch.last_failure.as_deref(), Some("provider unavailable"));
-        assert_eq!(
-            epoch.next_retry_at.as_deref(),
-            Some("2026-08-12T00:00:10+00:00")
-        );
-    }
-
-    #[test]
     fn completed_retry_acknowledges_the_whole_epoch() {
         let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
             .unwrap()
@@ -684,23 +658,6 @@ mod tests {
         assert_eq!(epoch.active_request_id, "wake-2");
         assert_eq!(epoch.attempt_count, 2);
         assert_eq!(epoch.acknowledged_notification_count, 1);
-    }
-
-    #[test]
-    fn exhausted_epoch_is_stranded() {
-        let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let diagnostics = summarize(
-            vec![wake("wake-1", None, "failed", 3, 3)],
-            vec![notification("wake-1", "child-1")],
-            head("wake-1"),
-            now,
-        );
-
-        assert_eq!(diagnostics.stranded_notifications, 1);
-        assert_eq!(diagnostics.epochs[0].state, "exhausted");
-        assert_eq!(diagnostics.epochs[0].next_retry_at, None);
     }
 
     #[test]
@@ -740,38 +697,93 @@ mod tests {
     }
 
     #[test]
-    fn failed_wake_displaced_by_later_turn_is_stranded_not_retrying() {
-        let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
+    fn epoch_matches_lean() {
+        gents_lean_vocab::families::background_diagnostics_epoch::replay::<String>(|case| {
+            let mut failed = wake(
+                "wake-1",
+                None,
+                "failed",
+                case.retry_count as i64,
+                case.max_retries as i64,
+            );
+            failed.failure_reason = Some(case.failure_reason.clone());
+            let created = DateTime::parse_from_rfc3339(failed.created_at.as_deref().unwrap())
+                .unwrap()
+                .with_timezone(&Utc);
+            let terminalized = DateTime::parse_from_rfc3339(
+                failed.terminalized_at.as_deref().unwrap(),
+            )
             .unwrap()
             .with_timezone(&Utc);
-        let diagnostics = summarize(
-            vec![wake("wake-1", None, "failed", 0, 3)],
-            vec![notification("wake-1", "child-1")],
-            head("later-interactive-request"),
-            now,
-        );
-
-        assert_eq!(diagnostics.pending_notifications, 1);
-        assert_eq!(diagnostics.stranded_notifications, 1);
-        let epoch = &diagnostics.epochs[0];
-        assert_eq!(epoch.state, "retry_ineligible_not_latest");
-        assert_eq!(epoch.next_retry_at, None);
-        assert_eq!(epoch.pending_notification_keys.len(), 1);
+            let now = created + chrono::Duration::seconds(case.age_seconds as i64);
+            let notifications = (0..case.notifications)
+                .map(|index| notification("wake-1", &format!("child-{index}")))
+                .collect();
+            let head_request = if case.is_latest {
+                "wake-1"
+            } else {
+                "later-interactive-request"
+            };
+            let diagnostics = summarize(vec![failed], notifications, head(head_request), now);
+            let epoch = &diagnostics.epochs[0];
+            gents_lean_vocab::families::background_diagnostics_epoch::EpochOutput {
+                state: epoch.state.clone(),
+                attempt_count: epoch.attempt_count as u64,
+                pending_notifications: diagnostics.pending_notifications as u64,
+                acknowledged_notifications: diagnostics.acknowledged_notifications as u64,
+                stranded_notifications: diagnostics.stranded_notifications as u64,
+                pending_notification_keys: epoch.pending_notification_keys.len() as u64,
+                pending_age_seconds: epoch.pending_age_seconds.map(|age| age as u64),
+                oldest_pending_age_seconds: diagnostics
+                    .oldest_pending_age_seconds
+                    .map(|age| age as u64),
+                last_failure: epoch.last_failure.clone(),
+                next_retry_delay_seconds: epoch.next_retry_at.as_deref().map(|at| {
+                    let at = DateTime::parse_from_rfc3339(at).unwrap().with_timezone(&Utc);
+                    (at - terminalized).num_seconds() as u64
+                }),
+            }
+        });
     }
+
     #[test]
-    fn retry_eligibility_requires_the_exact_physical_request_head() {
-        let failed = wake("same-logical-id", None, "failed", 0, 3);
-        let authoritative_heads =
-            BTreeMap::from([("session-1".to_owned(), "different-physical-row".to_owned())]);
-        let diagnostics = summarize(
-            vec![failed],
-            vec![notification("same-logical-id", "child-1")],
-            authoritative_heads,
-            Utc::now(),
+    fn failed_epoch_matches_lean() {
+        gents_lean_vocab::families::background_diagnostics_failed_epoch::replay::<String, String>(
+            |case: &gents_lean_vocab::families::background_diagnostics_failed_epoch::EpochInput<
+                String,
+            >| {
+                let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc);
+                let heads = match case.head.as_str() {
+                    "same_row" => head("same-logical-id"),
+                    "different_row" => BTreeMap::from([(
+                        "session-1".to_owned(),
+                        "different-physical-row".to_owned(),
+                    )]),
+                    _ => BTreeMap::new(),
+                };
+                let failed = wake(
+                    "same-logical-id",
+                    None,
+                    "failed",
+                    i64::try_from(case.retry_count).unwrap(),
+                    i64::try_from(case.max_retries).unwrap(),
+                );
+                let diagnostics = summarize(
+                    vec![failed],
+                    vec![notification("same-logical-id", "child-1")],
+                    heads,
+                    now,
+                );
+                let epoch = &diagnostics.epochs[0];
+                gents_lean_vocab::families::background_diagnostics_failed_epoch::EpochOutput {
+                    state: epoch.state.clone(),
+                    next_retry_scheduled: epoch.next_retry_at.is_some(),
+                    stranded_notifications: diagnostics.stranded_notifications as u64,
+                }
+            },
         );
-        assert_eq!(diagnostics.epochs[0].state, "retry_ineligible_not_latest");
-        assert_eq!(diagnostics.epochs[0].next_retry_at, None);
-        assert_eq!(diagnostics.stranded_notifications, 1);
     }
 
     #[test]
