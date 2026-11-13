@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Settings2, X } from "lucide-react";
 import type {
   DesktopSessionSnapshot,
   SessionContextDetails,
@@ -280,11 +280,16 @@ function compactionReason(reason: string) {
   }
 }
 
+export function contextTone(used: number, threshold: number) {
+  if (threshold <= 0) return "";
+  const share = used / threshold;
+  return share >= 0.95 ? "text-destructive" : share >= 0.75 ? "text-warning" : "";
+}
+
 function ContextRing({ used, threshold }: { used: number; threshold: number }) {
   const r = 7;
   const c = 2 * Math.PI * r;
   const share = threshold > 0 ? Math.min(1, used / threshold) : 0;
-  const nearCompaction = threshold > 0 && used >= threshold;
   return (
     <svg
       viewBox="0 0 20 20"
@@ -311,7 +316,7 @@ function ContextRing({ used, threshold }: { used: number; threshold: number }) {
         strokeWidth="2"
         strokeLinecap="round"
         strokeDasharray={`${share * c} ${c}`}
-        className={nearCompaction ? "text-brand" : ""}
+        className={contextTone(used, threshold)}
       />
     </svg>
   );
@@ -322,8 +327,10 @@ export function SessionContext({
   compact = false,
   loadDetails,
   onOpenCompaction,
+  compactionSettings,
 }: {
   context: DesktopSessionSnapshot["context"];
+  compactionSettings?: string;
   compact?: boolean;
   loadDetails?: (input: LastRequest) => Promise<SessionContextDetails | null>;
   /* shows a compaction where it happened in the transcript */
@@ -467,7 +474,12 @@ export function SessionContext({
         onMouseLeave={hoverClose}
       >
         <ContextRing used={used ?? 0} threshold={threshold} />
-        <span className="tabular-nums">{percentageLabel}</span>
+        <span
+          data-testid="context-percentage"
+          className={cn("tabular-nums", contextTone(used ?? 0, threshold))}
+        >
+          {percentageLabel}
+        </span>
         {!compact && (
           <span className="text-xs text-muted-foreground" title={compactionLabel}>
             {sessionCompactionCount == null
@@ -634,6 +646,17 @@ export function SessionContext({
                   );
                 })}
             </ul>
+          )}
+          {compactionSettings && (
+            <a
+              href={compactionSettings}
+              data-testid="compaction-settings"
+              onClick={() => onOpenChange(false)}
+              className="inline-flex items-center gap-1.5 justify-self-start text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground hover:decoration-foreground"
+            >
+              <Settings2 className="size-3.5" />
+              Compaction settings
+            </a>
           )}
         </div>
       </PopoverContent>

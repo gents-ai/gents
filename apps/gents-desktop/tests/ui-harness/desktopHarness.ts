@@ -410,6 +410,85 @@ function automatedInputItems(): RenderedTimelineItem[] {
 }
 
 /* commands left running in the background, and ones that have ended each way */
+function answeredItems(): RenderedTimelineItem[] {
+  const answered = (
+    itemKey: string,
+    docId: string,
+    prompt: string,
+    sequence: number,
+    answer: { option_ids: string[]; free_text?: string; skip?: boolean },
+  ): RenderedTimelineItem[] => [
+    {
+      kind: "toolGroup" as const,
+      itemKey: `${itemKey}-ask`,
+      messageSequence: sequence,
+      tools: [
+        {
+          itemKey: `${itemKey}-tool`,
+          toolName: "file_mailbox_item",
+          statusKind: "success",
+          requestId: "request-intro",
+          toolCallId: `call-${itemKey}`,
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
+          presentation: {
+            kind: "generic" as const,
+            summary: null,
+            input: JSON.stringify({ kind: "ask", title: prompt, question: { prompt } }),
+            output: JSON.stringify({
+              item: {
+                _docID: docId,
+                kind: "ask",
+                action: "start_request",
+                payload: JSON.stringify({
+                  version: 2,
+                  prompt,
+                  options: [
+                    { id: "tea", label: "Tea" },
+                    { id: "coffee", label: "Coffee" },
+                    { id: "water", label: "Sparkling water" },
+                  ],
+                  multi_select: true,
+                  allow_free_text: true,
+                  optional: true,
+                }),
+              },
+              outcome: "created",
+            }),
+          },
+        },
+      ],
+    } as unknown as RenderedTimelineItem,
+    {
+      kind: "userMessage" as const,
+      itemKey: `${itemKey}-reply`,
+      requestId: `request-${itemKey}`,
+      ownsTurn: true,
+      sequence: sequence + 1,
+      content: "answer",
+      timestamp: "2026-06-16T20:05:00Z",
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+      questionReply: { sourceDocId: docId, answer },
+    } as unknown as RenderedTimelineItem,
+  ];
+  return [
+    ...answered(
+      "answer-one",
+      "item-answer-one",
+      "Which of these do you like best? (This is a test of the mailbox answer flow. Nothing happens based on your answer.)",
+      2,
+      { option_ids: ["tea"] },
+    ),
+    ...answered("answer-many", "item-answer-many", "What should we stock?", 4, {
+      option_ids: ["tea", "water"],
+      free_text: "And oat milk, please.",
+    }),
+    ...answered("answer-skip", "item-answer-skip", "Anything else?", 6, {
+      option_ids: [],
+      skip: true,
+    }),
+  ];
+}
+
 function backgroundItems(): RenderedTimelineItem[] {
   const ago = (secs: number) => new Date(Date.now() - secs * 1000).toISOString();
   const run = (
@@ -702,6 +781,7 @@ export type DesktopUiHarnessScenario =
   | "automated-inputs"
   | "background"
   | "workflows"
+  | "answered"
   | "notices"
   | "startup-port-in-use"
   | SharingScenario;
@@ -1266,6 +1346,7 @@ export function createDesktopUiHarness(
       ...(scenario === "automated-inputs" ? automatedInputItems() : []),
       ...(scenario === "background" ? backgroundItems() : []),
       ...(scenario === "workflows" ? workflowItems() : []),
+      ...(scenario === "answered" ? answeredItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -1996,6 +2077,7 @@ export function createDesktopUiHarness(
             : "native logging",
         nodeHomeExists: !freshHome,
         clientStateExists: true,
+        localSetupUnfinished: false,
         savedPeers: !provisioned
           ? []
           : [
@@ -4894,6 +4976,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "automated-inputs":
     case "background":
     case "workflows":
+    case "answered":
     case "notices":
       return value;
     default:

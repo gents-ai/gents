@@ -628,6 +628,34 @@ pub(super) async fn handle_request(
             set_default_agent(fixture.desktop_core().as_ref(), request).await?;
             snapshot_response(fixture).await
         }
+        ("POST", "/desktop/agent/identity") => {
+            let request = decode::<gents_protocol::agent_identity::ProvisionAgentIdentityRequest>(
+                &request.body,
+                "decoding agent identity provision request",
+            )?;
+            json(serde_json::to_value(
+                fixture
+                    .desktop_core()
+                    .provision_agent_identity(&request.node_did)
+                    .await?,
+            )?)
+        }
+        ("POST", "/desktop/agent/workspace-root") => {
+            let request = decode::<gents_desktop_bridge::types::AgentWorkspaceRootSelectRequest>(
+                &request.body,
+                "decoding agent workspace root selection",
+            )?;
+            let access = fixture.desktop_core().operator_access(&request.node_did)?;
+            json(serde_json::to_value(
+                gents_desktop_core::workspace_root::select_agent_workspace_root(
+                    &access,
+                    &request.node_did,
+                    &request.agent_did,
+                    &request.path,
+                )
+                .await?,
+            )?)
+        }
         ("POST", "/desktop/agent/save") => {
             let request = decode::<AgentSaveRequest>(&request.body, "decoding agent save request")?;
             save_agent_config(fixture.desktop_core().as_ref(), request).await?;

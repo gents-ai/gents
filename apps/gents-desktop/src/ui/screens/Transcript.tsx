@@ -47,6 +47,7 @@ import {
 import { ActivityLine } from "./Thinking";
 import { activityStatus } from "./activity-status";
 import { AgentInitials } from "./parts";
+import { AnswerText } from "./AnswerText";
 import { Markdown } from "./Markdown";
 import { StreamText } from "./StreamText";
 import {
@@ -243,7 +244,18 @@ function OwnInput({
         )
       ) : (
         <UserInputWithState
-          content={bare ? <AttachmentsOnly item={item} /> : <InputText item={item} />}
+          content={
+            bare ? (
+              <AttachmentsOnly item={item} />
+            ) : item.questionReply ? (
+              <AnswerText
+                reply={item.questionReply}
+                fallback={<InputText item={item} />}
+              />
+            ) : (
+              <InputText item={item} />
+            )
+          }
           state={state}
           actions={
             unavailableOf(item) || bare

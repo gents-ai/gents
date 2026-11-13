@@ -46,7 +46,7 @@ export function FiledQuestion({
     ),
   );
   return (
-    <div className="grid gap-1.5 pb-1 text-sm" data-testid="filed-question">
+    <div className="grid gap-1.5 pb-1 font-sans text-sm" data-testid="filed-question">
       <p className="break-words text-foreground">{question.prompt}</p>
       {question.options.length > 0 && (
         <ul className="grid gap-1">

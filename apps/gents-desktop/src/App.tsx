@@ -15,6 +15,7 @@ import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { IncompatibleHomeScreen } from "./components/IncompatibleHomeScreen";
 import { StartupScreen } from "./components/StartupScreen";
+import { PluginWindowWaiting } from "./ui/app/PluginWindowWaiting";
 import {
   createDesktopApp,
   type DesktopApp,
@@ -177,7 +178,13 @@ function PluginWindowReactions({
 function PluginWindowBody({ pluginId }: { pluginId: string }) {
   const startup = useStartup();
   useClosesWhenPluginGone(pluginId, closeWindow);
-  if (startup.phase !== "ready") return <StartupScreen />;
+  if (startup.phase !== "ready")
+    return (
+      <PluginWindowWaiting
+        phase={startup.phase}
+        title={document.title && document.title !== "Gents" ? document.title : null}
+      />
+    );
   return (
     <TooltipProvider>
       <div
