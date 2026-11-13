@@ -7,7 +7,7 @@ use crate::graphql::escape_graphql_string;
 pub enum RuntimeHopCapError {
     #[error("the hop-cap read requires the bound runtime and a managed Agent transaction")]
     RuntimeScope,
-    #[error(transparent)]
+    #[error("{0}")]
     Access(#[from] ConfigClientError),
     #[error("multiple Node rows matched {0}")]
     Ambiguous(String),

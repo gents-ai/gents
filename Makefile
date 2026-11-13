@@ -49,7 +49,7 @@ help:
 	@echo
 	@echo "Tests:"
 	@echo "  make test                  Run core Rust and CLI tests"
-	@echo "  make test-agent            Run Gents runtime tests"
+	@echo "  make test-agent            Run the runtime crates' tests (the CI runtime suite)"
 	@echo "  make test-agent-conformance  Run runtime conformance tests"
 	@echo "  make test-agent-e2e        Run live-inference agent E2E tests"
 	@echo "  make test-cli              Run CLI tests"
@@ -224,8 +224,10 @@ proofs:
 .PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-eval-drivers test-evals live-configurator-eval
 test: test-agent test-cli test-eval-drivers
 
+RUNTIME_TEST_PACKAGES := $(shell .github/scripts/compile-rust-ci-suite.sh runtime --list-packages)
+
 test-agent:
-	$(CARGO) test -p gents $(CARGO_PROFILE_FLAG)
+	$(CARGO) test --no-fail-fast $(addprefix -p ,$(RUNTIME_TEST_PACKAGES)) $(CARGO_PROFILE_FLAG)
 
 test-agent-conformance:
 	$(CARGO) test -p gents --test conformance $(CARGO_PROFILE_FLAG)
@@ -320,9 +322,9 @@ live-triggers:
 
 live-client:
 	$(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG)
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime native_client_submits_signed_input_and_observes_live_and_durable_output $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime enrolled_client_resumes_a_durable_goal_and_observes_completion $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime managed_runtime_replacement_preserves_running_input_enrollment_and_transcript $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime native_client_submits_signed_input_and_observes_live_and_durable_output $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime enrolled_client_resumes_a_durable_goal_and_observes_completion $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime managed_runtime_replacement_preserves_running_input_enrollment_and_transcript $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
 
 live-editor:
 	@test -d "$$GENTS_VSCODE_ROOT" || { echo "Set GENTS_VSCODE_ROOT to the installed-editor extension checkout" >&2; exit 2; }

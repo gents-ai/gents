@@ -25,6 +25,7 @@ fn provision_agents(
 }
 
 struct Fixture {
+    _db: gents_inference::test_support::TestDb,
     node: Arc<defra_node::Node>,
     access: ConfigAccess,
 }
@@ -60,21 +61,17 @@ impl Fixture {
 async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     use crate::plugin::model_binding::{AccessModels, ModelBinding, ModelResolver};
     use crate::plugin::store;
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    let did_owned = node.node_identity_did().unwrap().to_owned();
+    let (db, _user, access) = gents_inference::test_support::signed_test_node_without_agent(
+        "plugin-profile-switch",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
+    let node = db.node.clone();
+    let did_owned = db.node_identity.did().to_owned();
     let did = did_owned.as_str();
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
-    gents_documents::test_support::bootstrap_signed_test_node(&access, did).await;
     let agents = provision_agents(did, &["reader"]);
     let fixture = Fixture {
+        _db: db,
         node: node.clone(),
         access,
     };
@@ -158,7 +155,8 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
         },
         "the binding names the profile, so the move needs no binding write"
     );
-    let endpoint = AccessModels(&fixture.access)
+    let runtime = ConfigAccess::local_as(fixture.node.clone(), identity::Did::new(did).unwrap());
+    let endpoint = AccessModels(&runtime)
         .resolve(
             &binding,
             Some(&identity::Did::new(fixture.node.node_identity_did().unwrap()).unwrap()),

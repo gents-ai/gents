@@ -40,10 +40,7 @@ pub(crate) async fn open(
         .spawn_blocking(move || prefs::read_keys(&saved))
         .await
         .context("reading the saved key set")?;
-    let work = runtime
-        .spawn_blocking(move || work::work_for(&reading))
-        .await
-        .context("reading this home's GraphQL endpoint")?;
+    let work = work::work_for(&reading).await;
     let config = runtime
         .spawn_blocking(move || gents_service::home_state::read_finished_init_config(&setup))
         .await

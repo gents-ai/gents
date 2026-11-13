@@ -178,8 +178,8 @@ async fn publish_ready(access: &ConfigAccess, agents: &[&str]) {
     linked.await.unwrap();
 }
 
-/// A node whose runtime is the fixture signer, served over its HTTP endpoint without node ACP.
-/// The test User writes its config and, standing in for the runtime, its chat documents: the
+/// A node whose runtime is the fixture signer, served as a home serves it. The test User owns
+/// its household, writes its config and, standing in for the runtime, its chat documents: the
 /// User reads its own documents as it reads those the runtime shares with it.
 pub(super) struct ChatNode {
     /// Kept serving while the test reads it.
@@ -199,14 +199,25 @@ impl ChatNode {
     async fn with_agents(agents: &[&str], ready: &[&str]) -> ChatNode {
         use gents_documents::apply_desired_state_plan;
         use gents_documents::DesiredStateApplyPlan;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-        let http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
+        use gents_store::identity::NodeIdentity as _;
+        let runtime = gents_session::test_support::lineage_fixtures::fixture_signer();
         let builder = gents_host::test_support::fixture_node_builder();
-        let node = Arc::new(builder.with_http(http).build().await.unwrap());
+        let (node, graphql) =
+            gents_host::test_support::served_runtime_node(builder, Arc::new(runtime)).await;
+        let as_runtime = defra_core::RequestContext::default().with_identity(Some(OWNER.into()));
+        let mailbox = gents_protocol::schemas::MAILBOX_POLICY;
+        let policy = node.add_dac_policy_with_counter_as(&as_runtime, mailbox, 0);
+        assert_eq!(
+            policy.await.unwrap(),
+            gents_protocol::schemas::MAILBOX_POLICY_ID
+        );
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
+        let as_runtime = ConfigAccess::local_as(node.clone(), ::identity::Did::new(OWNER).unwrap());
+        let owner = ::identity::Did::new(test_user().did()).unwrap();
+        let granted = gents_store::identity::GrantSet::HouseholdOwner.grant(&as_runtime, &owner);
+        granted.await.unwrap();
         let config = serde_json::from_value(chat_config(agents)).unwrap();
         let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
         let user = ConfigAccess::Graphql(user_endpoint(&graphql));
@@ -2405,7 +2416,9 @@ async fn work_for_signs_as_this_clis_user() {
     let (home, _) = home_serving(graphql, None);
     let user = gents_host::test_support::cli_user().await;
 
-    let work = work::work_for(home.path()).expect("this CLI's User signs");
+    let work = work::work_for(home.path())
+        .await
+        .expect("this CLI's User signs");
 
     assert_eq!(work.access().actor_did().as_deref(), Some(user.did()));
 }
@@ -2415,6 +2428,7 @@ async fn work_for_signs_as_this_clis_user() {
 async fn work_for_turns_off_with_no_runtime_recorded() {
     let bare = tempfile::tempdir().unwrap();
     let off = work::work_for(bare.path())
+        .await
         .err()
         .expect("no runtime recorded");
     assert!(off.contains("gents runtime server"), "{off}");
@@ -2525,6 +2539,17 @@ fn is_call_list(query: &str) -> bool {
     query.contains("await_mode") && query.contains(RUNNING_CALLS)
 }
 
+/// The key a node answers `query`'s read of `collection` under: its alias, as a view read
+/// names one, else the collection.
+fn answer_root(query: &str, collection: &str) -> String {
+    let before = query.split(&format!("{collection}(")).next().unwrap_or("");
+    let alias = before.trim_end().strip_suffix(':').map(|named| {
+        let mut name = named.rsplit(|ch: char| !ch.is_alphanumeric() && ch != '_');
+        name.next().unwrap_or("").to_string()
+    });
+    alias.unwrap_or_else(|| collection.to_string())
+}
+
 /// Answers `list_jobs`' query with the `jobs` of the session it names, as the node filters
 /// them, and the background owner's with `calls`. The node answers the rest.
 fn work_answer(query: &str, jobs: &[Value], calls: &[Value]) -> Option<Value> {
@@ -2537,7 +2562,8 @@ fn work_answer(query: &str, jobs: &[Value], calls: &[Value]) -> Option<Value> {
             )))
         };
         let jobs: Vec<_> = jobs.iter().filter(named).collect();
-        Some(json!({ "data": { "AgentToolCall": jobs } }))
+        let root = answer_root(query, "AgentToolCall");
+        Some(json!({ "data": { root: jobs } }))
     } else if is_call_list(query) {
         Some(json!({ "data": { "AgentToolCall": calls } }))
     } else {
@@ -3224,7 +3250,7 @@ async fn an_open_session_shows_its_ask_and_gate_items_oldest_first() {
         .position(|query| query == source::MAILBOX_WATCHED);
     let listed = queries
         .iter()
-        .position(|query| query.contains(MAILBOX_LIST));
+        .position(|query| without_whitespace(query).contains(&without_whitespace(MAILBOX_LIST)));
     assert!(
         watched.is_some() && watched < listed,
         "it subscribes before it reads: {queries:?}"
@@ -3377,9 +3403,7 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
     });
 
     let closed = Update::Notice(
-        "mailbox item i1 cannot cause this message: the item is no longer open\n\
-         Next: gents automation mailbox list"
-            .to_string(),
+        "MailboxItem is no longer open\nNext: gents automation mailbox list".to_string(),
     );
     assert_eq!(
         shell.until(is_prompts).await,
@@ -4354,7 +4378,8 @@ async fn a_schedule_runs_now_through_its_trigger() {
     let task = fired["retry_key"].as_str().unwrap_or_default();
     assert_eq!(fired["caused_by_trigger_kind"], "manual", "{written}");
     assert!(task.contains(":manual:triage:"), "{written}");
-    let no_trigger = "Couldn’t run the schedule: schedule weekly has no enabled Trigger";
+    let no_trigger = "Couldn’t run the schedule: schedule weekly has no enabled Trigger\n\
+                      Next: gents config trigger list";
     assert_eq!(refused, (no_trigger.to_string(), Tone::Warn));
     node.shutdown().await.expect("node shutdown");
 }
@@ -4451,7 +4476,7 @@ async fn a_new_trigger_on_a_preset_writes_schedule_task_and_trigger() {
             json!(false),
         ]
     );
-    let tasks = crate::commands::task::load_task_inventory(&access, Some("task-abc")).await;
+    let tasks = crate::commands::task::load_task_inventory(&access, OWNER, Some("task-abc")).await;
     let tasks = tasks.unwrap().tasks;
     assert_eq!(
         tasks
@@ -5220,7 +5245,7 @@ async fn packs_wait_for_the_runtime() {
     let key = keys.path().join("principal.key");
     let (home, did) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
     gents_host::test_support::cli_user().await;
-    let work = work::work_for(home.path());
+    let work = work::work_for(home.path()).await;
     assert!(
         work.is_ok(),
         "this CLI's User signs: {:?}",

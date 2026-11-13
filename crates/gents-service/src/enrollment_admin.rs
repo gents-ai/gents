@@ -264,7 +264,7 @@ pub async fn approve_verified_client(
         return Ok(None);
     };
     let (outcome, mut decided) =
-        gents_store::identity::approve_enrollment(pending.approval(expected), || {
+        gents_store::identity::approve_enrollment(pending.approval(expected), || async {
             submit_enrollment_decision(
                 home,
                 &graphql,
@@ -272,6 +272,8 @@ pub async fn approve_verified_client(
                 EnrollmentOperatorAction::Approve,
                 lease_seconds,
             )
+            .await
+            .map_err(anyhow::Error::reallocate_into_boxed_dyn_error_without_backtrace)
         })
         .await?;
     decided["granted"] = granted_json(

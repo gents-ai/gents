@@ -49,7 +49,9 @@ pub async fn served_config(mut config: Value) -> Served {
     for agent in config["agents"].as_array_mut().into_iter().flatten() {
         agent["creation_nonce"] = nonces[agent["agent_did"].as_str().unwrap()].clone().into();
     }
-    let (node, graphql) = served_node(fixture_node_builder()).await;
+    let runtime = gents_session::test_support::lineage_fixtures::fixture_signer();
+    let (node, graphql) =
+        served_runtime_node(fixture_node_builder(), std::sync::Arc::new(runtime)).await;
     // The runtime's migration registers the mailbox policy before the collection naming it.
     let as_runtime = defra_core::RequestContext::default().with_identity(Some(OWNER.to_owned()));
     let mailbox = gents_protocol::schemas::MAILBOX_POLICY;
@@ -101,9 +103,11 @@ pub async fn cli_user() -> &'static gents_desktop_core::client::PrincipalIdentit
     static USER: tokio::sync::OnceCell<gents_desktop_core::client::PrincipalIdentity> =
         tokio::sync::OnceCell::const_new();
     USER.get_or_init(|| async {
-        gents_service::home_state::load_client_identity()
-            .await
-            .unwrap()
+        gents_service::home_state::client_identity_for(
+            &gents_service::home_state::resolve_home_dir(None),
+        )
+        .await
+        .unwrap()
     })
     .await
 }
@@ -220,15 +224,43 @@ pub async fn publish_test_node_as(node: &std::sync::Arc<defra_node::Node>, node_
 pub async fn served_node(
     builder: defra_node::NodeBuilder,
 ) -> (std::sync::Arc<defra_node::Node>, String) {
+    serve(builder, None).await
+}
+
+/// [`served_node`] that also serves the runtime's client routes, Agent
+/// identity provisioning and agent admission facts, through the owner a home
+/// serves them with. `runtime` is the identity `builder` names as the node's.
+pub async fn served_runtime_node(
+    builder: defra_node::NodeBuilder,
+    runtime: std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+) -> (std::sync::Arc<defra_node::Node>, String) {
+    serve(builder, Some(runtime)).await
+}
+
+async fn serve(
+    builder: defra_node::NodeBuilder,
+    runtime: Option<std::sync::Arc<dyn gents_store::identity::NodeIdentity>>,
+) -> (std::sync::Arc<defra_node::Node>, String) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let mut http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
+    let served = gents::runtime::embedded::ServedNode::default();
+    if runtime.is_some() {
+        http = http.with_extra_routes(gents::runtime::embedded::agent_identity_routes(
+            served.clone(),
+        ));
+    }
     let node = builder
         .with_node_acp_enabled()
-        .with_http(gents::defra_node::HttpConfig::with_listener(listener).unwrap())
+        .with_http(http)
         .build()
         .await
         .unwrap();
-    (std::sync::Arc::new(node), graphql)
+    let node = std::sync::Arc::new(node);
+    if let Some(runtime) = runtime {
+        let _ = served.set((std::sync::Arc::downgrade(&node), runtime));
+    }
+    (node, graphql)
 }
 
 /// The User client's access over `graphql`, signed by its own key as the

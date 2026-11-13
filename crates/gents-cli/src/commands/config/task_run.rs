@@ -26,7 +26,8 @@ pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     let output = enqueue_task_run(&args).await?;
     let mut value = serde_json::to_value(&output)?;
     if args.wait {
-        let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+        let graphql =
+            resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
         let response = wait_for_request(
             &gents_store::config_client::ConfigAccess::Graphql(graphql),
             request_ref(&output.node_did, &output.request_id),
@@ -99,9 +100,8 @@ pub(crate) async fn enqueue_task_run_on(
 
 /// A refused Task operation, shown with the command that corrects it.
 pub(crate) fn failure(error: TaskOperationError) -> anyhow::Error {
-    let next = crate::next_call::command(error.recovery(), None);
-    let message = format!("{error}\nNext: {next}");
-    anyhow::Error::new(error).context(message)
+    let next = error.recovery();
+    crate::commands::refusal::Refusal::new(error, next).into()
 }
 
 pub(crate) fn resolve_task_id_for(

@@ -38,7 +38,16 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
         &args.profile,
     )?;
     let output = match args.account.as_deref() {
-        None => list_candidates(&access, &node_did, &args.profile, &slots).await?,
+        None => {
+            list_candidates(
+                &access,
+                &gents_service::home_state::resolve_home_dir(args.home.as_deref()),
+                &node_did,
+                &args.profile,
+                &slots,
+            )
+            .await?
+        }
         Some(account) => {
             set_account(
                 &access,
@@ -73,12 +82,13 @@ pub(crate) fn bound_slots(
 
 async fn list_candidates(
     access: &ConfigAccess,
+    home: &std::path::Path,
     node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
 ) -> Result<Value> {
     let observations = if let ConfigAccess::Graphql(graphql) = access {
-        let identity = gents_service::home_state::load_client_identity().await?;
+        let identity = gents_service::home_state::client_identity_for(home).await?;
         crate::commands::accounts::request_usage_reads(
             &identity,
             graphql,
@@ -502,21 +512,12 @@ mod tests {
 
     async fn seeded() -> (ConfigAccess, String, String) {
         use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
-        let node = std::sync::Arc::new(
-            gents_host::test_support::fixture_node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        gents_host::test_support::publish_test_node(&node).await;
-        let access = ConfigAccess::local_as(
-            node,
-            ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID)
-                .unwrap(),
-        );
+        let served = gents_host::test_support::served_config(json!({})).await;
+        let user = served.user.held_client_signing_capability().unwrap().did();
+        let access =
+            ConfigAccess::local_as(served.node.clone(), ::identity::Did::new(user).unwrap())
+                .with_client_signed_writes_through(served.user.clone())
+                .unwrap();
         for value in [
             backend(
                 "claude",
@@ -933,9 +934,15 @@ mod tests {
     async fn set_account_without_an_account_lists_the_candidates() {
         let (access, b_backend, _) = seeded().await;
         with_agents(&access).await;
-        let output = list_candidates(&access, DID, "p-original", &[])
-            .await
-            .unwrap();
+        let output = list_candidates(
+            &access,
+            std::path::Path::new("/unused"),
+            DID,
+            "p-original",
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(output["profile"], json!("p-original"));
         assert_eq!(
             output["account"],

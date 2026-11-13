@@ -151,24 +151,42 @@ impl Fixture {
         let query_bearers = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let observed_bearers = query_bearers.clone();
         let admin_did = admin.did().to_owned();
-        let router = router
-            .merge(axum::Router::new().route(
-                "/api/v0/graphql",
-                axum::routing::post(move |headers: axum::http::HeaderMap| {
-                    let queries = observed_queries.clone();
-                    let bearers = observed_bearers.clone();
-                    async move {
-                        queries.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        if let Some(bearer) = headers
-                            .get(header::AUTHORIZATION)
-                            .and_then(|value| value.to_str().ok())
-                        {
-                            bearers.lock().unwrap().push(bearer.to_owned());
-                        }
-                        axum::Json(serde_json::json!({ "data": {} }))
+        // Every database exchange is observed with its bearer: a read-only
+        // transaction's begin, its queries and its end, and a plain query.
+        let database = move |body: Value| {
+            let queries = observed_queries.clone();
+            let bearers = observed_bearers.clone();
+            move |headers: axum::http::HeaderMap| {
+                let (queries, bearers, body) = (queries.clone(), bearers.clone(), body.clone());
+                async move {
+                    queries.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(bearer) = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                    {
+                        bearers.lock().unwrap().push(bearer.to_owned());
                     }
-                }),
-            ))
+                    axum::Json(body)
+                }
+            }
+        };
+        let router = router
+            .merge(
+                axum::Router::new()
+                    .route(
+                        "/api/v0/graphql",
+                        axum::routing::post(database(serde_json::json!({ "data": {} }))),
+                    )
+                    .route(
+                        "/api/v0/tx",
+                        axum::routing::post(database(serde_json::json!({ "id": "status" }))),
+                    )
+                    .route(
+                        "/api/v0/tx/{id}",
+                        axum::routing::post(database(serde_json::json!({})))
+                            .delete(database(serde_json::json!({}))),
+                    ),
+            )
             // Native NAC's explanation to the subject itself; only the
             // fixture admin holds the `admin` relation.
             .merge(axum::Router::new().route(

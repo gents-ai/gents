@@ -61,7 +61,7 @@ fn missing_search_query(args: &SessionHistoryParams) -> anyhow::Error {
 #[serde(deny_unknown_fields)]
 pub struct SessionFilter {
     pub agent_did: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_archived: bool,
     pub status: Option<String>,
     pub tag: Option<String>,

@@ -94,9 +94,11 @@ impl Shell {
             cols,
             rows,
             cwd: None,
-            env: env
-                .iter()
-                .map(|(key, value)| (key.to_string(), value.to_string()))
+            env: std::iter::once(("NO_COLOR".to_owned(), String::new()))
+                .chain(
+                    env.iter()
+                        .map(|(key, value)| (key.to_string(), value.to_string())),
+                )
                 .collect(),
             wait_ready: Some(false),
             restart: false,

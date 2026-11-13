@@ -10,9 +10,9 @@ use crate::config_writes::ConfigAccess;
 use crate::print_json;
 use gents::operations::skill::{SkillImport, SkillSourceRoot, SkillWrite};
 
-fn access(graphql: &str) -> Result<ConfigAccess> {
+async fn access(graphql: &str) -> Result<ConfigAccess> {
     Ok(ConfigAccess::Graphql(
-        gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None)?,
+        gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None).await?,
     ))
 }
 
@@ -64,7 +64,7 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
         },
         enabled: args.enabled,
     };
-    let access = access(&args.graphql)?;
+    let access = access(&args.graphql).await?;
     let receipt = gents::operations::skill::save(
         &access,
         &SkillWrite {
@@ -87,12 +87,13 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
 }
 
 pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
-    let skills = gents::operations::skill::list(&access(&args.graphql)?, &args.node_did).await?;
+    let skills =
+        gents::operations::skill::list(&access(&args.graphql).await?, &args.node_did).await?;
     print_json(&json!({ "node_did": args.node_did, "count": skills.len(), "skills": skills }))
 }
 
 pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
-    let access = access(&args.graphql)?;
+    let access = access(&args.graphql).await?;
     let owner =
         gents::operations::skill::resolve_owner(&access, args.node_did.as_deref(), &args.skill_id)
             .await
@@ -104,7 +105,7 @@ pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
 }
 
 pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
-    let access = access(&args.graphql)?;
+    let access = access(&args.graphql).await?;
     let owner =
         gents::operations::skill::resolve_owner(&access, args.node_did.as_deref(), &args.skill_id)
             .await
@@ -120,7 +121,7 @@ pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
 }
 
 pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Result<()> {
-    let access = access(&args.graphql)?;
+    let access = access(&args.graphql).await?;
     let owner =
         gents::operations::skill::resolve_owner(&access, args.node_did.as_deref(), &args.skill_id)
             .await
@@ -190,7 +191,7 @@ fn find_skill_dirs(root: &std::path::Path, max_depth: usize) -> Vec<std::path::P
 pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
     let source = std::fs::canonicalize(&args.dir)
         .with_context(|| format!("resolving {}", args.dir.display()))?;
-    let access = access(&args.graphql)?;
+    let access = access(&args.graphql).await?;
 
     let mut imported = Vec::new();
     let mut errors = Vec::new();
@@ -344,7 +345,8 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
 }
 
 pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
-    let skills = gents::operations::skill::list(&access(&args.graphql)?, &args.node_did).await?;
+    let skills =
+        gents::operations::skill::list(&access(&args.graphql).await?, &args.node_did).await?;
 
     let mut exported = Vec::new();
     for skill in &skills {

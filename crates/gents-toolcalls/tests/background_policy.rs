@@ -6,7 +6,7 @@ use serde_json::json;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 
-use chrono::Utc;
+use chrono::{SubsecRound, Utc};
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_toolcalls::test_support::background_hook::{
     budget_hook_fixture, invoke, tool_row, BudgetHookFixture,
@@ -108,9 +108,11 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     .into_iter()
     .enumerate()
     {
-        let admitted_at = Utc::now();
+        let lifetime_span = chrono::Duration::seconds(lifetime);
+        let earliest = Utc::now().trunc_subsecs(0) + lifetime_span;
         let args = json!({"tool_name": tool, "args": {}}).to_string();
         let receipt = invoke(&hook, &format!("timed-{index}"), "spawn_process", &args).await;
+        let latest = Utc::now() + lifetime_span;
         assert_eq!(receipt["status"], "running", "{receipt}");
         assert_eq!(
             receipt["effective_timeout_secs"],
@@ -122,10 +124,9 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         let deadline = chrono::DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap())
             .unwrap()
             .with_timezone(&Utc);
-        let granted = deadline.signed_duration_since(admitted_at).num_seconds();
         assert!(
-            (lifetime - 5..=lifetime).contains(&granted),
-            "{tool}: {granted}s"
+            (earliest..=latest).contains(&deadline),
+            "{tool}: {deadline} outside {earliest}..={latest}"
         );
         assert_eq!(
             (

@@ -31,7 +31,8 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
     let graphql = gents_service::home_state::resolve_graphql_endpoint(
         args.item.access.graphql.as_deref(),
         home,
-    )?;
+    )
+    .await?;
     let access = ConfigAccess::Graphql(graphql);
     let item = operations::get(&access, &args.item.doc_id)
         .await
@@ -125,7 +126,6 @@ pub(crate) async fn send_reply(
 
 /// A refused mailbox operation, shown with the command that corrects it.
 pub(crate) fn failure(error: MailboxOperationError) -> anyhow::Error {
-    let next = crate::next_call::command(error.recovery(), None);
-    let message = format!("{error}\nNext: {next}");
-    anyhow::Error::new(error).context(message)
+    let next = error.recovery();
+    crate::commands::refusal::Refusal::new(error, next).into()
 }

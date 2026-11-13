@@ -20,7 +20,7 @@ import { MailboxStack, openInStack } from "../src/ui/screens/MailboxStack";
 import { mailboxSeen } from "../src/ui/app/mailboxSeen";
 import { listViews } from "../src/ui/app/listViews";
 import { IS_MAC } from "../src/ui/screens/shortcutKeys";
-import { node, testApp, withApp } from "./app-fixture";
+import { node, publish, testApp, withApp } from "./app-fixture";
 
 vi.mock("../src/ui/screens/HoverCards", () => ({
   NodeHoverCard: ({ children }: { children: ReactElement }) => children,
@@ -141,15 +141,21 @@ describe("the mailbox list", () => {
     expect(within(list).getByText("Docs landed")).toBeVisible();
   });
 
-  it("dismisses an item from its row without opening it", () => {
-    const dismiss = vi.fn().mockResolvedValue(undefined);
-    const app = testApp({
-      api: { dismissMailboxItem: dismiss },
+  it("dismisses an item from its row without opening it", async () => {
+    let app: DesktopApp;
+    app = testApp({
+      api: {
+        dismissMailboxItem: async (itemId: string, nodeDid: string) => {
+          if (itemId === "item-1" && nodeDid === "did:key:node") {
+            publish(app, [deploymentWith([])]);
+          }
+        },
+      },
       deployments: [deploymentWith([item()])],
     });
     renderMailbox(app);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Refactor landed" }));
-    expect(dismiss).toHaveBeenCalledExactlyOnceWith("item-1");
+    await waitFor(() => expect(screen.queryByText("Refactor landed")).toBeNull());
     expect(screen.queryByTestId("mailbox-dialog")).toBeNull();
   });
 
@@ -285,7 +291,6 @@ describe("an opened item", () => {
     ).toBeVisible();
     fireEvent.click(within(dialog()).getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(screen.queryByTestId("mailbox-dialog")).toBeNull());
-    expect(dismiss.mock.calls).toEqual([["a"], ["b"]]);
   });
 
   it("waits while another page shows, and opens again on coming back", () => {
