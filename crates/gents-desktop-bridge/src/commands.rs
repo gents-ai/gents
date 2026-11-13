@@ -26,7 +26,7 @@ pub mod mcp_health;
 #[path = "commands/peer.rs"]
 mod peer;
 #[path = "commands/session.rs"]
-mod session;
+pub(crate) mod session;
 #[path = "commands/session_history.rs"]
 mod session_history;
 pub use session_history::session_history;
@@ -59,5 +59,4 @@ pub use task::{
 };
 pub use tool_service::{save_tool_service_config, test_tool_service_config};
 
-pub(crate) use session::resolve_session_node;
 pub use session::{message_attachments, session_context_details, session_rows, session_snapshot};
