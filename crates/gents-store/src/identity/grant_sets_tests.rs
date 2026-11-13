@@ -17,6 +17,19 @@ fn sets_match_lean_owner() {
     });
 }
 
+#[test]
+fn recipient_grants_match_lean_owner() {
+    use gents_lean_vocab::families;
+    families::identity_grant_sets_recipient_vocabulary::replay(&Recipient::ALL);
+    families::identity_grant_recipient_sets::replay(|i| {
+        let grants = GrantSet::for_recipient(i.recipient);
+        families::identity_grant_recipient_sets::Grants {
+            direct: grants.direct.to_vec(),
+            projected: grants.projected.to_vec(),
+        }
+    });
+}
+
 #[tokio::test]
 async fn native_delegation_follows_modeled_holders() {
     let (directory, runtime, node) = nac_node().await;

@@ -454,7 +454,6 @@ pub struct LeanConfigurationSignedWriteRetryCase {
 pub struct LeanContractSnapshot {
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub generated_by: String,
-    pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub goal_client_start_cases: Vec<serde_json::Value>,
     #[serde(deserialize_with = "required_nullable")]
@@ -593,14 +592,6 @@ pub struct LeanFoldQueueEntry {
     pub requester_id: Option<u64>,
     pub turn_context: u64,
     pub fresh: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGrantRecipientCase {
-    pub recipient: String,
-    pub direct: Vec<String>,
-    pub projected: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
