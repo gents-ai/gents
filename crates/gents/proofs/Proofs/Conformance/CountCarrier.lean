@@ -95,13 +95,15 @@ structure StorageOutput where
   argument : Option Nat
   stored : Option Nat
   introspected : Bool
-  decimalAdmitted : Option Bool
+  decimalAdmitted : Bool
   deriving ToJson
 
 /-- A bounded write tool stores one scalar count field. Lists, relations and
 unsupported shapes declare no scalar field to write, and DefraDB refuses a
 non-null `ID` declaration, so only scalar carriers and `DateTime` are written.
-A field that cannot carry a count is also offered the decimal witness. -/
+Every field is also offered the decimal witness `"10"`, whether or not it
+carries a count: a field takes it only when its input kinds include text
+(`admitsEncoding field .decimal`). -/
 @[conformance_family]
 def storage : Family StorageInput StorageOutput where
   inputs := (fieldCases.filter fun c => canCarry c.field || c.field == .dateTime).map
@@ -112,7 +114,27 @@ def storage : Family StorageInput StorageOutput where
     { argument := parsed
       stored := parsed
       introspected := canCarry field
-      decimalAdmitted := if canCarry field then none else some (admitsEncoding field .decimal) }
+      decimalAdmitted := admitsEncoding field .decimal }
+
+structure IntegerTextInput where
+  schema : String
+  text : String
+  deriving ToJson
+
+/-- Count spellings sent as JSON text to an `Int` field of a bounded write
+tool: the canonical decimal, the non-canonical forms `parseWire` refuses, a
+count past the group bound and zero. Maintainer question (2026-11-13): should
+an `Int` field take a count sent as a decimal string? The production writer
+(`defra_write::input::literal`) takes only a JSON integer there and refuses
+every text, canonical or not, with "values are not coerced", so the model
+keeps `integer_field_takes_no_text` and this family holds production to it. -/
+def integerTexts : List String :=
+  ["10", "+10", "010", " 10", "10 ", "1e1", "10.0", "１０", "-1", "0", "257", ""]
+
+@[conformance_family]
+def integerText : Family IntegerTextInput Bool where
+  inputs := ["Int", "Int!"].flatMap fun schema => integerTexts.map fun text => ⟨schema, text⟩
+  model := fun i => admitsEncoding (fieldOf i.schema) .decimal
 
 /-- The obligation fixture collection declares one field of each reported type
 that can never carry a count; a count-carrying field passes on to validation
