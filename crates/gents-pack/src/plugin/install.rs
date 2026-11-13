@@ -269,6 +269,8 @@ fn bind_plugin_slots_locked(
     Ok(bound)
 }
 
+/// External premise: a missing file reaches here only as a `std::io::Error`
+/// of kind `NotFound` in the erased chain.
 fn is_not_found(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause

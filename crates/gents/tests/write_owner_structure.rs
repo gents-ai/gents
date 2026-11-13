@@ -1987,7 +1987,8 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 /// `find_source` call whose type the function's module does not declare and
 /// export, or that sits in a function that is not handed an error. Each is
 /// debt: the producer returns an owner enum whose variants the caller matches,
-/// or the caller asks the owner's classifier. This list only shrinks.
+/// or the caller asks the owner's classifier. A third-party type is asked
+/// for in an adapter classifier instead. This list only shrinks.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // CreateGoalForSessionError in create_goal_for_session_inner
@@ -2012,14 +2013,12 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     // RemoteP2pAdminError in ClientRouteManager::reconcile_route
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
-    // Error in classify_discovery_failure; ModelDiscoveryHttpError in classify_discovery_failure
-    ("crates/gents-desktop-core/src/inference.rs", 2),
+    // ModelDiscoveryHttpError in classify_discovery_failure
+    ("crates/gents-desktop-core/src/inference.rs", 1),
     // BaselineMismatch in freeze_job
     ("crates/gents-eval/src/optimization/driver.rs", 1),
     // ClosureDrift in drift_of
     ("crates/gents-eval/src/optimization/promote.rs", 1),
-    // Error in unresolvable
-    ("crates/gents-eval/src/report/store.rs", 1),
     // ActorBackendDiscoveryError in unavailable
     ("crates/gents-host/src/http/inference_activity.rs", 1),
     // EnrollmentDecisionRefusal in enrollment_decision_handler
@@ -2034,12 +2033,8 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-pack/src/plugin/allowed.rs", 2),
     // InternalAddress in send_error
     ("crates/gents-pack/src/plugin/http_calls.rs", 1),
-    // Error in is_not_found
-    ("crates/gents-pack/src/plugin/install.rs", 1),
     // E in any_error
     ("crates/gents-pack/src/plugin/store.rs", 1),
-    // Error in graphql_transport_error_in_chain
-    ("crates/gents-protocol/src/graphql/transport.rs", 1),
     // InvalidQueuePosition in verify_request_input
     ("crates/gents-session/src/request/admission.rs", 1),
     // ReconstructionError in recover_expired_generation_with_access_and_facts; ReconstructionError in validate_selection
@@ -2062,8 +2057,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-session/src/session/output/replay_request.rs", 1),
     // CanonicalOutputReadError in classify_terminal_read_error; ReconstructionError in classify_terminal_read_error
     ("crates/gents-session/src/session/request_output.rs", 2),
-    // Error in is_storage_full
-    ("crates/gents-store/src/graphql.rs", 1),
     // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
     ("crates/gents-store/src/local/storage_backend.rs", 3),
     // StepFailure in JobDriver::step_once
@@ -2096,8 +2089,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
     // MissingReference in ConfigCommandTool::validate_saved
     ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
-    // StreamableHttpError in classify
-    ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", 1),
     // PathChanged in pending_requests; SelectionChanged in pending_requests
     ("crates/gents-tools/src/plugin/approval.rs", 2),
     // ExecutionOwnershipLost in drive_inference_stream
@@ -2169,28 +2160,38 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-tools/src/native/session_history.rs", 1),
 ];
 
-/// Adapter-boundary classifiers: functions that decide on error text because
-/// third-party or persisted text is the only signal, which their docstring
-/// states on a line starting `External premise:`. Their decisions are not
-/// debt; a new entry is a reviewed addition.
+/// Adapter-boundary classifiers: functions that decide on error text, or ask
+/// an erased error for a third-party type, because third-party or persisted
+/// text or a third-party type is the only signal, which their docstring
+/// states on a line starting `External premise:`. A type is third-party when
+/// it is written out, is no type parameter and no `crate`, `self`, `super`
+/// or `gents_*` path, and either no workspace source declares its name or its
+/// path starts at an external crate. Their decisions are not debt; a new
+/// entry is a reviewed addition.
 #[rustfmt::skip]
 const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-cli/src/commands/eval/watch.rs", &["store_locked"]),
+    ("crates/gents-desktop-core/src/inference.rs", &["classify_discovery_failure"]),
+    ("crates/gents-eval/src/report/store.rs", &["unresolvable"]),
     ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", &["provider_reason_from_failure"]),
     ("crates/gents-loop/src/error.rs", &["ProviderReport::classify_failure_text"]),
     ("crates/gents-loop/src/tool.rs", &["schema_args_error"]),
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", &["classify_error_text"]),
     ("crates/gents-migration/src/engine.rs", &["collection_already_exists"]),
     ("crates/gents-observe/src/observe/trace_export.rs", &["looks_like_deadline_or_inference_failure"]),
+    ("crates/gents-pack/src/plugin/install.rs", &["is_not_found"]),
     ("crates/gents-protocol/src/graphql/response.rs", &["is_collection_missing_error_message"]),
+    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_error_in_chain"]),
     ("crates/gents-protocol/src/node_readiness.rs", &["is_behavior_unavailable_rejection"]),
     ("crates/gents-service/src/native_service.rs", &["ensure_launchd_result"]),
     ("crates/gents-session/src/workspace/action_plan.rs", &["parse_action_plan_json"]),
     ("crates/gents-session/src/workspace/adapter.rs", &["git_blob_missing"]),
     ("crates/gents-store/src/config_client/retry.rs", &["ConfigClientError::is_missing_or_denied_write", "is_transaction_conflict_text"]),
+    ("crates/gents-store/src/graphql.rs", &["is_storage_full"]),
     ("crates/gents-tools/src/builtin/schema_help/mod.rs", &["sdl_help_call"]),
     ("crates/gents-tools/src/builtin/self_config/command/patch.rs", &["serde_found_string"]),
     ("crates/gents-tools/src/mcp/health.rs", &["classify_last_error"]),
+    ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["classify"]),
 ];
 
 const EXTERNAL_PREMISE: &str = "External premise:";
@@ -2555,6 +2556,68 @@ struct DeclaredErrors {
     exported: BTreeMap<String, BTreeSet<String>>,
     /// Every declared error type's name, private ones included.
     names: BTreeSet<String>,
+    /// Every type name a workspace source declares, test code included.
+    workspace: BTreeSet<String>,
+    /// `std`, `core`, `alloc` and the crates the workspace depends on.
+    external: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct TypeNames(BTreeSet<String>);
+
+impl<'ast> Visit<'ast> for TypeNames {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        self.0.insert(item.ident.to_string());
+    }
+
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        self.0.insert(item.ident.to_string());
+    }
+
+    fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
+        self.0.insert(item.ident.to_string());
+    }
+
+    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
+        self.0.insert(item.ident.to_string());
+    }
+
+    fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
+        self.0.insert(item.ident.to_string());
+        visit::visit_item_trait(self, item);
+    }
+}
+
+/// The crate names a path may start at that are not this workspace's.
+fn external_crates(root: &Path) -> BTreeSet<String> {
+    let workspace = toml_file(&root.join("Cargo.toml"));
+    let mut tables = vec![workspace["workspace"].get("dependencies").cloned()];
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let manifest = toml_file(
+            &root
+                .join(member.as_str().expect("member path"))
+                .join("Cargo.toml"),
+        );
+        tables.push(manifest.get("dependencies").cloned());
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            tables.extend(
+                targets
+                    .values()
+                    .map(|target| target.get("dependencies").cloned()),
+            );
+        }
+    }
+    tables
+        .into_iter()
+        .flatten()
+        .filter_map(|table| table.as_table().cloned())
+        .flat_map(|table| table.into_iter().map(|(key, _)| key.replace('-', "_")))
+        .chain(["std", "core", "alloc"].map(str::to_string))
+        .filter(|name| !name.starts_with("gents"))
+        .collect()
 }
 
 #[derive(Default)]
@@ -2632,9 +2695,15 @@ fn in_owner_module(path: &str) -> bool {
 }
 
 impl DeclaredErrors {
-    fn of(sources: &[(String, syn::File)]) -> Self {
-        let mut declared = Self::default();
+    fn of(sources: &[(String, syn::File)], external: &BTreeSet<String>) -> Self {
+        let mut declared = Self {
+            external: external.clone(),
+            ..Self::default()
+        };
         for (path, syntax) in sources {
+            let mut names = TypeNames::default();
+            names.visit_file(syntax);
+            declared.workspace.extend(names.0);
             let mut declarations = ErrorDeclarations::default();
             declarations.visit_file(syntax);
             for (name, exported, derives) in declarations.types {
@@ -2726,14 +2795,44 @@ impl ClassifierVisitor<'_> {
         self.own.contains(&name) || (self.walker && single && frame.type_parameters.contains(&name))
     }
 
+    /// Whether the type asked for is a third-party one, which no owner here
+    /// can classify. A workspace type never is: not by a `crate`, `self`,
+    /// `super` or `gents_*` path, not as `Self` or a type parameter, and not
+    /// by a name a workspace source declares unless its path starts at an
+    /// external crate.
+    fn third_party(&self, asked: &syn::Type, frame: &FnFrame) -> bool {
+        let path = match asked {
+            syn::Type::Path(path) if path.qself.is_none() => &path.path,
+            _ => return false,
+        };
+        let (Some(first), Some(last)) = (path.segments.first(), path.segments.last()) else {
+            return false;
+        };
+        let (first, last) = (first.ident.to_string(), last.ident.to_string());
+        let single = path.segments.len() == 1;
+        if matches!(first.as_str(), "crate" | "self" | "super" | "Self")
+            || first.starts_with("gents_")
+            || (single && frame.type_parameters.contains(&last))
+        {
+            return false;
+        }
+        (!single && self.declared.external.contains(&first))
+            || !self.declared.workspace.contains(&last)
+    }
+
     fn downcast_site(&mut self, line: usize, asked: Option<&syn::Type>) {
         let function = self.function_name();
-        let compliant = match (self.frames.last(), asked) {
-            (Some(frame), Some(asked)) => self.owns(asked, frame),
-            _ => false,
+        let (owner, adapter) = match (self.frames.last(), asked) {
+            (Some(frame), Some(asked)) => (
+                self.owns(asked, frame),
+                frame.premise && self.third_party(asked, frame),
+            ),
+            _ => (false, false),
         };
-        if compliant {
+        if owner {
             *self.downcasts.compliant.entry(function).or_default() += 1;
+        } else if adapter {
+            *self.texts.compliant.entry(function).or_default() += 1;
         } else {
             let asked = asked.map_or_else(|| "an inferred type".to_string(), type_name);
             self.downcasts
@@ -3139,8 +3238,9 @@ impl ClassifierFindings {
 
 fn classifier_findings(
     sources: &[(String, syn::File)],
+    external: &BTreeSet<String>,
 ) -> (ClassifierFindings, ClassifierFindings) {
-    let declared = DeclaredErrors::of(sources);
+    let declared = DeclaredErrors::of(sources, external);
     let mut downcasts = ClassifierFindings::default();
     let mut texts = ClassifierFindings::default();
     for (path, syntax) in sources {
@@ -3153,7 +3253,10 @@ fn classifier_findings(
 
 fn production_classifier_findings() -> (ClassifierFindings, ClassifierFindings) {
     let root = repo_root();
-    classifier_findings(&parse_production(&root, production_sources(&root)))
+    classifier_findings(
+        &parse_production(&root, production_sources(&root)),
+        &external_crates(&root),
+    )
 }
 
 #[test]
@@ -3203,7 +3306,8 @@ fn snippet_findings(files: &[(&str, &str)]) -> (ClassifierFindings, ClassifierFi
             (path.to_string(), syntax)
         })
         .collect::<Vec<_>>();
-    classifier_findings(&sources)
+    let external: BTreeSet<String> = ["std", "serde_json"].map(str::to_string).into();
+    classifier_findings(&sources, &external)
 }
 
 fn downcast_sites(source: &str) -> usize {
@@ -3368,6 +3472,93 @@ fn downcast_fence_exempts_only_the_owner_asking_for_its_own_type() {
     let walker = "pub fn find_source<'a, T>(error: &'a (dyn Error + 'static)) -> Option<&'a T> where T: Error + 'static { find_map_source(error, |cause| cause.downcast_ref::<T>()) }";
     assert_eq!(check(&[(CHAIN_WALKER, walker)]), compliant("find_source"));
     assert_eq!(check(&[(OWNER_FILE, walker)]), counted(1));
+}
+
+#[test]
+fn downcast_fence_exempts_third_party_types_only_in_adapter_classifiers() {
+    const PREMISE: &str =
+        "/// External premise: serde reports a decode failure only as its own error type.\n";
+    let check = |files: &[(&str, &str)]| {
+        let (downcasts, adapters) = snippet_findings(files);
+        (
+            downcasts.sites(),
+            adapters
+                .functions()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let adapter = |function: &str| (0, vec![function.to_string()]);
+    let counted = (1, Vec::new());
+    let documented = |body: &str| format!("{PREMISE}{body}");
+
+    for (body, expected) in [
+        // A type no workspace source declares, by an external crate's path
+        // or by an imported name, in a function of any shape.
+        (
+            "fn decode_failed(error: &anyhow::Error) -> bool { error.chain().any(|cause| cause.is::<serde_json::Error>()) }",
+            adapter("decode_failed"),
+        ),
+        (
+            "fn missing(error: &anyhow::Error) -> bool { find_source::<std::io::Error>(error.as_ref()).is_some() }",
+            adapter("missing"),
+        ),
+        (
+            "fn refused(error: &Init) -> bool { error.inner.downcast_ref::<StreamableHttpError<C::Error>>().is_some() }",
+            adapter("refused"),
+        ),
+        // A workspace type in an adapter still counts: by its declaration,
+        // by a workspace path, as `Self`, and as a type parameter.
+        (
+            "#[derive(Debug, thiserror::Error)] struct Marker; fn marked(error: &anyhow::Error) -> bool { error.is::<Marker>() }",
+            counted.clone(),
+        ),
+        (
+            "fn theirs(error: &anyhow::Error) -> bool { error.is::<gents_store::StoreError>() }",
+            counted.clone(),
+        ),
+        (
+            "fn ours(error: &anyhow::Error) -> bool { error.is::<crate::other::OtherError>() }",
+            counted.clone(),
+        ),
+        (
+            "fn any<E>(error: &anyhow::Error) -> bool where E: std::error::Error + 'static { error.is::<E>() }",
+            counted.clone(),
+        ),
+        (
+            "fn inferred(error: &anyhow::Error) -> Option<&std::io::Error> { error.downcast_ref() }",
+            counted.clone(),
+        ),
+    ] {
+        let source = documented(body);
+        assert_eq!(check(&[(APPLICATION_FILE, source.as_str())]), expected, "{body}");
+        // The same downcast in a function without the premise counts.
+        assert_eq!(check(&[(APPLICATION_FILE, body)]), counted.clone(), "{body}");
+    }
+
+    // A name another workspace file declares is a workspace type, even in
+    // test code, unless the path starts at an external crate.
+    let declares = "#[cfg(test)] mod tests { pub struct Error; }";
+    let short = documented("fn io(error: &anyhow::Error) -> bool { error.is::<io::Error>() }");
+    let full = documented("fn io(error: &anyhow::Error) -> bool { error.is::<std::io::Error>() }");
+    assert_eq!(
+        check(&[(OWNER_FILE, declares), (APPLICATION_FILE, short.as_str())]),
+        counted.clone()
+    );
+    assert_eq!(
+        check(&[(OWNER_FILE, declares), (APPLICATION_FILE, full.as_str())]),
+        adapter("io")
+    );
+
+    // The adapter is registered like any other: undocumented it is debt,
+    // documented and unregistered it fails the registry check.
+    let (downcasts, adapters) = snippet_findings(&[(APPLICATION_FILE, full.as_str())]);
+    assert!(downcasts.failures(&[], &[], "advice").is_empty());
+    assert_eq!(adapters.failures(&[], &[], "advice").len(), 1);
+    assert!(adapters
+        .failures(&[], &[(APPLICATION_FILE, &["io"])], "advice")
+        .is_empty());
 }
 
 #[test]
