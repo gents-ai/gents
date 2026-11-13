@@ -387,7 +387,21 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let access = ConfigAccess::graphql(server.uri());
+        let reader = tokio::task::spawn_blocking(|| {
+            gents_store::test_support::test_identity("context-history-reader")
+        })
+        .await
+        .unwrap();
+        let access = ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::with_authenticated_delegation(
+                format!("{}/api/v0/graphql", server.uri()),
+                "Bearer fixture",
+                gents_store::identity::NodeIdentity::did(&reader)
+                    .parse()
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
         let mut items = Vec::new();
         let result =
             attach_context_history_rows(&access, "session", "node", None, &[], &mut items).await;
@@ -400,16 +414,7 @@ mod tests {
     #[tokio::test]
     async fn context_details_reject_foreign_physical_requests_before_reading_capture() {
         use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
-        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
-        fn query_contains(fragment: &'static str) -> impl wiremock::Match {
-            move |request: &wiremock::Request| {
-                request
-                    .body_json::<serde_json::Value>()
-                    .ok()
-                    .and_then(|body| body["query"].as_str().map(|query| query.contains(fragment)))
-                    .unwrap_or(false)
-            }
-        }
+        use gents_store::test_support::wire_database::WireDatabase;
         let directory = tempfile::tempdir().unwrap();
         let core = std::sync::Arc::new(
             ClientCore::start_with_paths_and_options(
@@ -419,7 +424,6 @@ mod tests {
             .await
             .unwrap(),
         );
-        let server = MockServer::start().await;
         let accounting = serde_json::json!({
             "accounting_version":gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
             "turn_index":0, "attempt":0, "estimator":"openai_chat_wire_json_bytes_div_4_v1",
@@ -428,27 +432,26 @@ mod tests {
             "compaction_threshold_basis_points":7500,"compaction_threshold_tokens":7500,
             "compaction_reason":"below_threshold"
         });
-        Mock::given(method("POST")).and(query_contains("InferenceCall("))
-            .and(query_contains("call_id: {_eq: \"call\"}"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":{"InferenceCall":[{
-                "request_doc_id":"foreign-physical", "request_id":"request", "call_id":"call", "call_seq":1,
-                "context_accounting_json":accounting.to_string()
-            }]}}))).expect(1).mount(&server).await;
-        Mock::given(method("POST"))
-            .and(query_contains("AgentRequest("))
-            .and(query_contains("_docID: {_eq: \"foreign-physical\"}"))
-            .and(query_contains("requester_did: {_eq: \"requester\"}"))
-            .and(query_contains("session_id: {_eq: \"session\"}"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"data":{"AgentRequest":[]}})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        let read = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let database = WireDatabase::spawn(
+            serde_json::json!({"InferenceCall": [{
+                "node_did": "node", "call_state": "completed",
+                "request_doc_id": "foreign-physical", "request_id": "request",
+                "call_id": "call", "call_seq": 1,
+                "context_accounting_json": accounting.to_string()
+            }]}),
+            {
+                let read = read.clone();
+                std::sync::Arc::new(move |collection| {
+                    read.lock().unwrap().push(collection);
+                    Box::pin(async { Ok(()) })
+                })
+            },
+        )
+        .await;
         let details = load_session_context_details(
             &core,
-            &ConfigAccess::graphql(server.uri()),
+            &ConfigAccess::Graphql(database.reader()),
             "node",
             Some("requester"),
             "session",
@@ -458,9 +461,8 @@ mod tests {
         .await
         .unwrap();
         assert!(details.is_none());
-        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(*read.lock().unwrap(), ["InferenceCall", "AgentRequest"]);
         core.shutdown().await.unwrap();
-        server.verify().await;
     }
 
     fn reduction(key: &str, through: Option<i64>, created_at: &str) -> LoadedReduction {

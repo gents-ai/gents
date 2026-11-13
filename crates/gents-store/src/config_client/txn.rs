@@ -73,7 +73,7 @@ type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 /// The receipt read is the caller's own query, so its failure stays opaque.
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiptWriteError {
-    #[error(transparent)]
+    #[error("{0}")]
     Write(#[from] ConfigClientError),
     #[error("checking stable write receipt")]
     Receipt(#[source] Box<dyn std::error::Error + Send + Sync>),
@@ -113,6 +113,9 @@ mod receipt_owner_tests;
 #[cfg(test)]
 #[path = "txn_stream_waiter_conformance.rs"]
 mod stream_waiter_conformance;
+
+#[cfg(test)]
+mod access_classification_tests;
 
 #[cfg(test)]
 mod variable_tests;

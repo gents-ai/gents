@@ -557,6 +557,18 @@ mod conformance {
     }
 
     #[test]
+    fn failed_snapshot_matches_lean() {
+        use gents_store::config_client::access_classification_fixture::AccessFailure;
+        gents_lean_vocab::families::runtime_connection_observation_failed_snapshot::replay::<
+            AccessFailure,
+            SnapshotOutcome,
+        >(|i| {
+            let read = anyhow::Error::from(gents_store::views::ViewError::from(i.failure.error()));
+            snapshot_outcome(&SnapshotReadError::from(read))
+        });
+    }
+
+    #[test]
     fn reconnects_matches_lean() {
         gents_lean_vocab::families::runtime_connection_observation_reconnects::replay(|i| {
             reconnects(i.origin, i.event)

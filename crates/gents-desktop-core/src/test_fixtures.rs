@@ -478,6 +478,14 @@ impl HeldRequest {
 }
 
 impl GatedRuntimeProxy {
+    /// Selects a node's snapshot read: the one request that reads the Node
+    /// together with its readiness and its datastore tool surfaces.
+    pub fn node_snapshot(body: &str) -> bool {
+        [": Node(", ": NodeReadiness(", ": DatastoreToolSurface("]
+            .iter()
+            .all(|root| body.contains(root))
+    }
+
     pub async fn start(upstream_graphql: &str, held: fn(&str) -> bool) -> Self {
         let upstream = upstream_graphql
             .strip_prefix("http://")

@@ -1944,53 +1944,32 @@ mod tests {
 
     #[tokio::test]
     async fn failed_liveness_activity_read_degrades_to_claimed_at() {
-        use axum::{http::StatusCode, routing::post, Json, Router};
-
         let claimed_at = (Utc::now() - Duration::seconds(120)).to_rfc3339();
-        let base = serde_json::json!({
-            "data": {
-                "NodeRuntime": [],
-                "NodeReadiness": [],
-                "InferenceBackendMetadata": [],
+        let database = gents_store::test_support::wire_database::WireDatabase::spawn(
+            serde_json::json!({
                 "AgentRequest": [{
                     "_docID": "doc-req-1",
                     "request_id": "req-1",
                     "node_did": "did:test:local",
+                    "lifecycle_state": "processing",
                     "claimed_at": claimed_at,
                 }],
-                "AgentToolCall": []
-            }
-        });
-        let router = Router::new().route(
-            "/api/v0/graphql",
-            post(move |Json(body): Json<Value>| {
-                let base = base.clone();
-                async move {
-                    let query = body["query"].as_str().unwrap_or_default().to_string();
-                    if query.contains("NodeRuntime") {
-                        Ok(Json(base))
-                    } else {
-                        Err(StatusCode::BAD_REQUEST)
-                    }
-                }
             }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind mock graphql");
-        let addr = listener.local_addr().expect("mock addr");
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
-        });
-
-        let data = load_metrics_query_data(
-            &gents_store::config_client::GraphqlEndpoint::anonymous(format!(
-                "http://{addr}/api/v0/graphql"
-            )),
-            "did:test:local",
+            std::sync::Arc::new(|collection| {
+                Box::pin(async move {
+                    if collection == "InferenceCall" {
+                        Err(axum::http::StatusCode::BAD_REQUEST)
+                    } else {
+                        Ok(())
+                    }
+                })
+            }),
         )
-        .await
-        .expect("an activity read failure must not fail the liveness owner");
+        .await;
+
+        let data = load_metrics_query_data(&database.reader(), "did:test:local")
+            .await
+            .expect("an activity read failure must not fail the liveness owner");
         let request = &data.liveness.requests[0];
         assert_eq!(request.request_id, "req-1");
         assert!(
