@@ -28,6 +28,13 @@ pub struct MissingReference {
     pub node_did: String,
 }
 
+impl MissingReference {
+    /// The missing reference an erased error carries as its root or as a context value.
+    pub fn in_error(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+}
+
 /// Canonical configuration visible for one node; observations are never selected.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigReferences {
