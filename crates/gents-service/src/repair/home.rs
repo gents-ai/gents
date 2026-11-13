@@ -71,6 +71,18 @@ pub async fn store_check(
     }
 }
 
+/// The report a read-only command gives before it asks anything of a home an
+/// older Gents made: the same refusal, text and exit code the repair gives,
+/// in place of whatever fails first against a home that has no node.
+pub async fn refuse_older_home(
+    home: &Path,
+) -> Result<(), gents_protocol::operations::install_repair::IncompatibleStore> {
+    match store_check(home).await {
+        Some(store) if store.kind.made_by_older_version() => Err(store),
+        _ => Ok(()),
+    }
+}
+
 pub fn classify_home(
     home: &Path,
     last_refusal: Option<ServiceRefusal>,

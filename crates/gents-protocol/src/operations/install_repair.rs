@@ -49,23 +49,56 @@ pub struct IncompatibleStore {
     pub data_path: PathBuf,
 }
 
+impl IncompatibleStore {
+    /// The report for the desktop app's own client store, which is not a
+    /// node's home: no older Gents serves it and no `gents` command sets it
+    /// up, so the advice for a home does not apply. The startup screen that
+    /// shows this offers the reset.
+    pub fn client_store_report(&self) -> String {
+        match older_what(self.kind) {
+            Some(what) => format!(
+                "The desktop app's local data at {} was made by an older version of Gents ({what}), which this version cannot open: this release has no conversion from it. Nothing in it was changed. The desktop app can back it up and start fresh from this screen",
+                self.data_path.display()
+            ),
+            None => self.to_string(),
+        }
+    }
+}
+
+/// What shows that an older Gents made the store, for the kinds
+/// [`IncompatibleStoreKind::made_by_older_version`] names.
+fn older_what(kind: IncompatibleStoreKind) -> Option<&'static str> {
+    match kind {
+        IncompatibleStoreKind::LegacyRocksDb => Some("a RocksDB store"),
+        IncompatibleStoreKind::LegacyLark => Some("a Lark store"),
+        IncompatibleStoreKind::UnknownLineage => {
+            Some("a store without this version's lineage marker")
+        }
+        IncompatibleStoreKind::UnencryptedStore => Some("a store that is not encrypted at rest"),
+        IncompatibleStoreKind::OtherVersionSchema => {
+            Some("its collections' access policies or schema differ from this version's")
+        }
+        _ => None,
+    }
+}
+
 fn describe(kind: IncompatibleStoreKind, data_path: &Path) -> String {
     let path = data_path.display();
     let home = data_path.parent().unwrap_or(data_path);
     let home_word = shell_word(home);
-    let older = |what: &str| {
-        format!(
-            "{home} was made by an older version of Gents ({what}), which this version cannot open: this release has no conversion from it. Nothing in it was changed and no background service was started for it. You can keep using it with the older Gents. To keep its data, export it first with the older Gents (`gents utils data export --help`). To start fresh with this version, move it aside yourself (`mv {home_word} {home_word}.older`), then run `gents`",
+    if let Some(what) = older_what(kind) {
+        return format!(
+            "{home} was made by an older version of Gents ({what}), which this version cannot open: this release has no conversion from it. Nothing in it was changed and no background service was started for it. You can keep using it with the older Gents. The older Gents can export its application records (`gents utils data export --help`); that export does not include sessions or agent configuration. To start fresh with this version, move it aside yourself (`mv {home_word} {home_word}.older`), then run `gents`",
             home = home.display()
-        )
-    };
+        );
+    }
     match kind {
-        IncompatibleStoreKind::LegacyRocksDb => older("a RocksDB store"),
-        IncompatibleStoreKind::LegacyLark => older("a Lark store"),
-        IncompatibleStoreKind::UnknownLineage => older("a store without this version's lineage marker"),
-        IncompatibleStoreKind::UnencryptedStore => older("a store that is not encrypted at rest"),
-        IncompatibleStoreKind::OtherVersionSchema => older("its collections' access policies or schema differ from this version's"),
-        IncompatibleStoreKind::UnsupportedOrCorrupt => format!(
+        IncompatibleStoreKind::LegacyRocksDb
+        | IncompatibleStoreKind::LegacyLark
+        | IncompatibleStoreKind::UnknownLineage
+        | IncompatibleStoreKind::UnencryptedStore
+        | IncompatibleStoreKind::OtherVersionSchema
+        | IncompatibleStoreKind::UnsupportedOrCorrupt => format!(
             "{path} is not a store this version can read: it may be damaged, or made by a program other than Gents. Nothing in it was changed. To set it aside and start fresh, run `gents --home {home_word}` in a terminal and choose to set it aside"
         ),
         IncompatibleStoreKind::InsecureKey => format!(
