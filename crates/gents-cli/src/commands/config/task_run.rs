@@ -99,9 +99,8 @@ pub(crate) async fn enqueue_task_run_on(
 
 /// A refused Task operation, shown with the command that corrects it.
 pub(crate) fn failure(error: TaskOperationError) -> anyhow::Error {
-    let next = crate::next_call::command(error.recovery(), None);
-    let message = format!("{error}\nNext: {next}");
-    anyhow::Error::new(error).context(message)
+    let next = error.recovery();
+    crate::commands::refusal::Refusal::new(error, next).into()
 }
 
 pub(crate) fn resolve_task_id_for(
