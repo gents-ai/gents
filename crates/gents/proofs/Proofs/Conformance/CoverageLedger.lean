@@ -1902,7 +1902,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "family"
       "identity_operations_readiness_observation_unreached"
-      "model-production-gap: the recovery scenario builds exactly one Node and one readiness row with a recorded parent and observes as the embedded runtime, so no production path observes a foreign requested runtime, a missing or duplicated Node or readiness row, or a row with no recorded parent.")
+      "model-production-gap: the recovery scenario builds at most one Node and exactly one readiness row, records a parent on every row that has a Node, and observes as the embedded runtime, so no production path observes a foreign requested runtime, a duplicated Node, a missing or duplicated readiness row, or a row with no recorded parent beside its Node.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"

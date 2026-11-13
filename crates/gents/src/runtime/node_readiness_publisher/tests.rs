@@ -693,6 +693,7 @@ async fn published_readiness_observation_matches_model() {
             "node-unregistered" => ("unregistered-parent", true, true),
             "revoked-after-publication" => ("already-complete", false, false),
             "pending" => ("foreign-runtime", true, false),
+            "no-node" => ("node-unknown", true, true),
             other => panic!("the recovery scenario has no fixture for {other}"),
         };
         let fixture = recovery_fixture(fixture_name, pending).await;

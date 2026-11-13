@@ -404,22 +404,24 @@ def observationUsable (i : ObservationInput) : Usable :=
       i.readinessCount, i.nodeId, i.nodeOwner, i.readinessOwner, i.recordedParent,
       i.parentLinked, i.parentPresent⟩ }
 
-/-- The recovery scenario observes, as the embedded runtime, the one Node and
-the one readiness row each of its fixtures leaves behind. -/
+/-- The recovery scenario observes, as the embedded runtime, the readiness row
+each of its fixtures leaves behind, with the one Node it registers or, when the
+fixture records an unknown parent, with no Node. -/
 @[conformance_family]
 def readinessObservation : Family ObservationInput Usable where
   inputs := observationInputs.filter (·.name ∈ ["valid", "readiness-unregistered",
     "foreign-readiness", "replaced-parent", "node-unregistered", "revoked-after-publication",
-    "pending"])
+    "pending", "no-node"])
   model := observationUsable
 
-/-- model-production-gap: the recovery scenario builds exactly one Node and one
-readiness row with a recorded parent and observes as the embedded runtime, so no
-production path observes a foreign requested runtime, a missing or duplicated
-Node or readiness row, or a row with no recorded parent. -/
+/-- model-production-gap: the recovery scenario builds at most one Node and
+exactly one readiness row, records a parent on every row that has a Node, and
+observes as the embedded runtime, so no production path observes a foreign
+requested runtime, a duplicated Node, a missing or duplicated readiness row, or a
+row with no recorded parent beside its Node. -/
 @[conformance_family]
 def readinessObservationUnreached : Family ObservationInput Usable where
-  inputs := observationInputs.filter (·.name ∈ ["foreign-runtime", "no-node", "duplicate-node",
+  inputs := observationInputs.filter (·.name ∈ ["foreign-runtime", "duplicate-node",
     "no-readiness", "duplicate-readiness", "missing-parent"])
   model := observationUsable
 
