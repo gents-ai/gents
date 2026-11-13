@@ -80,6 +80,84 @@ fn empty_mcp_tool_selection_explains_why_no_tools_are_attached() {
     }
 }
 
+#[tokio::test]
+async fn presented_mcp_tool_names_match_the_attached_tools() {
+    use gents_documents::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
+
+    let (db, root) = crate::mcp::meta::tests::test_node().await;
+    let node = db.node.clone();
+    crate::mcp::meta::tests::seed_registry_service(&node, "research", "127.0.0.1", 9213).await;
+    let node_did = node.node_identity_did().unwrap().to_string();
+    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), node_did.clone());
+    runtime.agent_identity = Some(agent);
+
+    let selection = |tool_names: Vec<&str>, background: Vec<&str>| RemoteServiceTools {
+        mcp_service_id: "research".into(),
+        tool_names: tool_names.into_iter().map(str::to_string).collect(),
+        background_tool_names: background.into_iter().map(str::to_string).collect(),
+        style: RemoteToolStyle::Discovery,
+        ..Default::default()
+    };
+
+    for (case, services, attaches) in [
+        (
+            "selected names",
+            vec![selection(vec!["search"], Vec::new())],
+            true,
+        ),
+        (
+            "no selected names",
+            vec![selection(Vec::new(), Vec::new())],
+            false,
+        ),
+        (
+            "duplicate service reference",
+            vec![
+                selection(vec!["search"], Vec::new()),
+                selection(vec!["search"], Vec::new()),
+            ],
+            false,
+        ),
+        (
+            "background name outside the selection",
+            vec![selection(vec!["search"], vec!["sweep"])],
+            false,
+        ),
+    ] {
+        let surface = AgentToolSurfaceConfig::from_selection(
+            "worker",
+            ResolvedToolSelection {
+                enable_meta_tools: true,
+                allowed_mcp_service_ids: vec!["research".into()],
+                remote_tools: Some(RemoteTools { services }),
+                ..Default::default()
+            },
+            &ToolCeiling::meta_only(),
+            Vec::new(),
+        )
+        .unwrap()
+        .resolve(&node, &node_did, &crate::plugin_host::NoPluginHost)
+        .await
+        .unwrap();
+
+        let names = surface.tool_names();
+        let presented = gents_protocol::tool_names::META_TOOL_NAMES
+            .iter()
+            .any(|meta| names.iter().any(|name| name == meta));
+        let built = surface.build_tools(&runtime).await.unwrap();
+        let attached = gents_protocol::tool_names::META_TOOL_NAMES
+            .iter()
+            .any(|meta| built.iter().any(|tool| tool.name() == *meta));
+        assert_eq!(
+            presented, attached,
+            "{case}: advertised meta tool names must match the attached tools"
+        );
+        assert_eq!(attached, attaches, "{case}: attachment");
+    }
+}
+
 fn temp_root(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{name}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();

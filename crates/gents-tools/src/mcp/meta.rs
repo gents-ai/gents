@@ -55,11 +55,9 @@ pub async fn build_meta_tools(
     let mut tools: Vec<Box<dyn gents_loop::tool::ToolDyn>> = Vec::new();
     let mut discovery = false;
     for selection in &ctx.remote_tools.services {
-        if selection.tool_names.is_empty()
-            || ctx.service_selection(&selection.mcp_service_id).is_none()
-        {
+        let Some(selection) = ctx.service_selection(&selection.mcp_service_id) else {
             continue;
-        }
+        };
         if selection.style == gents_documents::RemoteToolStyle::Discovery {
             discovery = true;
             continue;
