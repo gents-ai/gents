@@ -465,10 +465,6 @@ def snapshotIdentityCasesJson : String :=
 
 def snapshotClientCasesJson : String :=
   ""
-    ++ "\"client_request_closure_cases\":"
-      ++ Conformance.ClientRequestClosure.casesJson ++ ","
-    ++ "\"client_session_turn_cases\":"
-      ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
     ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","

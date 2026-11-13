@@ -227,8 +227,4 @@ example : desktopClientShellCases.all fun c =>
       (desktop.model (desktopInputOf c)).desktopExpectedTurnState == c.desktopObservedTurnState := by
   native_decide
 
-def sessionTurnCasesJson : String := SessionTurnCases.casesJson
-
-def sessionTurnCaseCount : Nat := SessionTurnCases.caseCount
-
 end Conformance.ClientShellContracts
