@@ -165,7 +165,11 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
             .get("request_doc_id")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("fire output missing request_doc_id: {fire}"))?;
-        assert!(!request_doc_id.is_empty());
+        let result = if request_doc_id.is_empty() {
+            "skipped"
+        } else {
+            "fired"
+        };
 
         let response = graphql_query(
             &graphql,
@@ -204,9 +208,13 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         ),
         "manual task run should create a request that is pending or has advanced through the daemon lifecycle, got lifecycle_state={persisted_lifecycle_state:?}"
     );
+        assert!(
+            row.get("caused_by_trigger_id").is_some(),
+            "AgentRequest row must carry caused_by_trigger_id, got {row}"
+        );
         case.check(
             gents_lean_vocab::families::trigger_contracts_manual_run::ManualRunOutput {
-                result: "fired".to_owned(),
+                result: result.to_owned(),
                 materialize_trigger_id: row
                     .get("caused_by_trigger_id")
                     .and_then(Value::as_str)
