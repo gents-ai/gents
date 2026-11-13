@@ -1865,6 +1865,12 @@ impl EventSource {
         Some(first)
     }
 
+    #[cfg(test)]
+    pub(super) async fn conformance_rescan(&mut self) -> Option<FireIntent> {
+        self.finish_durable_checkpoint().await;
+        self.rescan_created_docs().await
+    }
+
     async fn rescan_created_docs(&mut self) -> Option<FireIntent> {
         if let Some(intent) = self.reconcile_due_and_rotating_groups().await {
             return Some(intent);

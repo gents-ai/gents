@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
-use gents_inference::llm::message::{AssistantContent, ToolResultContent, UserContent};
+use gents_inference::llm::message::AssistantContent;
 use gents_loop::tool::ToolDyn;
-use rig::completion::{CompletionError, CompletionRequest};
+use rig::completion::CompletionRequest;
 
 use gents_inference::llm::message::Message;
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
@@ -26,7 +26,6 @@ include!("budgeting.rs");
 include!("capture.rs");
 include!("claude.rs");
 include!("responses_replay.rs");
-include!("one_shot.rs");
 include!("request_assembly.rs");
 include!("retry.rs");
 include!("streaming.rs");

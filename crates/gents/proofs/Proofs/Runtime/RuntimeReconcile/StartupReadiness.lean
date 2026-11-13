@@ -225,6 +225,49 @@ theorem staged_abort_preserves_active_pending
   unfold generationPending at hActive ⊢
   exact Finset.mem_erase.mpr ⟨hDifferent, Finset.mem_insert_of_mem hActive⟩
 
+inductive GenerationKind
+  | register
+  | retire
+  deriving DecidableEq, Repr
+
+structure GenerationStep where
+  kind : GenerationKind
+  generation : Nat
+  deriving DecidableEq, Repr
+
+structure GenerationObservation where
+  generationOnePending : Bool
+  generationTwoPending : Bool
+  ready : Bool
+  deriving DecidableEq, Repr
+
+def applyGenerationStep (owners : PendingGenerationOwners) (step : GenerationStep) :
+    PendingGenerationOwners :=
+  match step.kind with
+  | .register => registerGeneration step.generation owners
+  | .retire => releaseGeneration step.generation owners
+
+def observeGenerations (owners : PendingGenerationOwners) : GenerationObservation :=
+  { generationOnePending := decide (1 ∈ owners.generations)
+    generationTwoPending := decide (2 ∈ owners.generations)
+    ready := decide (owners.generations = ∅) }
+
+def observeGenerationTrace :
+    PendingGenerationOwners → List GenerationStep → List GenerationObservation
+  | _, [] => []
+  | owners, step :: rest =>
+      let next := applyGenerationStep owners step
+      observeGenerations next :: observeGenerationTrace next rest
+
+theorem aborted_staged_generation_does_not_release_active_startup_obligation :
+    observeGenerationTrace { generations := ∅ }
+        [⟨.register, 1⟩, ⟨.register, 2⟩, ⟨.retire, 2⟩, ⟨.retire, 1⟩] =
+      [ { generationOnePending := true, generationTwoPending := false, ready := false }
+      , { generationOnePending := true, generationTwoPending := true, ready := false }
+      , { generationOnePending := true, generationTwoPending := false, ready := false }
+      , { generationOnePending := false, generationTwoPending := false, ready := true } ] := by
+  decide
+
 structure ScopedDemotion where
   generation : Nat
   active : Bool
@@ -271,5 +314,69 @@ theorem unchanged_state_does_not_publish {α : Type} [DecidableEq α] (state : �
 theorem changed_state_publishes {α : Type} [DecidableEq α] (previous next : α)
     (hChanged : previous ≠ next) :
     shouldPublish (some previous) next = true := by simp [shouldPublish, hChanged]
+
+/-- How an agent's resolved tool configuration fares when the runtime admits
+it: its surface builds, it resolves but fails to build (a named plugin is not
+installed), or it names an agent target that does not resolve. -/
+inductive ToolAdmission where
+  | builds
+  | failsToBuild
+  | unresolvedTarget
+  deriving DecidableEq, Repr
+
+inductive UnavailableReason where
+  | toolSurfaceUnavailable
+  | toolConfigurationInvalid
+  deriving DecidableEq, Repr
+
+def admissionReason : ToolAdmission → Option UnavailableReason
+  | .builds => none
+  | .failsToBuild => some .toolSurfaceUnavailable
+  | .unresolvedTarget => some .toolConfigurationInvalid
+
+/-- Only an unresolved target is a fault of the agent's own configuration; its
+private diagnostic names the target so an operator can repair it. -/
+def diagnosticNamesTarget (admission : ToolAdmission) : Bool :=
+  admissionReason admission == some .toolConfigurationInvalid
+
+def admittedStanding (admission : ToolAdmission) : AgentStanding :=
+  if (admissionReason admission).isSome then .demoted else .ready
+
+def runnable (standing : AgentStanding) : Bool := standing == .ready
+
+/-- What depends on an agent follows its standing: another agent offers it as
+a target, its tasks stay active, and its schedules stay active only while it
+is runnable; a demoted agent's schedules are reported unavailable. -/
+structure Dependents where
+  offeredAsTarget : Bool
+  taskActive : Bool
+  scheduleActive : Bool
+  scheduleUnavailable : Bool
+  deriving DecidableEq, Repr
+
+def dependents (standing : AgentStanding) : Dependents :=
+  { offeredAsTarget := runnable standing
+    taskActive := runnable standing
+    scheduleActive := runnable standing
+    scheduleUnavailable := standing == .demoted }
+
+/-- The control watcher re-admits every resolved snapshot it proposes; a wake
+that does not change the agent's source carries its standing forward. -/
+def afterWake (admission : ToolAdmission) : AgentStanding :=
+  acrossGeneration false (admittedStanding admission)
+
+theorem startup_demotion_cascades_to_targets_schedules_and_tasks :
+    dependents (admittedStanding .failsToBuild) =
+      { offeredAsTarget := false, taskActive := false, scheduleActive := false,
+        scheduleUnavailable := true } := by decide
+
+theorem from_default_agent_documents_rejects_unresolved_agent_target :
+    admittedStanding .unresolvedTarget = .demoted ∧
+      admissionReason .unresolvedTarget = some .toolConfigurationInvalid ∧
+      diagnosticNamesTarget .unresolvedTarget = true := by decide
+
+theorem control_watcher_keeps_an_agent_whose_tools_fail_to_build_demoted :
+    afterWake .failsToBuild = .demoted ∧
+      admissionReason .failsToBuild = some .toolSurfaceUnavailable := by decide
 
 end RuntimeReconcile.StartupReadiness

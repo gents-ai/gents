@@ -31,4 +31,24 @@ theorem completed_only_without_a_deadline_or_failure (expired receiptFailed earl
   cases expired <;> cases receiptFailed <;> cases earlyFailure <;>
     first | exact ⟨rfl, rfl, rfl⟩ | simp [settleReady] at h
 
+/-- What a dispatch under a wall deadline shows: whether the tool was started
+and how the call settled. A deadline already past at dispatch settles the call
+without starting it; a started call settles by `settleReady` when it becomes
+ready, so a call that becomes ready past the deadline is timed out. -/
+structure DeadlineDispatch where
+  called : Bool
+  settlement : Settlement
+  deriving DecidableEq, Repr
+
+def dispatchUnderDeadline (expiredAtDispatch readyAfterDeadline fails : Bool) : DeadlineDispatch :=
+  if expiredAtDispatch then { called := false, settlement := .timedOut }
+  else { called := true, settlement := settleReady readyAfterDeadline false fails }
+
+theorem ready_tool_after_wall_deadline_is_timed_out :
+    dispatchUnderDeadline false true false = { called := true, settlement := .timedOut } := rfl
+
+theorem a_call_past_its_deadline_at_dispatch_is_never_started (readyAfterDeadline fails : Bool) :
+    dispatchUnderDeadline true readyAfterDeadline fails =
+      { called := false, settlement := .timedOut } := rfl
+
 end ToolDispatch
