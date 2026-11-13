@@ -2862,6 +2862,47 @@ def caseCoverage : List CoverageEntry :=
       "identity_household_cases"
       "IdentityHouseholdCases")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_destructive_decision")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_fresh_backend_reopen")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_signed_create_collections")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_signed_delete_collections")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ordinary_client_mutation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_held_client_signer")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_immutable")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_signed_write_retry")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_observation_authority")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_metadata_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_userset_native_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_selection_manager")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_node_manager")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_node_manager_link_revocation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_agent_manager_link_revocation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_agent_manager_invoke_native")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_configuration_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_cursor_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pairing_overlay")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_destructive_decision_unreached"
+      "model-production-gap: production has no complete-inventory read; every Gents read is filtered by document ACP for its actor, so InventoryRead has only AcpFiltered and a destructive decision over a complete inventory cannot be driven.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "session_publication_task")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "session_publication_client_reservation")

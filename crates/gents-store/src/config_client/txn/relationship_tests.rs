@@ -14,10 +14,6 @@ use super::{ConfigAccess, ConfigApplyTxn, GraphqlEndpoint, TxnBackend};
 #[tokio::test]
 async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Result<()> {
     use crate::identity::NodeIdentity;
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
     let directory = tempfile::tempdir()?;
     let root = crate::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
     let binding = crate::identity::provision_agent_identity(&root)?;
@@ -39,7 +35,11 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
     );
     let context = defra_core::RequestContext::default().with_identity(Some(root.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
         .await?;
     for did in [
         profile_owner.did(),
@@ -225,20 +225,21 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
             })
         })
         .await?;
-    for item in &case.backend_observation_authority_cases {
-        let actor = match item["actor"].as_str().unwrap() {
+    for case in gents_lean_vocab::families::household_backend_observation_authority::cases() {
+        let item = &case.input;
+        let actor = match item.actor.as_str() {
             "runtime" => runtime.did(),
             "backend-owner" => root.did(),
             "agent" => agent.did(),
             "sibling" => sibling.did(),
             other => anyhow::bail!("unknown modeled actor {other}"),
         };
-        let (collection, doc) = match item["object"].as_str().unwrap() {
+        let (collection, doc) = match item.object.as_str() {
             "backend-metadata" => ("SetBackendMetadata", &backend_doc),
             "backend-observation" => ("SetBackendObservation", &observation_doc),
             other => anyhow::bail!("unknown modeled object {other}"),
         };
-        let permission = item["permission"].as_str().unwrap();
+        let permission = item.permission.as_str();
         let observed = owner
             .transact_readonly("test.observation.authority", |txn| {
                 Box::pin(async move {
@@ -260,17 +261,15 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
                 })
             })
             .await?;
-        assert_eq!(
-            matches!(
-                observed.as_slice(),
-                [defra_node::DocumentAccessDecision::Allowed]
-            ),
-            item["allowed"].as_bool().unwrap()
-        );
+        case.check(matches!(
+            observed.as_slice(),
+            [defra_node::DocumentAccessDecision::Allowed]
+        ));
     }
-    for item in &case.configuration_backend_metadata_cases {
-        let direct = item["direct"].as_bool().unwrap();
-        let revoked = item["revoked"].as_bool().unwrap();
+    for case in gents_lean_vocab::families::household_backend_metadata_selection::cases() {
+        let item = &case.input;
+        let direct = item.direct;
+        let revoked = item.revoked;
         if direct {
             owner
                 .add_actor_relationship("SetBackendMetadata", &backend_doc, "reader", &agent_did)
@@ -294,7 +293,7 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
                 })
                 .await?;
         }
-        let actor = match item["actor"].as_str().unwrap() {
+        let actor = match item.actor.as_str() {
             "agent" => agent.did(),
             "sibling" => sibling.did(),
             other => anyhow::bail!("unknown modeled actor {other}"),
@@ -308,12 +307,6 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
                 rows.iter()
                     .any(|row| row["_docID"].as_str() == Some(backend_doc.as_str()))
             });
-        assert_eq!(
-            visible,
-            item["read"].as_bool().unwrap(),
-            "modeled {}",
-            item["name"]
-        );
         let observed = owner
             .transact_readonly("test.userset.backend_update", |txn| {
                 let backend_doc = &backend_doc;
@@ -332,17 +325,11 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
                 })
             })
             .await?;
-        let expected = if item["update"].as_bool().unwrap() {
-            defra_node::DocumentAccessDecision::Allowed
-        } else {
-            defra_node::DocumentAccessDecision::Denied
+        let update = match observed.as_slice() {
+            [defra_node::DocumentAccessDecision::Allowed] => true,
+            [defra_node::DocumentAccessDecision::Denied] => false,
+            other => panic!("{item:?}: unexpected update decision {other:?}"),
         };
-        assert_eq!(
-            observed.as_slice(),
-            [expected],
-            "modeled {} update",
-            item["name"]
-        );
         if revoked {
             owner
                 .transact_write("test.userset.backend_restore", |txn| {
@@ -366,6 +353,12 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
                 .delete_actor_relationship("SetBackendMetadata", &backend_doc, "reader", &agent_did)
                 .await?;
         }
+        case.check(
+            gents_lean_vocab::families::household_backend_metadata_selection::BackendMetadataAccess {
+                read: visible,
+                update,
+            },
+        );
     }
     let aborted: anyhow::Result<()> = owner
         .transact_write("test.userset.abort", |txn| {
@@ -391,9 +384,10 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
     assert!(after_abort["data"]["SetSampling"]
         .as_array()
         .is_some_and(|rows| rows.iter().any(|row| row["_docID"] == sampling_doc)));
-    for item in &case.configuration_userset_cases {
-        let direct = item["direct"].as_bool().unwrap();
-        let revoked = item["revoked"].as_str().unwrap();
+    for case in gents_lean_vocab::families::household_userset_native_visibility::cases() {
+        let item = &case.input;
+        let direct = item.direct;
+        let revoked = item.revoked.as_str();
         if direct {
             owner
                 .add_actor_relationship("SetSampling", &sampling_doc, "reader", &agent_did)
@@ -461,13 +455,13 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
             }
             _ => {}
         }
-        let actor = match item["actor"].as_str().unwrap() {
+        let actor = match item.actor.as_str() {
             "agent" => agent.did(),
             "sibling" => sibling.did(),
             "profile-owner" => profile_owner.did(),
             other => anyhow::bail!("unknown modeled actor {other}"),
         };
-        let (name, doc) = if item["document"] == "retry" {
+        let (name, doc) = if item.document == "retry" {
             ("SetRetry", &retry_doc)
         } else {
             ("SetSampling", &sampling_doc)
@@ -479,12 +473,6 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
             rows.iter()
                 .any(|row| row["_docID"].as_str() == Some(doc.as_str()))
         });
-        assert_eq!(
-            visible,
-            item["expected"].as_bool().unwrap(),
-            "modeled {}",
-            item["name"]
-        );
         match revoked {
             "profile" => {
                 profile_access
@@ -552,13 +540,15 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
                 .delete_actor_relationship("SetSampling", &sampling_doc, "reader", &agent_did)
                 .await?;
         }
+        case.check(visible);
     }
     let delegate = identity::Did::new(profile_owner.did())?;
     owner
         .add_actor_relationship("SetSampling", &sampling_doc, "reader", &delegate)
         .await?;
-    for item in &case.configuration_selection_manager_cases {
-        if item["grant"] == true {
+    for case in gents_lean_vocab::families::household_selection_manager::cases() {
+        let item = &case.input;
+        if item.grant {
             owner
                 .add_actor_relationship(
                     "SetSampling",
@@ -568,7 +558,7 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
                 )
                 .await?;
         }
-        if item["revoke"] == true {
+        if item.revoke {
             owner
                 .delete_actor_relationship(
                     "SetSampling",
@@ -594,12 +584,6 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
                 })
             })
             .await;
-        assert_eq!(
-            result.is_ok(),
-            item["selection"].as_bool().unwrap(),
-            "modeled {}",
-            item["name"]
-        );
         let reader = profile_access
             .transact_write("test.userset.delegate_reader", |txn| {
                 let (sampling_doc, delegate) = (&sampling_doc, &delegate);
@@ -609,12 +593,6 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
                 })
             })
             .await;
-        assert_eq!(
-            reader.is_ok(),
-            item["reader"].as_bool().unwrap(),
-            "modeled reader {}",
-            item["name"]
-        );
         let changed = match profile_access.write("test.userset.delegate_update", &format!(
             "mutation {{ update_SetSampling(docID: \"{}\", input: {{label:\"changed\"}}) {{_docID}} }}",
             crate::graphql::escape_graphql_string(&sampling_doc))).await {
@@ -624,11 +602,12 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
             Err(error) if error.is_graphql_rejection() => false,
             Err(error) => return Err(error.into()),
         };
-        assert_eq!(
-            changed,
-            item["update"].as_bool().unwrap(),
-            "modeled update {}",
-            item["name"]
+        case.check(
+            gents_lean_vocab::families::household_selection_manager::SelectionManagerAccess {
+                selection: result.is_ok(),
+                reader: reader.is_ok(),
+                update: changed,
+            },
         );
     }
     node.shutdown().await?;
@@ -872,10 +851,6 @@ async fn embedded_relationship_grants_and_revocations_follow_transaction_finalit
 async fn modeled_node_owners_and_administrators_manage_only_their_selected_relations(
 ) -> anyhow::Result<()> {
     use crate::identity::NodeIdentity;
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration policy model");
     let directory = tempfile::tempdir()?;
     let user = crate::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
     let admin = crate::identity::KeyIdentity::load_or_create(directory.path().join("admin"), None)?;
@@ -900,7 +875,11 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
     let owner_context =
         defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&owner_context, &model.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(
+            &owner_context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
         .await?;
     for actor in [admin.did(), other.did(), creator.did(), selected.did()] {
         for permission in [
@@ -988,9 +967,8 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
             Ok::<_, anyhow::Error>((docs.remove(0), docs.remove(0), docs.remove(0)))
         })
     }).await?;
-    assert!(!model.configuration_node_manager_cases.is_empty());
-    for case in &model.configuration_node_manager_cases {
-        let actor = match case["actor"].as_str().unwrap() {
+    for case in gents_lean_vocab::families::household_node_manager::cases() {
+        let actor = match case.input.actor.as_str() {
             "user" => &owner,
             "admin" => &admin_access,
             "other-admin" => &other_access,
@@ -998,7 +976,7 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
             other => panic!("unknown modeled manager {other}"),
         };
         let admin_did = identity::Did::new(admin.did())?;
-        if case["revoke_admin"] == true {
+        if case.input.revoke_admin {
             owner
                 .delete_actor_relationship("Node", &node_doc, "administrator", &admin_did)
                 .await?;
@@ -1007,9 +985,8 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
                 .add_actor_relationship("Node", &node_doc, "administrator", &admin_did)
                 .await?;
         }
-        let expected = case["expected"].as_bool().unwrap();
-        let collection = case["resource"].as_str().unwrap();
-        let relation = case["relation"].as_str().unwrap();
+        let collection = case.input.resource.as_str();
+        let relation = case.input.relation.as_str();
         let (name, doc) = match collection {
             "configuration" => ("ManagerConfig", &config_doc),
             "workspace_roots" => ("ManagerRoot", &root_doc),
@@ -1040,8 +1017,7 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
                 })
             })
             .await;
-        assert_eq!(result.is_ok(), expected, "modeled {}", case["name"]);
-        if expected {
+        if result.is_ok() {
             actor
                 .transact_write("test.manager.remove", |txn| {
                     let selected_doc = &selected_doc;
@@ -1066,6 +1042,7 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
                 })
                 .await?;
         }
+        case.check(result.is_ok());
     }
     let owners = creator_access
         .transact_readonly("test.manager.agent_owner", |txn| {
@@ -1086,7 +1063,8 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
     owner
         .add_actor_relationship("ManagerAgent", &selected_doc, "session_writer", &reader)
         .await?;
-    for phase in ["before", "after"] {
+    for case in gents_lean_vocab::families::household_agent_manager_invoke_native::cases() {
+        let phase = case.input.phase.as_str();
         if phase == "after" {
             owner
                 .delete_actor_relationship("ManagerAgent", &selected_doc, "session_writer", &reader)
@@ -1110,16 +1088,10 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
                 })
             })
             .await?;
-        assert_eq!(
-            matches!(
-                observed.as_slice(),
-                [defra_node::DocumentAccessDecision::Allowed]
-            ),
-            model.agent_node_manager_invoke_case[phase]
-                .as_bool()
-                .unwrap(),
-            "Agent invoke {phase} user revocation"
-        );
+        case.check(matches!(
+            observed.as_slice(),
+            [defra_node::DocumentAccessDecision::Allowed]
+        ));
     }
     let admin_did = identity::Did::new(admin.did())?;
     owner
@@ -1151,7 +1123,12 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
             ),
         )
         .await?;
-    for (name, actor) in [("admin", &admin_access), ("user", &owner)] {
+    for case in gents_lean_vocab::families::household_node_manager_link_revocation::cases() {
+        let actor = match case.input.actor.as_str() {
+            "admin" => &admin_access,
+            "user" => &owner,
+            other => panic!("unknown modeled manager {other}"),
+        };
         let result = actor
             .transact_write("test.manager.after_source_revocation", |txn| {
                 let (config_doc, selected_doc) = (&config_doc, &selected_doc);
@@ -1169,13 +1146,7 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
                 })
             })
             .await;
-        assert_eq!(
-            result.is_ok(),
-            model.configuration_node_manager_link_revocation_case[name]
-                .as_bool()
-                .expect("modeled manager link revocation"),
-            "manager {name} after unrelated update"
-        );
+        case.check(result.is_ok());
     }
     creator_access
         .transact_write("test.agent_manager.revoke_source", |txn| {
@@ -1203,17 +1174,16 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
             ),
         )
         .await?;
-    for (name, actor) in [("admin", &admin_access), ("user", &owner)] {
+    for case in gents_lean_vocab::families::household_agent_manager_link_revocation::cases() {
+        let actor = match case.input.actor.as_str() {
+            "admin" => &admin_access,
+            "user" => &owner,
+            other => panic!("unknown modeled manager {other}"),
+        };
         let result = actor
             .add_actor_relationship("ManagerAgent", &selected_doc, "reader", &reader)
             .await;
-        assert_eq!(
-            result.is_ok(),
-            model.agent_node_manager_link_revocation_case[name]
-                .as_bool()
-                .expect("modeled Agent manager link revocation"),
-            "Agent manager {name} after unrelated update"
-        );
+        case.check(result.is_ok());
     }
     node.shutdown().await?;
     Ok(())

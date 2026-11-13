@@ -823,16 +823,6 @@ def eventExecutionCases : List Json :=
      ("current", eventExecutionJson current),
      ("allowed", toJson (Automation.eventExecutionAllowed original current))]
 
-def eventCursorCaseJson (actor operation : String) (revoked : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩],
-      relations := [⟨"nodes", "home", "runtime_reader", .actor runtimeDid⟩], enrolled := [] }
-  let created := Automation.publishEventCursor initial userDid "cursor" "home" agentDid true true
-  let state := if revoked then apply created
-    (.revoke ⟨"configuration", "cursor", "writer", .actor agentDid⟩) else created
-  Json.mkObj [("actor", toJson actor), ("permission", toJson operation), ("revoked", toJson revoked),
-    ("expected", toJson (allowed 5 state actor "configuration" "cursor" operation))]
-
 def eventCursorRebindCaseJson (actor : String) (revoked : Bool) : Json :=
   let initial : State :=
     { objects := [⟨"nodes", "home", userDid⟩], relations := [], enrolled := [] }
@@ -930,18 +920,6 @@ def retryUsersetCaseJson (name actor : String) (revokeExecution : Bool) : Json :
     ("document", toJson "retry"), ("direct", toJson false),
     ("expected", toJson (Household.allowed 8 state actor "configuration" "retry" "read"))]
 
-def backendMetadataSelectionCaseJson (name actor : String) (revoked direct : Bool) : Json :=
-  let withDirect := if direct then apply Configuration.inferenceUsersetFixture
-    (.grant ⟨"configuration", "backend-metadata", "reader", .actor "agent"⟩)
-    else Configuration.inferenceUsersetFixture
-  let state := if revoked then apply withDirect (.revoke
-    ⟨"configuration", "backend-metadata", "selected_by", .entitySet "configuration" "profile" "selected_by"⟩)
-    else withDirect
-  Json.mkObj [("name", toJson name), ("actor", toJson actor),
-    ("revoked", toJson revoked), ("direct", toJson direct),
-    ("read", toJson (Household.allowed 8 state actor "configuration" "backend-metadata" "read")),
-    ("update", toJson (Household.allowed 8 state actor "configuration" "backend-metadata" "update"))]
-
 def skillUsersetCaseJson (name actor : String) (revoked : Bool) : Json :=
   let state := if revoked then apply Configuration.skillSelectionFixture (.revoke
       ⟨"configuration", "skill", "selected_by", .entitySet "configuration" "context" "selected_by"⟩)
@@ -1008,32 +986,6 @@ def pluginProfileCaseJson (name : String) (actor : Option String) (revoked : Boo
   Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
     ("expected", toJson (Configuration.pluginModelMayUse state actor "profile"))]
 
-def selectionManagerCaseJson (name : String) (granted revoked : Bool) : Json :=
-  let relation : Relation := ⟨"configuration", "skill", "selection_manager", .actor "delegate"⟩
-  let grantedState := if granted then apply Configuration.skillSelectionFixture (.grantAs "user" relation)
-    else Configuration.skillSelectionFixture
-  let state := if revoked then apply grantedState (.revokeAs "user" relation) else grantedState
-  Json.mkObj [("name", toJson name), ("grant", toJson granted), ("revoke", toJson revoked),
-    ("selection", toJson (mayManage state "delegate"
-      ⟨"configuration", "skill", "selected_by", .entitySet "configuration" "context" "selected_by"⟩)),
-    ("reader", toJson (mayManage state "delegate" ⟨"configuration", "skill", "reader", .actor "delegate"⟩)),
-    ("update", toJson (allowed 8 state "delegate" "configuration" "skill" "update"))]
-
-def nodeManagerCaseJson (name actor resource id relation : String) (revokeAdmin : Bool) : Json :=
-  let state := if revokeAdmin then apply nodeManagerFixture
-    (.revoke ⟨"nodes", "node", "administrator", .actor "admin"⟩) else nodeManagerFixture
-  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("resource", toJson resource),
-    ("relation", toJson relation), ("revoke_admin", toJson revokeAdmin),
-    ("expected", toJson (mayManage state actor ⟨resource, id, relation, .actor "selected-agent"⟩))]
-
-def nodeManagerLinkRevocationCaseJson : Json :=
-  let state := apply nodeManagerFixture (.revoke
-    ⟨"configuration", "config", "selection_manager", .entitySet "nodes" "node" "administrator"⟩)
-  Json.mkObj [("admin", toJson (mayManage state "admin"
-      ⟨"configuration", "config", "selected_by", .entitySet "agents" "agent" "executor"⟩)),
-    ("user", toJson (mayManage state "user"
-      ⟨"configuration", "config", "selected_by", .entitySet "agents" "agent" "executor"⟩))]
-
 def agentInvokeManagerCaseJson : Json :=
   let grant : Relation := ⟨"agents", "agent", "session_writer", .actor "reader"⟩
   let granted := apply nodeManagerFixture (.grantAs "user" grant)
@@ -1041,11 +993,6 @@ def agentInvokeManagerCaseJson : Json :=
   Json.mkObj [("before", toJson (allowed 8 granted "reader" "agents" "agent" "invoke")),
     ("after", toJson (allowed 8 revoked "reader" "agents" "agent" "invoke"))]
 
-def agentManagerLinkRevocationCaseJson : Json :=
-  let state := apply nodeManagerFixture (.revoke
-    ⟨"agents", "agent", "administrator", .entitySet "nodes" "node" "administrator"⟩)
-  Json.mkObj [("admin", toJson (mayManage state "admin" ⟨"agents", "agent", "reader", .actor "reader"⟩)),
-    ("user", toJson (mayManage state "user" ⟨"agents", "agent", "reader", .actor "reader"⟩))]
 def packInstallationCaseJson (name installer : String) (commit revoke retryFresh direct : Bool) : Json :=
   let initial : State :=
     { objects := [⟨"nodes", "home", userDid⟩],
@@ -1512,20 +1459,6 @@ def danglingRepairCaseJson (actor : String) (authority : Configuration.Destructi
     ("refusal", toJson refusal),
     ("applied", toJson (Configuration.danglingRepairApplied actor authority repair))]
 
-/-- Every combination of the destructive decision's observations, with the
-modeled refusal (`null` when allowed). -/
-def destructiveDecisionCases : List Json := Id.run do
-  let mut cases := []
-  for nacEnabled in [true, false] do
-    for admin in [true, false] do
-      for inventory in [Configuration.InventoryRead.acpFiltered, .complete] do
-        let authority : Configuration.DestructiveAuthority := ⟨nacEnabled, admin, inventory⟩
-        cases := cases ++ [Json.mkObj [("nac_enabled", toJson nacEnabled),
-          ("admin", toJson admin), ("complete_inventory", toJson inventory.isComplete),
-          ("refusal", toJson ((Configuration.destructiveAdminDecision authority).map
-            Configuration.DestructiveRefusal.name))]]
-  return cases
-
 def callbackState : State :=
   { objects := [⟨"nodes", "home", userDid⟩,
       ⟨"configuration", "binding", userDid⟩,
@@ -1719,14 +1652,6 @@ def json : Json := Json.mkObj
       pluginBackendCase "absent" none "",
       pluginBackendCase "profile_revoked" (some "agent") "profile",
       pluginBackendCase "backend_revoked" (some "agent") "backend"]),
-   ("backend_observation_authority_cases", toJson ([
-      ("runtime", "backend-metadata", "update"),
-      ("runtime", "backend-observation", "update"),
-      ("backend-owner", "backend-metadata", "update"),
-      ("agent", "backend-observation", "read"),
-      ("sibling", "backend-observation", "read")].map fun (actor, object, permission) =>
-      Json.mkObj [("actor", toJson actor), ("object", toJson object), ("permission", toJson permission),
-        ("allowed", toJson (Household.allowed 10 Configuration.backendObservationFixture actor "configuration" object permission))])),
    ("backend_discovery_cases", toJson ([(true, true, true, true), (false, true, true, true),
        (true, false, true, true), (true, true, false, true), (true, true, true, false)].map
       fun (authorized, doc, connection, committed) => Json.mkObj
@@ -1755,10 +1680,6 @@ def json : Json := Json.mkObj
         [("locked", toJson locked), ("empty", toJson empty), ("unexposed", toJson unexposed),
          ("committed", toJson committed),
          ("origin", toJson (Configuration.freshBackendOrigin locked empty unexposed committed))])),
-   ("fresh_backend_reopen_cases", toJson ([(true, true, true), (false, true, true), (false, true, false),
-       (true, false, true), (true, true, false)].map fun (marker, store, binding) =>
-      Json.mkObj [("marker", toJson marker), ("store", toJson store), ("binding", toJson binding),
-        ("allowed", toJson (Configuration.freshBackendReopenAllowed marker store binding))])),
    ("backend_credential_publication_cases", toJson [
      backendCredentialPublicationCase "new" "new" true true,
      backendCredentialPublicationCase "new" "other" true true,
@@ -1786,7 +1707,6 @@ def json : Json := Json.mkObj
       danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ true,
       danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ false,
       danglingRepairCaseJson "user" ⟨false, true, .acpFiltered⟩ true])),
-   ("destructive_decision_cases", toJson destructiveDecisionCases),
    ("tool_source_change_cases", toJson ([
       toolSourceChangeCaseJson "present-noop" true false false,
       toolSourceChangeCaseJson "absent-noop" false true false,
@@ -1802,15 +1722,6 @@ def json : Json := Json.mkObj
    ("policy_registrations", toJson ([] : List Json)),
    ("self_config_actions", toJson ([] : List Json)),
    ("self_config_lookup_cases", toJson ([] : List Json)),
-   ("configuration_signed_create_collections", toJson (["Node", "Agent", "AgentContext", "CompactionConfig", "Skill", "DatastoreToolSurface", "Tools", "AgentTarget", "InferenceBackend", "InferenceBackendMetadata", "InferenceProfile", "InferenceSampling", "InferenceExecution", "InferenceRetryPolicy", "ToolServiceRegistry", "ProjectionAcpBinding", "Task", "Schedule", "EventSource", "Trigger", "Callback", "CallbackBinding", "CallbackModule", "RepositoryPlacement", "EvalDefinition", "Page", "PluginSource", "NotBundled"].map fun collection =>
-      Json.mkObj [("collection", toJson collection),
-        ("supported", toJson (Configuration.clientSignedCreateCollection collection)),
-        ("update_supported", toJson (Configuration.clientSignedUpdateSupported collection))])),
-   ("configuration_signed_delete_collections", toJson (["Node", "Agent", "AgentContext", "Tools", "Schedule", "PackInstallation", "Goal", "GoalCreationClaim", "InferenceBackend", "InferenceBackendMetadata", "InferenceBackendObservation", "BackendCredential", "AgentSession", "NotBundled"].map fun collection =>
-      Json.mkObj [("collection", toJson collection), ("supported", toJson (Configuration.clientSignedDeleteCollection collection))])),
-   ("ordinary_client_mutation_cases", toJson ([(false, false), (false, true), (true, false), (true, true)].map fun (intent, mutation) =>
-      Json.mkObj [("intent", toJson intent), ("mutation", toJson mutation),
-        ("allowed", toJson (Configuration.ordinaryMutationAllowed intent mutation))])),
    ("client_goal_transaction_actor_cases", toJson ([(some "user", "user"), (some "agent", "user"), (none, "user"), (some "", "")].map fun (actor, requester) =>
       Json.mkObj [("actor", toJson actor), ("requester", toJson requester),
         ("allowed", toJson (Configuration.clientGoalTransactionActorMatches actor requester))])),
@@ -1821,25 +1732,6 @@ def json : Json := Json.mkObj
       Json.mkObj [("actor", toJson actor), ("command", toJson command), ("create", toJson create),
         ("authorized", toJson authorized), ("replacing", toJson replacing), ("delete", toJson delete),
         ("allowed", toJson (Configuration.clientGoalGraphHandoffAllowed actor command create authorized replacing delete))])),
-   ("held_client_signer_cases", toJson ([("user-a", "user-a", "user-a", true),
-      ("user-a", "user-a", "user-b", true), ("user-a", "user-a", "user-a", false),
-      ("user-a", "user-b", "user-a", true)].map fun (actor, bearer, signer, hasPrivate) =>
-        Json.mkObj [("actor", toJson actor), ("bearer", toJson bearer),
-          ("signer", toJson signer), ("has_private", toJson hasPrivate),
-          ("allowed", toJson (Configuration.heldClientSignerAuthorizes actor bearer signer hasPrivate))])),
-   ("configuration_immutable_cases", toJson ([("before", "before"), ("before", "after")].map fun (observed, proposed) =>
-      Json.mkObj [("observed", toJson observed), ("proposed", toJson proposed),
-        ("allowed", toJson (Configuration.immutableReplacementAllowed observed proposed))])),
-   ("configuration_signed_write_retry_cases", toJson (Id.run do
-      let mut cases : List Json := []
-      for dispatched in [false, true] do
-        for confirmedAbort in [false, true] do
-          for replayAuthorized in [false, true] do
-            cases := cases ++ [Json.mkObj [("dispatched", toJson dispatched),
-              ("confirmed_abort", toJson confirmedAbort),
-              ("replay_authorized", toJson replayAuthorized),
-              ("may_retry", toJson (Configuration.clientSignedWriteMayRetry dispatched confirmedAbort replayAuthorized))]]
-      return cases)),
    ("configuration_atomic_cases", toJson ([false, true].map atomicCaseJson)),
    ("configuration_node_binding_cases", toJson ([(true, true, true), (false, true, true),
       (true, false, true), (true, true, false)].map fun (sameNode, hasDoc, visible) =>
@@ -1855,11 +1747,6 @@ def json : Json := Json.mkObj
         inferenceProviderCaseJson "sibling" "sibling" ""] ++
        ["profile", "sampling", "execution", "retry", "compaction", "summary-profile"].map
         fun id => inferenceProviderCaseJson ("revoked-" ++ id) "agent" id)),
-   ("configuration_backend_metadata_cases", toJson
-      [backendMetadataSelectionCaseJson "selected" "agent" false false,
-       backendMetadataSelectionCaseJson "sibling" "sibling" false false,
-       backendMetadataSelectionCaseJson "revoked" "agent" true false,
-       backendMetadataSelectionCaseJson "direct-survives" "agent" true true]),
    ("configuration_userset_cases", toJson
       [inferenceUsersetCaseJson "selected" "agent" "" false,
        inferenceUsersetCaseJson "sibling" "sibling" "" false,
@@ -1927,29 +1814,7 @@ def json : Json := Json.mkObj
        pluginProfileCaseJson "sibling" (some "sibling") false,
        pluginProfileCaseJson "absent" none false,
        pluginProfileCaseJson "revoked" (some "agent") true]),
-   ("configuration_selection_manager_cases", toJson
-      [selectionManagerCaseJson "denied" false false,
-       selectionManagerCaseJson "granted" true false,
-       selectionManagerCaseJson "revoked" true true]),
-   ("configuration_node_manager_cases", toJson
-      [nodeManagerCaseJson "node-owner" "user" "configuration" "config" "selected_by" false,
-       nodeManagerCaseJson "node-admin" "admin" "configuration" "config" "selected_by" false,
-       nodeManagerCaseJson "creator" "creator-agent" "configuration" "config" "selected_by" false,
-       nodeManagerCaseJson "other-admin" "other-admin" "configuration" "config" "selected_by" false,
-       nodeManagerCaseJson "revoked-admin" "admin" "configuration" "config" "selected_by" true,
-       nodeManagerCaseJson "admin-cannot-grant-writer" "admin" "configuration" "config" "writer" false,
-       nodeManagerCaseJson "root-owner" "user" "workspace_roots" "root" "reader" false,
-       nodeManagerCaseJson "root-admin" "admin" "workspace_roots" "root" "reader" false,
-       nodeManagerCaseJson "root-other-admin" "other-admin" "workspace_roots" "root" "reader" false,
-       nodeManagerCaseJson "root-revoked-admin" "admin" "workspace_roots" "root" "reader" true,
-       nodeManagerCaseJson "agent-owner" "user" "agents" "agent" "session_writer" false,
-       nodeManagerCaseJson "agent-admin" "admin" "agents" "agent" "session_writer" false,
-       nodeManagerCaseJson "agent-creator" "creator-agent" "agents" "agent" "session_writer" false,
-       nodeManagerCaseJson "agent-other-admin" "other-admin" "agents" "agent" "session_writer" false,
-       nodeManagerCaseJson "agent-revoked-admin" "admin" "agents" "agent" "session_writer" true]),
-   ("configuration_node_manager_link_revocation_case", nodeManagerLinkRevocationCaseJson),
    ("agent_node_manager_invoke_case", agentInvokeManagerCaseJson),
-   ("agent_node_manager_link_revocation_case", agentManagerLinkRevocationCaseJson),
    ("mcp_service_use_cases", toJson
       ([(true, true, true, true, true, true),
         (false, true, true, true, true, true),
@@ -2067,10 +1932,6 @@ def json : Json := Json.mkObj
        eventConfigurationCaseJson agentDid "source" "read" true,
        eventReboundCaseJson siblingDid "trigger", eventReboundCaseJson siblingDid "source",
        eventReboundCaseJson agentDid "source", eventReboundCaseJson agentDid "trigger", eventReboundRevokedJson]),
-   ("event_cursor_cases", toJson
-      [eventCursorCaseJson userDid "update" false, eventCursorCaseJson runtimeDid "read" false,
-       eventCursorCaseJson runtimeDid "update" false, eventCursorCaseJson agentDid "update" false,
-       eventCursorCaseJson siblingDid "read" false, eventCursorCaseJson agentDid "update" true]),
    ("event_cursor_rebind_cases", toJson
       [eventCursorRebindCaseJson agentDid false, eventCursorRebindCaseJson siblingDid false,
        eventCursorRebindCaseJson siblingDid true]),
@@ -2112,15 +1973,6 @@ def json : Json := Json.mkObj
        taskReceiptCaseJson agentDid siblingDid "read" false,
        taskReceiptCaseJson agentDid siblingDid "read" true]),
    ("outcome_reader_cases", Automation.outcomeReaderCasesJson),
-   ("pairing_overlay_cases", toJson
-      ([false, true].flatMap fun revoked =>
-        let state := if revoked then apply Configuration.agentPairingFixture
-          (.revoke ⟨"application_pairings", "overlay", "parent", .object "nodes" "node"⟩)
-          else Configuration.agentPairingFixture
-        ["user", "runtime", "agent", "sibling", "outsider"].flatMap fun actor =>
-          ["read", "update"].map fun permission => Json.mkObj
-            [("revoked", toJson revoked), ("actor", toJson actor), ("permission", toJson permission),
-             ("expected", toJson (Household.allowed 5 state actor "application_pairings" "overlay" permission))])),
    ("actions", toJson (checks initial ++ [actionJson initial (.grant reader)] ++
       checks withReader ++ [actionJson withReader (.grant writer)] ++ checks withWriter ++
       [actionJson withWriter (.revoke writer)] ++ checks withoutWriter ++
