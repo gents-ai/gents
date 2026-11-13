@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use super::context::ToolError;
 
 pub use gents_loop::tool_policy::{
-    normalize_workspace_lifecycle_state, CommandExecutionMode, CommandNetworkMode,
-    WorkspaceAuthority,
+    CommandExecutionMode, CommandNetworkMode, WorkspaceAuthority,
 };
 
 #[path = "command_args.rs"]
@@ -36,8 +35,6 @@ use command_validation::{policy_denial, validate_command_policy_with_resolved_ex
 #[path = "command_protection_tests.rs"]
 mod command_protection_tests;
 use gents_session::workspace::sandbox::workspace_write_sandbox_enforced;
-#[cfg(target_os = "macos")]
-use gents_session::workspace::sandbox::SANDBOX_EXEC;
 
 pub(crate) fn apply_workspace_authority(
     policy: &CommandExecutionPolicy,

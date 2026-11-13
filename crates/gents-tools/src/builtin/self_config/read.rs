@@ -235,7 +235,7 @@ impl SelfConfigCore {
         Ok(effective)
     }
 
-    pub async fn task_owned(
+    pub(crate) async fn task_owned(
         &self,
         txn: &ConfigApplyTxn<'_>,
         _anchor: &AgentAnchor,

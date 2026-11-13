@@ -30,7 +30,8 @@ pub(crate) use documents::{
 pub(crate) use grants::guard_reselection_keeps_grants_in_txn;
 pub use grants::{guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants};
 pub use guards::{guard_agent_keeps_reach, guard_tools_keep_control};
-pub use guards::{guard_compaction_choice_in_txn, profile_backend_id};
+pub(crate) use guards::guard_compaction_choice_in_txn;
+pub use guards::profile_backend_id;
 pub use request::ApplyRequest;
 
 /// A self-config write's failure: an inference operation's own refusal, with
@@ -418,7 +419,7 @@ impl SelfConfigCore {
             .map_err(|error| anyhow!("selected agent DID is not ACP-addressable: {error}"))
     }
 
-    pub async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
+    pub(crate) async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
         load_agent_anchor_for(txn, &self.node_did, &self.agent_did).await
     }
 
@@ -798,7 +799,7 @@ impl SelfConfigCore {
 
 /// Load one agent's anchor by exact `agent_did`, for the invoking agent or for
 /// a sibling the write reaches. Fails closed when the row is owned elsewhere.
-pub async fn load_agent_anchor_for(
+pub(crate) async fn load_agent_anchor_for(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_did: &str,
