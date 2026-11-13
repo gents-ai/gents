@@ -14,7 +14,9 @@ use super::ReconstructedScopedMessage;
 #[cfg(any(test, feature = "test-fixtures"))]
 use super::{record_request_output_scan, SOURCE_OUTPUT_QUERIES};
 use gents_protocol::output::rows::{
-    decode_output_segment_row, decode_scoped_request_output_segments, AGENT_OUTPUT_SEGMENT_FIELDS,
+    decode_output_segment_row, decode_scoped_request_output_segment_shapes,
+    decode_scoped_request_output_segments, OutputSegmentShapeRow, AGENT_OUTPUT_SEGMENT_FIELDS,
+    AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS,
 };
 
 async fn request_rows(
@@ -66,12 +68,69 @@ pub(super) async fn source_rows(
         let response = access.query(&query, "load_output_source").await?;
         rows_value(&response, "AgentOutputSegment")?.to_vec()
     };
-    Ok(
-        decode_scoped_request_output_segments(&values, node_did, None, requester_did)?
-            .into_iter()
-            .filter(|row| row.segment.source == *source)
-            .collect(),
-    )
+    let rows = decode_scoped_request_output_segments(&values, node_did, None, requester_did)?
+        .into_iter()
+        .filter(|row| row.segment.source == *source)
+        .collect::<Vec<_>>();
+    #[cfg(any(test, feature = "test-fixtures"))]
+    super::record_source_read(
+        rows.len(),
+        rows.iter().map(|row| row.segment.payload.len()).sum(),
+    );
+    Ok(rows)
+}
+
+pub(super) async fn source_shapes(
+    access: ReadAccess<'_, '_>,
+    request_doc_id: &str,
+    source: &OutputSource,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<OutputSegmentShapeRow>> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    let _ = SOURCE_OUTPUT_QUERIES
+        .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let values = if let ReadAccess::Txn(txn) = access {
+        txn.cursor_rows(
+            "AgentOutputSegment",
+            AGENT_OUTPUT_SEGMENT_SHAPE_FIELDS,
+            &gents_protocol::output::rows::source_output_segments_filter(request_doc_id, source)?,
+        )
+        .await?
+    } else {
+        let query = gents_protocol::output::rows::source_output_segment_shapes_query(
+            request_doc_id,
+            source,
+        )?;
+        let response = access.query(&query, "load_output_source_shapes").await?;
+        rows_value(&response, "AgentOutputSegment")?.to_vec()
+    };
+    let rows = decode_scoped_request_output_segment_shapes(&values, node_did, None, requester_did)?
+        .into_iter()
+        .filter(|row| row.shape.source == *source)
+        .collect::<Vec<_>>();
+    #[cfg(any(test, feature = "test-fixtures"))]
+    super::record_source_read(rows.len(), 0);
+    Ok(rows)
+}
+
+pub(super) async fn segment_document(
+    access: ReadAccess<'_, '_>,
+    doc_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<gents_protocol::output::rows::OutputSegmentRow> {
+    let query = gents_protocol::output::rows::output_segment_document_query(doc_id);
+    let response = access.query(&query, "load_output_segment_document").await?;
+    let values = rows_value(&response, "AgentOutputSegment")?;
+    let mut rows = decode_scoped_request_output_segments(values, node_did, None, requester_did)?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "canonical output segment {doc_id} has no unique authorized row"
+    );
+    #[cfg(any(test, feature = "test-fixtures"))]
+    super::record_source_read(1, rows[0].segment.payload.len());
+    Ok(rows.remove(0))
 }
 
 /// Load output segments for the pass's referenced request documents

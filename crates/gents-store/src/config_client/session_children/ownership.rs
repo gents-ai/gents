@@ -65,12 +65,29 @@ pub async fn publish_agent_session_child_relationships_with_access(
     recover_agent_children(access, node_did, agent, Some(session_id)).await
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+tokio::task_local! {
+    static SKIP_CHILD_REPAIR: ();
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn without_child_relationship_repair<F>(future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    SKIP_CHILD_REPAIR.scope((), future).await
+}
+
 async fn recover_agent_children(
     access: &ConfigAccess,
     node_did: &str,
     agent: &identity::Did,
     session_id: Option<&str>,
 ) -> Result<usize> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    if SKIP_CHILD_REPAIR.try_with(|()| ()).is_ok() {
+        return Ok(0);
+    }
     anyhow::ensure!(
         access.actor_did().as_deref() == Some(agent.as_str()),
         "child repair actor differs from access actor"
@@ -267,5 +284,5 @@ async fn load_pending(
     Ok(pending)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 mod tests;

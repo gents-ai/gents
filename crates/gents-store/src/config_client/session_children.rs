@@ -6,6 +6,8 @@ use gents_protocol::output::rows::{
 use super::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use ownership::without_child_relationship_repair;
 pub mod ownership;
 pub use ownership::{
     publish_agent_session_child_relationships_with_access,

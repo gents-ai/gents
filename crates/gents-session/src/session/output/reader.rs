@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use super::access::{rows_value, ReadAccess, ReadCache};
 use super::reconstruct::{
-    reconstruct_scoped_message, reconstruct_scoped_message_with_facts, source_rows,
+    reconstruct_scoped_message, reconstruct_scoped_message_with_facts, segment_document,
+    source_rows, source_shapes,
 };
 use gents_protocol::output::rows::{
     decode_output_segment_row, decode_scoped_request_output_segments,
@@ -418,6 +419,42 @@ pub async fn load_request_headers_in_txn(
         );
     }
     Ok(headers)
+}
+
+pub async fn load_source_shapes_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+    source: &OutputSource,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<gents_protocol::output::rows::OutputSegmentShapeRow>> {
+    Ok(source_shapes(
+        ReadAccess::Txn(txn),
+        request_doc_id,
+        source,
+        node_did,
+        requester_did,
+    )
+    .await?
+    .into_iter()
+    .filter(|row| row.shape.session_id == session_id)
+    .collect())
+}
+
+pub async fn load_output_segment_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    doc_id: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<gents_protocol::output::rows::OutputSegmentRow> {
+    let row = segment_document(ReadAccess::Txn(txn), doc_id, node_did, requester_did).await?;
+    anyhow::ensure!(
+        row.segment.session_id == session_id,
+        "canonical output segment {doc_id} crossed exact session scope"
+    );
+    Ok(row)
 }
 
 /// One source's segments in a write transaction, read through the
