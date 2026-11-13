@@ -92,3 +92,12 @@ runs:
       run: |
         lake build Cache.Main
         lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
+
+    # Lean-backed tests build this target on first use under a shared lock with
+    # their output captured; on a cold runner cache that build outlasts the
+    # gate's 600 s silence guard. Build it here, visibly; warm, it is a no-op.
+    - name: Build the Lean conformance contract
+      if: inputs.lean == 'true'
+      shell: bash
+      working-directory: crates/gents/proofs
+      run: lake build Proofs.Conformance.Contracts:olean
