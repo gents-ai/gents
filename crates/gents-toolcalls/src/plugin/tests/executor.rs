@@ -8,7 +8,7 @@ pub use crate::test_support::{
 use gents_documents::PluginToolRef;
 use gents_loop::tool::ToolDyn;
 use gents_pack::plugin::store::{self, InstalledPlugin};
-use gents_pack::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
+use gents_pack::plugin::test_fixtures::ECHO_WAT;
 
 #[test]
 fn staged_plugin_resolution_conforms_to_lean() {

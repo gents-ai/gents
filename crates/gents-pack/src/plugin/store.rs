@@ -76,6 +76,9 @@ pub struct InstalledPlugin {
     /// absent here can only be written natively by the runtime.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub data_collection_schemas: std::collections::BTreeMap<String, String>,
+    /// The owning pack manifest's `plugin_interface`; absent is interface 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_interface: Option<u32>,
 }
 
 /// A plugin's data grant: the manifest's `data` declaration, the field names
@@ -97,6 +100,19 @@ impl InstalledPlugin {
             collection_fields: self.data_collection_fields.clone(),
             unique_keys: self.data_unique_keys.clone(),
         })
+    }
+
+    /// Refuses to run this plugin when this runtime does not load the plugin
+    /// interface its pack was built for.
+    pub fn check_interface(
+        &self,
+    ) -> std::result::Result<(), crate::pack::core_packs::InstalledInterfaceError> {
+        let plugin = format!("{}/{}", self.namespace, self.name);
+        let pack = self
+            .owner_pack_coordinate
+            .clone()
+            .unwrap_or_else(|| plugin.clone());
+        crate::pack::core_packs::check_installed_interface(&plugin, &pack, self.plugin_interface)
     }
 
     pub fn ceiling(&self) -> crate::plugin::Manifold {
@@ -570,6 +586,7 @@ mod tests {
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
             data_collection_schemas: Default::default(),
+            plugin_interface: None,
         }
     }
 

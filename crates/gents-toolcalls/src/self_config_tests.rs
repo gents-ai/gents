@@ -5021,6 +5021,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
             data_collection_schemas: Default::default(),
+            plugin_interface: None,
         },
     )
     .unwrap();
@@ -5098,7 +5099,6 @@ async fn native_pack_local_path_plugins_only_still_requires_operator_grant() {
 /// A pack tool whose invoking agent holds effective file read authority over
 /// `root` (process ceiling ReadOnly plus an effective tools grant), the
 /// authority the local built-artifact path requires before it opens a .pack.
-
 async fn pack_tool_with_local_read(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
@@ -5130,7 +5130,6 @@ async fn pack_tool_with_local_read(
 /// resolver needs to keep the account-free reference as the provider
 /// default. Binding to `p-default` is allowed; `p-other` selects another
 /// account and must be refused.
-
 async fn install_chat_account_fences(fixture: &SelfConfigFixture) {
     let owner = fixture.db.node_identity.did();
     let access = &fixture.user_access;

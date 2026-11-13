@@ -1,13 +1,17 @@
+#[cfg(test)]
 use std::path::PathBuf;
 
+#[cfg(test)]
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use gents_loop::tool_policy::WorkspaceAuthority;
 
-use super::{
-    bind_workspace_overlay, IsolatedWorkspaceRecord, WorkspaceBindInput, WorkspacePlacementRecord,
-};
+#[cfg(test)]
+use super::bind_workspace_overlay;
+#[cfg(test)]
+use super::{IsolatedWorkspaceRecord, WorkspaceBindInput, WorkspacePlacementRecord};
 
+#[cfg(test)]
 fn temp_tree() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let root = tempfile::tempdir().unwrap();
     let placement = root.path().join("worktrees").join("ws-1");
@@ -17,6 +21,7 @@ fn temp_tree() -> (tempfile::TempDir, PathBuf, PathBuf) {
     (root, canonical_root, canonical_placement)
 }
 
+#[cfg(test)]
 fn ready_workspace() -> IsolatedWorkspaceRecord {
     IsolatedWorkspaceRecord {
         workspace_id: "ws-1".into(),
@@ -25,12 +30,14 @@ fn ready_workspace() -> IsolatedWorkspaceRecord {
         owner_node_did: "dep-1".into(),
         writer_principal: "did:key:zWriter".into(),
         integrator_principal: "did:key:zIntegrator".into(),
+        creation_policy: crate::workspace::CreationPolicy::GitWorktreeDiff,
         lifecycle_state: "ready".into(),
         seal_hash: None,
         instruction_manifest: "{}".into(),
     }
 }
 
+#[cfg(test)]
 fn placement(host_path: &std::path::Path) -> WorkspacePlacementRecord {
     WorkspacePlacementRecord {
         workspace_id: "ws-1".into(),
@@ -40,6 +47,7 @@ fn placement(host_path: &std::path::Path) -> WorkspacePlacementRecord {
     }
 }
 
+#[cfg(test)]
 fn bind_input<'a>(
     authority: WorkspaceAuthority,
     operator_tool_root: Option<&'a std::path::Path>,

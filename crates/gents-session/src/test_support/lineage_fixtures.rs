@@ -225,7 +225,7 @@ pub async fn seed_lineage_case(
     loop {
         let next = rows
             .iter()
-            .filter(|row| !ids.contains_key(&model_id(*row)))
+            .filter(|row| !ids.contains_key(&model_id(row)))
             .map(|row| same_group(rows, row))
             .find(|group| ready_to_write(group, &ids, &case_ids));
         let Some(group) = next else { break };

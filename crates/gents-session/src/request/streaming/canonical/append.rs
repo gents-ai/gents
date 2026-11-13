@@ -5,7 +5,7 @@ use gents_protocol::output::extent::ObservedShape;
 use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
-use gents_protocol::output::rows::{OutputSegmentRow, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION};
+use gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;
 use gents_store::config_client::session_children::output_segment_bound_variables;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use gents_store::graphql::created_doc_id;

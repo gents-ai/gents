@@ -704,11 +704,16 @@ pub async fn materialize_workspace_binding(
                     false
                 };
                 match admit_workspace_binding(
-                    workspace_id,
-                    &workspace.lifecycle_state,
-                    optional_id(workspace.seal_hash.as_deref()),
+                    super::binding::BindingWorkspace {
+                        workspace_id,
+                        owner_node_did: &workspace.owner_node_did,
+                        lifecycle_state: &workspace.lifecycle_state,
+                        seal_hash: optional_id(workspace.seal_hash.as_deref()),
+                        creation_policy: workspace.creation_policy,
+                    },
                     &existing,
                     candidate,
+                    authority.may_write_git_metadata(),
                     release_previous,
                 )? {
                     AdmitBinding::Reuse(_) => Ok(()),

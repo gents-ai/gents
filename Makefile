@@ -29,6 +29,7 @@ help:
 	@echo "  make sweep [SWEEP_DAYS=7]  Delete target artifacts untouched for SWEEP_DAYS days"
 	@echo "  make build-desktop         Build the Tauri Rust shell"
 	@echo "  make build-desktop-ui      Build the desktop frontend"
+	@echo "  make core-packs            Build the Engineer's core packs into $(CORE_PACKS_DIR) for embedding"
 	@echo
 	@echo "Release (CI calls these; TARGET=<triple> optional, defaults to host):"
 	@echo "  make release-cli           Build the release CLI (full features)"
@@ -130,9 +131,43 @@ RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
 RELEASE_VERSION ?= $(shell awk '/^\[workspace\.package\]$$/ { p = 1; next } /^\[/ { p = 0 } p && $$1 == "version" { gsub(/"/, "", $$3); print $$3; exit }' Cargo.toml)
 DOCS_ARTIFACT := gents-docs-$(RELEASE_VERSION)
 
+# ---- Core packs ----
+# The Engineer's packs build with the runtime and are embedded in the CLI
+# (crates/gents-core-packs). `make core-packs` compiles their plugins to
+# wasm32-wasip1 and writes $(CORE_PACKS_DIR)/gents.<name>.pack with
+# CORE_PACK_TOOL, a gents CLI (default: the one build-cli makes), from inside
+# core-packs/ so its rust-toolchain.toml (with the wasm target) applies. A release
+# build refuses to start without all of them (GENTS_REQUIRE_CORE_PACKS=1);
+# CI builds them once and every release job embeds that same set.
+CORE_PACKS := pack_builder web dynamic_workflows charts data_tables script
+CORE_PACKS_DIR ?= target/core-packs
+CLI_PROFILE_DIR := $(if $(filter-out dev,$(PROFILE)),$(PROFILE),debug)
+CORE_PACK_TOOL ?=
+CORE_PACK_TESTS ?= $(CORE_PACKS)
+
+.PHONY: core-packs core-packs-test
+core-packs:
+	@tool="$(CORE_PACK_TOOL)"; \
+	if [ -z "$$tool" ]; then $(MAKE) build-cli && tool="$(CARGO_TARGET_DIR)/$(CLI_PROFILE_DIR)/gents"; fi; \
+	tool="$$(cd "$$(dirname "$$tool")" && pwd)/$$(basename "$$tool")"; \
+	mkdir -p "$(CORE_PACKS_DIR)" && out="$$(cd "$(CORE_PACKS_DIR)" && pwd)" && \
+	for pack in $(CORE_PACKS); do \
+		(cd core-packs && "$$tool" config pack build "$$pack" --out "$$out/gents.$$pack.pack") || exit 1; \
+		"$$tool" config pack verify "$$out/gents.$$pack.pack" || exit 1; \
+	done; \
+	cd "$(CORE_PACKS_DIR)" && sha256sum $(addprefix gents.,$(addsuffix .pack,$(CORE_PACKS))) > SHA256SUMS-core-packs.txt
+	@ls -l "$(CORE_PACKS_DIR)"
+
+# Each core pack's own suite (core-packs/test-pack.sh) against CORE_PACK_TOOL.
+core-packs-test:
+	@test -n "$(CORE_PACK_TOOL)" || { echo "usage: make core-packs-test CORE_PACK_TOOL=<gents binary> [CORE_PACK_TESTS=<packs>]" >&2; exit 2; }
+	@failed=""; for pack in $(CORE_PACK_TESTS); do \
+		(cd core-packs && GENTS="$(abspath $(CORE_PACK_TOOL))" ./test-pack.sh "$$pack") || failed="$$failed $$pack"; \
+	done; test -z "$$failed" || { echo "failed:$$failed" >&2; exit 1; }
+
 .PHONY: release-cli fast-dev-cli dist-cli dist-docs measure-build-graph measure-release-cli measure-build-attribution
 release-cli:
-	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
+	GENTS_REQUIRE_CORE_PACKS="$${GENTS_REQUIRE_CORE_PACKS:-1}" CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
 fast-dev-cli:
 	$(CARGO) build -p gents-cli --profile fast-dev --locked $(CARGO_TARGET_FLAG)

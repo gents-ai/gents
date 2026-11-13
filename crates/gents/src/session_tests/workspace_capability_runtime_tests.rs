@@ -1,10 +1,6 @@
 use anyhow::Context;
-use gents_session::request::lifecycle::{
-    RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage,
-};
-use gents_session::workspace::{
-    bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture,
-};
+use gents_session::request::lifecycle::WorkspaceLineage;
+use gents_session::workspace::Fixture;
 use gents_session::workspace::{
     isolated_workspace_upsert_mutation, materialize_workspace_binding,
     workspace_binding_upsert_mutation, workspace_host_path, CreateWorkspaceAction, CreationPolicy,
@@ -14,7 +10,6 @@ use gents_session::workspace::{
 };
 use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
-use std::time::Duration;
 
 #[tokio::test]
 async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Result<()> {

@@ -93,14 +93,14 @@ pub async fn desktop_pack_info(
     }
 }
 
-/// The Engineer's default packs as the local node's home has them. A read:
-/// it works while the node runs.
+/// The Engineer's core packs as the local node's home has them. A read: it
+/// works while the node runs.
 #[tauri::command]
 pub async fn desktop_default_packs(
     state: State<'_, DesktopAppState>,
 ) -> Result<DefaultPacksView, BridgeError> {
     let home = home(&state)?;
-    run(move || packs::default_packs(home, None)).await
+    run(move || packs::core_packs(home)).await
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -109,12 +109,12 @@ pub struct DefaultPacksApproveRequest {
     pub packs: Vec<DefaultPackApproval>,
 }
 
-/// One approved default pack, at the archive its listing showed.
+/// One core pack to turn on, installing it from the release when the home
+/// lacks it.
 #[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DefaultPackApproval {
     pub pack: String,
-    pub digest: String,
 }
 
 #[derive(Debug, Deserialize, TS)]

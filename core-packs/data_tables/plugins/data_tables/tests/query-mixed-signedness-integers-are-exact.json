@@ -1,0 +1,23 @@
+{
+  "expect": {
+    "columns": [
+      {
+        "name": "v",
+        "type": "decimal(21,0)"
+      }
+    ],
+    "markdown": "| v |\n| --- |\n| 9223372036854775808 |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 1,
+    "rows": [
+      [
+        "9223372036854775808"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT CAST(9223372036854775807 AS BIGINT) + CAST(1 AS BIGINT UNSIGNED) AS v"
+  }
+}

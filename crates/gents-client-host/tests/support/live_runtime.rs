@@ -38,6 +38,33 @@ mod live_undo;
 
 const WAIT: Duration = Duration::from_secs(30);
 
+impl Attachment {
+    async fn retire(mut self) -> Result<()> {
+        let build = self
+            .installation_build
+            .as_ref()
+            .context("native installation does not support retirement")?;
+        self.send(json!({"kind":"retire", "id":u32::MAX, "expectedBuild":build}))
+            .await;
+        loop {
+            let response = self.next().await;
+            if response["kind"] == "response" {
+                ensure!(
+                    response["id"] == u32::MAX && response["error"].is_null(),
+                    "native retirement failed: {response}"
+                );
+                break;
+            }
+        }
+        self.wait_for_output_eof().await;
+        ensure!(
+            self.wait_for_exit().await.success(),
+            "retired attachment failed"
+        );
+        Ok(())
+    }
+}
+
 pub async fn exercise(root: &Path, goal: bool) -> Result<()> {
     run(root, goal, None, false).await
 }

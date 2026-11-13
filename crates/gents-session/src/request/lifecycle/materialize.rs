@@ -724,20 +724,19 @@ pub async fn activate_workspace_bound_request_with_identity(
         actor,
         identity.and_then(|identity| identity.managed_agent_signer()),
     )?;
+    let transition = RequestLifecycleState::WorkspaceBindingPending
+        .transition_to(RequestLifecycleState::Pending)?;
     let mutation = {
         use gents_protocol::document_query::{
             fields::agent_request as fields, Filter, Input, Update,
         };
         Update::doc(
             request_doc_id,
-            Input::new().set(
-                fields::LIFECYCLE_STATE,
-                RequestLifecycleState::Pending.as_str(),
-            ),
+            Input::new().set(fields::LIFECYCLE_STATE, transition.to().as_str()),
         )
         .filter(Filter::eq(fields::DOC_ID, request_doc_id).and(Filter::eq(
             fields::LIFECYCLE_STATE,
-            RequestLifecycleState::WorkspaceBindingPending.as_str(),
+            transition.from().as_str(),
         )))
         .render()
     };

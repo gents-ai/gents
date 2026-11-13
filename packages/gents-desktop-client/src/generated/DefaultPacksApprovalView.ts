@@ -3,7 +3,7 @@ import type { DefaultPackFailureView } from "./DefaultPackFailureView.js";
 import type { DefaultPackView } from "./DefaultPackView.js";
 
 /**
- * What an approval left: every default pack's state after it, and the packs
- * it could not install.
+ * What enabling left: every core pack's state after it, and the packs it
+ * could not enable.
  */
 export type DefaultPacksApprovalView = { packs: Array<DefaultPackView>, failed: Array<DefaultPackFailureView>, };

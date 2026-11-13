@@ -1,0 +1,34 @@
+{
+  "bind": "fixtures/wide",
+  "expect": {
+    "columns": [
+      {
+        "name": "n",
+        "type": "int64"
+      },
+      {
+        "name": "last",
+        "type": "int64"
+      },
+      {
+        "name": "first",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| n | last | first |\n| --- | --- | --- |\n| 2 | 1999 | 0 |",
+    "offset": 0,
+    "order": "columns",
+    "row_count": 1,
+    "rows": [
+      [
+        2,
+        1999,
+        0
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT count(*) AS n, max(c1999) AS last, min(c0) AS first FROM ok"
+  }
+}

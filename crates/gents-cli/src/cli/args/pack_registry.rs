@@ -272,16 +272,11 @@ pub(crate) struct PackStarterArgs {
         long,
         value_name = "PACK",
         action = clap::ArgAction::Append,
-        help = "Install this starter pack for the Engineer, approving the permissions it requests; repeat for each pack. The runtime must be stopped"
+        help = "Turn on this core pack for the Engineer, installing it from this release when the home lacks it; repeat for each pack. The runtime must be stopped"
     )]
-    pub(crate) approve: Vec<String>,
+    pub(crate) enable: Vec<String>,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Pack registry to resolve a pack the home's store does not hold"
-    )]
-    pub(crate) registry: Option<String>,
 }
 
 #[derive(clap::Args)]

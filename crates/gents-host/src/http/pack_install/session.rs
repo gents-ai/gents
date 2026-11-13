@@ -597,8 +597,7 @@ async fn run_inner(
         .apply(
             &user_access,
             &state.node_did,
-            scope,
-            approver,
+            gents_pack::pack::HostedPackApproval { scope, approver },
             policy,
             home_publication,
             &gents_inference::resolved::ProviderProfilePolicy,

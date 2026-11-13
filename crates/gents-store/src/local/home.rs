@@ -409,9 +409,9 @@ pub const INIT_PENDING_FILE_NAME: &str = "init-pending";
 /// leaves a home whose initialization fails on the non-empty store it finds
 /// rather than bootstrapping again.
 pub const BOOTSTRAP_CONSUMED_FILE_NAME: &str = ".node-bootstrap-consumed";
-/// Written by setup before it offers the starter packs and removed once it
-/// has offered each one, so a setup stopped partway is offered to continue.
-/// Holds the JSON list of the packs it offers.
+/// Written by setup before it finishes the home's settings and removed once
+/// it has installed its core packs, so a setup stopped in between is offered
+/// to continue. Holds the JSON list of those packs.
 pub const SETUP_UNFINISHED_FILE_NAME: &str = "setup-unfinished.json";
 
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
@@ -459,7 +459,7 @@ pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
 /// before retirement, so retained receipts confer no authority on a fresh node.
 pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] = &[SERVICE_UPDATES_DIR_NAME];
 
-/// The starter packs a setup stopped before offering, as setup recorded them
+/// The core packs a setup stopped before installing, as setup recorded them
 /// in [`SETUP_UNFINISHED_FILE_NAME`]; `None` once its setup finished. The
 /// CLI's repair and the desktop's bootstrap both ask this.
 pub fn unfinished_setup(home_dir: &Path) -> Option<Vec<String>> {

@@ -1,9 +1,6 @@
 use super::target::session_target_allowed;
 use super::*;
 
-use gents_protocol::tool_call::AwaitMode;
-use gents_store::identity::NodeIdentity as _;
-
 /// The caller-visible session and grants one Lean session-target case describes,
 /// as `caller` on node `caller`.
 fn session_target_fixture(

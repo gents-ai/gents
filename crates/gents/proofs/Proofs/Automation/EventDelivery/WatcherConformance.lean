@@ -43,29 +43,4 @@ def actorCases : List (String × List ActorCandidate) :=
   , ("mixed", [⟨"a", true, true, true⟩, ⟨"b", true, true, false⟩,
       ⟨"c", true, false, false⟩, ⟨"d", false, true, false⟩]) ]
 
-def rowJson (row : ScopedRow) : Json := Json.mkObj
-  [("doc_id", toJson row.docId), ("selected_agent", toJson row.selectedAgent)]
-
-def scanJson (scan : ScopedScan) : Json :=
-  let (status, rows) := match scan.view with
-    | .denied => ("denied", [])
-    | .missingRoot => ("missing_root", [])
-    | .rows rows => ("ok", rows)
-  Json.mkObj [("actor", toJson scan.actor), ("status", toJson status),
-    ("rows", toJson (rows.map rowJson))]
-
-def resultJson (batch : ScopedBatch) : Json := Json.mkObj
-  [("rows", toJson (batch.rows.map rowJson)),
-   ("failures", toJson (batch.failures.map fun failure =>
-      Json.mkObj [("actor", toJson failure.actor), ("reason", toJson failure.reason)])),
-   ("needs_rescan", toJson (scopedNeedsRescan batch))]
-
-def caseJson (c : Case) : Json := Json.mkObj
-  [("name", toJson c.name), ("active_agents", toJson c.activeAgents),
-   ("scans", toJson (c.scans.map scanJson)), ("legacy_order", toJson c.legacyOrder),
-   ("arrival_order", toJson c.arrivalOrder),
-   ("expected", resultJson (scopedCandidates c.activeAgents c.scans c.legacyOrder c.arrivalOrder))]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
-
 end EventDelivery.WatcherConformance

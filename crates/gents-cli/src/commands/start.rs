@@ -353,6 +353,11 @@ async fn ask(
     answered(decision, options[picked])
 }
 
+type MoveBack = for<'a> fn(
+    HomeChoice,
+    &'a mut TerminalProgress,
+) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>;
+
 /// `prepare` already moved the node away from the folder it was serving when
 /// `start` asks, so that folder gets its node back first: a question left
 /// unanswered (Ctrl-C, no terminal) leaves it working.
@@ -360,10 +365,7 @@ async fn restore_then_ask(
     decision: HomeDecision,
     terminal: bool,
     progress: &mut TerminalProgress,
-    move_back: for<'a> fn(
-        HomeChoice,
-        &'a mut TerminalProgress,
-    ) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>,
+    move_back: MoveBack,
 ) -> Result<(HomeChoice, Option<PathBuf>, RepairAnswer)> {
     give_back(decision.serving_home.as_deref(), progress, move_back).await;
     ask(decision, terminal, progress).await
@@ -375,10 +377,7 @@ async fn restore_then_ask(
 async fn give_back(
     serving: Option<&Path>,
     progress: &mut TerminalProgress,
-    move_back: for<'a> fn(
-        HomeChoice,
-        &'a mut TerminalProgress,
-    ) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>,
+    move_back: MoveBack,
 ) {
     let Some(serving) = serving else {
         return;
@@ -526,7 +525,7 @@ fn home_question(decision: &HomeDecision, options: &[HomeOption]) -> String {
     let home = decision.home.display();
     let mut question = match decision.why {
         HomeState::UnfinishedSetup => format!(
-            "The setup of {home} stopped before it offered every starter pack ({}).",
+            "The setup of {home} stopped before it installed every core pack ({} missing).",
             unfinished_packs(&decision.home)
         ),
         why => format!("{home} can't be loaded: {why}."),
@@ -534,7 +533,7 @@ fn home_question(decision: &HomeDecision, options: &[HomeOption]) -> String {
     for (number, option) in options.iter().enumerate() {
         let line = match option {
             HomeOption::Continue => {
-                "Continue setup: offer the starter packs it did not reach".to_owned()
+                "Continue setup: install the core packs it did not reach".to_owned()
             }
             HomeOption::SetAside => format!(
                 "Start over: rename {home} to {home}.{}-<date> (kept, not deleted), then set up a fresh home there",
@@ -552,16 +551,21 @@ fn home_question(decision: &HomeDecision, options: &[HomeOption]) -> String {
 }
 
 fn unfinished_packs(home: &Path) -> String {
-    gents_store::local::home::unfinished_setup(home)
-        .filter(|packs| !packs.is_empty())
-        .map_or_else(|| "its starter packs".to_owned(), |packs| packs.join(", "))
+    match crate::commands::init::default_packs::not_installed(home) {
+        Ok(missing) if !missing.is_empty() => missing
+            .iter()
+            .map(|pack| pack.coordinate())
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => "its core packs".to_owned(),
+    }
 }
 
 /// Said when a command uses a home whose setup did not finish, with the
 /// calls that finish it.
 fn unfinished_setup_notice(home: &Path) -> String {
     format!(
-        "Note: the setup of {} stopped before it offered every starter pack ({}). Continue it with `gents --home {home}` in a terminal, or see and install them with `gents config pack starter --home {home}`.",
+        "Note: the setup of {} stopped before it installed every core pack ({} missing). Continue it with `gents --home {home}` in a terminal, or see and install them with `gents config pack starter --home {home}`.",
         home.display(),
         unfinished_packs(home),
         home = crate::shell_word(home)
@@ -677,12 +681,8 @@ mod tests {
     #[test]
     fn printed_commands_quote_a_home_with_spaces() {
         let home = Path::new("/srv/my home");
-        for (message, command) in [(
-            ignored_client_setting_notice(&home.join("client.json")),
-            "'/srv/my home/client.json'",
-        )] {
-            assert!(message.contains(command), "{message}");
-        }
+        let message = ignored_client_setting_notice(&home.join("client.json"));
+        assert!(message.contains("'/srv/my home/client.json'"), "{message}");
     }
 
     #[test]

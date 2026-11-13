@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "file": "long_cell.csv"
+  },
+  "bind": "fixtures/hostile",
+  "expect": {
+    "chart": "bar",
+    "error": "a cell is longer than 65536 bytes, so this is not a table; check the file",
+    "warnings": []
+  }
+}

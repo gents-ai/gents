@@ -83,6 +83,7 @@ async fn reject_pending_admission_in_txn(
     let node = escape_graphql_string(&request.node_did);
     let reason_gql = escape_graphql_string(reason);
     let time_gql = escape_graphql_string(terminalized_at);
+    let transition = RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Failed)?;
     let mutation = format!(
         r#"mutation($terminal_output: JSON) {{
         update_AgentRequest(docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }},
@@ -91,8 +92,8 @@ async fn reject_pending_admission_in_txn(
                 terminalized_at: "{time_gql}", terminal_redrive_attempts: 0,
                 terminal_output: $terminal_output }}) {{ _docID request_id workspace_id workspace_owner_node_did }}
     }}"#,
-        pending = RequestLifecycleState::Pending.as_str(),
-        failed = RequestLifecycleState::Failed.as_str()
+        pending = transition.from().as_str(),
+        failed = transition.to().as_str()
     );
     let response = txn
         .execute_with_variables(
@@ -117,7 +118,7 @@ async fn reject_pending_admission_in_txn(
             txn,
             &request.node_did,
             &request.request_id,
-            RequestLifecycleState::Failed,
+            transition.to(),
             reason,
             terminalized_at,
         )
@@ -200,7 +201,7 @@ pub(crate) async fn supersede_pending_in_txn(
         &successor.request_id,
         &successor.request_doc_id,
         reason,
-    );
+    )?;
     let response = txn.execute_local_response(&mutation).await?;
     let superseded = response
         .data
@@ -664,15 +665,16 @@ impl RequestLifecycle {
                             super::execution_policy::authorize_begin(observed, &generation, now),
                             "execution begin requires a live claimed or resuming generation"
                         );
+                        let transition = state.transition_to(RequestLifecycleState::Processing)?;
                         let update = Update::doc(
                             &request_doc_id,
-                            Input::new().set(
-                                fields::LIFECYCLE_STATE,
-                                RequestLifecycleState::Processing.as_str(),
-                            ),
+                            Input::new().set(fields::LIFECYCLE_STATE, transition.to().as_str()),
                         )
                         .filter(Filter::eq(fields::DOC_ID, &request_doc_id))
-                        .filter(Filter::eq(fields::LIFECYCLE_STATE, state.as_str()))
+                        .filter(Filter::eq(
+                            fields::LIFECYCLE_STATE,
+                            transition.from().as_str(),
+                        ))
                         .filter(Filter::eq(fields::EXECUTION_GENERATION, &generation))
                         .filter(Filter::eq(fields::EXECUTION_LEASE_EXPIRES_AT, expiry))
                         .render();
@@ -692,6 +694,8 @@ impl RequestLifecycle {
 
     pub async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
         let terminalized_at = chrono::Utc::now().to_rfc3339();
+        let transition =
+            RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Interrupted)?;
         let mutation = {
             use gents_protocol::document_query::{
                 fields::agent_request as fields, Filter, Input, Selection, Update,
@@ -699,10 +703,7 @@ impl RequestLifecycle {
             Update::doc(
                 &self.request.doc_id,
                 Input::new()
-                    .set(
-                        fields::LIFECYCLE_STATE,
-                        RequestLifecycleState::Interrupted.as_str(),
-                    )
+                    .set(fields::LIFECYCLE_STATE, transition.to().as_str())
                     .set(fields::TERMINALIZED_AT, terminalized_at.as_str())
                     .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i32),
             )
@@ -710,7 +711,7 @@ impl RequestLifecycle {
             .filter(Filter::eq(fields::NODE_DID, &self.request.node_did))
             .filter(Filter::eq(
                 fields::LIFECYCLE_STATE,
-                RequestLifecycleState::Pending.as_str(),
+                transition.from().as_str(),
             ))
             .returning(
                 Selection::doc_id()
@@ -748,7 +749,7 @@ impl RequestLifecycle {
                                 txn,
                                 &request.node_did,
                                 &request.request_id,
-                                RequestLifecycleState::Interrupted,
+                                transition.to(),
                                 "interrupted before claim",
                                 terminalized_at,
                             )
@@ -787,6 +788,8 @@ impl RequestLifecycle {
 
     pub async fn transition_pending_to_dead_stale(&mut self) -> Result<()> {
         let terminalized_at = chrono::Utc::now().to_rfc3339();
+        let transition =
+            RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Dead)?;
         let mutation = {
             use gents_protocol::document_query::{
                 fields::agent_request as fields, Filter, Input, Selection, Update,
@@ -794,10 +797,7 @@ impl RequestLifecycle {
             Update::doc(
                 &self.request.doc_id,
                 Input::new()
-                    .set(
-                        fields::LIFECYCLE_STATE,
-                        RequestLifecycleState::Dead.as_str(),
-                    )
+                    .set(fields::LIFECYCLE_STATE, transition.to().as_str())
                     .set(fields::FAILURE_REASON, "Stale")
                     .set(fields::TERMINALIZED_AT, terminalized_at.as_str())
                     .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i32),
@@ -806,7 +806,7 @@ impl RequestLifecycle {
             .filter(Filter::eq(fields::NODE_DID, &self.request.node_did))
             .filter(Filter::eq(
                 fields::LIFECYCLE_STATE,
-                RequestLifecycleState::Pending.as_str(),
+                transition.from().as_str(),
             ))
             .returning(
                 Selection::doc_id()
@@ -844,7 +844,7 @@ impl RequestLifecycle {
                                 txn,
                                 &request.node_did,
                                 &request.request_id,
-                                RequestLifecycleState::Dead,
+                                transition.to(),
                                 "Stale",
                                 terminalized_at,
                             )
@@ -1036,6 +1036,8 @@ impl RequestLifecycle {
             String::new()
         };
 
+        let transition =
+            RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Claimed)?;
         let build_mutation = |background_completion_snapshot_fields: &str| {
             format!(
                 r#"mutation {{
@@ -1065,8 +1067,8 @@ impl RequestLifecycle {
                     _version {{ cid height fieldName }}
                 }}
             }}"#,
-                lifecycle_state = RequestLifecycleState::Claimed.as_str(),
-                pending = RequestLifecycleState::Pending.as_str()
+                lifecycle_state = transition.to().as_str(),
+                pending = transition.from().as_str()
             )
         };
 
@@ -1136,13 +1138,6 @@ impl RequestLifecycle {
             folded_selection,
         }))
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
 }
 
 #[cfg(test)]

@@ -485,9 +485,6 @@ async fn observe_request_interrupt<F, R, Fut>(
 mod observer_scheduling_tests;
 
 #[cfg(test)]
-mod scope_tests;
-
-#[cfg(test)]
 mod physical_scope_tests;
 
 #[cfg(test)]

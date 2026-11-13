@@ -5,9 +5,9 @@ namespace InstallRepair
 
 /-- `olderStore` is a store an earlier, incompatible Gents made (its policies, schema, lineage
 marker or encryption differ), decided read-only before anything opens it for writing. This release
-is fresh-init only by the maintainer's decision: it converts nothing, so such a home is reported and
-left exactly as it was. `insecureKey` is a key file other users can read; the user fixes its mode.
-`unfinishedSetup` is a home whose setup stopped before it offered every starter pack. -/
+is fresh-init only by the maintainer's decision (migrations begin after 1.0), so such a home is
+reported and left exactly as it was. `insecureKey` is a key file other users can read; the user fixes its mode.
+`unfinishedSetup` is a home whose setup stopped before it installed every core pack. -/
 inductive HomeState where
   | absent | healthy | interrupted | unreadableSettings | missingSettings
   | missingStoreKey | olderStore | newerStore | insecureKey | corruptStore | unfinishedSetup
@@ -29,7 +29,7 @@ inductive Blocker where
   deriving Repr, DecidableEq, Lean.ToJson
 
 /-- What the user answered at a terminal about a home that cannot be used as it is. Only an answer
-moves a home aside; continuing an unfinished setup offers the starter packs it did not reach. -/
+moves a home aside; continuing an unfinished setup installs the core packs it did not reach. -/
 inductive Answer where
   | none | setAside | continueSetup
   deriving Repr, DecidableEq, Lean.ToJson
@@ -371,7 +371,7 @@ structure HomeObservation where
   dataPresent : Bool
   keysPresent : Bool
   missingKeyRefusal : Bool
-  /-- Setup recorded that it had starter packs left to offer when it stopped. -/
+  /-- Setup recorded that it had core packs left to install when it stopped. -/
   setupUnfinished : Bool
   store : StoreVerdict
   deriving Repr, DecidableEq, Lean.ToJson

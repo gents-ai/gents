@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use clap::Parser as _;
-use gents_store::local::home::{remember_home, unfinished_setup, SETUP_UNFINISHED_FILE_NAME};
+use gents_store::local::home::remember_home;
 use gents_tools::surface::refuse_too_broad_root;
 
 use crate::cli::args::InitArgs;
@@ -154,8 +154,6 @@ pub(super) async fn setup(
     let mut args = parse_init_args(&init_argv(&home, &tool_root))?;
     args.store_key_custody = store_key_custody;
     resolve_backend_interactively(&mut args, next_screen).await?;
-    let approval = default_packs::Approval::resolve(args.approve_default_packs, !args.unattended);
-    args.no_default_packs = true;
 
     let initialized = init_home(args).await?;
     for line in next_step_lines(&initialized, &home) {
@@ -164,51 +162,13 @@ pub(super) async fn setup(
     if folder_asked {
         remember_home(&home)?;
     }
-    let engineer = initialized["default_agent_did"]
-        .as_str()
-        .context("init reports no default agent")?;
-    offer_starter_packs(&home, engineer, default_packs::ENGINEER_DEFAULT_PACKS, approval).await?;
     Ok(home)
 }
 
-/// Records the packs it is about to offer before the first question, so a
-/// setup stopped at one of them is offered to continue, and clears the
-/// record once each was offered.
-async fn offer_starter_packs(
-    home: &Path,
-    engineer: &str,
-    packs: &[&str],
-    approval: default_packs::Approval,
-) -> Result<()> {
-    let record = home.join(SETUP_UNFINISHED_FILE_NAME);
-    std::fs::write(&record, serde_json::to_vec(packs)?)
-        .with_context(|| format!("recording setup progress in {}", record.display()))?;
-    default_packs::install(home, engineer, packs, None, approval).await;
-    finish_setup(home)
-}
-
-fn finish_setup(home: &Path) -> Result<()> {
-    let record = home.join(SETUP_UNFINISHED_FILE_NAME);
-    match std::fs::remove_file(&record) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-            Err(error).with_context(|| format!("removing {}", record.display()))
-        }
-        _ => Ok(()),
-    }
-}
-
-/// Continues a setup that stopped before it offered every starter pack:
-/// each pack it recorded and the home does not have is offered again, then
-/// setup is finished.
+/// Continues a setup that stopped before it installed every core pack.
 pub(super) async fn continue_setup(home: &Path) -> Result<()> {
-    let recorded = unfinished_setup(home).unwrap_or_default();
-    let packs: Vec<&str> = if recorded.is_empty() {
-        default_packs::ENGINEER_DEFAULT_PACKS.to_vec()
-    } else {
-        recorded.iter().map(String::as_str).collect()
-    };
-    default_packs::offer_remaining(home, &packs).await?;
-    finish_setup(home)
+    default_packs::install_missing(home, gents_core_packs::archives()).await?;
+    default_packs::record_installed(home)
 }
 
 /// What the folder question accepts. A symlink or `..` is judged by where it leads.

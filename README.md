@@ -53,9 +53,10 @@ macOS arm64) from the same release; checksums are in `SHA256SUMS-cli-*.txt`.
 
 Run `gents` in a terminal to set it up. It asks for the folder that holds Gents'
 data (`~/.gents` by default), the folder agents work in, then a model provider,
-model, reasoning effort, temperature and top-p, and asks you to approve each
-starter pack. It does not ask for a node name: the node is named `default`, a
-local label your node's DID does not depend on, and no command renames it.
+model, reasoning effort, temperature and top-p. It installs the Engineer's core
+packs without asking. It does not ask for a node name: the node is named
+`default`, a local label your node's DID does not depend on, and no command
+renames it.
 `gents status` shows the node's readiness afterwards.
 
 ## First run

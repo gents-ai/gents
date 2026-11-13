@@ -1,5 +1,3 @@
-use serde::Deserialize;
-
 use super::*;
 use crate::request::lifecycle::test_support::{
     hints, parent_request, test_db, wake_queue_input, TestDb,
@@ -11,11 +9,6 @@ use crate::request::lifecycle::{
 use crate::request::streaming::DefraStreamWriter;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::tool_call::AwaitMode;
-use gents_protocol::{
-    message::{AssistantContent, Message, ToolCall, ToolFunction},
-    output::PresentationPart,
-};
 use std::time::Duration;
 
 mod folding;
@@ -38,14 +31,13 @@ fn transaction_create_doc_id_accepts_both_defradb_response_shapes() {
 }
 
 mod background_completion;
-mod coalescing;
 mod input;
 
 mod pin_tests {
     use super::*;
     use crate::request::lifecycle::test_support::{
-        hints, normalize_pin_fields, parent_request, pin_fixed_signing_identity,
-        pin_parent_request, wake_queue_input, PIN_FIXED_DID,
+        hints, normalize_pin_fields, pin_fixed_signing_identity, pin_parent_request,
+        wake_queue_input,
     };
 
     /// The fixed pin root cannot mint a managed Agent signer, so the Agent is a

@@ -7,7 +7,7 @@ use query::TransactionHandle;
 
 use super::gate::mutation_write_gate;
 use super::native::NativeOperationTracker;
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use super::rollback::RollbackDropCleanupPause;
 use super::rollback::{begin_embedded_owned, begin_http_owned, RollbackOnDrop};
 use super::{ConfigClientError, GraphqlEndpoint, Result};
@@ -261,7 +261,7 @@ impl<'a> ConfigApplyTxn<'a> {
         })
     }
 
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub(crate) async fn begin_execution_renewal_for_test(
         node: &Arc<EmbeddedNode>,
     ) -> Result<ConfigApplyTxn<'static>> {
@@ -331,7 +331,7 @@ impl<'a> ConfigApplyTxn<'a> {
         .await
     }
 
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub(crate) fn pause_drop_rollback_for_test(&mut self, pause: Arc<RollbackDropCleanupPause>) {
         let rollback = self
             .rollback_on_drop

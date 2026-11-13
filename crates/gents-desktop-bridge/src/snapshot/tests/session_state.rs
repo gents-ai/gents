@@ -940,11 +940,16 @@ fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
 
 #[test]
 fn session_snapshot_retains_modeled_terminal_provider_evidence() {
-    for case in gents_lean_vocab::lean_request_transition_cases()
-        .iter()
-        .filter(|case| case.to == "interrupted" && case.classification == "legal")
-    {
-        for certificate in [None, Some(case.stopped_before_running)] {
+    for source in RequestLifecycleState::ALL.into_iter().filter(|source| {
+        matches!(
+            source.classify_transition(RequestLifecycleState::Interrupted),
+            gents_protocol::request_lifecycle::RequestTransitionClassification::Legal(_)
+        )
+    }) {
+        for certificate in [
+            None,
+            Some(source.certifies_stopped_before_running(RequestLifecycleState::Interrupted, true)),
+        ] {
             let mut row = request("req-2", RequestLifecycleState::Interrupted);
             row.stopped_before_running = certificate;
             let snapshot = build_session_snapshot_from_store(
@@ -963,8 +968,7 @@ fn session_snapshot_retains_modeled_terminal_provider_evidence() {
                     .unwrap()
                     .stopped_before_running,
                 certificate,
-                "{}",
-                case.name
+                "{source} -> interrupted"
             );
         }
     }

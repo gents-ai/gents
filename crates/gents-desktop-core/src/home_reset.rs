@@ -77,7 +77,7 @@ pub enum HomeResetReason {
     FullReset,
 }
 
-/// A home whose setup recorded starter packs it never offered, or whose
+/// A home whose setup recorded core packs it never installed, or whose
 /// provisioning committed a node name but never served or paired.
 /// `runtime.json` is written only by a serving runtime and removed only by an
 /// explicit reset, so its absence, with `init.json` present and no peer record

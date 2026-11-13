@@ -938,8 +938,10 @@ async fn record_plugin_install(
             .map(identity::Did::new)
             .transpose()
             .unwrap(),
-        plugin_home,
-        &identity.coordinate,
+        gents_pack::pack::PluginStoreLocation {
+            home: plugin_home,
+            coordinate: &identity.coordinate,
+        },
         Some(&identity),
         Some(node_binding),
         &gents_inference::resolved::ProviderProfilePolicy,

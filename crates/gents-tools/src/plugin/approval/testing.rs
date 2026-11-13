@@ -33,6 +33,7 @@ pub(crate) struct ObservedQuestion {
 pub(crate) struct QuestionObservation(Arc<Mutex<Option<String>>>);
 
 impl QuestionObservation {
+    #[cfg(test)]
     pub(crate) fn id(&self) -> Option<String> {
         self.0.lock().expect("approval observation lock").clone()
     }
@@ -45,6 +46,7 @@ impl Operator {
             .map(|(operator, _)| operator)
     }
 
+    #[cfg(test)]
     pub(crate) async fn answer_with_observation(
         home: &Path,
         answer: Answer,

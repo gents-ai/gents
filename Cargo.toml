@@ -21,6 +21,7 @@ members = [
     "crates/gents-claude",
     "crates/gents-claude-login",
     "crates/gents-cli",
+    "crates/gents-core-packs",
     "crates/gents-service",
     "crates/gents-host",
     "crates/gents-client-host",
@@ -44,6 +45,7 @@ members = [
 # upstream style; each crate has a local empty [workspace] for standalone tests.
 exclude = [
     "third_party/noq",
+    "core-packs",
 ]
 default-members = [
     "apps/fixture-host/src-tauri",
@@ -114,6 +116,7 @@ gents-documents = { path = "crates/gents-documents" }
 gents-inference = { path = "crates/gents-inference" }
 gents-p2p = { path = "crates/gents-p2p" }
 gents-pack = { path = "crates/gents-pack" }
+gents-core-packs = { path = "crates/gents-core-packs" }
 gents-session = { path = "crates/gents-session" }
 gents-tools = { path = "crates/gents-tools" }
 gents-toolcalls = { path = "crates/gents-toolcalls" }

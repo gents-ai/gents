@@ -107,13 +107,6 @@ impl Reset {
             ResetResume::NotUsageLimited | ResetResume::Deferred => None,
         }
     }
-
-    async fn waits(&self) {
-        assert!(self.resume(T).await.is_none());
-        assert!(self.resume(10 * T).await.is_none());
-        assert_eq!(self.f.goal_status().await, "usage_limited");
-        assert!(self.f.children().await.is_empty());
-    }
 }
 
 #[tokio::test]

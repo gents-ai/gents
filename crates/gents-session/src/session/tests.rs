@@ -3,8 +3,6 @@ use super::*;
 use crate::test_support::{
     fork_reader_node, history_on, sequenced_history_on, session_rewrite_rows,
 };
-use gents_inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
-use gents_store::test_support::first_content;
 
 #[tokio::test]
 async fn history_reconstruction_scans_a_shared_request_once() {

@@ -2,8 +2,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tempfile::TempDir;
-
 use super::adapter::DIRTY_BASE_SUMMARY_LIMIT;
 use super::fixture::*;
 use super::*;
@@ -544,9 +542,13 @@ fn writer_seal_persists_receipt_and_forbids_read_write() {
     assert_eq!(writer.lifecycle_state, "released");
 
     let err = super::binding::admit_workspace_binding(
-        "ws-seal",
-        &sealed.workspace.lifecycle_state,
-        sealed.workspace.seal_hash.as_deref(),
+        super::binding::BindingWorkspace {
+            workspace_id: "ws-seal",
+            owner_node_did: "did:key:zWorkspaceOwner",
+            lifecycle_state: &sealed.workspace.lifecycle_state,
+            seal_hash: sealed.workspace.seal_hash.as_deref(),
+            creation_policy: super::CreationPolicy::GitWorktreeDiff,
+        },
         &docs.load_bindings("ws-seal").unwrap(),
         super::binding::new_binding(
             "ws-seal",
@@ -556,6 +558,7 @@ fn writer_seal_persists_receipt_and_forbids_read_write() {
             "did:key:zWorkspaceOwner",
             sealed.workspace.seal_hash.as_deref(),
         ),
+        false,
         false,
     )
     .unwrap_err();
@@ -610,9 +613,13 @@ fn concurrent_read_only_after_seal_with_matching_hash() {
     let hash = sealed.workspace.seal_hash.clone().unwrap();
 
     let first = super::binding::admit_workspace_binding(
-        "ws-ro",
-        "sealed",
-        Some(&hash),
+        super::binding::BindingWorkspace {
+            workspace_id: "ws-ro",
+            owner_node_did: "did:key:zWorkspaceOwner",
+            lifecycle_state: "sealed",
+            seal_hash: Some(&hash),
+            creation_policy: super::CreationPolicy::GitWorktreeDiff,
+        },
         &[],
         super::binding::new_binding(
             "ws-ro",
@@ -623,15 +630,20 @@ fn concurrent_read_only_after_seal_with_matching_hash() {
             Some(&hash),
         ),
         false,
+        false,
     )
     .unwrap();
     let super::binding::AdmitBinding::Create { binding: a, .. } = first else {
         panic!("expected create");
     };
     let second = super::binding::admit_workspace_binding(
-        "ws-ro",
-        "sealed",
-        Some(&hash),
+        super::binding::BindingWorkspace {
+            workspace_id: "ws-ro",
+            owner_node_did: "did:key:zWorkspaceOwner",
+            lifecycle_state: "sealed",
+            seal_hash: Some(&hash),
+            creation_policy: super::CreationPolicy::GitWorktreeDiff,
+        },
         std::slice::from_ref(&a),
         super::binding::new_binding(
             "ws-ro",
@@ -641,6 +653,7 @@ fn concurrent_read_only_after_seal_with_matching_hash() {
             "did:key:zWorkspaceOwner",
             Some(&hash),
         ),
+        false,
         false,
     )
     .unwrap();
@@ -680,6 +693,7 @@ async fn seal_drift_fails_closed() {
         owner_node_did: "did:key:zWorkspaceOwner".into(),
         writer_principal: "did:key:zWriter".into(),
         integrator_principal: "did:key:zIntegrator".into(),
+        creation_policy: super::CreationPolicy::GitWorktreeDiff,
         lifecycle_state: "sealed".into(),
         seal_hash: Some(hash.clone()),
         instruction_manifest: sealed.workspace.instruction_manifest.clone(),
@@ -2052,11 +2066,17 @@ fn binding_admission_follows_the_lean_workspace_binding_model() {
     gents_lean_vocab::families::contracts_workspace_binding_admission::replay::<String>(|i| {
         let existing: Vec<_> = i.existing.iter().map(doc).collect();
         super::binding::admit_workspace_binding(
-            &i.workspace_id,
-            &i.workspace_state,
-            i.workspace_seal_hash.as_deref(),
+            super::binding::BindingWorkspace {
+                workspace_id: &i.workspace_id,
+                owner_node_did: &i.owner_node_did,
+                lifecycle_state: &i.workspace_state,
+                seal_hash: i.workspace_seal_hash.as_deref(),
+                creation_policy: super::CreationPolicy::parse(&i.creation_policy)
+                    .unwrap_or_else(|| panic!("{} has an unknown creation policy", i.name)),
+            },
             &existing,
             doc(&i.candidate),
+            i.git_metadata_write,
             false,
         )
         .is_ok()

@@ -117,32 +117,9 @@ def BindingInput.toCase (i : BindingInput) : Workspace.Conformance.WorkspaceBind
     gitMetadataWrite := i.gitMetadataWrite, agentCommandMode := i.agentCommandMode
     legal := false }
 
-/-- Premise: production binds a workspace under its owner node, so a binding's
-owner is the workspace owner by construction; and git metadata writes are denied
-by the spawn policy of the command, not by refusing the binding. Binding
-admission therefore decides neither of these cases. -/
-def bindingAdmissionUnreachedNames : List String :=
-  [ "non_owner_node_cannot_claim"
-  , "git_worktree_diff_read_write_git_metadata_write_illegal" ]
-
 @[conformance_family]
 def workspaceBindingAdmission : Family BindingInput Bool where
-  inputs :=
-    (Workspace.Conformance.workspaceBindingCases.filter fun c =>
-      !bindingAdmissionUnreachedNames.contains c.name).map BindingInput.ofCase
-  model := fun i => Workspace.Conformance.bindingCaseLegal i.toCase
-
-/-- model-production-gap: the model refuses a binding whose node is not the
-workspace owner and a read-write binding that would write git metadata on a
-git-worktree-diff workspace; `admit_workspace_binding` takes neither the
-workspace owner nor the command's git metadata writes, because production sets
-the binding owner from the workspace and denies git metadata writes in the
-command's spawn policy. -/
-@[conformance_family]
-def workspaceBindingAdmissionUnreached : Family BindingInput Bool where
-  inputs :=
-    (Workspace.Conformance.workspaceBindingCases.filter fun c =>
-      bindingAdmissionUnreachedNames.contains c.name).map BindingInput.ofCase
+  inputs := Workspace.Conformance.workspaceBindingCases.map BindingInput.ofCase
   model := fun i => Workspace.Conformance.bindingCaseLegal i.toCase
 
 end Conformance.Contracts

@@ -19,8 +19,8 @@ pub enum IncompatibleStoreKind {
 
 impl IncompatibleStoreKind {
     /// A store an earlier Gents made that this release cannot open. This
-    /// release is fresh-init only: it converts none of them, so such a home is
-    /// reported and left as it is. A key others can read, a missing key and a
+    /// release is fresh-init only (migrations begin after 1.0), so such a
+    /// home is reported and left as it is. A key others can read, a missing key and a
     /// damaged store are not about a version, and are named as what they are.
     pub fn is_older(self) -> bool {
         matches!(
@@ -47,7 +47,7 @@ fn describe(kind: IncompatibleStoreKind, data_path: &Path) -> String {
     let home_word = shell_word(home);
     let older = |what: &str| {
         format!(
-            "{home} was made by an older version of Gents ({what}), which this version cannot open: this release starts fresh and converts nothing. Nothing in it was changed and no background service was started for it. You can keep using it with the older Gents. To keep its data, export it first with the older Gents (`gents utils data export --help`). To start fresh with this version, move it aside yourself (`mv {home_word} {home_word}.older`), then run `gents`",
+            "{home} was made by an older version of Gents ({what}), which this version cannot open: this release has no conversion from it. Nothing in it was changed and no background service was started for it. You can keep using it with the older Gents. To keep its data, export it first with the older Gents (`gents utils data export --help`). To start fresh with this version, move it aside yourself (`mv {home_word} {home_word}.older`), then run `gents`",
             home = home.display()
         )
     };
@@ -123,7 +123,7 @@ impl fmt::Display for HomeState {
             Self::NewerStore => "its data is from a newer Gents version",
             Self::InsecureKey => "one of its key files can be read by other users",
             Self::CorruptStore => "its data can't be read; it may be damaged",
-            Self::UnfinishedSetup => "its setup stopped before it offered every starter pack",
+            Self::UnfinishedSetup => "its setup stopped before it installed every core pack",
         })
     }
 }
