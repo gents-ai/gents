@@ -316,15 +316,7 @@ async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
         "2026-07-15T00:00:00Z",
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    let _lifecycle =
-        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-            &db.node,
-            &user_access,
-            db.node_identity.clone(),
-            &user,
-            agent.as_ref(),
-            create,
-        )
+    gents_session::request::lifecycle::reserve_goal_session(&user_access, &create)
         .await
         .unwrap();
     crate::goal::create_goal_for_session_from_access(
@@ -348,15 +340,7 @@ async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
         "2026-07-15T00:00:00Z",
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    let _other_lifecycle =
-        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-            &db.node,
-            &user_access,
-            db.node_identity.clone(),
-            &user,
-            agent.as_ref(),
-            other_create,
-        )
+    gents_session::request::lifecycle::reserve_goal_session(&user_access, &other_create)
         .await
         .unwrap();
     let other = crate::goal::create_goal_for_session_from_access(
