@@ -2849,10 +2849,7 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
     .expect("initial goal submission");
 
     let mut changed = create.clone();
-    changed.input = serde_json::from_value(serde_json::json!({
-        "queue": {"source": "goal", "policy": "coalesce", "key": "changed"}
-    }))
-    .unwrap();
+    changed.content = "Begin different work".to_string();
     gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut changed)
         .await
         .expect("re-sign changed request");
@@ -4187,9 +4184,12 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
             !detail.contains("no longer the latest"),
             "wrong guard masked unfinished row: {detail}"
         );
-        if label != "unknown" {
-            assert!(detail.contains("unfinished"), "unexpected guard: {detail}");
-        }
+        let guard = match label {
+            "workspace" => "unfinished",
+            "unknown" => "invalid request lifecycle state",
+            _ => "decoding request lifecycle_state",
+        };
+        assert!(detail.contains(guard), "unexpected guard: {detail}");
         assert!(goal_children_from_access(&agent_access).await.is_empty());
         let after = load_goal_as(&client, did).await.unwrap();
         assert_eq!(
