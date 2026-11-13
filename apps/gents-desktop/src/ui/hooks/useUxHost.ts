@@ -200,6 +200,13 @@ export function useUxHost(
     installUxHost(buildUxHost(app, () => routeRef.current));
     openUxDoors(app);
   }, [app]);
+  /* a pack reinstalled from the CLI changes nothing this window hears of;
+     coming back to the window is when its user expects the new pages */
+  useEffect(() => {
+    const onFocus = () => rescanRuntimeUxPluginsSoon();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;

@@ -104,6 +104,41 @@ fn lists_pack_plugins_with_their_declaration_and_namespaced_id() {
 }
 
 #[test]
+fn a_pack_plugin_listing_digest_changes_with_its_code_or_css() {
+    let home = tempfile::tempdir().unwrap();
+    let mut plugin = ux("board", Some("ux/board/plugin.js"), None);
+    plugin.css = Some("ux/board/plugin.css".into());
+    let dir = install_record(home.path(), "acme/board", vec![plugin], vec![]);
+    std::fs::create_dir_all(dir.join("ux/board")).unwrap();
+    let write = |js: &str, css: &str| {
+        std::fs::write(dir.join("ux/board/plugin.js"), js).unwrap();
+        std::fs::write(dir.join("ux/board/plugin.css"), css).unwrap();
+        find(home.path(), "acme/board/board").unwrap().digest
+    };
+    let first = write("export default 1", ".b{}");
+    assert!(first.as_deref().unwrap().starts_with("sha256:"));
+    assert_eq!(
+        write("export default 1", ".b{}"),
+        first,
+        "same bytes, same digest"
+    );
+    assert_ne!(write("export default 2", ".b{}"), first, "new code reloads");
+    assert_ne!(write("export default 1", ".c{}"), first, "new css reloads");
+}
+
+#[test]
+fn an_unreadable_pack_entry_lists_without_a_digest() {
+    let home = tempfile::tempdir().unwrap();
+    install_record(
+        home.path(),
+        "acme/board",
+        vec![ux("board", Some("ux/board/plugin.js"), None)],
+        vec![],
+    );
+    assert_eq!(find(home.path(), "acme/board/board").unwrap().digest, None);
+}
+
+#[test]
 fn a_pack_plugin_lists_its_declared_data_surfaces_and_a_dev_plugin_none() {
     let home = tempfile::tempdir().unwrap();
     let mut plugin = ux("board", Some("ux/board/plugin.js"), None);
