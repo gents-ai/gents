@@ -82,6 +82,13 @@ pub struct EnrollmentStatusRequest {
     pub candidate_name: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnrollmentInviteRequest {
+    pub invite: String,
+    pub candidate_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendRequest {

@@ -64,10 +64,23 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_peer_status_fetch", {
         request: { peerId },
       }),
-    requestStatusEnrollment: (serverAddress, candidateName) =>
-      invokeDesktop("desktop_peer_enroll_status", {
-        request: { serverAddress, ...(candidateName ? { candidateName } : {}) },
-      }),
+    requestStatusEnrollment: (serverAddress, candidateName) => {
+      const value = serverAddress.trim();
+      if (
+        value.startsWith("gents://invite/") ||
+        /^[1-9A-HJ-NP-Za-km-z]{100,}$/.test(value)
+      ) {
+        return invokeDesktop("desktop_peer_enroll_invite", {
+          request: { invite: value, candidateName: candidateName ?? null },
+        });
+      }
+      return invokeDesktop("desktop_peer_enroll_status", {
+        request: {
+          serverAddress: value,
+          ...(candidateName ? { candidateName } : {}),
+        },
+      });
+    },
     listWorkspace: (subpath) =>
       invokeDesktop("desktop_workspace_list", {
         subpath: subpath ?? null,
@@ -161,7 +174,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_default_agent_set", {
         request,
       }),
-    provisionAgentIdentity: (nodeDid) => invokeDesktop("desktop_agent_identity_provision", { nodeDid }),
+    provisionAgentIdentity: (nodeDid) =>
+      invokeDesktop("desktop_agent_identity_provision", { nodeDid }),
     saveAgentConfig: (request) =>
       invokeDesktop("desktop_agent_save", {
         request,

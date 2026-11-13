@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use defra_node::Node as EmbeddedNode;
 use crate::p2p_reconcile::GraphqlEnrollmentStore;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
     EnrollmentOfferRecord, EnrollmentRequestRecord, DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
@@ -51,7 +51,7 @@ pub async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
 
 /// Upsert the admin's signed Network on `node` and sign a fresh offer from it.
 pub async fn signed_enrollment_offer(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     network_id: &str,
     network_name: &str,
     admin_identity: &dyn NodeIdentity,
@@ -141,6 +141,13 @@ pub async fn signed_enrollment_offer(
         owner_node_did: admin_identity.did().to_string(),
         profile: "client".to_string(),
         schema_fingerprint: enrollment_schema_fingerprint(),
+        live_schema_digest: gents_protocol::peer_schema::replicated_schema_digest(
+            crate::p2p_reconcile::CLIENT_COLLECTIONS,
+            &crate::p2p_reconcile::read_client_replicated_schema(node.clone())
+                .await
+                .unwrap(),
+        )
+        .unwrap(),
         issued_at: now.clone(),
         expires_at: expires_at.clone(),
         admin_sig: Vec::new(),

@@ -499,6 +499,7 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         owner_node_did: "did:key:owner".into(),
         profile: "client".into(),
         schema_fingerprint: enrollment_schema_fingerprint(),
+        live_schema_digest: format!("sha256:{}", "a".repeat(64)),
         issued_at: issued_at.clone(),
         expires_at: request_expires_at.clone(),
         admin_sig: Vec::new(),
@@ -1057,6 +1058,7 @@ fn signed_enrollment_authority_with_owner_at(
         owner_node_did: owner_node.into(),
         profile: "client".into(),
         schema_fingerprint: enrollment_schema_fingerprint(),
+        live_schema_digest: format!("sha256:{}", "a".repeat(64)),
         issued_at: issued_at.clone(),
         expires_at: request_expires_at.clone(),
         admin_sig: Vec::new(),
@@ -2760,6 +2762,7 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
     .is_empty());
 
     let issuer = EnrollmentOfferIssuer::new(
+        sender.node_arc(),
         Arc::new(sender.node_identity().clone()),
         sender.p2p.clone(),
         "client-receiver".into(),

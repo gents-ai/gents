@@ -274,6 +274,7 @@ pub(super) async fn handle_request(
             )
             .await?;
             let issuer = gents_p2p::p2p_reconcile::EnrollmentOfferIssuer::new(
+                Arc::clone(node),
                 identity,
                 fixture.runtime_p2p()?,
                 network.network_id,

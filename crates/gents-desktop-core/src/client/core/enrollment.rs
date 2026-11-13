@@ -101,8 +101,48 @@ impl ClientCore {
             .filter(|token| !token.trim().is_empty())
             .context("server does not advertise authenticated status enrollment")?;
         let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
+        self.request_offer_enrollment(
+            offer_token,
+            offer,
+            Some(status),
+            advertised_label,
+            candidate_name,
+        )
+        .await
+    }
+
+    pub async fn request_invite_enrollment(
+        &self,
+        offer_token: &str,
+        candidate_name: Option<&str>,
+    ) -> Result<EnrollmentRequestResult> {
+        let offer = decode_offer(offer_token).context("decoding enrollment invite")?;
+        self.request_offer_enrollment(
+            offer_token,
+            offer,
+            None,
+            None,
+            candidate_name
+                .map(str::trim)
+                .filter(|name| !name.is_empty()),
+        )
+        .await
+    }
+
+    async fn request_offer_enrollment(
+        &self,
+        offer_token: &str,
+        offer: gents_protocol::enrollment::EnrollmentOfferRecord,
+        status: Option<&Value>,
+        advertised_label: Option<&str>,
+        candidate_name: Option<&str>,
+    ) -> Result<EnrollmentRequestResult> {
         let _lifecycle = self.route_manager.lock().await;
         verify_enrollment_offer(&self.p2p, &self.node_identity, &offer).await?;
+        gents_p2p::p2p_reconcile::enrollment_candidate::verify_offer_live_schema(
+            &self.node, &offer,
+        )
+        .await?;
         confirm_network_admin_pin(&self.node, &offer).await?;
 
         let candidate_peer = self.local_peer_id.clone();
@@ -147,7 +187,10 @@ impl ClientCore {
                 (request, document_id)
             }
         };
-        if let Some(endpoint) = status.get("desktop_graphql").and_then(Value::as_str) {
+        if let Some(endpoint) = status
+            .and_then(|status| status.get("desktop_graphql"))
+            .and_then(Value::as_str)
+        {
             self.sync_state
                 .remember_enrollment_endpoint(
                     &request.server_peer,

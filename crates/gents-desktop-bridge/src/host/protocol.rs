@@ -4,8 +4,8 @@ use ts_rs::TS;
 
 use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingMessageSteerRequest,
-    PendingQueueEditRequest, SessionRenameRequest,
+    ChatSendRequest, DesktopInterruptRequest, EnrollmentInviteRequest, EnrollmentStatusRequest,
+    PendingMessageSteerRequest, PendingQueueEditRequest, SessionRenameRequest,
 };
 
 /// Change the version for incompatible framing or operation semantics.
@@ -260,6 +260,8 @@ pub enum ClientCommand {
     Snapshot {},
     #[serde(rename = "desktop_peer_enroll_status")]
     Enroll { request: EnrollmentStatusRequest },
+    #[serde(rename = "desktop_peer_enroll_invite")]
+    EnrollInvite { request: EnrollmentInviteRequest },
     #[serde(rename = "desktop_session_snapshot")]
     SessionSnapshot(SessionSnapshotArgs),
     #[serde(rename = "desktop_session_context_details")]
@@ -368,6 +370,7 @@ impl ClientCommand {
         "client_plugin_approval_decide",
         "desktop_client_snapshot",
         "desktop_peer_enroll_status",
+        "desktop_peer_enroll_invite",
         "desktop_session_snapshot",
         "desktop_session_context_details",
         "desktop_session_live_delta",

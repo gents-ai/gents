@@ -140,6 +140,7 @@ pub async fn request_enrollment(
     let p2p = gents_store::identity::node_p2p(node).context("this node has no P2P transport")?;
     let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
     verify_enrollment_offer(&p2p, identity, &offer).await?;
+    verify_offer_live_schema(node, &offer).await?;
     confirm_network_admin_pin(node, &offer).await?;
     let candidate_peer = p2p.local_peer_id().await.map_err(anyhow::Error::msg)?;
     let candidate_ticket = local_enrollment_ticket(&p2p, &candidate_peer).await?;
@@ -177,6 +178,21 @@ pub async fn request_enrollment(
     };
     push_enrollment_request(&p2p, &offer, &request.request_id, &document_id).await?;
     Ok(request)
+}
+
+pub async fn verify_offer_live_schema(
+    node: &Arc<EmbeddedNode>,
+    offer: &EnrollmentOfferRecord,
+) -> Result<()> {
+    let expected = offer.live_schema_digest.as_str();
+    let local = super::read_client_replicated_schema(Arc::clone(node)).await?;
+    let actual =
+        gents_protocol::peer_schema::replicated_schema_digest(super::CLIENT_COLLECTIONS, &local)?;
+    anyhow::ensure!(
+        gents_protocol::peer_schema::signed_schema_evidence_matches(Some(expected), Some(&actual)),
+        "invite's replicated schema does not match this node"
+    );
+    Ok(())
 }
 
 /// Accept only a fresh offer whose ticket, authenticated transport identity
@@ -241,9 +257,12 @@ pub fn validate_authenticated_server_did(
 }
 
 fn validate_fresh_window(issued_at: &str, expires_at: &str) -> Result<()> {
+    validate_fresh_window_at(issued_at, expires_at, Utc::now())
+}
+
+fn validate_fresh_window_at(issued_at: &str, expires_at: &str, now: DateTime<Utc>) -> Result<()> {
     let issued = DateTime::parse_from_rfc3339(issued_at).context("parsing offer issued_at")?;
     let expires = DateTime::parse_from_rfc3339(expires_at).context("parsing offer expires_at")?;
-    let now = Utc::now();
     anyhow::ensure!(
         issued <= now + chrono::Duration::seconds(30),
         "enrollment offer is from the future"
@@ -258,6 +277,26 @@ fn validate_fresh_window(issued_at: &str, expires_at: &str) -> Result<()> {
         "enrollment offer validity window is too long"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod invite_window_tests {
+    use super::*;
+
+    #[test]
+    fn freshness_matches_the_executable_model() {
+        use gents_lean_vocab::families::enrollment_invite_admissible as family;
+        family::replay(|input| {
+            let timestamp =
+                |seconds: u64| DateTime::from_timestamp(seconds.try_into().unwrap(), 0).unwrap();
+            validate_fresh_window_at(
+                &timestamp(input.issued).to_rfc3339(),
+                &timestamp(input.expires).to_rfc3339(),
+                timestamp(input.now),
+            )
+            .is_ok()
+        });
+    }
 }
 
 pub async fn local_enrollment_ticket(

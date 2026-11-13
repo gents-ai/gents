@@ -83,6 +83,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     };
     let reader = identity::Did::new(admin.did())?;
     let issuer = crate::p2p_reconcile::EnrollmentOfferIssuer::new(
+        admin_node.clone(),
         Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
         gents_store::identity::node_p2p(admin_node).context("admin P2P unavailable")?,
         "transport-test".into(),
@@ -310,7 +311,10 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         http_sees
     };
     for receiver_case in &receiver_cases {
-        let observed = match (receiver_case.input.sender_granted, receiver_case.input.delivered) {
+        let observed = match (
+            receiver_case.input.sender_granted,
+            receiver_case.input.delivered,
+        ) {
             (false, false) => ungranted_undelivered,
             (true, false) => granted_undelivered,
             (true, true) => granted_delivered,

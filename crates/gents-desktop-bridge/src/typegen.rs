@@ -222,6 +222,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         gents_desktop_core::workspace_root::AgentWorkspaceRoot,
         PeerStatusFetchRequest,
         EnrollmentStatusRequest,
+        EnrollmentInviteRequest,
         ChatSendRequest,
         gents_protocol::request_input::AuthoredRequestInput,
         PendingMessageEditRequest,

@@ -219,6 +219,7 @@ mod tests {
             owner_node_did: "owner".into(),
             profile: "client".into(),
             schema_fingerprint: "schema".into(),
+            live_schema_digest: format!("sha256:{}", "a".repeat(64)),
             issued_at: request.issued_at.clone(),
             expires_at: request.expires_at.clone(),
             admin_sig: vec![0; 64],
