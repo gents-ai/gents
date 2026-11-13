@@ -39,7 +39,6 @@ export function StartupScreen({
     setConnectError(null);
     try {
       await actions.enrollLocalServer();
-      await actions.awaitLocalServerPairing();
       await actions.refreshSnapshot();
     } catch (cause) {
       setConnectError(errorText(cause));
@@ -85,7 +84,7 @@ export function StartupScreen({
               data-testid="startup-connect-desktop"
               onClick={() => void connect()}
             >
-              Connect this desktop
+              {connecting ? "Connecting this desktop…" : "Connect this desktop"}
             </Button>
             <Button
               variant="outline"
