@@ -1903,6 +1903,31 @@ def caseCoverage : List CoverageEntry :=
       "identity_operations_deferred_unreached"
       "model-production-gap: the served scenarios observe only the parent link or grant the identity_operations_deferred_* families replay; no production path builds a foreign embedded runtime, an unregistered Node or a failed commit, or observes the recorded parent Node.")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_readiness_recovery_unreached"
+      "model-production-gap: production cannot inject a failed parent grant or a failed publication mark, and a readiness row natively owned by an empty runtime DID cannot be written.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_readiness_observation_unreached"
+      "model-production-gap: the recovery scenario builds at most one Node and exactly one readiness row, records a parent on every row that has a Node, and observes as the embedded runtime, so no production path observes a foreign requested runtime, a duplicated Node, a missing or duplicated readiness row, or a row with no recorded parent beside its Node.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_pairing_reader_unreached"
+      "model-production-gap: production records no owner-authorized reader generation, so no production path observes the last granted generation, an entitlement withdrawn without a revocation, or a new or unauthorized generation.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_enrollment_policy_unreached"
+      "model-production-gap: the thin-client scenario builds only the request a client writes before it has a Node; no production scenario builds the admin's received request, its parent, the revoked admin reader or the terminal decision.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_replica_grant_unreached"
+      "model-production-gap: no production scenario observes the received request before any grant or between the parent's revocation and its repair; the user's write is attempted only on the linked request, the application session exists only after the repair, and the pending relation is observed only by the runtime projector, which repairs no revoked parent.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "node_file_requests_access"

@@ -74,13 +74,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             )
             .await?;
     }
-    let receiver_model = &gents_lean_vocab::lean_contract_snapshot().identity_replica_grant_cases;
-    let case = |name: &str| {
-        receiver_model
-            .iter()
-            .find(|case| case.name == name)
-            .with_context(|| format!("missing replica case {name}"))
-    };
+    let mut replica_reads = std::collections::BTreeMap::new();
     let reader = identity::Did::new(admin.did())?;
     let issuer = crate::p2p_reconcile::EnrollmentOfferIssuer::new(
         admin_node.clone(),
@@ -324,13 +318,14 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         };
         receiver_case.check(observed);
     }
-    assert_eq!(
-        count(&admin_local.execute(&query).await?) != 0,
-        case("pending")?.runtime_read
-    );
-    assert_eq!(
-        count(&http(admin_address, &user)?.execute(&query).await?) != 0,
-        case("pending")?.user_read
+    replica_reads.insert(
+        "pending",
+        gents_lean_vocab::families::identity_operations_replica_grant_reads::ReplicaReads {
+            runtime_read: count(&admin_local.execute(&query).await?) != 0,
+            user_read: count(&http(admin_address, &user)?.execute(&query).await?) != 0,
+            agent_read: count(&http(admin_address, &agent)?.execute(&query).await?) != 0,
+            outsider_read: count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
+        },
     );
     let node = http(admin_address, &user)?
         .write(
@@ -354,9 +349,14 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         drop(view);
         txn.commit().await?;
     }
-    assert_eq!(
-        count(&http(admin_address, &user)?.execute(&query).await?) != 0,
-        case("linked")?.user_read
+    replica_reads.insert(
+        "linked",
+        gents_lean_vocab::families::identity_operations_replica_grant_reads::ReplicaReads {
+            runtime_read: count(&admin_local.execute(&query).await?) != 0,
+            user_read: count(&http(admin_address, &user)?.execute(&query).await?) != 0,
+            agent_read: count(&http(admin_address, &agent)?.execute(&query).await?) != 0,
+            outsider_read: count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
+        },
     );
     for actor in [&agent, &sibling, &outsider] {
         assert_eq!(
@@ -369,16 +369,13 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         &format!(r#"mutation {{ update_NetworkEnrollmentRequest(docID: "{}", input: {{offer_token:"forged"}}) {{_docID}} }}"#,
             escape_graphql_string(&doc)),
     ).await;
-    assert!(
-        denied.is_err()
-            || denied.as_ref().is_ok_and(|response| {
-                gents_protocol::graphql::graphql_rows_from_response(
-                    response,
-                    "update_NetworkEnrollmentRequest",
-                )
-                .is_empty()
-            })
-    );
+    let request_user_wrote = denied.as_ref().is_ok_and(|response| {
+        !gents_protocol::graphql::graphql_rows_from_response(
+            response,
+            "update_NetworkEnrollmentRequest",
+        )
+        .is_empty()
+    });
     assert_eq!(
         admin_local.execute(&query).await?["data"]["NetworkEnrollmentRequest"][0]["offer_token"],
         offer.token
@@ -414,10 +411,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         drop(view);
         txn.commit().await?;
     }
-    assert_eq!(
-        count(&http(admin_address, &user)?.execute(&query).await?) != 0,
-        case("after-repair")?.user_read
-    );
+    let repaired_user_read = count(&http(admin_address, &user)?.execute(&query).await?) != 0;
+    let repaired_runtime_read = count(&admin_local.execute(&query).await?) != 0;
+    let repaired_agent_read = count(&http(admin_address, &agent)?.execute(&query).await?) != 0;
     let session = http(admin_address, &candidate)?.write(
         "test.transport.private_session",
         &format!(r#"mutation {{ create_AgentSession(input:{{session_id:"private",node_did:"{}",agent_did:"{}"}}) {{_docID}} }}"#,
@@ -514,18 +510,20 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         !gents_protocol::graphql::graphql_rows_from_response(&public, "PeerRegistry").is_empty(),
     );
     assert_eq!(public["data"]["PeerRegistry"][0]["peer_id"], candidate_peer);
-    assert_eq!(
-        count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
-        case("after-repair")?.outsider_read
+    replica_reads.insert(
+        "after-repair",
+        gents_lean_vocab::families::identity_operations_replica_grant_reads::ReplicaReads {
+            runtime_read: repaired_runtime_read,
+            user_read: repaired_user_read,
+            agent_read: repaired_agent_read,
+            outsider_read: count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
+        },
     );
-    assert_eq!(
-        !gents_protocol::graphql::graphql_rows_from_response(
-            &admin_local.execute(&session_query).await?,
-            "AgentSession"
-        )
-        .is_empty(),
-        case("after-repair")?.app_read
-    );
+    let repaired_app_read = !gents_protocol::graphql::graphql_rows_from_response(
+        &admin_local.execute(&session_query).await?,
+        "AgentSession",
+    )
+    .is_empty();
 
     let runtime_registry = admin_local.write(
         "test.transport.runtime_registry",
@@ -715,11 +713,13 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let reopened_local = ConfigAccess::local_as(reopened.clone(), reader.clone());
     assert_eq!(
         count(&reopened_local.execute(&query).await?) != 0,
-        case("after-repair")?.runtime_read
+        repaired_runtime_read,
+        "a restart must not change the runtime's read of the repaired request"
     );
     assert_eq!(
         count(&http(reopened_address, &user)?.execute(&query).await?) != 0,
-        case("after-repair")?.user_read
+        repaired_user_read,
+        "a restart must not change the user's read of the repaired request"
     );
     let reopened_write = http(reopened_address, &user)?
         .write(
@@ -741,9 +741,35 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             "AgentSession"
         )
         .is_empty(),
-        case("after-repair")?.app_read
+        repaired_app_read,
+        "a restart must not change the runtime's read of the application session"
     );
     reopened.shutdown().await?;
+    for case in gents_lean_vocab::families::identity_operations_replica_grant_reads::cases() {
+        let reads = replica_reads
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the replica scenario never reached {}", case.input.name));
+        case.check(reads);
+    }
+    assert!(
+        replica_reads.is_empty(),
+        "unmodeled replica observations: {:?}",
+        replica_reads.keys().collect::<Vec<_>>()
+    );
+    for case in gents_lean_vocab::families::identity_operations_replica_grant_user_write::cases() {
+        case.check(
+            gents_lean_vocab::families::identity_operations_replica_grant_user_write::UserWrite {
+                user_write: request_user_wrote,
+            },
+        );
+    }
+    for case in gents_lean_vocab::families::identity_operations_replica_grant_app_read::cases() {
+        case.check(
+            gents_lean_vocab::families::identity_operations_replica_grant_app_read::AppRead {
+                app_read: repaired_app_read,
+            },
+        );
+    }
     for case in gents_lean_vocab::families::identity_operations_discovery::cases() {
         let allowed = discovery
             .remove(case.input.name.as_str())

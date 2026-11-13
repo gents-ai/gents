@@ -158,7 +158,6 @@ import Proofs.Conformance.Identity.CallbackParent
 import Proofs.Conformance.Identity.AgentIdentity
 import Proofs.Conformance.Identity.SessionPublication
 import Proofs.Conformance.Identity.DelegatedFinality
-import Proofs.Store.Identity.OperationsConformance
 import Proofs.Conformance.Identity.EvalRecords
 import Proofs.Conformance.Identity.OptimizationPromotion
 import Proofs.Store.Identity.DirectoryPublication
@@ -434,22 +433,6 @@ def snapshotIdentityCasesJson : String :=
       ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
     ++ "\"identity_parent_publication_cases\":"
       ++ Identity.PublicationConformance.parentCasesJson ++ ","
-    ++ "\"identity_readiness_preflight_cases\":"
-      ++ Identity.OperationsConformance.preflightCasesJson ++ ","
-    ++ "\"identity_pairing_partition_cases\":"
-      ++ Identity.OperationsConformance.pairingPartitionCasesJson ++ ","
-    ++ "\"identity_pairing_reader_cases\":"
-      ++ Identity.OperationsConformance.pairingReaderCasesJson ++ ","
-    ++ "\"identity_replica_grant_cases\":"
-      ++ Identity.OperationsConformance.replicaGrantCasesJson ++ ","
-    ++ "\"identity_enrollment_policy_cases\":"
-      ++ Identity.OperationsConformance.enrollmentPolicyCasesJson ++ ","
-    ++ "\"identity_readiness_recovery_cases\":"
-      ++ Identity.OperationsConformance.recoveryCasesJson ++ ","
-    ++ "\"identity_readiness_observation_cases\":"
-      ++ Identity.OperationsConformance.observationCasesJson ++ ","
-    ++ "\"identity_readiness_settled_cases\":"
-      ++ Identity.OperationsConformance.settledCasesJson ++ ","
 
 def snapshotClientCasesJson : String :=
   ""
