@@ -1,15 +1,12 @@
 #[tokio::test]
 async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().canonical_dispatch_observation_cases;
-    let cases: Vec<_> = cases
-        .iter()
-        .filter(|case| case.inputs[0].policy_allows)
-        .collect();
-    assert!(cases.iter().any(|case| case.inputs[0].acknowledged));
-    assert!(cases.iter().any(|case| !case.inputs[0].acknowledged));
-    for case in cases {
-        let input = &case.inputs[0];
-        let expected = &case.expected[0];
+    for case in gents_lean_vocab::families::dispatch_observation_contracts_owned_receipt::cases() {
+        let input = &case.input;
+        assert!(
+            input.policy_allows,
+            "{}: the counting tool admits every call",
+            input.name
+        );
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
             let (db, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
             let node = db.node.clone();
@@ -61,38 +58,28 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                 let (collected, fired) = gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
                         Some("tool_call.start_running_canonical"), collect,
                     ).await;
-                assert!(fired, "{}: dispatch commit must be reached", case.name);
+                assert!(fired, "{}: dispatch commit must be reached", input.name);
                 collected
             };
-            assert_eq!(
-                calls.load(Ordering::SeqCst),
-                usize::from(expected.may_invoke),
-                "{}: policy {policy:?}",
-                case.name
-            );
-            if expected.may_invoke {
-                assert!(collected.error.is_none(), "{:?}", collected.error);
-                assert_eq!(collected.tool_results, ["observed"]);
-                assert_eq!(collected.final_text.as_deref(), Some("done"));
-            } else {
-                assert!(
-                    collected.error.is_some(),
-                    "lost authority must stop the loop"
-                );
-                assert!(collected.tool_results.is_empty());
-                let rows = lifecycle
-                    .access()
-                    .unwrap()
-                    .execute("query { AgentToolCall { lifecycle_state } }")
-                    .await
-                    .unwrap();
-                let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
-                assert_eq!(rows.len(), 1, "publication must precede dispatch");
-                assert_eq!(
-                    rows[0]["lifecycle_state"], "running",
-                    "receipt loss must not roll back the committed dispatch"
-                );
-            }
+            let rows = lifecycle
+                .access()
+                .unwrap()
+                .execute("query { AgentToolCall { lifecycle_state } }")
+                .await
+                .unwrap();
+            let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
+            assert_eq!(rows.len(), 1, "publication must precede dispatch");
+            let loop_failed = collected.error.is_some();
+            case.check(Some(gents_lean_vocab::families::dispatch_observation_contracts_owned_receipt::OwnedReceiptOutput {
+                invocations: calls.load(Ordering::SeqCst) as u64,
+                loop_failed,
+                delivered_result: !loop_failed
+                    && collected.tool_results == ["observed"]
+                    && collected.final_text.as_deref() == Some("done"),
+                stopped_with_running_call: loop_failed
+                    && collected.tool_results.is_empty()
+                    && rows[0]["lifecycle_state"] == "running",
+            }));
             node.shutdown().await.expect("node shutdown");
         }
     }
@@ -100,18 +87,9 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
 
 #[tokio::test]
 async fn policy_rejection_settles_pending_call_without_dispatch_election() {
-    let cases: Vec<_> = gents_lean_vocab::lean_contract_snapshot()
-        .canonical_dispatch_observation_cases
-        .iter()
-        .filter_map(|case| {
-            case.expected_after_policy_settlement
-                .as_ref()
-                .map(|settlement| (case, settlement))
-        })
-        .collect();
-    assert!(!cases.is_empty());
-    for (case, settlement) in cases {
+    for case in gents_lean_vocab::families::dispatch_observation_contracts_owned_policy_settlement::cases() {
         assert!(case
+            .input
             .inputs
             .iter()
             .all(|input| input.acknowledged && !input.policy_allows));
@@ -165,30 +143,6 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                 let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
                 assert_eq!(rows.len(), 1, "publication precedes admission");
                 let row = &rows[0];
-                assert_eq!(
-                    (
-                        row["lifecycle_state"] == "failed",
-                        row["lifecycle_state"] == "running",
-                        row["started_at"].is_string(),
-                        row["tool_failure_class"].as_str(),
-                    ),
-                    (
-                        settlement.failed,
-                        settlement.running,
-                        settlement.started,
-                        settlement.failure_class.as_deref(),
-                    ),
-                    "{}/{}: policy {policy:?}",
-                    case.name,
-                    owner.owner(),
-                );
-                assert_eq!(
-                    fired,
-                    case.expected.iter().any(|expected| expected.running),
-                    "{}/{}: the dispatch election commits only for a modeled Running call",
-                    case.name,
-                    owner.owner(),
-                );
                 assert!(collected.error.is_none(), "{:?}", collected.error);
                 assert_eq!(collected.tool_results.len(), 1);
                 assert_eq!(collected.final_text.as_deref(), Some("done"));
@@ -201,13 +155,16 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                         None,
                     )
                     .await;
-                assert_eq!(
-                    completion.is_ok(),
-                    settlement.completion_accepted,
-                    "{}/{}: {completion:?}",
-                    case.name,
-                    owner.owner(),
-                );
+                case.check(Some(gents_lean_vocab::families::dispatch_observation_contracts_owned_policy_settlement::PolicySettlementOutput {
+                    election_committed: fired,
+                    after_policy_settlement: gents_lean_vocab::families::dispatch_observation_contracts_owned_policy_settlement::PolicySettlementWire {
+                        failed: row["lifecycle_state"] == "failed",
+                        running: row["lifecycle_state"] == "running",
+                        started: row["started_at"].is_string(),
+                        failure_class: row["tool_failure_class"].as_str().map(str::to_owned),
+                        completion_accepted: completion.is_ok(),
+                    },
+                }));
                 node.shutdown().await.expect("node shutdown");
             }
         }

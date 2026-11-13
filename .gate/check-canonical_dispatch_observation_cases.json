@@ -1,0 +1,15 @@
+{
+ "ok": true,
+ "problems": [],
+ "per_key": {
+  "canonical_dispatch_observation_cases": []
+ },
+ "notes": [
+  "canonical_dispatch_observation_cases: subset_fields (carried only for the named scenario families' cases): {'expected': ['dispatch_observation_contracts_hook_receipt'], 'completion_probe_outcome': ['dispatch_observation_contracts_hook_receipt'], 'completion_probe_accepted': ['dispatch_observation_contracts_hook_receipt'], 'parent_outcome': ['dispatch_observation_contracts_hook_receipt'], 'expected_after_parent_failure': ['dispatch_observation_contracts_hook_receipt'], 'expected_after_parent_recovery': ['dispatch_observation_contracts_hook_receipt'], 'expected_after_policy_settlement': ['dispatch_observation_contracts_owned_policy_settlement']}",
+  "dispatch_observation_contracts_hook_receipt: consumer crates/gents/src/toolcalls_tests/hook.rs",
+  "dispatch_observation_contracts_owned_receipt: consumer crates/gents/src/runtime/agent/loop_stream/tests/tool_execution.rs",
+  "dispatch_observation_contracts_owned_policy_settlement: consumer crates/gents/src/runtime/agent/loop_stream/tests/tool_execution.rs",
+  "dispatch_observation_contracts_loop_election: consumer crates/gents-loop/src/end_to_end_test.rs",
+  "dispatch_observation_contracts_control_replay: consumer crates/gents-automation/src/goal/goal_tools/tests.rs"
+ ]
+}
