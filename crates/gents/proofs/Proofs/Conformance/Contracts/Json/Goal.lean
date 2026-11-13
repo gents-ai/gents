@@ -777,7 +777,7 @@ def goalReadinessGateCases : List GoalReadinessGateCase :=
       settled := true, cause := .attempt, input := activeInput .completed (idle := false) }
   ]
 
-inductive ObservationWire where
+inductive GoalObservationWire where
   | ready
   | backendRecovering
   | unavailable
@@ -785,14 +785,14 @@ inductive ObservationWire where
   | unknown
   deriving Lean.ToJson
 
-def ObservationWire.ofModel : Observation → ObservationWire
+def GoalObservationWire.ofModel : Observation → GoalObservationWire
   | .ready _ => .ready
   | .backendRecovering => .backendRecovering
   | .unavailable => .unavailable
   | .unassigned => .unassigned
   | .unknown => .unknown
 
-def ObservationWire.toModel (newerThanTerminal : Bool) : ObservationWire → Observation
+def GoalObservationWire.toModel (newerThanTerminal : Bool) : GoalObservationWire → Observation
   | .ready => .ready newerThanTerminal
   | .backendRecovering => .backendRecovering
   | .unavailable => .unavailable
@@ -824,7 +824,7 @@ deriving instance Lean.ToJson for Readiness, Cause
 
 structure ReadinessGateInput where
   name : String
-  observation : ObservationWire
+  observation : GoalObservationWire
   newerThanTerminal : Bool
   settled : Bool
   cause : Cause
@@ -841,7 +841,7 @@ structure ReadinessGateInput where
   deriving Lean.ToJson
 
 def ReadinessGateInput.ofCase (w : GoalReadinessGateCase) : ReadinessGateInput :=
-  { name := w.name, observation := ObservationWire.ofModel w.observation
+  { name := w.name, observation := GoalObservationWire.ofModel w.observation
   , newerThanTerminal := w.observation.newerThanTerminal, settled := w.settled, cause := w.cause
   , status := w.input.status, terminal := w.input.terminal, sessionIdle := w.input.sessionIdle
   , childExists := w.input.childExists, budgetReached := w.input.budgetReached

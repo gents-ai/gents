@@ -101,7 +101,7 @@ structure LatestWire where
   state : RequestState
   deriving ToJson
 
-structure SessionObservationWire where
+structure ObservationWire where
   activity : Nat
   preview : Option String
   latest : Option LatestWire
@@ -120,7 +120,7 @@ structure DocumentWire where
   provenance : Option ProvenanceWire
   tags : List String
   title : Option TitleWire
-  observation : Option SessionObservationWire
+  observation : Option ObservationWire
   deriving ToJson
 
 def DocumentWire.ofModel (d : AgentSession.Document) : DocumentWire :=

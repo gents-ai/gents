@@ -845,22 +845,19 @@ async fn sink_deliveries_match_the_lean_capture_model() {
             rendered
         };
         let delivery = routed(0, body.clone(), "path-a");
-        match case.input.prior.as_str() {
-            "unbound" => {}
-            "same_request" => sink.capture(delivery.clone()).await.unwrap(),
-            "other_route" => sink
-                .capture(routed(0, body.clone(), "path-b"))
-                .await
-                .unwrap(),
-            "other_body" => sink
-                .capture(routed(
-                    0,
-                    json!({"messages":[{"role":"user","content":capture_text(90, 24 * 1024)}]}),
-                    "path-a",
-                ))
-                .await
-                .unwrap(),
+        let prior = match case.input.prior.as_str() {
+            "unbound" => None,
+            "same_request" => Some(delivery.clone()),
+            "other_route" => Some(routed(0, body.clone(), "path-b")),
+            "other_body" => Some(routed(
+                0,
+                json!({"messages":[{"role":"user","content":capture_text(90, 24 * 1024)}]}),
+                "path-a",
+            )),
             other => panic!("unknown prior {other}"),
+        };
+        if let Some(prior) = prior {
+            sink.capture(prior).await.unwrap();
         }
         if case.input.block_deleted {
             let earlier = routed(5, body.clone(), "path-a");
