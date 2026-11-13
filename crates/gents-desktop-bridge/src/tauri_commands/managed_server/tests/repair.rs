@@ -12,6 +12,7 @@ fn report(repaired: Vec<Finding>, outcome: RepairOutcome) -> anyhow::Result<Repa
         outcome,
         serving_home: None,
         older_data: None,
+        unfinished_setup: false,
     })
 }
 
@@ -59,7 +60,7 @@ fn tree(root: &Path) -> Vec<String> {
 #[tokio::test]
 async fn a_mac_without_a_local_node_is_left_alone() {
     let (temp, state) = orchestration_state();
-    let result = repair_with(&state, false, |_, _| async { panic!("prepared") })
+    let result = repair_with(&state, false, |_| async { panic!("prepared") })
         .await
         .unwrap();
     assert_eq!(result.outcome, ManagedServerRepairOutcome::NoLocalNode);
@@ -85,7 +86,7 @@ async fn a_remote_only_or_disabled_desktop_is_left_alone_even_with_a_preference(
             "{}",
         );
         let before = tree(temp.path());
-        let result = repair_with(&state, true, |_, _| async { panic!("prepared") })
+        let result = repair_with(&state, true, |_| async { panic!("prepared") })
             .await
             .unwrap();
         assert_eq!(result.outcome, ManagedServerRepairOutcome::NoLocalNode);
@@ -99,7 +100,7 @@ async fn unreadable_saved_connections_are_reported_as_repaired() {
     let paths = &state.policy.desktop_paths;
     std::fs::create_dir_all(paths.root()).unwrap();
     std::fs::write(paths.peer_directory_path(), "{ not json").unwrap();
-    let result = repair_with(&state, true, |_, _| async { ready() })
+    let result = repair_with(&state, true, |_| async { ready() })
         .await
         .unwrap();
     assert_eq!(result.outcome, ManagedServerRepairOutcome::Ready);
@@ -133,7 +134,7 @@ async fn older_data_set_aside_after_a_replaced_service_opens_setup_and_names_the
         from: None,
         kept_at: kept_at.clone(),
     };
-    let result = repair_with(&state, true, |_, _| async {
+    let result = repair_with(&state, true, |_| async {
         report(vec![set_aside], RepairOutcome::NeedsSetup)
     })
     .await
@@ -163,45 +164,33 @@ fn refused_with(state: &DesktopAppState, kind: IncompatibleStoreKind) {
 }
 
 #[tokio::test]
-async fn an_older_refusal_a_launch_saw_is_set_aside_then_setup_runs() {
+async fn an_older_refusal_a_launch_saw_keeps_the_incompatible_home_screen() {
     let (_temp, state) = orchestration_state();
     refused_with(&state, IncompatibleStoreKind::UnknownLineage);
-    let kept_at = PathBuf::from("/Users/me/.gents.from-older-2026-11-12-120000");
-    let set_aside = Finding::OlderDataSetAside {
-        from: None,
-        kept_at: kept_at.clone(),
-    };
-    let result = repair_with(&state, true, |choice, refused| async move {
-        assert!(refused, "the observed refusal reaches the repair owner");
+    let result = repair_with(&state, true, |choice| async move {
         assert!(!choice.explicit);
-        report(vec![set_aside], RepairOutcome::NeedsSetup)
+        ready()
     })
     .await
     .unwrap();
-    assert_eq!(result.outcome, ManagedServerRepairOutcome::NeedsSetup);
+    assert_eq!(result.outcome, ManagedServerRepairOutcome::Ready);
     assert_eq!(
-        result.repaired,
-        vec![format!(
-            "This version couldn't open the data from an older Gents version, so it was set aside at {}",
-            kept_at.display()
-        )]
+        state
+            .managed_server
+            .lock()
+            .await
+            .incompatible_store
+            .as_ref()
+            .map(|store| store.kind),
+        Some(IncompatibleStoreKind::UnknownLineage)
     );
-    assert!(state
-        .managed_server
-        .lock()
-        .await
-        .incompatible_store
-        .is_none());
 }
 
 #[tokio::test]
 async fn a_foreign_version_refusal_keeps_the_incompatible_home_screen() {
     let (_temp, state) = orchestration_state();
     refused_with(&state, IncompatibleStoreKind::ForeignVersion);
-    let result = repair_with(&state, true, |_, refused| async move {
-        assert!(!refused, "a newer build's data is never set aside");
-        ready()
-    })
+    let result = repair_with(&state, true, |_| async move { ready() })
     .await
     .unwrap();
     assert_eq!(result.outcome, ManagedServerRepairOutcome::Ready);
@@ -224,7 +213,7 @@ async fn a_late_failure_keeps_the_notes_already_gathered() {
     std::fs::create_dir_all(paths.root()).unwrap();
     std::fs::write(paths.peer_directory_path(), "{ not json").unwrap();
     write(paths.store_encryption_path(), "not a record");
-    let result = repair_with(&state, true, |_, _| async { ready() })
+    let result = repair_with(&state, true, |_| async { ready() })
         .await
         .unwrap();
     assert_eq!(result.outcome, ManagedServerRepairOutcome::Blocked);
@@ -277,7 +266,7 @@ async fn another_versions_client_store_is_set_aside_and_the_banner_names_the_bac
             r#"{"nodeName":"Forge"}"#,
         );
         let identity = std::fs::read(paths.identity_key_path()).unwrap();
-        let result = repair_with(&state, true, |_, _| async { ready() })
+        let result = repair_with(&state, true, |_| async { ready() })
             .await
             .unwrap();
         assert_eq!(result.outcome, ManagedServerRepairOutcome::Ready);
@@ -332,7 +321,7 @@ async fn the_field_state_after_an_upgrade_of_another_versions_store_is_set_aside
     assert!(source.join("MANIFEST").is_file());
     assert!(upgrade::journal_path(paths.node_data_dir()).is_file());
 
-    let result = repair_with(&state, true, |_, _| async { ready() })
+    let result = repair_with(&state, true, |_| async { ready() })
         .await
         .unwrap();
     assert_eq!(result.blocker, None);
@@ -364,7 +353,7 @@ async fn a_held_store_or_an_unreadable_key_is_never_set_aside() {
     gents_desktop_core::test_fixtures::write_other_version_client_store(paths, true, true).await;
     let held = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
     let before = tree(temp.path());
-    let result = repair_with(&state, true, |_, _| async { ready() })
+    let result = repair_with(&state, true, |_| async { ready() })
         .await
         .unwrap();
     assert!(result.repaired.is_empty(), "{:?}", result.repaired);
@@ -383,7 +372,7 @@ async fn a_held_store_or_an_unreadable_key_is_never_set_aside() {
             .unwrap()
         };
         mode(0o000);
-        let result = repair_with(&state, true, |_, _| async { ready() })
+        let result = repair_with(&state, true, |_| async { ready() })
             .await
             .unwrap();
         mode(0o600);
@@ -420,7 +409,7 @@ async fn a_removed_home_reports_the_lost_local_node_and_where_its_data_went() {
         &serde_json::json!({ "peers": [peer] }).to_string(),
     );
 
-    let result = repair_with(&state, true, |_, _| async {
+    let result = repair_with(&state, true, |_| async {
         report(Vec::new(), RepairOutcome::NeedsSetup)
     })
     .await
@@ -439,7 +428,7 @@ async fn a_removed_home_reports_the_lost_local_node_and_where_its_data_went() {
 #[tokio::test]
 async fn a_node_serving_a_deleted_folder_is_a_lost_node_not_a_repair() {
     let (_temp, state) = orchestration_state();
-    let result = repair_with(&state, true, |_, _| async {
+    let result = repair_with(&state, true, |_| async {
         report(vec![Finding::StaleNode], RepairOutcome::NeedsSetup)
     })
     .await

@@ -333,9 +333,9 @@ fn an_insecure_old_key_scopes_the_home_like_a_refused_store() {
     .unwrap()
     .preview();
     assert!(preview.stores[0].unsafe_key);
-    assert!(preview.stores[0].older);
+    assert!(!preview.stores[0].older);
     assert!(preview.delete_confirmation.is_some());
-    assert!(preview.stores[0].detail.contains("unsafe file permissions"));
+    assert!(preview.stores[0].detail.contains("can be read by other users"));
 }
 
 #[test]
@@ -556,7 +556,7 @@ fn a_store_from_another_build_is_not_reported_as_older() {
     .unwrap()
     .preview();
     assert!(!preview.stores[0].older);
-    assert!(preview.stores[0].detail.contains("different Gents version"));
+    assert!(preview.stores[0].detail.contains("newer version of Gents"));
 }
 
 #[test]

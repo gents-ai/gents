@@ -252,6 +252,28 @@ pub(crate) async fn install(
     json!({"installed": installed, "not_installed": not_installed})
 }
 
+/// Offers each of `packs` that `home` does not have as approved, asking on
+/// the terminal: what continuing an unfinished setup does. The home's own
+/// store is used, so its node is stopped first.
+pub(crate) async fn offer_remaining(home: &Path, packs: &[&str]) -> Result<()> {
+    let statuses = status(home, packs, None).await?;
+    let remaining: Vec<&str> = statuses
+        .iter()
+        .filter(|status| status.state != PackState::Installed)
+        .map(|status| status.pack.as_str())
+        .collect();
+    if remaining.is_empty() {
+        return Ok(());
+    }
+    let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
+    let engineer = engineer_of(&access, &owner).await;
+    release(access).await;
+    let engineer = engineer?
+        .context("this home's default agent is not the Engineer, so it has no starter packs")?;
+    install(home, &engineer, &remaining, None, Approval::resolve(false, true)).await;
+    Ok(())
+}
+
 /// One default pack as `home` has it: what the desktop's approval card and
 /// `gents config pack starter` list.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]

@@ -9,7 +9,10 @@ use gents_protocol::row::{
 };
 use serde_json::{json, Value};
 
+use std::io::IsTerminal as _;
+
 use crate::cli::args::StatusArgs;
+use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::print_json;
 use gents_service::home_state::read_runtime_state;
@@ -18,11 +21,85 @@ use gents_service::home_state::resolve_home_dir;
 use gents_service::home_state::resolve_node_did;
 
 pub(crate) async fn status(args: StatusArgs) -> Result<()> {
+    let format = match args.output {
+        Some(format) => {
+            format.ensure_supported("status", &[OutputFormat::Text, OutputFormat::Json])?
+        }
+        None if std::io::stdout().is_terminal() => OutputFormat::Text,
+        None => OutputFormat::Json,
+    };
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let output = load_runtime_status_output(args.home.as_deref(), &graphql, &node_did).await?;
-    print_json(&output)?;
+    if format == OutputFormat::Json {
+        return print_json(&output);
+    }
+    let home_flag = args
+        .home
+        .as_deref()
+        .map(|home| match home.display().to_string() {
+            home if home.contains(char::is_whitespace) => format!(" --home '{home}'"),
+            home => format!(" --home {home}"),
+        })
+        .unwrap_or_default();
+    for line in status_summary(&output, &home_flag) {
+        println!("{line}");
+    }
     Ok(())
+}
+
+/// The terminal summary of `load_runtime_status_output`; `home_flag` is the
+/// ` --home H` suffix the next calls repeat, empty for the default home.
+fn status_summary(output: &Value, home_flag: &str) -> Vec<String> {
+    let text = |field: &str| output[field].as_str().unwrap_or("unknown").to_owned();
+    let readiness = text("readiness_status");
+    let node_name = output["runtime_state"]["node_name"]
+        .as_str()
+        .unwrap_or("unknown");
+    let ready = output["runnable_agent_count"].as_u64().unwrap_or(0);
+    let unavailable = output["unavailable_agent_count"].as_u64().unwrap_or(0);
+    let backends = output["backend_probes"]
+        .as_object()
+        .map(|probes| {
+            probes
+                .iter()
+                .map(|(backend, probe)| {
+                    format!("{backend} {}", probe["state"].as_str().unwrap_or("unknown"))
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|line| !line.is_empty())
+        .unwrap_or_else(|| "not reported".to_owned());
+    let mut lines = vec![
+        format!("readiness  {readiness}"),
+        format!("node       {node_name} ({})", text("node_did")),
+        format!("home       {}", text("home")),
+        format!("endpoint   {}", text("graphql")),
+        format!("agents     {ready} of {} ready", ready + unavailable),
+        format!("backends   {backends}"),
+    ];
+    if readiness == "unknown" {
+        let reason = output["node_readiness"]["reason"]
+            .as_str()
+            .unwrap_or("not reported")
+            .replace('_', " ");
+        lines.push(format!("why        {reason}"));
+    }
+    if let Some(agents) = output["unavailable_agents"].as_object() {
+        lines.extend(
+            agents.iter().map(|(agent, reason)| {
+                format!("  {agent}: {}", reason.as_str().unwrap_or_default())
+            }),
+        );
+    }
+    if readiness != "ready" {
+        lines.push(format!("Next: gents runtime diagnose{home_flag}"));
+    }
+    lines.push(format!(
+        "Every field: gents status{home_flag} --output json"
+    ));
+    lines
 }
 
 pub(crate) async fn load_runtime_status_output(
@@ -258,5 +335,35 @@ mod tests {
         assert_eq!(probes.len(), 1);
         assert_eq!(probes["claude"]["last_error"], "404");
         assert!(runtime_backend_probes(&status, "did:key:other").is_empty());
+    }
+
+    #[test]
+    fn a_degraded_summary_names_the_unavailable_agent_and_the_next_call() {
+        let output = json!({
+            "home": "/h",
+            "graphql": "http://127.0.0.1:9191/api/v0/graphql",
+            "node_did": "did:key:node",
+            "runtime_state": {"node_name": "default"},
+            "readiness_status": "degraded",
+            "runnable_agent_count": 1,
+            "unavailable_agent_count": 1,
+            "unavailable_agents": {"did:key:agent": "behavior is disabled"},
+            "backend_probes": {"claude": {"state": "healthy"}},
+        });
+        let lines = status_summary(&output, " --home /h");
+        assert_eq!(
+            lines,
+            [
+                "readiness  degraded",
+                "node       default (did:key:node)",
+                "home       /h",
+                "endpoint   http://127.0.0.1:9191/api/v0/graphql",
+                "agents     1 of 2 ready",
+                "backends   claude healthy",
+                "  did:key:agent: behavior is disabled",
+                "Next: gents runtime diagnose --home /h",
+                "Every field: gents status --home /h --output json",
+            ]
+        );
     }
 }

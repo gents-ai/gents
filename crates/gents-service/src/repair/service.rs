@@ -106,27 +106,38 @@ pub enum ServiceAction {
         restart: bool,
     },
     Restart,
+    RewriteDefinition,
 }
 
 pub fn plan_service(facts: &ServiceFacts, chosen: &Path) -> Vec<ServiceAction> {
+    let serves_this_node = matches!(
+        facts.port,
+        PortObservation::Gents {
+            identity: ServedIdentity::Matches,
+            ..
+        }
+    );
     let Some(definition_home) = &facts.definition_home else {
-        return Vec::new();
+        return if facts.job_loaded && serves_this_node {
+            vec![ServiceAction::RewriteDefinition]
+        } else {
+            Vec::new()
+        };
     };
+    let complete = facts.home.is_complete();
     if definition_home != chosen {
         if facts.served_home_present && facts.operation != RepairOperation::Repoint {
             return Vec::new();
         }
-        if facts.service_move == ServiceMove::AfterSetup && facts.home != HomeState::Healthy {
+        if facts.service_move == ServiceMove::AfterSetup && !complete {
             return Vec::new();
         }
         return vec![ServiceAction::MoveFrom {
             from: definition_home.clone(),
-            start_after: (facts.job_loaded || facts.was_serving)
-                && facts.home == HomeState::Healthy,
+            start_after: (facts.job_loaded || facts.was_serving) && complete,
             replace_program: facts.foreign_program,
         }];
     }
-    let complete = facts.home == HomeState::Healthy;
     if !facts.executable_present {
         return vec![ServiceAction::Reinstall {
             start_after: facts.job_loaded && complete,
@@ -148,13 +159,6 @@ pub fn plan_service(facts: &ServiceFacts, chosen: &Path) -> Vec<ServiceAction> {
             start_after: (facts.job_loaded || facts.job_failed) && complete,
         }];
     }
-    let serves_this_node = matches!(
-        facts.port,
-        PortObservation::Gents {
-            identity: ServedIdentity::Matches,
-            ..
-        }
-    );
     let serves_another_node = matches!(
         facts.port,
         PortObservation::Gents {
@@ -218,6 +222,7 @@ pub async fn gather_facts(
             operation: RepairOperation::Run,
         };
         let Some(installed_home) = installed_home else {
+            facts.job_loaded = manager.job_pid()?.is_some();
             return Ok((facts, None));
         };
         let owner = NativeServiceManager::new(NativeServiceConfig {
@@ -478,6 +483,7 @@ async fn apply_inner(
             }
         }
         ServiceAction::Restart => start_after_stop(config).await?,
+        ServiceAction::RewriteDefinition => on_manager(config, NativeServiceManager::install).await?,
         ServiceAction::RefreshLog { restart } => {
             let restart = *restart;
             let pid = on_manager(config, move |manager| {

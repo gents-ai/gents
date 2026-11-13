@@ -272,9 +272,7 @@ pub fn resolve_graphql_endpoint(
                 && url.fragment().is_none(),
             "GraphQL endpoint must be an HTTP URL without credentials, query or fragment"
         );
-        let identity =
-            gents_desktop_core::client::PrincipalIdentity::load_existing(&cli_identity_paths()?)
-                .context("CLI client identity is unavailable; initialize the CLI client first")?;
+        let identity = existing_client_identity(&home_dir, &cli_identity_paths()?)?;
         let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             identity.private_key_bytes(),
         )?;
@@ -318,8 +316,7 @@ fn home_graphql_endpoint_with_paths(
         endpoint_serves_home(home_dir, &url),
         "endpoint is not this home's runtime"
     );
-    let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(paths)
-        .context("CLI client identity is unavailable; initialize the CLI client first")?;
+    let identity = existing_client_identity(home_dir, paths)?;
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         identity.private_key_bytes(),
     )?;
@@ -357,9 +354,7 @@ fn cli_identity_paths_under(
 pub fn held_client_identity(
     actor_did: &str,
 ) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
-    let identity =
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&cli_identity_paths()?)
-            .context("CLI client identity is unavailable; initialize the CLI client first")?;
+    let identity = existing_client_identity(&resolve_home_dir(None), &cli_identity_paths()?)?;
     anyhow::ensure!(
         identity.did() == actor_did,
         "the GraphQL endpoint is not authenticated as this CLI's client identity"
@@ -367,10 +362,158 @@ pub fn held_client_identity(
     Ok(std::sync::Arc::new(identity))
 }
 
+/// Why this machine's CLI client identity cannot be used for a home.
+#[derive(Debug, thiserror::Error)]
+pub enum ClientIdentityError {
+    /// The home finished setup, so its Node and sessions were made by a client
+    /// identity whose key is not on this machine. ACP lets only that Node's
+    /// owner or an administrator it granted read the sessions or grant another
+    /// identity, so no command can enrol a new identity into this home from here.
+    #[error("{}", missing_for_set_up_home(.home, .identity_dir))]
+    MissingForSetUpHome {
+        home: PathBuf,
+        identity_dir: PathBuf,
+    },
+    #[error(
+        "this machine has no Gents client identity yet; run `gents` to set up a home, which creates one"
+    )]
+    NotCreated,
+    #[error("loading this machine's Gents client identity")]
+    Load(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl ClientIdentityError {
+    fn load(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Self::Load(source.into())
+    }
+}
+
+/// `gents runtime desktop reset` sets the home aside as a backup and is
+/// macOS-only; elsewhere a new home in another folder is the only fresh start.
+fn missing_for_set_up_home(home: &Path, identity_dir: &Path) -> String {
+    let home = home.display();
+    let identity_dir = identity_dir.display();
+    let start_over = if cfg!(target_os = "macos") {
+        format!(
+            "To start over with a new identity, run `gents runtime desktop reset --home {home}`: it previews, then keeps {home} as a backup, and the next `gents` sets up a new home"
+        )
+    } else {
+        "To start over with a new identity, run `gents --home NEW_FOLDER` to set up a new home"
+            .to_owned()
+    };
+    format!(
+        "This machine has no Gents client identity for {home}; its sessions were made by an identity whose key belongs in {identity_dir}, and this machine does not have it. No command can give a new identity access to them: restore {identity_dir} from a backup and run this again. {start_over}; the new identity will not see the earlier sessions."
+    )
+}
+
+/// Whether this machine loads, creates or refuses its CLI client identity for
+/// a home: the Lean `clientIdentityAction`.
+pub fn client_identity_action(
+    observed: &gents_protocol::operations::install_repair::ClientIdentityObservation,
+) -> gents_protocol::operations::install_repair::ClientIdentityAction {
+    use gents_protocol::operations::install_repair::ClientIdentityAction;
+    if observed.key_present {
+        ClientIdentityAction::Load
+    } else if observed.settings_present && !observed.pending {
+        ClientIdentityAction::Refuse
+    } else {
+        ClientIdentityAction::Create
+    }
+}
+
+/// A home whose setup finished has a Node owned by the client identity that set
+/// it up; an interrupted setup has none yet and may still take this machine's.
+fn home_is_set_up(home: &Path) -> std::io::Result<bool> {
+    use gents_protocol::operations::install_repair::{
+        ClientIdentityAction, ClientIdentityObservation,
+    };
+    Ok(client_identity_action(&ClientIdentityObservation {
+        key_present: false,
+        settings_present: init_config_path(home).try_exists()?,
+        pending: home.join(INIT_PENDING_FILE_NAME).try_exists()?,
+    }) == ClientIdentityAction::Refuse)
+}
+
+fn missing_client_identity(
+    home: &Path,
+    paths: &gents_desktop_core::client::DesktopPaths,
+) -> ClientIdentityError {
+    match home_is_set_up(home) {
+        Ok(true) => ClientIdentityError::MissingForSetUpHome {
+            home: home.to_path_buf(),
+            identity_dir: paths.root().to_path_buf(),
+        },
+        Ok(false) => ClientIdentityError::NotCreated,
+        Err(error) => ClientIdentityError::load(error),
+    }
+}
+
+fn existing_client_identity(
+    home: &Path,
+    paths: &gents_desktop_core::client::DesktopPaths,
+) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    if !paths
+        .identity_key_path()
+        .try_exists()
+        .map_err(ClientIdentityError::load)?
+    {
+        return Err(missing_client_identity(home, paths));
+    }
+    gents_desktop_core::client::PrincipalIdentity::load_existing(paths)
+        .map_err(ClientIdentityError::load)
+}
+
+/// The one owner that decides whether this machine may create its CLI client
+/// identity: only while `home` is not yet set up. A set-up home's Node and
+/// sessions belong to the identity that set it up, so a key minted for it would
+/// own nothing there and hide everything; that is refused with
+/// [`ClientIdentityError::MissingForSetUpHome`].
+pub async fn client_identity_for(
+    home: &Path,
+) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    let paths = cli_identity_paths().map_err(ClientIdentityError::load)?;
+    let key_present = tokio::fs::try_exists(paths.identity_key_path())
+        .await
+        .map_err(ClientIdentityError::load)?;
+    if !key_present {
+        let selected = home.to_path_buf();
+        let set_up = tokio::task::spawn_blocking(move || home_is_set_up(&selected))
+            .await
+            .map_err(ClientIdentityError::load)?
+            .map_err(ClientIdentityError::load)?;
+        if set_up {
+            return Err(ClientIdentityError::MissingForSetUpHome {
+                home: home.to_path_buf(),
+                identity_dir: paths.root().to_path_buf(),
+            });
+        }
+    }
+    load_or_create_client_identity(&paths).await
+}
+
+/// `init` creating a new Node's store: the Node it makes is owned by this
+/// identity, so creating one is part of setting the home up.
+pub async fn client_identity_for_new_node(
+) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    let paths = cli_identity_paths().map_err(ClientIdentityError::load)?;
+    load_or_create_client_identity(&paths).await
+}
+
+async fn load_or_create_client_identity(
+    paths: &gents_desktop_core::client::DesktopPaths,
+) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    paths
+        .ensure_root_dirs()
+        .await
+        .map_err(ClientIdentityError::load)?;
+    gents_desktop_core::client::PrincipalIdentity::load_or_create(paths)
+        .await
+        .map_err(ClientIdentityError::load)
+}
+
+/// [`client_identity_for`] the default home, for callers that are not given one.
 pub async fn load_client_identity() -> Result<gents_desktop_core::client::PrincipalIdentity> {
-    let paths = cli_identity_paths()?;
-    paths.ensure_root_dirs().await?;
-    gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await
+    Ok(client_identity_for(&resolve_home_dir(None)).await?)
 }
 
 /// [`load_client_identity`] in the shape a pack wire takes to load the held

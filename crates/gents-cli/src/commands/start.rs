@@ -1,7 +1,7 @@
 use gents_protocol::operations::install_repair::RepairInput;
 use gents_protocol::operations::install_repair::{
-    Blocker, HomeChoice, HomeDecision, HomeState, RepairOperation, RepairOutcome, RepairReceipt,
-    ServiceMove,
+    Blocker, HomeChoice, HomeDecision, HomeState, RepairAnswer, RepairOperation, RepairOutcome,
+    RepairReceipt, ServiceMove,
 };
 use gents_service::repair::ServiceProgram;
 use std::future::Future;
@@ -235,6 +235,7 @@ async fn ready_node_with(
     let flag = home_flag.clone();
     let mut choice = tokio::task::spawn_blocking(move || home_choice(flag.as_deref())).await??;
     let mut setup_home = home_flag.clone();
+    let mut answer = RepairAnswer::None;
     loop {
         let mut set_up = false;
         let (moved_from, older_data) = loop {
@@ -243,6 +244,8 @@ async fn ready_node_with(
                     choice: choice.clone(),
                     service_move: ServiceMove::AfterSetup,
                     operation,
+                    interactive: terminal,
+                    answer,
                 },
                 &ServiceProgram::new(gents_service::repair::current_program),
                 progress,
@@ -251,7 +254,16 @@ async fn ready_node_with(
             .await?;
             match report.outcome {
                 RepairOutcome::Ready | RepairOutcome::Answering(_) => {
-                    break (report.serving_home, report.older_data)
+                    if report.unfinished_setup {
+                        progress.finish();
+                        eprintln!("{}", unfinished_setup_notice(&choice.home));
+                    }
+                    break (report.serving_home, report.older_data);
+                }
+                RepairOutcome::NeedsSetup if answer == RepairAnswer::ContinueSetup => {
+                    progress.finish();
+                    setup::continue_setup(&choice.home).await?;
+                    answer = RepairAnswer::None;
                 }
                 RepairOutcome::NeedsSetup => {
                     ensure!(!set_up, "setup left this home uninitialized");
@@ -261,10 +273,11 @@ async fn ready_node_with(
                         home: setup::setup(setup_home.take(), custody).await?,
                         explicit: false,
                     };
+                    answer = RepairAnswer::None;
                     set_up = true;
                 }
                 RepairOutcome::Decide(decision) => {
-                    (choice, home_flag) = ask(decision, terminal, progress).await?;
+                    (choice, home_flag, answer) = ask(decision, terminal, progress).await?;
                     setup_home = Some(choice.home.clone());
                 }
                 RepairOutcome::Blocked(blocker) => blocked(progress, &blocker),
@@ -307,7 +320,7 @@ async fn ready_node_with(
                     set_up = true;
                 }
                 RepairOutcome::Decide(decision) => {
-                    (choice, home_flag) =
+                    (choice, home_flag, answer) =
                         restore_then_ask(decision, terminal, progress, move_service_back).await?;
                     setup_home = Some(choice.home.clone());
                     break;
@@ -321,23 +334,23 @@ async fn ready_node_with(
     }
 }
 
-/// Asks which folder to open; with no terminal to ask in, nothing is touched.
+/// Asks what to do with a home that cannot be used as it is; with no
+/// terminal to ask in, nothing is touched and the message names the call.
 async fn ask(
     decision: HomeDecision,
     terminal: bool,
     progress: &mut TerminalProgress,
-) -> Result<(HomeChoice, Option<PathBuf>)> {
+) -> Result<(HomeChoice, Option<PathBuf>, RepairAnswer)> {
     ensure!(
         terminal,
         "{}",
         cannot_load_without_terminal(&decision.home, decision.why)
     );
     progress.finish();
-    eprintln!("{}", home_question(&decision));
-    Ok(answered(
-        decision,
-        crate::interactive_backend::ask_choice(2).await?,
-    ))
+    let options = home_options(&decision);
+    eprintln!("{}", home_question(&decision, &options));
+    let picked = crate::interactive_backend::ask_choice(options.len()).await?;
+    answered(decision, options[picked])
 }
 
 /// `prepare` already moved the node away from the folder it was serving when
@@ -351,7 +364,7 @@ async fn restore_then_ask(
         HomeChoice,
         &'a mut TerminalProgress,
     ) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>,
-) -> Result<(HomeChoice, Option<PathBuf>)> {
+) -> Result<(HomeChoice, Option<PathBuf>, RepairAnswer)> {
     give_back(decision.serving_home.as_deref(), progress, move_back).await;
     ask(decision, terminal, progress).await
 }
@@ -414,20 +427,63 @@ fn not_restarted(serving: &Path, moved: &Result<RepairReceipt>) -> Option<String
     ))
 }
 
-/// The folder an answer opens, and the `--home` that reopens it: none for the
-/// default folder. The repaired folder is no longer asked about.
-fn answered(decision: HomeDecision, picked: usize) -> (HomeChoice, Option<PathBuf>) {
-    let (home, flag) = match picked {
-        0 => (decision.default_home, None),
-        _ => (decision.home.clone(), Some(decision.home)),
+/// What the question about a home offers, in the order it lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeOption {
+    Continue,
+    SetAside,
+    UseDefault,
+    Leave,
+}
+
+fn home_options(decision: &HomeDecision) -> Vec<HomeOption> {
+    let mut options = Vec::new();
+    if decision.why == HomeState::UnfinishedSetup {
+        options.push(HomeOption::Continue);
+    }
+    options.push(HomeOption::SetAside);
+    if decision.home != decision.default_home {
+        options.push(HomeOption::UseDefault);
+    }
+    options.push(HomeOption::Leave);
+    options
+}
+
+/// The folder an answer opens, the `--home` that reopens it (none for the
+/// default folder), and what the user asked to do with it.
+fn answered(
+    decision: HomeDecision,
+    picked: HomeOption,
+) -> Result<(HomeChoice, Option<PathBuf>, RepairAnswer)> {
+    let flag = (decision.home != decision.default_home).then(|| decision.home.clone());
+    let keep = |answer| {
+        Ok((
+            HomeChoice {
+                home: decision.home.clone(),
+                explicit: false,
+            },
+            flag.clone(),
+            answer,
+        ))
     };
-    (
-        HomeChoice {
-            home,
-            explicit: false,
-        },
-        flag,
-    )
+    match picked {
+        HomeOption::Continue => keep(RepairAnswer::ContinueSetup),
+        HomeOption::SetAside => keep(RepairAnswer::SetAside),
+        HomeOption::UseDefault => Ok((
+            HomeChoice {
+                home: decision.default_home,
+                explicit: false,
+            },
+            None,
+            RepairAnswer::None,
+        )),
+        HomeOption::Leave => {
+            anyhow::bail!(
+                "{} was left as it is. Nothing was changed.",
+                crate::shell_word(&decision.home)
+            )
+        }
+    }
 }
 
 /// `--home` or `GENTS_HOME` naming the folder `gents` opens without them is
@@ -453,19 +509,62 @@ fn not_set_up(home: &Path) -> String {
 }
 
 fn cannot_load_without_terminal(home: &Path, why: HomeState) -> String {
-    format!(
-        "{} can't be loaded: {why}. Run gents --home {} in a terminal to repair it.",
-        home.display(),
-        crate::shell_word(home)
-    )
+    let home_word = crate::shell_word(home);
+    match why {
+        HomeState::UnfinishedSetup => format!(
+            "{} can't be used yet: {why}. Nothing was changed. Run `gents --home {home_word}` in a terminal to continue its setup or start over.",
+            home.display()
+        ),
+        _ => format!(
+            "{} can't be loaded: {why}. Nothing was changed. To set it aside (it is renamed, not deleted) and set up a fresh home there, run `gents --home {home_word}` in a terminal and choose to set it aside.",
+            home.display()
+        ),
+    }
 }
 
-fn home_question(decision: &HomeDecision) -> String {
+fn home_question(decision: &HomeDecision, options: &[HomeOption]) -> String {
+    let home = decision.home.display();
+    let mut question = match decision.why {
+        HomeState::UnfinishedSetup => format!(
+            "The setup of {home} stopped before it offered every starter pack ({}).",
+            unfinished_packs(&decision.home)
+        ),
+        why => format!("{home} can't be loaded: {why}."),
+    };
+    for (number, option) in options.iter().enumerate() {
+        let line = match option {
+            HomeOption::Continue => {
+                "Continue setup: offer the starter packs it did not reach".to_owned()
+            }
+            HomeOption::SetAside => format!(
+                "Start over: rename {home} to {home}.{}-<date> (kept, not deleted), then set up a fresh home there",
+                if decision.why == HomeState::UnfinishedSetup { "unfinished" } else { "broken" }
+            ),
+            HomeOption::UseDefault => format!(
+                "Use your default data folder ({}) instead",
+                decision.default_home.display()
+            ),
+            HomeOption::Leave => "Leave it as it is and stop (nothing is changed)".to_owned(),
+        };
+        question.push_str(&format!("\n  {}) {line}", number + 1));
+    }
+    question
+}
+
+fn unfinished_packs(home: &Path) -> String {
+    gents_store::local::home::unfinished_setup(home)
+        .filter(|packs| !packs.is_empty())
+        .map_or_else(|| "its starter packs".to_owned(), |packs| packs.join(", "))
+}
+
+/// Said when a command uses a home whose setup did not finish, with the
+/// calls that finish it.
+fn unfinished_setup_notice(home: &Path) -> String {
     format!(
-        "{home} can't be loaded: {why}.\n  1) Use your default data folder ({default})\n  2) Repair {home} (what's there is set aside, then setup runs)",
-        home = decision.home.display(),
-        why = decision.why,
-        default = decision.default_home.display()
+        "Note: the setup of {} stopped before it offered every starter pack ({}). Continue it with `gents --home {home}` in a terminal, or see and install them with `gents config pack starter --home {home}`.",
+        home.display(),
+        unfinished_packs(home),
+        home = crate::shell_word(home)
     )
 }
 
@@ -485,14 +584,20 @@ fn exit_code(blocker: &Blocker) -> i32 {
     }
 }
 
-/// A newer node is running, so it is named on its own.
+/// A newer node, the service serving another home and a store this version
+/// will not open are named on their own: none is a node that failed to start.
 fn blocked_line(blocker: &Blocker) -> String {
-    match blocker {
-        Blocker::NewerNode { .. } | Blocker::ServiceServesAnotherHome { .. } => blocker.to_string(),
-        _ => format!(
-            "Your local node couldn't start: {blocker}. Next: {}",
-            crate::next_call::command(blocker.next_call(), None)
-        ),
+    let said = blocker.to_string();
+    let said = said.trim_end_matches('.');
+    let line = match blocker {
+        Blocker::NewerNode { .. }
+        | Blocker::ServiceServesAnotherHome { .. }
+        | Blocker::StoreRefused { .. } => format!("{said}."),
+        _ => format!("Your local node couldn't start: {said}."),
+    };
+    match blocker.next_call() {
+        Some(next) => format!("{line} Next: {}", crate::next_call::command(next, None)),
+        None => line,
     }
 }
 
@@ -637,6 +742,7 @@ mod tests {
                 outcome,
                 serving_home: None,
                 older_data: None,
+                unfinished_setup: false,
             })
         };
         assert_eq!(not_restarted(serving, &report(RepairOutcome::Ready)), None);
@@ -678,7 +784,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_folder_answer_reopens_without_a_home_flag() {
+    fn each_answer_opens_the_folder_it_names() {
         let decision = HomeDecision {
             home: PathBuf::from("/srv/work"),
             why: HomeState::MissingStoreKey,
@@ -686,24 +792,41 @@ mod tests {
             serving_home: Some(PathBuf::from("/Users/me/other")),
         };
         assert_eq!(
-            answered(decision.clone(), 0),
+            home_options(&decision),
+            [HomeOption::SetAside, HomeOption::UseDefault, HomeOption::Leave]
+        );
+        assert_eq!(
+            answered(decision.clone(), HomeOption::UseDefault).unwrap(),
             (
                 HomeChoice {
                     home: PathBuf::from("/Users/me/.gents"),
                     explicit: false
                 },
-                None
+                None,
+                RepairAnswer::None
             )
         );
         assert_eq!(
-            answered(decision, 1),
+            answered(decision.clone(), HomeOption::SetAside).unwrap(),
             (
                 HomeChoice {
                     home: PathBuf::from("/srv/work"),
                     explicit: false
                 },
-                Some(PathBuf::from("/srv/work"))
+                Some(PathBuf::from("/srv/work")),
+                RepairAnswer::SetAside
             )
+        );
+        assert!(answered(decision, HomeOption::Leave).is_err());
+        let unfinished = HomeDecision {
+            home: PathBuf::from("/Users/me/.gents"),
+            why: HomeState::UnfinishedSetup,
+            default_home: PathBuf::from("/Users/me/.gents"),
+            serving_home: None,
+        };
+        assert_eq!(
+            home_options(&unfinished),
+            [HomeOption::Continue, HomeOption::SetAside, HomeOption::Leave]
         );
     }
 
@@ -730,10 +853,12 @@ mod tests {
             blocked_line(&newer),
             "Your local node runs Gents 1.1.0, newer than this Gents (1.0.0-rc1). Open Gents 1.1.0 or newer, then try again."
         );
-        assert_eq!(
-            blocked_line(&Blocker::OldNodeStillRunning { pid: 7 }),
-            "Your local node couldn't start: the old background node (pid 7) did not stop. Quit it, then try again."
+        let line = blocked_line(&Blocker::OldNodeStillRunning { pid: 7 });
+        assert!(
+            line.starts_with("Your local node couldn't start: the old background node (pid 7) did not stop. Quit it, then try again. Next: "),
+            "{line}"
         );
+        assert!(!line.contains(".."), "{line}");
     }
 
     #[test]

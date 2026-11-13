@@ -164,14 +164,20 @@ pub fn incompatible_store(
             data_path: key.path.clone(),
         });
     }
-    if matches!(
-        find_source::<super::backend_protection::BackendProtectionError>(error),
-        Some(super::backend_protection::BackendProtectionError::MissingProvenance)
-    ) {
-        return Some(IncompatibleStore {
-            kind: IncompatibleStoreKind::UnknownLineage,
-            data_path: data_path.to_path_buf(),
-        });
+    match find_source::<super::backend_protection::BackendProtectionError>(error) {
+        Some(super::backend_protection::BackendProtectionError::MissingProvenance) => {
+            return Some(IncompatibleStore {
+                kind: IncompatibleStoreKind::UnknownLineage,
+                data_path: data_path.to_path_buf(),
+            });
+        }
+        Some(super::backend_protection::BackendProtectionError::InvalidBinding) => {
+            return Some(IncompatibleStore {
+                kind: IncompatibleStoreKind::OtherVersionSchema,
+                data_path: data_path.to_path_buf(),
+            });
+        }
+        _ => {}
     }
     find_source::<gents_migration::Error>(error)
         .and_then(|cause| {

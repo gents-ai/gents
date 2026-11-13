@@ -218,7 +218,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
                 .clone()
                 .unwrap_or_else(|| default_key_path(&home_dir, &args.node_name))
         });
-        let owner = gents_service::home_state::load_client_identity().await?;
+        let owner = gents_service::home_state::client_identity_for(&home_dir).await?;
         let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
             home: &home_dir,
             node_name: &args.node_name,
@@ -365,10 +365,11 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             .context("building embedded DefraDB node for init")?,
     );
     stage("embedded_node_built");
-    let client_paths = gents_service::home_state::cli_identity_paths()?;
-    client_paths.ensure_root_dirs().await?;
-    let client_identity =
-        gents_desktop_core::client::PrincipalIdentity::load_or_create(&client_paths).await?;
+    let client_identity = if fresh_store {
+        gents_service::home_state::client_identity_for_new_node().await?
+    } else {
+        gents_service::home_state::client_identity_for(&home_dir).await?
+    };
     let held_store_access = ConfigAccess::claimed_local_as(
         node_arc,
         store_lock,
