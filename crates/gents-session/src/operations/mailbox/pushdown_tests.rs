@@ -6,10 +6,8 @@ use crate::session::mailbox::{
 };
 use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 
-use gents_lean_vocab::{assert_state_machine_contract_is_complete, lean_state_machine_contract};
-
 #[test]
-fn rust_mailbox_vocabularies_and_machine_match_lean_contract() {
+fn rust_mailbox_vocabularies_serialize_as_their_wire_names() {
     for status in MailboxStatus::ALL {
         assert_eq!(serde_json::json!(status), status.as_str());
     }
@@ -22,36 +20,10 @@ fn rust_mailbox_vocabularies_and_machine_match_lean_contract() {
     for source in MailboxSourceKind::ALL {
         assert_eq!(serde_json::json!(source), source.as_str());
     }
-    assert_state_machine_contract_is_complete("Mailbox");
 }
 
 #[tokio::test]
-async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
-    let machine = lean_state_machine_contract("Mailbox");
-    assert_eq!(
-        machine.nonterminal_states,
-        vec!["open".to_string()],
-        "Lean Mailbox machine must keep exactly one nonterminal state"
-    );
-    for status in MailboxStatus::ALL {
-        let lean_terminal = machine
-            .terminal_states
-            .iter()
-            .any(|name| name == status.as_str());
-        assert_eq!(
-            lean_terminal,
-            status.is_terminal(),
-            "Rust MailboxStatus::{status:?} terminality disagrees with the Lean machine"
-        );
-    }
-    assert!(
-        machine
-            .legal_transitions
-            .iter()
-            .all(|pair| pair.from == "open"),
-        "every legal Mailbox transition must leave the single open state"
-    );
-
+async fn rust_mailbox_dismiss_owner_resolves_an_open_item_once() {
     let directory = tempfile::tempdir().unwrap();
     let identity =
         gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)

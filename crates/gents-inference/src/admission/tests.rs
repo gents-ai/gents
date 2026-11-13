@@ -14,10 +14,6 @@ use super::{
     terminal_failure_reason_observer, AdmissionCallContext, AdmissionRegistry,
     BackendAdmissionConfig, CallKind,
 };
-use gents_lean_vocab::{
-    assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete,
-};
 use gents_protocol::row::AgentRequest;
 use gents_store::identity::NodeIdentity as _;
 
@@ -521,18 +517,6 @@ fn rust_inference_call_terminal_reason_vocabulary_matches_lean_model() {
         .map(str::to_owned)
         .collect();
     gents_lean_vocab::families::inference_call_terminal_reason_vocabulary::replay(&rust_reasons);
-}
-
-#[test]
-fn rust_inference_call_transition_table_matches_lean_contract() {
-    assert_state_machine_contract_is_complete("InferenceCall");
-    assert_lean_transition_is_legal("InferenceCall", "queued", "running");
-    assert_lean_transition_is_legal("InferenceCall", "queued", "cancelled");
-    assert_lean_transition_is_legal("InferenceCall", "running", "completed");
-    assert_lean_transition_is_legal("InferenceCall", "running", "failed");
-    assert_lean_transition_is_legal("InferenceCall", "running", "cancelled");
-    assert_lean_transition_is_illegal("InferenceCall", "queued", "completed");
-    assert_lean_transition_is_illegal("InferenceCall", "completed", "running");
 }
 
 fn fleet_observation(

@@ -92,36 +92,4 @@ def machineContract
   , illegalTransitions := illegalPairs states legalTransitions
   }
 
-def TransitionPair.toJson (pair : TransitionPair) : String :=
-  "{"
-    ++ "\"from\":" ++ jsonString pair.source ++ ","
-    ++ "\"to\":" ++ jsonString pair.target
-    ++ "}"
-
-private def boolJson (value : Bool) : String :=
-  if value then "true" else "false"
-
-def NamedTransition.toJson (t : NamedTransition) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString t.name ++ ","
-    ++ "\"from\":" ++ jsonString t.source ++ ","
-    ++ "\"to\":" ++ jsonString t.target
-    ++ "}"
-
-def StateMachineContract.toJson (contract : StateMachineContract) : String :=
-  "{"
-    ++ "\"domain\":" ++ jsonString contract.domain ++ ","
-    ++ "\"states\":" ++ jsonStringArray contract.states ++ ","
-    ++ "\"state_count\":" ++ toString contract.stateCount ++ ","
-    ++ "\"terminal_states\":" ++ jsonStringArray contract.terminalStates ++ ","
-    ++ "\"nonterminal_states\":" ++ jsonStringArray contract.nonterminalStates ++ ","
-    ++ "\"actions\":" ++ jsonStringArray contract.actions ++ ","
-    ++ "\"legal_transitions\":"
-      ++ jsonArray (contract.legalTransitions.map TransitionPair.toJson) ++ ","
-    ++ "\"illegal_transitions\":"
-      ++ jsonArray (contract.illegalTransitions.map TransitionPair.toJson) ++ ","
-    ++ "\"named_transitions\":"
-      ++ jsonArray (contract.namedTransitions.map NamedTransition.toJson)
-    ++ "}"
-
 end Conformance.Contracts

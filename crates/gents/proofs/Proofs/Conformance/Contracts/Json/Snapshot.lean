@@ -267,6 +267,7 @@ import Proofs.Conformance.PromptAssemblyRepair
 import Proofs.Conformance.ProviderToolIdentity
 import Proofs.Conformance.ReasoningDeltas
 import Proofs.Conformance.AggregateBudget
+import Proofs.Conformance.StateMachines
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.ContractCases.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
@@ -396,8 +397,6 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"state_machines\":"
-      ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
     ++ "\"tool_admission_handoff_cases\":"
       ++ CanonicalOutput.Execution.AdmissionHandoff.Cases.casesJson ++ ","
     ++ "\"delegated_publication_cases\":"

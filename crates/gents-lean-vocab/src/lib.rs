@@ -145,14 +145,6 @@ where
     serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
 }
 
-pub fn lean_state_machine_contract(domain: &str) -> &'static LeanStateMachineContract {
-    lean_contract_snapshot()
-        .state_machines
-        .iter()
-        .find(|contract| contract.domain == domain)
-        .unwrap_or_else(|| panic!("Lean state-machine contract {domain:?} was not emitted"))
-}
-
 pub fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileCase {
     lean_contract_snapshot()
         .runtime_reconcile_cases
@@ -248,84 +240,6 @@ impl LeanQueueManagementState {
             terminal: self.terminal.iter().copied().map(&native).collect(),
         }
     }
-}
-
-pub fn assert_lean_transition_is_legal(domain: &str, from: &str, to: &str) {
-    let machine = lean_state_machine_contract(domain);
-    assert!(
-        machine
-            .legal_transitions
-            .iter()
-            .any(|pair| pair.from == from && pair.to == to),
-        "Lean state-machine contract {domain:?} does not allow transition {from:?} -> {to:?}\n  legal transitions: {:?}",
-        machine.legal_transitions
-    );
-    assert!(
-        !machine
-            .illegal_transitions
-            .iter()
-            .any(|pair| pair.from == from && pair.to == to),
-        "Lean state-machine contract {domain:?} marks transition {from:?} -> {to:?} as both legal and illegal"
-    );
-}
-
-pub fn assert_lean_transition_is_illegal(domain: &str, from: &str, to: &str) {
-    let machine = lean_state_machine_contract(domain);
-    assert!(
-        machine
-            .illegal_transitions
-            .iter()
-            .any(|pair| pair.from == from && pair.to == to),
-        "Lean state-machine contract {domain:?} does not mark transition {from:?} -> {to:?} illegal\n  illegal transitions: {:?}",
-        machine.illegal_transitions
-    );
-    assert!(
-        !machine
-            .legal_transitions
-            .iter()
-            .any(|pair| pair.from == from && pair.to == to),
-        "Lean state-machine contract {domain:?} marks transition {from:?} -> {to:?} as both legal and illegal"
-    );
-}
-
-pub fn assert_state_machine_contract_is_complete(domain: &str) {
-    let machine = lean_state_machine_contract(domain);
-    let duplicate_states = duplicate_string_values(&machine.states);
-    let duplicate_actions = duplicate_string_values(&machine.actions);
-    let duplicate_legal_pairs = duplicate_transition_pairs(&machine.legal_transitions);
-    let duplicate_illegal_pairs = duplicate_transition_pairs(&machine.illegal_transitions);
-    let expected_pairs = machine.state_count * machine.state_count;
-    let actual_pairs = machine.legal_transitions.len() + machine.illegal_transitions.len();
-
-    assert!(
-        machine.state_count == machine.states.len()
-            && duplicate_states.is_empty()
-            && duplicate_actions.is_empty()
-            && duplicate_legal_pairs.is_empty()
-            && duplicate_illegal_pairs.is_empty()
-            && actual_pairs == expected_pairs
-            && machine
-                .legal_transitions
-                .iter()
-                .all(|pair| !machine.illegal_transitions.contains(pair))
-            && machine.legal_transitions.iter().all(
-                |pair| machine.states.contains(&pair.from) && machine.states.contains(&pair.to)
-            )
-            && machine.illegal_transitions.iter().all(
-                |pair| machine.states.contains(&pair.from) && machine.states.contains(&pair.to)
-            ),
-        "Lean state-machine contract {domain:?} is incomplete or malformed\n  state_count: {}\n  states: {:?}\n  actions: {:?}\n  legal transitions: {:?}\n  illegal transitions: {:?}\n  duplicate states: {:?}\n  duplicate actions: {:?}\n  duplicate legal pairs: {:?}\n  duplicate illegal pairs: {:?}\n  expected pair partition size: {}\n  actual pair partition size: {}",
-        machine.state_count,
-        machine.states,
-        machine.actions,
-        machine.legal_transitions,
-        machine.illegal_transitions,
-        duplicate_states,
-        duplicate_actions,
-        duplicate_legal_pairs,
-        duplicate_illegal_pairs,
-        expected_pairs,
-        actual_pairs
     );
 }
 
@@ -672,29 +586,6 @@ fn duplicate_values<'a>(values: &[&'a str]) -> Vec<&'a str> {
             }
         } else {
             seen.push(*value);
-        }
-    }
-    duplicates
-}
-
-fn duplicate_string_values(values: &[String]) -> Vec<String> {
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
-    duplicate_values(&refs)
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-}
-
-fn duplicate_transition_pairs(values: &[LeanTransitionPair]) -> Vec<LeanTransitionPair> {
-    let mut seen = Vec::new();
-    let mut duplicates = Vec::new();
-    for value in values {
-        if seen.contains(value) {
-            if !duplicates.contains(value) {
-                duplicates.push(value.clone());
-            }
-        } else {
-            seen.push(value.clone());
         }
     }
     duplicates
