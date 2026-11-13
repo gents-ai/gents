@@ -76,6 +76,8 @@ touching anything that reads or writes a document.
 - A **Node** has its own key. It authenticates peer admission and
   synchronization and owns node-local operational documents that no Agent
   caused.
+  Peer admission grants no document access. Approving a client's enrollment
+  does: it grants that User Node administration (`approve_enrollment`).
 - An **Agent** has a DID managed by the runtime that hosts it, and owns the
   data it creates. Clients connect to that hosting runtime. One active runtime
   per node is the operating convention.
