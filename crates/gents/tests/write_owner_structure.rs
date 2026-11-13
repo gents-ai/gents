@@ -2029,10 +2029,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 2),
     // ReconstructionError in definitive_output_corruption; RecoveryPlanError in definitive_output_corruption
     ("crates/gents-session/src/request/lifecycle/recovery.rs", 2),
-    // PendingInputChanged in DefraStreamWriter::try_publish_steering_message
-    ("crates/gents-session/src/request/streaming.rs", 1),
-    // ReplayEvidenceViolation in load_canonical_assistant_candidates_using
-    ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
     // CanonicalOutputReadError in validated_canonical_replay_boundary
     ("crates/gents-session/src/session/output/replay_request.rs", 1),
     // CanonicalOutputReadError in classify_terminal_read_error; ReconstructionError in classify_terminal_read_error
@@ -2065,10 +2061,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/runtime/agent/daemon/inference/drive.rs", 1),
     // ExecutionOwnershipLost in lost_execution_ownership
     ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
-    // StaleCompactionGeneration in is_stale_compaction_generation
-    ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
-    // ReplayEvidenceViolation in replay_resolution_error
-    ("crates/gents/src/turn/provider_input/replay.rs", 1),
 ];
 
 /// Owner classifiers: the functions through which an owner asks an erased
@@ -2089,13 +2081,16 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-eval/src/runner/freeze.rs", &["freeze_refused"]),
     ("crates/gents-eval/src/runner/mod.rs", &["provider_down"]),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", &["aggregate_token_budget_exhaustion_message"]),
+    ("crates/gents-loop/src/loop_stream/contract.rs", &["ReplayEvidenceViolation::in_chain"]),
     ("crates/gents-pack/src/pack/core_packs.rs", &["plugin_interface_refusal"]),
     ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
     ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
     ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
     ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
+    ("crates/gents-session/src/request/lifecycle/queue/folding.rs", &["PendingInputChanged::occurs_in"]),
     ("crates/gents-session/src/request/seam_error.rs", &["RuntimeSeamError::recover"]),
+    ("crates/gents-session/src/session/compaction_entries.rs", &["StaleCompactionGeneration::occurs_in"]),
     ("crates/gents-store/src/config_client/retry.rs", &["access_error_in", "rerun_request_in"]),
     ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
     ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
