@@ -338,6 +338,7 @@ impl DefraSessionHook {
                             true,
                             async {
                                 if process_tool {
+                                    gents_tools::runtime_context::debug_assert_ambient(&envelope);
                                     gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
                                         target_tool.as_ref(), target_args, &envelope, |outcome| {
                                             if let Some(outcome) = outcome.filter(|outcome| gents_session::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
@@ -349,6 +350,7 @@ impl DefraSessionHook {
                                     ).await
                                 } else {
                                     gents_loop::tool_effects::scope(dispatcher, async {
+                                        gents_tools::runtime_context::debug_assert_ambient(&envelope);
                                         gents_loop::tool_call_lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args, &envelope).await
                                     }).await
                                 }

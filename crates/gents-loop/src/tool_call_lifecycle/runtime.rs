@@ -642,6 +642,7 @@ pub(crate) async fn dispatch_with_receipt(
     live_output: Option<LiveToolOutputWriter>,
     context: &ToolCallEnvelope,
 ) -> Result<String, ToolError> {
+    context.debug_assert_ambient();
     record_dispatch_receipt(tool.call_with_receipt(args, context).await, live_output).await
 }
 
@@ -702,6 +703,7 @@ where
             dispatch_with_receipt(tool, args, None, context).await,
         );
     };
+    context.debug_assert_ambient();
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
         let outcome = ToolOutcome::TimedOut {

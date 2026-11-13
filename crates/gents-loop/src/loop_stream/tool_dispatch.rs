@@ -79,6 +79,7 @@ where
                 let scope = current_tool_runtime_context().ok_or_else(|| {
                     Unavailable("tool effects require a request execution scope".to_owned())
                 })?;
+                parent.debug_assert_ambient_runtime();
                 let child =
                     child_envelope(parent).unwrap_or_else(|| parent.clone().with_effects(None));
                 let child = &child;
@@ -441,6 +442,7 @@ pub(super) async fn dispatch_provider_tool(
         live_output,
         session_id.or(scope.session_id.clone()),
         async {
+            tool_call.debug_assert_ambient();
             tool.call_with_receipt(args, &tool_call).await
         },
     ));

@@ -190,6 +190,7 @@ impl DefraSessionHook {
                             context.source_fields,
                             false,
                             async {
+                                gents_tools::runtime_context::debug_assert_ambient(&handoff);
                                 call(handoff.clone(), Some(cleanup)).await
                             },
                         ),

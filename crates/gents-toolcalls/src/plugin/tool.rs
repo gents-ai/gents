@@ -160,6 +160,7 @@ impl ToolDyn for PluginTool {
         context: &'a ToolCallEnvelope,
     ) -> BoxFuture<'a, ToolDispatchResult> {
         Box::pin(async move {
+            gents_tools::runtime_context::debug_assert_ambient(context);
             let input: serde_json::Value = match gents_loop::tool::parse_tool_args(&args) {
                 Ok(input) => input,
                 Err(error) => {

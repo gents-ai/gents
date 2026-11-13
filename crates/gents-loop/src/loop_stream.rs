@@ -1321,6 +1321,7 @@ where
             }
 
             let tool_scope = current_tool_runtime_context();
+            config.tool_context.debug_assert_ambient_runtime();
             let tool_context = config.tool_context.clone();
             let mut pending_calls: std::collections::VecDeque<_> = pending_calls.into();
             while let Some((first_call, _)) = pending_calls.front() {
