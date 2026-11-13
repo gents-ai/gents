@@ -1982,252 +1982,48 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
     }
 }
 
-/// Production files that classify an error by its concrete type through a
-/// downcast (`downcast*`, `is::<T>`) or `find_source`. Owner interfaces return
-/// thiserror enums whose classifiers match their variants; a downcast belongs
-/// only where an application (`anyhow`) or erased error reaches an owner
-/// boundary, which then asks the owner enum it finds.
+/// Production sites that classify an error by its concrete type and are not
+/// the owner asking for its own type: a downcast (`downcast*`, `is::<T>`) or a
+/// `find_source` call whose type the function's module does not declare and
+/// export, or that sits in a function that is not handed an error. Each is
+/// debt: the producer returns an owner enum whose variants the caller matches,
+/// or the caller asks the owner's classifier. This list only shrinks.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-cli/src/commands/eval/manage.rs", 1),
-    ("crates/gents-client-host/src/editor_store.rs", 1),
-    ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
-    ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
-    ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
-    ("crates/gents-desktop-core/src/error.rs", 2),
-    ("crates/gents-desktop-core/src/inference.rs", 2),
-    ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
-    ("crates/gents-protocol/src/database_error.rs", 1),
-    ("crates/gents-protocol/src/error_chain.rs", 1),
-    ("crates/gents-protocol/src/graphql/transport.rs", 3),
-    ("crates/gents/src/runtime/agent/daemon.rs", 1),
-    ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
-    ("crates/gents-session/src/request/seam_error.rs", 1),
-    ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
-    ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
-    ("crates/gents/src/runtime/agent/reconcile.rs", 1),
-    ("crates/gents-toolcalls/src/plugin/application_write/mod.rs", 1),
-    ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
-    ("crates/gents-documents/src/desired_state/plan.rs", 1),
-    ("crates/gents-store/src/config_client/retry.rs", 3),
-    ("crates/gents-store/src/config_client/schema_install.rs", 2),
-    ("crates/gents-tools/src/builtin/defra_query/mod.rs", 1),
-    ("crates/gents/src/eval/documents.rs", 3),
-    ("crates/gents-eval/src/report/mod.rs", 1),
-    ("crates/gents-eval/src/report/store.rs", 1),
-    ("crates/gents-eval/src/runner/freeze.rs", 1),
-    ("crates/gents-eval/src/runner/mod.rs", 1),
-    ("crates/gents-automation/src/goal/creation.rs", 2),
-    ("crates/gents-store/src/graphql.rs", 1),
-    ("crates/gents-store/src/local/home.rs", 3),
-    ("crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", 1),
-    ("crates/gents-toolcalls/src/call/hook/persistence/session_message.rs", 1),
-    ("crates/gents-store/src/identity/error.rs", 1),
-    ("crates/gents-session/src/request/lifecycle.rs", 1),
-    ("crates/gents-session/src/request/lifecycle/canonical_recovery.rs", 2),
-    ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 2),
-    ("crates/gents-session/src/request/lifecycle/execution_renewal.rs", 1),
-    ("crates/gents-session/src/request/lifecycle/queue/position.rs", 1),
-    ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
-    ("crates/gents-eval/src/optimization/driver.rs", 2),
-    ("crates/gents-eval/src/optimization/job.rs", 1),
-    ("crates/gents-eval/src/optimization/promote.rs", 2),
-    ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    ("crates/gents-pack/src/pack/core_packs.rs", 1),
-    ("crates/gents-pack/src/pack/resolve.rs", 1),
-    ("crates/gents-pack/src/plugin/allowed.rs", 2),
-    ("crates/gents-tools/src/plugin/approval.rs", 2),
-    ("crates/gents-toolcalls/src/plugin/executor.rs", 2),
-    ("crates/gents-pack/src/plugin/http_calls.rs", 1),
-    ("crates/gents-pack/src/plugin/install.rs", 1),
-    ("crates/gents-pack/src/plugin/store.rs", 1),
-    ("crates/gents-toolcalls/src/background/job/driver.rs", 1),
-    ("crates/gents-toolcalls/src/background/job/driver/step.rs", 1),
-    ("crates/gents/src/turn/provider_input/replay.rs", 1),
-    // rmcp erases transport errors behind DynamicTransportError; the pool's
-    // McpAuthRefusal is then asked for on its erased source chain
-    ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", 2),
-    ("crates/gents-inference/src/rendered_request/mod.rs", 2),
-    ("crates/gents-session/src/request/admission.rs", 2),
-    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 2),
-    ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
-    ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
-    ("crates/gents-session/src/session/fork.rs", 1),
-    ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
-    ("crates/gents-session/src/session/output/replay_capture.rs", 1),
-    ("crates/gents-session/src/session/output/replay_request.rs", 1),
-    ("crates/gents-session/src/session/request_output.rs", 1),
-    ("crates/gents-store/src/local/storage_backend.rs", 9),
-    ("crates/gents-store/src/local/store_key.rs", 2),
-    ("crates/gents-session/src/request/streaming.rs", 1),
-    ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
-    ("crates/gents-automation/src/triggers/engine/mod.rs", 2),
 ];
 
-#[derive(Default)]
-struct DowncastVisitor {
-    sites: usize,
-}
+/// Owner classifiers: the functions through which an owner asks an erased
+/// error for its own error type. A site is one when its function is
+/// synchronous and takes an error, and the type asked for is an error type
+/// that is declared and exported (any `pub`) in the same file, or, for a file
+/// in `OWNER_MODULES`, in an `OWNER_MODULES` file of the same crate. The chain
+/// walker alone may ask for its own type parameter. These sites are not debt;
+/// a new entry is a reviewed addition.
+#[rustfmt::skip]
+const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
+];
 
-impl<'ast> Visit<'ast> for DowncastVisitor {
-    fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-        if !cfg_test(&item.attrs) {
-            visit::visit_item_mod(self, item);
-        }
-    }
+/// The one generic chain walker; every other generic downcast hides the type
+/// it asks for and counts.
+const CHAIN_WALKER: &str = "crates/gents-protocol/src/error_chain.rs";
 
-    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        let test = cfg_test(&item.attrs)
-            || item.attrs.iter().any(|attribute| {
-                attribute
-                    .path()
-                    .segments
-                    .last()
-                    .is_some_and(|segment| segment.ident == "test")
-            });
-        if !test {
-            visit::visit_item_fn(self, item);
-        }
-    }
-
-    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
-        if path_name(call).is_some_and(|name| name.rsplit("::").next() == Some("find_source")) {
-            self.sites += 1;
-        }
-        visit::visit_expr_call(self, call);
-    }
-
-    /// Only an error receiver classifies a failure; `Any` maps, deferred
-    /// write payloads and panic payloads downcast data, not errors.
-    fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
-        let method = call.method.to_string();
-        if (matches!(
-            method.as_str(),
-            "downcast" | "downcast_ref" | "downcast_mut"
-        ) || (method == "is" && call.turbofish.is_some()))
-            && expression_names_error(&call.receiver)
-        {
-            self.sites += 1;
-        }
-        visit::visit_expr_method_call(self, call);
-    }
-}
-
-fn downcast_sites(syntax: &syn::File) -> usize {
-    let mut visitor = DowncastVisitor::default();
-    visitor.visit_file(syntax);
-    visitor.sites
-}
-
-#[test]
-fn downcast_classifiers_only_shrink() {
-    let root = repo_root();
-    let actual = parse_production(&root, production_sources(&root))
-        .into_iter()
-        .filter_map(|(relative, syntax)| {
-            let sites = downcast_sites(&syntax);
-            (sites > 0).then_some((relative, sites))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let allowed = DOWNCAST_CLASSIFIER_ALLOWLIST
-        .iter()
-        .map(|(path, count)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let found = actual.get(path).copied().unwrap_or_default();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} new downcast classifier site(s); return an owner enum and match its variants"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} downcast classifier sites exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} downcast classifier sites; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
-    let current = actual
-        .iter()
-        .map(|(path, count)| format!("    (\"{path}\", {count}),"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        violations.is_empty(),
-        "downcast classifier ratchet failed:\n{}\n\ncurrent sites:\n{current}",
-        violations.join("\n")
-    );
-}
-
-#[test]
-fn downcast_fence_counts_type_classification_outside_tests() {
-    for (source, sites) in [
-        ("fn f(e: &anyhow::Error) -> bool { e.downcast_ref::<E>().is_some() }", 1),
-        ("fn f(e: anyhow::Error) { let _ = e.downcast::<E>(); }", 1),
-        ("fn f(e: &anyhow::Error) -> bool { e.is::<E>() }", 1),
-        ("fn f(e: &dyn Error) { find_source::<E>(e); gents_protocol::error_chain::find_source::<F>(e); }", 2),
-        ("fn f(e: &Error) -> bool { e.is_conflict() || e.is(x) }", 0),
-        ("fn f(e: &dyn Error) -> bool { find_map_source(e, |cause| cause.downcast_ref::<E>()).is_some() }", 1),
-        ("fn f(m: &Map) -> Option<&T> { m.get(&id)?.downcast_ref() }", 0),
-        ("fn f(payload: &dyn Any) -> bool { payload.downcast_ref::<String>().is_some() }", 0),
-        ("#[cfg(test)] mod tests { fn f(e: &anyhow::Error) { e.downcast_ref::<E>(); } }", 0),
-        ("#[test] fn f() { error().downcast_ref::<E>(); }", 0),
-        ("#[tokio::test] async fn f() { error().downcast_ref::<E>(); }", 0),
-    ] {
-        let syntax = syn::parse_file(source).expect("parse snippet");
-        assert_eq!(downcast_sites(&syntax), sites, "{source}");
-    }
-}
-
-/// Production files that still decide on an error's text. Each entry is an
-/// adapter-boundary classifier whose external premise its docstring names
-/// (third-party or persisted text that is the only signal), or display-only
-/// composition; owner facts are variants that callers match instead.
+/// Production decisions on an error's text outside an adapter-boundary
+/// classifier. Each is debt: the fact becomes an owner enum variant that
+/// callers match, or the decision moves into an adapter classifier whose
+/// docstring names the external premise. This list only shrinks.
 #[rustfmt::skip]
 const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    // regolith store-lock messages through the node builder
-    ("crates/gents-cli/src/commands/eval/watch.rs", 1),
-    // provider text through Rig's ProviderError(String) (ProviderReport)
-    ("crates/gents-loop/src/error.rs", 21),
-    // serde_json schema-mismatch message prefixes
-    ("crates/gents-loop/src/tool.rs", 3),
-    // tool errors erased by Rig's ToolCallError
-    ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 8),
-    // DefraDB schema validator messages
-    ("crates/gents-migration/src/engine.rs", 1),
-    // DefraDB missing-collection messages
-    ("crates/gents-protocol/src/graphql/response.rs", 4),
-    // replicated AgentRequest failure_reason
-    ("crates/gents-protocol/src/node_readiness.rs", 1),
-    // launchctl print output
-    ("crates/gents-service/src/native_service.rs", 1),
-    // DefraDB HTTP 409 commit body
-    ("crates/gents-store/src/config_client/retry.rs", 3),
-    // JSON-RPC node pruned-history wording
-    // persisted AgentRequest failure_reason
-    ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", 2),
-    // MCP probe transport/OS error text (metric label)
-    ("crates/gents-tools/src/mcp/health.rs", 8),
-    // display only: appends a next-call hint when absent
-    ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    // DefraDB SDL parser messages (help page choice)
-    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 6),
-    // serde `invalid type: string` message
-    ("crates/gents-tools/src/builtin/self_config/command/patch.rs", 1),
-    // display only: appends a next-call hint when absent
-    ("crates/gents-tools/src/native/session_history.rs", 1),
-    // persisted AgentRequest failure_reason
-    ("crates/gents-observe/src/observe/trace_export.rs", 6),
-    // serde `unknown variant` message
-    ("crates/gents-session/src/workspace/action_plan.rs", 1),
-    // git show stderr
-    ("crates/gents-session/src/workspace/adapter.rs", 2),
 ];
+
+/// Adapter-boundary classifiers: functions that decide on error text because
+/// third-party or persisted text is the only signal, which their docstring
+/// states on a line starting `External premise:`. Their decisions are not
+/// debt; a new entry is a reviewed addition.
+#[rustfmt::skip]
+const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
+];
+
+const EXTERNAL_PREMISE: &str = "External premise:";
 
 const TEXT_TESTS: &[&str] = &["contains", "starts_with", "ends_with", "eq", "ne"];
 
@@ -2272,13 +2068,14 @@ fn names_error(name: &str) -> bool {
     }
 }
 
-fn expression_names_error(expression: &Expr) -> bool {
+/// An expression that is an error: one named as an error, or a binding in
+/// `bound` that its function received as an error under any name.
+fn expression_is_error(expression: &Expr, bound: &[String]) -> bool {
     match expression {
-        Expr::Path(path) => path
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| names_error(&segment.ident.to_string())),
+        Expr::Path(path) => path.path.segments.last().is_some_and(|segment| {
+            let name = segment.ident.to_string();
+            names_error(&name) || (path.path.segments.len() == 1 && bound.contains(&name))
+        }),
         // A `cause` field states why a request or event happened; a `cause`
         // binding is an error walked from a source chain.
         Expr::Field(field) => match &field.member {
@@ -2286,33 +2083,39 @@ fn expression_names_error(expression: &Expr) -> bool {
                 let name = name.to_string();
                 name != "cause" && names_error(&name)
             }
-            syn::Member::Unnamed(_) => expression_names_error(&field.base),
+            syn::Member::Unnamed(_) => expression_is_error(&field.base, bound),
         },
-        Expr::Reference(reference) => expression_names_error(&reference.expr),
-        Expr::Paren(paren) => expression_names_error(&paren.expr),
-        Expr::Unary(unary) => expression_names_error(&unary.expr),
+        Expr::Reference(reference) => expression_is_error(&reference.expr, bound),
+        Expr::Paren(paren) => expression_is_error(&paren.expr, bound),
+        Expr::Unary(unary) => expression_is_error(&unary.expr, bound),
         Expr::MethodCall(call) => {
             let method = call.method.to_string();
             names_error(&method)
                 || (ERROR_VIEWS.contains(&method.as_str())
-                    && expression_names_error(&call.receiver))
+                    && expression_is_error(&call.receiver, bound))
         }
         Expr::Call(call) => {
             path_name(call).is_some_and(|name| name.ends_with("ErrorChain"))
-                || call.args.iter().any(expression_names_error)
+                || call
+                    .args
+                    .iter()
+                    .any(|argument| expression_is_error(argument, bound))
         }
         _ => false,
     }
 }
 
-fn macro_renders_error(invocation: &syn::Macro) -> bool {
+fn macro_renders_error(invocation: &syn::Macro, bound: &[String]) -> bool {
     invocation.path.is_ident("format")
         && invocation
             .tokens
             .clone()
             .into_iter()
             .any(|token| match token {
-                proc_macro2::TokenTree::Ident(ident) => names_error(&ident.to_string()),
+                proc_macro2::TokenTree::Ident(ident) => {
+                    let ident = ident.to_string();
+                    names_error(&ident) || bound.contains(&ident)
+                }
                 proc_macro2::TokenTree::Literal(literal) => {
                     let text = literal.to_string();
                     ["{e:", "{e}", "{err", "{error"]
@@ -2323,13 +2126,436 @@ fn macro_renders_error(invocation: &syn::Macro) -> bool {
             })
 }
 
-#[derive(Default)]
-struct ErrorTextVisitor {
-    sites: Vec<usize>,
-    renderings: Vec<String>,
+fn is_test_fn(attributes: &[syn::Attribute]) -> bool {
+    cfg_test(attributes)
+        || attributes.iter().any(|attribute| {
+            attribute
+                .path()
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "test")
+        })
 }
 
-impl ErrorTextVisitor {
+/// A docstring names its external premise on a line that starts
+/// `External premise:` and goes on to state it.
+fn names_external_premise(attributes: &[syn::Attribute]) -> bool {
+    attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("doc"))
+        .filter_map(|attribute| match &attribute.meta {
+            syn::Meta::NameValue(pair) => match &pair.value {
+                Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(text),
+                    ..
+                }) => Some(text.value()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .any(|text| {
+            text.lines().any(|line| {
+                line.trim_start()
+                    .strip_prefix(EXTERNAL_PREMISE)
+                    .is_some_and(|premise| !premise.trim().is_empty())
+            })
+        })
+}
+
+/// A type that is an error by its name or trait: `anyhow::Error`, an
+/// `...Error`, `dyn Error`, `impl Error`, or a reference or box of one.
+fn names_error_type(ty: &syn::Type) -> bool {
+    let error_bound = |bound: &syn::TypeParamBound| {
+        matches!(bound, syn::TypeParamBound::Trait(bound)
+            if bound.path.segments.last().is_some_and(|segment| segment.ident == "Error"))
+    };
+    match ty {
+        syn::Type::Paren(paren) => names_error_type(&paren.elem),
+        syn::Type::Reference(reference) => names_error_type(&reference.elem),
+        syn::Type::Path(path) => path.path.segments.last().is_some_and(|segment| {
+            let boxed = segment.ident == "Box"
+                && matches!(&segment.arguments, syn::PathArguments::AngleBracketed(arguments)
+                if arguments.args.iter().any(|argument| {
+                    matches!(argument, syn::GenericArgument::Type(inner) if names_error_type(inner))
+                }));
+            boxed || segment.ident.to_string().ends_with("Error")
+        }),
+        syn::Type::TraitObject(object) => object.bounds.iter().any(error_bound),
+        syn::Type::ImplTrait(object) => object.bounds.iter().any(error_bound),
+        _ => false,
+    }
+}
+
+/// The function a classifier site sits in, as the two classifier ratchets
+/// judge it: by its signature and its docstring, never by its name.
+struct FnFrame {
+    name: String,
+    /// Synchronous, with a parameter typed as an error.
+    asks_error: bool,
+    type_parameters: Vec<String>,
+    /// Its docstring names the external premise.
+    premise: bool,
+}
+
+fn fn_frame(
+    owner: Option<&String>,
+    attributes: &[syn::Attribute],
+    signature: &syn::Signature,
+) -> FnFrame {
+    let takes_error = signature
+        .inputs
+        .iter()
+        .any(|input| matches!(input, syn::FnArg::Typed(typed) if names_error_type(&typed.ty)));
+    FnFrame {
+        name: match owner {
+            Some(owner) => format!("{owner}::{}", signature.ident),
+            None => signature.ident.to_string(),
+        },
+        asks_error: takes_error && signature.asyncness.is_none(),
+        type_parameters: signature
+            .generics
+            .type_params()
+            .map(|parameter| parameter.ident.to_string())
+            .collect(),
+        premise: names_external_premise(attributes),
+    }
+}
+
+fn type_name(ty: &syn::Type) -> String {
+    match ty {
+        syn::Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string())
+            .unwrap_or_default(),
+        syn::Type::Paren(paren) => type_name(&paren.elem),
+        syn::Type::Reference(reference) => type_name(&reference.elem),
+        _ => String::new(),
+    }
+}
+
+fn pattern_names(pattern: &syn::Pat, names: &mut Vec<String>) {
+    match pattern {
+        syn::Pat::Ident(binding) => {
+            names.push(binding.ident.to_string());
+            if let Some((_, inner)) = &binding.subpat {
+                pattern_names(inner, names);
+            }
+        }
+        syn::Pat::Type(typed) => pattern_names(&typed.pat, names),
+        syn::Pat::Reference(reference) => pattern_names(&reference.pat, names),
+        syn::Pat::Paren(paren) => pattern_names(&paren.pat, names),
+        syn::Pat::Tuple(tuple) => tuple
+            .elems
+            .iter()
+            .for_each(|inner| pattern_names(inner, names)),
+        syn::Pat::TupleStruct(tuple) => tuple
+            .elems
+            .iter()
+            .for_each(|inner| pattern_names(inner, names)),
+        syn::Pat::Or(cases) => cases
+            .cases
+            .iter()
+            .for_each(|inner| pattern_names(inner, names)),
+        _ => {}
+    }
+}
+
+fn first_type(arguments: &syn::AngleBracketedGenericArguments) -> Option<&syn::Type> {
+    arguments.args.iter().find_map(|argument| match argument {
+        syn::GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    })
+}
+
+/// The Rust expressions a macro invocation holds. Macro input is not parsed
+/// by `syn`, so a site inside `matches!`, `assert!` or `tokio::select!` would
+/// otherwise never count. The input is read as an expression list, then as
+/// statements; where both fail it is split at `,`, `;`, `=>` and `if` and
+/// each piece is read alone. Pieces that are still not expressions give up
+/// their groups to the same reading and their remaining tokens to `loose`.
+fn macro_expressions(
+    tokens: proc_macro2::TokenStream,
+    parsed: &mut Vec<Expr>,
+    loose: &mut Vec<proc_macro2::TokenTree>,
+) {
+    use proc_macro2::{Spacing, TokenTree};
+    use syn::parse::Parser;
+    let list = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
+    if let Ok(expressions) = list.parse2(tokens.clone()) {
+        parsed.extend(expressions);
+        return;
+    }
+    if let Ok(stmts) = syn::Block::parse_within.parse2(tokens.clone()) {
+        parsed.push(Expr::Block(syn::ExprBlock {
+            attrs: Vec::new(),
+            label: None,
+            block: syn::Block {
+                brace_token: syn::token::Brace::default(),
+                stmts,
+            },
+        }));
+        return;
+    }
+    let tokens = tokens.into_iter().collect::<Vec<_>>();
+    let mut pieces = vec![Vec::new()];
+    let mut index = 0;
+    while index < tokens.len() {
+        let arrow = matches!(
+            (&tokens[index], tokens.get(index + 1)),
+            (TokenTree::Punct(equals), Some(TokenTree::Punct(greater)))
+                if equals.as_char() == '='
+                    && equals.spacing() == Spacing::Joint
+                    && greater.as_char() == '>'
+        );
+        let boundary = arrow
+            || match &tokens[index] {
+                TokenTree::Punct(punct) => matches!(punct.as_char(), ',' | ';'),
+                TokenTree::Ident(ident) => ident == "if",
+                _ => false,
+            };
+        if boundary {
+            pieces.push(Vec::new());
+            index += 1 + usize::from(arrow);
+        } else {
+            if let Some(piece) = pieces.last_mut() {
+                piece.push(tokens[index].clone());
+            }
+            index += 1;
+        }
+    }
+    for piece in pieces {
+        if piece.is_empty() {
+            continue;
+        }
+        match syn::parse2::<Expr>(piece.iter().cloned().collect()) {
+            Ok(expression) => parsed.push(expression),
+            Err(_) => {
+                for token in piece {
+                    match token {
+                        TokenTree::Group(group) => macro_expressions(group.stream(), parsed, loose),
+                        other => loose.push(other),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Error types by the file that declares them: a `struct` or `enum` that
+/// derives `Error` or has an `impl Error for` it in the same file.
+#[derive(Default)]
+struct DeclaredErrors {
+    /// Declared with any `pub`, by file.
+    exported: BTreeMap<String, BTreeSet<String>>,
+    /// Every declared error type's name, private ones included.
+    names: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct ErrorDeclarations {
+    /// Name, exported, derives `Error`.
+    types: Vec<(String, bool, bool)>,
+    implemented: BTreeSet<String>,
+}
+
+fn derives_error(attributes: &[syn::Attribute]) -> bool {
+    attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("derive"))
+        .any(|attribute| {
+            let mut found = false;
+            let _ = attribute.parse_nested_meta(|meta| {
+                found |= meta
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "Error");
+                Ok(())
+            });
+            found
+        })
+}
+
+impl<'ast> Visit<'ast> for ErrorDeclarations {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        self.types.push((
+            item.ident.to_string(),
+            !matches!(item.vis, syn::Visibility::Inherited),
+            derives_error(&item.attrs),
+        ));
+    }
+
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        self.types.push((
+            item.ident.to_string(),
+            !matches!(item.vis, syn::Visibility::Inherited),
+            derives_error(&item.attrs),
+        ));
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        if let Some((_, path, _)) = &item.trait_ {
+            if path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "Error")
+            {
+                self.implemented.insert(type_name(&item.self_ty));
+            }
+        }
+        visit::visit_item_impl(self, item);
+    }
+}
+
+fn crate_of(path: &str) -> &str {
+    let end = path
+        .match_indices('/')
+        .nth(1)
+        .map_or(path.len(), |(index, _)| index);
+    &path[..end]
+}
+
+fn in_owner_module(path: &str) -> bool {
+    OWNER_MODULES.iter().any(|owner| owned_by(path, owner))
+}
+
+impl DeclaredErrors {
+    fn of(sources: &[(String, syn::File)]) -> Self {
+        let mut declared = Self::default();
+        for (path, syntax) in sources {
+            let mut declarations = ErrorDeclarations::default();
+            declarations.visit_file(syntax);
+            for (name, exported, derives) in declarations.types {
+                if !derives && !declarations.implemented.contains(&name) {
+                    continue;
+                }
+                declared.names.insert(name.clone());
+                if exported {
+                    declared
+                        .exported
+                        .entry(path.clone())
+                        .or_default()
+                        .insert(name);
+                }
+            }
+        }
+        declared
+    }
+
+    /// The error types `path` owns: those its file exports, and for a file
+    /// in `OWNER_MODULES` those the `OWNER_MODULES` files of its crate export.
+    fn own(&self, path: &str) -> BTreeSet<String> {
+        let owner = in_owner_module(path);
+        self.exported
+            .iter()
+            .filter(|(file, _)| {
+                file.as_str() == path
+                    || (owner && crate_of(file) == crate_of(path) && in_owner_module(file))
+            })
+            .flat_map(|(_, names)| names.iter().cloned())
+            .collect()
+    }
+}
+
+/// The sites of one file: those that count, described for the failure
+/// message, and the functions that hold a compliant one.
+#[derive(Default)]
+struct SiteFindings {
+    debt: Vec<String>,
+    compliant: BTreeSet<String>,
+}
+
+struct ClassifierVisitor<'declared> {
+    declared: &'declared DeclaredErrors,
+    own: BTreeSet<String>,
+    walker: bool,
+    owners: Vec<String>,
+    frames: Vec<FnFrame>,
+    /// Bindings the function received as errors, whatever they are named.
+    errors: Vec<String>,
+    /// Bindings that hold an error's rendering.
+    renderings: Vec<String>,
+    downcasts: SiteFindings,
+    texts: SiteFindings,
+}
+
+impl ClassifierVisitor<'_> {
+    fn function_name(&self) -> String {
+        self.frames
+            .last()
+            .map_or_else(|| "(no function)".to_string(), |frame| frame.name.clone())
+    }
+
+    /// The type a downcast asks for, with `Self` read as the `impl` type.
+    fn asked_name(&self, asked: &syn::Type) -> String {
+        match type_name(asked).as_str() {
+            "Self" => self.owners.last().cloned().unwrap_or_default(),
+            name => name.to_string(),
+        }
+    }
+
+    /// Whether the owner is asking for its own type. A path into another
+    /// workspace crate is never the owner's, whatever its last segment.
+    fn owns(&self, asked: &syn::Type, frame: &FnFrame) -> bool {
+        let path = match asked {
+            syn::Type::Path(path) if path.qself.is_none() => &path.path,
+            _ => return false,
+        };
+        let single = path.segments.len() == 1;
+        let foreign = !single
+            && path
+                .segments
+                .first()
+                .is_some_and(|segment| segment.ident.to_string().starts_with("gents_"));
+        if foreign || !frame.asks_error {
+            return false;
+        }
+        let name = self.asked_name(asked);
+        self.own.contains(&name) || (self.walker && single && frame.type_parameters.contains(&name))
+    }
+
+    fn downcast_site(&mut self, line: usize, asked: Option<&syn::Type>) {
+        let function = self.function_name();
+        let compliant = match (self.frames.last(), asked) {
+            (Some(frame), Some(asked)) => self.owns(asked, frame),
+            _ => false,
+        };
+        if compliant {
+            self.downcasts.compliant.insert(function);
+        } else {
+            let asked = asked.map_or_else(|| "an inferred type".to_string(), type_name);
+            self.downcasts
+                .debt
+                .push(format!("{line}: {asked} in {function}"));
+        }
+    }
+
+    fn text_site(&mut self, line: usize) {
+        let function = self.function_name();
+        if self.frames.last().is_some_and(|frame| frame.premise) {
+            self.texts.compliant.insert(function);
+        } else {
+            self.texts.debt.push(format!("{line}: in {function}"));
+        }
+    }
+
+    /// A downcast asks about an error when its receiver is one or the type
+    /// it asks for is an error type, so renaming the receiver hides nothing.
+    fn asks_error_type(&self, asked: Option<&syn::Type>) -> bool {
+        asked.is_some_and(|asked| {
+            let name = self.asked_name(asked);
+            name.ends_with("Error") || self.declared.names.contains(&name)
+        })
+    }
+
     /// Text derived from an error: its `to_string()` or `format!` rendering,
     /// a local bound to one, or an identifier named as error text.
     fn error_text(&self, expression: &Expr, named: bool) -> bool {
@@ -2337,18 +2563,18 @@ impl ErrorTextVisitor {
             Expr::Reference(reference) => self.error_text(&reference.expr, named),
             Expr::Paren(paren) => self.error_text(&paren.expr, named),
             Expr::Unary(unary) => self.error_text(&unary.expr, named),
-            Expr::Macro(invocation) => macro_renders_error(&invocation.mac),
+            Expr::Macro(invocation) => macro_renders_error(&invocation.mac, &self.errors),
             Expr::Path(path) => path.path.get_ident().is_some_and(|ident| {
                 let ident = ident.to_string();
                 self.renderings.contains(&ident) || (named && names_error(&ident))
             }),
-            Expr::Field(_) => named && expression_names_error(expression),
+            Expr::Field(_) => named && expression_is_error(expression, &[]),
             Expr::MethodCall(call) => {
                 let method = call.method.to_string();
                 if TEXT_ADAPTERS.contains(&method.as_str()) {
                     self.error_text(&call.receiver, named)
                 } else {
-                    method == "to_string" && expression_names_error(&call.receiver)
+                    method == "to_string" && expression_is_error(&call.receiver, &self.errors)
                 }
             }
             _ => false,
@@ -2379,46 +2605,107 @@ impl ErrorTextVisitor {
         }
     }
 
-    fn scoped(&mut self, visit: impl FnOnce(&mut Self)) {
-        let depth = self.renderings.len();
+    fn function(
+        &mut self,
+        attributes: &[syn::Attribute],
+        signature: &syn::Signature,
+        visit: impl FnOnce(&mut Self),
+    ) {
+        if is_test_fn(attributes) {
+            return;
+        }
+        let (errors, renderings) = (self.errors.len(), self.renderings.len());
+        self.frames
+            .push(fn_frame(self.owners.last(), attributes, signature));
+        for input in &signature.inputs {
+            if let syn::FnArg::Typed(typed) = input {
+                if names_error_type(&typed.ty) {
+                    pattern_names(&typed.pat, &mut self.errors);
+                }
+            }
+        }
+        self.classifier_parameters(signature);
         visit(self);
-        self.renderings.truncate(depth);
+        self.frames.pop();
+        self.errors.truncate(errors);
+        self.renderings.truncate(renderings);
+    }
+
+    fn owned(&mut self, owner: String, visit: impl FnOnce(&mut Self)) {
+        self.owners.push(owner);
+        visit(self);
+        self.owners.pop();
     }
 }
 
-fn is_test_fn(attributes: &[syn::Attribute]) -> bool {
-    cfg_test(attributes)
-        || attributes.iter().any(|attribute| {
-            attribute
-                .path()
-                .segments
-                .last()
-                .is_some_and(|segment| segment.ident == "test")
-        })
-}
-
-impl<'ast> Visit<'ast> for ErrorTextVisitor {
+impl<'ast> Visit<'ast> for ClassifierVisitor<'_> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if !item_cfg_test(item) {
             visit::visit_item(self, item);
         }
     }
 
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        self.owned(type_name(&item.self_ty), |visitor| {
+            visit::visit_item_impl(visitor, item)
+        });
+    }
+
+    fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
+        self.owned(item.ident.to_string(), |visitor| {
+            visit::visit_item_trait(visitor, item)
+        });
+    }
+
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        if !is_test_fn(&item.attrs) {
-            self.scoped(|visitor| {
-                visitor.classifier_parameters(&item.sig);
-                visit::visit_item_fn(visitor, item);
-            });
-        }
+        self.function(&item.attrs, &item.sig, |visitor| {
+            visit::visit_item_fn(visitor, item)
+        });
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        if !is_test_fn(&item.attrs) {
-            self.scoped(|visitor| {
-                visitor.classifier_parameters(&item.sig);
-                visit::visit_impl_item_fn(visitor, item);
-            });
+        self.function(&item.attrs, &item.sig, |visitor| {
+            visit::visit_impl_item_fn(visitor, item)
+        });
+    }
+
+    fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
+        self.function(&item.attrs, &item.sig, |visitor| {
+            visit::visit_trait_item_fn(visitor, item)
+        });
+    }
+
+    /// The payload of an `Err(..)` pattern is an error under any name.
+    fn visit_pat_tuple_struct(&mut self, pattern: &'ast syn::PatTupleStruct) {
+        if pattern
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "Err")
+        {
+            for inner in &pattern.elems {
+                pattern_names(inner, &mut self.errors);
+            }
+        }
+        visit::visit_pat_tuple_struct(self, pattern);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let mut parsed = Vec::new();
+        let mut loose = Vec::new();
+        macro_expressions(invocation.tokens.clone(), &mut parsed, &mut loose);
+        for expression in &parsed {
+            Visit::visit_expr(self, expression);
+        }
+        for token in loose {
+            if let proc_macro2::TokenTree::Ident(ident) = token {
+                if matches!(
+                    ident.to_string().as_str(),
+                    "downcast" | "downcast_ref" | "downcast_mut" | "find_source"
+                ) {
+                    self.downcast_site(ident.span().start().line, None);
+                }
+            }
         }
     }
 
@@ -2431,11 +2718,38 @@ impl<'ast> Visit<'ast> for ErrorTextVisitor {
         }
     }
 
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Expr::Path(function) = call.func.as_ref() {
+            if let Some(segment) = function.path.segments.last() {
+                if segment.ident == "find_source" {
+                    let asked = match &segment.arguments {
+                        syn::PathArguments::AngleBracketed(arguments) => first_type(arguments),
+                        _ => None,
+                    };
+                    self.downcast_site(segment.ident.span().start().line, asked);
+                }
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    /// Only an error classifies a failure; `Any` maps, deferred write
+    /// payloads and panic payloads downcast data, not errors.
     fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
-        if TEXT_TESTS.contains(&call.method.to_string().as_str())
-            && self.error_text(&call.receiver, true)
+        let method = call.method.to_string();
+        let line = call.method.span().start().line;
+        let asked = call.turbofish.as_ref().and_then(first_type);
+        let downcast = matches!(
+            method.as_str(),
+            "downcast" | "downcast_ref" | "downcast_mut"
+        ) || (method == "is" && call.turbofish.is_some());
+        if downcast
+            && (expression_is_error(&call.receiver, &self.errors) || self.asks_error_type(asked))
         {
-            self.sites.push(call.method.span().start().line);
+            self.downcast_site(line, asked);
+        }
+        if TEXT_TESTS.contains(&method.as_str()) && self.error_text(&call.receiver, true) {
+            self.text_site(line);
         }
         visit::visit_expr_method_call(self, call);
     }
@@ -2466,58 +2780,421 @@ impl<'ast> Visit<'ast> for ErrorTextVisitor {
             && ((wording(&binary.right) && self.error_text(&binary.left, true))
                 || (wording(&binary.left) && self.error_text(&binary.right, true)))
         {
-            self.sites.push(binary.op.span().start().line);
+            self.text_site(binary.op.span().start().line);
         }
         visit::visit_expr_binary(self, binary);
     }
 }
 
-fn error_text_sites(syntax: &syn::File) -> Vec<usize> {
-    let mut visitor = ErrorTextVisitor::default();
+/// The downcast sites and the error-text decisions of one file.
+fn classifier_sites(
+    path: &str,
+    syntax: &syn::File,
+    declared: &DeclaredErrors,
+) -> (SiteFindings, SiteFindings) {
+    let mut visitor = ClassifierVisitor {
+        declared,
+        own: declared.own(path),
+        walker: path == CHAIN_WALKER,
+        owners: Vec::new(),
+        frames: Vec::new(),
+        errors: Vec::new(),
+        renderings: Vec::new(),
+        downcasts: SiteFindings::default(),
+        texts: SiteFindings::default(),
+    };
     visitor.visit_file(syntax);
-    visitor.sites
+    (visitor.downcasts, visitor.texts)
+}
+
+/// What a classifier ratchet found: the sites that still count, by file, and
+/// the functions whose sites are the compliant form.
+#[derive(Default)]
+struct ClassifierFindings {
+    debt: BTreeMap<String, Vec<String>>,
+    compliant: BTreeSet<(String, String)>,
+}
+
+impl ClassifierFindings {
+    fn record(&mut self, path: &str, sites: SiteFindings) {
+        if !sites.debt.is_empty() {
+            self.debt.insert(path.to_string(), sites.debt);
+        }
+        self.compliant.extend(
+            sites
+                .compliant
+                .into_iter()
+                .map(|function| (path.to_string(), function)),
+        );
+    }
+
+    fn sites(&self) -> usize {
+        self.debt.values().map(Vec::len).sum()
+    }
+
+    fn functions(&self) -> Vec<&str> {
+        self.compliant
+            .iter()
+            .map(|(_, function)| function.as_str())
+            .collect()
+    }
+
+    /// The counted sites must equal the allowlist, which only shrinks, and the
+    /// compliant functions must equal the registry, which is reviewed.
+    fn failures(
+        &self,
+        allowlist: &[(&str, usize)],
+        registry: &[(&str, &[&str])],
+        advice: &str,
+    ) -> Vec<String> {
+        let allowed = allowlist
+            .iter()
+            .map(|(path, count)| (path.to_string(), *count))
+            .collect::<BTreeMap<_, _>>();
+        let mut failures = Vec::new();
+        for path in allowed
+            .keys()
+            .chain(self.debt.keys())
+            .collect::<BTreeSet<_>>()
+        {
+            let sites = self.debt.get(path).cloned().unwrap_or_default();
+            let found = sites.len();
+            let listed = sites.join("\n    ");
+            match allowed.get(path).copied() {
+                None => failures.push(format!(
+                    "{path}: {found} new site(s); {advice}\n    {listed}"
+                )),
+                Some(limit) if found > limit => failures.push(format!(
+                    "{path}: {found} sites exceed the allowlisted {limit}; {advice}\n    {listed}"
+                )),
+                Some(limit) if found < limit => failures.push(format!(
+                    "{path}: {found} sites; lower the allowlist entry from {limit}"
+                )),
+                Some(_) => {}
+            }
+        }
+        let registered = registry
+            .iter()
+            .flat_map(|(path, functions)| {
+                functions
+                    .iter()
+                    .map(|function| (path.to_string(), function.to_string()))
+            })
+            .collect::<BTreeSet<_>>();
+        for (path, function) in self.compliant.difference(&registered) {
+            failures.push(format!(
+                "{path}: `{function}` is a compliant classifier that is not registered; add it to the registry for review"
+            ));
+        }
+        for (path, function) in registered.difference(&self.compliant) {
+            failures.push(format!(
+                "{path}: `{function}` is registered but holds no compliant site; remove it from the registry"
+            ));
+        }
+        failures
+    }
+
+    fn current(&self) -> String {
+        let debt = self
+            .debt
+            .iter()
+            .map(|(path, sites)| {
+                format!(
+                    "    (\"{path}\", {}),\n        // {}",
+                    sites.len(),
+                    sites.join("\n        // ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut registry = BTreeMap::<&str, Vec<&str>>::new();
+        for (path, function) in &self.compliant {
+            registry.entry(path).or_default().push(function);
+        }
+        let registry = registry
+            .iter()
+            .map(|(path, functions)| format!("    (\"{path}\", &{functions:?}),"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "current allowlist ({} sites):\n{debt}\n\ncurrent registry ({} functions):\n{registry}",
+            self.sites(),
+            self.compliant.len()
+        )
+    }
+}
+
+fn classifier_findings(
+    sources: &[(String, syn::File)],
+) -> (ClassifierFindings, ClassifierFindings) {
+    let declared = DeclaredErrors::of(sources);
+    let mut downcasts = ClassifierFindings::default();
+    let mut texts = ClassifierFindings::default();
+    for (path, syntax) in sources {
+        let (downcast, text) = classifier_sites(path, syntax, &declared);
+        downcasts.record(path, downcast);
+        texts.record(path, text);
+    }
+    (downcasts, texts)
+}
+
+fn production_classifier_findings() -> (ClassifierFindings, ClassifierFindings) {
+    let root = repo_root();
+    classifier_findings(&parse_production(&root, production_sources(&root)))
+}
+
+#[test]
+fn downcast_classifiers_only_shrink() {
+    let (downcasts, _) = production_classifier_findings();
+    let failures = downcasts.failures(
+        DOWNCAST_CLASSIFIER_ALLOWLIST,
+        OWNER_CLASSIFIER_REGISTRY,
+        "return an owner enum and match its variants, or ask the owner's classifier",
+    );
+    assert!(
+        failures.is_empty(),
+        "downcast classifier ratchet failed:\n{}\n\n{}",
+        failures.join("\n"),
+        downcasts.current()
+    );
 }
 
 #[test]
 fn error_text_classification_only_shrinks() {
-    let root = repo_root();
-    let actual = parse_production(&root, production_sources(&root))
-        .into_iter()
-        .filter_map(|(relative, syntax)| {
-            let sites = error_text_sites(&syntax);
-            (!sites.is_empty()).then_some((relative, sites))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let allowed = ERROR_TEXT_CLASSIFIER_ALLOWLIST
-        .iter()
-        .map(|(path, count)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let lines = actual.get(path).cloned().unwrap_or_default();
-        let found = lines.len();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}:{lines:?}: {found} new decision(s) on error text; expose the fact as an owner enum variant and match it"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}:{lines:?}: {found} error-text decisions exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} error-text decisions; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
-    let current = actual
-        .iter()
-        .map(|(path, lines)| format!("    (\"{path}\", {}),", lines.len()))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let (_, texts) = production_classifier_findings();
+    let failures = texts.failures(
+        ERROR_TEXT_CLASSIFIER_ALLOWLIST,
+        ADAPTER_CLASSIFIER_REGISTRY,
+        "expose the fact as an owner enum variant and match it, or decide in an adapter classifier whose docstring states its `External premise:`",
+    );
     assert!(
-        violations.is_empty(),
-        "error text ratchet failed:\n{}\n\ncurrent sites:\n{current}",
-        violations.join("\n")
+        failures.is_empty(),
+        "error text ratchet failed:\n{}\n\n{}",
+        failures.join("\n"),
+        texts.current()
+    );
+}
+
+/// A file that is no owner module, and two owner modules of one crate.
+const APPLICATION_FILE: &str = "crates/gents-cli/src/snippet.rs";
+const OWNER_FILE: &str = "crates/gents-protocol/src/snippet.rs";
+const OWNER_SIBLING: &str = "crates/gents-protocol/src/sibling.rs";
+const OTHER_OWNER: &str = "crates/gents-loop/src/snippet.rs";
+
+fn snippet_findings(files: &[(&str, &str)]) -> (ClassifierFindings, ClassifierFindings) {
+    let sources = files
+        .iter()
+        .map(|(path, source)| {
+            let syntax = syn::parse_file(source)
+                .unwrap_or_else(|error| panic!("parse snippet {source}: {error}"));
+            (path.to_string(), syntax)
+        })
+        .collect::<Vec<_>>();
+    classifier_findings(&sources)
+}
+
+fn downcast_sites(source: &str) -> usize {
+    snippet_findings(&[(APPLICATION_FILE, source)]).0.sites()
+}
+
+fn error_text_sites(source: &str) -> usize {
+    snippet_findings(&[(APPLICATION_FILE, source)]).1.sites()
+}
+
+#[test]
+fn downcast_fence_counts_type_classification_outside_tests() {
+    for (source, sites) in [
+        ("fn f(e: &anyhow::Error) -> bool { e.downcast_ref::<E>().is_some() }", 1),
+        ("fn f(e: anyhow::Error) { let _ = e.downcast::<E>(); }", 1),
+        ("fn f(e: &anyhow::Error) -> bool { e.is::<E>() }", 1),
+        ("fn f(e: &dyn Error) { find_source::<E>(e); gents_protocol::error_chain::find_source::<F>(e); }", 2),
+        ("fn f(e: &Error) -> bool { e.is_conflict() || e.is(x) }", 0),
+        ("fn f(e: &dyn Error) -> bool { find_map_source(e, |cause| cause.downcast_ref::<E>()).is_some() }", 1),
+        ("fn f(m: &Map) -> Option<&T> { m.get(&id)?.downcast_ref() }", 0),
+        ("fn f(payload: &dyn Any) -> bool { payload.downcast_ref::<String>().is_some() }", 0),
+        ("#[cfg(test)] mod tests { fn f(e: &anyhow::Error) { e.downcast_ref::<E>(); } }", 0),
+        ("#[test] fn f() { error().downcast_ref::<E>(); }", 0),
+        ("#[tokio::test] async fn f() { error().downcast_ref::<E>(); }", 0),
+        // Renaming the receiver hides nothing: an error-typed parameter, an
+        // `Err(..)` payload and a downcast to an error type all count.
+        ("fn f(value: &anyhow::Error) -> bool { value.downcast_ref::<E>().is_some() }", 1),
+        ("fn f(r: Result<(), anyhow::Error>) { if let Err(value) = r { value.is::<E>(); } }", 1),
+        ("fn f(x: &X) -> bool { x.inner.downcast_ref::<ConflictError>().is_some() }", 1),
+        ("#[derive(Debug, thiserror::Error)] struct Marker; fn f(x: &X) -> bool { x.inner.is::<Marker>() }", 1),
+        ("fn f(value: &anyhow::Error) -> Option<&E> { value.downcast_ref() }", 1),
+        // Nor does a macro.
+        ("fn f(e: &anyhow::Error) -> bool { matches!(e.downcast_ref::<E>(), Some(_)) }", 1),
+        ("fn f(r: R) -> bool { matches!(r, Err(e) if e.is::<E>()) }", 1),
+        ("fn f(e: &anyhow::Error) { assert!(e.downcast_ref::<E>().is_some(), \"typed\"); }", 1),
+        ("async fn f() { tokio::select! { r = a() => { if let Err(e) = r { e.is::<E>(); } } _ = b() => {} } }", 1),
+        ("macro_rules! typed { ($e:expr) => { $e.downcast_ref::<E>() }; }", 1),
+    ] {
+        assert_eq!(downcast_sites(source), sites, "{source}");
+    }
+}
+
+const OWN_ERROR: &str =
+    "#[derive(Debug, thiserror::Error)] pub enum OwnError { #[error(\"x\")] X }";
+
+#[test]
+fn downcast_fence_exempts_only_the_owner_asking_for_its_own_type() {
+    let classifier = "pub fn own_error(error: &(dyn std::error::Error + 'static)) -> Option<&OwnError> { find_map_source(error, |cause| cause.downcast_ref::<OwnError>()) }";
+    let declared_here = format!("{OWN_ERROR} {classifier}");
+    let check = |files: &[(&str, &str)]| {
+        let (downcasts, _) = snippet_findings(files);
+        (
+            downcasts.sites(),
+            downcasts
+                .functions()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let compliant = |function: &str| (0, vec![function.to_string()]);
+    let counted = |sites: usize| (sites, Vec::new());
+
+    // The module that declares and exports the type, owner module or not.
+    assert_eq!(
+        check(&[(OWNER_FILE, declared_here.as_str())]),
+        compliant("own_error")
+    );
+    assert_eq!(
+        check(&[(APPLICATION_FILE, declared_here.as_str())]),
+        compliant("own_error")
+    );
+    // Another owner module of the same crate.
+    assert_eq!(
+        check(&[(OWNER_FILE, OWN_ERROR), (OWNER_SIBLING, classifier)]),
+        compliant("own_error")
+    );
+    // The same downcast outside the owner: an application file, a file of the
+    // same crate that is no owner module, and an owner module of another crate.
+    assert_eq!(
+        check(&[(OWNER_FILE, OWN_ERROR), (APPLICATION_FILE, classifier)]),
+        counted(1)
+    );
+    assert_eq!(
+        check(&[
+            (APPLICATION_FILE, OWN_ERROR),
+            ("crates/gents-cli/src/other.rs", classifier)
+        ]),
+        counted(1)
+    );
+    assert_eq!(
+        check(&[(OWNER_FILE, OWN_ERROR), (OTHER_OWNER, classifier)]),
+        counted(1)
+    );
+    let named_crate = "pub fn own_error(error: &anyhow::Error) -> bool { error.is::<gents_protocol::snippet::OwnError>() }";
+    let named_crate = format!("{OWN_ERROR} {named_crate}");
+    assert_eq!(check(&[(OTHER_OWNER, named_crate.as_str())]), counted(1));
+
+    for (source, expected) in [
+        // A method asking for `Self`.
+        (
+            "#[derive(Debug, thiserror::Error)] pub enum OwnError { #[error(\"x\")] X } impl OwnError { pub fn recover(error: anyhow::Error) -> Self { error.downcast::<Self>().unwrap_or(Self::X) } }",
+            compliant("OwnError::recover"),
+        ),
+        // A hand-written `Error` impl declares an error type too.
+        (
+            "#[derive(Debug)] pub struct Refused; impl std::error::Error for Refused {} pub fn refused(error: &anyhow::Error) -> bool { error.is::<Refused>() }",
+            compliant("refused"),
+        ),
+        // A private marker carried through `anyhow` is debt wherever it is asked for.
+        (
+            "#[derive(Debug, thiserror::Error)] struct Marker; fn marked(error: &anyhow::Error) -> bool { error.is::<Marker>() }",
+            counted(1),
+        ),
+        // A function that is not handed an error is not a classifier.
+        (
+            "#[derive(Debug, thiserror::Error)] pub struct OwnError; fn run(job: &Job) -> bool { match job.run() { Err(error) => error.is::<OwnError>(), Ok(()) => false } }",
+            counted(1),
+        ),
+        // Nor is an asynchronous one.
+        (
+            "#[derive(Debug, thiserror::Error)] pub struct OwnError; async fn settle(error: &anyhow::Error) -> bool { error.is::<OwnError>() }",
+            counted(1),
+        ),
+        // A type the module only imports, an inferred type, a third-party type.
+        (
+            "use other::OwnError; fn own_error(error: &anyhow::Error) -> bool { error.is::<OwnError>() }",
+            counted(1),
+        ),
+        (
+            "#[derive(Debug, thiserror::Error)] pub struct OwnError; fn own_error(error: &anyhow::Error) -> Option<&OwnError> { error.downcast_ref() }",
+            counted(1),
+        ),
+        (
+            "fn io(error: &anyhow::Error) -> bool { error.is::<std::io::Error>() }",
+            counted(1),
+        ),
+        // A generic helper hides the type it asks for.
+        (
+            "fn find<T>(error: &(dyn Error + 'static)) -> Option<&T> where T: Error + 'static { error.downcast_ref::<T>() }",
+            counted(1),
+        ),
+        // Wrapping the compliant form in a macro changes nothing either way.
+        (
+            "#[derive(Debug, thiserror::Error)] pub struct OwnError; fn own_error(error: &anyhow::Error) -> bool { matches!(error.downcast_ref::<OwnError>(), Some(_)) }",
+            compliant("own_error"),
+        ),
+    ] {
+        assert_eq!(check(&[(APPLICATION_FILE, source)]), expected, "{source}");
+    }
+
+    // Asking for another module's type beside its own counts that site alone.
+    let mixed = "#[derive(Debug, thiserror::Error)] pub struct OwnError; fn own_error(error: &anyhow::Error) -> bool { error.is::<OwnError>() || error.is::<other::TheirError>() }";
+    assert_eq!(
+        check(&[(APPLICATION_FILE, mixed)]),
+        (1, vec!["own_error".to_string()])
+    );
+
+    // Only the chain walker may ask for its own type parameter.
+    let walker = "pub fn find_source<'a, T>(error: &'a (dyn Error + 'static)) -> Option<&'a T> where T: Error + 'static { find_map_source(error, |cause| cause.downcast_ref::<T>()) }";
+    assert_eq!(check(&[(CHAIN_WALKER, walker)]), compliant("find_source"));
+    assert_eq!(check(&[(OWNER_FILE, walker)]), counted(1));
+}
+
+#[test]
+fn classifier_ratchet_checks_the_allowlist_and_the_registry() {
+    let source = format!(
+        "{OWN_ERROR} fn own_error(error: &anyhow::Error) -> bool {{ error.is::<OwnError>() }} fn other(error: &anyhow::Error) -> bool {{ error.is::<std::io::Error>() }}"
+    );
+    let (downcasts, _) = snippet_findings(&[(APPLICATION_FILE, source.as_str())]);
+    let failures = |allowlist: &[(&str, usize)], registry: &[(&str, &[&str])]| {
+        downcasts.failures(allowlist, registry, "advice").len()
+    };
+    assert_eq!(
+        failures(
+            &[(APPLICATION_FILE, 1)],
+            &[(APPLICATION_FILE, &["own_error"])]
+        ),
+        0
+    );
+    // An unlisted site, an entry that is too high or too low.
+    assert_eq!(failures(&[], &[(APPLICATION_FILE, &["own_error"])]), 1);
+    assert_eq!(
+        failures(
+            &[(APPLICATION_FILE, 2)],
+            &[(APPLICATION_FILE, &["own_error"])]
+        ),
+        1
+    );
+    assert_eq!(
+        failures(
+            &[(APPLICATION_FILE, 0)],
+            &[(APPLICATION_FILE, &["own_error"])]
+        ),
+        1
+    );
+    // A compliant classifier that is not registered, and a stale registration.
+    assert_eq!(failures(&[(APPLICATION_FILE, 1)], &[]), 1);
+    assert_eq!(
+        failures(
+            &[(APPLICATION_FILE, 1)],
+            &[(APPLICATION_FILE, &["own_error", "other"])]
+        ),
+        1
     );
 }
 
@@ -2590,9 +3267,123 @@ fn error_text_fence_counts_decisions_on_error_renderings() {
             r#"#[test] fn f() { error().to_string().contains("x"); }"#,
             0,
         ),
+        // Renaming the error hides nothing: an error-typed parameter and an
+        // `Err(..)` payload render error text under any name.
+        (
+            r#"fn f(value: &anyhow::Error) -> bool { value.to_string().contains("x") }"#,
+            1,
+        ),
+        (
+            r#"fn f(r: R) -> bool { match r { Err(value) => value.to_string().contains("x"), Ok(()) => false } }"#,
+            1,
+        ),
+        (
+            r#"fn f(value: &anyhow::Error) -> bool { let text = format!("{value:#}"); text.contains("x") }"#,
+            1,
+        ),
+        // Nor does a macro.
+        (
+            r#"fn f(e: &E) -> bool { matches!(e.to_string().contains("x"), true) }"#,
+            1,
+        ),
+        (
+            r#"fn f(e: &E) { assert!(e.to_string().contains("x"), "worded"); }"#,
+            1,
+        ),
+        (
+            r#"async fn f() { tokio::select! { r = a() => { if let Err(e) = r { let _ = e.to_string() == "x"; } } _ = b() => {} } }"#,
+            1,
+        ),
     ] {
-        let syntax = syn::parse_file(source).expect("parse snippet");
-        assert_eq!(error_text_sites(&syntax).len(), sites, "{source}");
+        assert_eq!(error_text_sites(source), sites, "{source}");
+    }
+}
+
+#[test]
+fn error_text_fence_exempts_only_adapter_classifiers_that_name_their_premise() {
+    let decision = r#"fn unknown_variant(error: &serde_json::Error) -> bool { error.to_string().contains("unknown variant") }"#;
+    let check = |docstring: &str| {
+        let source = format!("{docstring}\n{decision}");
+        let (_, texts) = snippet_findings(&[(APPLICATION_FILE, source.as_str())]);
+        (
+            texts.sites(),
+            texts
+                .functions()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let compliant = || (0, vec!["unknown_variant".to_string()]);
+    let counted = || (1, Vec::new());
+
+    assert_eq!(
+        check(
+            "/// External premise: `serde_json::Error` names an unknown tag only in its message."
+        ),
+        compliant()
+    );
+    assert_eq!(
+        check("/// Whether the tag was unknown.\n///\n/// External premise: serde says so only in its message."),
+        compliant()
+    );
+    // The same decision without the docstring, and with docstrings that do
+    // not state the premise in the required form.
+    assert_eq!(check(""), counted());
+    assert_eq!(check("/// Whether serde met an unknown tag."), counted());
+    assert_eq!(check("/// External premise:"), counted());
+    assert_eq!(
+        check("/// On the external premise that serde says so only in text."),
+        counted()
+    );
+    assert_eq!(
+        check("/// See the External premise: of the caller."),
+        counted()
+    );
+    assert_eq!(
+        check("// External premise: an ordinary comment is not a docstring."),
+        counted()
+    );
+
+    for (source, expected) in [
+        // A closure belongs to its function; a nested function and a caller do not.
+        (
+            "/// External premise: git says so only on stderr.\nfn missing(stderr: &str) -> bool { stderr.lines().any(|message| message.contains(\"exists on disk\")) }",
+            (0, vec!["missing".to_string()]),
+        ),
+        (
+            "/// External premise: git says so only on stderr.\nfn outer(stderr: &str) -> bool { fn inner(stderr: &str) -> bool { stderr.contains(\"x\") } inner(stderr) }",
+            (1, Vec::new()),
+        ),
+        (
+            "/// External premise: git says so only on stderr.\nfn missing(stderr: &str) -> bool { stderr.contains(\"x\") } fn caller(e: &E) -> bool { missing(&e.to_string()) || e.to_string().contains(\"y\") }",
+            (1, vec!["missing".to_string()]),
+        ),
+        // The premise belongs to the function, not to its `impl`.
+        (
+            "/// External premise: git says so only on stderr.\nimpl Git { fn missing(stderr: &str) -> bool { stderr.contains(\"x\") } }",
+            (1, Vec::new()),
+        ),
+        (
+            "impl Git {\n/// External premise: git says so only on stderr.\nfn missing(stderr: &str) -> bool { stderr.contains(\"x\") } }",
+            (0, vec!["Git::missing".to_string()]),
+        ),
+        // Wrapping the compliant form in a macro changes nothing either way.
+        (
+            "/// External premise: git says so only on stderr.\nfn missing(stderr: &str) -> bool { matches!(stderr.contains(\"x\"), true) }",
+            (0, vec!["missing".to_string()]),
+        ),
+    ] {
+        let (_, texts) = snippet_findings(&[(APPLICATION_FILE, source)]);
+        let found = (
+            texts.sites(),
+            texts
+                .functions()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(found, expected, "{source}");
     }
 }
 
