@@ -1,0 +1,66 @@
+{
+  "input": {
+    "chart": "horizontal_bar",
+    "title": "Top languages",
+    "sort": "value_desc",
+    "format": "{.0f}%",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "language",
+        "share"
+      ],
+      "rows": [
+        [
+          "Python",
+          28
+        ],
+        [
+          "JavaScript",
+          22
+        ],
+        [
+          "Java",
+          15
+        ],
+        [
+          "C++",
+          11
+        ],
+        [
+          "Rust",
+          4
+        ],
+        [
+          "Go",
+          6
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Horizontal bar chart titled \"Top languages\". 6 categories of language, from Python to Rust. Value axis: share, from 0 to 30. 1 series. \"share\" (bar): highest 28 at Python, lowest 4 at Rust.",
+      "chart": "bar",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 28.0,
+          "min": 4.0,
+          "name": "share",
+          "points": 6,
+          "sum": 86.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Top languages</title><desc id=\"chart-desc\">Horizontal bar chart titled &quot;Top languages&quot;. 6 categories of language, from Python to Rust. Value axis: share, from 0 to 30. 1 series. &quot;share&quot; (bar): highest 28 at Python, lowest 4 at Rust.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Top languages</text><line x1=\"239.5\" y1=\"50\" x2=\"239.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"386.5\" y1=\"50\" x2=\"386.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"92.35\" y=\"55.9\" width=\"411.26\" height=\"30.36\" fill=\"#0072b2\"><title>share, Python: 28%</title></rect><text x=\"507.62\" y=\"74.58\" font-size=\"10\" fill=\"#1f2328\">28%</text><rect x=\"92.35\" y=\"98.07\" width=\"323.14\" height=\"30.36\" fill=\"#0072b2\"><title>share, JavaScript: 22%</title></rect><text x=\"419.49\" y=\"116.75\" font-size=\"10\" fill=\"#1f2328\">22%</text><rect x=\"92.35\" y=\"140.24\" width=\"220.32\" height=\"30.36\" fill=\"#0072b2\"><title>share, Java: 15%</title></rect><text x=\"316.67\" y=\"158.92\" font-size=\"10\" fill=\"#1f2328\">15%</text><rect x=\"92.35\" y=\"182.4\" width=\"161.57\" height=\"30.36\" fill=\"#0072b2\"><title>share, C++: 11%</title></rect><text x=\"257.92\" y=\"201.08\" font-size=\"10\" fill=\"#1f2328\">11%</text><rect x=\"92.35\" y=\"224.57\" width=\"88.13\" height=\"30.36\" fill=\"#0072b2\"><title>share, Go: 6%</title></rect><text x=\"184.48\" y=\"243.25\" font-size=\"10\" fill=\"#1f2328\">6%</text><rect x=\"92.35\" y=\"266.74\" width=\"58.75\" height=\"30.36\" fill=\"#0072b2\"><title>share, Rust: 4%</title></rect><text x=\"155.1\" y=\"285.42\" font-size=\"10\" fill=\"#1f2328\">4%</text><line x1=\"92.35\" y1=\"303.5\" x2=\"532.99\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"91.85\" y1=\"50\" x2=\"91.85\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"92.5\" y1=\"303\" x2=\"92.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"92.35\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">0%</text><line x1=\"239.5\" y1=\"303\" x2=\"239.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"239.23\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">10%</text><line x1=\"386.5\" y1=\"303\" x2=\"386.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"386.11\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">20%</text><line x1=\"533.5\" y1=\"303\" x2=\"533.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"532.99\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">30%</text><line x1=\"88.35\" y1=\"71.5\" x2=\"92.35\" y2=\"71.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"84.35\" y=\"75.08\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Python</text><line x1=\"88.35\" y1=\"113.5\" x2=\"92.35\" y2=\"113.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"84.35\" y=\"117.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">JavaScript</text><line x1=\"88.35\" y1=\"155.5\" x2=\"92.35\" y2=\"155.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"84.35\" y=\"159.42\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Java</text><line x1=\"88.35\" y1=\"198.5\" x2=\"92.35\" y2=\"198.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"84.35\" y=\"201.58\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">C++</text><line x1=\"88.35\" y1=\"240.5\" x2=\"92.35\" y2=\"240.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"84.35\" y=\"243.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Go</text><line x1=\"88.35\" y1=\"282.5\" x2=\"92.35\" y2=\"282.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"84.35\" y=\"285.92\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Rust</text><text x=\"312.67\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">share</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">language</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}
