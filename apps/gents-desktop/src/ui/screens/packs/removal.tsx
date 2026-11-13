@@ -6,6 +6,7 @@ import type { PackWireSources } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { agentName } from "../behavior";
 import { toolsUsers } from "../agent/ToolsSummary";
+import { packOrigin } from "../agent/ListDetail";
 import { ErrorDetail } from "./PackCard";
 import { shortName } from "./model";
 
@@ -19,7 +20,10 @@ export type PackUse = {
 
 /** The agents whose tools select any of `pack`'s plugins, as far as `node`
     shows them: each agent's context names its tools, which list the plugins
-    it is offered. A tool set no agent uses selects nothing that matters. */
+    it is offered. A tool set no agent uses selects nothing that matters, and
+    one the pack installed goes with it, so neither is counted: taking the
+    plugins out of the pack's own tool set would only edit what is about to
+    be deleted, and the runtime then refuses the removal as an edit. */
 export function packUses(
   node: NodeView,
   sources: PackWireSources,
@@ -31,6 +35,7 @@ export function packUses(
   if (shipped.size === 0) return [];
   const uses = new Map<string, PackUse>();
   for (const tools of node.tools) {
+    if (packOrigin(tools.tags ?? null) === pack) continue;
     const selected = (tools.integrations?.plugins ?? [])
       .map((ref) => ref.plugin)
       .filter((plugin) => shipped.has(plugin));
@@ -103,4 +108,25 @@ export function failedWithDetails(message: string, error: string) {
     description: <ErrorDetail error={error} />,
     duration: Infinity,
   });
+}
+
+/* the runtime's refusal to remove a pack whose documents were edited since
+   it was installed, naming them as `Collection/id` */
+const EDITED = /documents were edited since it was installed: ([^.]+)\./;
+
+/** The documents of `pack` edited since it was installed, as the runtime's
+    refusal names them, or null when the refusal is about something else. */
+export function editedDocuments(error: string): string[] | null {
+  const named = EDITED.exec(error)?.[1];
+  return named ? named.split(/,\s*/).filter(Boolean) : null;
+}
+
+/** What Remove asks when some of the pack's own documents were changed
+    since it was installed: removing deletes them with the rest. */
+export function editedQuestion(pack: string, documents: readonly string[]): string {
+  const name = shortName(pack);
+  const which = documents.join(", ");
+  return documents.length === 1
+    ? `${which} was changed since ${name} was installed. Removing ${name} deletes it with the rest of the pack.`
+    : `${documents.length} of ${name}'s documents were changed since it was installed: ${which}. Removing ${name} deletes them with the rest of the pack.`;
 }

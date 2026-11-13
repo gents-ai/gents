@@ -9,6 +9,8 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { forgetSetAsideReview } from "../packs/preview";
 import { shortName } from "../packs/model";
 import {
+  editedDocuments,
+  editedQuestion,
   failedWithDetails,
   packUses,
   refusedRemoval,
@@ -160,7 +162,16 @@ export function usePackActions(refresh: () => Promise<void>) {
           }
         }
       }
-      await actions.removePack(pack);
+      try {
+        await actions.removePack(pack);
+      } catch (error) {
+        /* documents of the pack's own edited since it was installed: say
+           which, and delete them with the rest only when asked */
+        const edited = editedDocuments(errorText(error));
+        if (!edited) throw error;
+        if (!window.confirm(editedQuestion(pack, edited))) return false;
+        await actions.removePack(pack, "overwrite");
+      }
       toast.success(`Removed ${pack}`);
       await refresh();
       void refreshPages(pack);

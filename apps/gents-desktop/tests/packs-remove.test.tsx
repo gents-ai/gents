@@ -19,6 +19,8 @@ import {
   packUses,
   refusedRemoval,
   removalQuestion,
+  editedDocuments,
+  editedQuestion,
 } from "../src/ui/screens/packs/removal";
 import { resetDefaultPacks } from "../src/ui/screens/packs/useDefaultPacks";
 import { renderIn, testApp, withFlags } from "./app-fixture";
@@ -55,7 +57,12 @@ const node: DeploymentView = {
             plugins: [...TOOLS, "acme/notes"].map((plugin) => ({ plugin })),
           },
         }
-      : t,
+      : /* the tool set the web pack installed for its own agent, Ops */
+        {
+          ...t,
+          tags: [`gents:pack:${WEB}`],
+          integrations: { plugins: TOOLS.map((plugin) => ({ plugin })) },
+        },
   ),
 };
 const sources: PackWireSources = {
@@ -73,6 +80,10 @@ const pack = (name: string): InstalledPack => ({
   outdated: false,
   error: null,
 });
+
+/* the runtime's refusal to remove a pack one of whose documents was edited */
+const EDITED =
+  "1 of gents/web's documents were edited since it was installed: Tools/web-researcher-tools. Overwrite replaces them with the pack's versions (a removal deletes them); keep leaves them as edited.";
 
 /* the runtime's refusal while the Engineer's tools still select a plugin */
 const REFUSAL =
@@ -95,6 +106,20 @@ describe("who uses a pack's tools", () => {
     ]);
     expect(packUses(node, sources, "demo/research")).toEqual([]);
     expect(removalQuestion(WEB, packUses(node, sources, WEB))).toBe(QUESTION);
+  });
+
+  it("leaves out the agents that use the pack's tools through a tool set the pack installed", () => {
+    expect(packUses(node, sources, WEB).map((use) => use.agentDid)).toEqual([
+      "default",
+    ]);
+  });
+
+  it("reads which of the pack's documents were edited from the runtime's refusal", () => {
+    expect(editedDocuments(EDITED)).toEqual(["Tools/web-researcher-tools"]);
+    expect(editedDocuments(REFUSAL)).toBeNull();
+    expect(editedQuestion(WEB, ["Tools/web-researcher-tools"])).toBe(
+      "Tools/web-researcher-tools was changed since web was installed. Removing web deletes it with the rest of the pack.",
+    );
   });
 
   it("asks as it always did when no agent uses them", () => {
@@ -155,9 +180,9 @@ describe("removing a pack from the Packs page", () => {
         if (fail.wire) throw new Error(fail.wire);
         return {};
       }),
-      removePack: vi.fn(async (name: string) => {
-        calls.push(`remove ${name}`);
-        if (fail.remove) throw new Error(fail.remove);
+      removePack: vi.fn(async (name: string, edited?: string) => {
+        calls.push(edited ? `remove ${name} (${edited})` : `remove ${name}`);
+        if (fail.remove && !edited) throw new Error(fail.remove);
       }),
     };
   }
@@ -182,6 +207,27 @@ describe("removing a pack from the Packs page", () => {
         preview: false,
       });
     }
+  });
+
+  it("asks before deleting the pack's edited documents with it, then removes it", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const api = recorder({ remove: EDITED });
+    show(pack(WEB), api);
+    await chooseRemove(WEB);
+    await waitFor(() => expect(api.calls).toContain(`remove ${WEB} (overwrite)`));
+    expect(confirm).toHaveBeenLastCalledWith(
+      editedQuestion(WEB, ["Tools/web-researcher-tools"]),
+    );
+    expect(api.calls.at(-2)).toBe(`remove ${WEB}`);
+  });
+
+  it("keeps the pack when deleting its edited documents is declined", async () => {
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const api = recorder({ remove: EDITED });
+    show(pack(WEB), api);
+    await chooseRemove(WEB);
+    await waitFor(() => expect(window.confirm).toHaveBeenCalledTimes(2));
+    expect(api.calls).not.toContain(`remove ${WEB} (overwrite)`);
   });
 
   it("changes nothing when the question is declined", async () => {
