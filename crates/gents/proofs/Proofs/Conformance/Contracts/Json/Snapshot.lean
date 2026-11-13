@@ -1,3 +1,5 @@
+import Proofs.Conformance.Identity.SessionChild
+import Proofs.Conformance.RemoteDelivery
 import Proofs.Conformance.StagedPermissionObjects
 import Proofs.Conformance.SessionStopAdmission
 import Proofs.Conformance.SessionInputEditMalformed
@@ -53,7 +55,6 @@ import Proofs.Conformance.LspConsent
 import Proofs.Conformance.ConfigurationDiscovery
 import Proofs.Conformance.P2pAdministration
 import Proofs.Conformance.Views
-import Proofs.Conformance.RemoteDelivery
 import Proofs.Conformance.AgentViews
 import Proofs.Conformance.InferenceViews
 import Proofs.Conformance.PluginGrantDeclaration
@@ -344,12 +345,8 @@ def snapshotCaptureTailJson : String :=
       ++ compactionCanonicalProjectionCasesJson ++ ","
     ++ "\"repaired_projection_admission_cases\":"
       ++ repairedProjectionAdmissionCasesJson ++ ","
-    ++ "\"auxiliary_session_child_binding_cases\":"
-      ++ Identity.SessionChild.childScopeCasesJson ++ ","
     ++ "\"goal_link_cases\":"
       ++ Identity.SessionChild.goalLinkCasesJson ++ ","
-    ++ "\"client_request_publication_cases\":"
-      ++ Identity.SessionChild.clientRequestPublicationCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
     ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
@@ -407,8 +404,6 @@ def snapshotGoalCasesJson : String :=
       ++ Conformance.GoalWakeReceiptContracts.casesJson ++ ","
     ++ "\"client_process_claim_cases\":"
       ++ Conformance.NativeRefinement.clientProcessClaimCasesJson ++ ","
-    ++ "\"client_process_receipt_cases\":"
-      ++ Conformance.NativeRefinement.clientProcessReceiptCasesJson ++ ","
     ++ "\"client_control_grant_cases\":"
       ++ Conformance.NativeRefinement.clientControlGrantCasesJson ++ ","
     ++ "\"tool_admission_handoff_cases\":"
@@ -441,8 +436,6 @@ def snapshotRequestCasesJson : String :=
       ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
-    ++ "\"interrupt_queue_cases\":"
-      ++ Conformance.InterruptQueueContracts.casesJson ++ ","
     ++ "\"session_control_cases\":"
       ++ Conformance.SessionControlContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
@@ -487,7 +480,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"session_document_reference_encoding\":" ++ sessionDocumentReferenceEncodingJson ++ ","
     ++ "\"session_document_retry_cases\":" ++ sessionDocumentRetryCasesJson ++ ","
     ++ "\"plugin_job_opening_cases\":" ++ pluginJobOpeningCasesJson ++ ","
-    ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
@@ -515,10 +507,7 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
     ++ "\"identity_agent_creator_cases\":"
       ++ Identity.NodeProvisioningConformance.agentCreatorCasesJson ++ ","
-    ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
-    ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
-    ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
     ++ "\"identity_private_journal_policy\":"
       ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
@@ -628,8 +617,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (liveOverlayCases.map liveOverlayCaseJson) ++ ","
     ++ "\"request_progress_cases\":"
       ++ jsonArray (requestProgressCases.map requestProgressCaseJson) ++ ","
-    ++ "\"remote_agent_delivery_cases\":" ++ Request.RemoteDelivery.casesJson ++ ","
-    ++ "\"remote_agent_delivery_claim_cases\":" ++ Request.RemoteDelivery.claimCasesJson ++ ","
     ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
 
 def snapshotRecoveryCasesJson : String :=
@@ -726,9 +713,6 @@ def snapshotFileCasesJson : String :=
       ++ workspaceBindingCasesJson ++ ","
     ++ "\"callback_transition_case_count\":" ++ toString callbackTransitionCaseCount ++ ","
     ++ "\"callback_transition_cases\":" ++ callbackTransitionCasesJson ++ ","
-    ++ "\"callback_retry_cases\":" ++ callbackRetryCasesJson ++ ","
-    ++ "\"callback_cases\":"
-      ++ callbackCasesJson ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

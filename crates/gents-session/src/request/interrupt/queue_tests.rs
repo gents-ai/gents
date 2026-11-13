@@ -4,7 +4,9 @@ use crate::request::lifecycle::queue::{
     RequestInput, RequestQueue,
 };
 use crate::request::lifecycle::ExecutionOrigin;
-use gents_lean_vocab::{LeanInterruptQueueCase, LeanInterruptQueueEntry, LeanInterruptQueueInput};
+use gents_lean_vocab::families::interrupt_queue_contracts_sequential::{
+    Entry as ModeledEntry, Input as ModeledCase, Observation as ModeledObservation,
+};
 use gents_protocol::row::AgentRequest;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::identity::NodeIdentity;
@@ -84,7 +86,7 @@ async fn latch(access: &ConfigAccess, parent: &AgentRequest) -> Option<String> {
     observed.requested_at
 }
 
-async fn fixture(case: &LeanInterruptQueueCase) -> QueueFixture {
+async fn fixture(case: &ModeledCase) -> QueueFixture {
     use crate::request::lifecycle::{ClaimOutcome, RequestIdentity, RequestLifecycle};
 
     assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
@@ -179,8 +181,8 @@ async fn enqueue_generated_wake(
     access: &ConfigAccess,
     node: &Arc<EmbeddedNode>,
     parent: &AgentRequest,
-    case: &LeanInterruptQueueCase,
-    entry: &LeanInterruptQueueEntry,
+    case: &ModeledCase,
+    entry: &ModeledEntry,
 ) -> String {
     let source: QueueSource = serde_json::from_value(json!(entry.source)).unwrap();
     let policy: QueuePolicy = serde_json::from_value(json!(entry.policy)).unwrap();
@@ -224,7 +226,7 @@ async fn enqueue_generated_wake(
 async fn insert_generated_pending(
     fixture: &QueueFixture,
     parent: &AgentRequest,
-    entry: &LeanInterruptQueueEntry,
+    entry: &ModeledEntry,
     source: QueueSource,
     policy: QueuePolicy,
     origin: ExecutionOrigin,
@@ -266,14 +268,11 @@ async fn insert_generated_pending(
 }
 
 fn assert_generated_queue_row_metadata(
-    case: &LeanInterruptQueueCase,
+    case: &ModeledCase,
     by_doc: &RapidHashMap<String, &Value>,
     bound: &RapidHashMap<u64, String>,
 ) {
-    for event in &case.inputs {
-        let LeanInterruptQueueInput::Enqueue { entry } = event else {
-            continue;
-        };
+    for entry in case.inputs.iter().filter_map(|event| event.entry.as_ref()) {
         let row = by_doc.get(&bound[&entry.request_id]).unwrap();
         assert_eq!(
             row["execution_origin"], entry.execution_origin,
@@ -315,27 +314,9 @@ fn assert_generated_queue_row_metadata(
 
 #[tokio::test]
 async fn generated_interrupt_queue_events_bind_to_native_rows() {
-    let mut overlap_cases = RapidHashSet::new();
-    for case in gents_lean_vocab::lean_interrupt_queue_cases() {
-        let has_overlap_event = case.inputs.iter().any(|event| {
-            matches!(
-                event,
-                LeanInterruptQueueInput::CaptureInterrupt
-                    | LeanInterruptQueueInput::CommitInterrupt
-            )
-        });
-        if has_overlap_event {
-            assert!(matches!(
-                case.name.as_str(),
-                "empty_scan_completion_before_latch_commit"
-                    | "observed_old_then_later_same_key_completion"
-            ));
-            assert!(
-                overlap_cases.insert(case.name.as_str()),
-                "duplicate generated overlap case"
-            );
-            continue;
-        }
+    for modeled in gents_lean_vocab::families::interrupt_queue_contracts_sequential::cases() {
+        let case = &modeled.input;
+        let mut observations = Vec::new();
         for use_http in [false, true] {
             let fixture = fixture(case).await;
             let node = fixture.db.node.clone();
@@ -349,8 +330,8 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
             let mut notification_bindings = Vec::new();
             let mut first_latch = None;
             for event in &case.inputs {
-                match event {
-                    LeanInterruptQueueInput::Interrupt => {
+                match (event.kind.as_str(), &event.entry) {
+                    ("interrupt", None) => {
                         interrupt_request_by_doc_id_with_access(
                             &access,
                             &parent.doc_id,
@@ -367,7 +348,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                             first_latch = Some(latch);
                         }
                     }
-                    LeanInterruptQueueInput::Enqueue { entry } => {
+                    ("enqueue", Some(entry)) => {
                         let source: QueueSource =
                             serde_json::from_value(json!(entry.source)).unwrap();
                         let policy: QueuePolicy =
@@ -404,10 +385,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                         };
                         bound.insert(entry.request_id, doc);
                     }
-                    LeanInterruptQueueInput::CaptureInterrupt
-                    | LeanInterruptQueueInput::CommitInterrupt => {
-                        unreachable!("overlap runner owns this case")
-                    }
+                    (kind, _) => panic!("{}: no sequential runner for {kind}", case.name),
                 }
             }
             let actual = rows(&fixture.agent_access, &parent.session_id).await;
@@ -443,32 +421,29 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                 })
                 .map(|row| row["_docID"].as_str().unwrap().to_owned())
                 .collect();
-            assert_eq!(
-                physical_pending,
-                case.expected
-                    .pending
+            let mut request_of: RapidHashMap<&String, u64> = RapidHashMap::new();
+            for entry in case.inputs.iter().filter_map(|event| event.entry.as_ref()) {
+                if let Some(doc) = bound.get(&entry.request_id) {
+                    request_of.entry(doc).or_insert(entry.request_id);
+                }
+            }
+            let modeled_ids = |docs: &RapidHashSet<String>| {
+                let mut ids = docs
                     .iter()
-                    .map(|id| bound[id].clone())
-                    .collect(),
-                "{}: pending physical rows",
-                case.name
-            );
-            assert_eq!(
-                physical_terminal,
-                case.expected
-                    .terminal
-                    .iter()
-                    .map(|id| bound[id].clone())
-                    .collect(),
-                "{}: terminal physical rows",
-                case.name
-            );
-            assert_eq!(
-                first_latch.is_some(),
-                case.expected.latched,
-                "{}: latch",
-                case.name
-            );
+                    .map(|doc| {
+                        *request_of
+                            .get(doc)
+                            .unwrap_or_else(|| panic!("{}: unbound row {doc}", case.name))
+                    })
+                    .collect::<Vec<_>>();
+                ids.sort();
+                ids
+            };
+            observations.push(ModeledObservation {
+                pending: modeled_ids(&physical_pending),
+                terminal: modeled_ids(&physical_terminal),
+                latched: first_latch.is_some(),
+            });
             let messages = fixture
                 .agent_access
                 .execute(&format!(
@@ -493,59 +468,47 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
             );
             node.shutdown().await.expect("shut down test node");
         }
+        let http = observations.pop().unwrap();
+        let local = observations.pop().unwrap();
+        assert_eq!(
+            serde_json::to_value(&local).unwrap(),
+            serde_json::to_value(&http).unwrap(),
+            "{}: local and HTTP observations",
+            case.name
+        );
+        modeled.check(Some(local));
     }
-    assert_eq!(
-        overlap_cases,
-        RapidHashSet::from_iter([
-            "empty_scan_completion_before_latch_commit",
-            "observed_old_then_later_same_key_completion",
-        ]),
-        "both generated overlap cases must have native runners"
-    );
 }
 
 #[tokio::test]
 async fn generated_http_overlap_cases_preserve_cutoff() {
-    let cases = gents_lean_vocab::lean_interrupt_queue_cases()
-        .iter()
-        .filter(|case| {
-            matches!(
-                case.name.as_str(),
-                "empty_scan_completion_before_latch_commit"
-                    | "observed_old_then_later_same_key_completion"
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        cases.len(),
-        2,
-        "exactly two generated overlap cases are required"
-    );
-    assert_eq!(
-        cases
+    for modeled in gents_lean_vocab::families::interrupt_queue_contracts_overlap::cases() {
+        let case: ModeledCase = gents_lean_vocab::family::recode(&modeled.input);
+        let case = &case;
+        let kinds = case
+            .inputs
             .iter()
-            .map(|case| case.name.as_str())
-            .collect::<RapidHashSet<_>>(),
-        RapidHashSet::from_iter([
-            "empty_scan_completion_before_latch_commit",
-            "observed_old_then_later_same_key_completion",
-        ])
-    );
-    for case in cases {
-        let (before_capture, during_pause, after_commit) = match (
-            case.name.as_str(),
-            case.inputs.as_slice(),
-        ) {
-            (
-                "empty_scan_completion_before_latch_commit",
-                [LeanInterruptQueueInput::CaptureInterrupt, LeanInterruptQueueInput::Enqueue { entry }, LeanInterruptQueueInput::CommitInterrupt, LeanInterruptQueueInput::Interrupt],
-            ) => (None, Some(entry), None),
-            (
-                "observed_old_then_later_same_key_completion",
-                [LeanInterruptQueueInput::Enqueue { entry: old }, LeanInterruptQueueInput::CaptureInterrupt, LeanInterruptQueueInput::CommitInterrupt, LeanInterruptQueueInput::Enqueue { entry: later }, LeanInterruptQueueInput::Interrupt],
-            ) => (Some(old), None, Some(later)),
-            _ => panic!("generated overlap script changed without a native adapter"),
-        };
+            .map(|event| event.kind.as_str())
+            .collect::<Vec<_>>();
+        let entries = case
+            .inputs
+            .iter()
+            .filter_map(|event| event.entry.as_ref())
+            .collect::<Vec<_>>();
+        let (before_capture, during_pause, after_commit) =
+            match (kinds.as_slice(), entries.as_slice()) {
+                (["capture_interrupt", "enqueue", "commit_interrupt", "interrupt"], [entry]) => {
+                    (None, Some(*entry), None)
+                }
+                (
+                    ["enqueue", "capture_interrupt", "commit_interrupt", "enqueue", "interrupt"],
+                    [old, later],
+                ) => (Some(*old), None, Some(*later)),
+                _ => panic!(
+                    "{}: generated overlap script changed without a native adapter",
+                    case.name
+                ),
+            };
         let fixture = fixture(case).await;
         let node = fixture.db.node.clone();
         let parent = &fixture.parent;
@@ -570,7 +533,6 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         let reached_in = Arc::clone(&reached);
         let release_in = Arc::clone(&release);
         let paused_in = Arc::clone(&paused);
-        let expected_drained = case.expected.terminal.len();
         let interrupt = tokio::spawn(async move {
             access
                 .transact_write("test.http_interrupt_overlap", |txn| {
@@ -580,15 +542,11 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
                     let filter = &filter;
                     Box::pin(async move {
                         let drained = interrupt_request_matching_in_txn(txn, filter).await?;
-                        anyhow::ensure!(
-                            drained.len() == expected_drained,
-                            "captured modeled pending wake count"
-                        );
                         if !paused.swap(true, Ordering::SeqCst) {
                             reached.notify_one();
                             release.notified().await;
                         }
-                        Ok(drained)
+                        Ok::<_, anyhow::Error>(drained)
                     })
                 })
                 .await
@@ -633,24 +591,8 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             .expect("HTTP interrupt must commit after release")
             .unwrap()
             .unwrap();
-        let mut expected_receipt = case
-            .expected
-            .terminal
-            .iter()
-            .map(|id| {
-                before_commit
-                    .iter()
-                    .find(|row| row["_docID"] == bound[id])
-                    .unwrap()["request_id"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned()
-            })
-            .collect::<Vec<_>>();
         let mut drained = drained;
-        expected_receipt.sort();
         drained.sort();
-        assert_eq!(drained, expected_receipt, "exact committed drain receipt");
         if let Some(entry) = after_commit {
             bound.insert(
                 entry.request_id,
@@ -658,7 +600,6 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             );
         }
         let latched = latch(&fixture.agent_access, parent).await;
-        assert_eq!(latched.is_some(), case.expected.latched);
         let after_commit = rows(&fixture.agent_access, &parent.session_id).await;
         let by_doc: RapidHashMap<_, _> = after_commit
             .iter()
@@ -692,22 +633,37 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             .filter(|row| row["lifecycle_state"] == "interrupted")
             .map(|row| row["_docID"].as_str().unwrap().to_owned())
             .collect();
-        assert_eq!(
-            actual_pending,
-            case.expected
-                .pending
+        let mut request_of: RapidHashMap<&String, u64> = RapidHashMap::new();
+        for entry in case.inputs.iter().filter_map(|event| event.entry.as_ref()) {
+            if let Some(doc) = bound.get(&entry.request_id) {
+                request_of.entry(doc).or_insert(entry.request_id);
+            }
+        }
+        let modeled_ids = |docs: &RapidHashSet<String>| {
+            let mut ids = docs
                 .iter()
-                .map(|id| bound[id].clone())
-                .collect()
-        );
-        assert_eq!(
-            actual_terminal,
-            case.expected
-                .terminal
-                .iter()
-                .map(|id| bound[id].clone())
-                .collect()
-        );
+                .map(|doc| {
+                    *request_of
+                        .get(doc)
+                        .unwrap_or_else(|| panic!("{}: unbound row {doc}", case.name))
+                })
+                .collect::<Vec<_>>();
+            ids.sort();
+            ids
+        };
+        let mut drained_terminal = after_commit
+            .iter()
+            .filter(|row| row["lifecycle_state"] == "interrupted")
+            .map(|row| row["request_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        drained_terminal.sort();
+        assert_eq!(drained, drained_terminal, "exact committed drain receipt");
+        let observation =
+            gents_lean_vocab::families::interrupt_queue_contracts_overlap::Observation {
+                pending: modeled_ids(&actual_pending),
+                terminal: modeled_ids(&actual_terminal),
+                latched: latched.is_some(),
+            };
         interrupt_request_by_doc_id_with_access(
             &fixture.agent_access,
             &parent.doc_id,
@@ -755,16 +711,12 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             "{}: notification facts",
             case.name
         );
+        modeled.check(Some(observation));
         node.shutdown().await.expect("shut down test node");
     }
 }
 
-#[tokio::test]
-async fn interrupted_queue_drain_rolls_back_with_latch() {
-    let case = gents_lean_vocab::lean_interrupt_queue_cases()
-        .iter()
-        .find(|case| case.name == "completion_before_interrupt")
-        .expect("generated pre-interrupt completion case");
+async fn interrupted_queue_drain_rolls_back_with_latch(case: &ModeledCase) {
     let fixture = fixture(case).await;
     let node = fixture.db.node.clone();
     let parent = &fixture.parent;
@@ -820,17 +772,26 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
 
 #[tokio::test]
 async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
-    let case = gents_lean_vocab::lean_interrupt_queue_cases()
-        .iter()
-        .find(|case| case.name == "completion_before_interrupt")
-        .expect("modeled completion before interrupt");
+    for modeled in
+        gents_lean_vocab::families::interrupt_queue_contracts_completion_before_interrupt::cases()
+    {
+        let case: ModeledCase = gents_lean_vocab::family::recode(&modeled.input);
+        interrupted_queue_drain_rolls_back_with_latch(&case).await;
+        desktop_interrupt_observation(&case, &modeled).await;
+    }
+}
+
+async fn desktop_interrupt_observation(
+    case: &ModeledCase,
+    modeled: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::interrupt_queue_contracts_completion_before_interrupt::Input,
+        Option<gents_lean_vocab::families::interrupt_queue_contracts_completion_before_interrupt::Observation>,
+    >,
+) {
     let entry = case
         .inputs
         .iter()
-        .find_map(|event| match event {
-            LeanInterruptQueueInput::Enqueue { entry } => Some(entry),
-            _ => None,
-        })
+        .find_map(|event| event.entry.as_ref())
         .expect("modeled pending wake");
     let fixture = fixture(case).await;
     let parent = &fixture.parent;
@@ -855,7 +816,6 @@ async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
     .await
     .unwrap();
     let first = latch(&fixture.agent_access, parent).await;
-    assert_eq!(first.is_some(), case.expected.latched);
     assert_eq!(
         fetch_interrupt_requested_at_by_doc_id(&fixture.db.node, &parent.doc_id)
             .await
@@ -888,14 +848,12 @@ async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
     observer.await.unwrap();
     let after = rows(&fixture.agent_access, &parent.session_id).await;
     let state = &after.iter().find(|row| row["_docID"] == wake).unwrap()["lifecycle_state"];
-    assert_eq!(
-        state == "interrupted",
-        case.expected.terminal.contains(&entry.request_id)
-    );
-    assert_eq!(
-        state == "pending",
-        case.expected.pending.contains(&entry.request_id)
-    );
+    let observation =
+        gents_lean_vocab::families::interrupt_queue_contracts_completion_before_interrupt::Observation {
+            pending: if state == "pending" { vec![entry.request_id] } else { Vec::new() },
+            terminal: if state == "interrupted" { vec![entry.request_id] } else { Vec::new() },
+            latched: first.is_some(),
+        };
 
     interrupt_request_by_doc_id_with_access(
         &fixture.client,
@@ -906,6 +864,7 @@ async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
     .await
     .unwrap();
     assert_eq!(latch(&fixture.agent_access, parent).await, first);
+    modeled.check(Some(observation));
     fixture
         .db
         .node

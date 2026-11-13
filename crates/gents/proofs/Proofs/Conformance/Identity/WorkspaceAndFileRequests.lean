@@ -62,4 +62,48 @@ def callbackActor : Family CallbackActorInput CallbackActorOutput where
       workspaceLoaded := callbackActorMatches i.accessActor i.selectedAgent
       repositoryLoaded := callbackActorMatches i.accessActor i.selectedAgent }
 
+structure LivenessInput where
+  visible : Bool
+  terminal : Bool
+  deriving ToJson
+
+structure LivenessOutput where
+  mayRelease : Bool
+  deriving ToJson
+
+@[conformance_family]
+def liveness : Family LivenessInput LivenessOutput where
+  inputs := [false, true].flatMap fun visible => [false, true].map fun terminal => { visible, terminal }
+  model := fun i => { mayRelease := mayReleaseExclusive i.visible i.terminal }
+
+structure ActorInput where
+  actor : String
+  deriving ToJson
+
+structure QuickstartSelectionOutput where
+  before : Bool
+  afterRevocation : Bool
+  deriving ToJson
+
+@[conformance_family]
+def quickstartSelection : Family ActorInput QuickstartSelectionOutput where
+  inputs := ["user", "creator", "other"].map fun actor => { actor }
+  model := fun i =>
+    { before := Household.allowed 8 quickstartSelectedAgentFixture i.actor "agents" "target" "read"
+      afterRevocation := Household.allowed 8 quickstartSelectedAgentRevoked i.actor "agents" "target" "read" }
+
+structure QuickstartRepositoryOutput where
+  before : Bool
+  afterRevoke : Bool
+  abortedDocumentVisible : Bool
+  deriving ToJson
+
+@[conformance_family]
+def quickstartRepository : Family ActorInput QuickstartRepositoryOutput where
+  inputs := ["user", "agent", "other"].map fun actor => { actor }
+  model := fun i =>
+    { before := quickstartRepositoryRead workspaceRepositoryFixture i.actor
+      afterRevoke := quickstartRepositoryRead revokedWorkspaceRepository i.actor
+      abortedDocumentVisible := (Identity.NodeFileRequests.publish false).document }
+
 end Conformance.WorkspaceAndFileRequests

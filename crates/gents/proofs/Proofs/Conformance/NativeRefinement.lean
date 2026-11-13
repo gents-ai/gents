@@ -43,33 +43,37 @@ def clientProcessClaimCasesJson : String :=
         "agent" claimant intent owner ⟨"call", "doc"⟩ read update invoke 0 currentRevision))])
   (toJson cases).compress
 
-def clientProcessReceiptCasesJson : String :=
-  let expected : Background.ProcessControl.ControlReceipt :=
-    ⟨"intent", "client", "agent", ⟨"call", "doc"⟩⟩
-  let cases := do
+structure ClientProcessReceiptInput where
+  intentDoc : String
+  author : String
+  agent : String
+  call : String
+  document : String
+  signatureValid : Bool
+  observedResult : String
+  signedResult : String
+  deriving ToJson
+
+def controlResultOf (name : String) : Background.ProcessControl.ControlResult :=
+  if name == "applied" then .applied else .unconfirmed
+
+@[conformance_family]
+def clientProcessReceipt : Family ClientProcessReceiptInput Bool where
+  inputs := do
     let intentDoc ← ["intent", "other"]
     let author ← ["client", "other"]
     let agent ← ["agent", "other"]
     let call ← ["call", "other"]
     let document ← ["doc", "other"]
     let signatureValid ← [false, true]
-    let observedResult ← [Background.ProcessControl.ControlResult.applied,
-      Background.ProcessControl.ControlResult.unconfirmed]
-    let signedResult ← [Background.ProcessControl.ControlResult.applied,
-      Background.ProcessControl.ControlResult.unconfirmed]
-    let receipt : Background.ProcessControl.ControlReceipt :=
-      ⟨intentDoc, author, agent, ⟨call, document⟩⟩
-    let resultName := fun result => if result == Background.ProcessControl.ControlResult.applied
-      then "applied" else "unconfirmed"
-    pure (Json.mkObj [
-      ("intent_doc", toJson intentDoc), ("author", toJson author),
-      ("agent", toJson agent), ("call", toJson call), ("document", toJson document),
-      ("signature_valid", toJson signatureValid),
-      ("observed_result", toJson (resultName observedResult)),
-      ("signed_result", toJson (resultName signedResult)),
-      ("expected", toJson (Background.ProcessControl.receiptAccepted receipt expected signatureValid &&
-        Background.ProcessControl.signedResultMatches observedResult signedResult))])
-  (toJson cases).compress
+    let observedResult ← ["applied", "unconfirmed"]
+    let signedResult ← ["applied", "unconfirmed"]
+    pure { intentDoc, author, agent, call, document, signatureValid, observedResult, signedResult }
+  model := fun i =>
+    Background.ProcessControl.receiptAccepted ⟨i.intentDoc, i.author, i.agent, ⟨i.call, i.document⟩⟩
+        ⟨"intent", "client", "agent", ⟨"call", "doc"⟩⟩ i.signatureValid &&
+      Background.ProcessControl.signedResultMatches (controlResultOf i.observedResult)
+        (controlResultOf i.signedResult)
 
 def clientControlGrantCasesJson : String :=
   let cases := do

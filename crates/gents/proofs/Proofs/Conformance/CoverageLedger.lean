@@ -1451,8 +1451,8 @@ def caseCoverage : List CoverageEntry :=
       "QueueDeadlineConformanceCases")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "interrupt_queue_cases"
-      "InterruptQueueCases"
+      "family"
+      "interrupt_queue_contracts_sequential"
       "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1592,8 +1592,8 @@ def caseCoverage : List CoverageEntry :=
       "FoldTurnInputCases")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "interrupt_queue_cases"
-      "InterruptQueueHttpOverlapCases"
+      "family"
+      "interrupt_queue_contracts_overlap"
       "Two observed-identity overlap scripts bind real HTTP transactions against embedded completion publication, including permitted pre-latch phantom survival and post-latch replay. These schedules do not prove arbitrary distributed serialization; exact native queue ordering remains unbound.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1630,8 +1630,8 @@ def caseCoverage : List CoverageEntry :=
       "PrivateJournalPolicy")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "workspace_liveness_cases"
-      "WorkspaceLivenessCases"
+      "family"
+      "workspace_and_file_requests_liveness"
       "Checks native filtered absence before exclusive release; complete workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1645,8 +1645,8 @@ def caseCoverage : List CoverageEntry :=
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
-      "workspace_quickstart_selection_cases"
-      "WorkspaceQuickstartSelectionCases")
+      "family"
+      "workspace_and_file_requests_quickstart_selection")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "family"
@@ -1698,8 +1698,8 @@ def caseCoverage : List CoverageEntry :=
       "Checks duplicate publication after revocation and a stale retry after cleanup has begun.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_quickstart_cases"
-      "WorkspaceQuickstartCases"
+      "family"
+      "workspace_and_file_requests_quickstart_repository"
       "Covers user-signed repository publication, Agent visibility, outsider isolation and revocation; host provisioning follows reservation.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
@@ -2201,8 +2201,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientProcessClaimCases")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_process_receipt_cases"
-      "ClientProcessReceiptCases")
+      "family"
+      "native_refinement_client_process_receipt")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_control_grant_cases"
@@ -2914,13 +2914,13 @@ def caseCoverage : List CoverageEntry :=
       "Replay these cases through the production Workspace binding admission owner after node-field migration; do not restore the deleted test-local binding predicate.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "callback_cases"
-      "CallbackCases"
+      "family"
+      "contracts_callback_journal"
       "Generated journal-prefix observations exercise the actual journal owner. Invocation-state legality, denied execution and result-emission ordering need the callback executor consumer; the removed Rust predicate copy did not establish them.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "callback_retry_cases"
-      "CallbackRetryCases")
+      "family"
+      "contracts_callback_retry")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2941,7 +2941,7 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "request_input_cases" "RequestInputCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_reply_preview_cases" "SessionReplyPreviewCases")
+  , tagged (consumerCoverage "family" "session_reply_preview_observation")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "task_lineage_originating")
       "client-shell" [Surface.runtimeInternal]
@@ -3036,6 +3036,21 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "node_provisioning_bootstrap_grant_unreached"
       "model-production-gap: no production path reaches these emitted cases yet (not-exclusive, foreign-runtime, unauthenticated-client, existing-or-unknown-node, store-not-fresh, reservation-not-durable, nac-disabled, already-published: init decides each inline across its store lock, runtime match, client authentication, Node and store observation, reservation, NAC status and publication steps; no production function takes the bootstrap observation)")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "remote_delivery_delivery_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (every case: production refuses delivery to another runtime until the authenticated HTTP delivery path exists (plan_with_delivery), so remote creation, the working-agent grant and response confirmation have no production owner)")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "remote_delivery_claim_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (every case: production never creates a request from another runtime, so no claim transaction observes the remote sender's session, invoke or node permission)")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "session_child_child_scope_binding_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (absent_session_requester, foreign_collection, foreign_physical_session, empty_physical_session, foreign_child_agent, invalid_auxiliary_signature, invalid_auxiliary_shape, foreign_auxiliary_requester, foreign_auxiliary_node, foreign_auxiliary_session, foreign_auxiliary_agent, missing_parent, invalid_parent_signature, parent_not_normal, foreign_parent_document, foreign_parent_id, foreign_runtime_source, foreign_parent_node, foreign_parent_session, foreign_parent_agent, foreign_parent_requester, absent_parent_requester, missing_native_owner, foreign_native_owner, foreign_creator, foreign_authenticated_creator, failed_grant, failed_marker, uncommitted, completed_then_revoked: the served binding fixture writes the session, signed parent and auxiliary request through their production writers and cannot forge their signed contents, owners or collection)")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "session_child_child_scope_repair_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (every case except paired_title_segment, missing_parent, invalid_parent_signature, foreign_native_owner and completed_then_revoked: the served repair fixture cannot fail a native grant or marker write, leave the child uncommitted, or forge binding fields of signed rows)")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "session_child_client_request_recovery_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (grant_failed, wrong_signature, already_completed_revoked: the served retry fixture cannot fail the working Agent grant or marker, sign a mismatched request, or start from a completed publication whose grant was revoked)")
       "identity-permission" [Surface.runtimeInternal]
   ]
 
