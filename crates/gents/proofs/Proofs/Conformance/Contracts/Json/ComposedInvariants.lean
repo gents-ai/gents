@@ -1,33 +1,65 @@
-import Proofs.Conformance.Contracts.Json.Helpers
-import Proofs.Conformance.ContractCases
+import Proofs.Runtime.CrossMachineComposed.Reachability
+import Proofs.Conformance.Family
 
-namespace Conformance.Contracts
+namespace Conformance.ComposedTermination
 
-open Conformance.ContractCases
+open Lean ComposedState ComposedState.ReachabilityWitness
 
-def composedInvariantWitnessJson (witness : ComposedInvariantWitness) : String :=
-  "{"
-    ++ "\"theorem_name\":" ++ jsonString witness.theoremName ++ ","
-    ++ "\"witness_kind\":" ++ jsonString witness.witnessKind ++ ","
-    ++ "\"scenario\":" ++ jsonString witness.scenario ++ ","
-    ++ "\"rust_path\":" ++ jsonString witness.rustPath ++ ","
-    ++ "\"trace_step_count\":" ++ toString witness.traceStepCount ++ ","
-    ++ "\"transition_path\":" ++ jsonStringArray witness.transitionPath ++ ","
-    ++ "\"pre_request_state\":" ++ jsonString witness.preRequestState ++ ","
-    ++ "\"pre_request_admission\":" ++ jsonString witness.preRequestAdmission ++ ","
-    ++ "\"tool_pre_state\":" ++ jsonString witness.toolPreState ++ ","
-    ++ "\"tool_post_state\":" ++ jsonString witness.toolPostState ++ ","
-    ++ "\"request_id\":" ++ toString witness.requestId ++ ","
-    ++ "\"tool_request_id\":" ++ toString witness.toolRequestId ++ ","
-    ++ "\"tool_call_id\":" ++ toString witness.toolCallId ++ ","
-    ++ "\"request_deadline\":" ++ toString witness.requestDeadline ++ ","
-    ++ "\"request_current_time\":" ++ toString witness.requestCurrentTime ++ ","
-    ++ "\"tool_deadline\":" ++ toString witness.toolDeadline ++ ","
-    ++ "\"tool_current_time\":" ++ toString witness.toolCurrentTime ++ ","
-    ++ "\"deadline_exceeded\":" ++ boolString witness.deadlineExceeded ++ ","
-    ++ "\"well_formed_source\":" ++ jsonString witness.wellFormedSource ++ ","
-    ++ "\"pre_tool_persisted\":" ++ boolString witness.preToolPersisted ++ ","
-    ++ "\"cancel_cause\":" ++ jsonOptionalString witness.cancelCause
-    ++ "}"
+structure Witness where
+  scenario : String
+  state : ComposedState
+  tool : ToolExecution.ToolCallContext
 
-end Conformance.Contracts
+/-- Reachable compositions with one linked tool whose request stops: a pending
+and a running tool past the request deadline, and a pending and a running tool
+of an interrupted request. -/
+def witnesses : List Witness :=
+  [ ⟨"pending_tool_deadline_exceeded_cancels_before_dispatch", withExpiredPendingTool, expiredPendingTool⟩
+  , ⟨"running_tool_deadline_exceeded_times_out_on_recovery", withExpiredRunningTool, expiredRunningTool⟩
+  , ⟨"interrupted_request_cancels_live_pending_tool", interruptedWithTool, pendingTool⟩
+  , ⟨"interrupted_request_cancels_live_running_tool", interruptedWithRunningTool, runningTool⟩ ]
+
+structure Input where
+  scenario : String
+  toolPreState : String
+  deadlineExceeded : Bool
+  toolCallId : Nat
+  deriving ToJson
+
+structure Output where
+  preRequestState : String
+  toolPostState : Option String
+  cancelCause : Option String
+  toolFailureClass : Option String
+  deriving ToJson
+
+def witnessOf (scenario : String) : Option Witness :=
+  witnesses.find? (·.scenario == scenario)
+
+@[conformance_family]
+def linked : Family Input Output where
+  inputs := witnesses.map fun w =>
+    ⟨w.scenario, w.tool.state.toDefraDB, decide w.state.request.deadlineExceeded, w.tool.callId⟩
+  model := fun i => match witnessOf i.scenario with
+    | none => ⟨"", none, none, none⟩
+    | some w =>
+      let termination := linkedTermination w.state.request w.tool
+      { preRequestState := w.state.request.state.toDefraDB
+        toolPostState := termination.map (·.state.toDefraDB)
+        cancelCause := termination.bind (·.cancelCause.map ToolExecution.CancelCause.toDefraDB)
+        toolFailureClass :=
+          termination.bind (·.failureClass.map ToolExecution.FailureClass.toDefraDB) }
+
+example : witnesses.all (fun w => decide (w.tool ∈ w.state.tools) && !decide (IsDetached w.tool)) = true := by
+  native_decide
+
+example : witnesses.all (fun w =>
+    decide w.state.request.deadlineExceeded == decide w.tool.deadlineExceeded) = true := by
+  native_decide
+
+example : witnesses.all (fun w =>
+    decide (w.state.request.admission = .executing ∧ w.state.request.state = .processing) ||
+      decide (w.state.request.admission = .released ∧ w.state.request.state = .interrupted)) = true := by
+  native_decide
+
+end Conformance.ComposedTermination

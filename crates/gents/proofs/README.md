@@ -252,9 +252,9 @@ outside it, as a remote merge is. Its observations include exact normalized
 immutable segments and messages, not only row counts.
 `Conformance/Contracts/Json/PayloadPresentation` exports stored and presented
 payload lengths from reconstruction, not provider request sizes or token usage.
-`canonical_presentation/native_adapter.rs` runs its four generated cases through
-native reconstruction for presented payload bytes and missing dependencies;
-stored-byte values remain Lean expectations, not native provider estimates.
+Its families replay native reconstruction for stored and presented payload
+bytes, missing dependencies and corrupted flushes; these are payload lengths,
+not native provider estimates.
 The compaction projection join connects exact canonical message reconstruction
 to a fallible complete-request projection and estimation boundary, then to the
 existing reduction decision. Rebuilt requests are projected and measured again;
@@ -262,15 +262,15 @@ dispatch requires both threshold admission and positive output capacity. The
 provider serializer and estimator remain explicit native parameters, not a
 second implementation in Lean. `contract_cases_compaction_projection_join_projection_join` supplies
 controlled observations at that boundary; it does not establish that native
-serialization produced them. `compaction_canonical_projection_cases` supplies
-the immutable records and checks full reconstructed native messages;
+serialization produced them. the leftover family `compaction_canonical_projection_unreached` supplies
+the immutable records and pins full reconstructed native messages;
 the family `contract_cases_compaction_canonical_projection_repaired_admission_unreached`
 covers remeasurement of repaired input.
 The actual serialized-request/threshold experiment
 remains `native.external-projected-request-threshold` in the implementation layer.
 
 The canonical output groups are registered in `tests/conformance/coverage.rs`.
-Native projection consumers live in `crates/gents-lean-vocab/src/canonical_presentation.rs`,
+Native projection consumers live in `crates/gents-protocol/tests/canonical_output.rs`,
 and `src/runtime/agent/tests/canonical_execution_native_adapter.rs` binds selected
 execution scripts to native owners, including live partial publication and replay.
 The retired `streaming_response_cases` generator is no longer a runtime/test
@@ -335,7 +335,7 @@ Historical bridge references below are not evidence that this target already run
 | Document vocabulary | `ConfigDocuments` supplies apply, self-config, and sync projections with canonical names and field lists. Nested groups are values, not new documents. |
 | Authoring and inference | `Configuration` resolves a agent into one `ResolvedSessionConfig`: actual context content plus inference. Typed document lookups use `(node_did, logical ID)` and share one owner check; Tasks reuse this result. `defaultAgentPublishable` requires a node's default agent to be owned and enabled, so a publishable default never resolves to `disabledAgent`. Compact defaults, explicit auth, and backend/credential-scoped discovery retain their own boundaries. |
 | Context and permissions | `Skills` uses an explicit context whitelist and preserves tool authority exactly. `PromptAssembly/Template` retains task rendering only; its existing assembler carries literal context text, with task substitutions confined to the task slot. `ToolPolicy/Configuration` enforces exact service/tool selection, independent presentation, background subsets, and tool-local limits alongside the existing ceiling lattice; its `effective*` owners clamp admitted document timeouts to host and fixed ceilings, and the `tool_timeouts_*` families bind the native resolution to them. Its `pluginCallAccess` owner gives each bound plugin call `read` unless it sets a declared write field, and `pluginCallAdmitted` runs it only where the operator's grant covers that call's access; `plugin_resources_call_admissions` drives the executor's bind admission. `ToolPolicy/PluginNetwork` admits host-mediated plugin HTTP: a granted allow-list, HTTPS unless an entry names plaintext, and public addresses unless an entry names the IP literal; `plugin_resources_network_admission` and `plugin_resources_address_public` drive the native admission and address classifier. `ToolPolicy/WriteInput` enforces typed scalar input, nullability, required fields, and caller exclusion from runtime-filled fields; 256 generated cases exercise the bounded writer's input validator. |
-| Plugin access answers | `ToolPolicy/PluginApproval` admits an answer only for the same unanswered question before its waiter deadline. Cancellation removes the question while preserving existing grants; duplicate answers cannot widen access. `plugin_approval_cases` drives the native queue and grant files. Native locks serialize filesystem operations; cross-file I/O atomicity is not modeled. |
+| Plugin access answers | `ToolPolicy/PluginApproval` admits an answer only for the same unanswered question before its waiter deadline. Cancellation removes the question while preserving existing grants; duplicate answers cannot widen access. The `plugin_approval_unscoped_step`, `plugin_approval_scoped_step` and `plugin_approval_delivery` families drive the native queue, answer and grant files. Native locks serialize filesystem operations; cross-file I/O atomicity is not modeled. |
 | Event groups | Trigger and callback consumers share `EventGroupKey`, candidate eligibility and the durable clock in `EventDelivery/Group`. Callback input and group origin live on the existing invocation and survive its transitions; retries do not reproject live sources. |
 | Self-configuration | Existing patch/validate/guard owner remains. Canonical nested fields replace flattened legacy fields; the opt-in no-lockout guard (`keepsControl`, #1796) consumes decoded self-config and agents enablement and is the only lockout protection; the always-on `keepsGrants` bounds each operator-managed grant on its own, and pack installation may be raised only within what the stored Tools carry or the invoking agent holds; `reselectionKeepsGrants` applies the same bound to Context and Agent re-points, new Contexts and clones; `SelfConfig/Auth` permits environment/OAuth reference edits while preventing new raw-key writes, which includes the static `awsCredentials` and `googleCredentials` auth. `Configuration/ClaudePlatform` fixes which `claude_platform` settings each Claude platform provider kind requires or refuses and the default base URL they derive; its generated cases bind the Rust validation and URL derivation. |
 | Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their node once, so same-label documents from different nodes coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. `publishIf` adds an expected-field precondition on the same publication; a stale expectation leaves state unchanged and an empty scope is `publish`. |
@@ -379,8 +379,8 @@ state machines explicit enough that:
 
 - lifecycle invariants are written down once
 - Rust changes can be checked against an executable model
-- unresolved Rust/spec mismatches are isolated as deviations, while intentional
-  product boundaries are documented explicitly
+- a Rust/spec mismatch is a model definition that drives conformance cases,
+  while intentional product boundaries are documented explicitly
 
 The proofs are strongest where the runtime is a state machine:
 
@@ -717,7 +717,6 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Runtime/Properties/SchedulingLiveness.lean` | Scheduler/fleet liveness properties |
 | `Proofs/Runtime/Properties/Decidable.lean` | Finite-state exhaustive checks |
 | `Proofs/Conformance/Gents.lean` | Mapping from Lean state to Rust/DefraDB state |
-| `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches |
 | `Proofs/Conformance/RuntimeConnectionObservation.lean` | Desktop runtime connection status (`ClientShell.ObservationOrdering` `RuntimeConnectionObservation`): transitions including planned renewal and missing endpoint, the presentation tone and reason each status shows, stream-end and snapshot-outcome classification (an omitted root is an empty view; the runtime's own refusal is shown as `refused` while the source reconnects), the armed notice and armed state, the renewal cadence and the snapshot retry delay; replayed by `gents-desktop-core` `client::observe` and the desktop's operational-state projection. TLA `RuntimeConnectionTransport` models the source, observer and reconcile interleavings |
 | `Proofs/Conformance/RuntimeConnectionBackoff.lean` | Reconnect backoff (`reconnects` by origin: a snapshot that failed for a transport reason keeps the source armed; `reconnectDelayMs`: five 250 ms reconnects, then doubling to 30 s; `reconnectAttempt`, reset only after the source stayed connected for `reconnectStableMs`) replayed by `client::observe::remote`, the one delay of every reconnect path |
 | `Proofs/Conformance/ClientWindowScope.lean` | Desktop window scope (`ClientShell.ObservationScope` `ClientWindowScope`): executes serialized register/select/destroy traces and reports each window's command node, with and without a named node, and the nodes a delivery reaches it for; replayed against `DesktopBridge` by `gents-desktop-bridge` `state::window_selection_tests` |
@@ -1422,7 +1421,6 @@ The main conformance files are:
 - `Proofs/Conformance/Boundaries.lean`
 - `Proofs/Conformance/CoverageLedger.lean`
 - `Proofs/Conformance/Triggers.lean`
-- `Proofs/Conformance/Deviations.lean`
 
 The Rust/Lean vocabulary checks compare Rust-visible strings against Lean
 `toDefraDB` definitions for request lifecycle states, execution origins,
@@ -1469,11 +1467,10 @@ structurally pin the finite vocabularies; the cardinality output is diagnostic
 and is not itself a separate proof obligation beyond those instances and the
 theorems established in `Proofs/Runtime/Properties/Decidable.lean`.
 
-## Boundaries And Deviations
+## Boundaries
 
 `Proofs/Conformance/Boundaries.lean` records intentional product policies,
-reserved vocabulary, closed historical items, and external assumptions. These
-are not deviations.
+reserved vocabulary, closed historical items, and external assumptions.
 
 Current boundaries:
 
@@ -1489,10 +1486,8 @@ Current boundaries:
   failed mutations, stale reads/events, and minimum visibility paths. DefraDB
   storage-engine correctness remains external.
 
-`Proofs/Conformance/Deviations.lean` is reserved only for real unresolved
-Rust/spec mismatches. Active deviations are expected to name an accepted failure
-mode or a follow-up tracker. Current entries cover live event-source rescan
-gaps.
+A real unresolved Rust/spec mismatch is stated as a model definition whose
+conformance family drives the production owner, not as a hand-written record.
 
 ## Known Limitations
 
@@ -1664,8 +1659,9 @@ lifecycle-only seal guard remains a coarse necessary condition, not sufficient
 authorization for host effects. Path normalization/encoding/alias and Git capture
 are observed host predicates, not claimed filesystem or hash proofs.
 
-Twenty-four explicit operation cases are consumed by the real Git/executor
-umbrella test `generated_workspace_path_capability_cases_drive_real_git_executor`.
+Twenty-four explicit operation cases are replayed through the real Git executor
+by the `workspace_path_capability_contracts_*` families (provision, sealing,
+integrate, replay and tree_delta).
 Operation cases cover legacy fresh denial, identity recovery, empty exact sets, both rename endpoints,
 symlink/gitlink denial, immutable-base/snapshot mismatch, denied receipt repair,
 authorized integration, absent-checkout receipt recovery and capability tampering.

@@ -51,38 +51,21 @@ async fn startup_subscriptions_use_one_batch_with_the_exact_allowed_scope() {
 }
 
 #[tokio::test]
+async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
+    for case in gents_lean_vocab::families::native_claim_lifetime_client_core_scenario::cases::<
+        String,
+        String,
+    >() {
+        case.check(cancelled_shutdown_waiter_claim_observations().await);
+    }
+}
+
 #[expect(
     clippy::disallowed_methods,
     reason = "retries a file lock on a blocking-pool thread; the lock has no release notification"
 )]
-async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
-    let cases = tokio::task::spawn_blocking(|| {
-        &gents_lean_vocab::lean_contract_snapshot().native_claim_lifetime_cases
-    })
-    .await
-    .expect("Lean snapshot load");
-    let case = cases
-        .iter()
-        .find(|case| case.name == "client_shutdown_cancel_retains_claim_until_return")
-        .expect("Lean client shutdown cancellation case");
-    let expected_events = [
-        "native_started",
-        "caller_cancelled",
-        "native_returned",
-        "access_released",
-        "lifecycle_guard_released",
-        "gate_release_requested",
-    ];
-    assert_eq!(case.events, expected_events);
-    let claim_held_for = |event: &str| {
-        let index = case
-            .events
-            .iter()
-            .position(|candidate| candidate == event)
-            .expect("event in generated trace");
-        case.observations[index].claim_held
-    };
-
+async fn cancelled_shutdown_waiter_claim_observations() -> Vec<bool> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().expect("temporary desktop home");
     let paths = DesktopPaths::from_root(temp.path().join("client"));
     let core = Arc::new(
@@ -112,11 +95,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     assert!(waiter.await.unwrap_err().is_cancelled());
     drop(core);
 
-    assert_eq!(
-        gents_store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("caller_cancelled"),
-        "the claim observation after shutdown waiter cancellation"
-    );
+    observed.push(gents_store::local::home::lock_store(&home, &data).is_err());
 
     pause.allow_node_shutdown.notify_one();
     tokio::time::timeout(
@@ -125,11 +104,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     )
     .await
     .expect("native shutdown returns before the claim is released");
-    assert_eq!(
-        gents_store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("native_returned"),
-        "the claim observation after native shutdown return"
-    );
+    observed.push(gents_store::local::home::lock_store(&home, &data).is_err());
 
     pause.allow_access_release.notify_one();
     let retry_home = home.clone();
@@ -152,11 +127,8 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     .await
     .expect("store lock probe panicked");
     drop(reacquired);
-    assert_eq!(
-        gents_store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("access_released"),
-        "the claim observation after access release"
-    );
+    observed.push(gents_store::local::home::lock_store(&home, &data).is_err());
+    observed
 }
 
 #[tokio::test]

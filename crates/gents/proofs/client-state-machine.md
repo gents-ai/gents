@@ -92,8 +92,8 @@ values cannot be confused with request or response `status` strings.
 ## Reserved Vocabulary And Boundaries
 
 See `Proofs/Conformance/Boundaries.lean` for server-side product boundaries.
-`Proofs/Conformance/Deviations.lean` is only for active unresolved mismatches
-and currently has none.
+An unresolved mismatch is stated as a model definition that drives
+conformance cases.
 
 | Server state | Client mapping | Note |
 |---|---|---|
@@ -331,11 +331,11 @@ enforces these parts:
 | C9 awaiting retires only on matching request | Rust `build_session_snapshot_from_store(..., preferred_request_id)` reports a preferred request only if that request is actually in the observed store; TypeScript keeps `awaitingObservation` while latest/pending request ids do not match. | Generated stale/matching observation cases are consumed by both `projectChatShell` and desktop session snapshot tests. |
 | Terminal follow-up allowance | Follow-up uses the selected session/request observation, with no separate conversation summary. | Generated terminal cases exercise the single session observation path. |
 
-`Proofs.Conformance.Contracts` now includes `frontend_client_shell_case_count`,
-`frontend_client_shell_cases` and the generated family
-`client_shell_contracts_desktop`. Those cases are evaluated from `step`,
-`canSubmit`, `projectChat`, and the Lean turn derivation helpers. The frontend
-list keeps all generated rows for TypeScript projection coverage; the desktop
+`Proofs.Conformance.Contracts` now includes the generated families
+`client_shell_contracts_frontend` and `client_shell_contracts_desktop`. Their
+cases are evaluated from `step`, `canSubmit`, `projectChat`, and the Lean turn
+derivation helpers. The frontend family keeps all generated rows for
+TypeScript projection coverage; the desktop
 list contains selected-session rows that the Rust session-snapshot bridge can
 own directly, including the selected-but-absent snapshot case. Future shell
 changes that add workflow states, blocker reasons, agent-mismatch handling,

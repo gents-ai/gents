@@ -1,33 +1,10 @@
 use super::*;
 use crate::goal::operator_resume::support::{execute, FixtureNode};
 use crate::goal::session_goal_control::process_command;
-use gents_lean_vocab::{
-    LeanGoalClientControlCaseBeforeExecution, LeanGoalClientControlCaseExpectedExecution,
-};
 use gents_protocol::goal_control::{
     GoalRevision, SessionGoalControlReceipt, SESSION_GOAL_CONTROL_VERSION,
 };
-use serde_json::{json, Value};
 use std::sync::Arc;
-
-fn before_execution_json(execution: &LeanGoalClientControlCaseBeforeExecution) -> Value {
-    json!({
-        "status": execution.status,
-        "blocked_audits": execution.blocked_audits,
-        "wrapup_requested": execution.wrapup_requested,
-        "wrapup_completed": execution.wrapup_completed,
-        "sequence": execution.sequence,
-        "last_continued_from": execution.last_continued_from,
-        "latest_request": execution.latest_request,
-        "children": execution.children,
-        "tokens_used": execution.tokens_used,
-        "token_budget": execution.token_budget
-    })
-}
-
-fn observed_execution(value: Value) -> LeanGoalClientControlCaseExpectedExecution {
-    serde_json::from_value(value).unwrap()
-}
 
 pub(super) async fn persist_command(
     access: &gents_store::config_client::ConfigAccess,
@@ -64,8 +41,8 @@ const NODES_AT_ONCE: usize = 4;
 #[tokio::test]
 async fn generated_goal_client_controls_drive_signed_commands() {
     use futures::StreamExt;
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_client_control_cases;
-    assert_eq!(cases.len(), 756);
+    let cases =
+        gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>();
     futures::stream::iter(cases.chunks(CASES_PER_NODE))
         .for_each_concurrent(NODES_AT_ONCE, |chunk| async move {
             let node = FixtureNode::start().await;
@@ -79,9 +56,15 @@ async fn generated_goal_client_controls_drive_signed_commands() {
 
 async fn drive_signed_command(
     node: &FixtureNode,
-    case: &gents_lean_vocab::LeanGoalClientControlCase,
+    modeled_case: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::goal_client_control_contracts_control::ControlInput<String>,
+        Option<
+            gents_lean_vocab::families::goal_client_control_contracts_control::GoalSnapshot<String>,
+        >,
+    >,
 ) {
-    let before_execution = before_execution_json(&case.before.execution);
+    let case = &modeled_case.input;
+    let before_execution = serde_json::to_value(&case.before.execution).unwrap();
     let terminal_parent = !case.facts.unfinished_request;
     let fixture = node
         .fixture_with_parent_state(&before_execution, terminal_parent)
@@ -261,33 +244,11 @@ async fn drive_signed_command(
         )
         .await
         .unwrap());
-    let current = fixture.current_goal().await;
-    match &case.expected {
-        Some(expected) => {
-            assert!(
-                matches!(receipt.outcome, GoalControlOutcome::Applied { .. }),
-                "{}: {:?}",
-                case.name,
-                receipt.outcome
-            );
-            assert_eq!(
-                observed_execution(fixture.observe().await),
-                expected.execution,
-                "{} execution",
-                case.name
-            );
-            assert_eq!(
-                current.objective, expected.objective,
-                "{} objective",
-                case.name
-            );
+    let observed = match &receipt.outcome {
+        GoalControlOutcome::Applied { .. } => {
+            Some(serde_json::from_value(fixture.control_snapshot(&revision).await).unwrap())
         }
-        None => {
-            assert!(
-                matches!(receipt.outcome, GoalControlOutcome::Rejected { .. }),
-                "{}",
-                case.name
-            );
+        GoalControlOutcome::Rejected { .. } => {
             assert_eq!(
                 fixture.observe().await,
                 before,
@@ -295,7 +256,8 @@ async fn drive_signed_command(
                 case.name
             );
             assert_eq!(
-                current.objective, case.before.objective,
+                fixture.current_goal().await.objective,
+                case.before.objective,
                 "{} unchanged objective",
                 case.name
             );
@@ -305,8 +267,10 @@ async fn drive_signed_command(
                 "{} no goal write",
                 case.name
             );
+            None
         }
-    }
+    };
+    modeled_case.check(observed);
     let first_receipt = serde_json::to_value(receipt).unwrap();
     process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
         .await
@@ -325,41 +289,38 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
     let user =
         gents_store::identity::KeyIdentity::load_or_create(directory.path().join("user.key"), None)
             .unwrap();
-    let cases = &gents_lean_vocab::lean_contract_snapshot().cross_actor_authorization_cases;
-    let baseline = cases
-        .iter()
-        .find(|case| case.name == "committed_claim")
-        .unwrap();
-    let mut command = SessionGoalControl {
-        version: SESSION_GOAL_CONTROL_VERSION,
-        command_id: baseline.intent.document.clone(),
-        requester_did: user.did().into(),
-        requester_peer_id: None,
-        node_did: "node".into(),
-        agent_did: baseline.intent.selected_agent.clone(),
-        agent_doc_id: baseline.intent.agent_document.clone(),
-        session_id: "session".into(),
-        session_doc_id: Some(baseline.intent.session.clone()),
-        issued_at: "2026-11-04T00:00:00Z".into(),
-        expires_at: "2026-11-04T00:01:00Z".into(),
-        expected: Some(GoalRevision {
-            document: "goal".into(),
-            composite: "revision".into(),
-        }),
-        operation: GoalOperation::Pause {},
-        initial_request: None,
-        native_evidence: None,
-        signature: Vec::new(),
-    };
-    command.signature = user
-        .sign(&command.signing_payload().unwrap())
-        .await
-        .unwrap();
-    for name in ["wrong_session", "wrong_agent_document"] {
-        let case = cases.iter().find(|case| case.name == name).unwrap();
+    for case in
+        gents_lean_vocab::families::cross_actor_authorization_goal_command_signed_targets::cases()
+    {
+        let input = &case.input;
+        let mut command = SessionGoalControl {
+            version: SESSION_GOAL_CONTROL_VERSION,
+            command_id: "request-doc".into(),
+            requester_did: user.did().into(),
+            requester_peer_id: None,
+            node_did: "node".into(),
+            agent_did: "agent".into(),
+            agent_doc_id: input.signed_agent_document.clone(),
+            session_id: "session".into(),
+            session_doc_id: Some(input.signed_session.clone()),
+            issued_at: "2026-11-04T00:00:00Z".into(),
+            expires_at: "2026-11-04T00:01:00Z".into(),
+            expected: Some(GoalRevision {
+                document: "goal".into(),
+                composite: "revision".into(),
+            }),
+            operation: GoalOperation::Pause {},
+            initial_request: None,
+            native_evidence: None,
+            signature: Vec::new(),
+        };
+        command.signature = user
+            .sign(&command.signing_payload().unwrap())
+            .await
+            .unwrap();
         let mut changed = command.clone();
-        changed.session_doc_id = Some(case.observation.session.clone());
-        changed.agent_doc_id = case.observation.agent_document.clone();
+        changed.session_doc_id = Some(input.session.clone());
+        changed.agent_doc_id = input.agent_document.clone();
         let verified = user
             .verify(
                 user.did(),
@@ -368,18 +329,6 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
             )
             .await
             .unwrap_or(false);
-        assert_eq!(
-            verified,
-            case.decision == gents_lean_vocab::LeanCrossActorDecision::Claimed,
-            "{name}"
-        );
+        case.check(verified);
     }
-    assert!(user
-        .verify(
-            user.did(),
-            &command.signing_payload().unwrap(),
-            &command.signature
-        )
-        .await
-        .unwrap());
 }

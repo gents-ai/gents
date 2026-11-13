@@ -27,7 +27,7 @@ pub(super) struct NativeOperationTracker {
 }
 
 impl NativeOperationTracker {
-    fn start(self: &Arc<Self>) -> Result<NativeOperationPermit> {
+    pub(super) fn start(self: &Arc<Self>) -> Result<NativeOperationPermit> {
         let mut state = self
             .state
             .lock()
@@ -93,7 +93,7 @@ impl NativeOperationTracker {
     }
 }
 
-struct NativeOperationPermit(Arc<NativeOperationTracker>);
+pub(super) struct NativeOperationPermit(Arc<NativeOperationTracker>);
 
 impl Drop for NativeOperationPermit {
     fn drop(&mut self) {

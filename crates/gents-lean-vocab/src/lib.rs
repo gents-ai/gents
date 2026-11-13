@@ -56,36 +56,6 @@ pub struct LeanVocabulary<'a> {
     pub rust_values: &'a [&'a str],
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct LeanContractVocabulary<'a> {
-    pub domain: &'a str,
-    pub rust_source: &'a str,
-    pub rust_values: &'a [&'a str],
-}
-
-impl LeanPluginJobAdoptionCase {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Step0 { name, .. }
-            | Self::HostPin { name, .. }
-            | Self::Handle { name, .. }
-            | Self::Address { name, .. } => name,
-        }
-    }
-}
-
-impl LeanPluginJobControlCase {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Kill { name, .. }
-            | Self::Resume { name, .. }
-            | Self::ResultRead { name, .. }
-            | Self::ResultOffer { name, .. }
-            | Self::StepFailure { name, .. } => name,
-        }
-    }
-}
-
 impl LeanSurface {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -104,11 +74,12 @@ pub use generated::*;
 
 mod canonical_execution;
 mod canonical_output;
-pub mod canonical_presentation;
+pub mod canonical_wire;
 pub mod claude_replay;
-mod compaction_canonical_projection;
 pub mod consumer_scan;
 pub mod family;
+mod plugin_job_wire;
+mod session_turn_wire;
 mod title;
 
 /// Family types generated from `families.schema.json`, which Lean emits.
@@ -118,10 +89,9 @@ pub mod families {
 
 pub use canonical_execution::*;
 pub use canonical_output::*;
-pub use canonical_presentation::native_adapter::native_presentation;
-pub use canonical_presentation::*;
-pub use compaction_canonical_projection::*;
 pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
+pub use plugin_job_wire::*;
+pub use session_turn_wire::*;
 pub use title::*;
 
 #[cfg(test)]
@@ -152,46 +122,6 @@ where
     serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
 }
 
-pub fn lean_vocabulary_contract(domain: &str) -> &'static LeanVocabularyContract {
-    lean_contract_snapshot()
-        .vocabularies
-        .iter()
-        .find(|contract| contract.domain == domain)
-        .unwrap_or_else(|| panic!("Lean vocabulary contract {domain:?} was not emitted"))
-}
-
-pub fn lean_state_machine_contract(domain: &str) -> &'static LeanStateMachineContract {
-    lean_contract_snapshot()
-        .state_machines
-        .iter()
-        .find(|contract| contract.domain == domain)
-        .unwrap_or_else(|| panic!("Lean state-machine contract {domain:?} was not emitted"))
-}
-
-pub fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileCase {
-    lean_contract_snapshot()
-        .runtime_reconcile_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean runtime-reconcile case {name:?} was not emitted"))
-}
-
-pub fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
-    lean_contract_snapshot()
-        .frontend_client_shell_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean ClientShell case {name:?} was not emitted"))
-}
-
-pub fn lean_queue_deadline_case(name: &str) -> &'static LeanQueueDeadlineConformanceCase {
-    lean_contract_snapshot()
-        .queue_deadline_conformance_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean queue/deadline case {name:?} was not emitted"))
-}
-
 pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
     lean_contract_snapshot()
         .recovery_sweep_cases
@@ -206,30 +136,6 @@ pub fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCas
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean R6 backgrounding case {name:?} was not emitted"))
-}
-
-pub fn lean_composed_invariant_witness(
-    theorem_name: &str,
-) -> &'static LeanComposedInvariantWitness {
-    lean_contract_snapshot()
-        .composed_invariant_witnesses
-        .iter()
-        .find(|witness| witness.theorem_name == theorem_name)
-        .unwrap_or_else(|| {
-            panic!("Lean composed invariant witness {theorem_name:?} was not emitted")
-        })
-}
-
-pub fn lean_composed_invariant_witness_by_scenario(
-    scenario: &str,
-) -> &'static LeanComposedInvariantWitness {
-    lean_contract_snapshot()
-        .composed_invariant_witnesses
-        .iter()
-        .find(|witness| witness.scenario == scenario)
-        .unwrap_or_else(|| {
-            panic!("Lean composed invariant witness scenario {scenario:?} was not emitted")
-        })
 }
 
 pub fn lean_transcript_case(name: &str) -> &'static LeanTranscriptCase {
@@ -263,142 +169,6 @@ impl LeanQueueManagementState {
             terminal: self.terminal.iter().copied().map(&native).collect(),
         }
     }
-}
-
-pub fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
-    lean_vocabulary_contract(domain)
-        .values
-        .iter()
-        .map(String::as_str)
-        .collect()
-}
-
-pub fn assert_lean_contract_vocabulary_matches(spec: LeanContractVocabulary<'_>) {
-    let lean_values = lean_vocabulary_values(spec.domain);
-    let missing_from_lean = values_missing_from(spec.rust_values, &lean_values);
-    let extra_in_lean = values_missing_from(&lean_values, spec.rust_values);
-    let duplicate_rust_values = duplicate_values(spec.rust_values);
-    let duplicate_lean_values = duplicate_values(&lean_values);
-
-    assert!(
-        spec.rust_values == lean_values.as_slice()
-            && missing_from_lean.is_empty()
-            && extra_in_lean.is_empty()
-            && duplicate_rust_values.is_empty()
-            && duplicate_lean_values.is_empty(),
-        "Rust/Lean vocabulary contract mismatch\n  Lean contract domain: {}\n  Rust vocabulary source: {}\n  missing Lean values (present in Rust): {:?}\n  extra Lean values (absent from Rust): {:?}\n  duplicate Rust values: {:?}\n  duplicate Lean values: {:?}\n  Rust values: {:?}\n  Lean values: {:?}",
-        spec.domain,
-        spec.rust_source,
-        missing_from_lean,
-        extra_in_lean,
-        duplicate_rust_values,
-        duplicate_lean_values,
-        spec.rust_values,
-        lean_values
-    );
-}
-
-pub fn assert_lean_contract_vocabulary_set_matches(spec: LeanContractVocabulary<'_>) {
-    let lean_values = lean_vocabulary_values(spec.domain);
-    let missing_from_lean = values_missing_from(spec.rust_values, &lean_values);
-    let extra_in_lean = values_missing_from(&lean_values, spec.rust_values);
-    let duplicate_rust_values = duplicate_values(spec.rust_values);
-    let duplicate_lean_values = duplicate_values(&lean_values);
-
-    assert!(
-        missing_from_lean.is_empty()
-            && extra_in_lean.is_empty()
-            && duplicate_rust_values.is_empty()
-            && duplicate_lean_values.is_empty(),
-        "Rust/Lean vocabulary contract set mismatch\n  Lean contract domain: {}\n  Rust vocabulary source: {}\n  missing Lean values (present in Rust): {:?}\n  extra Lean values (absent from Rust): {:?}\n  duplicate Rust values: {:?}\n  duplicate Lean values: {:?}\n  Rust values: {:?}\n  Lean values: {:?}",
-        spec.domain,
-        spec.rust_source,
-        missing_from_lean,
-        extra_in_lean,
-        duplicate_rust_values,
-        duplicate_lean_values,
-        spec.rust_values,
-        lean_values
-    );
-}
-
-pub fn assert_lean_transition_is_legal(domain: &str, from: &str, to: &str) {
-    let machine = lean_state_machine_contract(domain);
-    assert!(
-        machine
-            .legal_transitions
-            .iter()
-            .any(|pair| pair.from == from && pair.to == to),
-        "Lean state-machine contract {domain:?} does not allow transition {from:?} -> {to:?}\n  legal transitions: {:?}",
-        machine.legal_transitions
-    );
-    assert!(
-        !machine
-            .illegal_transitions
-            .iter()
-            .any(|pair| pair.from == from && pair.to == to),
-        "Lean state-machine contract {domain:?} marks transition {from:?} -> {to:?} as both legal and illegal"
-    );
-}
-
-pub fn assert_lean_transition_is_illegal(domain: &str, from: &str, to: &str) {
-    let machine = lean_state_machine_contract(domain);
-    assert!(
-        machine
-            .illegal_transitions
-            .iter()
-            .any(|pair| pair.from == from && pair.to == to),
-        "Lean state-machine contract {domain:?} does not mark transition {from:?} -> {to:?} illegal\n  illegal transitions: {:?}",
-        machine.illegal_transitions
-    );
-    assert!(
-        !machine
-            .legal_transitions
-            .iter()
-            .any(|pair| pair.from == from && pair.to == to),
-        "Lean state-machine contract {domain:?} marks transition {from:?} -> {to:?} as both legal and illegal"
-    );
-}
-
-pub fn assert_state_machine_contract_is_complete(domain: &str) {
-    let machine = lean_state_machine_contract(domain);
-    let duplicate_states = duplicate_string_values(&machine.states);
-    let duplicate_actions = duplicate_string_values(&machine.actions);
-    let duplicate_legal_pairs = duplicate_transition_pairs(&machine.legal_transitions);
-    let duplicate_illegal_pairs = duplicate_transition_pairs(&machine.illegal_transitions);
-    let expected_pairs = machine.state_count * machine.state_count;
-    let actual_pairs = machine.legal_transitions.len() + machine.illegal_transitions.len();
-
-    assert!(
-        machine.state_count == machine.states.len()
-            && duplicate_states.is_empty()
-            && duplicate_actions.is_empty()
-            && duplicate_legal_pairs.is_empty()
-            && duplicate_illegal_pairs.is_empty()
-            && actual_pairs == expected_pairs
-            && machine
-                .legal_transitions
-                .iter()
-                .all(|pair| !machine.illegal_transitions.contains(pair))
-            && machine.legal_transitions.iter().all(
-                |pair| machine.states.contains(&pair.from) && machine.states.contains(&pair.to)
-            )
-            && machine.illegal_transitions.iter().all(
-                |pair| machine.states.contains(&pair.from) && machine.states.contains(&pair.to)
-            ),
-        "Lean state-machine contract {domain:?} is incomplete or malformed\n  state_count: {}\n  states: {:?}\n  actions: {:?}\n  legal transitions: {:?}\n  illegal transitions: {:?}\n  duplicate states: {:?}\n  duplicate actions: {:?}\n  duplicate legal pairs: {:?}\n  duplicate illegal pairs: {:?}\n  expected pair partition size: {}\n  actual pair partition size: {}",
-        machine.state_count,
-        machine.states,
-        machine.actions,
-        machine.legal_transitions,
-        machine.illegal_transitions,
-        duplicate_states,
-        duplicate_actions,
-        duplicate_legal_pairs,
-        duplicate_illegal_pairs,
-        expected_pairs,
-        actual_pairs
-    );
 }
 
 pub fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>) {
@@ -666,29 +436,6 @@ fn duplicate_values<'a>(values: &[&'a str]) -> Vec<&'a str> {
             }
         } else {
             seen.push(*value);
-        }
-    }
-    duplicates
-}
-
-fn duplicate_string_values(values: &[String]) -> Vec<String> {
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
-    duplicate_values(&refs)
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-}
-
-fn duplicate_transition_pairs(values: &[LeanTransitionPair]) -> Vec<LeanTransitionPair> {
-    let mut seen = Vec::new();
-    let mut duplicates = Vec::new();
-    for value in values {
-        if seen.contains(value) {
-            if !duplicates.contains(value) {
-                duplicates.push(value.clone());
-            }
-        } else {
-            seen.push(value.clone());
         }
     }
     duplicates

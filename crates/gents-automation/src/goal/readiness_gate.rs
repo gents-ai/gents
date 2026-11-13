@@ -254,6 +254,16 @@ pub trait GoalReconcileSettled: Send + Sync {
     async fn goal_reconcile_settled(&self) -> bool;
 }
 
+pub async fn live_goal_reconcile_settled<S>(status: Option<&S>) -> bool
+where
+    S: GoalReconcileSettled + ?Sized,
+{
+    match status {
+        Some(status) => status.goal_reconcile_settled().await,
+        None => false,
+    }
+}
+
 pub const GOAL_READINESS_WAIT_PREFIX: &str = "waiting for agent readiness: ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

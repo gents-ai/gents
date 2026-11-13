@@ -424,27 +424,17 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
             publication["expected_target_read"].as_bool().unwrap()
         );
     }
-    let goal_links = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .goal_link_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    for (collection, child) in [("Goal", &goals[0]), ("GoalCreationClaim", &claims[0])] {
-        let modeled_link = goal_links
-            .iter()
-            .find(|case| {
-                case.collection == collection
-                    && case.actor == "agent"
-                    && case.mode == "fresh"
-                    && case.commit
-            })
-            .unwrap();
+    for case in gents_lean_vocab::families::goal_links_agent_target::cases() {
+        let collection = case.input.collection.as_str();
+        let child = match collection {
+            "Goal" => &goals[0],
+            "GoalCreationClaim" => &claims[0],
+            other => panic!("unknown modeled collection {other}"),
+        };
         assert_eq!(child["session_doc_id"], sessions[0]["_docID"]);
         assert_eq!(child["agent_did"], target.did());
         assert_eq!(child["creator_did"], caller.agent_did);
-        assert_eq!(child["parent_linked"], modeled_link.initial.linked);
+        case.check(child["parent_linked"].as_bool().unwrap());
         let doc = child["_docID"].as_str().unwrap().to_owned();
         let owners = caller_access
             .transact_readonly("test.nested_goal_owner", |txn| {

@@ -1,4 +1,4 @@
-use super::contract_tests::resume_state_value;
+use super::contract_tests::paused_goal_state;
 use super::support::{request_rows, Fixture, PARENT, SESSION};
 use super::*;
 use gents_protocol::request_admission::{
@@ -32,15 +32,7 @@ async fn update_goal_root(access: &ConfigAccess, doc_id: &str, root: Option<&str
 
 #[tokio::test]
 async fn user_goal_continuation_claim_fences_current_physical_binding() {
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let before = resume_state_value(
-        &snapshot
-            .goal_operator_resume_cases
-            .iter()
-            .find(|case| case.name == "atomic_publication")
-            .unwrap()
-            .before,
-    );
+    let before = paused_goal_state();
 
     for scenario in [
         "valid",

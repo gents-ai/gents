@@ -175,21 +175,16 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
 #[tokio::test]
 async fn generated_projection_cases_use_native_owners_and_scopes() {
     use base64::Engine as _;
+    use gents_lean_vocab::families::file_inventory_contracts_source_projection_pages as source_projection;
     use gents_protocol::file_changes::{
         FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
     };
-    use serde_json::{json, Value};
-    let contracts: Value =
-        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
-            .await
-            .unwrap()
-            .unwrap();
-    let cases = contracts["file_inventory_source_projection_cases"]
-        .as_array()
-        .unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
+    use gents_protocol::file_inventory::FileInventoryRefusalReason;
+    use serde_json::json;
+    for case in gents_lean_vocab::families::file_inventory_contracts_source_projection_pages::cases::<
+        FileInventoryRefusalReason,
+    >() {
+        let name = case.input.name.as_str();
         let (fixture, mut request_owner) =
             published_admission_with_owner(PublishedAdmissionOptions {
                 name: format!("inventory-projection-{name}"),
@@ -208,8 +203,8 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             &fixture.node_did,
         )
         .await;
-        let model_tool = &case["source"]["tools"][0];
-        if model_tool["state"] == "completed" {
+        let model_tool = &case.input.source.tools[0];
+        if model_tool.state == "completed" {
             tool.complete("fixture terminal").await.unwrap();
         }
         let scope = FileImageScope {
@@ -266,9 +261,9 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
         };
         let mut seen_paths = BTreeSet::new();
         let mut paths = Vec::new();
-        for projection in case["source"]["projections"].as_array().unwrap() {
-            for modeled in projection["changes"].as_array().unwrap() {
-                let path = modeled["path"].as_str().unwrap().to_owned();
+        for projection in &case.input.source.projections {
+            for modeled in &projection.changes {
+                let path = modeled.path.clone();
                 if seen_paths.insert(path.clone()) {
                     paths.push(path);
                 }
@@ -293,11 +288,11 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             serde_json::to_value(&batch).unwrap(),
         )
         .unwrap();
-        for projection in case["source"]["projections"].as_array().unwrap() {
+        for projection in &case.input.source.projections {
             let observation_input = json!({ "tool_call_doc_id": tool_id, "request_doc_id": request_id,
                 "node_did": scope.node_did, "session_id": scope.session_id, "requester_did": scope.requester_did,
                 "file_changes": batch });
-            let observation = if projection["observation"].is_null() {
+            let observation = if projection.observation.is_none() {
                 None
             } else {
                 Some(tool.access().unwrap().transact_write("test.inventory.model_observation", |txn| {
@@ -311,29 +306,29 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             }).await.unwrap())
             };
             let mut changes = Vec::new();
-            for modeled in projection["changes"].as_array().unwrap() {
+            for modeled in &projection.changes {
                 let mut metadata = FileChangeMetadata::from(&change);
-                metadata.path = modeled["path"].as_str().unwrap().into();
+                metadata.path = modeled.path.clone();
                 changes.push(metadata);
             }
-            let actor = |value: &Value| match value.as_str().unwrap() {
+            let actor = |value: &str| match value {
                 "node-1" => scope.node_did.clone(),
                 "reader-1" => scope.requester_did.clone(),
                 "session-1" => scope.session_id.clone(),
                 other => other.to_owned(),
             };
-            let projected_request = if projection["request"] == model_tool["request"] {
+            let projected_request = if projection.request == model_tool.request {
                 request_id.clone()
             } else {
                 "different-physical-request".into()
             };
             let input = json!({ "tool_call_doc_id": tool_id, "observation_doc_id": observation,
-                "request_doc_id": projected_request, "node_did": actor(&projection["scope"]["node"]),
-                "session_id": actor(&projection["scope"]["session"]),
-                "requester_did": actor(&projection["scope"]["requester"]),
-                "verified_unchanged": projection["verified_unchanged"].as_bool().filter(|value| *value),
+                "request_doc_id": projected_request, "node_did": actor(&projection.scope.node),
+                "session_id": actor(&projection.scope.session),
+                "requester_did": actor(&projection.scope.requester),
+                "verified_unchanged": Some(projection.verified_unchanged).filter(|value| *value),
                 "changes": if changes.is_empty() { None } else { Some(changes) } });
-            let foreign = if projection["owner"] != model_tool["agent_did"] {
+            let foreign = if projection.owner != model_tool.agent_did {
                 let key_path = fixture.path.join("foreign-projection.key");
                 Some(
                     tokio::task::spawn_blocking(move || {
@@ -392,75 +387,45 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             }).await.unwrap();
         }
         let result = FileInventorySnapshot::load(&node, &admission).await;
-        let expected = &case["expected"];
-        match expected["kind"].as_str().unwrap() {
-            "rejected" => {
-                let error = result.expect_err("accepted invalid source projection");
-                assert_eq!(
-                    serde_json::to_value(refusal_reason(&error)).unwrap(),
-                    case["refusal"],
-                    "{name}"
-                );
-            }
-            "selected" => {
-                let actual = result.unwrap_or_else(|error| panic!("{name}: {error:#}"));
-                let facts = expected["snapshot"]["tools"].as_array().unwrap();
-                let pending = facts
-                    .iter()
-                    .filter(|fact| fact["capture"]["kind"] == "pending")
-                    .count();
-                let unknown = facts
-                    .iter()
-                    .filter(|fact| fact["capture"]["kind"] == "unknown")
-                    .count();
-                let entries = facts
-                    .iter()
-                    .filter_map(|fact| fact["capture"]["projection"]["changes"].as_array())
-                    .map(Vec::len)
-                    .sum::<usize>();
-                assert_eq!(
-                    actual.binding.coverage,
-                    FileInventoryCoverage {
-                        entries: entries as u64,
-                        pending: pending as u64,
-                        unknown: unknown as u64
-                    },
-                    "{name}"
-                );
+        match result {
+            Err(error) => case.check(source_projection::SourceProjectionOutput {
+                refusal: Some(refusal_reason(&error)),
+                coverage: None,
+                pages: Vec::new(),
+            }),
+            Ok(actual) => {
+                let mut pages = Vec::new();
                 let mut cursor = None;
                 let mut issued = None;
-                for expected_page in case["pages"].as_array().unwrap() {
+                loop {
                     let page = actual.page(cursor.as_ref()).unwrap();
                     assert!(page.well_formed(), "{name}");
-                    assert_eq!(
-                        page.offset,
-                        expected_page["offset"].as_u64().unwrap(),
-                        "{name}"
-                    );
-                    let expected_entries = expected_page["entries"].as_array().unwrap();
-                    assert_eq!(page.entries.len(), expected_entries.len(), "{name}");
-                    assert_eq!(
-                        page.entries
+                    pages.push(source_projection::PageObservation {
+                        offset: page.offset,
+                        paths: page
+                            .entries
                             .iter()
-                            .map(|entry| entry.change.path.as_str())
-                            .collect::<Vec<_>>(),
-                        expected_entries
-                            .iter()
-                            .map(|entry| entry["change"]["path"].as_str().unwrap())
-                            .collect::<Vec<_>>(),
-                        "{name}"
-                    );
-                    assert_eq!(
-                        page.next.as_ref().map(|next| next.offset),
-                        expected_page["next"]["offset"].as_u64(),
-                        "{name}"
-                    );
+                            .map(|entry| entry.change.path.clone())
+                            .collect(),
+                        next: page.next.as_ref().map(|next| next.offset),
+                    });
                     if issued.is_none() {
                         issued = page.next.clone();
                     }
                     cursor = page.next;
+                    if cursor.is_none() {
+                        break;
+                    }
                 }
-                assert!(cursor.is_none(), "{name}");
+                case.check(source_projection::SourceProjectionOutput {
+                    refusal: None,
+                    coverage: Some(source_projection::Coverage {
+                        entries: actual.binding.coverage.entries,
+                        pending: actual.binding.coverage.pending,
+                        unknown: actual.binding.coverage.unknown,
+                    }),
+                    pages,
+                });
                 for offset in [0, 1, actual.binding.coverage.entries] {
                     let cursor = FileInventoryCursor {
                         binding: actual.binding.clone(),
@@ -488,7 +453,6 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                     );
                 }
             }
-            other => panic!("unhandled source projection outcome {other}"),
         }
         node.shutdown().await.expect("node shutdown");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
@@ -556,19 +520,12 @@ async fn retain_fork_fixture_capture(
 
 #[tokio::test]
 async fn generated_fork_inventory_retains_only_selected_native_origins() {
+    use gents_lean_vocab::families::file_inventory_contracts_fork_snapshot as fork;
     use gents_session::session::{fork_on, ForkBoundary, ForkParams};
     use gents_toolcalls::call::lifecycle::admission_fixture::{
         pending_client_fixture_request, publish_accepted_on_claimed_request,
     };
-    use serde_json::Value;
-    let contracts: Value =
-        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
-            .await
-            .unwrap()
-            .unwrap();
-    let cases = contracts["file_inventory_fork_cases"].as_array().unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
+    for case in gents_lean_vocab::families::file_inventory_contracts_fork_snapshot::cases() {
         let (fixture, mut request_owner) =
             published_admission_with_owner(PublishedAdmissionOptions {
                 name: "inventory-native-fork".into(),
@@ -733,33 +690,26 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             )
             .await
             .unwrap();
-        let snapshot = FileInventorySnapshot::load(&node, &child_admission)
-            .await
-            .unwrap();
-        let expected = &case["expected"];
-        assert_eq!(expected["kind"], "selected");
-        let selected = expected["snapshot"]["tools"].as_array().unwrap();
-        let expected_entries = selected
-            .iter()
-            .map(|fact| {
-                fact["capture"]["projection"]["changes"]
-                    .as_array()
-                    .unwrap()
-                    .len()
-            })
-            .sum::<usize>();
-        assert_eq!(snapshot.entries.len(), expected_entries);
+        let result = FileInventorySnapshot::load(&node, &child_admission).await;
+        case.check(fork::ForkOutput {
+            selected: result.is_ok(),
+            entries: result
+                .as_ref()
+                .map_or(0, |snapshot| snapshot.entries.len() as u64),
+        });
+        let snapshot = result.unwrap();
         assert!(!snapshot.entries.is_empty());
-        let source_projections = case["source"]["projections"]
-            .as_array()
-            .unwrap()
+        let source_projections = case
+            .input
+            .source
+            .projections
             .iter()
             .filter(|projection| {
-                case["source"]["tools"]
-                    .as_array()
-                    .unwrap()
+                case.input
+                    .source
+                    .tools
                     .iter()
-                    .any(|tool| tool["scope"]["session"] == projection["scope"]["session"])
+                    .any(|tool| tool.scope.session == projection.scope.session)
             })
             .count();
         for entry in &snapshot.entries {

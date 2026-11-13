@@ -14,11 +14,6 @@ use super::{
     terminal_failure_reason_observer, AdmissionCallContext, AdmissionRegistry,
     BackendAdmissionConfig, CallKind,
 };
-use gents_lean_vocab::{
-    assert_lean_contract_vocabulary_set_matches, assert_lean_transition_is_illegal,
-    assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
-    lean_vocabulary_values, LeanContractVocabulary,
-};
 use gents_protocol::row::AgentRequest;
 use gents_store::identity::NodeIdentity as _;
 
@@ -327,10 +322,6 @@ const ADMISSION_CALL_STATE_SOURCES: &[&str] = &[
     include_str!("registry.rs"),
 ];
 
-fn lean_inference_call_states() -> Vec<&'static str> {
-    lean_vocabulary_values("InferenceCallState")
-}
-
 fn string_literals_after(source: &'static str, needle: &str) -> Vec<&'static str> {
     let mut rest = source;
     let mut values = Vec::new();
@@ -377,7 +368,7 @@ fn rust_literal_call_states_from_admission_sources() -> Vec<&'static str> {
 }
 
 fn assert_inference_call_rows_use_lean_vocabulary(rows: &[Value]) {
-    let lean_states = lean_inference_call_states();
+    let states = rust_literal_call_states_from_admission_sources();
     for row in rows {
         let request_doc_id = row
             .get("request_doc_id")
@@ -392,8 +383,8 @@ fn assert_inference_call_rows_use_lean_vocabulary(rows: &[Value]) {
             .and_then(Value::as_str)
             .expect("InferenceCall row must include call_state");
         assert!(
-            lean_states.contains(&state),
-            "InferenceCall.call_state={state:?} is not in the Lean InferenceCallState vocabulary"
+            states.contains(&state),
+            "InferenceCall.call_state={state:?} is not in the admission InferenceCallState vocabulary"
         );
     }
 }
@@ -512,11 +503,6 @@ async fn wait_for_request_call_state(
 #[test]
 fn rust_inference_call_state_vocabulary_matches_lean_model() {
     let rust_states = rust_literal_call_states_from_admission_sources();
-    assert_lean_contract_vocabulary_set_matches(LeanContractVocabulary {
-        domain: "InferenceCallState",
-        rust_source: "admission source call_state literals",
-        rust_values: &rust_states,
-    });
     let owned: Vec<String> = rust_states
         .iter()
         .map(|state| (*state).to_owned())
@@ -526,24 +512,11 @@ fn rust_inference_call_state_vocabulary_matches_lean_model() {
 
 #[test]
 fn rust_inference_call_terminal_reason_vocabulary_matches_lean_model() {
-    let rust_reasons = rust_literal_terminal_reasons_from_admission_sources();
-    assert_lean_contract_vocabulary_set_matches(LeanContractVocabulary {
-        domain: "InferenceCallTerminalReason",
-        rust_source: "admission system terminal reason literals",
-        rust_values: &rust_reasons,
-    });
-}
-
-#[test]
-fn rust_inference_call_transition_table_matches_lean_contract() {
-    assert_state_machine_contract_is_complete("InferenceCall");
-    assert_lean_transition_is_legal("InferenceCall", "queued", "running");
-    assert_lean_transition_is_legal("InferenceCall", "queued", "cancelled");
-    assert_lean_transition_is_legal("InferenceCall", "running", "completed");
-    assert_lean_transition_is_legal("InferenceCall", "running", "failed");
-    assert_lean_transition_is_legal("InferenceCall", "running", "cancelled");
-    assert_lean_transition_is_illegal("InferenceCall", "queued", "completed");
-    assert_lean_transition_is_illegal("InferenceCall", "completed", "running");
+    let rust_reasons: Vec<String> = rust_literal_terminal_reasons_from_admission_sources()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    gents_lean_vocab::families::inference_call_terminal_reason_vocabulary::replay(&rust_reasons);
 }
 
 fn fleet_observation(
@@ -1686,7 +1659,6 @@ async fn park_with_assigned_permit(
     request_id: &'static str,
     mut holder: super::permit::AdmissionPermit,
 ) -> ParkedCall {
-    let _ = lean_inference_call_states();
     let parked_registry = registry.clone();
     let mut parked: ParkedCall =
         Box::pin(async move { acquire_on(&parked_registry, request_id, backend).await });

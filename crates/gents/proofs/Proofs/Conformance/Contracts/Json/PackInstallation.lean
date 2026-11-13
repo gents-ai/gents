@@ -250,12 +250,21 @@ def wireTarget : Conformance.Family WireTargetInput Bool where
     [false, true].map fun remove => { «local» := localTarget, preview, remove }
   model := fun i => Configuration.wireTargetAllowed i.«local» i.preview i.remove
 
-def operatorWireCasesJson : String := jsonArray (
-  [false, true].flatMap fun operator => [false, true].flatMap fun ready =>
-    [false, true].map fun home =>
-      "{\"operator\":" ++ toString operator ++ ",\"ready\":" ++ toString ready ++
-      ",\"home\":" ++ toString home ++ ",\"allowed\":" ++
-      toString (Configuration.operatorWireAvailable operator ready home) ++ "}")
+structure OperatorWireInput where
+  operator : Bool
+  ready : Bool
+  home : Bool
+  deriving Lean.ToJson
+
+structure OperatorWireOutput where
+  allowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def operatorWire : Conformance.Family OperatorWireInput OperatorWireOutput where
+  inputs := [false, true].flatMap fun operator => [false, true].flatMap fun ready =>
+    [false, true].map fun home => { operator, ready, home }
+  model := fun i => { allowed := Configuration.operatorWireAvailable i.operator i.ready i.home }
 
 structure ReferenceInput where
   witness : String

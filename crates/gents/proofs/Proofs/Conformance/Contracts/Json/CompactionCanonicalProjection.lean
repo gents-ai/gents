@@ -1,41 +1,66 @@
-import Proofs.Conformance.Contracts.Json.ClientRuntime
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.CanonicalOutputWire
 import Proofs.Conformance.ContractCases.CompactionCanonicalProjection
 
-namespace Conformance.Contracts
+namespace Conformance.CompactionCanonicalProjection
 
-open Conformance.ContractCases.CompactionCanonicalProjection
+open Lean Conformance.ContractCases.CompactionCanonicalProjection
 
-private def natArray (values : List Nat) : String := jsonArray (values.map toString)
+structure CanonicalInput where
+  name : String
+  session : Nat
+  request : Nat
+  segments : Json
+  messages : Json
+  source : List Nat
+  contextWindow : Nat
+  thresholdBasisPoints : Nat
+  configuredMaxOutputTokens : Nat
+  canFit : Bool
+  prefixLength : Nat
+  checkpoint : Nat
+  initialEstimateTokens : Nat
+  rebuiltEstimateTokens : Nat
+  deriving ToJson
 
-private def nativeArray (values : List CanonicalOutput.ReconstructedMessage) : String :=
-  jsonArray (values.map reconstructedMessageJson)
-private def optionalNativeArray : Option (List CanonicalOutput.ReconstructedMessage) → String
-  | none => "null" | some values => nativeArray values
+structure CanonicalObservation where
+  initialNative : Option Json
+  rebuiltCheckpoint : Option Nat
+  rebuiltNative : Option Json
+  result : String
+  outputTokens : Option Nat
+  deriving ToJson
 
-def compactionCanonicalProjectionCaseJson (w : CanonicalCase) : String :=
-  let result := canonicalRun w
-  let rebuilt := rebuiltNative result
-  "{\"name\":" ++ jsonString w.name ++ ",\"input\":{" ++
-    "\"session\":" ++ toString w.world.sessionId ++ ",\"request\":" ++ toString w.world.requestId ++
-    ",\"segments\":" ++ jsonArray (w.world.segments.map canonicalSegmentJson) ++
-    ",\"messages\":" ++ jsonArray (w.world.messages.map canonicalMessageJson) ++
-    ",\"source\":" ++ natArray w.source ++
-    ",\"context_window\":" ++ toString w.contextWindow ++
-    ",\"threshold_basis_points\":" ++ toString w.thresholdBasisPoints ++
-    ",\"configured_max_output_tokens\":" ++ toString w.configuredMaxOutputTokens ++
-    ",\"can_fit\":" ++ (if w.canFit then "true" else "false") ++
-    ",\"prefix_length\":" ++ toString w.prefixLength ++
-    ",\"checkpoint\":" ++ toString w.checkpoint ++
-    ",\"initial_estimate_tokens\":" ++ toString w.initialEstimateTokens ++
-    ",\"rebuilt_estimate_tokens\":" ++ toString w.rebuiltEstimateTokens ++ "}," ++
-    "\"expected\":{\"initial_native\":" ++ optionalNativeArray (canonicalInputNative w) ++
-    ",\"rebuilt_checkpoint\":" ++ jsonOptionalNat (rebuilt.map (·.1)) ++
-    ",\"rebuilt_native\":" ++ optionalNativeArray (rebuilt.map (·.2)) ++
-    ",\"result\":" ++ jsonString (canonicalResultName result) ++
-    ",\"output_tokens\":" ++ jsonOptionalNat (canonicalOutputTokens result) ++ "}}"
+def caseNamed (name : String) : Option CanonicalCase :=
+  canonicalCases.find? (·.name == name)
 
-def compactionCanonicalProjectionCasesJson : String :=
-  jsonArray (canonicalCases.map compactionCanonicalProjectionCaseJson)
+theorem canonical_case_names_are_unique :
+    (canonicalCases.map (·.name)).eraseDups.length = canonicalCases.length := by
+  native_decide
 
-end Conformance.Contracts
+/-- model-production-gap: production composes canonical reconstruction,
+provider projection, token estimation and reduction inside gents-loop request
+assembly over the serialized provider request; no production function takes a
+canonical world, selected identities and supplied estimates and returns the
+native messages handed to initial projection and checkpoint rebuilding. -/
+@[conformance_family]
+def unreached : Family CanonicalInput (Option CanonicalObservation) where
+  inputs := canonicalCases.map fun w =>
+    { name := w.name, session := w.world.sessionId, request := w.world.requestId
+      segments := CanonicalOutputWire.segments w.world.segments
+      messages := CanonicalOutputWire.messages w.world.messages
+      source := w.source, contextWindow := w.contextWindow
+      thresholdBasisPoints := w.thresholdBasisPoints
+      configuredMaxOutputTokens := w.configuredMaxOutputTokens, canFit := w.canFit
+      prefixLength := w.prefixLength, checkpoint := w.checkpoint
+      initialEstimateTokens := w.initialEstimateTokens
+      rebuiltEstimateTokens := w.rebuiltEstimateTokens }
+  model := fun i => (caseNamed i.name).map fun w =>
+    let result := canonicalRun w
+    let rebuilt := rebuiltNative result
+    { initialNative := (canonicalInputNative w).map CanonicalOutputWire.reconstructedList
+      rebuiltCheckpoint := rebuilt.map (·.1)
+      rebuiltNative := rebuilt.map fun value => CanonicalOutputWire.reconstructedList value.2
+      result := canonicalResultName result
+      outputTokens := canonicalOutputTokens result }
+
+end Conformance.CompactionCanonicalProjection

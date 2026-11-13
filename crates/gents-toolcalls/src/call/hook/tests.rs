@@ -208,9 +208,6 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
     );
 }
 
-use gents_lean_vocab::{
-    lean_persistence_failure_policy_cases, lean_storage_observation_runtime_cases,
-};
 use gents_store::test_support::first_content;
 
 fn hook_counters_for_test() -> HookCounters {
@@ -283,72 +280,34 @@ async fn active_request_binding_rejects_a_half_bound_pair() {
     node.shutdown().await.expect("shut down test node");
 }
 
-fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
-    match policy {
-        "failOpen" => FailurePolicy::FailOpen,
-        "failClosed" => FailurePolicy::FailClosed,
-        other => panic!("unknown Lean persistence failure policy {other:?}"),
+fn recorded(count: u64) -> bool {
+    match count {
+        0 => false,
+        1 => true,
+        other => panic!("one persistence outcome recorded {other} times"),
     }
 }
 
 #[test]
-fn generated_persistence_failure_policy_cases_match_hook_decisions() {
-    let cases = lean_persistence_failure_policy_cases();
-    assert_eq!(cases.len(), 2);
-
-    for case in cases {
+fn hook_persistence_failure_decisions_follow_the_lean_model() {
+    gents_lean_vocab::families::hook_persistence_failure::replay::<FailurePolicy>(|input| {
         let counters = hook_counters_for_test();
-        let error = anyhow::anyhow!("generated persistence failure for {}", case.name);
-        let decision = decide_persistence_outcome(
-            failure_policy_from_contract(&case.policy),
-            &counters,
-            &case.name,
-            &error,
-        );
-        let actual_decision = match decision {
-            PolicyDecision::Continue => "continue",
-            PolicyDecision::Terminate(_) => "terminate",
-        };
-
-        assert_eq!(case.action, "writeFail", "{}", case.name);
-        assert_eq!(case.pre_persistence, "committing", "{}", case.name);
-        assert_eq!(actual_decision, case.hook_decision, "{}", case.name);
-        assert_eq!(
-            counters.failures.load(Ordering::Relaxed),
-            u64::from(case.records_failure),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            counters.successes.load(Ordering::Relaxed),
-            u64::from(case.records_success),
-            "{}",
-            case.name
-        );
-        assert!(
-            !case.external_durability_claimed,
-            "{} must not claim DefraDB durability",
-            case.name
-        );
-
-        match case.policy.as_str() {
-            "failClosed" => {
-                assert_eq!(case.post_persistence, "uncommitted");
-                assert_eq!(case.post_storage_observation, "mutationFailed");
+        let error = anyhow::anyhow!("generated persistence failure for {}", input.name);
+        let decision = decide_persistence_outcome(input.policy, &counters, &input.name, &error);
+        gents_lean_vocab::families::hook_persistence_failure::FailureOutput {
+            hook_decision: match decision {
+                PolicyDecision::Continue => "continue",
+                PolicyDecision::Terminate(_) => "terminate",
             }
-            "failOpen" => {
-                assert_eq!(case.post_persistence, "lost");
-                assert_eq!(case.post_storage_observation, "lostAcknowledged");
-            }
-            other => panic!("unknown Lean persistence failure policy {other:?}"),
+            .to_string(),
+            records_failure: recorded(counters.failures.load(Ordering::Relaxed)),
+            records_success: recorded(counters.successes.load(Ordering::Relaxed)),
         }
-    }
+    });
 }
 
 #[tokio::test]
-async fn generated_storage_observation_cases_match_hook_runtime_classification() {
-    let cases = lean_storage_observation_runtime_cases();
-    assert_eq!(cases.len(), 8);
+async fn hook_persistence_mutation_results_follow_the_lean_model() {
     let node_db = gents_inference::test_support::test_db(
         "generated-storage-observation-cases-matc",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -356,51 +315,27 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
     .await;
     let node = node_db.node.clone();
 
-    for case in cases {
-        if case.mutation_result == "notApplicable" {
-            assert_eq!(case.hook_result, "notApplicable", "{}", case.name);
-            assert!(!case.records_failure, "{}", case.name);
-            assert!(!case.records_success, "{}", case.name);
-        } else {
-            let hook = DefraSessionHook::with_identity(
-                node.clone(),
-                "did:test:test",
-                failure_policy_from_contract(&case.policy),
-            );
-            let result = match case.mutation_result.as_str() {
-                "success" => Ok(()),
-                "failure" => Err(anyhow::anyhow!(
-                    "generated storage-observation failure for {}",
-                    case.name
-                )),
-                other => panic!("unknown Lean mutation result {other:?}"),
-            };
-            let actual_result = hook.apply_persistence_policy(result, &case.name);
-            let stats = hook.stats();
-
-            assert_eq!(
-                actual_result.is_ok(),
-                case.hook_result == "ok",
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                stats.persistence_failures,
-                u64::from(case.records_failure),
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                stats.persistence_successes,
-                u64::from(case.records_success),
-                "{}",
-                case.name
-            );
-        }
-        assert!(
-            !case.external_visibility_claimed,
-            "{} must not claim storage-engine visibility",
-            case.name
+    for case in
+        gents_lean_vocab::families::hook_persistence_mutation::cases::<FailurePolicy, String>()
+    {
+        let hook =
+            DefraSessionHook::with_identity(node.clone(), "did:test:test", case.input.policy);
+        let result = match case.input.mutation_result.as_str() {
+            "success" => Ok(()),
+            "failure" => Err(anyhow::anyhow!(
+                "generated storage-observation failure for {}",
+                case.input.name
+            )),
+            other => panic!("unknown Lean mutation result {other:?}"),
+        };
+        let actual_result = hook.apply_persistence_policy(result, &case.input.name);
+        let stats = hook.stats();
+        case.check(
+            gents_lean_vocab::families::hook_persistence_mutation::MutationOutput {
+                hook_result: if actual_result.is_ok() { "ok" } else { "err" }.to_string(),
+                records_failure: recorded(stats.persistence_failures),
+                records_success: recorded(stats.persistence_successes),
+            },
         );
     }
 }
@@ -1129,10 +1064,11 @@ fn generated_interrupt_dispositions_follow_the_lean_model() {
     gents_lean_vocab::families::contracts_interrupt_disposition::replay::<String, String, String>(
         |case| {
             let state = ToolCallState::from_persisted(&case.state).expect("modeled state");
-            let await_mode =
-                AwaitMode::from_persisted(&case.await_mode).expect("modeled mode");
+            let await_mode = AwaitMode::from_persisted(&case.await_mode).expect("modeled mode");
             gents_lean_vocab::families::contracts_interrupt_disposition::Output {
-                disposition: InterruptDisposition::of(state, await_mode).as_str().to_owned(),
+                disposition: InterruptDisposition::of(state, await_mode)
+                    .as_str()
+                    .to_owned(),
             }
         },
     );
@@ -1148,13 +1084,10 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     .await;
     let node = node_db.node.clone();
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    for case in gents_lean_vocab::families::contracts_interrupt_in_flight::cases::<
-        String,
-        String,
-        String,
-    >() {
-        let await_mode =
-            AwaitMode::from_persisted(&case.input.await_mode).expect("modeled mode");
+    for case in
+        gents_lean_vocab::families::contracts_interrupt_in_flight::cases::<String, String, String>()
+    {
+        let await_mode = AwaitMode::from_persisted(&case.input.await_mode).expect("modeled mode");
         let name = format!("interrupt_{}_{}", case.input.state, case.input.await_mode);
         let hook = signed_hook(&node, FailurePolicy::default()).await;
         hook.on_completion_call(&user_text_message(&name), &[])
