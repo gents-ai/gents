@@ -339,9 +339,6 @@ structure NativeFilesystemBoundaryCase where
   innerPollBlocks : Bool
   requestDeadlineMs : Nat
   blockerMs : Nat
-  expectedTerminal : String
-  expectedFailureClass : Option String
-  queueAdvancesBeforeBlockerReturns : Bool
   deriving Repr
 
 structure ManagedExecToolBoundaryCase where

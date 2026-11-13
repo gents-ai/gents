@@ -3,6 +3,7 @@ import Proofs.Conformance.Family
 import Proofs.Conformance.Functions.Tools
 import Proofs.Conformance.ContractCases
 import Proofs.Session.ToolExecution
+import Proofs.Session.ToolExecution.NativeFilesystemBoundary
 import Proofs.Tools.MCPHealth.Executable
 import Proofs.Runtime.BackendHealth.Executable
 import Proofs.Conformance.Functions.Runtime
@@ -11,22 +12,36 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-def nativeFilesystemBoundaryCaseJson
-    (witness : NativeFilesystemBoundaryCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"tool_name\":" ++ jsonString witness.toolName ++ ","
-    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
-    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
-    ++ "\"inner_poll_blocks\":" ++ boolString witness.innerPollBlocks ++ ","
-    ++ "\"request_deadline_ms\":" ++ toString witness.requestDeadlineMs ++ ","
-    ++ "\"blocker_ms\":" ++ toString witness.blockerMs ++ ","
-    ++ "\"expected_terminal\":" ++ jsonString witness.expectedTerminal ++ ","
-    ++ "\"expected_failure_class\":"
-      ++ jsonOptionalString witness.expectedFailureClass ++ ","
-    ++ "\"queue_advances_before_blocker_returns\":"
-      ++ boolString witness.queueAdvancesBeforeBlockerReturns
-    ++ "}"
+structure NativeFilesystemBoundaryInput where
+  name : String
+  toolName : String
+  workClass : String
+  boundary : String
+  innerPollBlocks : Bool
+  requestDeadlineMs : Nat
+  blockerMs : Nat
+  deriving Lean.ToJson
+
+structure NativeFilesystemBoundaryOutput where
+  terminal : String
+  queueAdvancesBeforeBlockerReturns : Bool
+  deriving Lean.ToJson
+
+/-- Each native filesystem tool driven past its request deadline while one
+poll in its runner is blocked. -/
+@[conformance_family]
+def nativeFilesystemBoundary :
+    Family NativeFilesystemBoundaryInput NativeFilesystemBoundaryOutput where
+  inputs := nativeFilesystemBoundaryCases.map fun c =>
+    { name := c.name, toolName := c.toolName, workClass := c.workClass, boundary := c.boundary
+    , innerPollBlocks := c.innerPollBlocks, requestDeadlineMs := c.requestDeadlineMs
+    , blockerMs := c.blockerMs }
+  model := fun i =>
+    { terminal := (ToolExecution.NativeFilesystemBoundary.terminal i.innerPollBlocks
+        i.requestDeadlineMs i.blockerMs).toDefraDB
+    , queueAdvancesBeforeBlockerReturns :=
+        ToolExecution.NativeFilesystemBoundary.queueAdvancesBeforeBlockerReturns
+          i.innerPollBlocks i.requestDeadlineMs i.blockerMs }
 
 def managedExecToolBoundaryCaseJson
     (witness : ManagedExecToolBoundaryCase) : String :=

@@ -1318,10 +1318,9 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_backend_health_transition")
       "backend-health" [Surface.operatorCli]
-  , tagged (followUpCoverage
-      "native_filesystem_boundary_cases"
-      "NativeFilesystemBoundaryCases"
-      "Replay generated glob/grep/list_files cases through the existing managed filesystem boundary. toolset::tests::native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue preserves real GlobTool preemption/queue observations; grep/list_files routing is not established by the removed fixture-only test.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_native_filesystem_boundary")
       "tool-call" [Surface.agentFacing]
   , tagged (followUpCoverage
       "managed_exec_liveness_cases"

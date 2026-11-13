@@ -490,9 +490,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"storage_observation_runtime_cases\":"
       ++ jsonArray
         (storageObservationRuntimeCases.map storageObservationRuntimeCaseJson) ++ ","
-    ++ "\"native_filesystem_boundary_cases\":"
-      ++ jsonArray
-        (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
     ++ "\"managed_exec_tool_boundary_cases\":"
       ++ jsonArray
         (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","

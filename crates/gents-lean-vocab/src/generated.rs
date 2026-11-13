@@ -73,10 +73,6 @@ pub fn lean_managed_exec_tool_boundary_cases() -> &'static [LeanManagedExecToolB
     &lean_contract_snapshot().managed_exec_tool_boundary_cases
 }
 
-pub fn lean_native_filesystem_boundary_cases() -> &'static [LeanNativeFilesystemBoundaryCase] {
-    &lean_contract_snapshot().native_filesystem_boundary_cases
-}
-
 pub fn lean_persistence_failure_policy_cases() -> &'static [LeanPersistenceFailurePolicyCase] {
     &lean_contract_snapshot().persistence_failure_policy_cases
 }
@@ -1078,7 +1074,6 @@ pub struct LeanContractSnapshot {
     pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
     pub storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
-    pub native_filesystem_boundary_cases: Vec<LeanNativeFilesystemBoundaryCase>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
     pub managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
@@ -2741,20 +2736,6 @@ pub struct LeanNativeCompletionCaseObservationsItem {
     pub retry_started: bool,
     pub rollback_returned: bool,
     pub caller_abandonment_observed: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanNativeFilesystemBoundaryCase {
-    pub name: String,
-    pub tool_name: String,
-    pub work_class: String,
-    pub boundary: String,
-    pub inner_poll_blocks: bool,
-    pub request_deadline_ms: usize,
-    pub blocker_ms: usize,
-    pub expected_terminal: String,
-    pub expected_failure_class: Option<String>,
-    pub queue_advances_before_blocker_returns: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
