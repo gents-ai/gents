@@ -912,4 +912,268 @@ theorem capture_version_strictly_selects_the_storage_format :
       inlineDecode 3 .bareJson = .refused := by
   decide
 
+/-- The stored state of the block document one manifest entry names. A
+`wrongPayload` block holds bytes that do not hash to the entry's content key,
+while its field commit still matches the entry; an `absent` block has no
+document at the named id. -/
+inductive BlockState where
+  | healthy
+  | wrongPayload
+  | absent
+  deriving DecidableEq, Repr
+
+/-- The outcome of decoding one turn, as the reader reports it. -/
+inductive TurnOutcome where
+  | verbatim
+  | altered
+  | contentKeyMismatch
+  | verificationFailure
+  | storeFailure
+  deriving DecidableEq, Repr
+
+/-- A turn names one entry whose block is in `state`; every other entry is
+healthy. A block whose payload misses its content key fails the turn while the
+manifest is read, before anything is cached. An absent block fails the turn as
+unresolvable. -/
+def turnOutcome : BlockState → TurnOutcome
+  | .healthy => .verbatim
+  | .wrongPayload => .contentKeyMismatch
+  | .absent => .verificationFailure
+
+/-- Three turns resolved in order on one shared cache. Each turn's outcome is
+decided by its own manifest, so no earlier turn changes what a later one
+decodes to. -/
+def sequenceOutcomes (first second third : BlockState) :
+    TurnOutcome × TurnOutcome × TurnOutcome :=
+  (turnOutcome first, turnOutcome second, turnOutcome third)
+
+theorem a_misreferenced_block_entry_drops_only_its_own_turn :
+    sequenceOutcomes .wrongPayload .healthy .absent =
+      (.contentKeyMismatch, .verbatim, .verificationFailure) := by
+  rfl
+
+theorem content_key_mismatch_fails_closed (first third : BlockState) :
+    (sequenceOutcomes first .wrongPayload third).2.1 = .contentKeyMismatch := by
+  rfl
+
+theorem neighbor_outcome_ignores_earlier_turns (first third : BlockState) :
+    (sequenceOutcomes first .healthy third).2.1 = .verbatim := by
+  rfl
+
+/-! ## The capturing transport -/
+
+/-- The completion loop inside a request that armed a capture. -/
+inductive ScopeKind where
+  | inference
+  | compaction
+  | compactionFallback
+  | title
+  | oneshot
+  | accessReview
+  deriving DecidableEq, Repr
+
+/-- Compaction and its strict-JSON fallback send through a provider client built
+separately from the request's own client. -/
+def ScopeKind.onCompactionClient : ScopeKind → Bool
+  | .compaction | .compactionFallback => true
+  | _ => false
+
+/-- The provider family a capture's provenance names: the family of the client
+that built the request, or none when that client recorded none. -/
+inductive RecordedFamily where
+  | mainClient
+  | compactionClient
+  | absent
+  deriving DecidableEq, Repr
+
+/-- A compaction scope never inherits the main client's family: the family is
+provenance for the client that actually sent the request. -/
+def recordedFamily (kind : ScopeKind) (mainFamily compactionFamily : Bool) : RecordedFamily :=
+  if kind.onCompactionClient then
+    if compactionFamily then .compactionClient else .absent
+  else if mainFamily then .mainClient else .absent
+
+/-- The completion path a body is posted to. -/
+inductive Route where
+  | responses
+  | chatCompletions
+  deriving DecidableEq, Repr
+
+/-- The provider wire shape a capture records, derived from the route. -/
+inductive Source where
+  | openaiResponses
+  | openaiChatCompletions
+  deriving DecidableEq, Repr
+
+def Route.source : Route → Source
+  | .responses => .openaiResponses
+  | .chatCompletions => .openaiChatCompletions
+
+/-- The bytes the provider client hands the transport. -/
+inductive Body where
+  | json
+  | unparseable
+  deriving DecidableEq, Repr
+
+/-- Where a capture failed; the send is refused at any of them. -/
+inductive FailureStage where
+  | decodeBody
+  | buildFact
+  | persist
+  deriving DecidableEq, Repr
+
+structure RecordedCapture where
+  family : RecordedFamily
+  source : Source
+  deriving DecidableEq, Repr
+
+/-- One armed send through the capturing transport with a sink that accepts. -/
+structure SendObservation where
+  recorded : Option RecordedCapture
+  issued : Bool
+  refusedAt : Option FailureStage
+  deriving DecidableEq, Repr
+
+/-- A body the transport cannot decode is refused before any capture is built:
+nothing is recorded and the provider is never called, the `assembled` stage of
+the capture machine. A decodable body is recorded once, then issued. -/
+def transportSend (kind : ScopeKind) (route : Route) (body : Body)
+    (mainFamily compactionFamily : Bool) : SendObservation :=
+  match body with
+  | .unparseable => { recorded := none, issued := false, refusedAt := some .decodeBody }
+  | .json =>
+      { recorded := some { family := recordedFamily kind mainFamily compactionFamily
+                         , source := route.source }
+      , issued := true
+      , refusedAt := none }
+
+theorem compaction_capture_uses_its_separately_built_client_family
+    (kind : ScopeKind) (route : Route) (mainFamily : Bool)
+    (h : kind.onCompactionClient = true) :
+    ((transportSend kind route .json mainFamily true).recorded.map (·.family)) =
+      some .compactionClient := by
+  cases kind <;> simp_all [ScopeKind.onCompactionClient, transportSend, recordedFamily]
+
+theorem compaction_without_built_client_family_does_not_inherit_main_family
+    (kind : ScopeKind) (route : Route) (h : kind.onCompactionClient = true) :
+    ((transportSend kind route .json true false).recorded.map (·.family)) = some .absent := by
+  cases kind <;> simp_all [ScopeKind.onCompactionClient, transportSend, recordedFamily]
+
+theorem an_unparseable_body_fails_closed_too (kind : ScopeKind) (route : Route)
+    (mainFamily compactionFamily : Bool) :
+    transportSend kind route .unparseable mainFamily compactionFamily =
+      { recorded := none, issued := false, refusedAt := some .decodeBody } := rfl
+
+/-! ## The durable sink -/
+
+/-- What a capture key already names when a request is delivered to the
+durable sink. The transport route is part of the canonical capture fact, so the
+same body sent to another route is another request. -/
+inductive SinkPrior where
+  | unbound
+  | sameRequest
+  | otherRoute
+  | otherBody
+  deriving DecidableEq, Repr
+
+def deliveredRequest : CanonicalRequest := ⟨0⟩
+
+def SinkPrior.binding : SinkPrior → Option CanonicalRequest
+  | .unbound => none
+  | .sameRequest => some deliveredRequest
+  | .otherRoute => some ⟨1⟩
+  | .otherBody => some ⟨2⟩
+
+/-- Why the sink refused a delivery. -/
+inductive SinkRefusal where
+  | integrityViolation
+  | missingBlock
+  deriving DecidableEq, Repr
+
+structure SinkDelivery where
+  refusal : Option SinkRefusal
+  bound : Bool
+  blocksWritten : Bool
+  redeliveryRefusal : Option SinkRefusal
+  boundAfterRedelivery : Bool
+  unrelatedDurable : Bool
+  deriving DecidableEq, Repr
+
+def SinkDelivery.refusalOf : CaptureOutcome → Option SinkRefusal
+  | .rejected => some .integrityViolation
+  | _ => none
+
+/-- Deliver `deliveredRequest` at `key`, then deliver it again through a newly
+opened sink, then capture an unrelated request at another key. A fresh binding
+references every block its request is built from; when one of those blocks was
+deleted out from under it the write fails closed and binds nothing, every time
+it is retried, while unrelated captures still bind. A refused write rolls back,
+so only a fresh binding writes blocks. -/
+def sinkDeliver (key : CaptureKey) (prior : SinkPrior) (blockDeleted : Bool) : SinkDelivery :=
+  let sc : Scenario := { key, request := deliveredRequest, priorBinding := prior.binding }
+  let blocked := blockDeleted && prior.binding.isNone
+  let post := if blocked then sc.store else sc.postStore
+  let redelivered := if blocked then post else (capture post key deliveredRequest).2
+  let unrelated := { key with turnIndex := key.turnIndex + 1 }
+  { refusal := if blocked then some .missingBlock else SinkDelivery.refusalOf sc.outcome
+  , bound := (post key).isSome
+  , blocksWritten := !blocked && sc.outcome == .fresh
+  , redeliveryRefusal :=
+      if blocked then some .missingBlock
+      else SinkDelivery.refusalOf (capture post key deliveredRequest).1
+  , boundAfterRedelivery := (redelivered key).isSome
+  , unrelatedDurable := (capture redelivered unrelated ⟨3⟩).1.durable }
+
+def sinkKey : CaptureKey := ⟨0, 0, 0, 0, 0⟩
+
+theorem re_delivering_a_capture_is_idempotent :
+    (sinkDeliver sinkKey .sameRequest false).refusal = none ∧
+      (sinkDeliver sinkKey .sameRequest false).blocksWritten = false := by
+  decide
+
+theorem same_capture_key_cannot_rebind_its_transport_route :
+    (sinkDeliver sinkKey .otherRoute false).refusal = some .integrityViolation ∧
+      (sinkDeliver sinkKey .otherRoute false).redeliveryRefusal = some .integrityViolation := by
+  decide
+
+theorem deleted_blocks_never_publish_dangling_references :
+    sinkDeliver sinkKey .unbound true =
+      { refusal := some .missingBlock, bound := false, blocksWritten := false
+      , redeliveryRefusal := some .missingBlock, boundAfterRedelivery := false
+      , unrelatedDurable := true } := by
+  decide
+
+/-! ## Reading a stored capture back -/
+
+/-- Why a stored capture did not decode. A store that cannot be read is an
+operational failure; every other failure means the stored references do not
+resolve to their pinned content, and the read fails closed. -/
+inductive DecodeFailure where
+  | storeRead
+  | unverified
+  deriving DecidableEq, Repr
+
+def decodeStored (readable : Bool) (store : ArtifactStore) (fuel ref witness : Nat) :
+    Except DecodeFailure CanonicalRequest :=
+  if readable then
+    match resolveRequest store fuel ref witness with
+    | some request => .ok request
+    | none => .error .unverified
+  else .error .storeRead
+
+theorem an_unreadable_store_is_a_store_failure (store : ArtifactStore) (fuel ref witness : Nat) :
+    decodeStored false store fuel ref witness = .error .storeRead := rfl
+
+theorem base_resolution_distinguishes_store_reads_from_missing_bases
+    (store : ArtifactStore) (fuel ref witness : Nat)
+    (h : resolveRequest store fuel ref witness = none) :
+    decodeStored true store fuel ref witness = .error .unverified := by
+  simp [decodeStored, h]
+
+theorem an_issued_send_was_recorded (kind : ScopeKind) (route : Route) (body : Body)
+    (mainFamily compactionFamily : Bool) :
+    (transportSend kind route body mainFamily compactionFamily).issued = true →
+      (transportSend kind route body mainFamily compactionFamily).recorded.isSome := by
+  cases body <;> simp [transportSend]
+
 end RenderedCapture

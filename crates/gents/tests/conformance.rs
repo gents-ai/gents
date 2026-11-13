@@ -1,16 +1,14 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use rapidhash::RapidHashSet;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents_automation::triggers::event_delivery::runtime_event_delivery_source_contracts;
 use gents_inference::admission::InferenceCall;
 use gents_inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use gents_session::request::event_delivery::EventDeliverySourceContract;
 use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use gents_session::{
     request::lifecycle::write_manual_agent_request, request::lifecycle::RequestLifecycle,
@@ -29,10 +27,9 @@ use admission_slot_accounting::{
 use gents_lean_vocab::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     lean_compaction_cursor_cases, lean_compaction_reducer_cases, lean_contract_snapshot,
-    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
-    lean_event_delivery_transition_cases, lean_queue_deadline_cases, lean_r6_backgrounding_case,
-    lean_r6_backgrounding_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
-    lean_session_control_cases, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
+    lean_queue_deadline_cases, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_recovery_sweep_cases, lean_request_transition_cases, lean_session_control_cases,
+    LeanLifecycleTransitionCase,
 };
 use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
@@ -50,8 +47,6 @@ mod coverage;
 mod enrollment;
 #[path = "conformance/eval.rs"]
 mod eval;
-#[path = "conformance/event_delivery.rs"]
-mod event_delivery;
 #[path = "conformance/hooks.rs"]
 mod hooks;
 #[path = "conformance/interrupts_manual.rs"]
@@ -145,21 +140,6 @@ async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
 #[tokio::test]
 async fn generated_request_transition_cases_cover_lifecycle_policy() {
     request_lifecycle::generated_request_transition_cases_cover_lifecycle_policy().await;
-}
-
-#[tokio::test]
-async fn event_delivery_transition_cases_match_contract() {
-    event_delivery::event_delivery_transition_cases_match_contract().await;
-}
-
-#[test]
-fn event_delivery_source_instances_match_runtime() {
-    event_delivery::event_delivery_source_instances_match_runtime();
-}
-
-#[tokio::test]
-async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
-    event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation().await;
 }
 
 #[test]

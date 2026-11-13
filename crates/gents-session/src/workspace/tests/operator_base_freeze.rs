@@ -387,95 +387,78 @@ fn freeze_fault_context<'a>(
 }
 
 #[test]
-fn operator_base_freeze_recovers_partial_documents_with_fresh_journal() {
-    let fx = Fixture::new();
-    let mut memory = MemoryWorkspaceDocuments::default();
-    let mut create = fx.action("freeze-recovery", "freeze-work", "freeze-recovery-branch");
-    create.path_capability = WorkspacePathCapability::exact_paths(vec![]).unwrap();
-    execute_create_workspace_plan(
-        &emit_create_workspace_plan(create),
-        &mut Vec::new(),
-        &mut fx.ctx(&mut memory, git_worktree_caps()),
-    )
-    .unwrap();
-
-    memory
-        .placements
-        .get_mut("freeze-recovery")
-        .unwrap()
-        .observed_tree_hash
-        .clear();
-    let base_tree = git(
-        &fx.repo,
-        &["rev-parse", &format!("{}^{{tree}}", fx.base_sha)],
-    );
-    let trunk = git(&fx.repo, &["rev-parse", "HEAD"]);
-    let plan = emit_freeze_workspace_base_plan(FreezeWorkspaceBaseAction {
-        workspace_id: "freeze-recovery".into(),
-        base_sha: fx.base_sha.clone(),
+fn base_freeze_recovery_matches_the_lean_model() {
+    gents_lean_vocab::families::base_freeze_recovery_steps::replay::<String>(|input| {
+        let fx = Fixture::new();
+        let mut memory = MemoryWorkspaceDocuments::default();
+        let mut create = fx.action("freeze-recovery", "freeze-work", "freeze-recovery-branch");
+        create.path_capability = WorkspacePathCapability::exact_paths(vec![]).unwrap();
+        execute_create_workspace_plan(
+            &emit_create_workspace_plan(create),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut memory, git_worktree_caps()),
+        )
+        .unwrap();
+        if input.placement_cleared {
+            memory
+                .placements
+                .get_mut("freeze-recovery")
+                .unwrap()
+                .observed_tree_hash
+                .clear();
+        }
+        let base_tree = git(
+            &fx.repo,
+            &["rev-parse", &format!("{}^{{tree}}", fx.base_sha)],
+        );
+        let trunk = git(&fx.repo, &["rev-parse", "HEAD"]);
+        let plan = emit_freeze_workspace_base_plan(FreezeWorkspaceBaseAction {
+            workspace_id: "freeze-recovery".into(),
+            base_sha: fx.base_sha.clone(),
+        });
+        let mut docs = FailFreezePlacementOnce {
+            inner: memory,
+            fail_placement: false,
+            workspace_writes: 0,
+            placement_writes: 0,
+        };
+        input
+            .faults
+            .iter()
+            .map(|&fault| {
+                docs.fail_placement = fault;
+                let mut journal = Vec::new();
+                let result = execute_freeze_workspace_base_plan(
+                    &plan,
+                    &mut journal,
+                    &mut freeze_fault_context(&fx, &mut docs),
+                );
+                let workspace = &docs.inner.workspaces["freeze-recovery"];
+                gents_lean_vocab::families::base_freeze_recovery_steps::StepOutput {
+                    ok: result.is_ok(),
+                    returned_placement_at_base: result
+                        .as_ref()
+                        .ok()
+                        .map(|outcome| outcome.placement.observed_tree_hash == base_tree),
+                    journal: match super::super::journal::current_state(&journal, 0) {
+                        Some(ActionJournalState::Validated) => "validated",
+                        Some(ActionJournalState::Executing) => "executing",
+                        Some(ActionJournalState::EffectObserved) => "effect_observed",
+                        Some(ActionJournalState::ResultDocsWritten) => "result_docs_written",
+                        other => panic!("unmodeled journal state {other:?}"),
+                    }
+                    .to_owned(),
+                    workspace_state: workspace.lifecycle_state.clone(),
+                    sealed_at_base: workspace.seal_hash.as_deref() == Some(base_tree.as_str()),
+                    placement_at_base: docs.inner.placements["freeze-recovery"]
+                        .observed_tree_hash
+                        == base_tree,
+                    workspace_writes: docs.workspace_writes as u64,
+                    placement_writes: docs.placement_writes as u64,
+                    receipts: docs.inner.receipts.len() as u64,
+                    trunk_moved: git(&fx.repo, &["rev-parse", "HEAD"]) != trunk,
+                }
+            })
+            .collect()
     });
-    let mut docs = FailFreezePlacementOnce {
-        inner: memory,
-        fail_placement: true,
-        workspace_writes: 0,
-        placement_writes: 0,
-    };
-    let mut interrupted = Vec::new();
-    let failed = execute_freeze_workspace_base_plan(
-        &plan,
-        &mut interrupted,
-        &mut freeze_fault_context(&fx, &mut docs),
-    );
-    assert!(failed.is_err());
-    assert_eq!(
-        docs.inner.workspaces["freeze-recovery"].lifecycle_state,
-        "sealed"
-    );
-    assert_eq!(
-        docs.inner.workspaces["freeze-recovery"]
-            .seal_hash
-            .as_deref(),
-        Some(base_tree.as_str())
-    );
-    assert_eq!(
-        docs.inner.placements["freeze-recovery"].observed_tree_hash,
-        ""
-    );
-    assert!(docs.inner.receipts.is_empty());
-    assert_eq!(
-        super::super::journal::current_state(&interrupted, 0),
-        Some(ActionJournalState::EffectObserved)
-    );
-
-    let mut restarted = Vec::new();
-    let recovered = execute_freeze_workspace_base_plan(
-        &plan,
-        &mut restarted,
-        &mut freeze_fault_context(&fx, &mut docs),
-    )
-    .unwrap();
-    assert_eq!(recovered.placement.observed_tree_hash, base_tree);
-    assert_eq!(
-        docs.inner.placements["freeze-recovery"].observed_tree_hash,
-        base_tree
-    );
-    assert!(docs.inner.receipts.is_empty());
-    assert_eq!(git(&fx.repo, &["rev-parse", "HEAD"]), trunk);
-    assert_eq!(
-        super::super::journal::current_state(&restarted, 0),
-        Some(ActionJournalState::ResultDocsWritten)
-    );
-
-    let writes = (docs.workspace_writes, docs.placement_writes);
-    execute_freeze_workspace_base_plan(
-        &plan,
-        &mut Vec::new(),
-        &mut freeze_fault_context(&fx, &mut docs),
-    )
-    .unwrap();
-    assert_eq!(
-        (docs.workspace_writes, docs.placement_writes),
-        writes,
-        "identical persisted seal replay must not write documents"
-    );
 }

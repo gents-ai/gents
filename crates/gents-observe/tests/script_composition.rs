@@ -1,8 +1,10 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
+use gents_toolcalls::call::hook::fixtures::accept_hook_tool_call;
 use gents_toolcalls::call::hook::*;
 
 use gents_loop::SessionHook;
@@ -186,5 +188,83 @@ async fn one_unreadable_script_child_is_marked_and_the_timeline_still_loads() {
         .unwrap();
     assert_eq!(readable.payload_unavailable, None);
     assert!(readable.result.is_some());
+    fixture.db.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn background_plugin_keeps_the_selected_tool_surface() {
+    use gents_toolcalls::test_support::{host_call_plugin_wat, installed_plugin};
+    let wat = host_call_plugin_wat(&json!({"tool_name":"probe", "arguments":{}}), 3);
+    let (home, mut record) = installed_plugin(&wat, None);
+    record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
+    gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
+    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(home.path().to_owned()),
+    ));
+    let selected = gents_documents::PluginToolRef {
+        plugin: "team/plugin".into(),
+        digest: None,
+        tool_calls: true,
+        input_fields: Vec::new(),
+        job: None,
+    };
+    let tool =
+        gents_toolcalls::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
+    let registry = BackgroundToolRegistry::from_tools(vec![Box::new(tool)], &["plugin".into()]);
+    let fixture = gents_toolcalls::test_support::background_hook::budget_hook_fixture(
+        "script-background",
+        registry,
+        Default::default(),
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    bind_admitted_deadline(&fixture).await;
+    let count = Arc::new(AtomicU64::new(0));
+    fixture
+        .hook
+        .bind_tool_surface(Arc::new(vec![Box::new(Probe(count.clone()))]))
+        .await;
+    let args = json!({"tool_name":"plugin", "args":{}}).to_string();
+    accept_hook_tool_call(&fixture.hook, "start-script", "spawn_process", &args, None).await;
+    let ToolCallHookAction::Skip { reason } = fixture
+        .hook
+        .on_tool_call("spawn_process", None, "start-script", &args)
+        .await
+    else {
+        panic!("spawn did not return its receipt")
+    };
+    let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
+    let id = receipt["tool_call_id"].as_str().unwrap();
+    let wait = json!({"tool_call_id":id, "timeout_secs":30}).to_string();
+    accept_hook_tool_call(&fixture.hook, "wait-script", "wait_process", &wait, None).await;
+    let ToolCallHookAction::Skip { reason } = fixture
+        .hook
+        .on_tool_call("wait_process", None, "wait-script", &wait)
+        .await
+    else {
+        panic!("wait did not return")
+    };
+    assert_eq!(count.load(Ordering::SeqCst), 3, "{reason}");
+    let row = gents_toolcalls::test_support::background_hook::tool_row(
+        &fixture.access,
+        &fixture.session_id,
+        id,
+    )
+    .await;
+    assert_eq!(row["lifecycle_state"], "completed", "{reason}");
+    let timeline = gents_observe::observe::run_timeline_fetch::load_session_tool_calls(
+        &fixture.access,
+        fixture.db.node_identity.did(),
+        &fixture.session_id,
+        Some(fixture.user.did()),
+    )
+    .await
+    .unwrap();
+    let probes: Vec<_> = timeline
+        .iter()
+        .filter(|call| call.tool_name == "probe")
+        .collect();
+    assert_eq!(probes.len(), 3);
+    assert!(probes.iter().all(|call| call.result.is_some()));
     fixture.db.node.shutdown().await.unwrap();
 }

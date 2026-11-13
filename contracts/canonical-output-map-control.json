@@ -267,7 +267,8 @@
       "StorageWriteGate.Event.cleanupReturned",
       "StorageWriteGate.Event.cleanupDeadlineObserved",
       "StorageWriteGate.Event.dropReturned",
-      "StorageWriteGate.Event.release"
+      "StorageWriteGate.Event.release",
+      "StorageWriteGate.Event.consumerDrop"
     ],
     "generated_groups": [],
     "fixture_status": "not_exported",

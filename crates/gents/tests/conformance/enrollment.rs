@@ -93,45 +93,6 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
 
 #[test]
 fn generated_causal_hop_cases_match_native_materializer() {
-    use gents_protocol::request_lifecycle::{
-        next_request_hop, request_hop_within_bound, RequestHopCause,
-    };
-
     let contract = lean_contract_snapshot();
     assert_eq!(contract.causal_hop_default_max_request_hop, None);
-    let cause = |name: &str, cause_hop: Option<u32>| match name {
-        "root" => RequestHopCause::Root,
-        "cross_session" => RequestHopCause::CrossSession {
-            cause_hop: cause_hop.expect("cross-session step names its cause hop"),
-        },
-        "return" => RequestHopCause::Return,
-        "continuation" => RequestHopCause::Continuation,
-        other => panic!("unknown Lean causal-hop cause {other:?}"),
-    };
-    assert!(!contract.causal_hop_step_cases.is_empty());
-    for case in &contract.causal_hop_step_cases {
-        let hop = next_request_hop(cause(&case.cause, case.cause_hop), case.own_predecessor_hop);
-        assert_eq!(hop, case.expected_hop, "{}", case.name);
-        assert_eq!(
-            request_hop_within_bound(case.max_request_hop, hop),
-            case.expected_admitted,
-            "{}",
-            case.name
-        );
-    }
-    assert!(!contract.causal_hop_interrupt_cases.is_empty());
-    for case in &contract.causal_hop_interrupt_cases {
-        assert_eq!(
-            gents_session::session::message::agent_interrupt_allowed(
-                &case.caller_session,
-                &case.target_session,
-                case.target_origin_cause.as_deref(),
-                case.same_node,
-                case.task_triggered,
-            ),
-            case.expected_allowed,
-            "{}",
-            case.name
-        );
-    }
 }

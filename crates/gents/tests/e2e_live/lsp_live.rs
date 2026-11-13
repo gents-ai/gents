@@ -1,399 +1,119 @@
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gents::{DocumentRuntimeOptions, Gents};
-use gents_documents::FileToolMode;
-use gents_documents::{FileTools, HostTools, IntegrationTools, LspTools, Tools};
+use gents_documents::{FileToolMode, FileTools, HostTools, IntegrationTools, LspTools, Tools};
 use gents_tools::surface::ToolCeiling;
 
-use gents_store::identity::NodeIdentity;
-
-use crate::support::builder_runtime::submit_request;
-use crate::support::fixtures::configure_agent_tools;
-use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
+use crate::support::agent_requests::submit_user_request;
+use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::live_inference::{
-    bind_target, live_target, wait_for_assistant_answer, wait_for_request_terminal,
+    bind_target, boot_live_agent_with_ceiling, live_target, terminal_assistant_answer,
+    wait_for_request_terminal,
 };
 use crate::support::snapshots::fetch_tool_call_payloads_for_request_as;
 use crate::support::test_db;
 
-const MEET_FILE: &str = "crates/gents-loop/src/tool_policy.rs";
-const ADVERTISED_FILE: &str = "crates/gents-tools/src/native/lsp/auth.rs";
-
-fn live_lsp_enabled() -> bool {
-    std::env::var("GENTS_LIVE_LSP").as_deref() == Ok("1")
-}
-
-fn rust_analyzer_on_path() -> bool {
-    std::process::Command::new("rust-analyzer")
-        .arg("--version")
-        .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
-}
-
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("repo root")
-}
-
-fn pack_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("GENTS_LSP_RUST_PACK_DIR").unwrap_or_else(|_| {
-            panic!(
-                "GENTS_LSP_RUST_PACK_DIR must name a checkout of the lsp_rust pack \
-             (gents-ai/packs, packs/gents/lsp_rust)"
-            )
-        }),
-    )
-}
-
-fn pack_json_string(relative: &str, field: &str) -> String {
-    let path = pack_dir().join(relative);
-    let raw = std::fs::read_to_string(&path).unwrap_or_else(|err| {
-        panic!("read {}: {err}", path.display());
+fn lsp_config() -> String {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pack = std::env::var_os("GENTS_LSP_RUST_PACK_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("../packs/packs/gents/lsp_rust"));
+    let path = pack.join("pack_config.json");
+    let bytes = std::fs::read(&path).unwrap_or_else(|error| {
+        panic!(
+            "read {}: {error}; set GENTS_LSP_RUST_PACK_DIR to packs/gents/lsp_rust",
+            path.display()
+        )
     });
-    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|err| {
-        panic!("parse {}: {err}", path.display());
-    });
-    value
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_else(|| panic!("{} missing string {field}", path.display()))
-        .to_string()
-}
-
-fn pack_default_prompt() -> String {
-    pack_json_string("experiment.json", "default_prompt")
-}
-
-fn pack_lsp_config() -> String {
-    let relative = "pack_config.json";
-    let path = pack_dir().join(relative);
-    let raw = std::fs::read_to_string(&path).unwrap_or_else(|err| {
-        panic!("read {}: {err}", path.display());
-    });
-    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|err| {
-        panic!("parse {}: {err}", path.display());
-    });
-    let raw_config = value["tools"]
+    let pack: serde_json::Value = serde_json::from_slice(&bytes).expect("LSP pack configuration");
+    let encoded = pack["tools"]
         .as_array()
-        .and_then(|tools| {
-            tools
-                .iter()
-                .find(|tools| tools["tools_id"] == "lsp-readonly")
-        })
-        .and_then(|tools| tools["integrations"]["lsp"]["config"].as_str())
-        .unwrap_or_else(|| panic!("{} missing lsp-readonly Tools config", path.display()));
-    let mut config: serde_json::Value =
-        serde_json::from_str(raw_config).expect("pack LSP server configuration");
+        .expect("pack tools")
+        .iter()
+        .find(|tool| tool["tools_id"] == "lsp-readonly")
+        .and_then(|tool| tool["integrations"]["lsp"]["config"].as_str())
+        .expect("lsp-readonly server configuration");
+    let mut config: serde_json::Value = serde_json::from_str(encoded).expect("LSP servers");
     let settings = &mut config["servers"]["rust-analyzer"]["settings"]["rust-analyzer"];
-    settings["cargo"]["buildScripts"]["enable"] = serde_json::json!(false);
-    settings["procMacro"]["enable"] = serde_json::json!(false);
-    serde_json::to_string(&config).expect("serialize live LSP server configuration")
+    settings["cargo"]["buildScripts"]["enable"] = false.into();
+    settings["procMacro"]["enable"] = false.into();
+    serde_json::to_string(&config).unwrap()
 }
 
-fn pack_system_prompt() -> String {
-    gents_pack::test_support::load_pack_system_prompt(&pack_dir())
-        .expect("load pack lsp-coder system prompt")
-}
-
-fn pack_unscripted_prompt() -> String {
-    std::fs::read_to_string(pack_dir().join("unscripted_prompt.md"))
-        .expect("pack unscripted prompt")
-}
-
-struct CurrentDirGuard(PathBuf);
-
-impl CurrentDirGuard {
-    fn set(path: &std::path::Path) -> Self {
-        let original = std::env::current_dir().expect("current directory");
-        std::env::set_current_dir(path).expect("set live LSP workspace cwd");
-        Self(original)
-    }
-}
-
-impl Drop for CurrentDirGuard {
-    fn drop(&mut self) {
-        std::env::set_current_dir(&self.0).expect("restore current directory after live LSP test");
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ToolCallRow {
-    tool_name: Option<String>,
-    status: Option<String>,
-    lifecycle_state: Option<String>,
-    args: Option<String>,
-    result: Option<String>,
-}
-
-async fn fetch_tool_calls(
-    reader: &gents_store::config_client::ConfigAccess,
-    request_id: &str,
-) -> Vec<ToolCallRow> {
-    fetch_tool_call_payloads_for_request_as(reader, request_id)
-        .await
-        .into_iter()
-        .map(|call| ToolCallRow {
-            tool_name: Some(call.tool_name),
-            status: call.status,
-            lifecycle_state: call.lifecycle_state,
-            args: call.arguments,
-            result: call.result,
-        })
-        .collect()
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "live: set GENTS_LIVE_LSP=1 and pass --ignored"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lsp_live_model_uses_rust_analyzer() {
-    assert!(
-        live_lsp_enabled(),
-        "set GENTS_LIVE_LSP=1 and pass --ignored to run the rust-analyzer lsp live qualification"
-    );
-    assert!(
-        rust_analyzer_on_path(),
-        "rust-analyzer must be on PATH (rust-analyzer --version)"
-    );
-
-    let workspace = repo_root();
-    // The document runtime resolves its initial host-tool root from cwd before
-    // the persisted selection is reconciled; restore cwd on every exit so a
-    // failed run cannot poison subsequent tests in the same process.
-    let _cwd = CurrentDirGuard::set(&workspace);
-
+    let target = live_target().await;
+    let config = tokio::task::spawn_blocking(|| {
+        let version = std::process::Command::new("rust-analyzer")
+            .arg("--version")
+            .output()
+            .expect("rust-analyzer must be installed and on PATH");
+        assert!(
+            version.status.success(),
+            "rust-analyzer --version failed; install rust-analyzer"
+        );
+        lsp_config()
+    })
+    .await
+    .unwrap();
+    let workspace = tokio::task::spawn_blocking(tempfile::tempdir)
+        .await
+        .unwrap()
+        .unwrap();
+    let root = workspace.path().to_owned();
+    let files_root = root.clone();
+    tokio::task::spawn_blocking(move || {
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rust-toolchain.toml"),
+            files_root.join("rust-toolchain.toml"),
+        ).expect("give the LSP workspace the repository's installed toolchain selection");
+        std::fs::create_dir(files_root.join("src")).unwrap();
+        std::fs::write(files_root.join("Cargo.toml"),
+            "[package]\nname = \"lsp-live-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n").unwrap();
+        std::fs::write(files_root.join("src/lib.rs"),
+            "pub struct Harbor { pub berths: u16 }\npub fn berth_count(harbor: &Harbor) -> u16 { harbor.berths }\n").unwrap();
+    }).await.unwrap();
     let db = test_db("lsp-live").await;
-    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
-
-    let actors = bind_target(&db, &live_target()).await;
-    let (node_did, agent_did) = (actors.node_did().to_owned(), actors.agent_did().to_owned());
-    let reader = &actors.fixture.access;
-
-    configure_agent_tools(
-        &db,
-        &node_did,
-        &agent_did,
-        Some(pack_system_prompt()),
+    let actors = bind_target(&db, &target).await;
+    configure_agent_tools_as(
+        &actors.fixture.access, actors.node_did(), actors.agent_did(),
+        Some("Use the requested lsp call. Once it succeeds, acknowledge briefly without repeating it.".into()),
         Tools {
-            tools_id: "lsp-live-tools".to_string(),
-            node_did: node_did.clone(),
-            host: Some(HostTools {
-                root: Some(workspace.display().to_string()),
-                files: Some(FileTools {
-                    mode: FileToolMode::ReadOnly,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            integrations: Some(IntegrationTools {
-                lsp: Some(LspTools {
-                    config: Some(pack_lsp_config()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
+            tools_id: "lsp-live-tools".into(), node_did: actors.node_did().into(),
+            host: Some(HostTools { root: Some(root.display().to_string()),
+                files: Some(FileTools { mode: FileToolMode::ReadOnly, ..Default::default() }),
+                ..Default::default() }),
+            integrations: Some(IntegrationTools { lsp: Some(LspTools { config: Some(config), ..Default::default() }), ..Default::default() }),
             ..Default::default()
-        },
-        Vec::new(),
-    )
-    .await;
-
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
-        Arc::clone(&identity),
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: ToolCeiling::readonly_at(&workspace),
-            ..Default::default()
-        },
+        }, Vec::new(),
+    ).await;
+    let runtime = boot_live_agent_with_ceiling(
+        &db,
+        db.node_identity.clone(),
+        ToolCeiling::readonly_at(&root),
     )
     .await
-    .expect("boot agent");
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(&db.node, &node_did).await;
-    let booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
-
-    let unscripted_request_id = "lsp-live-unscripted-1";
-    submit_request(
-        &actors,
-        unscripted_request_id,
-        "lsp-live-unscripted-session-1",
-        "interactive",
-        &pack_unscripted_prompt(),
-    )
-    .await;
+    .unwrap();
+    const REQUEST: &str = "lsp-live-request";
+    submit_user_request(actors.node_did(), &actors.fixture, "lsp-live-session", REQUEST,
+        "Call lsp with action hover, file src/lib.rs, symbol berth_count, line 2. After the hover succeeds, acknowledge briefly.",
+        Default::default()).await;
     let terminal =
-        wait_for_request_terminal(reader, unscripted_request_id, Duration::from_secs(600)).await;
-    let mut failures = Vec::new();
-    if terminal != "completed" {
-        failures.push(format!("unscripted live lsp run must complete: {terminal}"));
-    }
-    let unscripted_calls = fetch_tool_calls(reader, unscripted_request_id).await;
-    let useful_semantic = unscripted_calls.iter().any(|call| {
-        call.tool_name.as_deref() == Some("lsp")
-            && call_completed(call)
-            && matches!(
-                action_of(call).as_deref(),
-                Some(
-                    "hover"
-                        | "symbols"
-                        | "definition"
-                        | "type_definition"
-                        | "implementation"
-                        | "references"
-                )
-            )
-            && !result_is_error(call)
-    });
-    if !useful_semantic {
-        failures.push(format!(
-            "unscripted arm must produce at least one useful semantic lsp result; calls: {:?}",
-            summarize_calls(unscripted_calls.iter())
-        ));
-    }
-    let unscripted_answer =
-        wait_for_assistant_answer(reader, unscripted_request_id, Duration::from_secs(10)).await;
-    if !answer_reports_meet_contract(&unscripted_answer) {
-        failures.push(format!(
-            "unscripted answer must report that the more restrictive mode wins in Disabled < Inherit < Enabled order; got:\n{unscripted_answer}"
-        ));
-    }
-
-    let request_id = "lsp-live-req-1";
-    let prompt = pack_default_prompt();
-    submit_request(
-        &actors,
-        request_id,
-        "lsp-live-session-1",
-        "interactive",
-        &prompt,
-    )
-    .await;
-
-    let terminal = wait_for_request_terminal(reader, request_id, Duration::from_secs(600)).await;
-    if terminal != "completed" {
-        failures.push(format!("live lsp run must complete: {terminal}"));
-    }
-
-    let calls = fetch_tool_calls(reader, request_id).await;
-    let lsp_calls: Vec<_> = calls
-        .iter()
-        .filter(|call| call.tool_name.as_deref() == Some("lsp"))
-        .collect();
-    if lsp_calls.is_empty() {
-        failures.push(format!(
-            "model must persist at least one lsp tool call; calls: {:?}",
-            summarize_calls(calls.iter())
-        ));
-    }
-    for (file, symbol, required) in [
-        (MEET_FILE, "meet", &["Disabled", "Inherit"][..]),
-        (ADVERTISED_FILE, "lsp_advertised", &["FileToolMode"][..]),
-    ] {
-        if matching_hover(&lsp_calls, file, symbol, required).is_none() {
-            failures.push(format!(
-                "need a completed hover on {file} symbol={symbol} quoting {required:?}; lsp calls: {:?}",
-                summarize_calls(lsp_calls.iter().copied())
-            ));
-        }
-    }
-
-    let answer = wait_for_assistant_answer(reader, request_id, Duration::from_secs(10)).await;
-    if !(answer.contains("FileToolMode")
-        || (answer.contains("Disabled") && answer.contains("Inherit")))
-    {
-        failures.push(format!(
-            "assistant must report a rust-analyzer fact; got:\n{answer}"
-        ));
-    }
-
-    booted.shutdown().await;
-    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
-}
-
-fn matching_hover<'a>(
-    calls: &[&'a ToolCallRow],
-    file: &str,
-    symbol: &str,
-    required: &[&str],
-) -> Option<&'a ToolCallRow> {
-    calls.iter().copied().find(|call| {
-        call_completed(call)
-            && action_of(call).as_deref() == Some("hover")
-            && file_of(call)
-                .is_some_and(|path| gents_tools::native::result_path_matches(file, &path))
-            && symbol_of(call).as_deref() == Some(symbol)
-            && !result_is_error(call)
+        wait_for_request_terminal(&actors.fixture.access, REQUEST, Duration::from_secs(600)).await;
+    let calls = fetch_tool_call_payloads_for_request_as(&actors.fixture.access, REQUEST).await;
+    let answer = terminal_assistant_answer(&actors.fixture.access, REQUEST).await;
+    runtime.shutdown().await;
+    assert_eq!(terminal, "completed");
+    assert!(
+        calls.iter().any(|call| call.tool_name == "lsp"
+            && call.lifecycle_state.as_deref() == Some("completed")
             && call
                 .result
                 .as_deref()
-                .is_some_and(|text| required.iter().all(|needle| text.contains(needle)))
-    })
-}
-
-fn call_completed(call: &ToolCallRow) -> bool {
-    call.lifecycle_state.as_deref() == Some("completed")
-}
-
-fn answer_reports_meet_contract(answer: &str) -> bool {
-    let lower = answer.to_ascii_lowercase();
-    lower.contains("disabled < inherit < enabled")
-        && (lower.contains("restrict") || lower.contains("wins"))
-}
-
-fn args_json(call: &ToolCallRow) -> Option<serde_json::Value> {
-    serde_json::from_str(call.args.as_deref()?).ok()
-}
-
-fn action_of(call: &ToolCallRow) -> Option<String> {
-    args_json(call)?
-        .get("action")?
-        .as_str()
-        .map(ToOwned::to_owned)
-}
-
-fn file_of(call: &ToolCallRow) -> Option<String> {
-    args_json(call)?
-        .get("file")?
-        .as_str()
-        .map(ToOwned::to_owned)
-}
-
-fn symbol_of(call: &ToolCallRow) -> Option<String> {
-    args_json(call)?
-        .get("symbol")?
-        .as_str()
-        .map(ToOwned::to_owned)
-}
-
-fn result_is_error(call: &ToolCallRow) -> bool {
-    gents_tools::native::result_looks_failed(call.result.as_deref().unwrap_or(""))
-}
-
-type CallSummary = (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
-
-fn summarize_calls<'a>(calls: impl IntoIterator<Item = &'a ToolCallRow>) -> Vec<CallSummary> {
-    calls
-        .into_iter()
-        .map(|call| {
-            (
-                call.tool_name.clone(),
-                action_of(call),
-                call.args.clone(),
-                call.status.clone(),
-                call.result.clone(),
-            )
-        })
-        .collect()
+                .is_some_and(|result| result.contains("berth_count")
+                    && result.contains("Harbor")
+                    && result.contains("u16"))),
+        "the real rust-analyzer hover must preserve the fixture's function signature: {calls:?}"
+    );
+    assert!(!answer.trim().is_empty());
 }

@@ -21,15 +21,11 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for AcceptRea
 }
 
 #[derive(Default)]
-struct ExhaustStartupSourceWriter {
-    source_attempts: std::sync::atomic::AtomicUsize,
-    source_exhausted: tokio::sync::Notify,
-    persisted: std::sync::Mutex<Vec<NodeReadinessSnapshot>>,
-}
-
-#[derive(Default)]
-struct ExhaustReadyWriter {
-    ready_attempts: std::sync::atomic::AtomicUsize,
+struct ScriptedStartupWriter {
+    source: std::sync::Mutex<std::collections::VecDeque<String>>,
+    ready: std::sync::Mutex<std::collections::VecDeque<String>>,
+    source_attempts: std::sync::atomic::AtomicU64,
+    ready_attempts: std::sync::atomic::AtomicU64,
     persisted: std::sync::Mutex<Vec<NodeReadinessSnapshot>>,
 }
 
@@ -51,51 +47,43 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter
 }
 
 #[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ExhaustStartupSourceWriter {
+impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ScriptedStartupWriter {
     async fn upsert(
         &self,
         _node_did: &str,
         snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
     ) -> anyhow::Result<()> {
-        if snapshot.process_state == NodeReadinessProcessState::Recovering
-            && snapshot.active_generation > 0
-        {
-            let attempt = self
-                .source_attempts
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                + 1;
-            if attempt == 5 {
-                self.source_exhausted.notify_one();
+        let (script, attempts) = match snapshot.process_state {
+            NodeReadinessProcessState::Recovering if snapshot.active_generation > 0 => {
+                (&self.source, &self.source_attempts)
             }
-            anyhow::bail!("injected startup source persistence exhaustion");
-        }
-        self.persisted
+            NodeReadinessProcessState::Ready => (&self.ready, &self.ready_attempts),
+            _ => {
+                self.persisted
+                    .lock()
+                    .expect("scripted writer mutex poisoned")
+                    .push(snapshot.clone());
+                return Ok(());
+            }
+        };
+        attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let result = script
             .lock()
-            .expect("startup source writer mutex poisoned")
-            .push(snapshot.clone());
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ExhaustReadyWriter {
-    async fn upsert(
-        &self,
-        _node_did: &str,
-        snapshot: &NodeReadinessSnapshot,
-        _updated_at: &str,
-    ) -> anyhow::Result<()> {
-        if snapshot.process_state == NodeReadinessProcessState::Ready {
-            self.ready_attempts
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            anyhow::bail!("injected Ready persistence exhaustion");
+            .expect("scripted writer mutex poisoned")
+            .pop_front()
+            .unwrap_or_else(|| "ok".to_owned());
+        match result.as_str() {
+            "ok" => {
+                self.persisted
+                    .lock()
+                    .expect("scripted writer mutex poisoned")
+                    .push(snapshot.clone());
+                Ok(())
+            }
+            "fail" => anyhow::bail!("injected startup persistence failure"),
+            other => panic!("unmodeled write result {other}"),
         }
-        self.persisted
-            .lock()
-            .expect("Ready writer mutex poisoned")
-            .push(snapshot.clone());
-        Ok(())
     }
 }
 
@@ -496,32 +484,138 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
 }
 
 #[tokio::test]
-async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run_error() {
+async fn startup_publication_follows_the_lean_persistence_model() {
+    use gents_lean_vocab::families::startup_publication_startup;
+    for case in gents_lean_vocab::families::startup_publication_startup::cases::<String>() {
+        let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+        let fixture = held_runtime_fixture_with_status(
+            "startup-publication",
+            "backend-startup-publication",
+            mock_endpoint.endpoint(),
+            1,
+            "healthy",
+        )
+        .await;
+        let observer = Arc::new(RecordingObserver::default());
+        let agent = crate::Gents::from_default_agent_documents(
+            fixture.db.node.clone(),
+            fixture.db.node_identity.clone(),
+            crate::runtime::agent::DocumentRuntimeOptions {
+                backend_admission: Some(fixture.admission()),
+                tool_ceiling: ToolCeiling::meta_only(),
+                process_state_observer: Some(observer.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let writer = Arc::new(ScriptedStartupWriter {
+            source: std::sync::Mutex::new(case.input.source_writes.iter().cloned().collect()),
+            ready: std::sync::Mutex::new(case.input.ready_writes.iter().cloned().collect()),
+            ..Default::default()
+        });
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut run = tokio::spawn(super::startup::run_agent_with_readiness_writer(
+            agent,
+            shutdown_rx,
+            writer.clone(),
+            Duration::from_millis(1),
+        ));
+        let deadline = tokio::time::Instant::now() + STARTUP_DEADLOCK_GUARD;
+        let result = loop {
+            if observer
+                .states
+                .lock()
+                .expect("recording observer mutex poisoned")
+                .contains(&crate::runtime::agent::ProcessLifecycleState::Ready)
+            {
+                shutdown_tx.send_replace(true);
+            }
+            match tokio::time::timeout(Duration::from_millis(50), &mut run).await {
+                Ok(joined) => break joined.expect("run_agent task must join"),
+                Err(_) => assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "startup run did not end boundedly"
+                ),
+            }
+        };
+        let failure = match result {
+            Ok(()) => None,
+            Err(error) => {
+                assert_eq!(
+                    error.root_cause().to_string(),
+                    "injected startup persistence failure",
+                    "the run error must be the exhausted write's own error: {error:#}"
+                );
+                let text = format!("{error:#}");
+                if text.contains("durably publish startup agent_config readiness source") {
+                    Some("source".to_owned())
+                } else if text.contains("durably publish runtime Ready state") {
+                    Some("ready".to_owned())
+                } else {
+                    panic!("runtime returned an unmodeled failure: {text}")
+                }
+            }
+        };
+        let attempts = match failure.as_deref() {
+            Some("source") => writer
+                .source_attempts
+                .load(std::sync::atomic::Ordering::SeqCst),
+            Some(_) => writer
+                .ready_attempts
+                .load(std::sync::atomic::Ordering::SeqCst),
+            None => 0,
+        };
+        let persisted = writer
+            .persisted
+            .lock()
+            .expect("scripted writer mutex poisoned")
+            .iter()
+            .map(|snapshot| snapshot.process_state)
+            .collect::<Vec<_>>();
+        let ready_observed = observer
+            .states
+            .lock()
+            .expect("recording observer mutex poisoned")
+            .contains(&crate::runtime::agent::ProcessLifecycleState::Ready);
+        case.check(startup_publication_startup::Output {
+            failure,
+            attempts,
+            ready_persisted: persisted.contains(&NodeReadinessProcessState::Ready),
+            shutdown_persisted: persisted.contains(&NodeReadinessProcessState::Shutdown),
+            ready_observed,
+        });
+    }
+}
+
+/// The readiness model does not cover slot workers: a failed startup source
+/// shuts the generation-one slot down and `run_agent` returns only after it exits.
+#[tokio::test]
+async fn startup_source_failure_returns_only_after_the_slot_exits() {
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     let fixture = held_runtime_fixture_with_status(
-        "startup-source-persistence-exhaustion",
-        "backend-startup-source-persistence",
+        "startup-source-slot-join",
+        "backend-startup-source-slot-join",
         mock_endpoint.endpoint(),
         1,
         "healthy",
     )
     .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    let observer = Arc::new(RecordingObserver::default());
     let agent = crate::Gents::from_default_agent_documents(
-        node.clone(),
-        identity.clone(),
+        fixture.db.node.clone(),
+        fixture.db.node_identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
             backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
-            process_state_observer: Some(observer.clone()),
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    let writer = Arc::new(ExhaustStartupSourceWriter::default());
+    let writer = Arc::new(ScriptedStartupWriter {
+        source: std::sync::Mutex::new(std::iter::repeat_n("fail".to_owned(), 5).collect()),
+        ..Default::default()
+    });
     let (slot_started_tx, mut slot_started_rx) = mpsc::unbounded_channel();
     let (slot_shutdown_tx, mut slot_shutdown_rx) = mpsc::unbounded_channel();
     let (slot_exited_tx, mut slot_exited_rx) = mpsc::unbounded_channel();
@@ -537,194 +631,60 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
                 let _ = slot_started_tx.send(generation);
                 let _ = shutdown.changed().await;
                 let _ = slot_shutdown_tx.send(generation);
-                let permit = slot_exit_gate
+                slot_exit_gate
                     .acquire_owned()
                     .await
-                    .expect("slot exit gate closed");
-                permit.forget();
+                    .expect("slot exit gate closed")
+                    .forget();
                 let _ = slot_exited_tx.send(generation);
                 Ok(())
             })
         })
     };
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-
     let mut run = tokio::spawn(
         super::startup::run_agent_with_readiness_writer_and_slot_runner(
             agent,
             shutdown_rx,
-            writer.clone(),
+            writer,
             Duration::from_millis(1),
             Some(slot_runner),
         ),
     );
-    let slot_worker_count = 1;
     assert_eq!(
         tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_started_rx.recv())
             .await
             .expect("generation-one slot must start"),
         Some(1)
     );
-    for _ in 1..slot_worker_count {
-        assert_eq!(
-            tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_started_rx.recv())
-                .await
-                .expect("retained slot worker must start"),
-            Some(1)
-        );
-    }
-    tokio::time::timeout(STARTUP_DEADLOCK_GUARD, writer.source_exhausted.notified())
-        .await
-        .expect("startup source must exhaust all persistence attempts");
     assert_eq!(
         tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_shutdown_rx.recv())
             .await
             .expect("slot runner must observe owned startup shutdown"),
         Some(1)
     );
-    for _ in 1..slot_worker_count {
-        assert_eq!(
-            tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_shutdown_rx.recv())
-                .await
-                .expect("retained slot worker must observe shutdown"),
-            Some(1)
-        );
-    }
     assert!(
         tokio::time::timeout(Duration::from_millis(100), &mut run)
             .await
             .is_err(),
         "run_agent returned while its generation-one slot was still gated"
     );
-    slot_exit_gate.add_permits(slot_worker_count);
-    for _ in 0..slot_worker_count {
-        assert_eq!(
-            tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_exited_rx.recv())
-                .await
-                .expect("generation-one worker must report exit"),
-            Some(1)
-        );
-    }
+    slot_exit_gate.add_permits(1);
+    assert_eq!(
+        tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_exited_rx.recv())
+            .await
+            .expect("generation-one worker must report exit"),
+        Some(1)
+    );
     let error = tokio::time::timeout(STARTUP_DEADLOCK_GUARD, run)
         .await
-        .expect("startup source exhaustion must terminate run_agent boundedly")
+        .expect("startup source failure must terminate run_agent boundedly")
         .expect("run_agent task must join")
-        .expect_err("startup source exhaustion cannot become clean shutdown");
-    assert_eq!(
-        error.root_cause().to_string(),
-        "injected startup source persistence exhaustion"
-    );
+        .expect_err("startup source failure cannot become clean shutdown");
     assert!(
         format!("{error:#}").contains("durably publish startup agent_config readiness source"),
         "runtime returned the wrong failure: {error:#}"
     );
-    assert_eq!(
-        writer
-            .source_attempts
-            .load(std::sync::atomic::Ordering::SeqCst),
-        5,
-        "the ordered publisher must exhaust its bounded retry budget"
-    );
-    let persisted = writer
-        .persisted
-        .lock()
-        .expect("startup source writer mutex poisoned");
-    assert!(
-        persisted
-            .iter()
-            .all(|snapshot| snapshot.process_state != NodeReadinessProcessState::Ready),
-        "failed startup source publication must never persist Ready"
-    );
-    assert!(
-        persisted
-            .iter()
-            .any(|snapshot| snapshot.process_state == NodeReadinessProcessState::Shutdown),
-        "publisher must recover after the failed command and flush terminal Shutdown"
-    );
-    let observed = observer
-        .states
-        .lock()
-        .expect("recording observer mutex poisoned");
-    assert!(!observed.contains(&crate::runtime::agent::ProcessLifecycleState::Ready));
-}
-
-#[tokio::test]
-async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    let fixture = held_runtime_fixture_with_status(
-        "ready-persistence-exhaustion",
-        "backend-ready-persistence",
-        mock_endpoint.endpoint(),
-        1,
-        "healthy",
-    )
-    .await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    let observer = Arc::new(RecordingObserver::default());
-    let agent = crate::Gents::from_default_agent_documents(
-        node.clone(),
-        identity.clone(),
-        crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
-            tool_ceiling: ToolCeiling::meta_only(),
-            process_state_observer: Some(observer.clone()),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let writer = Arc::new(ExhaustReadyWriter::default());
-    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-
-    let error = tokio::time::timeout(
-        STARTUP_DEADLOCK_GUARD,
-        super::startup::run_agent_with_readiness_writer(
-            agent,
-            shutdown_rx,
-            writer.clone(),
-            Duration::from_millis(1),
-        ),
-    )
-    .await
-    .expect("Ready persistence exhaustion must terminate run_agent boundedly")
-    .expect_err("Ready persistence exhaustion cannot become clean shutdown");
-    assert_eq!(
-        error.root_cause().to_string(),
-        "injected Ready persistence exhaustion"
-    );
-    assert!(
-        format!("{error:#}").contains("durably publish runtime Ready state"),
-        "runtime returned the wrong failure: {error:#}"
-    );
-    assert_eq!(
-        writer
-            .ready_attempts
-            .load(std::sync::atomic::Ordering::SeqCst),
-        5,
-        "the ordered publisher must exhaust its bounded retry budget"
-    );
-    let persisted = writer
-        .persisted
-        .lock()
-        .expect("Ready writer mutex poisoned");
-    assert!(
-        persisted
-            .iter()
-            .all(|snapshot| snapshot.process_state != NodeReadinessProcessState::Ready),
-        "a rejected Ready command must not change durable readiness"
-    );
-    assert!(
-        persisted
-            .iter()
-            .any(|snapshot| snapshot.process_state == NodeReadinessProcessState::Shutdown),
-        "terminal Shutdown must flush after Ready command exhaustion"
-    );
-    let observed = observer
-        .states
-        .lock()
-        .expect("recording observer mutex poisoned");
-    assert!(!observed.contains(&crate::runtime::agent::ProcessLifecycleState::Ready));
 }
 
 #[tokio::test]
@@ -1422,98 +1382,108 @@ async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
 }
 
 #[tokio::test]
-async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
-    let (fixture, node_did, _endpoint) = missing_plugin_node("demotion-cascade").await;
-    let node = fixture.db.node.clone();
-    let identity = fixture.db.node_identity.clone();
-    let default_agent_did = fixture.agent.did().to_owned();
-    let broken_binding = gents_store::identity::provision_agent_identity_authorized(
-        &node,
-        identity.as_ref(),
-        &fixture.user.did().parse().unwrap(),
-    )
-    .await
-    .unwrap();
-    let caller_binding = gents_store::identity::provision_agent_identity_authorized(
-        &node,
-        identity.as_ref(),
-        &fixture.user.did().parse().unwrap(),
-    )
-    .await
-    .unwrap();
-    let broken = broken_binding.agent_did.as_str();
-    let caller = caller_binding.agent_did.as_str();
-    write_runtime_documents(
-        &fixture.user_access,
-        vec![
-            agent_document(&node_did, &broken_binding, &default_agent_did),
-            context_document(&node_did, broken),
-            tools_naming_missing_plugin(&node_did, &format!("{broken}:tools")),
-            agent_document(&node_did, &caller_binding, &default_agent_did),
-            context_document(&node_did, caller),
-            (
+async fn startup_tool_admission_cascade_follows_the_lean_model() {
+    use gents_lean_vocab::families::tool_admission_startup_cascade;
+    for case in gents_lean_vocab::families::tool_admission_startup_cascade::cases::<
+        String,
+        AgentReadinessUnavailableReason,
+    >() {
+        let (fixture, node_did, _endpoint) = missing_plugin_node("demotion-cascade").await;
+        let node = fixture.db.node.clone();
+        let identity = fixture.db.node_identity.clone();
+        let default_agent_did = fixture.agent.did().to_owned();
+        let target_binding = gents_store::identity::provision_agent_identity_authorized(
+            &node,
+            identity.as_ref(),
+            &fixture.user.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let caller_binding = gents_store::identity::provision_agent_identity_authorized(
+            &node,
+            identity.as_ref(),
+            &fixture.user.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let target = target_binding.agent_did.as_str();
+        let caller = caller_binding.agent_did.as_str();
+        let target_tools = match case.input.admission.as_str() {
+            "fails_to_build" => tools_naming_missing_plugin(&node_did, &format!("{target}:tools")),
+            "builds" => (
                 gents_store::collection::Collection::Tools,
-                serde_json::json!({"node_did": node_did, "tools_id": format!("{caller}:tools"),
-                    "agents": {"target_ids": ["target-web-persona"], "enabled": true}}),
+                serde_json::json!({"node_did": node_did, "tools_id": format!("{target}:tools")}),
             ),
-            (
-                gents_store::collection::Collection::AgentTarget,
-                serde_json::json!({"node_did": node_did, "target_id": "target-web-persona",
-                    "target_node_did": node_did, "agent_did": broken, "name": "web"}),
-            ),
-            (
-                gents_store::collection::Collection::Task,
-                serde_json::json!({"node_did": node_did, "task_id": "task-web", "agent_did": broken,
-                    "prompt_template": "tick", "enabled": true}),
-            ),
-            (
-                gents_store::collection::Collection::Schedule,
-                serde_json::json!({"node_did": node_did, "schedule_id": "schedule-web",
-                    "cadence": {"kind": "interval", "interval_secs": 300}}),
-            ),
-            (
-                gents_store::collection::Collection::Trigger,
-                serde_json::json!({"node_did": node_did, "trigger_id": "trigger-web", "task_id": "task-web",
-                    "source": {"kind": "schedule", "schedule_id": "schedule-web"}, "enabled": true}),
-            ),
-        ],
-    )
-    .await;
-    let (agent, _plugin_home) = documents_agent(&fixture).await;
-    let tool_runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
-        agent.node.clone(),
-        agent.mcp_pool.clone(),
-        gents_tools::mcp::health::ServiceHealthMap::new(),
-        agent.local_hostname.clone(),
-        agent.local_subnet.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-    )
-    .with_plugins(agent.plugins().clone());
+            other => panic!("unmodeled tool admission {other}"),
+        };
+        write_runtime_documents(
+            &fixture.user_access,
+            vec![
+                agent_document(&node_did, &target_binding, &default_agent_did),
+                context_document(&node_did, target),
+                target_tools,
+                agent_document(&node_did, &caller_binding, &default_agent_did),
+                context_document(&node_did, caller),
+                (
+                    gents_store::collection::Collection::Tools,
+                    serde_json::json!({"node_did": node_did, "tools_id": format!("{caller}:tools"),
+                        "agents": {"target_ids": ["target-web-persona"], "enabled": true}}),
+                ),
+                (
+                    gents_store::collection::Collection::AgentTarget,
+                    serde_json::json!({"node_did": node_did, "target_id": "target-web-persona",
+                        "target_node_did": node_did, "agent_did": target, "name": "web"}),
+                ),
+                (
+                    gents_store::collection::Collection::Task,
+                    serde_json::json!({"node_did": node_did, "task_id": "task-web", "agent_did": target,
+                        "prompt_template": "tick", "enabled": true}),
+                ),
+                (
+                    gents_store::collection::Collection::Schedule,
+                    serde_json::json!({"node_did": node_did, "schedule_id": "schedule-web",
+                        "cadence": {"kind": "interval", "interval_secs": 300}}),
+                ),
+                (
+                    gents_store::collection::Collection::Trigger,
+                    serde_json::json!({"node_did": node_did, "trigger_id": "trigger-web", "task_id": "task-web",
+                        "source": {"kind": "schedule", "schedule_id": "schedule-web"}, "enabled": true}),
+                ),
+            ],
+        )
+        .await;
+        let (agent, _plugin_home) = documents_agent(&fixture).await;
+        let tool_runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
+            agent.node.clone(),
+            agent.mcp_pool.clone(),
+            gents_tools::mcp::health::ServiceHealthMap::new(),
+            agent.local_hostname.clone(),
+            agent.local_subnet.clone(),
+            node_did.clone(),
+            Some(identity.clone()),
+        )
+        .with_plugins(agent.plugins().clone());
 
-    let mut snapshot = startup::snapshot::resolve_startup_snapshot(&agent)
-        .await
-        .unwrap();
-    startup::snapshot::validate_startup_snapshot(&agent, &tool_runtime, &mut snapshot)
-        .await
-        .unwrap();
-
-    assert!(snapshot.unavailable_agents.contains_key(broken));
-    assert!(snapshot.agents.contains_key(caller));
-    assert!(
-        snapshot.tool_surfaces[caller]
-            .agent_targets()
-            .iter()
-            .all(|target| target.agent_did != broken),
-        "a demoted agent must not stay offered as a subagent target"
-    );
-    assert!(
-        !snapshot.active_schedules.contains_key("trigger-web")
-            && snapshot.unavailable_schedules.contains("trigger-web"),
-        "a demoted agent's schedule must be unavailable, not active"
-    );
-    assert!(
-        !snapshot.active_tasks.contains_key("task-web"),
-        "a demoted agent's task must not stay active"
-    );
+        let mut snapshot = startup::snapshot::resolve_startup_snapshot(&agent)
+            .await
+            .unwrap();
+        startup::snapshot::validate_startup_snapshot(&agent, &tool_runtime, &mut snapshot)
+            .await
+            .unwrap();
+        assert!(snapshot.agents.contains_key(caller));
+        case.check(tool_admission_startup_cascade::CascadeOutput {
+            runnable: snapshot.agents.contains_key(target),
+            reason: snapshot
+                .unavailable_agents
+                .get(target)
+                .map(|unavailable| unavailable.public_reason),
+            offered_as_target: snapshot.tool_surfaces[caller]
+                .agent_targets()
+                .iter()
+                .any(|offered| offered.agent_did == target),
+            task_active: snapshot.active_tasks.contains_key("task-web"),
+            schedule_active: snapshot.active_schedules.contains_key("trigger-web"),
+            schedule_unavailable: snapshot.unavailable_schedules.contains("trigger-web"),
+        });
+    }
 }

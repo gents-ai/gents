@@ -6,7 +6,13 @@ license.workspace = true
 repository.workspace = true
 description = "Evaluation and optimization drivers for Gents"
 
+[[test]]
+name = "optimization_live"
+path = "tests/optimization_live.rs"
+required-features = ["live-e2e"]
+
 [features]
+live-e2e = ["gents/live-e2e"]
 test-fixtures = []
 
 [dependencies]
