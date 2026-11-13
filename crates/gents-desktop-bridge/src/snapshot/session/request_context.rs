@@ -387,7 +387,21 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let access = ConfigAccess::graphql(server.uri());
+        let reader = tokio::task::spawn_blocking(|| {
+            gents_store::test_support::test_identity("context-history-reader")
+        })
+        .await
+        .unwrap();
+        let access = ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::with_authenticated_delegation(
+                format!("{}/api/v0/graphql", server.uri()),
+                "Bearer fixture",
+                gents_store::identity::NodeIdentity::did(&reader)
+                    .parse()
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
         let mut items = Vec::new();
         let result =
             attach_context_history_rows(&access, "session", "node", None, &[], &mut items).await;
@@ -400,16 +414,7 @@ mod tests {
     #[tokio::test]
     async fn context_details_reject_foreign_physical_requests_before_reading_capture() {
         use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
-        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
-        fn query_contains(fragment: &'static str) -> impl wiremock::Match {
-            move |request: &wiremock::Request| {
-                request
-                    .body_json::<serde_json::Value>()
-                    .ok()
-                    .and_then(|body| body["query"].as_str().map(|query| query.contains(fragment)))
-                    .unwrap_or(false)
-            }
-        }
+        use gents_store::test_support::wire_database::WireDatabase;
         let directory = tempfile::tempdir().unwrap();
         let core = std::sync::Arc::new(
             ClientCore::start_with_paths_and_options(
@@ -419,7 +424,6 @@ mod tests {
             .await
             .unwrap(),
         );
-        let server = MockServer::start().await;
         let accounting = serde_json::json!({
             "accounting_version":gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
             "turn_index":0, "attempt":0, "estimator":"openai_chat_wire_json_bytes_div_4_v1",
@@ -428,27 +432,26 @@ mod tests {
             "compaction_threshold_basis_points":7500,"compaction_threshold_tokens":7500,
             "compaction_reason":"below_threshold"
         });
-        Mock::given(method("POST")).and(query_contains("InferenceCall("))
-            .and(query_contains("call_id: {_eq: \"call\"}"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":{"InferenceCall":[{
-                "request_doc_id":"foreign-physical", "request_id":"request", "call_id":"call", "call_seq":1,
-                "context_accounting_json":accounting.to_string()
-            }]}}))).expect(1).mount(&server).await;
-        Mock::given(method("POST"))
-            .and(query_contains("AgentRequest("))
-            .and(query_contains("_docID: {_eq: \"foreign-physical\"}"))
-            .and(query_contains("requester_did: {_eq: \"requester\"}"))
-            .and(query_contains("session_id: {_eq: \"session\"}"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"data":{"AgentRequest":[]}})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        let read = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let database = WireDatabase::spawn(
+            serde_json::json!({"InferenceCall": [{
+                "node_did": "node", "call_state": "completed",
+                "request_doc_id": "foreign-physical", "request_id": "request",
+                "call_id": "call", "call_seq": 1,
+                "context_accounting_json": accounting.to_string()
+            }]}),
+            {
+                let read = read.clone();
+                std::sync::Arc::new(move |collection| {
+                    read.lock().unwrap().push(collection);
+                    Box::pin(async { Ok(()) })
+                })
+            },
+        )
+        .await;
         let details = load_session_context_details(
             &core,
-            &ConfigAccess::graphql(server.uri()),
+            &ConfigAccess::Graphql(database.reader()),
             "node",
             Some("requester"),
             "session",
@@ -458,9 +461,8 @@ mod tests {
         .await
         .unwrap();
         assert!(details.is_none());
-        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(*read.lock().unwrap(), ["InferenceCall", "AgentRequest"]);
         core.shutdown().await.unwrap();
-        server.verify().await;
     }
 
     fn reduction(key: &str, through: Option<i64>, created_at: &str) -> LoadedReduction {
@@ -736,42 +738,65 @@ mod tests {
 
     #[tokio::test]
     async fn a_read_carries_the_summaries_of_the_markers_it_draws_only() {
-        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(|request: &wiremock::Request| {
-                request
-                    .body_json::<serde_json::Value>()
-                    .ok()
-                    .and_then(|body| body["query"].as_str().map(str::to_owned))
-                    .is_some_and(|query| {
-                        query.contains(r#"compaction_key: { _in: ["drawn"] }"#)
-                            && query.contains(r#"reduction_key: { _in: ["mid"] }"#)
-                    })
+        use gents_store::identity::NodeIdentity as _;
+        let home = tempfile::tempdir().unwrap();
+        let identity =
+            gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+                .unwrap();
+        let reader = identity.did().to_owned();
+        let node = std::sync::Arc::new(
+            gents::defra_node::Node::builder()
+                .with_node_identity_did(&reader)
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        let inputs = vec![
+            (
+                "mutation($input: CompactionEntryMutationInputArg!) { create_CompactionEntry(input: $input) { _docID } }",
+                serde_json::json!({
+                    "compaction_key": "drawn", "node_did": reader, "session_id": "session",
+                    "requester_did": reader, "summary": "## Goal\nKept.",
+                    "files_read": "[\"src/lib.rs\"]"
+                }),
+            ),
+            (
+                "mutation($input: ProviderContextReductionMutationInputArg!) { create_ProviderContextReduction(input: $input) { _docID } }",
+                serde_json::json!({
+                    "reduction_key": "mid", "node_did": reader, "session_id": "session",
+                    "requester_did": reader, "request_id": "request", "request_doc_id": "physical",
+                    "request_commit_cid": "cid", "reduction_index": 0, "turn_index": 0,
+                    "source_boundary_json": "{}", "compacted_prefix_json": "[]",
+                    "retained_suffix_json": "[]", "pair_closed": true,
+                    "checkpoint_messages_json": "[]", "replay_associations_json": "{}",
+                    "summary": "  ", "messages_compacted": 0, "original_tokens": 0,
+                    "compacted_tokens": 0, "created_at": "2026-10-30T17:01:00Z"
+                }),
+            ),
+        ];
+        ConfigAccess::transact_local_write(&node, None, "test.marker_summaries", |txn| {
+            let inputs = inputs.clone();
+            Box::pin(async move {
+                for (mutation, input) in inputs {
+                    txn.execute_with_variables(mutation, &serde_json::json!({"input": input}))
+                        .await?;
+                }
+                Ok::<_, anyhow::Error>(())
             })
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
-                    "CompactionEntry": [{"compaction_key": "drawn", "summary": "## Goal\nKept.",
-                        "files_read": "[\"src/lib.rs\"]", "files_modified": null}],
-                    "ProviderContextReduction": [{"reduction_key": "mid", "summary": "  "}]
-                }})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        })
+        .await
+        .unwrap();
+        let access = ConfigAccess::local_as(node, reader.parse().unwrap());
         let mut markers = vec![
             marker("session-compaction:drawn", 4, "2026-10-30T17:00:00Z"),
             marker("request-compaction:mid", 9, "2026-10-30T17:01:00Z"),
         ];
-        fill_marker_summaries(
-            &ConfigAccess::graphql(server.uri()),
-            "session",
-            "node",
-            Some("requester"),
-            &mut markers,
-        )
-        .await
-        .expect("marker summaries");
+        fill_marker_summaries(&access, "session", &reader, Some(&reader), &mut markers)
+            .await
+            .expect("marker summaries");
         let summaries = markers
             .iter()
             .map(|(_, item)| match item {
@@ -794,7 +819,6 @@ mod tests {
                 (None, None),
             ]
         );
-        server.verify().await;
     }
 }
 

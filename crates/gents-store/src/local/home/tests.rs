@@ -210,6 +210,7 @@ mod retirement {
     #[serde(rename_all = "snake_case")]
     enum Role {
         Inventory,
+        Reservation,
         Lock,
         Maintenance,
         Foreign,
@@ -260,12 +261,18 @@ mod retirement {
         let root = fs::canonicalize(temp.path()).unwrap();
         let (home, outside, backup) =
             (root.join("home"), root.join("outside"), root.join("backup"));
-        let mut inventory = RUNTIME_HOME_ENTRIES.to_vec();
+        let reservation = [BOOTSTRAP_CONSUMED_FILE_NAME];
+        let mut inventory: Vec<&str> = RUNTIME_HOME_ENTRIES
+            .iter()
+            .copied()
+            .filter(|name| !reservation.contains(name))
+            .collect();
         inventory.sort_unstable();
         let mut names = [
             inventory.iter(),
             RUNTIME_HOME_LOCK_FILES.iter(),
             RUNTIME_HOME_RETAINED_ENTRIES.iter(),
+            reservation.iter(),
         ];
         let mut exclude = Vec::new();
         let mut kept = Vec::new();
@@ -278,6 +285,7 @@ mod retirement {
                     Role::Inventory => home.join(names[0].next().unwrap()),
                     Role::Lock => home.join(names[1].next().unwrap()),
                     Role::Maintenance => home.join(names[2].next().unwrap()),
+                    Role::Reservation => home.join(names[3].next().unwrap()),
                     Role::Foreign => home.join(format!("notes-{index}.md")),
                 };
                 let inside = match item.presence {

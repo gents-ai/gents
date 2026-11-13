@@ -16,6 +16,7 @@ pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
             tokio::task::spawn_blocking(|| {
                 reqwest::Client::builder()
                     .timeout(HTTP_TIMEOUT)
+                    .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT)
                     .build()
                     .map_err(ConfigClientError::HttpClientBuild)
             })

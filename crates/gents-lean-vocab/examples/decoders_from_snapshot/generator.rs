@@ -1171,6 +1171,20 @@ fn patch_fields(
     }
 }
 
+fn require_nullable_root_keys(fields: &mut Fields, patches: &mut Vec<String>) {
+    for field in fields.iter_mut() {
+        if option_inner(&field.ty).is_some() && serde_args(&field.attrs).is_empty() {
+            field
+                .attrs
+                .push(syn::parse_quote!(#[serde(deserialize_with = "required_nullable")]));
+            patches.push(format!(
+                "{ROOT}.{}: null is decoded, absence is refused",
+                field.ident.as_ref().unwrap()
+            ));
+        }
+    }
+}
+
 pub fn generate(
     snapshot: &Value,
     sources: &[Source],
@@ -1330,6 +1344,9 @@ pub fn generate(
                     &mut inference,
                     &mut patches,
                 );
+                if name == ROOT {
+                    require_nullable_root_keys(&mut item.fields, &mut patches);
+                }
                 if let Fields::Unnamed(fields) = &mut item.fields {
                     fields
                         .unnamed

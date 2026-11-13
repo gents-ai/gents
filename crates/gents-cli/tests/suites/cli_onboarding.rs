@@ -202,8 +202,9 @@ fn print_on_a_broken_explicit_folder_names_it_and_how_to_repair() -> Result<()> 
         stderr.contains("can't be loaded: its settings file (init.json) can't be read"),
         "stderr:\n{stderr}"
     );
+    assert!(stderr.contains("Nothing was changed."), "stderr:\n{stderr}");
     assert!(
-        stderr.contains("in a terminal to repair it"),
+        stderr.contains("in a terminal and choose to set it aside"),
         "stderr:\n{stderr}"
     );
     assert!(
@@ -214,7 +215,7 @@ fn print_on_a_broken_explicit_folder_names_it_and_how_to_repair() -> Result<()> 
 }
 
 #[test]
-fn gents_home_naming_the_default_folder_is_not_explicit() -> Result<()> {
+fn print_on_a_broken_default_folder_leaves_it_and_names_how_to_repair() -> Result<()> {
     let user_home = tempfile::tempdir()?;
     let home = user_home.path().join(".gents");
     fs::create_dir(&home)?;
@@ -230,6 +231,18 @@ fn gents_home_naming_the_default_folder_is_not_explicit() -> Result<()> {
 
     let stderr = stderr_of(&output);
     assert!(!output.status.success(), "stderr:\n{stderr}");
-    assert!(!stderr.contains("can't be loaded"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("can't be loaded: its settings file (init.json) can't be read"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("in a terminal and choose to set it aside"),
+        "stderr:\n{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(home.join("init.json"))?,
+        "{",
+        "the folder was changed"
+    );
     Ok(())
 }

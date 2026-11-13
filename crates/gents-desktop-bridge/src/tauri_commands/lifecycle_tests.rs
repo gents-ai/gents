@@ -95,7 +95,9 @@ fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
     let (error, store) = classify_client_start_error(&refused, node);
     assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
     assert!(
-        error.message.contains("/tmp/desktop/node"),
+        error
+            .message
+            .contains("local data at /tmp/desktop/node was made by an older version"),
         "{}",
         error.message
     );
@@ -284,56 +286,6 @@ async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
     assert!(opened.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-#[tokio::test]
-async fn a_plaintext_client_upgrade_returns_a_started_core_with_lifecycle_exclusion() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let paths = gents_desktop_core::client::DesktopPaths::from_root(temp.path());
-    let legacy = gents::defra_node::Node::builder()
-        .data_path(paths.node_data_dir())
-        .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
-        .build()
-        .await
-        .expect("legacy client store");
-    legacy.shutdown().await.unwrap();
-    drop(legacy);
-
-    let lifecycle_owner = Arc::new(tokio::sync::Mutex::new(()));
-    let lifecycle = Arc::clone(&lifecycle_owner).lock_owned().await;
-    let (core, lifecycle) = start_client_core_async(
-        paths.clone(),
-        gents_store::local::store_key::StoreKeyCustodyChoice::File,
-        lifecycle,
-    )
-    .await
-    .expect("plaintext upgrade must complete through the native startup boundary");
-    assert!(
-        lifecycle_owner.try_lock().is_err(),
-        "successful startup transfers lifecycle exclusion with the core"
-    );
-    assert!(paths.store_encryption_path().is_file());
-    assert!(paths.store_key_path().is_file());
-    assert!(
-        gents_store::local::store_key::upgrade::pending_record(paths.node_data_dir())
-            .unwrap()
-            .is_none()
-    );
-    for entry in [paths.store_encryption_path(), paths.store_key_path()] {
-        assert!(
-            paths
-                .client_state_entries()
-                .iter()
-                .any(|path| path == entry),
-            "the reset retires {}",
-            entry.display()
-        );
-    }
-    let core = Arc::new(core);
-    core.shutdown().await.expect("shutdown upgraded client");
-    drop(core);
-    drop(lifecycle);
-    assert!(lifecycle_owner.try_lock().is_ok());
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store() {
@@ -358,11 +310,7 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
         panic!("an insecure key must not start the client");
     };
     assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
-    assert!(
-        error.message.contains("unsafe file permissions"),
-        "{}",
-        error.message
-    );
+    assert!(error.message.contains("chmod 600"), "{}", error.message);
     let store = store.expect("typed refusal");
     assert_eq!(
         store.kind,

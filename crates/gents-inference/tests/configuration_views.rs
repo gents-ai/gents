@@ -115,11 +115,31 @@ async fn configuration_views_match_model_on_served_node() -> anyhow::Result<()> 
             json!({"node_did":node,"plugin_id":"view-plugin","language":"rust","source":""}),
         ),
     ];
-    for (_, collection, schema, input) in fixtures {
+    let reader_did = reader.did().parse()?;
+    let mut node_document = None;
+    for (name, collection, schema, input) in fixtures {
         let document = create(&owner, collection, schema, input).await?;
-        owner
-            .add_actor_relationship(collection, &document, "reader", &reader.did().parse()?)
-            .await?;
+        match name {
+            "node" => {
+                owner
+                    .add_actor_relationship(collection, &document, "runtime_reader", &reader_did)
+                    .await?;
+                node_document = Some(document);
+            }
+            "default_selection" => {
+                let parent = node_document
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("the Node fixture precedes its selection"))?;
+                owner
+                    .add_resource_relationship(collection, &document, "parent", "nodes", parent)
+                    .await?;
+            }
+            _ => {
+                owner
+                    .add_actor_relationship(collection, &document, "reader", &reader_did)
+                    .await?;
+            }
+        }
     }
     let cases = gents_lean_vocab::families::configuration_views_inventory::cases::<String>();
     assert_eq!(cases.len(), 40);

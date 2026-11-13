@@ -107,28 +107,12 @@ mod tests {
 
     #[tokio::test]
     async fn thirty_two_trials_record_over_http_without_losing_completions_or_verdicts() {
-        let db = gents_inference::test_support::test_db(
+        let (db, _user, access) = gents_inference::test_support::signed_test_node_without_agent(
             "thirty-two-trials-record-over-http",
             gents_automation::lifecycle_hooks::composition(),
         )
         .await;
-        let node = db.node.clone();
-        let keys = tempfile::tempdir().unwrap();
-        let user =
-            gents_store::identity::KeyIdentity::load_or_create(keys.path().join("user.key"), None)
-                .unwrap();
-        let access = db.client_access(&user);
-        let owner = node.node_identity_did().unwrap();
-        let node_input = json!({"input": {"node_did": owner}});
-        access.transact_write("test.recorder.node", |txn| {
-            let node_input = &node_input;
-            Box::pin(async move {
-                txn.execute_client_signed_create(
-                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                    node_input, gents_protocol::schemas::NODE,
-                ).await.map(|_| ())
-            })
-        }).await.unwrap();
+        let owner = db.node_identity.did();
         let recorder = DocumentRecorder::new(&access);
         let completion = TrialCompletion {
             ended_at: "2026-09-30T00:00:00Z".into(),
@@ -205,6 +189,6 @@ mod tests {
                 .len(),
             32
         );
-        node.shutdown().await.expect("shutdown node");
+        db.node.shutdown().await.expect("shutdown node");
     }
 }

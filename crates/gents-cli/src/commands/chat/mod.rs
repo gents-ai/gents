@@ -32,7 +32,7 @@ pub(crate) async fn print_reply(
     steer: bool,
 ) -> Result<()> {
     // The turn is the User's: it is signed by the CLI's client key, never the Node's.
-    gents_service::home_state::load_client_identity().await?;
+    gents_service::home_state::client_identity_for(home).await?;
     let session_id = session.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_owned);
     let access = ConfigAccess::Graphql(graphql.clone());
     let signer = client_signer(&access)?;

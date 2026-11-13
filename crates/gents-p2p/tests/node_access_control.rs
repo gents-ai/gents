@@ -6,9 +6,13 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use defra_node::{HttpConfig, Node as EmbeddedNode, StorageBackend};
 use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
+use gents_protocol::peer_schema::{
+    decide_app_collection, is_managed_collection, AppCollectionFacts,
+};
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 
+const PROBE: &str = "NodeAccessProbe";
 const SCHEMA: &str = "type NodeAccessProbe { name: String }";
 
 fn free_address() -> SocketAddr {
@@ -115,21 +119,28 @@ async fn assert_access_control(
         .await
         .expect("the home principal may write in an HTTP transaction");
 
+    let admitted = decide_app_collection(AppCollectionFacts {
+        managed: is_managed_collection(PROBE),
+        has_policy: false,
+        is_view: false,
+    });
     let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(node));
-    assert!(
-        matches!(
-            admin
-                .add_replicator(
-                    &[],
-                    &["NodeAccessProbe".to_string()],
-                    &gents_p2p::p2p_reconcile::PairingFilters::default(),
-                )
-                .await,
-            Err(gents_p2p::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(
-                ref name
-            )) if name == "NodeAccessProbe"
-        ),
-        "P2P carries only discovery and enrollment documents"
+    let outcome = admin
+        .add_replicator(
+            &[],
+            &[PROBE.to_string()],
+            &gents_p2p::p2p_reconcile::PairingFilters::default(),
+        )
+        .await;
+    let refused = matches!(
+        outcome,
+        Err(gents_p2p::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(ref name))
+            if name == PROBE
+    );
+    assert_eq!(
+        refused,
+        admitted.is_err(),
+        "P2P admits exactly the application collections the model admits: {outcome:?}"
     );
     let replicated = gents_store::identity::node_p2p(node)
         .expect("P2P transport")
@@ -137,10 +148,8 @@ async fn assert_access_control(
         .await
         .expect("in-process P2P listing acts as the node");
     assert!(
-        !replicated
-            .iter()
-            .any(|collection| collection == "NodeAccessProbe"),
-        "a refused runtime-local collection is never replicated: {replicated:?}"
+        !replicated.iter().any(|collection| collection == PROBE),
+        "a collection named to no peer is never replicated: {replicated:?}"
     );
 }
 

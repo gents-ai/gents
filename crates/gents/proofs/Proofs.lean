@@ -151,3 +151,4 @@ import Proofs.Pack.CorePacks
 import Proofs.Session.Request.PreclaimBoundary
 
 import Proofs.Clients.InstallRepair
+import Proofs.Clients.RepairBackups

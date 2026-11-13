@@ -24,6 +24,12 @@ on:
 permissions:
   contents: read
 
+# One runner builds the packs for half an hour; a newer push to the same pull
+# request supersedes the build it queued behind. Release callers keep their own run.
+concurrency:
+  group: core-packs-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"

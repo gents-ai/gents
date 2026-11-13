@@ -90,7 +90,11 @@ describe("the starter packs card", () => {
     renderIn(local(api), <StarterPacksCard />);
     const dialog = await card();
     expect(within(dialog).getByText("Starter packs")).toBeInTheDocument();
-    expect(within(dialog).getByText("The packs the Engineer starts with. They come with Gents.")).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "The packs the Engineer starts with. They come with Gents.",
+      ),
+    ).toBeTruthy();
     const rows = within(within(dialog).getByRole("list", { name: "Starter packs" }))
       .getAllByRole("listitem")
       .filter((row) => row.parentElement?.getAttribute("aria-label"));
@@ -322,7 +326,9 @@ describe("starter packs on the Packs page", () => {
       within(section).getByText("The registry could not be reached."),
     ).toBeInTheDocument();
     expect(within(section).queryByRole("button", { name: "Install all" })).toBeNull();
-    expect(within(section).queryByRole("button", { name: /^(Install|Turn on) / })).toBeNull();
+    expect(
+      within(section).queryByRole("button", { name: /^(Install|Turn on) / }),
+    ).toBeNull();
     expect(listDefaultPacks).toHaveBeenCalledTimes(1);
   });
 

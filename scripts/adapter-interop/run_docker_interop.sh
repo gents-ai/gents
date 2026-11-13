@@ -94,7 +94,7 @@ if [[ "${GENTS_DOCKER_INTEROP_SKIP_RUST:-0}" != "1" ]]; then
   (
     cd "${repo_root}"
     GENTS_ADAPTER_INTEROP_FIXTURES="${out_dir}" \
-      cargo test -p gents-observe --lib external_adapter_projection_fixtures_validate_against_contracts -- --ignored --nocapture
+      cargo test -p gents-observe --lib observe::adapter_projection::tests::external_adapter_projection_fixtures_validate_against_contracts -- --exact --ignored --nocapture
   )
 
   export_dir="${out_dir}/gents-exports"

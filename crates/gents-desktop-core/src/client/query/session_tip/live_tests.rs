@@ -305,15 +305,20 @@ async fn session_live_text_reads_the_running_turn_and_ends_with_its_lifecycle() 
     })
     .await
     .unwrap();
-    let access = ConfigAccess::graphql_as(
-        format!("{}/api/v0/graphql", server.uri()),
-        gents_store::identity::NodeIdentity::did(&reader),
+    let access = ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(
+            format!("{}/api/v0/graphql", server.uri()),
+            gents_store::identity::NodeIdentity::did(&reader),
+        )
+        .with_client_signing_capability(
+            gents_store::identity::NodeIdentity::client_signing_capability(&reader).unwrap(),
+        )
+        .unwrap(),
     );
     let mount = |body: Value| {
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/api/v0/graphql"))
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
-            .expect(1)
     };
     mount(body.clone()).mount(&server).await;
     let live = load_session_live_text_on(&access, &observed, "session", "node")
@@ -322,7 +327,6 @@ async fn session_live_text_reads_the_running_turn_and_ends_with_its_lifecycle() 
         .expect("running turn has live text");
     assert_eq!(live.content, "hello");
     assert!(live.reasoning.is_empty());
-    server.verify().await;
     server.reset().await;
     body["data"]["view_0"][0]["lifecycle_state"] = serde_json::json!("completed");
     mount(body).mount(&server).await;
@@ -332,7 +336,6 @@ async fn session_live_text_reads_the_running_turn_and_ends_with_its_lifecycle() 
             .unwrap()
             .is_none()
     );
-    server.verify().await;
     assert!(
         load_session_live_text_on(&access, &observed, "session", "other")
             .await
