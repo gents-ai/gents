@@ -396,8 +396,6 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"vocabularies\":"
-      ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
     ++ "\"tool_admission_handoff_cases\":"

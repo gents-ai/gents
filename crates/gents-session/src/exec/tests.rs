@@ -7,23 +7,16 @@ use chrono::Utc;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use gents_lean_vocab::{
-    assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete, LeanContractVocabulary,
-};
+use gents_lean_vocab::{assert_lean_transition_is_legal, assert_state_machine_contract_is_complete};
 
 #[test]
 fn rust_managed_exec_state_vocabulary_matches_lean_model() {
     let rust_states = ManagedExecState::ALL
         .iter()
         .copied()
-        .map(ManagedExecState::as_str)
+        .map(|state| state.as_str().to_owned())
         .collect::<Vec<_>>();
-    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-        domain: "ManagedExecState",
-        rust_source: "ManagedExecState::ALL",
-        rust_values: &rust_states,
-    });
+    gents_lean_vocab::families::managed_exec_state_vocabulary::replay(&rust_states);
 }
 
 #[test]

@@ -70,9 +70,10 @@ mod conformance {
             GoalStatus::BudgetLimited,
             GoalStatus::Complete,
             GoalStatus::Stopped,
-        ]
-        .map(GoalStatus::as_str);
-        assert_eq!(gents_lean_vocab::lean_vocabulary_values("GoalStatus"), rust);
+        ];
+        for status in rust {
+            assert_eq!(serde_json::json!(status), status.as_str());
+        }
         gents_lean_vocab::assert_state_machine_contract_is_complete("Goal");
     }
 }

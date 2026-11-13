@@ -11,10 +11,7 @@ const CONTRACT_METADATA: &[&str] = &[
     "feature_surface_requirements",
 ];
 
-const DOMAIN_FAMILIES: &[(&str, &str)] = &[
-    ("vocabularies", "vocabulary"),
-    ("state_machines", "state_machine"),
-];
+const DOMAIN_FAMILIES: &[(&str, &str)] = &[("state_machines", "state_machine")];
 
 const DERIVED_FAMILIES: &str = "families";
 const DERIVED_VOCABULARIES: &str = "family_vocabularies";

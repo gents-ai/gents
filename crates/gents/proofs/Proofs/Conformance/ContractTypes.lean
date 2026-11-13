@@ -14,11 +14,6 @@ structure NamedTransition where
   target : String
   deriving Repr
 
-structure VocabularyContract where
-  domain : String
-  values : List String
-  deriving Repr
-
 structure StateMachineContract where
   domain : String
   states : List String
@@ -111,12 +106,6 @@ def NamedTransition.toJson (t : NamedTransition) : String :=
     ++ "\"name\":" ++ jsonString t.name ++ ","
     ++ "\"from\":" ++ jsonString t.source ++ ","
     ++ "\"to\":" ++ jsonString t.target
-    ++ "}"
-
-def VocabularyContract.toJson (contract : VocabularyContract) : String :=
-  "{"
-    ++ "\"domain\":" ++ jsonString contract.domain ++ ","
-    ++ "\"values\":" ++ jsonStringArray contract.values
     ++ "}"
 
 def StateMachineContract.toJson (contract : StateMachineContract) : String :=

@@ -1118,7 +1118,6 @@ pub struct LeanContractSnapshot {
     pub tool_admission_handoff_cases: Vec<LeanToolAdmissionHandoffCase>,
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub generated_by: String,
-    pub vocabularies: Vec<LeanVocabularyContract>,
     pub state_machines: Vec<LeanStateMachineContract>,
     pub goal_claimed_publication_cases: Vec<LeanGoalClaimedPublicationCase>,
     pub goal_operator_resume_cases: Vec<LeanGoalOperatorResumeCase>,
@@ -4226,12 +4225,6 @@ pub struct LeanTranscriptCase {
 pub struct LeanTransitionPair {
     pub from: String,
     pub to: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanVocabularyContract {
-    pub domain: String,
-    pub values: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

@@ -56,13 +56,6 @@ pub struct LeanVocabulary<'a> {
     pub rust_values: &'a [&'a str],
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct LeanContractVocabulary<'a> {
-    pub domain: &'a str,
-    pub rust_source: &'a str,
-    pub rust_values: &'a [&'a str],
-}
-
 impl LeanPluginJobAdoptionCase {
     pub fn name(&self) -> &str {
         match self {
@@ -150,14 +143,6 @@ where
     T: serde::de::DeserializeOwned,
 {
     serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
-}
-
-pub fn lean_vocabulary_contract(domain: &str) -> &'static LeanVocabularyContract {
-    lean_contract_snapshot()
-        .vocabularies
-        .iter()
-        .find(|contract| contract.domain == domain)
-        .unwrap_or_else(|| panic!("Lean vocabulary contract {domain:?} was not emitted"))
 }
 
 pub fn lean_state_machine_contract(domain: &str) -> &'static LeanStateMachineContract {
@@ -263,63 +248,6 @@ impl LeanQueueManagementState {
             terminal: self.terminal.iter().copied().map(&native).collect(),
         }
     }
-}
-
-pub fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
-    lean_vocabulary_contract(domain)
-        .values
-        .iter()
-        .map(String::as_str)
-        .collect()
-}
-
-pub fn assert_lean_contract_vocabulary_matches(spec: LeanContractVocabulary<'_>) {
-    let lean_values = lean_vocabulary_values(spec.domain);
-    let missing_from_lean = values_missing_from(spec.rust_values, &lean_values);
-    let extra_in_lean = values_missing_from(&lean_values, spec.rust_values);
-    let duplicate_rust_values = duplicate_values(spec.rust_values);
-    let duplicate_lean_values = duplicate_values(&lean_values);
-
-    assert!(
-        spec.rust_values == lean_values.as_slice()
-            && missing_from_lean.is_empty()
-            && extra_in_lean.is_empty()
-            && duplicate_rust_values.is_empty()
-            && duplicate_lean_values.is_empty(),
-        "Rust/Lean vocabulary contract mismatch\n  Lean contract domain: {}\n  Rust vocabulary source: {}\n  missing Lean values (present in Rust): {:?}\n  extra Lean values (absent from Rust): {:?}\n  duplicate Rust values: {:?}\n  duplicate Lean values: {:?}\n  Rust values: {:?}\n  Lean values: {:?}",
-        spec.domain,
-        spec.rust_source,
-        missing_from_lean,
-        extra_in_lean,
-        duplicate_rust_values,
-        duplicate_lean_values,
-        spec.rust_values,
-        lean_values
-    );
-}
-
-pub fn assert_lean_contract_vocabulary_set_matches(spec: LeanContractVocabulary<'_>) {
-    let lean_values = lean_vocabulary_values(spec.domain);
-    let missing_from_lean = values_missing_from(spec.rust_values, &lean_values);
-    let extra_in_lean = values_missing_from(&lean_values, spec.rust_values);
-    let duplicate_rust_values = duplicate_values(spec.rust_values);
-    let duplicate_lean_values = duplicate_values(&lean_values);
-
-    assert!(
-        missing_from_lean.is_empty()
-            && extra_in_lean.is_empty()
-            && duplicate_rust_values.is_empty()
-            && duplicate_lean_values.is_empty(),
-        "Rust/Lean vocabulary contract set mismatch\n  Lean contract domain: {}\n  Rust vocabulary source: {}\n  missing Lean values (present in Rust): {:?}\n  extra Lean values (absent from Rust): {:?}\n  duplicate Rust values: {:?}\n  duplicate Lean values: {:?}\n  Rust values: {:?}\n  Lean values: {:?}",
-        spec.domain,
-        spec.rust_source,
-        missing_from_lean,
-        extra_in_lean,
-        duplicate_rust_values,
-        duplicate_lean_values,
-        spec.rust_values,
-        lean_values
-    );
 }
 
 pub fn assert_lean_transition_is_legal(domain: &str, from: &str, to: &str) {

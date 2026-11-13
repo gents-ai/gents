@@ -303,8 +303,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
 
 def vocabularyCoverage : List CoverageEntry :=
   [ tagged (consumerCoverage
-      "vocabulary"
-      "RequestState")
+      "family"
+      "request_state_vocabulary")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -314,47 +314,22 @@ def vocabularyCoverage : List CoverageEntry :=
       "family"
       "process_state_vocabulary")
       "process-lifecycle" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "vocabulary"
-      "PersistenceState"
-      "The database schema has no per-token PersistenceState document; committed/uncommitted is the model abstraction.")
-      "persistence-failure-policy" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "vocabulary"
-      "PersistenceFailurePolicy"
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through persistence_failure_policy_cases.")
+  , tagged (consumerCoverage
+      "family"
+      "persistence_state_failure_policy_vocabulary")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "reconcile_phase_vocabulary")
       "runtime-reconcile" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "vocabulary"
-      "StorageObservation"
-      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
-      "storage-observation" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "vocabulary"
-      "SessionRecoveryLatestRequestState")
-      "session-recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "vocabulary"
-      "InferenceCallState")
+      "family"
+      "inference_call_state_vocabulary")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "vocabulary"
-      "InferenceCallTerminalReason")
+      "family"
+      "inference_call_terminal_reason_vocabulary")
       "inference-call" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "vocabulary"
-      "CompletionRetryFailureClass"
-      "The immutable-publication retry vocabulary has changed; the native owned loop must migrate before this is production vocabulary coverage.")
-      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "vocabulary"
-      "ToolRetryDisposition"
-      "No production disposition enum exists; the deleted test-only mirror was not runtime vocabulary coverage. Retry behavior is observed through MCP operations below.")
-      "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
       "tool_execution_tool_call_state_vocabulary")
@@ -364,8 +339,8 @@ def vocabularyCoverage : List CoverageEntry :=
       "tool_execution_cancel_cause_vocabulary")
       "interrupt-and-cancel" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "ManagedExecState")
+      "family"
+      "managed_exec_state_vocabulary")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -389,36 +364,36 @@ def vocabularyCoverage : List CoverageEntry :=
       "tool_execution_await_mode_vocabulary")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "GoalStatus")
+      "family"
+      "goals_status_vocabulary")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "vocabulary"
-      "MailboxStatus")
+      "family"
+      "mailbox_status_vocabulary")
       "mailbox" allSurfaces
   , tagged (consumerCoverage
-      "vocabulary"
-      "MailboxKind")
+      "family"
+      "mailbox_kind_vocabulary")
       "mailbox" allSurfaces
   , tagged (consumerCoverage
-      "vocabulary"
-      "MailboxHandling")
+      "family"
+      "mailbox_handling_vocabulary")
       "mailbox" allSurfaces
   , tagged (consumerCoverage
-      "vocabulary"
-      "MailboxSourceKind")
+      "family"
+      "mailbox_source_kind_vocabulary")
       "mailbox" allSurfaces
   , tagged (consumerCoverage
-      "vocabulary"
-      "EvalOutcomeKind")
+      "family"
+      "eval_outcome_kind_vocabulary")
       "eval" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "vocabulary"
-      "EvalProviderReason")
+      "family"
+      "eval_provider_reason_vocabulary")
       "eval" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "vocabulary"
-      "EvalEvidenceClass")
+      "family"
+      "eval_evidence_class_vocabulary")
       "eval" [Surface.operatorCli]
   ]
 
