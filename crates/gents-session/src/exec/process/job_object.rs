@@ -152,7 +152,7 @@ impl FailedJobOwner {
     }
 
     /// Holds the exact job and child until the child is reaped and the job is empty.
-    pub(crate) async fn stop_and_confirm(&self) -> bool {
+    pub async fn stop_and_confirm(&self) -> bool {
         let mut state = self.state.lock().await;
         if state.confirmed {
             return true;

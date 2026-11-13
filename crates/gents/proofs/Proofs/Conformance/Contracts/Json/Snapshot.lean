@@ -300,6 +300,8 @@ import Proofs.Documents.ScopeTemplates.Derivation
 import Proofs.Conformance.LspServerStart
 import Proofs.Conformance.WorkspacePermissions
 
+import Proofs.Conformance.InstallRepair
+
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

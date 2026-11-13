@@ -31,10 +31,10 @@ fn custody_refusals_preserve_key_access_without_reclassifying_authorization() {
         );
     }
     assert_eq!(
-        refusal_reason(&refusal(
+        refusal_reason(&anyhow::Error::from(refusal(
             RuntimePreparationRefusal::Credentials,
             "operator authorization refused"
-        )),
+        ))),
         RuntimePreparationRefusal::Credentials
     );
     assert_eq!(
@@ -161,11 +161,7 @@ async fn preparation_control_verifies_live_receipts_and_rejects_tampering() {
         .await;
         if tamper {
             assert_eq!(
-                result
-                    .unwrap_err()
-                    .downcast_ref::<PreparationFailure>()
-                    .unwrap()
-                    .reason,
+                result.unwrap_err().reason().unwrap(),
                 RuntimePreparationRefusal::InvalidHome
             );
         } else {
@@ -190,7 +186,7 @@ async fn preparation_control_refuses_a_signed_receipt_for_another_node() {
     .await
     .unwrap_err();
     assert_eq!(
-        error.downcast_ref::<PreparationFailure>().unwrap().reason,
+        error.reason().unwrap(),
         RuntimePreparationRefusal::InvalidHome
     );
     assert_eq!(node.seen.lock().unwrap().len(), 1);
@@ -218,11 +214,7 @@ async fn preparation_control_refuses_a_runtime_without_the_control_endpoint() {
     server.abort();
     let _ = server.await;
     assert_eq!(
-        result
-            .unwrap_err()
-            .downcast_ref::<PreparationFailure>()
-            .unwrap()
-            .reason,
+        result.unwrap_err().reason().unwrap(),
         RuntimePreparationRefusal::Unsupported
     );
 }
@@ -255,11 +247,7 @@ async fn preparation_busy_refusal_leaves_identity_store_and_saved_route_unchange
     )
     .await;
     assert_eq!(
-        result
-            .unwrap_err()
-            .downcast_ref::<PreparationFailure>()
-            .unwrap()
-            .reason,
+        refusal_reason(&result.unwrap_err()),
         RuntimePreparationRefusal::Busy
     );
     let commands = node.seen.lock().unwrap();
@@ -308,10 +296,7 @@ async fn changing_root_does_not_modify_a_busy_runtime() {
     )
     .await
     .unwrap_err();
-    assert_eq!(
-        error.downcast_ref::<PreparationFailure>().unwrap().reason,
-        RuntimePreparationRefusal::Busy
-    );
+    assert_eq!(refusal_reason(&error), RuntimePreparationRefusal::Busy);
     assert_eq!(std::fs::read(home.join("init.json")).unwrap(), init_before);
     assert_eq!(
         std::fs::read(home.join("runtime.json")).unwrap(),
@@ -546,7 +531,7 @@ async fn preparation_missing_store_key_refuses_before_requesting_retirement() {
     .await
     .unwrap_err();
     assert_eq!(
-        error.downcast_ref::<PreparationFailure>().unwrap().reason,
+        refusal_reason(&error),
         RuntimePreparationRefusal::Credentials
     );
     assert_eq!(node.seen.lock().unwrap().len(), 1);
@@ -600,7 +585,7 @@ async fn unavailable_observation_is_absent_but_cannot_authorize_retirement() {
     )
     .await;
     assert_eq!(
-        refusal_reason(&retired.unwrap_err()),
+        retired.unwrap_err().reason().unwrap(),
         RuntimePreparationRefusal::Unavailable
     );
     server.abort();

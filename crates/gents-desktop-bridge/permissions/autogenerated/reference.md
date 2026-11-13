@@ -1479,6 +1479,32 @@ Denies the desktop_managed_server_open_login_items command without any pre-confi
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-managed-server-repair`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_repair command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-repair`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_repair command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-managed-server-reset`
 
 </td>

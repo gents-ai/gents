@@ -1,4 +1,5 @@
 import type { createDesktopInvoker } from "../src/api/invoke.js";
+import type { ManagedServerRepairResult } from "../src/generated/ManagedServerRepairResult.js";
 import type { ManagedServerStatus } from "../src/generated/ManagedServerStatus.js";
 
 declare const invoke: ReturnType<typeof createDesktopInvoker>;
@@ -7,6 +8,10 @@ const status: Promise<ManagedServerStatus> = invoke(
   "desktop_managed_server_status",
 );
 void status;
+const repair: Promise<ManagedServerRepairResult> = invoke(
+  "desktop_managed_server_repair",
+);
+void repair;
 invoke("desktop_open_external_url", { url: "https://example.com" });
 invoke("desktop_pack_install", {
   request: { package: "example/demo", registry: null },

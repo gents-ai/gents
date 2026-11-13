@@ -20,6 +20,7 @@ use gents_documents::{
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
     InferenceExecution, InferenceSampling, SurfaceToolDecl, Tools,
 };
+use gents_store::local::home::BOOTSTRAP_CONSUMED_FILE_NAME;
 use gents_store::{
     collection::Collection, identity::load_or_create_macos_keychain_identity,
     identity::load_or_create_macos_secure_enclave_identity, identity::KeyIdentity,
@@ -521,7 +522,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
 /// A consumed marker is never removed by ordinary initialization; an
 /// ambiguous or interrupted grant attempt cannot become a fresh attempt.
 async fn reserve_fresh_bootstrap(home: &Path) -> Result<()> {
-    let marker = home.join(".node-bootstrap-consumed");
+    let marker = home.join(BOOTSTRAP_CONSUMED_FILE_NAME);
     let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1950,7 +1951,7 @@ mod tests {
             "the init User administers the identity-only node"
         );
         assert!(
-            home.join(".node-bootstrap-consumed").exists(),
+            home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists(),
             "the bootstrap reservation is consumed"
         );
     }
@@ -2891,10 +2892,23 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(&home).unwrap();
-        fs::write(home.join(".node-bootstrap-consumed"), b"").unwrap();
+        fs::write(home.join(BOOTSTRAP_CONSUMED_FILE_NAME), b"").unwrap();
         let error = initialize_disposable_home(&home, false).await.unwrap_err();
         assert!(format!("{error:#}").contains("bootstrap was already attempted"));
         assert!(!default_data_dir(&home).join("MANIFEST").exists());
+    }
+
+    #[tokio::test]
+    async fn a_set_aside_home_bootstraps_fresh() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join(BOOTSTRAP_CONSUMED_FILE_NAME), b"").unwrap();
+        let aside = gents_service::repair::home::set_aside_home(&home)
+            .await
+            .unwrap();
+        assert!(aside.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
+        initialize_disposable_home(&home, false).await.unwrap();
     }
 
     #[tokio::test]

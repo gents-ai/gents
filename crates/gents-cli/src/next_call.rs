@@ -34,6 +34,9 @@ pub(crate) fn command(next: NextCall, target: Option<&str>) -> String {
 
 fn prefix(resource: &str) -> String {
     match resource {
+        "service" => "gents runtime service".to_owned(),
+        "runtime" | "server" => "gents runtime".to_owned(),
+        "node" => "gents".to_owned(),
         "request" => "gents utils debug request".to_owned(),
         "session" => "gents sessions".to_owned(),
         "mailbox" => "gents automation mailbox".to_owned(),
@@ -46,6 +49,7 @@ fn prefix(resource: &str) -> String {
 
 fn spelling<'a>(resource: &str, verb: &'a str) -> &'a str {
     match (resource, verb) {
+        ("server", "run") => "server",
         ("skill", "update") => "add",
         ("mcp-service", "register") => "service register",
         ("tools" | "agent" | "backend" | "profile", "update") => "set",

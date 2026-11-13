@@ -41,12 +41,14 @@ def main : IO Unit := do
         [false, true].flatMap fun needsSetup =>
           [false, true].flatMap fun authoritative =>
             [false, true].flatMap fun localRuntimeAllowed =>
-              [false, true].map fun remoteConfigured =>
-                let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initStatus needsSetup authoritative localRuntimeAllowed remoteConfigured
-                "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
-                ",\"initConfigStatus\":\"" ++ initName ++ "\",\"needsSetup\":" ++ toString needsSetup ++
-                ",\"authoritative\":" ++ toString authoritative ++ ",\"localRuntimeAllowed\":" ++ toString localRuntimeAllowed ++
-                ",\"remoteConfigured\":" ++ toString remoteConfigured ++ ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
+              [false, true].flatMap fun remoteConfigured =>
+                [false, true].map fun localHomeLost =>
+                  let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initStatus needsSetup authoritative localRuntimeAllowed remoteConfigured localHomeLost
+                  "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
+                  ",\"initConfigStatus\":\"" ++ initName ++ "\",\"needsSetup\":" ++ toString needsSetup ++
+                  ",\"authoritative\":" ++ toString authoritative ++ ",\"localRuntimeAllowed\":" ++ toString localRuntimeAllowed ++
+                  ",\"remoteConfigured\":" ++ toString remoteConfigured ++ ",\"localHomeLost\":" ++ toString localHomeLost ++
+                  ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
     "],\"startup\":[" ++ String.intercalate "," startupRows ++
     "],\"firstRun\":[" ++ String.intercalate "," firstRunRows ++

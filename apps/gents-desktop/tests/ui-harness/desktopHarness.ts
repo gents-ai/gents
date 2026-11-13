@@ -1837,6 +1837,7 @@ export function createDesktopUiHarness(
                 addr: deployment.addr,
                 graphql: deployment.graphql,
                 source: deployment.source,
+                local: false,
               },
             ],
       },
@@ -2223,6 +2224,15 @@ export function createDesktopUiHarness(
           async setManagedServerAutoStart(enabled) {
             managedServer = { ...managedServer, autoStart: enabled };
             return clone(managedServer);
+          },
+          async repairManagedServer() {
+            return {
+              repaired: [],
+              outcome: "noLocalNode",
+              blocker: null,
+              savedPeers: [],
+              localNodeLost: false,
+            };
           },
           async restartManagedServer(nodeName, authority) {
             pairingStatusReads = 0;

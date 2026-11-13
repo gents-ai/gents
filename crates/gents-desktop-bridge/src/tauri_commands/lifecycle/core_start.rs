@@ -29,7 +29,7 @@ pub(super) type ClientStartDelivery<T> = (anyhow::Result<T>, ClientLifecycleGuar
 
 pub(super) type ClientStartFailure = (
     BridgeError,
-    Option<gents_store::local::storage_backend::IncompatibleStore>,
+    Option<gents_protocol::operations::install_repair::IncompatibleStore>,
 );
 
 /// Open the embedded node on a large-stack OS thread without blocking a Tokio

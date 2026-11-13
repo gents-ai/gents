@@ -101,7 +101,7 @@ fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
     );
     assert_eq!(
         store.map(|store| store.kind),
-        Some(gents_store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::UnknownLineage)
     );
 
     let refused =
@@ -387,7 +387,7 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
     let store = store.expect("typed refusal");
     assert_eq!(
         store.kind,
-        gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey
+        gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey
     );
     assert_eq!(store.data_path, paths.identity_key_path());
     assert_eq!(
@@ -399,4 +399,48 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
         0o644
     );
     assert!(!paths.peer_directory_path().exists());
+}
+
+#[tokio::test]
+async fn a_remote_only_start_sets_aside_another_versions_client_store() {
+    use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy};
+    use tauri::Manager as _;
+    let temp = tempfile::tempdir().unwrap();
+    let policy = crate::state::resolve_policy(
+        &BridgeConfig {
+            home: HomePolicy::FixedRoot(temp.path().join("client")),
+            bootstrap: BootstrapPolicy::PairedRemoteOnly,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let paths = policy.desktop_paths.clone();
+    gents_desktop_core::test_fixtures::write_other_version_client_store(&paths, true, false).await;
+    let identity = std::fs::read(paths.identity_key_path()).unwrap();
+    let app = tauri::test::mock_builder()
+        .manage(DesktopAppState::new(policy))
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let snapshot = desktop_client_start(app.handle().clone(), app.state::<DesktopAppState>())
+        .await
+        .expect("the client starts on a fresh store");
+    let note = snapshot
+        .repair_note
+        .expect("the start names what it set aside");
+    assert!(note.contains("another Gents version"), "{note}");
+    assert!(snapshot.client.is_some());
+    assert_eq!(std::fs::read(paths.identity_key_path()).unwrap(), identity);
+    let backup = std::fs::read_dir(temp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.join("node/MANIFEST").is_file())
+        .expect("the backup holds the old store");
+    assert!(note.contains(&backup.display().to_string()), "{note}");
+    drop(
+        exclusion::exclude_client(&app.state::<DesktopAppState>())
+            .await
+            .unwrap(),
+    );
 }

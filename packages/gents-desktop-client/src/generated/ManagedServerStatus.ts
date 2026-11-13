@@ -8,4 +8,9 @@ export type ManagedServerStatus = { state: ManagedServerState, autoStart: boolea
  * Not a failure: the runtime answers but has not reported ready; it is
  * waited on without a bound and never restarted for taking long.
  */
-runtimeBooting: boolean, error: string | null, errorCode?: BridgeErrorCode | null, };
+runtimeBooting: boolean, error: string | null, errorCode?: BridgeErrorCode | null,
+/**
+ * The local node's folder, once its node stopped because the folder was
+ * deleted; kept until a new setup writes the folder's `init.json`.
+ */
+deletedHome?: string | null, };

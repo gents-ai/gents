@@ -1120,7 +1120,7 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
             paths.node_data_dir()
         )
         .map(|store| store.kind),
-        Some(gents_store::local::storage_backend::IncompatibleStoreKind::MissingStoreKey)
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::MissingStoreKey)
     );
     assert!(
         !paths.store_key_path().exists(),

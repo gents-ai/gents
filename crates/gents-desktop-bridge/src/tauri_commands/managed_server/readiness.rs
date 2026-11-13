@@ -1,16 +1,18 @@
 use super::native::{native_service, run_native};
 use super::port::{
-    observe_port_readiness, occupied_port_message, status_unreadable_error, user_status_signer,
-    PortReadiness,
+    observe_port_readiness, occupied_port_message, sentence, status_unreadable_error,
+    user_status_signer, PortReadiness,
 };
 use super::start_wait::{
     begin_start_wait, finish_start_wait, relock_start, wait_unlocked, LifecycleGuard, StartWait,
 };
-use super::status::{emit_status, restarts_since};
+use super::status::{emit_status, last_runtime_error, store_refusal};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::ManagedServerStatus;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
+use gents_service::repair::crash_loop::{restarts_since, CRASH_LOOP_RESTARTS};
+use gents_service::repair::reason::blocker_for_exit;
 use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
@@ -19,7 +21,6 @@ use tauri::{AppHandle, Runtime};
 const MANAGED_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
 pub(super) const BACKGROUND_APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
 pub(super) const MANAGED_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
-pub(super) const CRASH_LOOP_RESTARTS: u64 = 2;
 
 #[derive(Debug)]
 pub(super) enum Readiness {
@@ -105,6 +106,7 @@ where
             .await
         },
         || observe_native_progress(app, state),
+        || last_runtime_error(state),
     )
     .await;
     result.map(|readiness| preserve_managed_selection(readiness, selected))
@@ -120,13 +122,16 @@ pub(super) fn preserve_managed_selection(readiness: Readiness, selected: bool) -
     }
 }
 
-pub(super) async fn await_runtime_readiness<P, PF, N, NF>(
+pub(super) async fn await_runtime_readiness<P, PF, N, NF, E, EF>(
     timeout: Duration,
     interval: Duration,
     mut probe: P,
     mut native: N,
+    mut last_error: E,
 ) -> anyhow::Result<Readiness>
 where
+    E: FnMut() -> EF,
+    EF: Future<Output = Option<String>>,
     P: FnMut() -> PF,
     PF: Future<Output = Result<PortReadiness, BridgeError>>,
     N: FnMut() -> NF,
@@ -170,7 +175,7 @@ where
                 )))
             }
             NativeProgress::Exited(exit) | NativeProgress::Failed(exit)
-                if exit.incompatible_store() =>
+                if store_refusal(&exit).is_some() =>
             {
                 let error = anyhow::Error::new(BridgeError::new(
                     BridgeErrorCode::IncompatibleLocalStore,
@@ -179,26 +184,27 @@ where
                         exit.reason
                     ),
                 ));
-                return Err(match exit.refused_store() {
+                return Err(match store_refusal(&exit) {
                     Some(kind) => error.context(RefusedStoreKind(kind)),
                     None => error,
                 });
             }
-            NativeProgress::Failed(exit) => anyhow::bail!(
-                "the native Gents service failed before it published runtime readiness and will not be restarted: it {} after {} restarts",
-                exit.reason,
-                exit.restarts
-            ),
+            NativeProgress::Failed(exit) => {
+                let cause = last_error()
+                    .await
+                    .or_else(|| exit.code.is_none().then(|| exit.reason.clone()));
+                anyhow::bail!(sentence(&blocker_for_exit(&exit, cause)))
+            }
             NativeProgress::Exited(exit) if exit.clean => anyhow::bail!(
                 "the native Gents service exited normally before it published runtime readiness, so it will not be restarted"
             ),
             NativeProgress::Exited(exit) => {
                 let restarts = restarts_since(&mut first_exit_restarts, exit.restarts);
                 if restarts >= CRASH_LOOP_RESTARTS {
-                    return Err(explain(format!(
-                        "the native Gents service keeps exiting before it publishes runtime readiness: it {} and was restarted {restarts} times in a row",
-                        exit.reason
-                    )));
+                    return Err(explain(sentence(&blocker_for_exit(
+                        &exit,
+                        last_error().await,
+                    ))));
                 }
             }
             NativeProgress::Loaded => {}
@@ -326,7 +332,7 @@ pub(super) async fn settle_adoption<'a>(
 }
 
 #[derive(Debug, Clone, Copy)]
-struct RefusedStoreKind(gents_store::local::storage_backend::IncompatibleStoreKind);
+struct RefusedStoreKind(gents_protocol::operations::install_repair::IncompatibleStoreKind);
 
 impl std::fmt::Display for RefusedStoreKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -339,7 +345,7 @@ impl std::fmt::Display for RefusedStoreKind {
 
 pub(super) fn refused_kind(
     error: &anyhow::Error,
-) -> Option<gents_store::local::storage_backend::IncompatibleStoreKind> {
+) -> Option<gents_protocol::operations::install_repair::IncompatibleStoreKind> {
     error
         .downcast_ref::<RefusedStoreKind>()
         .map(|refused| refused.0)
@@ -347,19 +353,21 @@ pub(super) fn refused_kind(
 
 pub(super) fn refused_runtime_store(
     node_home: &Path,
-    reported: Option<gents_store::local::storage_backend::IncompatibleStoreKind>,
-) -> gents_store::local::storage_backend::IncompatibleStore {
+    reported: Option<gents_protocol::operations::install_repair::IncompatibleStoreKind>,
+) -> gents_protocol::operations::install_repair::IncompatibleStore {
     let data_path = gents_store::local::home::default_data_dir(node_home);
     let kind = gents_store::local::storage_backend::incompatible_store_kind(&data_path)
         .ok()
         .flatten()
         .or(reported)
-        .unwrap_or(gents_store::local::storage_backend::IncompatibleStoreKind::UnknownLineage);
+        .unwrap_or(
+            gents_protocol::operations::install_repair::IncompatibleStoreKind::UnknownLineage,
+        );
     let data_path = match kind {
-        gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey => {
+        gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey => {
             node_home.join("keys")
         }
         _ => data_path,
     };
-    gents_store::local::storage_backend::IncompatibleStore { kind, data_path }
+    gents_protocol::operations::install_repair::IncompatibleStore { kind, data_path }
 }

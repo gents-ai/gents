@@ -149,3 +149,5 @@ import Proofs.Automation.Hooks
 import Proofs.Pack.Operations
 
 import Proofs.Session.Request.PreclaimBoundary
+
+import Proofs.Clients.InstallRepair

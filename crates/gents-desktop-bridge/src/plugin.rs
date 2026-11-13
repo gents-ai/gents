@@ -47,49 +47,6 @@ where
                     .expect("desktop bridge lock poisoned")
                     .approvals_watch_task = Some(watch);
             }
-            let handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let refresh_handle = handle.clone();
-                let refreshed = tauri::async_runtime::spawn_blocking(move || {
-                    tauri_commands::managed_server::native::refresh_packaged_install(
-                        &refresh_handle,
-                        &refresh_handle.state::<DesktopAppState>(),
-                    )
-                })
-                .await;
-                match refreshed {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => tracing::warn!(
-                        error = %error.message,
-                        "could not bring the packaged Gents runtime up to date"
-                    ),
-                    Err(error) => tracing::warn!(
-                        error = %error,
-                        "could not bring the packaged Gents runtime up to date"
-                    ),
-                }
-                let state = handle.state::<DesktopAppState>();
-                if let Err(error) =
-                    tauri_commands::managed_server::native::restart_outdated_managed_job(
-                        &handle, &state,
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        error = %error.message,
-                        "could not restart the node service that predates this app"
-                    );
-                }
-                if let Err(error) =
-                    tauri_commands::managed_server::start_configured_managed_server(&handle, &state)
-                        .await
-                {
-                    tracing::warn!(
-                        error = %error.message,
-                        "could not start the configured local node"
-                    );
-                }
-            });
             Ok(())
         })
         .on_webview_ready(register_window)
@@ -156,6 +113,7 @@ where
             tauri_commands::managed_server::desktop_managed_server_set_auto_start,
             tauri_commands::managed_server::desktop_managed_server_restart,
             tauri_commands::managed_server::desktop_managed_server_reset,
+            tauri_commands::managed_server::desktop_managed_server_repair,
             tauri_commands::managed_server::desktop_managed_server_validate_root,
             tauri_commands::managed_server::desktop_agent_workspace_root_select,
             tauri_commands::managed_server::desktop_managed_server_open_login_items,

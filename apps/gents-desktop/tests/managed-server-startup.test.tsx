@@ -8,6 +8,7 @@ import type {
   ManagedServerAuthorityInput,
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
+import type { ManagedServerRepairResult } from "@source-inc/gents-desktop-client/generated/ManagedServerRepairResult";
 
 import { StartupScreen } from "../src/components/StartupScreen";
 import { restoreManagedServer } from "../src/hooks/managedServerLifecycle";
@@ -222,42 +223,120 @@ describe("managed server startup waits", () => {
     await expect(restoreManagedServer(api)).rejects.toThrow("exited with code 78");
   });
 
-  it("offers restart and continuing without the agent when launch startup fails", async () => {
+  it("sets aside a home the node refused as older data, then goes to setup with the note", async () => {
+    const note =
+      "This version couldn't open the data from an older Gents version, so it was set aside at /Users/test/.gents.from-older-2026-11-12-120000";
+    const repairManagedServer = vi
+      .fn<() => Promise<ManagedServerRepairResult>>()
+      .mockResolvedValueOnce({
+        repaired: ["Earlier note."],
+        outcome: "ready",
+        blocker: null,
+        savedPeers: [],
+        localNodeLost: false,
+      })
+      .mockResolvedValueOnce({
+        repaired: [note],
+        outcome: "needsSetup",
+        blocker: null,
+        savedPeers: [],
+        localNodeLost: false,
+      });
+    const api = {
+      repairManagedServer,
+      managedServerStatus: vi.fn(async () =>
+        managedStatus({ state: "failed", errorCode: "incompatibleLocalStore" }),
+      ),
+    } as unknown as DesktopApiAdapter;
+    const onRepair = vi.fn();
+    await expect(restoreManagedServer(api, { onRepair })).resolves.toBe(false);
+    expect(repairManagedServer).toHaveBeenCalledTimes(2);
+    expect(onRepair).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        outcome: "needsSetup",
+        repaired: ["Earlier note.", note],
+      }),
+    );
+  });
+
+  it("keeps the refusal a repair could not set aside, such as another version's data", async () => {
+    const repairManagedServer = vi.fn(async () => ({
+      repaired: [],
+      outcome: "ready" as const,
+      blocker: null,
+      savedPeers: [],
+      localNodeLost: false,
+    }));
+    const api = {
+      repairManagedServer,
+      managedServerStatus: vi.fn(async () =>
+        managedStatus({
+          state: "failed",
+          error: "written by a different Gents version",
+          errorCode: "incompatibleLocalStore",
+        }),
+      ),
+    } as unknown as DesktopApiAdapter;
+    await expect(restoreManagedServer(api)).rejects.toThrow(
+      "written by a different Gents version",
+    );
+    expect(repairManagedServer).toHaveBeenCalledTimes(2);
+  });
+
+  const studio = {
+    peerId: "studio",
+    label: "Studio",
+    nodeDid: "did:key:studio",
+    addr: "a",
+    source: "enrollment",
+    graphql: null,
+    local: false,
+  };
+  const pausedApp = (repairPeers: (typeof studio)[]) => {
     const message =
       "The background node keeps exiting before it becomes ready: it exited with code 78.";
-    const app = testApp({
-      api: { restartManagedServer: vi.fn(async () => undefined) },
-      supportsManagedServer: true,
-    });
+    const app = testApp({ supportsManagedServer: true });
     app.stores.client.setState({
       startupPhase: "managed-server-error",
       error: message,
-      managedServerFailure: new ManagedServerStartupError(
-        message,
-        managedStatus({
-          state: "failed",
-          nodeName: "Workshop Node",
-          effectiveToolCeiling: "readwrite",
-        }),
-      ),
+      repairPeers,
     });
-    const restart = vi
-      .spyOn(app.lifecycle, "restartManagedServer")
-      .mockResolvedValue(undefined);
+    return app;
+  };
+
+  it("paused_startup_offers_only_try_again_without_remote_nodes", () => {
+    const app = pausedApp([]);
+    renderIn(app, <StartupScreen />);
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "Your local node couldn't start",
+    );
+    expect(screen.getByTestId("startup-retry")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("startup-continue-without-managed-server"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Restart node")).not.toBeInTheDocument();
+  });
+
+  it("paused_startup_offers_continue_with_the_remote_node_name", async () => {
+    const app = pausedApp([studio]);
     const skip = vi
       .spyOn(app.lifecycle, "skipManagedServerWait")
       .mockReturnValue(undefined);
     renderIn(app, <StartupScreen />);
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "exited with code 78",
-    );
-    expect(screen.getByTestId("startup-retry")).toBeInTheDocument();
-    await userEvent.click(screen.getByTestId("startup-restart-managed-server"));
-    expect(restart).toHaveBeenCalledOnce();
-    await userEvent.click(
-      screen.getByTestId("startup-continue-without-managed-server"),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue with Studio" }));
     expect(skip).toHaveBeenCalledOnce();
+  });
+
+  it("the_wait_hides_continue_without_remote_nodes", () => {
+    const app = testApp({ supportsManagedServer: true });
+    app.stores.client.setState({ startupPhase: "checking-managed-server" });
+    app.stores.localServer.setState({
+      wait: { kind: "approval", since: Date.now() },
+    });
+    renderIn(app, <StartupScreen />);
+    expect(
+      screen.queryByTestId("startup-skip-managed-server-wait"),
+    ).not.toBeInTheDocument();
   });
 
   it("names where the logs are when launch startup fails", () => {
@@ -375,7 +454,10 @@ describe("managed server startup waits", () => {
       api: { openManagedServerLoginItems: open },
       supportsManagedServer: true,
     });
-    app.stores.client.setState({ startupPhase: "checking-managed-server" });
+    app.stores.client.setState({
+      startupPhase: "checking-managed-server",
+      repairPeers: [studio],
+    });
     app.stores.localServer.setState({
       wait: { kind: "approval", since: Date.now() - 12_000 },
     });
@@ -392,6 +474,9 @@ describe("managed server startup waits", () => {
     expect(screenText).toHaveTextContent("Waiting 12s");
     await userEvent.click(screen.getByTestId("startup-open-login-items"));
     expect(open).toHaveBeenCalledOnce();
+    expect(screen.getByTestId("startup-skip-managed-server-wait")).toHaveTextContent(
+      "Continue with Studio",
+    );
     await userEvent.click(screen.getByTestId("startup-skip-managed-server-wait"));
     expect(skip).toHaveBeenCalledOnce();
   });
@@ -666,4 +751,114 @@ describe("first-run local node startup", () => {
       { timeout: 3_000 },
     );
   }, 10_000);
+
+  describe("self-repair at launch", () => {
+    const repairResult = (
+      overrides: Partial<ManagedServerRepairResult> = {},
+    ): ManagedServerRepairResult => ({
+      repaired: [],
+      outcome: "ready",
+      blocker: null,
+      savedPeers: [],
+      localNodeLost: false,
+      ...overrides,
+    });
+    const repairApp = (
+      repairManagedServer: () => Promise<ManagedServerRepairResult>,
+      calls: string[] = [],
+    ) =>
+      testApp({
+        api: {
+          managedServerStatus: vi.fn(async () => {
+            calls.push("status");
+            return managedStatus({ state: "running" });
+          }),
+          repairManagedServer,
+        },
+        supportsManagedServer: true,
+      });
+
+    it("launch_runs_the_repair_before_checking_the_node", async () => {
+      const calls: string[] = [];
+      const app = repairApp(async () => {
+        calls.push("repair");
+        return repairResult();
+      }, calls);
+      await app.lifecycle.initializeDesktop();
+      expect(calls.slice(0, 2)).toEqual(["repair", "status"]);
+    });
+
+    it("a_blocked_repair_pauses_startup_with_its_reason", async () => {
+      const app = repairApp(async () =>
+        repairResult({ outcome: "blocked", blocker: "The folder is not writable." }),
+      );
+      await app.lifecycle.initializeDesktop();
+      renderIn(app, <StartupScreen />);
+      expect(screen.getByTestId("startup-error")).toHaveTextContent(
+        "The folder is not writable.",
+      );
+    });
+
+    it("try_again_runs_the_repair_again", async () => {
+      const repair = vi.fn(async () =>
+        repairResult({ outcome: "blocked", blocker: "Still stuck." }),
+      );
+      const app = repairApp(repair);
+      await app.lifecycle.initializeDesktop();
+      renderIn(app, <StartupScreen />);
+      await userEvent.click(screen.getByTestId("startup-retry"));
+      await waitFor(() => expect(repair).toHaveBeenCalledTimes(2));
+    });
+
+    it("a_blocked_repair_clears_earlier_notes", async () => {
+      const app = repairApp(async () =>
+        repairResult({
+          outcome: "blocked",
+          blocker: "Stuck.",
+          repaired: ["Did a thing."],
+        }),
+      );
+      app.stores.client.setState({ repairNotes: ["Old note."] });
+      await app.lifecycle.initializeDesktop();
+      expect(app.stores.client.getState().repairNotes).toEqual([]);
+    });
+
+    it("a_client_start_adds_what_it_set_aside_to_the_banner", async () => {
+      const app = testApp({
+        api: {
+          startDesktopClient: vi.fn(async () => ({
+            bootstrap,
+            client: null,
+            repairNote: "The desktop's local data was moved aside.",
+          })),
+        },
+      });
+      app.stores.client.setState({ repairNotes: ["Earlier note."] });
+      await app.lifecycle.ensureDesktopClientStarted();
+      expect(app.stores.client.getState().repairNotes).toEqual([
+        "Earlier note.",
+        "The desktop's local data was moved aside.",
+      ]);
+    });
+
+    it("repair_notes_are_kept_for_the_banner", async () => {
+      const peer = {
+        peerId: "p",
+        label: "Studio",
+        nodeDid: "did:key:studio",
+        addr: "a",
+        source: "enrollment",
+        graphql: null,
+        local: false,
+      };
+      const app = repairApp(async () =>
+        repairResult({ repaired: ["Moved the old folder aside."], savedPeers: [peer] }),
+      );
+      await app.lifecycle.initializeDesktop();
+      expect(app.stores.client.getState().repairNotes).toEqual([
+        "Moved the old folder aside.",
+      ]);
+      expect(app.stores.client.getState().repairPeers).toEqual([peer]);
+    });
+  });
 });

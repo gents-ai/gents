@@ -90,7 +90,11 @@ pub(super) fn apply(
                 .as_dictionary()
                 .context("installed service environment is not a dictionary")?
                 .iter()
-                .filter(|(key, _)| !owned(key))
+                // The LaunchAgent template renders HOME itself; read back as
+                // custom it would re-serialize the whole plist.
+                .filter(|(key, _)| {
+                    !owned(key) && !(platform == NativeServicePlatform::Macos && *key == "HOME")
+                })
                 .map(|(key, value)| {
                     Ok((
                         key.clone(),
