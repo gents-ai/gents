@@ -150,10 +150,17 @@ function enabledByListing(entry: Scanned): boolean {
   );
 }
 
-/* whether a page document differs from what this window holds: its content
-   was edited, or it was enabled or disabled since it was loaded or listed */
-function documentChanged(entry: Scanned): boolean {
-  if (!isDocument(entry) || !digests.has(entry.key)) return false;
+/* a pack reinstalled outside this window (the CLI) announces nothing here;
+   its listing digest is how a scan learns the plugin's code changed */
+const tracksDigest = (entry: Scanned) =>
+  isDocument(entry) || (entry.door === "pack" && entry.digest != null);
+
+/* whether a listing differs from what this window holds: a page document or
+   pack plugin was edited, or a page document was enabled or disabled since it
+   was loaded or listed */
+function contentChanged(entry: Scanned): boolean {
+  if (!tracksDigest(entry) || !digests.has(entry.key)) return false;
+  if (!isDocument(entry)) return digests.get(entry.key) !== (entry.digest ?? null);
   const loaded =
     uxPluginRecords()[known.get(entry.key)?.loaded ?? ""]?.status === "loaded";
   return (
@@ -163,7 +170,7 @@ function documentChanged(entry: Scanned): boolean {
 }
 
 function noteDigest(entry: Scanned): void {
-  if (isDocument(entry)) digests.set(entry.key, entry.digest ?? null);
+  if (tracksDigest(entry)) digests.set(entry.key, entry.digest ?? null);
 }
 
 function note(entry: Scanned, loaded: string | null): void {
@@ -392,7 +399,7 @@ async function reconcile(reloadKnown: boolean, reloadPack?: string): Promise<voi
     if (
       known.get(entry.key)?.loaded &&
       !reloadKnown &&
-      !documentChanged(entry) &&
+      !contentChanged(entry) &&
       (reloadPack === undefined || entry.pack !== reloadPack)
     )
       continue;
