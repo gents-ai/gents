@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import {
+  type ChatSendRequest,
   type DesktopSessionSnapshot,
   projectDeploymentOperationalState,
   type DeploymentView,
@@ -25,6 +26,7 @@ import { MemoryNavProvider } from "@gents/shell";
 import { writeSession } from "../src/hooks/sessionStore";
 import { composerText, typeInComposer, typeText } from "./composer-field";
 import { CHAT_SEND_DEADLINE_MS } from "../src/hooks/chatDelivery";
+import { loadChatDrafts } from "../src/hooks/chatDrafts";
 import { goalControl, observedGoal } from "./goal-state-fixture";
 
 const navigate = vi.hoisted(() => vi.fn());
@@ -356,13 +358,20 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 
-  it("steers a follow-up into a running turn, and queues one sent with the modified Enter", async () => {
+  it("queues a follow-up by default, and steers one sent with the modified Enter", async () => {
     for (const [metaKey, delivery] of [
-      [false, "steer"],
-      [true, "queue"],
+      [false, "queue"],
+      [true, "steer"],
     ] as const) {
-      const { app, sendChatMessage } = screenApp({
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => (release = resolve));
+      const sendChatMessage = vi.fn(async (request: ChatSendRequest) => {
+        await pending;
+        return acceptedChat(request);
+      });
+      const { app } = screenApp({
         session: heldSession({ turnState: "running" }),
+        sendChatMessage,
       });
       const view = renderScreen(app);
       const message = screen.getByLabelText("Message");
@@ -370,9 +379,13 @@ describe("SessionScreen canonical composer admission", () => {
       await act(async () => {
         fireEvent.keyDown(message, { key: "Enter", metaKey });
       });
-      expect(sendChatMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ content: "and this", delivery }),
-      );
+      await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(1));
+      expect(JSON.parse(loadChatDrafts().chatDrafts[0]!.requestJson)).toMatchObject({
+        content: "and this",
+        delivery,
+      });
+      await act(async () => release());
+      await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
       view.unmount();
     }
   });
