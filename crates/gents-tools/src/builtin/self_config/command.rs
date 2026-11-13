@@ -27,8 +27,8 @@ pub mod help;
 #[cfg(not(any(test, feature = "test-fixtures")))]
 pub(super) mod help;
 mod inference;
-mod inventory;
 mod inference_inventory;
+mod inventory;
 mod mcp_views;
 mod observe;
 mod pack;

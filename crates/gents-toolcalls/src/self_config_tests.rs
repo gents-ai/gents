@@ -1485,8 +1485,7 @@ async fn structured_config_preview_and_apply_match_the_lean_model() {
             after["document"]["system_prompt"].as_str() == Some(prompt.as_str());
         request["set"] = json!({"node_did":"foreign"});
         let foreign_refused = tool.call(request.to_string()).await.is_err();
-        let after_refusal: Value =
-            serde_json::from_str(&tool.call(read).await.unwrap()).unwrap();
+        let after_refusal: Value = serde_json::from_str(&tool.call(read).await.unwrap()).unwrap();
         let unchanged_after_refusal = after_refusal == after;
         case.check(TraceOutput {
             preview_committed,
@@ -5333,4 +5332,90 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     .unwrap();
     assert_eq!(installed["effective"]["digest"], Value::String(digest));
     assert!(node.get_collection("FixtureJob").unwrap().is_some());
+}
+
+#[tokio::test]
+async fn provisioning_the_engineer_grants_what_the_model_names() {
+    let fixture = SelfConfigFixture::new("engineer-provisioning").await;
+    let owner = fixture.db.node_identity.did().to_owned();
+    let engineer = ::identity::Did::new(fixture.agent_did()).unwrap();
+    let selection = fixture
+        .user_access
+        .execute("{ DefaultAgentSelection { _docID default_agent_did } }")
+        .await
+        .unwrap();
+    let selection = selection["data"]["DefaultAgentSelection"]
+        .as_array()
+        .unwrap();
+    assert!(
+        matches!(selection.as_slice(), [row] if row["default_agent_did"] == fixture.agent_did()),
+        "{selection:?}"
+    );
+    let selection_doc = selection[0]["_docID"].as_str().unwrap().to_owned();
+    let agent_doc = fixture
+        .user_access
+        .transact_readonly("test.engineer_provisioning.agent_doc", |txn| {
+            let owner = &owner;
+            let engineer = &engineer;
+            Box::pin(async move {
+                gents_documents::read_desired_state_record_in_txn(
+                    txn,
+                    gents_store::collection::Collection::Agent,
+                    owner,
+                    engineer.as_str(),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .expect("the Engineer's Agent document")
+        .0;
+    let observe = |resource: String, permission: String| {
+        let document = match resource.as_str() {
+            "nodes" => ("Node", fixture.node_binding.doc_id.as_str()),
+            "default_agent_selections" => ("DefaultAgentSelection", selection_doc.as_str()),
+            "agents" => ("Agent", agent_doc.as_str()),
+            other => panic!("unexpected modeled resource {other}"),
+        };
+        let node = &fixture.db.node;
+        let owner = &owner;
+        let engineer = &engineer;
+        async move {
+            gents_store::identity::observe_document_permissions(
+                node,
+                owner,
+                engineer,
+                Some(document),
+                &[permission],
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .held[0]
+        }
+    };
+    let cases = gents_lean_vocab::families::node_provisioning_engineer_grants::cases();
+    let (before, after): (Vec<_>, Vec<_>) =
+        cases.into_iter().partition(|case| !case.input.provisioned);
+    assert!(!before.is_empty() && !after.is_empty());
+    for case in before {
+        let held = observe(case.input.resource.clone(), case.input.permission.clone()).await;
+        case.check(held);
+    }
+    fixture
+        .user_access
+        .transact_write("test.engineer_provisioning.provision", |txn| {
+            let owner = &owner;
+            let engineer = &engineer;
+            Box::pin(async move {
+                gents_documents::provision_engineer(txn, owner, engineer.as_str()).await
+            })
+        })
+        .await
+        .unwrap();
+    for case in after {
+        let held = observe(case.input.resource.clone(), case.input.permission.clone()).await;
+        case.check(held);
+    }
 }

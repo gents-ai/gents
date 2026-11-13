@@ -853,26 +853,28 @@ mod tests {
             let mut verdict = draft(&run_id, "t", &format!("v-{index}"), None);
             verdict.kind = case.input.kind;
             verdict.provider_reason = case.input.provider_reason;
-            verdict.score_bp = case
-                .input
-                .score
-                .map(|score| u32::try_from(score).unwrap());
+            verdict.score_bp = case.input.score.map(|score| u32::try_from(score).unwrap());
             append_verdict(access, owner, EvalSplit::Validation, &verdict)
                 .await
                 .unwrap();
             let verdicts = load_verdicts(access, owner, &run_id).await.unwrap();
             let [stored] = verdicts.as_slice() else {
-                panic!("{run_id}: expected one stored verdict, found {}", verdicts.len());
+                panic!(
+                    "{run_id}: expected one stored verdict, found {}",
+                    verdicts.len()
+                );
             };
             let reason = match (case.input.provider_reason, stored.provider_reason) {
                 (None, None) => "absent".to_owned(),
                 (Some(given), Some(recorded)) if given == recorded => "recorded".to_owned(),
                 _ => "altered".to_owned(),
             };
-            case.check(gents_lean_vocab::families::eval_stored_verdict::StoredVerdictOutput {
-                score: stored.score_bp.map(u64::from),
-                reason,
-            });
+            case.check(
+                gents_lean_vocab::families::eval_stored_verdict::StoredVerdictOutput {
+                    score: stored.score_bp.map(u64::from),
+                    reason,
+                },
+            );
         }
     }
 

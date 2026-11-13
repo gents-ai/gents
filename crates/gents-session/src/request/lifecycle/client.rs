@@ -1842,7 +1842,11 @@ mod tests {
                 .execute("{ AgentRequest { _docID relationships_pending } }")
                 .await
                 .unwrap();
-            let row = rows["data"]["AgentRequest"].as_array().unwrap().first().cloned();
+            let row = rows["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .first()
+                .cloned();
             let grants = match &row {
                 Some(row) => observed_access
                     .list_document_relationships("AgentRequest", row["_docID"].as_str().unwrap())
@@ -1863,7 +1867,9 @@ mod tests {
                 grants,
             }
         };
-        for case in gents_lean_vocab::families::session_child_atomic_client_request_unconfirmed::cases() {
+        for case in
+            gents_lean_vocab::families::session_child_atomic_client_request_unconfirmed::cases()
+        {
             assert!(case.input.fresh && case.input.commit, "{}", case.input.name);
             let (result, fired) = gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
                 Some("request.client.submit"), submit_client_request(&access, &first),
@@ -1873,7 +1879,11 @@ mod tests {
             assert!(reconcile_client_request(&access, &first).await.unwrap());
             let reconciled = observe().await;
             assert_eq!(
-                (unconfirmed.committed, unconfirmed.pending, unconfirmed.grants),
+                (
+                    unconfirmed.committed,
+                    unconfirmed.pending,
+                    unconfirmed.grants
+                ),
                 (reconciled.committed, reconciled.pending, reconciled.grants)
             );
             case.check(reconciled);

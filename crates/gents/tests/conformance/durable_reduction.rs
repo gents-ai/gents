@@ -159,7 +159,10 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
 
         let mut prior_doc_id = None;
         if let Some(prior_checkpoint) = case.input.prior_checkpoint {
-            let prior_claim = case.input.prior_claim_commit.unwrap_or(case.input.claim_commit);
+            let prior_claim = case
+                .input
+                .prior_claim_commit
+                .unwrap_or(case.input.claim_commit);
             let prior_messages = checkpoint(prior_checkpoint);
             let prior_boundary = boundary(&request_doc_id, prior_claim);
             let prior_associations = unassociated(&[Message::user("old")], &prior_messages);
@@ -275,7 +278,11 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         let title = rendered_capture_cites_reduction(
             "title.1",
             i64::try_from(turn_index).unwrap(),
-            &provenance("title.1", intended_checkpoint, cited_keys(case.input.title_cites)),
+            &provenance(
+                "title.1",
+                intended_checkpoint,
+                cited_keys(case.input.title_cites),
+            ),
             i64::try_from(turn_index).unwrap(),
             &key,
         );

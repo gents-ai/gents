@@ -164,16 +164,28 @@ pub(super) async fn install(
     )
     .await
     .context(TRIAL_PACK_INSTALL)?;
+    let engineer = config.agents.iter().any(|agent| {
+        agent.agent_did == agent_did
+            && agent
+                .tags
+                .iter()
+                .any(|tag| tag == gents_tools::builtin::self_config::ENGINEER_AGENT_TAG)
+    });
     access
-        .transact_write("eval.trial.grant_self_configuration", |txn| {
+        .transact_write("eval.trial.provision_selected_agent", |txn| {
             let node_did = &node_did;
             let agent_did = &agent_did;
             Box::pin(async move {
-                gents_documents::grant_selected_self_configuration(txn, node_did, agent_did).await
+                if engineer {
+                    gents_documents::provision_engineer(txn, node_did, agent_did).await
+                } else {
+                    gents_documents::grant_selected_self_configuration(txn, node_did, agent_did)
+                        .await
+                }
             })
         })
         .await
-        .context("granting the selected trial Agent self-configuration")?;
+        .context("provisioning the selected trial Agent")?;
     apply(
         &access,
         "eval.trial.select_agent",

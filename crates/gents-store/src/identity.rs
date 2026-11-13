@@ -18,20 +18,19 @@ mod registered;
 pub mod request_receipt;
 
 pub use agent::{
-    derive_agent_identity, observe_agent_admission, provision_agent_identity,
-    provision_agent_identity_authorized, provision_agent_identity_for_agent,
-    resolve_agent_identity, AgentAdmissionObservationError, AgentProvisionError,
-    RuntimeAgentProof,
+    derive_agent_identity, observe_agent_admission, observe_document_permissions,
+    provision_agent_identity, provision_agent_identity_authorized,
+    provision_agent_identity_for_agent, resolve_agent_identity, AgentAdmissionObservationError,
+    AgentProvisionError, ObservedDocumentPermissions, RuntimeAgentProof,
 };
 pub use enrollment_approval::{
-    approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep, EnrollmentApproval,
-    EnrollmentApprovalError,
+    approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep,
+    EnrollmentApproval, EnrollmentApprovalError,
 };
 pub use enrollment_grant::{
     grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant,
-    plan_membership_withdrawal, plan_withdrawal,
-    EnrollmentGrantError, EnrollmentGrantOutcome, EnrollmentGrantReceipt, EnrollmentGrantTuple,
-    EnrollmentGrantWithdrawal,
+    plan_membership_withdrawal, plan_withdrawal, EnrollmentGrantError, EnrollmentGrantOutcome,
+    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal,
 };
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};

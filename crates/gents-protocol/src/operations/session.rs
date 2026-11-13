@@ -209,9 +209,15 @@ pub enum SessionOperationError {
     #[error("this operation needs an authenticated client identity")]
     IdentityRequired,
     #[error("session {session_id} was not found on node {node_did} in this client's scope")]
-    NotFound { node_did: String, session_id: String },
+    NotFound {
+        node_did: String,
+        session_id: String,
+    },
     #[error("session id {session_id} names more than one session on node {node_did}; name its requester")]
-    Ambiguous { node_did: String, session_id: String },
+    Ambiguous {
+        node_did: String,
+        session_id: String,
+    },
     #[error("session {session_id} is not a valid session document: {source}")]
     InvalidDocument {
         session_id: String,
@@ -220,7 +226,9 @@ pub enum SessionOperationError {
     },
     #[error("session {session_id} has no requester, so a client cannot change it")]
     RequesterMissing { session_id: String },
-    #[error("archive revision {revision} is out of range; read the session for its current revision")]
+    #[error(
+        "archive revision {revision} is out of range; read the session for its current revision"
+    )]
     RevisionOutOfRange { revision: u64 },
     #[error("session {session_id} belongs to another requester than this caller")]
     RequesterMismatch { session_id: String },
@@ -236,7 +244,9 @@ pub enum SessionOperationError {
     ForkMessageNotEditable { message_key: String, reason: String },
     #[error("the saved edit belongs to another client {client_did}; fork with this client's own identity")]
     ForkClientMismatch { client_did: String },
-    #[error("child session id {child_session_id:?} must be nonblank and keep its exact canonical form")]
+    #[error(
+        "child session id {child_session_id:?} must be nonblank and keep its exact canonical form"
+    )]
     ForkChildNotCanonical { child_session_id: String },
     #[error("forking to a different agent is unavailable; fork without naming an agent")]
     CrossAgentForkUnavailable,
@@ -250,7 +260,9 @@ pub enum SessionOperationError {
     },
     #[error("fork {session_id} has incomplete relationships and its retained creation intent is required to finish it")]
     ForkRecoveryIntentRequired { session_id: String },
-    #[error("session control is supported only on this runtime's own node; {node_did} is another node")]
+    #[error(
+        "session control is supported only on this runtime's own node; {node_did} is another node"
+    )]
     RemoteNodeUnsupported { node_did: String },
     #[error("session {session_id} cannot resume yet: {blocker}; read the session and resume after it settles")]
     ResumeBlocked {
@@ -313,11 +325,11 @@ impl SessionOperationError {
             Self::IdentityRequired
             | Self::ForkClientMismatch { .. }
             | Self::RemoteNodeUnsupported { .. } => NextCall::Inspect { resource: "node" },
-            Self::NotFound { .. }
-            | Self::Ambiguous { .. }
-            | Self::RequesterMismatch { .. } => NextCall::List {
-                resource: "session",
-            },
+            Self::NotFound { .. } | Self::Ambiguous { .. } | Self::RequesterMismatch { .. } => {
+                NextCall::List {
+                    resource: "session",
+                }
+            }
             Self::InvalidDocument { .. }
             | Self::RequesterMissing { .. }
             | Self::ForkRelationshipsIncomplete { .. }

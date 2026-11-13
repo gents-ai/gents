@@ -1,9 +1,9 @@
 use super::contract_tests::{persist_command, receipt, try_persist_command};
-use gents_protocol::request_admission::RequestPurpose;
 use super::*;
 use crate::goal::session_goal_control::process_command;
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
+use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_protocol::session::SessionTitle;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};

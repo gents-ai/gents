@@ -524,9 +524,10 @@ fn fleet_observation(
     backend_id: &str,
     max_concurrent: u64,
 ) -> gents_lean_vocab::families::fleet_slot_accounting_contribution::SlotObservation {
-    let reconstructed =
-        reconstructed_running_slot_count(rows.iter().map(|row| slot_row_from_value(row)), backend_id)
-            as u64;
+    let reconstructed = reconstructed_running_slot_count(
+        rows.iter().map(|row| slot_row_from_value(row)),
+        backend_id,
+    ) as u64;
     let contribution = match rows {
         [row] => slot_contribution(slot_row_from_value(row), backend_id) as u64,
         _ => reconstructed,
@@ -1884,8 +1885,8 @@ async fn invalid_provider_usage_still_publishes_the_modeled_terminal_observation
     for (index, case) in gents_lean_vocab::families::provider_usage_invalid_storage::cases::<
         gents_protocol::usage::UsageCompleteness,
     >()
-        .into_iter()
-        .enumerate()
+    .into_iter()
+    .enumerate()
     {
         let request_id = format!("invalid-usage-{index}");
         let context = test_context(&registry, &request_id, "usage-backend").await;

@@ -288,9 +288,11 @@ mod selection_tests {
     fn display_state_follows_the_modeled_backend_availability() {
         use gents_lean_vocab::families::backend_health_admission_display as wire;
 
-        gents_lean_vocab::families::backend_health_admission_display::replay::<String>(|input: &wire::ObservedInput<String>| wire::DisplayOutput {
-            available: derive_display_state(input.enabled, &input.probe_status) == "available",
-        });
+        gents_lean_vocab::families::backend_health_admission_display::replay::<String>(
+            |input: &wire::ObservedInput<String>| wire::DisplayOutput {
+                available: derive_display_state(input.enabled, &input.probe_status) == "available",
+            },
+        );
     }
 
     #[test]

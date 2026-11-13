@@ -166,7 +166,9 @@ mod tests {
 
     #[test]
     fn generated_access_review_replies_match_the_native_decoder() {
-        gents_lean_vocab::families::access_review_reply_decision::replay(|i| wire(&decode_reply(&i.action, &i.raw)));
+        gents_lean_vocab::families::access_review_reply_decision::replay(|i| {
+            wire(&decode_reply(&i.action, &i.raw))
+        });
     }
 
     #[test]
@@ -218,7 +220,9 @@ mod tests {
 
     #[test]
     fn generated_access_review_completions_match_the_native_gate() {
-        gents_lean_vocab::families::access_review_completion_acceptance::replay(|i| accepts_completion(parsed(&i.purpose), i.has_tools));
+        gents_lean_vocab::families::access_review_completion_acceptance::replay(|i| {
+            accepts_completion(parsed(&i.purpose), i.has_tools)
+        });
     }
 
     #[test]
