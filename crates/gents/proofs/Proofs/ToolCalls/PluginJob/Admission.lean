@@ -63,6 +63,15 @@ structure StepContext where
   /-- The facts the host writes into a resume pin, `resumeOf` included. Read on
   step 0. -/
   resumeFacts : HostFacts
+  /-- Whether a target's Agent is hosted on the calling runtime's own Node.
+
+  Decision (#3670): a job stages its children only on its own runtime, so a
+  spawn whose target names an Agent on a peer Node is refused at admission
+  (`peer_target_spawn_refused`). The refusal is the call's result, which the
+  model reads and the turn continues past; it names `agent_new` for work on a
+  peer. Before this rule the spawn was admitted and its staging failed, which
+  failed the whole turn. -/
+  localTarget : Target → Bool := fun _ => true
 
 /-- Live ∩ pinned ceiling ∩ job targets ∩ the caller's ceiling, and the dynamic
 policy's targets for a dynamic origin. -/
@@ -259,7 +268,14 @@ def spawnRefusal (ctx : StepContext) (pin : Pin) (job : Job) (s : Spawn) : Optio
   else if !cwdAdmitted ctx pin s.cwd then some .policyDenied
   else if maxSlotBytes < s.slot.utf8ByteSize then some .policyDenied
   else if !attemptAdmitted job s then some .policyDenied
+  else if !ctx.localTarget s.target then some .policyDenied
   else none
+
+/-- A spawn whose target is hosted on a peer Node never starts a child. -/
+theorem peer_target_spawn_refused (ctx : StepContext) (pin : Pin) (job : Job) (s : Spawn)
+    (peer : ctx.localTarget s.target = false) : spawnRefusal ctx pin job s ≠ none := by
+  unfold spawnRefusal
+  split_ifs <;> simp_all
 
 /-- Rule 6: the whole panel of `n` fresh spawns fits the budget and the live
 bound of the live ∩ pinned ceiling. -/
@@ -901,7 +917,7 @@ private theorem spawnRefusal_eq_none {ctx : StepContext} {p : Pin} {job : Job} {
       cwdAdmitted ctx p s.cwd = true ∧ s.slot.utf8ByteSize ≤ maxSlotBytes ∧
       attemptAdmitted job s = true := by
   unfold spawnRefusal at h
-  split_ifs at h with h1 h2 h3 h4 h5
+  split_ifs at h with h1 h2 h3 h4 h5 h6
   exact ⟨h1, by simpa using h2, by simpa using h3, Nat.le_of_not_lt h4, by simpa using h5⟩
 
 private theorem admitted_spawn_checks {ctx : StepContext} {job job' : Job} {e : Effects} {p : Pin}

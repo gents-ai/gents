@@ -473,6 +473,18 @@ async fn seeded_node() -> gents_inference::test_support::TestDb {
     db
 }
 
+#[test]
+fn trigger_delivery_self_session_matches_lean() {
+    gents_lean_vocab::families::trigger_delivery_self_session::replay(|i| {
+        is_current_session(
+            &i.caller_owner,
+            &i.caller_session,
+            &i.listed_owner,
+            &i.listed_session,
+        )
+    });
+}
+
 mod accounting;
 mod investigation;
 mod listing;

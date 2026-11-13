@@ -133,7 +133,8 @@ pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
 
 /// The canonical `AgentSession` rows a selected-session read found for its
 /// exact node/session scope (`SessionRowObservation` in `Proofs/Session/Client/Types.lean`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionRowObservation {
     Absent,
     Canonical,

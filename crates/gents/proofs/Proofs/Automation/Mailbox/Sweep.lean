@@ -11,6 +11,9 @@ structure Row where
   nodeDid : String
   isOpen : Bool
   due : Bool
+  /-- The observer cannot process the row (undecodable, or its close check
+  fails). The sweep counts it as a skipped error and never transitions it. -/
+  poisoned : Bool
   deriving DecidableEq, Repr
 
 structure State where
@@ -38,9 +41,15 @@ def nextCursor (state : State) (nodeDid : String) (pageSize budget : Nat) : Opti
   else if batch.length < available.length then lastDocId? batch
   else none
 
+def skipped (state : State) (nodeDid : String) (pageSize budget : Nat) : List Row :=
+  (selected state nodeDid pageSize budget).filter fun row => row.poisoned
+
+def expiredIn (state : State) (nodeDid : String) (pageSize budget : Nat) : List Row :=
+  (selected state nodeDid pageSize budget).filter fun row => row.due && !row.poisoned
+
 def closeSelected (state : State) (batch : List Row) : State :=
   { state with rows := state.rows.map fun row =>
-      if row.due && batch.any (fun selectedRow => selectedRow.docId = row.docId) then
+      if row.due && !row.poisoned && batch.any (fun selectedRow => selectedRow.docId = row.docId) then
         { row with isOpen := false }
       else row }
 
@@ -90,9 +99,9 @@ theorem read_failure_keeps_cursor (state : State) :
 
 theorem keyset_progress_survives_close :
     let state : State :=
-      { rows := [⟨1, "local", true, true⟩, ⟨2, "local", true, true⟩,
-        ⟨3, "local", true, true⟩, ⟨4, "local", true, true⟩,
-        ⟨5, "foreign", true, true⟩]
+      { rows := [⟨1, "local", true, true, false⟩, ⟨2, "local", true, true, false⟩,
+        ⟨3, "local", true, true, false⟩, ⟨4, "local", true, true, false⟩,
+        ⟨5, "foreign", true, true, false⟩]
         cursor := none }
     let first := advance state "local" 2 2
     let second := advance first "local" 2 2
@@ -100,6 +109,16 @@ theorem keyset_progress_survives_close :
       (selected first "local" 2 2).map Row.docId = [3, 4] ∧
       (second.cursor = none) ∧
       ((second.rows.find? (fun row => row.docId = 5)).map Row.isOpen = some true) := by
+  decide
+
+theorem poisoned_item_does_not_block_later_expiry :
+    let state : State :=
+      { rows := [⟨1, "local", true, false, true⟩, ⟨2, "local", true, false, true⟩,
+        ⟨3, "local", true, true, false⟩],
+        cursor := none }
+    (skipped state "local" 16 16).length = 2 ∧
+      (expiredIn state "local" 16 16).length = 1 ∧
+      ((advance state "local" 16 16).rows.map Row.isOpen) = [true, true, false] := by
   decide
 
 end Mailbox.Sweep
