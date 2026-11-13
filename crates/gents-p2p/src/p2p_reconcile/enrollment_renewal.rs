@@ -442,6 +442,7 @@ mod tests {
 
     #[test]
     fn renewal_notices_match_the_lean_model() {
+        use gents_lean_vocab::families::enrollment_renewal_notices_trace as notices_family;
         let now = at("2026-11-25T00:00:00Z");
         gents_lean_vocab::families::enrollment_renewal_notices_trace::replay::<String>(|trace| {
             let mut notices = RenewalNotices::default();
@@ -469,65 +470,19 @@ mod tests {
                     };
                     let mut found = notices.observe(&projection(active), now);
                     assert!(found.len() <= 1, "{found:?}");
-                    found.pop().map(|notice| {
-                        serde_json::to_value(notice.lease.state)
-                            .unwrap()
-                            .as_str()
-                            .unwrap()
-                            .to_string()
-                    })
+                    notices_family::Observed {
+                        notice: found.pop().map(|notice| notices_family::Notice {
+                            sequence: notice.authorization_sequence,
+                            state: serde_json::to_value(notice.lease.state)
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .to_string(),
+                        }),
+                        remembered: notices.noticed.len() as u64,
+                    }
                 })
                 .collect()
         });
-    }
-
-    #[test]
-    fn a_generation_is_noticed_once_per_state_and_forgotten_when_superseded() {
-        let expiring = active_enrollment(1, "2026-11-29T19:07:47Z");
-        let mut notices = RenewalNotices::default();
-
-        assert!(notices
-            .observe(
-                &projection(vec![expiring.clone()]),
-                at("2026-11-01T00:00:00Z")
-            )
-            .is_empty());
-
-        let due = notices.observe(
-            &projection(vec![expiring.clone()]),
-            at("2026-11-25T00:00:00Z"),
-        );
-        assert_eq!(due.len(), 1);
-        assert_eq!(due[0].lease.state, AuthorizationLeaseState::RenewalDue);
-        assert_eq!(due[0].lease.remaining_days(), 4);
-        assert_eq!(due[0].authorization_sequence, 1);
-        assert!(notices
-            .observe(
-                &projection(vec![expiring.clone()]),
-                at("2026-11-26T00:00:00Z")
-            )
-            .is_empty());
-
-        let expired = notices.observe(
-            &projection(vec![expiring.clone()]),
-            at("2026-11-30T00:00:00Z"),
-        );
-        assert_eq!(expired.len(), 1);
-        assert_eq!(expired[0].lease.state, AuthorizationLeaseState::Expired);
-        assert!(notices
-            .observe(&projection(vec![expiring]), at("2026-11-30T00:01:00Z"))
-            .is_empty());
-
-        let renewed = active_enrollment(2, "2026-12-29T19:07:47Z");
-        assert!(notices
-            .observe(
-                &projection(vec![renewed.clone()]),
-                at("2026-11-30T00:02:00Z")
-            )
-            .is_empty());
-        assert!(notices.noticed.is_empty());
-        let due = notices.observe(&projection(vec![renewed]), at("2026-12-23T00:00:00Z"));
-        assert_eq!(due.len(), 1);
-        assert_eq!(due[0].authorization_sequence, 2);
     }
 }

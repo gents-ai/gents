@@ -380,52 +380,85 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
 }
 
 #[tokio::test]
-async fn envelope_shaped_errors_from_other_tools_keep_their_hint() {
-    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
-    let node = db.node.clone();
-    let mut turns = (0..5)
-        .map(|index| {
-            vec![
-                RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-                    format!("shaped-{index}"),
-                    "envelope_shaped".into(),
-                    serde_json::json!({}),
-                )),
-                RawStreamingChoice::FinalResponse(()),
-            ]
-        })
-        .collect::<Vec<_>>();
-    turns.push(vec![
-        RawStreamingChoice::Message("done".into()),
-        RawStreamingChoice::FinalResponse(()),
-    ]);
-    let model = ScriptedModel::new_turns(turns);
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let stream = run_loop_stream(
-        model.clone(),
-        Some(hook.clone()),
-        TaggedMessage::unassociated(Message::user("call the tool")),
-        Vec::new(),
-        Arc::new(vec![Box::new(EnvelopeShapedTool {
-            calls: Arc::clone(&calls),
-        }) as Box<dyn ToolDyn>]),
-        owned_config(64),
-    );
-    let collected = collect_owned_scripted_stream(
-        stream,
-        &hook,
-        &writer,
-        &mut lifecycle,
-        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-    )
-    .await;
-    assert!(collected.error.is_none(), "{:?}", collected.error);
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
-    assert!(collected
-        .tool_results
-        .iter()
-        .all(|result| !result.contains("repeated_tool_call_not_run")));
-    node.shutdown().await.expect("node shutdown");
+async fn repeated_failures_are_identified_as_the_lean_model_derives_them() {
+    for case in
+        gents_lean_vocab::families::repeated_failure_identity_streak::cases::<String, String>()
+    {
+        let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let node = db.node.clone();
+        let mut turns = (0..case.input.calls)
+            .map(|index| {
+                vec![
+                    RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                        format!("shaped-{index}"),
+                        "envelope_shaped".into(),
+                        serde_json::json!({}),
+                    )),
+                    RawStreamingChoice::FinalResponse(()),
+                ]
+            })
+            .collect::<Vec<_>>();
+        turns.push(vec![
+            RawStreamingChoice::Message("done".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ]);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let stream = run_loop_stream(
+            ScriptedModel::new_turns(turns),
+            Some(hook.clone()),
+            TaggedMessage::unassociated(Message::user("call the tool")),
+            Vec::new(),
+            Arc::new(vec![Box::new(EnvelopeShapedTool {
+                calls: Arc::clone(&calls),
+                command_envelope: case.input.command_envelope,
+                varying_hint: case.input.varying_hint,
+            }) as Box<dyn ToolDyn>]),
+            owned_config(64),
+        );
+        let collected = collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )
+        .await;
+        let mut actions = collected
+            .tool_results
+            .iter()
+            .map(|result| {
+                if result.contains("repeated_tool_call_not_run") {
+                    "suppress".to_string()
+                } else {
+                    "dispatch".to_string()
+                }
+            })
+            .collect::<Vec<_>>();
+        let ending = match &collected.error {
+            None => None,
+            Some(error) if error.contains(REPEATED_TOOL_FAILURE_PREFIX) => {
+                actions.push("stop".into());
+                Some("repeated_failure".to_string())
+            }
+            Some(error) => panic!("{:?}: {error}", case.input),
+        };
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            actions
+                .iter()
+                .filter(|action| *action == "dispatch")
+                .count(),
+            "{:?}",
+            case.input
+        );
+        case.check(
+            gents_lean_vocab::families::repeated_failure_identity_streak::StreakOutput {
+                actions,
+                ending,
+            },
+        );
+        node.shutdown().await.expect("node shutdown");
+    }
 }
 
 #[tokio::test]
@@ -654,101 +687,193 @@ async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
     assert_eq!(model.seen_histories().await.len(), 1);
 }
 
-#[tokio::test]
-async fn plugin_image_parts_reach_the_provider_whole() {
-    const IMAGE_BYTES: usize = 900_000;
-    let result = plugin_image_result_seen_by(
-        gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey,
-        IMAGE_BYTES,
-    )
-    .await;
-    assert_eq!(result.len(), 2, "one text part and one image part");
-    assert_eq!(tool_result_text(&result[0]), r#"{"height":2,"width":2}"#);
-    let ToolResultContent::Image(image) = &result[1] else {
-        panic!("the second part is the image: {:?}", result[1]);
+fn threading_counter(
+    profile: &str,
+) -> std::sync::Arc<gents_loop::provider_input::ProviderInputCounter> {
+    use gents_inference::backends::provider::BackendProviderKind as Provider;
+    use gents_loop::openai_wire::OpenAiWireApi as Wire;
+    use gents_loop::provider_input::ProviderInputProfile as Profile;
+    let (provider, wire, expected) = match profile {
+        "open_ai_chat_completions" => (
+            Provider::OpenAiCompatible,
+            Wire::ChatCompletions,
+            Profile::OpenAiChatCompletions,
+        ),
+        "open_ai_responses_normalized" => (
+            Provider::OpenAiCompatible,
+            Wire::Responses,
+            Profile::OpenAiResponsesNormalized,
+        ),
+        "open_router_chat_completions" => (
+            Provider::OpenRouter,
+            Wire::ChatCompletions,
+            Profile::OpenRouterChatCompletions,
+        ),
+        "chat_gpt_codex_responses" => (
+            Provider::ChatGptCodex,
+            Wire::Responses,
+            Profile::ChatGptCodexResponses,
+        ),
+        "xai_responses" => (
+            Provider::XaiGrokOAuth,
+            Wire::Responses,
+            Profile::XaiResponses,
+        ),
+        "claude_messages" => (
+            Provider::AnthropicApiKey,
+            Wire::ChatCompletions,
+            Profile::ClaudeMessages,
+        ),
+        other => panic!("unknown profile {other}"),
     };
-    assert_eq!(
-        image.media_type,
-        Some(gents_inference::llm::message::ImageMediaType::PNG)
-    );
-    let gents_inference::llm::message::DocumentSourceKind::Base64(data) = &image.data else {
-        panic!("the image arrives as base64 data");
-    };
-    assert_eq!(
-        data.len(),
-        IMAGE_BYTES,
-        "the image is not cut by the text bound"
-    );
+    let counter = provider_input_counter(provider, wire);
+    assert_eq!(counter.profile(), expected);
+    counter
 }
 
-#[tokio::test]
-async fn persisted_plugin_image_result_replays_text_parts_and_a_note() {
-    for image_bytes in [64, 400_000] {
-        persisted_plugin_image_result_replay(image_bytes).await;
+fn text_segments(text: &str, source: &str) -> Vec<String> {
+    let not_replayed = gents_loop::loop_stream::TOOL_RESULT_IMAGE_NOT_REPLAYED;
+    if text == gents_loop::loop_stream::TOOL_RESULT_IMAGE_OMITTED {
+        return vec!["image_omitted_note".into()];
+    }
+    if text == not_replayed {
+        return vec!["image_not_replayed_note".into()];
+    }
+    if let Some(prefix) = text.strip_suffix(&format!("\n{not_replayed}")) {
+        let mut segments = text_segments(prefix, source);
+        segments.push("image_not_replayed_note".into());
+        return segments;
+    }
+    vec![if text == source {
+        "text_whole"
+    } else if !text.is_empty() && text.len() < source.len() {
+        "text_bounded"
+    } else {
+        "other"
+    }
+    .into()]
+}
+
+fn part_segments(part: &ToolResultContent, source: &str, image_bytes: usize) -> Vec<String> {
+    match part {
+        ToolResultContent::Text(text) => text_segments(&text.text, source),
+        ToolResultContent::Image(image) => {
+            let whole = image.media_type
+                == Some(gents_inference::llm::message::ImageMediaType::PNG)
+                && matches!(
+                    &image.data,
+                    gents_inference::llm::message::DocumentSourceKind::Base64(data) if data.len() == image_bytes
+                );
+            vec![if whole { "image_whole" } else { "other" }.into()]
+        }
     }
 }
 
 #[tokio::test]
-async fn plugin_image_parts_become_a_note_where_the_provider_refuses_them() {
-    let result = plugin_image_result_seen_by(
-        gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
-        64,
-    )
-    .await;
-    assert_eq!(
-        result.iter().map(tool_result_text).collect::<Vec<_>>(),
-        vec![
-            r#"{"height":2,"width":2}"#,
-            gents_loop::loop_stream::TOOL_RESULT_IMAGE_OMITTED,
-        ]
-    );
+async fn tool_results_reach_the_provider_as_the_lean_model_threads_them() {
+    const PLUGIN_RESPONSE: &str = r#"{"height":2,"width":2}"#;
+    let oversized = std::iter::repeat_n("x".repeat(200), 10_000)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for case in gents_lean_vocab::families::tool_result_threading_projection::cases::<
+        String,
+        String,
+        String,
+    >() {
+        let input = &case.input;
+        let counter = threading_counter(&input.profile);
+        let image_bytes = input.image_bytes as usize;
+        let (source, parts) = match (input.tool.as_str(), input.persisted) {
+            ("plugin_image", false) => (
+                PLUGIN_RESPONSE.to_owned(),
+                plugin_image_result_seen_by(counter, image_bytes).await,
+            ),
+            ("plugin_image", true) => (
+                PLUGIN_RESPONSE.to_owned(),
+                persisted_plugin_image_result_replay(counter, image_bytes).await,
+            ),
+            ("oversized_text", false) => (
+                oversized.clone(),
+                owned_tool_result_threaded(
+                    counter,
+                    Box::new(FixedTool {
+                        name: "echo".to_string(),
+                        output: oversized.clone(),
+                    }),
+                )
+                .await,
+            ),
+            other => panic!("no production scenario for {other:?}"),
+        };
+        case.check(Some(
+            parts
+                .iter()
+                .map(|part| part_segments(part, &source, image_bytes))
+                .collect(),
+        ));
+    }
 }
 
 #[tokio::test]
-async fn threaded_assistant_turn_carries_provider_message_id() {
-    let model = ScriptedModel::new_turns(vec![
-        vec![
-            RawStreamingChoice::MessageId("msg_abc123".to_string()),
-            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-                "call-1".to_string(),
-                "echo".to_string(),
-                serde_json::json!({}),
-            )),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-        vec![
+async fn threaded_assistant_turns_carry_ids_as_the_lean_model_threads_them() {
+    for case in gents_lean_vocab::families::tool_result_threading_assistant_ids::cases::<String>() {
+        let tool_turns = case.input.tool_turns as usize;
+        let mut turns = (0..tool_turns)
+            .map(|turn| {
+                let mut chunks = Vec::new();
+                if case.input.reports_id {
+                    chunks.push(RawStreamingChoice::MessageId(format!("msg_{turn}")));
+                }
+                chunks.push(RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                    format!("call-{turn}"),
+                    "echo".to_string(),
+                    serde_json::json!({}),
+                )));
+                chunks.push(RawStreamingChoice::FinalResponse(()));
+                chunks
+            })
+            .collect::<Vec<_>>();
+        turns.push(vec![
             RawStreamingChoice::Message("done".to_string()),
             RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-
-    let stream = run_loop_stream(
-        model.clone(),
-        None::<gents_loop::session_hook::NoopSessionHook>,
-        TaggedMessage::unassociated(Message::user("go")),
-        Vec::new(),
-        Arc::new(vec![echo_tool()]),
-        config(4),
-    );
-    futures::pin_mut!(stream);
-    while stream.next().await.is_some() {}
-
-    let histories = model.seen_histories().await;
-    assert_eq!(
-        histories.len(),
-        2,
-        "expected two completion turns; got {histories:?}"
-    );
-    let assistant_id = histories[1].iter().find_map(|message| match message {
-        Message::Assistant { id, .. } => Some(id.clone()),
-        _ => None,
-    });
-    assert_eq!(
-        assistant_id,
-        Some(Some("msg_abc123".to_string())),
-        "threaded assistant turn must carry the provider message id; history: {:?}",
-        histories[1]
-    );
+        ]);
+        let model = ScriptedModel::new_turns(turns);
+        let stream = run_loop_stream(
+            model.clone(),
+            None::<gents_loop::session_hook::NoopSessionHook>,
+            TaggedMessage::unassociated(Message::user("go")),
+            Vec::new(),
+            Arc::new(vec![echo_tool()]),
+            config(tool_turns + 1),
+        );
+        futures::pin_mut!(stream);
+        while stream.next().await.is_some() {}
+        let observed = model
+            .seen_histories()
+            .await
+            .iter()
+            .skip(1)
+            .map(|history| {
+                history
+                    .iter()
+                    .filter_map(|message| match message {
+                        Message::Assistant { id, .. } => Some(id.clone()),
+                        _ => None,
+                    })
+                    .enumerate()
+                    .map(|(turn, id)| {
+                        match id {
+                            Some(id) if id == format!("msg_{turn}") => "provider_id",
+                            None => "absent",
+                            Some(_) => "other",
+                        }
+                        .to_string()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        case.check(observed);
+    }
 }
 
 #[tokio::test]

@@ -173,4 +173,37 @@ example : (step? scope ((step? scope initial .stop).getD initial) (.enqueue ordi
 example : (step? ⟨2, 900, some 1⟩ initial .stop).isNone = true := by
   native_decide
 
+def pendingStopInitial (count : Nat) : State :=
+  { queuedStopInitial with
+    queue := { queuedStopInitial.queue with pending := List.replicate count ordinary } }
+
+def pendingStopPost (count : Nat) : Option State :=
+  step? scope (pendingStopInitial count) .stop
+
+def stopAcceptedAt (count : Nat) : Bool :=
+  (pendingStopPost count).isSome
+
+def drainedPendingAt (count : Nat) : Bool :=
+  match pendingStopPost count with
+  | none => false
+  | some post =>
+      post.queue.pending.isEmpty &&
+        (pendingStopInitial count).queue.pending.all fun entry =>
+          decide (entry.requestId ∈ post.queue.terminal)
+
+def stoppedAfterStop (count : Nat) : Bool :=
+  match pendingStopPost count with
+  | none => false
+  | some post => post.stopped
+
+def lateMessageRefusedAfterStop (count : Nat) : Bool :=
+  match pendingStopPost count with
+  | none => false
+  | some post => (step? scope post (.enqueue ordinary)).isNone
+
+theorem explicit_stop_drains_pending_work_and_rejects_late_admission :
+    stopAcceptedAt 1 = true ∧ drainedPendingAt 1 = true ∧
+      stoppedAfterStop 1 = true ∧ lateMessageRefusedAfterStop 1 = true := by
+  native_decide
+
 end SessionQueue.Control

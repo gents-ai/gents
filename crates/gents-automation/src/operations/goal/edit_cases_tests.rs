@@ -3,7 +3,7 @@ use crate::goal::{
     GoalDocument,
 };
 use gents_protocol::goal_status::GoalStatus;
-use gents_lean_vocab::families::goal_edit_contracts_edit as family;
+use gents_lean_vocab::families::goal_edit_contracts_edit as edit_family;
 use gents_protocol::operations::goal::{GoalExpected, GoalOperationError, GoalSetInput};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
@@ -22,7 +22,8 @@ enum Origin {
     Client,
 }
 
-type WireAssignment = family::Assignment<GoalStatus>;
+type WireAssignment = edit_family::Assignment<GoalStatus>;
+type WireEdited = edit_family::Edited<GoalStatus>;
 
 fn wire_assignment(goal: &GoalDocument) -> WireAssignment {
     WireAssignment {
@@ -30,6 +31,13 @@ fn wire_assignment(goal: &GoalDocument) -> WireAssignment {
         sequence: u64::try_from(goal.continuation_sequence()).unwrap(),
         objective: goal.objective.clone(),
         budget: goal.token_budget,
+    }
+}
+
+fn wire_edited(goal: &GoalDocument) -> WireEdited {
+    WireEdited {
+        assignment: wire_assignment(goal),
+        auto_resume: goal.auto_resume_at_reset,
     }
 }
 
@@ -43,13 +51,13 @@ async fn durable_rows(access: &gents_store::config_client::ConfigAccess) -> Valu
 
 #[tokio::test]
 async fn generated_goal_edit_cases_drive_real_transactions() {
-    let cases = family::cases::<Origin, GoalStatus>();
-    assert_eq!(cases.len(), 66);
+    let cases = gents_lean_vocab::families::goal_edit_contracts_edit::cases::<Origin, GoalStatus>();
     for case in &cases {
         let row = &case.input;
         let input = GoalSetInput {
             objective: row.fields.objective.clone(),
             token_budget: row.fields.budget.map(Some),
+            auto_resume: row.auto_resume,
             ..Default::default()
         };
         let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
@@ -101,7 +109,8 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
                     &format!(r#"mutation($input: GoalMutationInputArg!) {{update_Goal(docID: "{doc}", input: $input) {{_docID}}}}"#),
                     &serde_json::json!({"input": {"status": row.current.status,
                         "continuation_sequence": row.current.sequence, "objective": row.current.objective.as_str(),
-                        "token_budget": row.current.budget}}),
+                        "token_budget": row.current.budget,
+                        "auto_resume_at_reset": row.stored_auto_resume}}),
                     gents_protocol::schemas::GOAL,
                 ).await
             })
@@ -135,6 +144,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             "{} durable input",
             row.name
         );
+        assert_eq!(current.auto_resume_at_reset, row.stored_auto_resume, "{}", row.name);
         let before = durable_rows(&access).await;
         let edit = match row.origin {
             Origin::Agent => {
@@ -161,7 +171,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             Err(GoalOperationError::Passthrough(error)) => panic!("{}: {error:#}", row.name),
             Err(_) => None,
         };
-        let edited = result.as_ref().map(wire_assignment);
+        let edited = result.as_ref().map(wire_edited);
         case.check(edited.clone());
         if let Some(updated) = &result {
             let prompt =
@@ -181,10 +191,10 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             "{}",
             row.name
         );
-        if edited
-            .as_ref()
-            .is_none_or(|edited| same(edited, &wire_assignment(&current)))
-        {
+        if edited.as_ref().is_none_or(|edited| {
+            same(&edited.assignment, &wire_assignment(&current))
+                && edited.auto_resume == current.auto_resume_at_reset
+        }) {
             assert_eq!(before, after, "{} must not write", row.name);
         }
         assert_eq!(after["Goal"][0]["goal_id"], before["Goal"][0]["goal_id"]);

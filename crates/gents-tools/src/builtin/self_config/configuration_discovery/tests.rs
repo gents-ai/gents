@@ -164,53 +164,90 @@ fn synthetic_laptop_inventory_is_bounded_inert_and_sanitized() {
 }
 
 #[test]
-fn malformed_missing_and_limits_are_explicit() {
-    let fixture = tempfile::tempdir().unwrap();
-    let claude = fixture.path().join("claude");
-    fs::create_dir_all(&claude).unwrap();
-    write(&claude.join("settings.json"), "{bad");
-    write(&claude.join("CLAUDE.md"), "0123456789abcdef");
-    let missing = fixture.path().join("missing");
-    let inventory = discover_configuration(&DiscoveryRequest {
-        sources: vec![
-            DiscoverySourceRoot {
-                source_id: "claude-user".to_owned(),
-                kind: DiscoverySourceKind::Claude,
-                scope: DiscoveryScope::User,
-                root: claude,
+fn source_outcomes_and_notices_follow_the_discovery_model() {
+    for case in gents_lean_vocab::families::configuration_discovery_scan::cases::<
+        String,
+        DiscoveryNoticeCode,
+        DiscoverySourceOutcome,
+        String,
+    >() {
+        let fixture = tempfile::tempdir().unwrap();
+        let sources = case
+            .input
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                let root = fixture.path().join(format!("source-{index}"));
+                let root = match source.root.as_str() {
+                    "present" => {
+                        fs::create_dir_all(&root).unwrap();
+                        root
+                    }
+                    "missing" => root,
+                    "relative" => PathBuf::from(format!("source-{index}")),
+                    "not_directory" => {
+                        write(&root, "not a directory");
+                        root
+                    }
+                    other => panic!("unknown root {other}"),
+                };
+                match source.settings.as_deref() {
+                    None => {}
+                    Some("well_formed") => write(&root.join("settings.json"), "{}"),
+                    Some("malformed") => write(&root.join("settings.json"), "{bad"),
+                    Some("oversized") => {
+                        write(&root.join("settings.json"), r#"{"model":"0123456789"}"#)
+                    }
+                    Some(other) => panic!("unknown settings {other}"),
+                }
+                match source.instructions_oversized {
+                    None => {}
+                    Some(false) => write(&root.join("CLAUDE.md"), "ok"),
+                    Some(true) => write(&root.join("CLAUDE.md"), "0123456789abcdef"),
+                }
+                DiscoverySourceRoot {
+                    source_id: format!("source-{index}"),
+                    kind: DiscoverySourceKind::Claude,
+                    scope: DiscoveryScope::User,
+                    root,
+                }
+            })
+            .collect::<Vec<_>>();
+        let ids = sources
+            .iter()
+            .map(|source| source.source_id.clone())
+            .collect::<Vec<_>>();
+        let inventory = discover_configuration(&DiscoveryRequest {
+            sources,
+            limits: DiscoveryLimits {
+                max_file_bytes: 8,
+                ..DiscoveryLimits::default()
             },
-            DiscoverySourceRoot {
-                source_id: "codex-user".to_owned(),
-                kind: DiscoverySourceKind::Codex,
-                scope: DiscoveryScope::User,
-                root: missing,
-            },
-        ],
-        limits: DiscoveryLimits {
-            max_file_bytes: 8,
-            ..DiscoveryLimits::default()
-        },
-    });
-    assert_eq!(
-        inventory.sources[0].outcome,
-        DiscoverySourceOutcome::Partial
-    );
-    assert_eq!(
-        inventory.sources[1].outcome,
-        DiscoverySourceOutcome::Unavailable
-    );
-    assert!(inventory
-        .truncation
-        .iter()
-        .any(|notice| notice.code == DiscoveryNoticeCode::FileTooLarge));
-    assert!(inventory
-        .warnings
-        .iter()
-        .any(|notice| notice.code == DiscoveryNoticeCode::MalformedFile));
-    assert!(inventory
-        .warnings
-        .iter()
-        .any(|notice| notice.code == DiscoveryNoticeCode::MissingRoot));
+        });
+        assert_eq!(inventory.sources.len(), ids.len());
+        let codes = |notices: &[DiscoveryNotice], id: &str| -> Vec<DiscoveryNoticeCode> {
+            notices
+                .iter()
+                .filter(|notice| notice.source_id.as_deref() == Some(id))
+                .map(|notice| notice.code)
+                .collect()
+        };
+        let sources = inventory
+            .sources
+            .iter()
+            .zip(&ids)
+            .map(|(source, id)| {
+                assert_eq!(&source.source_id, id);
+                gents_lean_vocab::families::configuration_discovery_scan::SourceReport {
+                    outcome: source.outcome,
+                    warnings: codes(&inventory.warnings, id),
+                    truncations: codes(&inventory.truncation, id),
+                }
+            })
+            .collect();
+        case.check(gents_lean_vocab::families::configuration_discovery_scan::Inventory { sources });
+    }
 }
 
 #[test]

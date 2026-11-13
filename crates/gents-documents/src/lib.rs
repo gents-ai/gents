@@ -33,6 +33,8 @@ mod pack_config;
 pub mod pack_spec;
 mod page;
 pub mod patch;
+#[cfg(test)]
+mod trigger_budget_contract;
 pub mod plugin_coordinate;
 pub mod plugin_job_settings;
 mod plugin_source;

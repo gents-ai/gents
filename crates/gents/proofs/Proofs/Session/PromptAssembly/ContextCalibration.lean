@@ -78,6 +78,19 @@ def State.ratio (s : State) : Nat :=
   | [] => s.prior
   | first :: rest => rest.foldl max first
 
+/-- The ratio `State.observe` reports for one observation: the ratio in effect
+after it when the observation is usable, none when it is ignored. -/
+def State.reading (s : State) (observedInput estimatedInput : Nat) : Option Nat :=
+  match observedRatio observedInput estimatedInput with
+  | some _ => some (s.observe observedInput estimatedInput).ratio
+  | none => none
+
+def observeReadings : State → List (Nat × Nat) → List (Option Nat)
+  | _, [] => []
+  | s, (observedInput, estimatedInput) :: rest =>
+    s.reading observedInput estimatedInput ::
+      observeReadings (s.observe observedInput estimatedInput) rest
+
 def calibrated (raw ratio : Nat) : Nat :=
   ceilDiv (raw * max ratio unitRatio) unitRatio
 
@@ -226,5 +239,100 @@ theorem admission_iff_over_budget
   · simp [h]
   · simp [h]
     omega
+
+/-- A calibrated count scales up by the ratio and never down, rounds up, and
+the ratio is floored at one and capped at the malformed-usage clamp. Zero
+observations are ignored, and a higher observation sets the ratio at once. -/
+theorem calibration_scales_up_and_never_down :
+    calibrated 561000 (seed 18000 []).ratio = 1009800 ∧
+    calibrated 3 (seed 15000 []).ratio = 5 ∧
+    calibrated 1000 (seed 5000 []).ratio = 1000 ∧
+    (seed 1 []).ratio = unitRatio ∧
+    observeReadings (seed 1 []) [(500, 1000), (1000000, 1), (0, 1000), (1000, 0)] =
+      [some unitRatio, some maxRatio, none, none] ∧
+    ([(500, 1000), (1000000, 1), (0, 1000), (1000, 0)].foldl
+      (fun (s : State) (p : Nat × Nat) => s.observe p.1 p.2) (seed 1 [])).ratio = maxRatio := by
+  decide
+
+theorem raw_le_calibrated (raw ratio : Nat) : raw ≤ calibrated raw ratio := by
+  unfold calibrated ceilDiv unitRatio
+  apply (Nat.le_div_iff_mul_le (by decide)).2
+  have : raw * 10000 ≤ raw * max ratio 10000 := Nat.mul_le_mul_left _ (Nat.le_max_right _ _)
+  omega
+
+/-- The output cap a dispatched request carries, or `none` when dispatch is
+refused. The context count caps output; when it leaves no output at all the
+raw count caps it instead. Only the raw count can refuse dispatch: the
+provider's own overflow rejection is recovered, an overestimate is not. -/
+def State.dispatchCap (s : State) (raw contextWindow maxOutputTokens : Nat) : Option Nat :=
+  let contextCap := effectiveOutputBudget (s.tokens raw) contextWindow maxOutputTokens
+  let cap := if contextCap = 0 then effectiveOutputBudget raw contextWindow maxOutputTokens
+    else contextCap
+  if CanDispatch raw contextWindow cap then some cap else none
+
+theorem a_calibrated_overestimate_never_refuses_a_request_the_raw_count_fits
+    (s : State) (raw contextWindow maxOutputTokens : Nat)
+    (h : CanDispatch raw contextWindow maxOutputTokens) :
+    (s.dispatchCap raw contextWindow maxOutputTokens).isSome := by
+  have hraw : raw ≤ s.tokens raw :=
+    Nat.le_trans (raw_le_calibrated raw s.ratio) (tokens_ge_calibrated s raw)
+  unfold State.dispatchCap
+  by_cases hc : effectiveOutputBudget (s.tokens raw) contextWindow maxOutputTokens = 0
+  · have hcap : CanDispatch raw contextWindow
+        (effectiveOutputBudget raw contextWindow maxOutputTokens) := by
+      unfold CanDispatch effectiveOutputBudget at *
+      omega
+    simp [hc, hcap]
+  · have hcap : CanDispatch raw contextWindow
+        (effectiveOutputBudget (s.tokens raw) contextWindow maxOutputTokens) := by
+      unfold CanDispatch effectiveOutputBudget at *
+      omega
+    simp [hc, hcap]
+
+/-- Where a turn's compaction ends. -/
+inductive Rebuild where
+  | belowThreshold
+  | noOutputCapacity
+  | cannotFit
+  | committed
+  deriving DecidableEq, Repr
+
+/-- A turn whose request the trigger admits is reduced once and rebuilt. The
+rebuilt request must leave output room by its raw count and fit the budget
+that admitted the reduction at the session ratio, not anchored: the anchor
+counted the unreduced transcript. Only a rebuild that fits is committed. -/
+def State.rebuild (s : State) (beforeRaw afterRaw contextWindow basisPoints maxOutputTokens : Nat) :
+    Rebuild :=
+  match s.admission beforeRaw contextWindow basisPoints maxOutputTokens with
+  | none => .belowThreshold
+  | some _ =>
+    if ¬ CanDispatch afterRaw contextWindow maxOutputTokens then .noOutputCapacity
+    else match decideThreshold (calibrated afterRaw s.ratio)
+        (compactionInputBudget contextWindow basisPoints maxOutputTokens) with
+      | .reduceEligible => .cannotFit
+      | .notNeeded => .committed
+
+/-- The compactor runs once for every admitted turn. -/
+def Rebuild.compactorCalls : Rebuild → Nat
+  | .belowThreshold => 0
+  | _ => 1
+
+/-- The transcript, its reduction keys and the reduction's commit change only
+when the rebuilt request fits; the anchor is dropped with them. -/
+def Rebuild.replacesSession : Rebuild → Bool
+  | .committed => true
+  | _ => false
+
+def Rebuild.commits (r : Rebuild) : Nat := if r.replacesSession then 1 else 0
+
+def Rebuild.keepsAnchor (r : Rebuild) : Bool := !r.replacesSession
+
+theorem rebuilt_request_over_the_calibrated_budget_cannot_fit_and_keeps_the_session :
+    let s : State := { prior := 20000, observations := [], anchor := some ⟨1, 0, 1⟩ }
+    let r := s.rebuild 40000 40000 100000 7500 8000
+    r = .cannotFit ∧ r.compactorCalls = 1 ∧ r.commits = 0 ∧ r.replacesSession = false ∧
+      r.keepsAnchor = true ∧ CanDispatch 40000 100000 8000 ∧
+      40000 ≤ compactionInputBudget 100000 7500 8000 := by
+  decide
 
 end PromptAssembly.ContextCalibration

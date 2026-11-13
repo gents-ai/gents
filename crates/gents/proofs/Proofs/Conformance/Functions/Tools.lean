@@ -1,5 +1,6 @@
 import Proofs.Tools.Identity.Configuration
 import Proofs.Tools.Lsp.Types
+import Proofs.Tools.Lsp.ServerStart
 import Proofs.Tools.MCPHealth.Coupling
 import Proofs.Tools.ToolPolicy.OperatorPaths
 import Proofs.Tools.ToolPolicy.PluginCalls
@@ -24,6 +25,7 @@ attribute [conformance_function]
   Identity.Configuration.ordinaryMutationAllowed
   Identity.Configuration.clientSignedWriteMayRetry
   Lsp.LspAction.mutates
+  Lsp.LspAction.mayColdStart
   ToolPolicy.OperatorPaths.commandGuardAllows
   ToolPolicy.PluginCalls.available
   Proofs.MCPHealth.healthProjection
