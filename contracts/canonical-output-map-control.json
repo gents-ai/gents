@@ -115,7 +115,7 @@
       "SessionQueue.Action.claimNext",
       "SessionQueue.Action.finishActive"
     ],
-    "generated_groups": ["queue_deadline_conformance_cases"],
+    "generated_groups": ["families"],
     "fixture_status": "summary_only",
     "native_owner_paths": [
       "crates/gents-session/src/request/lifecycle/queue/enqueue.rs",
@@ -129,7 +129,7 @@
       "preserve request-id freshness, append ordering and coalesced-key uniqueness",
       "claim only the pending head when no request is active",
       "finish exactly the active request before admitting the next claim",
-      "retain queue deadline and stale-owner observations from queue_deadline_conformance_cases without claiming those summaries execute native mutations"
+      "retain queue deadline and stale-owner observations from the contracts_queue_deadline_* families without claiming those summaries execute native mutations"
     ],
     "retired_bindings": [],
     "admission": {
@@ -147,7 +147,7 @@
       { "file": "crates/gents/proofs/Proofs/Conformance/ContractCases/QueueDeadline.lean", "symbol": "Conformance.ContractCases.backgroundCompletionCreatesNoAgentRequestCase" }
     ],
     "constructors": ["SessionQueue.Action.drainAutomated"],
-    "generated_groups": ["queue_deadline_conformance_cases"],
+    "generated_groups": ["families"],
     "fixture_status": "summary_only",
     "native_owner_paths": [
       "crates/gents-session/src/request/lifecycle/queue/draining.rs",

@@ -6,21 +6,14 @@ use gents_store::config_client::NodePermission;
 
 #[tokio::test]
 async fn signed_client_claim_uses_transaction_bound_intent_and_native_permissions() {
-    let modeled = gents_lean_vocab::lean_contract_snapshot();
-    for (name, mutate, scheduled, steer) in [
-        ("committed_claim", false, false, false),
-        ("committed_claim", false, true, false),
-        ("invalid_signature", true, false, false),
-        ("invoke_denied_at_check", false, false, false),
-        ("committed_claim", false, false, true),
-        ("invalid_signature", true, false, true),
-        ("invoke_denied_at_check", false, false, true),
-    ] {
-        let case = modeled
-            .cross_actor_authorization_cases
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap();
+    for (index, case) in
+        gents_lean_vocab::families::cross_actor_authorization_signed_client_claim::cases()
+            .into_iter()
+            .enumerate()
+    {
+        let input = &case.input;
+        let name = format!("{}-{index}", input.name);
+        let (mutate, scheduled, steer) = (!input.signature_valid, input.scheduled, input.steer);
         let home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let owner = KeyIdentity::load_or_create(home.path().join("owner.key"), None).unwrap();
@@ -47,7 +40,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 .unwrap();
         }
         let user_access = db.client_access(&user);
-        if name == "invoke_denied_at_check" {
+        if !input.agent_invoke {
             let owner_access = db.client_access(&owner);
             seed_owned_agent(&owner_access, runtime.did(), &binding).await;
             let agent = owner_access.execute("{ Agent { _docID } }").await.unwrap();
@@ -105,6 +98,15 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             .await
             .unwrap();
         submit_client_request(&user_access, &create).await.unwrap();
+        if !input.requester_node_permission {
+            admin
+                .revoke_node_permission(
+                    &user.did().parse().unwrap(),
+                    NodePermission::DocumentUpdate,
+                )
+                .await
+                .unwrap();
+        }
         let agent_identity =
             gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let agent_access = ConfigAccess::local_managed_agent(
@@ -148,21 +150,11 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         lifecycle.set_client_claim_admission(admission);
         let result = lifecycle.claim_with_identity().await;
         let claimed = matches!(result.as_ref(), Ok(ClaimOutcome::Claimed));
-        assert_eq!(
-            result.is_err(),
-            case.decision == gents_lean_vocab::LeanCrossActorDecision::Denied,
-            "{name}: {}",
-            result
-                .as_ref()
-                .err()
-                .map(|error| gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string())
-                .unwrap_or_default()
-        );
-        assert_eq!(
-            claimed,
-            case.decision == gents_lean_vocab::LeanCrossActorDecision::Claimed,
-            "{name}"
-        );
+        let decision = match result.as_ref() {
+            Ok(ClaimOutcome::Claimed) => "claimed",
+            Err(_) => "denied",
+            Ok(other) => panic!("{name}: unmodeled claim outcome {other:?}"),
+        };
         if claimed {
             assert!(lifecycle.owns_execution().await.unwrap());
         }
@@ -170,22 +162,26 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             .execute("{ AgentRequest { lifecycle_state failure_reason terminal_output } }")
             .await
             .unwrap();
-        assert_eq!(
-            state["data"]["AgentRequest"][0]["lifecycle_state"].as_str(),
-            Some(case.lifecycle.as_str()),
-            "{name}"
-        );
-        if case.decision == gents_lean_vocab::LeanCrossActorDecision::Denied {
-            assert_eq!(
-                state["data"]["AgentRequest"][0]["failure_reason"].as_str(),
-                case.failure_reason.as_deref()
-            );
+        let row = &state["data"]["AgentRequest"][0];
+        let terminal_output = (!row["terminal_output"].is_null()).then(|| {
             let output: gents_protocol::output::TerminalOutput =
-                serde_json::from_value(state["data"]["AgentRequest"][0]["terminal_output"].clone())
-                    .unwrap();
-            assert_eq!(output, gents_protocol::output::TerminalOutput::NoMessage);
-            assert_eq!(case.terminal_output.as_deref(), Some("no_message"));
-        }
+                serde_json::from_value(row["terminal_output"].clone()).unwrap();
+            match output {
+                gents_protocol::output::TerminalOutput::NoMessage => "no_message".to_owned(),
+                _ => "message".to_owned(),
+            }
+        });
+        case.check(
+            gents_lean_vocab::families::cross_actor_authorization_signed_client_claim::ClaimOutput {
+                decision: decision.to_owned(),
+                lifecycle: row["lifecycle_state"].as_str().unwrap().to_owned(),
+                terminal_output,
+                failure_reason: row["failure_reason"]
+                    .as_str()
+                    .filter(|reason| !reason.is_empty())
+                    .map(str::to_owned),
+            },
+        );
         if claimed {
             if scheduled {
                 let writer = crate::request::streaming::DefraStreamWriter::new_managed(
@@ -337,25 +333,6 @@ async fn generated_tool_control_receipts_require_selected_agent_and_exact_intent
 
 #[tokio::test]
 async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
-    let modeled = gents_lean_vocab::lean_contract_snapshot();
-    let allowed = modeled
-        .cross_actor_authorization_cases
-        .iter()
-        .find(|case| case.name == "committed_claim")
-        .unwrap();
-    let denied = modeled
-        .cross_actor_authorization_cases
-        .iter()
-        .find(|case| case.name == "node_denied_at_check")
-        .unwrap();
-    assert_eq!(
-        allowed.decision,
-        gents_lean_vocab::LeanCrossActorDecision::Claimed
-    );
-    assert_eq!(
-        denied.decision,
-        gents_lean_vocab::LeanCrossActorDecision::Denied
-    );
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let collaborator =

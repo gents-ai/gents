@@ -109,32 +109,50 @@ async fn protocol_allowlist_rejects_local_data_before_transport() {
             .unwrap(),
     );
     let admin = EmbeddedRemoteP2pAdmin::new(node);
-    for contract in gents_lean_vocab::lean_identity_contracts() {
-        for name in gents_protocol::schemas::ALL_COLLECTION_NAMES
-            .iter()
-            .copied()
-            .chain(["PackPrivateData"])
-        {
-            let allowed = contract
-                .replicated_protocol_collections
-                .iter()
-                .any(|collection| collection == name);
-            assert_eq!(
-                admin
-                    .require_protocol_collections(&[name.to_owned()])
-                    .is_ok(),
-                allowed,
-                "{name}"
-            );
-            if allowed || !gents_protocol::peer_schema::is_managed_collection(name) {
-                continue;
-            }
+    let admitted = |name: &str| {
+        admin
+            .require_protocol_collections(&[name.to_owned()])
+            .is_ok()
+    };
+    let cases = gents_lean_vocab::families::agent_identity_replication_admission::cases();
+    for case in &cases {
+        let name = case.input.collection.as_str();
+        let replicates = admitted(name);
+        if !replicates && gents_protocol::peer_schema::is_managed_collection(name) {
             let result = admin
                 .add_replicator(&[], &[name.to_owned()], &PairingFilters::new())
                 .await;
             assert!(
                 matches!(result, Err(RemoteP2pAdminError::RuntimeLocalCollection(collection)) if collection == name)
             );
+        }
+        case.check(
+            gents_lean_vocab::families::agent_identity_replication_admission::LocalityOutput {
+                replicates,
+            },
+        );
+    }
+    for name in gents_protocol::schemas::ALL_COLLECTION_NAMES
+        .iter()
+        .copied()
+    {
+        if admitted(name) {
+            assert!(
+                cases.iter().any(|case| case.input.collection == name),
+                "{name} is admitted without a modeled protocol collection"
+            );
+            continue;
+        }
+        let result = admin
+            .add_replicator(&[], &[name.to_owned()], &PairingFilters::new())
+            .await;
+        assert!(
+            matches!(result, Err(RemoteP2pAdminError::RuntimeLocalCollection(collection)) if collection == name)
+        );
+    }
+    for template in crate::p2p_reconcile::builtin_templates() {
+        for name in template.collections {
+            assert!(admitted(name), "{} must not replicate {name}", template.id);
         }
     }
 }

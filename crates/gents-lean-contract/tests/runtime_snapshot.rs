@@ -4,7 +4,6 @@ fn generated_contract_decodes_into_runtime_snapshot() {
     let snapshot: gents_lean_vocab::LeanContractSnapshot =
         serde_json::from_str(&json).expect("decode current contracts with runtime fixture types");
     assert!(!snapshot.generated_by.is_empty());
-    assert!(!snapshot.vocabularies.is_empty());
     assert!(!snapshot.coverage_ledger.is_empty());
 }
 

@@ -474,127 +474,151 @@ async fn await_native_blocker_path(path: &std::path::Path) {
     .unwrap_or_else(|_| panic!("native blocker never produced {path:?}"));
 }
 
+fn tool_outcome_state(outcome: &gents_loop::tool_call_lifecycle::ToolOutcome) -> &'static str {
+    match outcome {
+        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(_) => "completed",
+        gents_loop::tool_call_lifecycle::ToolOutcome::Failed { .. } => "failed",
+        gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => "timedOut",
+        gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled => "cancelled",
+    }
+}
+
 #[tokio::test]
 async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
     ensure_native_fs_runner_for_test();
-    let root = temp_root("gents-native-boundary");
-    std::fs::write(root.join("first.txt"), "first request\n").unwrap();
-    std::fs::write(root.join("second.txt"), "second request\n").unwrap();
-    let context = ToolContext::new(root.clone(), false).unwrap();
+    for case in gents_lean_vocab::families::contracts_native_filesystem_boundary::cases() {
+        let root = temp_root(&format!("gents-native-boundary-{}", case.input.tool_name));
+        std::fs::write(root.join("first.txt"), "first request\n").unwrap();
+        std::fs::write(root.join("second.txt"), "second request\n").unwrap();
+        let context = ToolContext::new(root.clone(), false).unwrap();
 
-    let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
-    let blocking_tool: Box<dyn gents_loop::tool::ToolDyn> =
-        Box::new(GlobTool::new(context.clone(), DEFAULT_MAX_MATCHES));
-    let second_tool: Box<dyn gents_loop::tool::ToolDyn> =
-        Box::new(ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS));
+        let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
+        let (blocking_tool, blocking_args): (Box<dyn gents_loop::tool::ToolDyn>, &str) =
+            match case.input.tool_name.as_str() {
+                "list_files" => (
+                    Box::new(ListFilesTool::new(
+                        context.clone(),
+                        DEFAULT_MAX_LIST_ENTRIES,
+                    )),
+                    r#"{"recursive":true}"#,
+                ),
+                "glob" => (
+                    Box::new(GlobTool::new(context.clone(), DEFAULT_MAX_MATCHES)),
+                    r#"{"pattern":"*.txt"}"#,
+                ),
+                "grep" => (
+                    Box::new(GrepTool::new(context.clone(), DEFAULT_MAX_MATCHES)),
+                    r#"{"pattern":"request"}"#,
+                ),
+                other => panic!("no native filesystem tool named {other}"),
+            };
+        let second_tool: Box<dyn gents_loop::tool::ToolDyn> =
+            Box::new(ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS));
 
-    let control_entered = root.join("control-entered");
-    let control_gate = root.join("control-gate");
-    let control_released = root.join("control-released");
-    let control_outcome = {
-        let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &control_entered);
-        let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &control_gate);
-        let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &control_released);
-        let call = crate::runtime_context::scope_request_tool_execution(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            crate::runtime_context::call_tool_managed(
-                blocking_tool.as_ref(),
-                r#"{"pattern":"*.txt"}"#.to_string(),
-            ),
-        );
-        let open_gate = async {
-            await_native_blocker_path(&control_entered).await;
-            assert!(
-                !control_released.exists(),
-                "control blocker released before its gate opened"
-            );
-            std::fs::write(&control_gate, b"open").expect("opening control gate");
-        };
-        let (outcome, ()) = tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
-            tokio::join!(call, open_gate)
-        })
-        .await
-        .expect("control blocker should return once its gate opens");
-        outcome
-    };
-    match &control_outcome {
-        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) => {
-            assert!(text.contains("first.txt"), "control glob output: {text}");
-        }
-        other => panic!("control blocker should complete, got {other:?}"),
-    }
-    assert_eq!(
-        std::fs::read(&control_released).expect("control release marker"),
-        b"released",
-        "an unpreempted blocker must write its release marker"
-    );
-
-    let gate = root.join("preempt-gate");
-    let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &gate);
-    let mut deadline_ms = 25;
-    let mut attempt = 0;
-    let released = loop {
-        let entered = root.join(format!("preempt-entered-{attempt}"));
-        let released = root.join(format!("preempt-released-{attempt}"));
-        let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &entered);
-        let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &released);
-        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(deadline_ms);
-        let outcome = tokio::time::timeout(
-            NATIVE_BLOCKER_HANG_BOUND,
-            crate::runtime_context::scope_request_tool_execution(
-                Some(deadline),
+        let control_entered = root.join("control-entered");
+        let control_gate = root.join("control-gate");
+        let control_released = root.join("control-released");
+        let control_outcome = {
+            let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &control_entered);
+            let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &control_gate);
+            let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &control_released);
+            let call = crate::runtime_context::scope_request_tool_execution(
+                None,
                 tokio_util::sync::CancellationToken::new(),
                 crate::runtime_context::call_tool_managed(
                     blocking_tool.as_ref(),
-                    r#"{"pattern":"*.txt"}"#.to_string(),
+                    blocking_args.to_string(),
                 ),
+            );
+            let open_gate = async {
+                await_native_blocker_path(&control_entered).await;
+                assert!(
+                    !control_released.exists(),
+                    "control blocker released before its gate opened"
+                );
+                std::fs::write(&control_gate, b"open").expect("opening control gate");
+            };
+            let (outcome, ()) = tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
+                tokio::join!(call, open_gate)
+            })
+            .await
+            .expect("control blocker should return once its gate opens");
+            outcome
+        };
+        match &control_outcome {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) => {
+                assert!(text.contains("first.txt"), "control output: {text}");
+            }
+            other => panic!("control blocker should complete, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(&control_released).expect("control release marker"),
+            b"released",
+            "an unpreempted blocker must write its release marker"
+        );
+
+        let gate = root.join("preempt-gate");
+        let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &gate);
+        let mut deadline_ms = i64::try_from(case.input.request_deadline_ms).unwrap();
+        let mut attempt = 0;
+        let (released, terminal) = loop {
+            let entered = root.join(format!("preempt-entered-{attempt}"));
+            let released = root.join(format!("preempt-released-{attempt}"));
+            let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &entered);
+            let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &released);
+            let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(deadline_ms);
+            let outcome = tokio::time::timeout(
+                NATIVE_BLOCKER_HANG_BOUND,
+                crate::runtime_context::scope_request_tool_execution(
+                    Some(deadline),
+                    tokio_util::sync::CancellationToken::new(),
+                    crate::runtime_context::call_tool_managed(
+                        blocking_tool.as_ref(),
+                        blocking_args.to_string(),
+                    ),
+                ),
+            )
+            .await
+            .expect("blocking native tool must terminalize at the request deadline");
+            let deadline_nanos = deadline.timestamp_nanos_opt().expect("deadline in range");
+            if blocker_entered_at_nanos(&entered).is_some_and(|at| at < deadline_nanos) {
+                break (released, tool_outcome_state(&outcome));
+            }
+            attempt += 1;
+            assert!(
+                attempt < 12,
+                "no attempt entered the blocker before its deadline; last deadline {deadline_ms}ms"
+            );
+            deadline_ms *= 2;
+        };
+
+        let second_deadline = chrono::Utc::now() + chrono::Duration::seconds(30);
+        let second_outcome = crate::runtime_context::scope_request_tool_execution(
+            Some(second_deadline),
+            tokio_util::sync::CancellationToken::new(),
+            crate::runtime_context::call_tool_managed(
+                second_tool.as_ref(),
+                r#"{"path":"second.txt"}"#.to_string(),
             ),
         )
-        .await
-        .expect("blocking native tool must terminalize at the request deadline");
-        assert!(
-            matches!(
-                outcome,
-                gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
-            ),
-            "blocking native tool must resolve to a typed timeout, got {outcome:?}"
-        );
-        let deadline_nanos = deadline.timestamp_nanos_opt().expect("deadline in range");
-        if blocker_entered_at_nanos(&entered).is_some_and(|at| at < deadline_nanos) {
-            break released;
-        }
-        attempt += 1;
-        assert!(
-            attempt < 12,
-            "no attempt entered the blocker before its deadline; last deadline {deadline_ms}ms"
-        );
-        deadline_ms *= 2;
-    };
+        .await;
+        let released_before_queue_advanced = released.exists();
+        let gate_closed_while_queue_advanced = !gate.exists();
+        let _ = std::fs::remove_dir_all(&root);
 
-    let second_deadline = chrono::Utc::now() + chrono::Duration::seconds(30);
-    let second_outcome = crate::runtime_context::scope_request_tool_execution(
-        Some(second_deadline),
-        tokio_util::sync::CancellationToken::new(),
-        crate::runtime_context::call_tool_managed(
-            second_tool.as_ref(),
-            r#"{"path":"second.txt"}"#.to_string(),
-        ),
-    )
-    .await;
-    let released_before_queue_advanced = released.exists();
-    let gate_closed_while_queue_advanced = !gate.exists();
-    let _ = std::fs::remove_dir_all(&root);
-
-    assert!(
-        !released_before_queue_advanced && gate_closed_while_queue_advanced,
-        "single-worker queue should advance while the entered blocker cannot return"
-    );
-    match &second_outcome {
-        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) => {
-            assert!(text.contains("second request"));
+        match &second_outcome {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) => {
+                assert!(text.contains("second request"));
+            }
+            other => panic!("second read should complete, got {other:?}"),
         }
-        other => panic!("second read should complete, got {other:?}"),
+        case.check(
+            gents_lean_vocab::families::contracts_native_filesystem_boundary::NativeFilesystemBoundaryOutput {
+                terminal: terminal.to_owned(),
+                queue_advances_before_blocker_returns: !released_before_queue_advanced
+                    && gate_closed_while_queue_advanced,
+            },
+        );
     }
 }
 
@@ -2597,4 +2621,56 @@ fn main() {
     denied(|| TcpStream::connect_timeout(&address, Duration::from_secs(2)).map(|_| ()));
 }
 "#)) . await ;
+}
+
+#[tokio::test]
+async fn bash_tool_liveness_follows_the_lean_composed_model() {
+    for case in gents_lean_vocab::families::contracts_managed_exec_liveness_tool::cases::<String>()
+    {
+        let root = temp_root(&format!("gents-bash-liveness-{}", case.input.name));
+        let tool: Box<dyn gents_loop::tool::ToolDyn> = Box::new(UnrestrictedBashTool::with_policy(
+            ToolContext::new(root.clone(), false).unwrap(),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            DEFAULT_MAX_COMMAND_CHARS,
+            CommandExecutionPolicy::write_capable(),
+        ));
+        let token = tokio_util::sync::CancellationToken::new();
+        let (command, deadline) = match case.input.trigger.as_str() {
+            "deadline_elapsed" => (
+                "printf partial; sleep 30",
+                Some(chrono::Utc::now() + chrono::Duration::milliseconds(300)),
+            ),
+            "cancel_requested" => {
+                let cancel = token.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    cancel.cancel();
+                });
+                ("sleep 30", None)
+            }
+            "observe_exit_success" => ("true", None),
+            "observe_exit_failure" => ("false", None),
+            other => panic!("no bash scenario for trigger {other}"),
+        };
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(60),
+            crate::runtime_context::scope_request_tool_execution(
+                deadline,
+                token,
+                crate::runtime_context::call_tool_managed(
+                    tool.as_ref(),
+                    serde_json::json!({ "command": command }).to_string(),
+                ),
+            ),
+        )
+        .await
+        .expect("a bash call reaches its terminal within the bound");
+        let _ = std::fs::remove_dir_all(&root);
+        case.check(
+            gents_lean_vocab::families::contracts_managed_exec_liveness_tool::ManagedExecLivenessToolOutput {
+                tool_state: tool_outcome_state(&outcome).to_owned(),
+            },
+        );
+    }
 }

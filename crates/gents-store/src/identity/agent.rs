@@ -250,6 +250,97 @@ pub async fn observe_agent_admission(
     Ok(facts)
 }
 
+/// What [`observe_document_permissions`] answers for one document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedDocumentPermissions {
+    pub collection: String,
+    pub doc_id: String,
+    /// One answer per requested permission, in request order.
+    pub held: Vec<bool>,
+}
+
+/// Observes, as the runtime, whether `actor` natively holds each named
+/// permission of the Household policy on one document: the evaluation
+/// [`observe_agent_admission`] reads the catalog with, so an actor asking what
+/// it holds gets the answer admission gets. `document` is a collection and
+/// document ID, or `None` for this node's Node document; the answer is `None`
+/// when that Node document is not found. It decides nothing, and a permission
+/// counts as held only when DefraDB answers `Allowed`. This is document ACP's
+/// answer (Lean `Identity.Household.allowed`), gated as admission gates it:
+/// `read` by the node's document read and every other permission by its
+/// document update. The node permission an operation itself needs, such as
+/// `delete-document` for a delete, is node access control and is not read here.
+pub async fn observe_document_permissions(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+    actor: &identity::Did,
+    document: Option<(&str, &str)>,
+    permissions: &[String],
+) -> std::result::Result<Option<ObservedDocumentPermissions>, AgentAdmissionObservationError> {
+    use crate::config_client::{ConfigAccess, ConfigClientError, NodePermission};
+    use gents_protocol::document_query::{
+        self as query, fields::node as fields, Filter, Query, Selection,
+    };
+    if node.node_identity_did() != Some(node_did) {
+        return Err(AgentAdmissionObservationError::NodeMismatch);
+    }
+    let runtime = identity::Did::new(node_did).map_err(IdentityError::from)?;
+    let observed = ConfigAccess::local_as(node.clone(), runtime)
+        .transact_readonly("agent.document_permissions", |txn| {
+            Box::pin(async move {
+                let (collection, doc_id) = match document {
+                    Some((collection, doc_id)) => (collection.to_owned(), doc_id.to_owned()),
+                    None => {
+                        let nodes = txn
+                            .run(
+                                &Query::select(Selection::doc_id())
+                                    .filter(Filter::eq(fields::NODE_DID, node_did))
+                                    .limit(2)
+                                    .render(),
+                            )
+                            .await?;
+                        let [row] = query::rows(&nodes, "Node") else {
+                            return Ok(None);
+                        };
+                        let Some(doc_id) = row["_docID"].as_str() else {
+                            return Ok(None);
+                        };
+                        ("Node".to_owned(), doc_id.to_owned())
+                    }
+                };
+                let mut held = Vec::with_capacity(permissions.len());
+                for permission in permissions {
+                    let node_permission = match permission.as_str() {
+                        "read" => NodePermission::DocumentRead,
+                        _ => NodePermission::DocumentUpdate,
+                    };
+                    let decisions = txn
+                        .observe_document_access(
+                            actor,
+                            &collection,
+                            std::slice::from_ref(&doc_id),
+                            defra_node::DocumentAccessMode::Named {
+                                permission: permission.clone(),
+                                node_permission,
+                            },
+                        )
+                        .await?;
+                    held.push(matches!(
+                        decisions.as_slice(),
+                        [defra_node::DocumentAccessDecision::Allowed]
+                    ));
+                }
+                Ok::<_, ConfigClientError>(Some(ObservedDocumentPermissions {
+                    collection,
+                    doc_id,
+                    held,
+                }))
+            })
+        })
+        .await?;
+    Ok(observed)
+}
+
 /// Allocate a binding for an explicitly held executing Agent signer. Native
 /// creation and relationship operations remain the authorization boundary;
 /// the new Agent's baseline is projected when its document publishes.
@@ -556,11 +647,12 @@ mod tests {
 
     #[test]
     fn derived_identity_matches_lean_cases() {
+        use gents_lean_vocab::families::agent_identity_derivation as derivation;
         use rapidhash::{HashMapExt, RapidHashMap};
         let directory = tempfile::tempdir().unwrap();
         let mut roots = RapidHashMap::new();
-        for case in gents_lean_vocab::lean_identity_derivation_cases() {
-            let mut derive = |input: &gents_lean_vocab::LeanIdentityDerivationInput| {
+        for case in gents_lean_vocab::families::agent_identity_derivation::cases() {
+            let mut derive = |input: &derivation::DerivationInput| {
                 let next = roots.len();
                 let root = roots.entry(input.node_key.clone()).or_insert_with(|| {
                     KeyIdentity::load_or_create(
@@ -571,16 +663,11 @@ mod tests {
                 });
                 derive_agent_identity(root, &input.creation_nonce).unwrap()
             };
-            let left = derive(&case.left);
-            let right = derive(&case.right);
-            assert_eq!(
-                left.did() == right.did(),
-                case.expected_same_did,
-                "{}: {:?} -> {:?}",
-                case.name,
-                case.left.label,
-                case.right.label
-            );
+            let left = derive(&case.input.left);
+            let right = derive(&case.input.right);
+            case.check(derivation::DerivationOutput {
+                same_did: left.did() == right.did(),
+            });
         }
     }
 

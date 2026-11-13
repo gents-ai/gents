@@ -1,55 +1,29 @@
 import Proofs.Session.ManagedExec
+import Proofs.Session.ManagedExec.Composed
 import Proofs.ToolCalls.Background.ProcessControl
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases
 
+structure ManagedExecLivenessCase where
+  name : String
+  trigger : ManagedExec.Trigger
+  preExecState : String
+  preToolState : String
+  deriving Repr
+
+def managedExecLivenessCase (name : String) (trigger : ManagedExec.Trigger) :
+    ManagedExecLivenessCase :=
+  { name, trigger
+  , preExecState := ManagedExecState.toDefraDB .running
+  , preToolState := ToolExecution.ToolCallState.toDefraDB .running }
+
 def managedExecLivenessCases : List ManagedExecLivenessCase :=
-  [ { name := "running_child_expired_deadline_kill_signaled"
-    , trigger := "deadlineElapsed"
-    , preExecState := ManagedExecState.toDefraDB .running
-    , preToolState := ToolExecution.ToolCallState.toDefraDB .running
-    , expectedExecState := ManagedExecState.toDefraDB .killSignaled
-    , expectedToolState := ToolExecution.ToolCallState.toDefraDB .timedOut
-    , maxSteps := ManagedExec.maxTimeoutSteps
-    , killSignalRequired := true
-    }
-  , { name := "running_child_cancel_kill_signaled"
-    , trigger := "cancelRequested"
-    , preExecState := ManagedExecState.toDefraDB .running
-    , preToolState := ToolExecution.ToolCallState.toDefraDB .running
-    , expectedExecState := ManagedExecState.toDefraDB .killSignaled
-    , expectedToolState := ToolExecution.ToolCallState.toDefraDB .cancelled
-    , maxSteps := ManagedExec.maxTimeoutSteps
-    , killSignalRequired := true
-    }
-  , { name := "fast_child_exit_completes_without_kill"
-    , trigger := "observeExitSuccess"
-    , preExecState := ManagedExecState.toDefraDB .running
-    , preToolState := ToolExecution.ToolCallState.toDefraDB .running
-    , expectedExecState := ManagedExecState.toDefraDB .exited
-    , expectedToolState := ToolExecution.ToolCallState.toDefraDB .completed
-    , maxSteps := 1
-    , killSignalRequired := false
-    }
-  , { name := "nonzero_child_exit_fails_without_kill"
-    , trigger := "observeExitFailure"
-    , preExecState := ManagedExecState.toDefraDB .running
-    , preToolState := ToolExecution.ToolCallState.toDefraDB .running
-    , expectedExecState := ManagedExecState.toDefraDB .exited
-    , expectedToolState := ToolExecution.ToolCallState.toDefraDB .failed
-    , maxSteps := 1
-    , killSignalRequired := false
-    }
-  , { name := "deadline_timeout_preserves_partial_stdout_metadata"
-    , trigger := "deadlineElapsed"
-    , preExecState := ManagedExecState.toDefraDB .running
-    , preToolState := ToolExecution.ToolCallState.toDefraDB .running
-    , expectedExecState := ManagedExecState.toDefraDB .killSignaled
-    , expectedToolState := ToolExecution.ToolCallState.toDefraDB .timedOut
-    , maxSteps := ManagedExec.maxTimeoutSteps
-    , killSignalRequired := true
-    }
+  [ managedExecLivenessCase "running_child_expired_deadline_kill_signaled" .deadlineElapsed
+  , managedExecLivenessCase "running_child_cancel_kill_signaled" .cancelRequested
+  , managedExecLivenessCase "fast_child_exit_completes_without_kill" .observeExitSuccess
+  , managedExecLivenessCase "nonzero_child_exit_fails_without_kill" .observeExitFailure
+  , managedExecLivenessCase "deadline_timeout_preserves_partial_stdout_metadata" .deadlineElapsed
   ]
 
 def processStopCases : List ProcessStopCase :=

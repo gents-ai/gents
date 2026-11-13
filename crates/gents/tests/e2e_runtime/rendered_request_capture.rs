@@ -73,7 +73,7 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
         )
         .await;
     fixture.wait_completed("image-second").await;
-    let bodies = backend.observed_completion_bodies();
+    let bodies = backend.observed_turn_completion_bodies();
     assert_eq!(bodies.len(), 2);
     let url = format!("data:image/png;base64,{image}");
     for body in &bodies {
@@ -116,7 +116,7 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
             .await,
         RequestLifecycleState::Failed
     );
-    assert_eq!(backend.observed_completion_requests(), 2);
+    assert_eq!(backend.observed_turn_completion_bodies().len(), 2);
     fixture.runtime.shutdown().await;
 }
 
@@ -135,7 +135,7 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         .await;
     fixture.wait_completed("req-capture-1").await;
 
-    let observed = backend.observed_completion_bodies();
+    let observed = backend.observed_turn_completion_bodies();
     assert_eq!(
         observed.len(),
         1,
@@ -682,7 +682,7 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
         .await;
     fixture.wait_completed("req-capture-attempts").await;
 
-    let observed = backend.observed_completion_bodies();
+    let observed = backend.observed_turn_completion_bodies();
     assert_eq!(
         observed.len(),
         2,
@@ -889,7 +889,7 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
          rebinding of the first"
     );
 
-    let observed = backend.observed_completion_bodies();
+    let observed = backend.observed_turn_completion_bodies();
     assert_eq!(
         observed.len(),
         3,
@@ -1016,7 +1016,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         .await;
     fixture.wait_completed("req-capture-compaction").await;
 
-    let observed = backend.observed_completion_bodies();
+    let observed = backend.observed_turn_completion_bodies();
     assert_eq!(
         observed.len(),
         3,
@@ -1170,7 +1170,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         )
         .await;
     owned.wait_completed("req-capture-seed").await;
-    let seed_bodies = backend.observed_completion_requests();
+    let seed_bodies = backend.observed_turn_completion_bodies().len();
     assert_eq!(
         seed_bodies, 1,
         "the seeding request must be a single uncompacted completion"
@@ -1301,7 +1301,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         .await;
     owned.wait_completed("req-capture-summarized").await;
 
-    let follow_up_bodies = backend.observed_completion_bodies()[seed_bodies..].to_vec();
+    let follow_up_bodies = backend.observed_turn_completion_bodies()[seed_bodies..].to_vec();
     assert!(
         follow_up_bodies.len() >= 2,
         "the follow-up must have summarized before answering; it issued {} \

@@ -302,10 +302,9 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
   ]
 
 def vocabularyCoverage : List CoverageEntry :=
-  [ tagged (boundaryCoverage
-      "vocabulary"
-      "RequestState"
-      "Replayed as a family: request_state_vocabulary checks it against RequestLifecycleState::ALL, and request_transition_classification decodes every state pair into RequestLifecycleState.")
+  [ tagged (consumerCoverage
+      "family"
+      "request_state_vocabulary")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -315,47 +314,22 @@ def vocabularyCoverage : List CoverageEntry :=
       "family"
       "process_state_vocabulary")
       "process-lifecycle" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "vocabulary"
-      "PersistenceState"
-      "The database schema has no per-token PersistenceState document; committed/uncommitted is the model abstraction.")
-      "persistence-failure-policy" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "vocabulary"
-      "PersistenceFailurePolicy"
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through persistence_failure_policy_cases.")
+  , tagged (consumerCoverage
+      "family"
+      "persistence_state_failure_policy_vocabulary")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "reconcile_phase_vocabulary")
       "runtime-reconcile" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "vocabulary"
-      "StorageObservation"
-      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
-      "storage-observation" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "vocabulary"
-      "SessionRecoveryLatestRequestState")
-      "session-recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "vocabulary"
-      "InferenceCallState")
+      "family"
+      "inference_call_state_vocabulary")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "vocabulary"
-      "InferenceCallTerminalReason")
+      "family"
+      "inference_call_terminal_reason_vocabulary")
       "inference-call" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "vocabulary"
-      "CompletionRetryFailureClass"
-      "The immutable-publication retry vocabulary has changed; the native owned loop must migrate before this is production vocabulary coverage.")
-      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "vocabulary"
-      "ToolRetryDisposition"
-      "No production disposition enum exists; the deleted test-only mirror was not runtime vocabulary coverage. Retry behavior is observed through MCP operations below.")
-      "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
       "tool_execution_tool_call_state_vocabulary")
@@ -365,8 +339,8 @@ def vocabularyCoverage : List CoverageEntry :=
       "tool_execution_cancel_cause_vocabulary")
       "interrupt-and-cancel" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "ManagedExecState")
+      "family"
+      "managed_exec_state_vocabulary")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -390,57 +364,59 @@ def vocabularyCoverage : List CoverageEntry :=
       "tool_execution_await_mode_vocabulary")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "GoalStatus")
+      "family"
+      "goals_status_vocabulary")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "vocabulary"
-      "MailboxStatus")
+      "family"
+      "mailbox_status_vocabulary")
       "mailbox" allSurfaces
   , tagged (consumerCoverage
-      "vocabulary"
-      "MailboxKind")
+      "family"
+      "mailbox_kind_vocabulary")
       "mailbox" allSurfaces
   , tagged (consumerCoverage
-      "vocabulary"
-      "MailboxHandling")
+      "family"
+      "mailbox_handling_vocabulary")
       "mailbox" allSurfaces
   , tagged (consumerCoverage
-      "vocabulary"
-      "MailboxSourceKind")
+      "family"
+      "mailbox_source_kind_vocabulary")
       "mailbox" allSurfaces
   , tagged (consumerCoverage
-      "vocabulary"
-      "EvalOutcomeKind")
+      "family"
+      "eval_outcome_kind_vocabulary")
       "eval" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "vocabulary"
-      "EvalProviderReason")
+      "family"
+      "eval_provider_reason_vocabulary")
       "eval" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "vocabulary"
-      "EvalEvidenceClass")
+      "family"
+      "eval_evidence_class_vocabulary")
       "eval" [Surface.operatorCli]
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
-  [ tagged (consumerCoverage
+  [ tagged (followUpCoverage
       "state_machine"
-      "Request")
+      "Request"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through request_state_terminal.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "Process")
+      "Process"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
       "Persistence.failClosed"
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through persistence_failure_policy_cases.")
+      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through hook_persistence_failure.")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
       "Persistence.failOpen"
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through persistence_failure_policy_cases.")
+      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through hook_persistence_failure.")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
@@ -452,34 +428,50 @@ def stateMachineCoverage : List CoverageEntry :=
       "StorageObservation.failOpen"
       "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
       "storage-observation" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "RuntimeReconcile")
+      "RuntimeReconcile"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "runtime-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "SessionRecovery")
+      "SessionRecovery"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "session-recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "InferenceCall")
+      "InferenceCall"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "inference-call" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "ToolCall")
+      "ToolCall"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through tool_execution_tool_call_state_terminal.")
       "tool-call" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "ManagedExec")
+      "ManagedExec"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "managed-exec" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "Goal")
+      "Goal"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
       "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "Mailbox")
+      "Mailbox"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through mailbox_status_terminal.")
       "mailbox" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "state_machines_catalog_unreached"
+      "model-production-gap: production has no transition function over the state-machine catalogs; each owner writes its transitions inline, so only the terminal partitions are replayed.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_state_terminal")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "tool_execution_tool_call_state_terminal")
+      "tool-call" [Surface.agentFacing, Surface.runtimeInternal]
   ]
 
 def caseCoverage : List CoverageEntry :=
@@ -526,22 +518,73 @@ def caseCoverage : List CoverageEntry :=
       "hooks_contracts_owed_prune"
       "Production prunable decides every record. The deletion of pruned rows is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "cross_actor_authorization_request_signed_targets")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "cross_actor_authorization_goal_command_signed_targets")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "cross_actor_authorization_signed_client_claim")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "cross_actor_authorization_cases" "CrossActorAuthorization"
-      "Native transaction-bound requester document and node authorization is unavailable; cross-actor execution remains blocked. Bind these cases to native transaction and claim owners when supported.")
+      "family"
+      "cross_actor_authorization_unreached"
+      "model-production-gap: the served claim fixture cannot present an unsupported or disabled native check, a transient or hidden observation, a foreign or missing native owner or authenticated author, a mismatched request document, physical target or executor, or a permission change or commit failure between the claim transaction's check and its commit.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "goal_link_cases" "GoalLinks"
+      "family" "goal_links_user_owned"
       "A detached relationship operation already in flight is not fenced by a concurrent revocation.")
       "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "identity_parent_publication_cases" "ParentPublication"
-      "Callback repair assumes trusted authored Agent metadata; forged or missing authenticated creator traces need an ownership-bound native consumer.")
+  , tagged (consumerCoverage
+      "family" "goal_links_agent_owned")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_foreign")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_session_goal")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_client_session_goal")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_seeded_goal")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_goal_backed_submission")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_task_fire")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_scheduled_task_fire")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_workspace_task_fire")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_agent_target")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "goal_links_closeout_goal")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family" "identity_publication_parent")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family" "callback_parent_actor")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases")
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_trace")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_durable_trace")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_reopened_acknowledgement")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_racing_proposals")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -619,10 +662,6 @@ def caseCoverage : List CoverageEntry :=
       "request_execution_lease_contracts_lease_trace_unreached"
       "model-production-gap: native lease owners take one database-backed action at a time under the wall clock; no production path replays a multi-action renewal, expiry, recovery or stale-owner trace over a logical clock. No scheduler fairness or wall-clock continuity is proved.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "process_transition_cases"
-      "ProcessTransitions")
-      "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "trigger_delivery_fire_admission")
@@ -709,17 +748,29 @@ def caseCoverage : List CoverageEntry :=
       "contracts_goal_transition")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_create_cases"
-      "GoalCreateCases")
+      "family"
+      "contracts_goal_create")
+      "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_goal_create_committed")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "contracts_goal_capability_resolution")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_task_goal_declaration")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_task_goal_publication_identity")
+      "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "task_goal_publication_cases"
-      "TaskGoalPublicationCases"
-      "The consumer checks the production declaration validator and fire identity. Atomic task/goal/request publication needs the shared publication owner; fixture-only booleans are not an implementation check.")
+      "family"
+      "contracts_task_goal_publication_materialized"
+      "The production materializer publishes only the positive-budget scheduled goal Task; ordinary and invalid publication modes are checked through the declaration validator, not through a served publication.")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -965,8 +1016,8 @@ def caseCoverage : List CoverageEntry :=
       "task_hooks_contracts_recovery")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "request_progress_cases"
-      "RequestProgressCases")
+      "family"
+      "contracts_request_progress")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -1005,10 +1056,22 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_goal_decision")
       "durable-goals" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "runtime_reconcile_cases"
-      "RuntimeReconcileCases"
-      "The status consumer observes publication/router-generation writeback. Generated request acceptance, lifetime tracking and generation retirement need router/reconciler owner consumers; fixture-only arithmetic is not implementation coverage.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_runtime_reconcile_status")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_runtime_reconcile_router")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_runtime_reconcile_supervisor")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_runtime_reconcile_unreached"
+      "model-production-gap: no production scenario drives a request finish releasing its generation, a replayed accept, retiring an unobserved generation, a resolve over a snapshot with a missing dependency, an unknown or demoted explicit selection, or an explicit request before the router observes the published generation; the served runtime fixtures cannot seed these pre-states.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1220,8 +1283,40 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: the stamped mailbox write takes the question's request, session and owner from the filing request, so production cannot file a mismatched question, and no scenario replays the reply-side mismatches through the signed reply claim after a linked handoff.")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "count_carrier_cases"
-      "CountCarrierCases")
+      "family"
+      "admission_handoff_drive_admissions")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "admission_handoff_owned_loop")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "admission_handoff_hook_effect")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "admission_handoff_unreached"
+      "model-production-gap: production's typed oneshot admission handoff has no dispatch linearization, lease or generation fence, duplicate or misaddressed reply, unpublished header, invocation without a reply or effect observed after a stop to stage, so no production scenario replays these cases.")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_value")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_admission")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_storage")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_obligation_field")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_event_source_field")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1246,13 +1341,22 @@ def caseCoverage : List CoverageEntry :=
       "fleet_slot_accounting_bound")
       "fleet-slot-accounting" [Surface.api]
   , tagged (consumerCoverage
-      "persistence_failure_policy_cases"
-      "PersistenceFailurePolicyCases")
+      "family"
+      "hook_persistence_failure")
       "persistence-failure-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "hook_persistence_mutation")
+      "storage-observation" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "native_completion_trace_unreached"
+      "model-production-gap: no served scenario blocks a transaction statement, observes the rollback owner's return and then retries, so the timeout, cancellation, drain-then-rollback and concurrent-drain traces reach no production path.")
+      "storage-observation" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
-      "storage_observation_runtime_cases"
-      "StorageObservationRuntimeCases"
-      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
+      "family"
+      "hook_persistence_visibility_unreached"
+      "model-production-gap: the hook observes only its own mutation acknowledgements; read-your-writes, stale reads, stale events and late event delivery are DefraDB observations no production path classifies.")
       "storage-observation" [Surface.runtimeInternal]
   , tagged ({ consumerCoverage
       "family"
@@ -1307,15 +1411,17 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_backend_health_transition")
       "backend-health" [Surface.operatorCli]
-  , tagged (followUpCoverage
-      "native_filesystem_boundary_cases"
-      "NativeFilesystemBoundaryCases"
-      "Replay generated glob/grep/list_files cases through the existing managed filesystem boundary. toolset::tests::native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue preserves real GlobTool preemption/queue observations; grep/list_files routing is not established by the removed fixture-only test.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_native_filesystem_boundary")
       "tool-call" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "managed_exec_liveness_cases"
-      "ManagedExecLivenessCases"
-      "Drive generated exit/deadline/cancel cases through existing managed_exec process tests. Fixture kill flags do not observe OS termination.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_managed_exec_liveness_exec")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_managed_exec_liveness_tool")
       "managed-exec" [Surface.agentFacing]
   , tagged (followUpCoverage
       "managed_exec_tool_boundary_cases"
@@ -1376,8 +1482,20 @@ def caseCoverage : List CoverageEntry :=
       "client_settings_fields")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_data_publication_cases"
-      "ClientDataNoticeDeliveryCases")
+      "family"
+      "client_data_publication_publication")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_data_publication_node_publication")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_data_publication_recovery")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_data_publication_notice_delivery")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -1416,24 +1534,32 @@ def caseCoverage : List CoverageEntry :=
       "storage_failure_contracts_host_error")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_request_closure_cases"
-      "ClientRequestClosureCases")
+      "family"
+      "client_request_closure_closed")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
       "client_request_cache_identity_merge")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "frontend_client_shell_cases"
-      "FrontendClientShellCases")
+      "family"
+      "client_shell_contracts_frontend")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
       "client_shell_contracts_desktop")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_session_turn_cases"
-      "ClientSessionTurnCases")
+      "family"
+      "client_shell_contracts_session_turn_cases_selection")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_shell_contracts_session_turn_cases_read")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_shell_contracts_session_turn_cases_projection")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -1510,8 +1636,20 @@ def caseCoverage : List CoverageEntry :=
       "contracts_command_policy_validation")
       "command-policy" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "queue_deadline_conformance_cases"
-      "QueueDeadlineConformanceCases")
+      "family"
+      "contracts_queue_deadline_admission")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_queue_deadline_claim_deadline")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_queue_deadline_completion_delivery")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_queue_deadline_interrupt_scope")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -1639,8 +1777,8 @@ def caseCoverage : List CoverageEntry :=
       "SessionInputEditCases")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_input_edit_client_observation_cases"
-      "SessionInputEditClientObservationCases")
+      "family"
+      "fold_queue_contracts_input_edit_client_observation")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -1715,8 +1853,24 @@ def caseCoverage : List CoverageEntry :=
       "operator_base_freeze_contracts_freeze")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_path_capability_cases"
-      "WorkspacePathCapabilityCases")
+      "family"
+      "workspace_path_capability_contracts_provision")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_sealing")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_tree_delta")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_integrate")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_replay")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1895,6 +2049,31 @@ def caseCoverage : List CoverageEntry :=
       "identity_operations_deferred_unreached"
       "model-production-gap: the served scenarios observe only the parent link or grant the identity_operations_deferred_* families replay; no production path builds a foreign embedded runtime, an unregistered Node or a failed commit, or observes the recorded parent Node.")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_readiness_recovery_unreached"
+      "model-production-gap: production cannot inject a failed parent grant or a failed publication mark, and a readiness row natively owned by an empty runtime DID cannot be written.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_readiness_observation_unreached"
+      "model-production-gap: the recovery scenario builds at most one Node and exactly one readiness row, records a parent on every row that has a Node, and observes as the embedded runtime, so no production path observes a foreign requested runtime, a duplicated Node, a missing or duplicated readiness row, or a row with no recorded parent beside its Node.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_pairing_reader_unreached"
+      "model-production-gap: production records no owner-authorized reader generation, so no production path observes the last granted generation, an entitlement withdrawn without a revocation, or a new or unauthorized generation.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_enrollment_policy_unreached"
+      "model-production-gap: the thin-client scenario builds only the request a client writes before it has a Node; no production scenario builds the admin's received request, its parent, the revoked admin reader or the terminal decision.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_replica_grant_unreached"
+      "model-production-gap: no production scenario observes the received request before any grant or between the parent's revocation and its repair; the user's write is attempted only on the linked request, the application session exists only after the repair, and the pending relation is observed only by the runtime projector, which repairs no revoked parent.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "node_file_requests_access"
@@ -1933,8 +2112,8 @@ def caseCoverage : List CoverageEntry :=
       "client_agent_journal_local_signer")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "file_review_subscription_cases"
-      "FileReviewSubscriptionCases")
+      "family"
+      "file_review_route_contracts_subscription")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1982,28 +2161,32 @@ def caseCoverage : List CoverageEntry :=
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_direct_reader_cases"
-      "FileInventoryDirectReaderCases"
+      "family"
+      "file_inventory_contracts_direct_reader_snapshot"
       "Drives actual operator reads and bounded pages under the authenticated reader. HTTP extraction and installed consumption remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_fork_cases"
-      "FileInventoryForkCases"
+      "family"
+      "file_inventory_contracts_fork_snapshot"
       "Uses the native fork owner and source snapshot reader to preserve selected physical origins while excluding later parent work. Installed acceptance remains a separate obligation.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_reader_cases"
-      "FileInventoryReaderCases"
+      "family"
+      "file_inventory_contracts_shared_reader_snapshot"
       "Refines public-root visibility, exact physical binding, explicit projection read permission, revocation and reauthorization for the authenticated direct reader in one native source snapshot. Installed consumption remains a separate obligation.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_source_projection_cases"
-      "FileInventorySourceProjectionCases"
+      "family"
+      "file_inventory_contracts_source_projection_pages"
       "Refines source projection scope, terminal coverage, path coherence, authenticated native owners and unsigned bounded pages. Remaining canonical admission, fork and publication refinements stay separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "schema_argument_repair_cases"
-      "SchemaArgumentRepairCases")
+      "family"
+      "schema_argument_repair_tool_arguments")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "schema_argument_repair_owned_loop")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2132,16 +2315,52 @@ def caseCoverage : List CoverageEntry :=
       "plugin_resources_consents")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_job_admission_cases"
-      "PluginJobAdmissionCases")
+      "family"
+      "plugin_job_admission")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_source_boundary_dispatch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_dispatch_refusal")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_adoption_step0")
       "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_adoption_cases"
-      "PluginJobAdoptionCases")
+      "family"
+      "plugin_job_adoption_host_pin")
       "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_control_cases"
-      "PluginJobControlCases")
+      "family"
+      "plugin_job_adoption_handle")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_adoption_address")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_control_kill")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_control_resume")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_control_result_read")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_control_result_offer")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_control_step_failure")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -2268,8 +2487,16 @@ def caseCoverage : List CoverageEntry :=
       "workspace_path_alias_admission")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_claimed_publication_cases"
-      "GoalClaimedPublicationCases")
+      "family"
+      "goal_claimed_publication_contracts_historical")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_claimed_publication_contracts_running_wait")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_claimed_publication_contracts_wait_observation")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2422,16 +2649,28 @@ def caseCoverage : List CoverageEntry :=
       "goal_edit_contracts_edit")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_client_control_cases"
-      "GoalClientControlCases")
+      "family"
+      "goal_client_control_contracts_control")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_control_contracts_denied_submission")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_control_contracts_foreign_submission")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_control_contracts_submission_trace")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_client_start_cases"
       "GoalClientStartCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_client_receipt_cases"
-      "GoalClientReceiptCases")
+      "family"
+      "goal_client_mutation_contracts_local_receipt")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2454,24 +2693,32 @@ def caseCoverage : List CoverageEntry :=
       "GoalSessionFoldCases")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "plugin_approval_cases"
-      "PluginApprovalCases")
+      "family"
+      "plugin_approval_unscoped_step")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_approval_scoped_step")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_approval_delivery")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "goal_edit_contracts_objective_whitespace_runs")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_operator_resume_cases"
-      "GoalOperatorResumeCases")
+      "family"
+      "goal_operator_resume_contracts_resume_transaction")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_operator_resume_cases"
-      "GoalOperatorResumeCases")
+      "family"
+      "goal_operator_resume_contracts_resume_transaction")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "goal_operator_resume_on_cases"
-      "GoalOperatorResumeOnCases")
+      "family"
+      "goal_operator_resume_contracts_resume_on_target")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2567,9 +2814,9 @@ def caseCoverage : List CoverageEntry :=
       "R6BackgroundingCases")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "composed_invariant_witnesses"
-      "ComposedInvariantWitnesses"
-      "Covers four persisted tool recovery/cancellation outcomes through canonical accepted admission and physical request/tool rows. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
+      "family"
+      "composed_termination_linked"
+      "Covers four persisted tool recovery/cancellation outcomes of ComposedState.linkedTermination (justified by linkedTermination_reachable_from_initial over the ToolTermination theorems) through canonical accepted admission and physical request/tool rows: ToolCallLifecycle::cancel_before_dispatch, ToolCallLifecycle::cancel_during_run and the ToolCallLifecycle::recover_all deadline sweep. Full composed request, admission and clock traces still need their runtime owners.")
       "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2604,28 +2851,33 @@ def caseCoverage : List CoverageEntry :=
       "transcript_conformance_cases"
       "TranscriptConformanceCases")
       "transcript" [Surface.operatorUi]
-  , tagged (consumerWithFollowUp
-      "identity_permission_cases"
-      "IdentityPermissionCases"
-      "Checks native Defra ACP using the selected agent DID after explicit node-scoped resolution. Unknown-DID and duplicate-DID selector rejection require the canonical registry owner; no test-local ID map remains.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "identity_permission_cases"
-      "IdentityPermissionCases")
+  , tagged (consumerCoverage "family" "agent_identity_permission_decide")
       "identity-permission" [Surface.api]
+  , tagged (followUpCoverage "family" "agent_identity_permission_selection_unreached"
+      "model-production-gap: production has no node-scoped Agent selector over Agent rows to replay; foreign-node, unknown and duplicate DIDs are rejected only by the model before /identity/decide, which receives an already selected DID.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_household_cases"
       "IdentityHouseholdCases")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "identity_derivation_cases"
-      "IdentityDerivationCases")
+  , tagged (consumerCoverage "family" "session_publication_task")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "identity_contracts"
-      "IdentityContracts"
-      "Route through the canonical DID registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
+  , tagged (consumerCoverage "family" "session_publication_client_reservation")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "session_child_atomic_client_request")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "session_child_atomic_client_request_unconfirmed")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "session_child_atomic_client_task_request")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "agent_identity_derivation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "agent_identity_collection_locality")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "agent_identity_replication_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "agent_identity_desktop_subscription")
+      "identity-permission" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "family"
       "worker_capacity_contracts_transition"
@@ -2670,9 +2922,13 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: the join of the observed request row with the own-lease title or access-review world runs only through the Lean activation and claim owner; no production scenario materializes those rows for the native watcher admission and claim owners, nor renewal, recovery or output capture.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "canonical_payload_presentation_cases"
-      "CanonicalPayloadPresentationCases"
-      "The four generated cases bind presented payload-field bytes and missing-dependency failure to native canonical reconstruction; stored-byte quantities remain Lean expectations. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
+      "family"
+      "payload_presentation_contracts_lengths"
+      "The four generated cases bind stored and presented payload-field bytes and missing-dependency failure to native canonical reconstruction; payload_presentation_contracts_malformed_lengths binds integrity rejection of a corrupted stored flush. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
+      "canonical-output" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "payload_presentation_contracts_malformed_lengths")
       "canonical-output" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "family"
@@ -2697,9 +2953,9 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: no production path reaches these emitted cases yet. Model-derived projection/estimate/reduction and rebuilt-admission observations bind exact input identities, failure propagation and threshold/output-capacity boundaries. Provider projection and estimation are explicit fallible native premises, not modeled serializers. Native adapters and the real serialized-request experiment remain pending; controlled observations are not native consumer coverage.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
-      "compaction_canonical_projection_cases"
-      "CompactionCanonicalProjectionCases"
-      "Concrete canonical records and selected identities exercise the composed reconstruction/projection/reduction entry. Compare full native messages at initial and checkpoint-rebuild callbacks, and reject missing or loading dependencies without shortened history. The native serializer and ACP-authorized snapshot remain external premises.")
+      "family"
+      "compaction_canonical_projection_unreached"
+      "model-production-gap: production composes canonical reconstruction, provider projection, estimation and reduction inside gents-loop request assembly over the serialized request; no production function takes a canonical world, selected identities and supplied estimates. Concrete canonical records and selected identities pin the full native messages at initial and checkpoint-rebuild callbacks and reject missing or loading dependencies without shortened history.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "family"
@@ -2707,18 +2963,23 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: production admits a fresh provider request inside gents-loop request assembly over the serialized request, where projection and estimation are the provider's own calls; no production function takes a supplied projection outcome and estimate. This does not model the repair transformation.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "canonical_output_projection_cases"
-      "CanonicalOutputProjectionCases"
+      "family"
+      "canonical_output_projection_view"
+      "project_live replays every projection observation and its whole view (published envelope and reconstructed native message, preview streams, or the loading, denied, conflicted, invalid, retracted and absent verdicts) is compared with the model's project. This binds the projection owner, not ACP or genesis validation.")
+      "canonical-output" [Surface.agentFacing, Surface.operatorUi]
+  , tagged (consumerWithFollowUp
+      "family"
+      "canonical_output_projection_presentation"
       "The two published mixed/all-opaque reasoning cases bind present_message to renderedKinds. This binds stateless reasoning presentation, not projection selection, ACP or genesis validation.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (consumerWithFollowUp
-      "canonical_output_projection_cases"
-      "CanonicalOutputProjectionCases"
+      "family"
+      "canonical_output_projection_preview"
       "The two published mixed/all-opaque reasoning cases bind render_reasoning_text to renderedKinds. This binds the stateless per-event rendering function, not stream-event delivery or reconnect behavior.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (consumerWithFollowUp
-      "reasoning_audit_cases"
-      "ReasoningAuditCases"
+      "family"
+      "reasoning_audit_prefix"
       "Generated open, partial, retracted, continued-signature and gap observations bind exact native dense-prefix reconstruction, including subtype and bytes. They do not establish provider-event capture, durable write admission, ACP, or full replica completeness beyond the observed prefix.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2727,24 +2988,29 @@ def caseCoverage : List CoverageEntry :=
       "Generated fragment cases drive the native accumulator across reasoning identities, signed boundaries, text boundaries and UTF-8 bytes.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "reasoning_signature_cases"
-      "ReasoningSignatureCases"
-      "Generated typed cases bind published-header signature agreement to retained signature bytes, including provider inline-signature rejection without a retained stream and authored inline-signature allowance. Invalid UTF-8 is rejected at the byte-to-String adapter boundary because native OutputSegment payload is typed String; this does not establish provider-event capture, durable write admission, or ACP.")
+      "family"
+      "reasoning_audit_signature"
+      "Generated typed cases bind published-header signature agreement to retained signature bytes, including provider inline-signature rejection without a retained stream and authored inline-signature allowance. This does not establish provider-event capture, durable write admission, or ACP.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "reasoning_audit_signature_unreached"
+      "model-production-gap: native OutputSegment payload is a UTF-8 String, so a flush whose modeled bytes are not UTF-8 cannot be written or translated; the model rejects such a signature run as malformed.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "auxiliary_output_cases"
-      "AuxiliaryOutputCases"
+      "family"
+      "auxiliary_output_owned"
       "Generated compaction/fallback cases bind claimed append denial, own begin/append, Complete or Partial exact close, stale-writer close replay denial, and nonempty auxiliary publication denial to native request/output owners. Empty-assistant publication is Lean-only because the native encoder rejects that shape. This does not cover title ownership, recovery after crash, or every provider cancellation path.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "auxiliary_output_cases"
-      "AuxiliaryOutputCases"
+      "family"
+      "auxiliary_output_sink"
       "Generated compaction/fallback cases drive the non-Claude auxiliary sink with typed reasoning, signature, encrypted and redacted observations, then compare durable bytes, exact closure, private audit reconstruction and absent public live/message output to Lean. This does not cover crash durability before sink acknowledgement, title ownership, recovery after crash, or every provider cancellation path.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "auxiliary_output_cases"
-      "AuxiliaryOutputCases"
-      "Generated compaction/fallback records bind exact private audit bytes and absent public live projection to native reconstruction. This is a read-only projection check; it does not establish provider-event capture, durable write admission, recovery transactions, title ownership, or ACP.")
+      "family"
+      "auxiliary_output_projection"
+      "Generated compaction/fallback records bind exact private audit bytes and absent public live projection to native reconstruction. The expired-lease recovery plan closes the record without retained streams. This is a read-only projection check; it does not establish provider-event capture, durable write admission, recovery transactions, title ownership, or ACP.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -3095,9 +3361,10 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "tool_execution_cancel_cause_vocabulary")
       "interrupt-and-cancel" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "state_machine"
-      "Request")
+      "Request"
+      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through request_state_terminal.")
       "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -3127,8 +3394,7 @@ def caseCoverage : List CoverageEntry :=
       "contracts_callback_denial")
       "isolated-workspaces" [Surface.runtimeInternal]
 
-  , tagged (consumerWithFollowUp "runtime_reconcile_cases" "RuntimeReconcileCases"
-      "Pending the L3 test rename. Exercises explicit request/session agent binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
+  , tagged (consumerCoverage "family" "contracts_runtime_reconcile_selection")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "request_input_cases" "RequestInputCases"
       "Canonical input serde only. Signed canonical_input_fields/bytes, context whitelist, title materialization and verified goal receipt checks need the migrated admission/signing owners.")
@@ -3221,8 +3487,10 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "family" "event_delivery_group_capture_unreached"
       "model-production-gap: production captures a callback group only inside the served callback scan (materialize_group), which loads the group by the delivery's own key; mismatched or trigger candidates have no production path and the eligible and quiesced cases need a served callback-binding scenario.")
       "triggers" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "callback_transition_cases" "CallbackTransitionCases"
-      "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through contracts_callback_recovery.")
+  , tagged (followUpCoverage "family" "contracts_callback_transition_unreached"
+      "model-production-gap: the callback executor's claim, run, succeed, fail and retry steps happen inside the served engine's database writes and no production function applies one step to an invocation; denial and interrupt state and journal replay through contracts_callback_denial and contracts_callback_recovery, but the invocation document stores the origin group as a derived key string and has no emission flag, so these input, origin and emission preservation witnesses have no native replay.")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_callback_saturation_trace")
       "triggers" [Surface.runtimeInternal]
 
   , tagged (consumerCoverage "family" "contracts_discovery_guidance_presented")
@@ -3304,6 +3572,8 @@ def externalPremiseCoverage : List CoverageEntry :=
       "The WASM guest supplies its step function, output schema and resume bookkeeping; core proofs do not establish guest determinism.") "tool-call" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.plugin-job.single-step-driver"
       "One active runtime per node is an operating premise. Host-local job control and in-memory step coalescing do not enforce that premise across processes.") "tool-call" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.count-carrier.non-null-id"
+      "DefraDB refuses a non-null ID field declaration (NonNull variant for type ID is not supported), so no count carrier of that schema is ever stored.") "completion-retry" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.plugin-data.transaction"
       "DefraDB provides transaction serializability and its unique index as a backstop for read-then-insert plugin data writes.") "tool-policy" [Surface.runtimeInternal]
   ]

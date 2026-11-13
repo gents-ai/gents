@@ -1,20 +1,15 @@
 use gents::eval::{classify, subject_causable, EvidenceClass, OutcomeKind, ProviderReason};
 
-use gents_lean_vocab::lean_vocabulary_values;
-
 pub(super) fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
-    assert_eq!(
-        lean_vocabulary_values("EvalOutcomeKind"),
-        OutcomeKind::ALL.map(OutcomeKind::as_str)
-    );
-    assert_eq!(
-        lean_vocabulary_values("EvalProviderReason"),
-        ProviderReason::ALL.map(ProviderReason::as_str)
-    );
-    assert_eq!(
-        lean_vocabulary_values("EvalEvidenceClass"),
-        EvidenceClass::ALL.map(EvidenceClass::as_str)
-    );
+    for kind in OutcomeKind::ALL {
+        assert_eq!(serde_json::json!(kind), kind.as_str());
+    }
+    for reason in ProviderReason::ALL {
+        assert_eq!(serde_json::json!(reason), reason.as_str());
+    }
+    for class in EvidenceClass::ALL {
+        assert_eq!(serde_json::json!(class), class.as_str());
+    }
 
     gents_lean_vocab::families::eval_classification::replay::<
         EvidenceClass,

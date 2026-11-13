@@ -586,10 +586,15 @@ mod tests {
     }
 
     #[test]
+    fn protected_collection_declarations_follow_the_model() {
+        gents_lean_vocab::families::datastore_protection_declaration::replay(|case| {
+            super::reject_protected_collection_name(&case.collection)
+                .is_err_and(|error| format!("{error:#}").contains("protected"))
+        });
+    }
+
+    #[test]
     fn eval_and_optimization_collections_are_never_exposed() {
-        let publication =
-            &gents_lean_vocab::lean_contract_snapshot().client_publication_protected_collection;
-        assert!(super::PROTECTED_DATASTORE_COLLECTIONS.contains(&publication.as_str()));
         for name in super::PROTECTED_DATASTORE_COLLECTIONS {
             let error = super::reject_protected_collection_name(name).unwrap_err();
             assert!(format!("{error:#}").contains("protected"), "{error:#}");

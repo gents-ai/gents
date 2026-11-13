@@ -10,6 +10,19 @@ use gents_session::request::lifecycle::materialize::{
 use gents_session::request::lifecycle::queue::parent_agent_did;
 use gents_session::request::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 
+/// Why a goal continuation publication refused: an actor or predecessor the
+/// Goal does not authorize, a Goal state that forbids the continuation, or a
+/// stored continuation that differs from the one this predecessor prepares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ContinuationRefusal {
+    #[error("{0}")]
+    Denied(&'static str),
+    #[error("{0}")]
+    Illegal(&'static str),
+    #[error("{0}")]
+    Conflict(&'static str),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalContinuationIdentity {
     pub request_id: String,

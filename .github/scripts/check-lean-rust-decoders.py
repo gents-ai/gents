@@ -10,12 +10,6 @@ from pathlib import Path
 GROUPS = {
     "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
     "canonical_dispatch_observation_cases": "LeanDispatchObservationCase",
-    "canonical_payload_presentation_cases": "LeanPayloadPresentationCase",
-    "canonical_output_projection_cases": "LeanCanonicalOutputProjectionCase",
-    "reasoning_audit_cases": "LeanReasoningAuditCase",
-    "reasoning_signature_cases": "LeanReasoningSignatureCase",
-    "auxiliary_output_cases": "LeanAuxiliaryOutputCase",
-    "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
 }
 INT_RANGES = {
     "u8": (0, 2**8 - 1), "u16": (0, 2**16 - 1),

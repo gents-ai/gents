@@ -37,23 +37,6 @@ def recoveryCases : List RecoveryCase :=
   , ⟨"unregistered-parent", true, false, "runtime", some "runtime", some "node", some "node", true, true, "runtime", false⟩
   , ⟨"already-complete", false, false, "runtime", some "runtime", some "node", some "node", true, true, "runtime", true⟩ ]
 
-def recoveryCaseJson (c : RecoveryCase) : Json :=
-  let before : ParentPublication := ⟨true, c.parentGranted, !c.pending⟩
-  let after := repairReadiness before c.runtime c.embeddedRuntime c.parentRegistered c.nativeOwner c.recordedParent c.currentParent
-    c.grantSucceeded c.markSucceeded
-  Json.mkObj [("name", toJson c.name), ("pending", toJson c.pending),
-    ("parent_granted", toJson c.parentGranted), ("runtime", toJson c.runtime),
-    ("embedded_runtime", toJson c.embeddedRuntime), ("parent_registered", toJson c.parentRegistered),
-    ("native_owner", toJson c.nativeOwner), ("recorded_parent", toJson c.recordedParent),
-    ("current_parent", toJson c.currentParent), ("grant_succeeded", toJson c.grantSucceeded),
-    ("mark_succeeded", toJson c.markSucceeded), ("expected_parent_granted", toJson after.parentGranted),
-    ("expected_parent_linked", toJson after.parentLinked)]
-
-def preflightCasesJson : String := (toJson (bindingCases.map fun (name, binding) =>
-  Json.mkObj [("name", toJson name), ("expected", toJson (readinessPreflight binding))])).compress
-
-def recoveryCasesJson : String := (toJson (recoveryCases.map recoveryCaseJson)).compress
-
 structure DeferredCase where
   name : String
   before : DeferredOperation
@@ -73,12 +56,6 @@ def deferredCases : List DeferredCase :=
   , ⟨"failed-commit", beginDeferredOperation, "runtime", "runtime", some "runtime", some "node", true, false⟩
   , ⟨"revoked-after-publication", ⟨some "node", false, true⟩, "runtime", "runtime", some "runtime", some "node", true, true⟩ ]
 
-def pairingPartitionCasesJson : String := (toJson
-  ([("local", "runtime", "runtime", "peer"), ("foreign", "other", "other", "peer"),
-    ("forged", "runtime", "other", "peer"), ("other-peer", "runtime", "runtime", "other-peer")].map fun (name, source, owner, peer) =>
-    Json.mkObj [("name", toJson name), ("source", toJson source), ("peer", toJson peer),
-      ("owner", toJson owner), ("selected", toJson (pairingInPartition "runtime" source owner peer "peer"))])).compress
-
 def validObservation : ReadinessObservation :=
   ⟨"runtime", "runtime", 1, 1, some "node", some "user", some "runtime", some "node", true, true⟩
 
@@ -97,30 +74,11 @@ def observationCases : List (String × ReadinessObservation) :=
    ("pending", { validObservation with parentLinked := false }),
    ("revoked-after-publication", { validObservation with parentPresent := false })]
 
-def observationCaseJson (name : String) (o : ReadinessObservation) : Json := Json.mkObj
-  [("name", toJson name), ("requested_runtime", toJson o.requestedRuntime),
-   ("embedded_runtime", toJson o.embeddedRuntime), ("node_count", toJson o.nodeCount),
-   ("readiness_count", toJson o.readinessCount), ("node_id", toJson o.nodeId),
-   ("node_owner", toJson o.nodeOwner), ("readiness_owner", toJson o.readinessOwner),
-   ("recorded_parent", toJson o.recordedParent), ("parent_linked", toJson o.parentLinked),
-   ("parent_present", toJson o.parentPresent), ("expected_usable", toJson (readinessObservationUsable o))]
-
-def observationCasesJson : String := (toJson (observationCases.map fun (name, value) =>
-  observationCaseJson name value)).compress
-
 def settledCases : List (String × Option LiveReconcileStatus × Bool) :=
   [("missing", none, true), ("initial", some ⟨true, false, false⟩, true),
    ("idle-success", some ⟨true, true, false⟩, false),
    ("busy", some ⟨false, true, false⟩, true),
    ("idle-error", some ⟨true, true, true⟩, true)]
-
-def settledCasesJson : String := (toJson (settledCases.map fun (name, status, persisted) =>
-  Json.mkObj [("name", toJson name), ("live_present", toJson status.isSome),
-    ("idle", toJson (status.any (fun (s : LiveReconcileStatus) => s.idle))),
-    ("result_known", toJson (status.any (fun (s : LiveReconcileStatus) => s.lastResultKnown))),
-    ("result_error", toJson (status.any (fun (s : LiveReconcileStatus) => s.lastResultError))),
-    ("persisted_settled", toJson persisted),
-    ("expected", toJson (goalRuntimeSettled status persisted))])).compress
 
 structure PairingReaderCase where
   name : String
@@ -138,65 +96,5 @@ def pairingReaderCases : List PairingReaderCase :=
   , ⟨"unauthorized-generation", ⟨some 1, false⟩, true, false, true, 2⟩
   , ⟨"aborted-grant", ⟨none, false⟩, true, true, false, 1⟩
   , ⟨"aborted-revoke", ⟨some 1, true⟩, false, true, false, 1⟩ ]
-
-def pairingReaderCaseJson (c : PairingReaderCase) : Json :=
-  let after := reconcilePairingReader c.before c.entitled c.ownerAuthorized c.committed c.generation
-  Json.mkObj [("name", toJson c.name), ("before_generation", toJson c.before.lastGrantedGeneration),
-    ("before_granted", toJson c.before.readerGranted), ("entitled", toJson c.entitled),
-    ("owner_authorized", toJson c.ownerAuthorized), ("committed", toJson c.committed),
-    ("generation", toJson c.generation), ("expected_generation", toJson after.lastGrantedGeneration),
-    ("expected_granted", toJson after.readerGranted)]
-
-def pairingReaderCasesJson : String := (toJson (pairingReaderCases.map pairingReaderCaseJson)).compress
-
-def enrollmentPolicyCasesJson : String :=
-  let empty : State := { objects := [], relations := [], enrolled := [] }
-  let thin := publishEnrollmentRequest empty "client" "admin" "request" none
-    true false true true
-  let revoked := apply enrollmentRequestWithParent (.revokeAs "candidate"
-    ⟨"enrollment_records", "request", "reader", .actor "admin"⟩)
-  let cases : List (String × State × DID × String × String) :=
-    [("thin-client-write", thin, "client", "request", "update"),
-     ("thin-admin-read", thin, "admin", "request", "read"),
-     ("thin-admin-write", thin, "admin", "request", "update"),
-     ("thin-user-read", thin, "user", "request", "read"),
-     ("thin-agent-read", thin, "agent", "request", "read"),
-     ("thin-outsider-read", thin, "outsider", "request", "read"),
-     ("candidate-request-write", enrollmentRequestFixture, "candidate", "request", "update"),
-     ("admin-request-read", enrollmentRequestFixture, "admin", "request", "read"),
-     ("admin-request-write", enrollmentRequestFixture, "admin", "request", "update"),
-     ("user-request-before-parent", enrollmentRequestFixture, "user", "request", "read"),
-     ("user-request-after-parent", enrollmentRequestWithParent, "user", "request", "read"),
-     ("outsider-request", enrollmentRequestWithParent, "outsider", "request", "read"),
-     ("revoked-admin", revoked, "admin", "request", "read"),
-     ("admin-terminal-write", enrollmentTerminalFixture, "admin", "terminal", "update"),
-     ("candidate-terminal-read", enrollmentTerminalFixture, "candidate", "terminal", "read"),
-     ("candidate-terminal-write", enrollmentTerminalFixture, "candidate", "terminal", "update"),
-     ("user-terminal-read", enrollmentTerminalFixture, "user", "terminal", "read"),
-     ("outsider-terminal", enrollmentTerminalFixture, "outsider", "terminal", "read")]
-  (toJson (cases.map fun (name, state, actor, id, permission) =>
-    Json.mkObj [("name", toJson name), ("actor", toJson actor), ("document", toJson id),
-      ("permission", toJson permission),
-      ("allowed", toJson (allowed 5 state actor "enrollment_records" id permission))])).compress
-
-def replicaGrantCasesJson : String :=
-  let before := privateReplicaFixture
-  let pending := replicaGrant before "enrollment_records" "remote" "runtime" "local-node" "user"
-    true true true false false
-  let linked := replicaLinkPending pending "enrollment_records" "remote" "runtime" "local-node" "user"
-    true true true
-  let revoked := apply linked (.revoke ⟨"enrollment_records", "remote", "parent", .object "nodes" "local-node"⟩)
-  let repaired := replicaLinkPending revoked "enrollment_records" "remote" "runtime" "local-node" "user"
-    true true true
-  let cases : List (String × State) := [("before", before), ("pending", pending),
-    ("linked", linked), ("revoked", revoked), ("after-repair", repaired)]
-  (toJson (cases.map fun (name, state) => Json.mkObj [("name", toJson name),
-    ("runtime_read", toJson (allowed 5 state "runtime" "enrollment_records" "remote" "read")),
-    ("user_read", toJson (allowed 5 state "user" "enrollment_records" "remote" "read")),
-    ("user_write", toJson (allowed 5 state "user" "enrollment_records" "remote" "update")),
-    ("agent_read", toJson (allowed 5 state "agent" "enrollment_records" "remote" "read")),
-    ("outsider_read", toJson (allowed 5 state "outsider" "enrollment_records" "remote" "read")),
-    ("app_read", toJson (allowed 5 state "runtime" "children" "application" "read")),
-    ("pending", toJson (state.relations.contains ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩))])).compress
 
 end Identity.OperationsConformance

@@ -51,35 +51,6 @@ def cases : List Case :=
   , ⟨"generation-changes-after-commit", true, [.offer, .beginDispatch, .linearizeDispatch, .replaceGeneration 8, .observeDispatch, reply, .invoke]⟩
   , ⟨"lease-expires-after-reply-without-observed-stop", true, [.offer] ++ dispatchActions ++ [reply, .time 10, .invoke]⟩ ]
 
-def decisionName : Decision → String
-  | .run => "run" | .skip => "skip" | .terminate => "terminate"
-
-def phaseName : Phase → String
-  | .initial => "initial" | .waiting => "waiting" | .permitted => "permitted" | .closed => "closed"
-
-def stopName : Stop → String
-  | .cancelled => "cancelled" | .leaseLost => "lease_lost" | .shutdown => "shutdown"
-  | .deadline => "deadline" | .channelClosed => "channel_closed"
-
-def observationName : Observation → String
-  | .notStarted => "not_started" | .unknown => "unknown"
-  | .committed => "committed" | .rejected => "rejected"
-
-def actionJson : Action → Json
-  | .offer => Json.mkObj [("kind", toJson ("offer" : String))]
-  | .beginDispatch => Json.mkObj [("kind", toJson ("begin_dispatch" : String))]
-  | .linearizeDispatch => Json.mkObj [("kind", toJson ("linearize_dispatch" : String))]
-  | .observeDispatch => Json.mkObj [("kind", toJson ("observe_dispatch" : String))]
-  | .rejectDispatch => Json.mkObj [("kind", toJson ("reject_dispatch" : String))]
-  | .beginEffect => Json.mkObj [("kind", toJson ("begin_effect" : String))]
-  | .observeEffect => Json.mkObj [("kind", toJson ("observe_effect" : String))]
-  | .invoke => Json.mkObj [("kind", toJson ("invoke" : String))]
-  | .time now => Json.mkObj [("kind", toJson ("time" : String)), ("now", toJson now)]
-  | .replaceGeneration generation => Json.mkObj [("kind", toJson ("replace_generation" : String)), ("generation", toJson generation)]
-  | .stop reason => Json.mkObj [("kind", toJson ("stop" : String)), ("reason", toJson (stopName reason))]
-  | .reply call agent decision => Json.mkObj [("kind", toJson ("reply" : String)),
-      ("call", toJson call), ("agent", toJson agent), ("decision", toJson (decisionName decision))]
-
 def author (s : State) : Option String :=
   if s.invoked || s.effectObservation == .committed then
     (outbound s.context.effect "child" "child-session" "child-agent-doc" "child-agent" 0 0).map
@@ -120,21 +91,5 @@ theorem dispatch_checks_generation_at_linearization :
     (run (initial true) [.offer, .beginDispatch, .replaceGeneration 8, .linearizeDispatch, .observeDispatch]).dispatchObservation = .rejected ∧
     (run (initial true) [.offer, .beginDispatch, .linearizeDispatch, .replaceGeneration 8, .observeDispatch]).dispatchObservation = .committed := by
   native_decide
-
-def caseJson (c : Case) : Json :=
-  let result := run (initial c.published) c.actions
-  Json.mkObj [("name", toJson c.name), ("published", toJson c.published),
-    ("request", toJson context.request), ("session", toJson context.session),
-    ("call", toJson context.call), ("generation", toJson context.generation),
-    ("selected_agent", toJson context.selectedAgent), ("actions", toJson (c.actions.map actionJson)),
-    ("expected_phase", toJson (phaseName result.phase)),
-    ("expected_replies", toJson result.acceptedReplies),
-    ("expected_decision", toJson (result.decision.map decisionName)),
-    ("expected_dispatch", toJson (observationName result.dispatchObservation)),
-    ("expected_native_dispatch_committed", toJson result.nativeDispatchCommitted),
-    ("expected_effect", toJson (observationName result.effectObservation)),
-    ("expected_invoked", toJson result.invoked), ("expected_author", toJson (author result))]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
 
 end CanonicalOutput.Execution.AdmissionHandoff.Cases

@@ -20,4 +20,9 @@ def sessionRecoveryMachine : StateMachineContract :=
     ["reissueFailed"]
     sessionRecoveryLegalTransitions
 
+example : sessionRecoveryMachine.states =
+    [ "workspaceBindingPending", "pending", "claimed", "processing", "waitingForBackend"
+    , "resumingBackend", "completed", "failed", "superseded", "dead", "interrupted" ] := by
+  native_decide
+
 end Conformance.Contracts

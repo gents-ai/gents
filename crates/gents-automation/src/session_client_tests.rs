@@ -316,86 +316,106 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         "2026-11-04T00:00:00Z",
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    let cases =
-        &gents_lean_vocab::lean_contract_snapshot().identity_client_session_reservation_cases;
-    let modeled = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
-    let aborted: anyhow::Result<()> = access
-        .transact_write("test.client.abort_session_reservation", |txn| {
-            let request = &request;
-            let actor = user.did();
-            Box::pin(async move {
-                ensure_request_session_in_txn(txn, request, actor).await?;
-                anyhow::bail!("forced abort after client session relationships")
-            })
-        })
-        .await;
-    assert!(aborted
-        .unwrap_err()
-        .to_string()
-        .contains("forced abort after client session relationships"));
-    let before = access.execute("{ AgentSession { _docID } }").await.unwrap();
-    assert_eq!(
-        !before["data"]["AgentSession"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        modeled("aborted")["session"]
-    );
-    let (session, agent_doc) = reserve_client_targets(&access, &request).await.unwrap();
-    let created = access
-        .execute(
-            "{ AgentSession { _docID relationships_pending _version { cid height fieldName } } }",
-        )
-        .await
-        .unwrap();
-    let row = &created["data"]["AgentSession"][0];
-    assert_eq!(row["_docID"], session);
-    assert_eq!(row["relationships_pending"], false);
-    let version = gents_store::graphql::document_composite_version(row, "client session")
-        .unwrap()
-        .unwrap();
-    assert_block_signer(&node, &version.cid, user.did()).await;
     let agent_access = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap());
-    let visible = agent_access
-        .execute("{ AgentSession { _docID } }")
-        .await
-        .unwrap();
-    assert_eq!(
-        !visible["data"]["AgentSession"]
+    let agent_did = identity::Did::new(&agent.agent_did).unwrap();
+    let (observed_access, observed_agent, working_agent) = (&access, &agent_access, &agent_did);
+    let session_doc = move || async move {
+        observed_access
+            .execute("{ AgentSession { _docID } }")
+            .await
+            .unwrap()["data"]["AgentSession"]
             .as_array()
             .unwrap()
-            .is_empty(),
-        modeled("created")["working_agent"]
-    );
+            .first()
+            .map(|row| row["_docID"].as_str().unwrap().to_owned())
+    };
+    let observe_session = move || async move {
+        let session = session_doc().await;
+        let relationships = match &session {
+            Some(doc) => observed_access
+                .list_document_relationships("AgentSession", doc)
+                .await
+                .unwrap(),
+            None => Vec::new(),
+        };
+        let visible = observed_agent
+            .execute("{ AgentSession { _docID } }")
+            .await
+            .unwrap();
+        gents_lean_vocab::families::session_publication_client_reservation::ReservationState {
+            session: session.is_some(),
+            parent: relationships.iter().any(|row| row.relation == "parent"),
+            working_agent: visible["data"]["AgentSession"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| session.as_deref() == row["_docID"].as_str()),
+        }
+    };
+    let mut reserved: Option<(String, String)> = None;
+    for case in gents_lean_vocab::families::session_publication_client_reservation::cases() {
+        let before = &case.input.before;
+        if observe_session().await.working_agent && !before.working_agent {
+            access
+                .delete_actor_relationship(
+                    "AgentSession",
+                    &session_doc().await.unwrap(),
+                    "working_agent",
+                    working_agent,
+                )
+                .await
+                .unwrap();
+        }
+        let start = observe_session().await;
+        assert_eq!(
+            (start.session, start.parent, start.working_agent),
+            (before.session, before.parent, before.working_agent),
+            "{} starts from its modeled state",
+            case.input.name
+        );
+        if !case.input.commit {
+            let aborted: anyhow::Result<()> = access
+                .transact_write("test.client.abort_session_reservation", |txn| {
+                    let request = &request;
+                    let actor = user.did();
+                    Box::pin(async move {
+                        ensure_request_session_in_txn(txn, request, actor).await?;
+                        anyhow::bail!("forced abort after client session relationships")
+                    })
+                })
+                .await;
+            assert!(aborted
+                .unwrap_err()
+                .to_string()
+                .contains("forced abort after client session relationships"));
+        } else {
+            let targets = reserve_client_targets(&access, &request).await.unwrap();
+            match &reserved {
+                Some((session, _)) => assert_eq!(&targets.0, session),
+                None => {
+                    let created = access
+                        .execute(
+                            "{ AgentSession { _docID relationships_pending _version { cid height fieldName } } }",
+                        )
+                        .await
+                        .unwrap();
+                    let row = &created["data"]["AgentSession"][0];
+                    assert_eq!(row["_docID"], targets.0);
+                    assert_eq!(row["relationships_pending"], false);
+                    let version =
+                        gents_store::graphql::document_composite_version(row, "client session")
+                            .unwrap()
+                            .unwrap();
+                    assert_block_signer(&node, &version.cid, user.did()).await;
+                }
+            }
+            reserved = Some(targets);
+        }
+        case.check(observe_session().await);
+    }
+    let (session, agent_doc) = reserved.unwrap();
     access
-        .delete_actor_relationship(
-            "AgentSession",
-            &session,
-            "working_agent",
-            &identity::Did::new(&agent.agent_did).unwrap(),
-        )
-        .await
-        .unwrap();
-    let duplicate = reserve_client_targets(&access, &request).await.unwrap();
-    assert_eq!(duplicate.0, session);
-    let visible = agent_access
-        .execute("{ AgentSession { _docID } }")
-        .await
-        .unwrap();
-    assert_eq!(
-        !visible["data"]["AgentSession"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        modeled("duplicate-after-revocation")["working_agent"]
-    );
-    access
-        .add_actor_relationship(
-            "AgentSession",
-            &session,
-            "working_agent",
-            &identity::Did::new(&agent.agent_did).unwrap(),
-        )
+        .add_actor_relationship("AgentSession", &session, "working_agent", working_agent)
         .await
         .unwrap();
     request.session_doc_id = Some(session);
@@ -403,84 +423,101 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     gents_session::request::admission::sign_agent_request_create(&user, &mut request)
         .await
         .unwrap();
-    let request_cases =
-        &gents_lean_vocab::lean_contract_snapshot().identity_atomic_client_request_cases;
-    let request_model = |name: &str| {
-        request_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()
-    };
-    let aborted: anyhow::Result<()> = access
-        .transact_write("test.client.abort_request", |txn| {
-            let request = &request;
-            Box::pin(async move {
-                stage_client_request_in_txn(
-                    txn,
-                    request,
-                    request.session_doc_id.as_deref().unwrap(),
-                    request.agent_doc_id.as_deref().unwrap(),
-                )
-                .await?;
-                anyhow::bail!("forced abort after client request relationships")
-            })
-        })
-        .await;
-    assert!(aborted
-        .unwrap_err()
-        .to_string()
-        .contains("forced abort after client request relationships"));
-    let before = access.execute("{ AgentRequest { _docID } }").await.unwrap();
-    assert_eq!(
-        !before["data"]["AgentRequest"]
+    let request_grantee = agent.agent_did.as_str();
+    let request_doc = move || async move {
+        observed_access
+            .execute("{ AgentRequest { _docID relationships_pending } }")
+            .await
+            .unwrap()["data"]["AgentRequest"]
             .as_array()
             .unwrap()
-            .is_empty(),
-        request_model("aborted")["committed"]
-    );
-    submit_client_request(&access, &request).await.unwrap();
-    let published = access
-        .execute(
-            "{ AgentRequest { _docID relationships_pending _version { cid height fieldName } } }",
-        )
-        .await
-        .unwrap();
-    let row = &published["data"]["AgentRequest"][0];
-    let request_doc = row["_docID"].as_str().unwrap();
-    assert_eq!(
-        row["relationships_pending"],
-        request_model("created")["pending"]
-    );
-    let version = gents_store::graphql::document_composite_version(row, "client request")
-        .unwrap()
-        .unwrap();
-    assert_block_signer(&node, &version.cid, user.did()).await;
-    let removed = node
-        .delete_dac_actor_relationship(
-            user.did(),
-            "AgentRequest",
-            request_doc,
-            "working_agent",
-            &agent.agent_did,
-        )
-        .await
-        .unwrap();
-    assert_eq!(removed, request_model("created")["grants"]);
-    assert!(reconcile_client_request(&access, &request).await.unwrap());
-    let restored = node
-        .delete_dac_actor_relationship(
-            user.did(),
-            "AgentRequest",
-            request_doc,
-            "working_agent",
-            &agent.agent_did,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        restored,
-        request_model("duplicate-after-revocation")["grants"]
-    );
+            .first()
+            .cloned()
+    };
+    let observe_request = move || async move {
+        let row = request_doc().await;
+        let grants = match &row {
+            Some(row) => observed_access
+                .list_document_relationships("AgentRequest", row["_docID"].as_str().unwrap())
+                .await
+                .unwrap()
+                .iter()
+                .any(|relationship| {
+                    relationship.relation == "working_agent"
+                        && relationship.subject == request_grantee
+                }),
+            None => false,
+        };
+        gents_lean_vocab::families::session_child_atomic_client_request::ClientRequestPublication {
+            committed: row.is_some(),
+            pending: row
+                .as_ref()
+                .is_some_and(|row| row["relationships_pending"].as_bool().unwrap()),
+            grants,
+        }
+    };
+    for case in gents_lean_vocab::families::session_child_atomic_client_request::cases() {
+        let before = &case.input.before;
+        if observe_request().await.grants && !before.grants {
+            let doc = request_doc().await.unwrap();
+            assert!(node
+                .delete_dac_actor_relationship(
+                    user.did(),
+                    "AgentRequest",
+                    doc["_docID"].as_str().unwrap(),
+                    "working_agent",
+                    request_grantee,
+                )
+                .await
+                .unwrap());
+        }
+        let start = observe_request().await;
+        assert_eq!(
+            (start.committed, start.pending, start.grants),
+            (before.committed, before.pending, before.grants),
+            "{} starts from its modeled state",
+            case.input.name
+        );
+        match (case.input.commit, case.input.fresh) {
+            (false, _) => {
+                let aborted: anyhow::Result<()> = access
+                    .transact_write("test.client.abort_request", |txn| {
+                        let request = &request;
+                        Box::pin(async move {
+                            stage_client_request_in_txn(
+                                txn,
+                                request,
+                                request.session_doc_id.as_deref().unwrap(),
+                                request.agent_doc_id.as_deref().unwrap(),
+                            )
+                            .await?;
+                            anyhow::bail!("forced abort after client request relationships")
+                        })
+                    })
+                    .await;
+                assert!(aborted
+                    .unwrap_err()
+                    .to_string()
+                    .contains("forced abort after client request relationships"));
+            }
+            (true, true) => {
+                submit_client_request(&access, &request).await.unwrap();
+                let published = access
+                    .execute("{ AgentRequest { _docID _version { cid height fieldName } } }")
+                    .await
+                    .unwrap();
+                let version = gents_store::graphql::document_composite_version(
+                    &published["data"]["AgentRequest"][0],
+                    "client request",
+                )
+                .unwrap()
+                .unwrap();
+                assert_block_signer(&node, &version.cid, user.did()).await;
+            }
+            (true, false) => assert!(reconcile_client_request(&access, &request).await.unwrap()),
+        }
+        case.check(observe_request().await);
+    }
     let query = "{ AgentSession { session_id } }";
     let sibling_access = ConfigAccess::local_as(node.clone(), sibling.agent_did.parse().unwrap());
     let other_access = ConfigAccess::Graphql(endpoint_for(&other_user));
@@ -531,51 +568,82 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     gents_session::request::admission::sign_agent_request_create(&user, &mut manual)
         .await
         .unwrap();
-    let first = crate::triggers::write_task_delivery(&access, &fire, true, &manual)
-        .await
-        .unwrap();
-    assert!(!first.duplicate);
-    let query = format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ _docID relationships_pending _version {{ cid height fieldName }} }} }}", gents_store::graphql::escape_graphql_string(&first.request.doc_id));
-    let response = access.execute(&query).await.unwrap();
-    let row = &response["data"]["AgentRequest"][0];
-    assert_eq!(
-        row["relationships_pending"],
-        request_model("created")["pending"]
+    let task_request_query = format!(
+        "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID relationships_pending _version {{ cid height fieldName }} }} }}",
+        gents_store::graphql::escape_graphql_string(&fire.request_id)
     );
-    let version = gents_store::graphql::document_composite_version(row, "client Task request")
-        .unwrap()
-        .unwrap();
-    assert_block_signer(&node, &version.cid, user.did()).await;
-    let removed = node
-        .delete_dac_actor_relationship(
-            user.did(),
-            "AgentRequest",
-            &first.request.doc_id,
-            "working_agent",
-            &agent.agent_did,
-        )
-        .await
-        .unwrap();
-    assert_eq!(removed, request_model("created")["grants"]);
-    let duplicate = crate::triggers::write_task_delivery(&access, &fire, true, &manual)
-        .await
-        .unwrap();
-    assert!(duplicate.duplicate);
-    assert_eq!(duplicate.request.doc_id, first.request.doc_id);
-    let restored = node
-        .delete_dac_actor_relationship(
-            user.did(),
-            "AgentRequest",
-            &first.request.doc_id,
-            "working_agent",
-            &agent.agent_did,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        restored,
-        request_model("duplicate-after-revocation")["grants"]
-    );
+    let task_request_query = task_request_query.as_str();
+    let task_request = move || async move {
+        observed_access.execute(task_request_query).await.unwrap()["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .first()
+            .cloned()
+    };
+    let observe_task_request = move || async move {
+        let row = task_request().await;
+        let grants = match &row {
+            Some(row) => observed_access
+                .list_document_relationships("AgentRequest", row["_docID"].as_str().unwrap())
+                .await
+                .unwrap()
+                .iter()
+                .any(|relationship| {
+                    relationship.relation == "working_agent"
+                        && relationship.subject == request_grantee
+                }),
+            None => false,
+        };
+        gents_lean_vocab::families::session_child_atomic_client_task_request::ClientRequestPublication {
+            committed: row.is_some(),
+            pending: row
+                .as_ref()
+                .is_some_and(|row| row["relationships_pending"].as_bool().unwrap()),
+            grants,
+        }
+    };
+    let mut task_deliveries = Vec::new();
+    for case in gents_lean_vocab::families::session_child_atomic_client_task_request::cases() {
+        let before = &case.input.before;
+        if observe_task_request().await.grants && !before.grants {
+            assert!(node
+                .delete_dac_actor_relationship(
+                    user.did(),
+                    "AgentRequest",
+                    task_request().await.unwrap()["_docID"].as_str().unwrap(),
+                    "working_agent",
+                    request_grantee,
+                )
+                .await
+                .unwrap());
+        }
+        let start = observe_task_request().await;
+        assert_eq!(
+            (start.committed, start.pending, start.grants),
+            (before.committed, before.pending, before.grants),
+            "{} starts from its modeled state",
+            case.input.name
+        );
+        assert!(case.input.commit, "{}", case.input.name);
+        let delivery = crate::triggers::write_task_delivery(&access, &fire, true, &manual)
+            .await
+            .unwrap();
+        assert_eq!(delivery.duplicate, !case.input.fresh);
+        if case.input.fresh {
+            let row = task_request().await.unwrap();
+            assert_eq!(row["_docID"], delivery.request.doc_id);
+            let version =
+                gents_store::graphql::document_composite_version(&row, "client Task request")
+                    .unwrap()
+                    .unwrap();
+            assert_block_signer(&node, &version.cid, user.did()).await;
+        }
+        task_deliveries.push(delivery);
+        case.check(observe_task_request().await);
+    }
+    for delivery in &task_deliveries {
+        assert_eq!(delivery.request.doc_id, task_deliveries[0].request.doc_id);
+    }
     let legacy_session = access.transact_write("test.client.legacy_pending_session", |txn| {
             let agent = &agent.agent_did;
             let node_did = runtime.did();

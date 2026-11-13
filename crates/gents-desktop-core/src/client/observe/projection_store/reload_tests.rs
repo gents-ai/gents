@@ -27,39 +27,37 @@ fn node_store(initial: ClientStore) -> (Arc<ObservedStores>, Arc<ObservedStore>)
 }
 
 #[test]
-fn generated_notice_delivery_never_regresses_watchers() {
-    let case = &gents_lean_vocab::lean_contract_snapshot()
-        .client_data_publication_cases
-        .notice_delivery;
-    let decode = |version: u64, provenance: u64, request_event: u64| StoreUpdateNotice {
+fn notice_delivery_matches_the_lean_model() {
+    use gents_lean_vocab::families::client_data_publication_notice_delivery as notice_family;
+    let decode = |notice: &notice_family::Notice| StoreUpdateNotice {
         revision: StoreProjectionRevision {
-            store_version: version,
-            provenance_version: provenance,
-            request_event_version: request_event,
+            store_version: notice.version,
+            provenance_version: notice.provenance,
+            request_event_version: notice.request_event,
         },
     };
-    let (_stores, store) = node_store(ClientStore::default());
-    let versions = store.subscribe();
-    let changes = store.change_tx.subscribe();
-    store.publish_notice(decode(
-        case.initial.version,
-        case.initial.provenance,
-        case.initial.request_event,
-    ));
-    for delivery in &case.deliveries {
-        store.publish_notice(decode(
-            delivery.incoming.version,
-            delivery.incoming.provenance,
-            delivery.incoming.request_event,
-        ));
-        let expected = decode(
-            delivery.expected.version,
-            delivery.expected.provenance,
-            delivery.expected.request_event,
-        );
-        assert_eq!(*versions.borrow(), expected.revision.store_version);
-        assert_eq!(*changes.borrow(), expected);
-    }
+    gents_lean_vocab::families::client_data_publication_notice_delivery::replay(|trace| {
+        let (_stores, store) = node_store(ClientStore::default());
+        let versions = store.subscribe();
+        let changes = store.change_tx.subscribe();
+        store.publish_notice(decode(&trace.initial));
+        trace
+            .deliveries
+            .iter()
+            .map(|incoming| {
+                store.publish_notice(decode(incoming));
+                let change = changes.borrow().revision;
+                notice_family::Delivered {
+                    change: notice_family::Notice {
+                        version: change.store_version,
+                        provenance: change.provenance_version,
+                        request_event: change.request_event_version,
+                    },
+                    watched_version: *versions.borrow(),
+                }
+            })
+            .collect()
+    });
 }
 
 #[test]
@@ -124,34 +122,23 @@ fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
 }
 
 #[test]
-fn generated_data_publication_cases_match_observed_store() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../gents/tests/fixtures/client_data_publication.json"
-    ))
-    .expect("generated ClientDataPublication cases");
-    let cases = fixture["publication"]
-        .as_array()
-        .expect("publication cases");
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = case["name"].as_str().expect("case name");
-        let expected = case["accepted"].as_bool().expect("model decision");
-        let ids = |key: &str| -> Vec<String> {
-            case[key]
-                .as_array()
-                .expect("modeled request IDs")
-                .iter()
-                .map(|id| id.as_str().expect("request ID").to_owned())
-                .collect()
-        };
-        let initial_ids = ids("initial_request_ids");
-        let publish_ids = ids("publish_request_ids");
-        let initial_refs = initial_ids.iter().map(String::as_str).collect::<Vec<_>>();
-        let publish_refs = publish_ids.iter().map(String::as_str).collect::<Vec<_>>();
-        let (_stores, store) = node_store(requests(&initial_refs));
+fn data_publications_match_the_lean_model() {
+    use gents_lean_vocab::families::client_data_publication_publication as publication_family;
+    gents_lean_vocab::families::client_data_publication_publication::replay::<String>(|case| {
+        let initial = case
+            .initial_request_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let publish = case
+            .publish_request_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let (_stores, store) = node_store(requests(&initial));
         let captured = store.capture_read();
-        for action in case["actions"].as_array().expect("modeled actions") {
-            match action.as_str().expect("publication action") {
+        for action in &case.actions {
+            match action.as_str() {
                 "request_event" => {
                     store.observe_request_event();
                 }
@@ -164,21 +151,19 @@ fn generated_data_publication_cases_match_observed_store() {
                 other => panic!("unrecognized modeled publication action {other}"),
             }
         }
-        let published = store
-            .merge_chat_patch_at_read(&captured, requests(&publish_refs))
-            .is_some();
-        assert_eq!(published, expected, "modeled case {name}");
-    }
+        publication_family::PublicationOutput {
+            accepted: store
+                .merge_chat_patch_at_read(&captured, requests(&publish))
+                .is_some(),
+        }
+    });
 }
 
 /// Two nodes, each in its own store. A read of node 1 publishes after the
 /// modeled actions; nothing done to node 2's store moves node 1's.
 #[test]
-fn generated_node_publications_keep_each_node_in_its_own_store() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../gents/tests/fixtures/client_data_publication.json"
-    ))
-    .expect("generated ClientDataPublication cases");
+fn node_publications_match_the_lean_model() {
+    use gents_lean_vocab::families::client_data_publication_node_publication as node_family;
     let did = |node: u64| format!("did:node:{node}");
     let sessions = |node: u64, title: &str| {
         ClientStore::from_rows(ClientStoreRows {
@@ -193,127 +178,118 @@ fn generated_node_publications_keep_each_node_in_its_own_store() {
             ..Default::default()
         })
     };
-    let cases = fixture["node_publication"].as_array().unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
-        let stores = ObservedStores::new();
-        for node in [1, 2] {
-            stores.insert_for_test(&did(node), sessions(node, "initial"));
-        }
-        let read_store = stores.store(&did(1)).unwrap();
-        let read = read_store.capture_read();
-        for action in case["actions"].as_array().unwrap() {
-            let node = action["node"].as_u64().unwrap();
-            let store = stores.store(&did(node)).unwrap();
-            match action["op"].as_str().unwrap() {
-                "merge" => {
-                    store.merge_chat_patch(sessions(node, "concurrent"));
-                }
-                "request" => {
-                    store.observe_request_event();
-                }
-                "transcript" => {
-                    store.invalidate_projection(false);
-                }
-                other => panic!("unknown modeled publication action {other}"),
+    gents_lean_vocab::families::client_data_publication_node_publication::replay::<String>(
+        |case| {
+            let stores = ObservedStores::new();
+            for node in [1, 2] {
+                stores.insert_for_test(&did(node), sessions(node, "initial"));
             }
-        }
-        let incoming = sessions(1, "incoming");
-        let accepted = if case["merge"].as_bool().unwrap() {
-            let read_accepted = read_store.accepts_chat_patch_read(&read);
-            let published = read_store
-                .merge_chat_patch_at_read(&read, incoming)
-                .is_some();
-            assert_eq!(read_accepted, published, "{name}");
-            published
-        } else {
-            read_store.replace_reloaded_snapshot_at_read(&read, incoming)
-        };
-        assert_eq!(accepted, case["accepted"].as_bool().unwrap(), "{name}");
-        for expected in case["expected"].as_array().unwrap() {
-            let node = expected["node"].as_u64().unwrap();
-            let shown = stores.snapshot(&did(node));
-            let titles = shown
-                .sessions
-                .iter()
-                .map(|row| {
-                    (
-                        row.node_did.clone(),
-                        row.title.as_ref().unwrap().text.clone(),
-                    )
+            let read_store = stores.store(&did(1)).unwrap();
+            let read = read_store.capture_read();
+            for action in &case.actions {
+                let store = stores.store(&did(action.node)).unwrap();
+                match action.op.as_str() {
+                    "merge" => {
+                        store.merge_chat_patch(sessions(action.node, "concurrent"));
+                    }
+                    "request" => {
+                        store.observe_request_event();
+                    }
+                    "transcript" => {
+                        store.invalidate_projection(false);
+                    }
+                    other => panic!("unknown modeled publication action {other}"),
+                }
+            }
+            let incoming = sessions(1, "incoming");
+            let accepted = if case.merge {
+                let read_accepted = read_store.accepts_chat_patch_read(&read);
+                let published = read_store
+                    .merge_chat_patch_at_read(&read, incoming)
+                    .is_some();
+                assert_eq!(read_accepted, published, "{}", case.name);
+                published
+            } else {
+                read_store.replace_reloaded_snapshot_at_read(&read, incoming)
+            };
+            let shown = [1, 2]
+                .into_iter()
+                .flat_map(|node| {
+                    stores
+                        .snapshot(&did(node))
+                        .sessions
+                        .iter()
+                        .map(|row| {
+                            assert_eq!(
+                                row.node_did,
+                                did(node),
+                                "{}: node {node} shows only its own rows",
+                                case.name
+                            );
+                            node_family::NodeRow {
+                                node,
+                                value: row.title.as_ref().unwrap().text.clone(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
                 })
-                .collect::<Vec<_>>();
-            assert_eq!(
-                titles,
-                vec![(did(node), expected["value"].as_str().unwrap().to_owned())],
-                "{name}: node {node} shows only its own rows"
-            );
-        }
-    }
+                .collect();
+            node_family::NodePublicationOutput {
+                accepted,
+                expected: shown,
+            }
+        },
+    );
 }
 
 #[tokio::test]
-async fn generated_recovery_cases_preserve_scopes_without_self_waking() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../gents/tests/fixtures/client_data_publication.json"
-    ))
-    .expect("generated ClientDataPublication cases");
-    let cases = fixture["recovery"].as_array().expect("recovery cases");
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = case["name"].as_str().expect("case name");
-        let scope =
-            |value: &serde_json::Value| format!("scope-{}", value.as_u64().expect("modeled scope"));
-        let expected_scopes: Vec<String> = case["pending_scopes"]
-            .as_array()
-            .expect("modeled pending scopes")
+async fn recovery_matches_the_lean_model() {
+    use gents_lean_vocab::families::client_data_publication_recovery as recovery_family;
+    let scope = |value: u64| format!("scope-{value}");
+    let scopes = |taken: Vec<String>| -> Vec<u64> {
+        taken
             .iter()
-            .map(scope)
-            .collect();
-        let expected_generation = case["generation"].as_u64().expect("model generation");
-        let retry_scheduled = case["retry_scheduled"]
-            .as_bool()
-            .expect("modeled retry deadline state");
-        assert!(case["initial"]["pending_scopes"]
-            .as_array()
-            .expect("modeled initial scopes")
-            .is_empty());
-        assert_eq!(case["initial"]["generation"].as_u64(), Some(0));
-        assert_eq!(case["initial"]["retry_scheduled"].as_bool(), Some(false));
+            .map(|taken| {
+                taken
+                    .strip_prefix("scope-")
+                    .and_then(|value| value.parse().ok())
+                    .expect("modeled scope")
+            })
+            .collect()
+    };
+    for case in gents_lean_vocab::families::client_data_publication_recovery::cases::<String>() {
+        let name = &case.input.name;
         let stores = ObservedStores::new();
         let mut wake = stores.subscribe_resync_requests();
-        assert_eq!(
-            *wake.borrow(),
-            case["initial"]["generation"].as_u64().unwrap()
-        );
+        let now = tokio::time::Instant::now();
+        let mut retry_not_before = None;
+        let initial = recovery_family::Recovery {
+            pending_scopes: scopes(stores.take_resync_requests()),
+            generation: *wake.borrow(),
+            retry_scheduled: !super::super::resync_retry_ready(retry_not_before, now),
+        };
         let mut in_flight = Vec::new();
         let mut observed_generation = 0;
         let mut batch_taken = false;
-        let mut retry_not_before = None;
-        let now = tokio::time::Instant::now();
-        for action in case["actions"]
-            .as_array()
-            .expect("modeled recovery actions")
-        {
-            match action["op"].as_str().expect("recovery action op") {
-                "request_scope" if batch_taken => {
-                    stores.ensure(&scope(&action["scope"])).request_resync();
+        for action in &case.input.actions {
+            match (action.op.as_str(), action.scope) {
+                ("request_scope", Some(requested)) if batch_taken => {
+                    stores.ensure(&scope(requested)).request_resync();
                     assert!(wake.has_changed().expect("watch remains open"));
                     observed_generation = *wake.borrow_and_update();
                 }
-                "request_scope" => {
-                    stores.ensure(&scope(&action["scope"])).request_resync();
+                ("request_scope", Some(requested)) => {
+                    stores.ensure(&scope(requested)).request_resync();
                 }
-                "take_batch" => {
+                ("take_batch", _) => {
                     wake.changed().await.expect("initial batch notification");
                     in_flight = stores.take_resync_requests();
                     observed_generation = *wake.borrow_and_update();
                     batch_taken = true;
                 }
-                "fail_batch" => {
-                    for failed in action["scopes"].as_array().expect("modeled failed scopes") {
-                        let failed = scope(failed);
+                ("fail_batch", _) => {
+                    for failed in &action.scopes {
+                        let failed = scope(*failed);
                         assert!(
                             in_flight.contains(&failed),
                             "failed scope was not in flight"
@@ -324,31 +300,23 @@ async fn generated_recovery_cases_preserve_scopes_without_self_waking() {
                     assert_eq!(*wake.borrow(), observed_generation);
                     retry_not_before = Some(now + std::time::Duration::from_millis(1));
                 }
-                "retry_timer" => {
+                ("retry_timer", _) => {
                     retry_not_before = None;
                 }
-                other => panic!("unrecognized modeled recovery action {other}"),
+                other => panic!("unrecognized modeled recovery action {other:?} in {name}"),
             }
         }
-        assert_eq!(
-            *wake.borrow(),
-            expected_generation,
-            "model generation {name}"
-        );
-        assert_eq!(
-            super::super::resync_retry_ready(retry_not_before, now),
-            !retry_scheduled,
-            "observer retry gate for modeled recovery actions {name}"
-        );
-        if retry_scheduled {
-            let deadline = retry_not_before.expect("failed batch has a retry deadline");
+        if let Some(deadline) = retry_not_before {
             assert!(super::super::resync_retry_ready(Some(deadline), deadline));
         }
-        assert_eq!(
-            stores.take_resync_requests(),
-            expected_scopes,
-            "modeled recovery case {name}"
-        );
+        let retry_scheduled = !super::super::resync_retry_ready(retry_not_before, now);
+        let generation = *wake.borrow();
+        case.check(recovery_family::RecoveryOutput {
+            initial,
+            pending_scopes: scopes(stores.take_resync_requests()),
+            generation,
+            retry_scheduled,
+        });
     }
 }
 

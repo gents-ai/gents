@@ -75,14 +75,27 @@ pub async fn grant_selected_self_configuration(
     Ok(())
 }
 
-/// Lean `SelfConfig.engineerInitRelations`: make `agent_did` an administrator
-/// of the Node (`nodes#administrator`), which node initialisation gives the
-/// Engineer. It carries the agent catalog and, through `parent`, update of
-/// every Agent and configuration document of the Node; it also carries Node
-/// delete, every Agent's sessions and the management of Node relations, the
-/// accepted cost recorded on the Lean definition. The transaction's actor must
-/// manage `administrator` on the Node (its owner or an `administrator`).
-pub async fn grant_node_administration(
+/// Lean `SelfConfig.provisionEngineer`: what every path that makes a node's
+/// Engineer (`gents init`, the eval runner's trial node, fixtures standing in
+/// for an initialised node) grants it in document ACP, self-configuration of
+/// its selected documents and administration of the Node. The transaction's
+/// actor must manage `administrator` on the Node (its owner or an
+/// `administrator`) and the relations on the Engineer's selected documents.
+pub async fn provision_engineer(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<()> {
+    grant_selected_self_configuration(txn, node_did, agent_did).await?;
+    grant_node_administration(txn, node_did, agent_did).await
+}
+
+/// Lean `SelfConfig.engineerInitRelations`: `nodes#administrator` carries the
+/// agent catalog and, through `parent`, update of every Agent and configuration
+/// document of the Node; it also carries Node delete, every Agent's sessions
+/// and the management of Node relations, the accepted cost recorded on the
+/// Lean definition.
+async fn grant_node_administration(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_did: &str,

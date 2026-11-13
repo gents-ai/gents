@@ -393,10 +393,8 @@ impl GoalSource {
             latest.terminalized_at.as_deref(),
         )
         .await?;
-        agent.settled = match &self.runtime_status {
-            Some(status) => status.goal_reconcile_settled().await,
-            None => false,
-        };
+        agent.settled =
+            crate::goal::live_goal_reconcile_settled(self.runtime_status.as_deref()).await;
         if persisted_phase == GoalContinuationPhase::Claimed {
             if reconciled_phase != GoalContinuationPhase::ChildPresent {
                 return Ok(None);

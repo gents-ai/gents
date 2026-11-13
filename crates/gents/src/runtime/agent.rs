@@ -49,6 +49,8 @@ pub(crate) mod worker_capacity;
 
 pub(crate) use principal_assembly::assemble_node_and_agents;
 pub(crate) use principal_assembly::AgentBuildError;
+#[cfg(test)]
+pub(crate) use reconcile::next_generation;
 
 pub(crate) use builder::AgentFactory;
 #[cfg(test)]
