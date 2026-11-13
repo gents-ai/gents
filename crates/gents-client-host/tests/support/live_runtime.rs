@@ -502,16 +502,24 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             Err(error)
         }
     };
+    // Cleanup runs on every path; the journey's own error is reported first.
+    let mut released = Ok(());
     for gate in &mut gates {
-        gate.release().await?;
+        let outcome = gate.release().await;
+        if released.is_ok() {
+            released = outcome;
+        }
     }
-    if !replacement {
-        stop(&mut runtime).await?;
-    }
-    tokio::time::timeout(WAIT, drain)
+    let stopped = match runtime.try_wait() {
+        Ok(None) => stop(&mut runtime).await,
+        Ok(Some(_)) => Ok(()),
+        Err(error) => Err(error.into()),
+    };
+    let drained = tokio::time::timeout(WAIT, drain)
         .await
-        .context("runtime output cleanup deadline")???;
-    result
+        .context("runtime output cleanup deadline")
+        .and_then(|joined| joined?);
+    result.and(released).and(stopped).and(drained)
 }
 
 async fn configure(
@@ -553,7 +561,13 @@ async fn configure(
     }
     let mut document = json!({"node":{"node_did":node},"agents":[selected],"inference_backends":[backend],"inference_profiles":[profile]});
     if replacement {
-        document["inference_executions"] = json!([{"node_did":node,"execution_id":"native-live-replacement-budget","max_total_tokens":8192}]);
+        document["inference_execution"] =
+            serde_json::to_value([gents_documents::InferenceExecution {
+                node_did: node.to_owned(),
+                execution_id: "native-live-replacement-budget".to_owned(),
+                max_total_tokens: Some(8192),
+                ..Default::default()
+            }])?;
     }
     if goal {
         document["contexts"] = json!([{"node_did":node,"context_id":"native-live-goal-context","tools_id":"native-live-goal-tools","system_prompt":"Answer ordinary requests briefly. When the Goal is resumed, fulfill its objective and call update_goal with status complete. Do not create another Goal."}]);
@@ -600,6 +614,10 @@ async fn configure(
     if let Some(undo) = undo {
         undo.configure(&mut document, node)?;
     }
+    // Decoded through the contract type, so a stale fixture field fails here
+    // with the field's name rather than as the runtime's refusal.
+    let document: gents_documents::PackConfig = serde_json::from_value(document)
+        .context("live fixture configuration differs from the PackConfig contract")?;
     client
         .try_call(
             *id,
