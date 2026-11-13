@@ -83,7 +83,7 @@ pub enum PromotionError {
     NameRequired(PromoteRefusal),
     #[error(transparent)]
     Javy(#[from] JavyMissing),
-    #[error(transparent)]
+    #[error("{0}")]
     Operation(#[from] anyhow::Error),
 }
 

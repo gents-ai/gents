@@ -6,3 +6,6 @@ pub mod p2p_reconcile;
 pub mod test_support;
 
 pub mod views;
+
+#[cfg(test)]
+mod access_classification_tests;

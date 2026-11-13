@@ -1119,9 +1119,9 @@ async fn plugin_replacement_conflict_in_txn(
 pub enum PluginStoreChangeError {
     #[error("{0}")]
     PinConflict(String),
-    #[error(transparent)]
-    Rejected(anyhow::Error),
-    #[error(transparent)]
+    #[error("{0}")]
+    Rejected(#[source] anyhow::Error),
+    #[error("{0}")]
     Unconfirmed(#[from] anyhow::Error),
 }
 
@@ -1172,7 +1172,7 @@ pub enum PackChangeError {
     Grant(#[from] GrantError),
     #[error(transparent)]
     Slots(#[from] super::SlotBindingError),
-    #[error(transparent)]
+    #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 

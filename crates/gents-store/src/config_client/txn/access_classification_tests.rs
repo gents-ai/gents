@@ -1,11 +1,7 @@
-use std::collections::BTreeSet;
-use std::path::Path;
-
 use super::runtime_hop_cap::RuntimeHopCapError;
 use super::ReceiptWriteError;
 use crate::config_client::access_classification_fixture::{
-    classify_erased, classify_owner, error_owner_variants_holding, AccessClassification,
-    AccessFailure, Erasure,
+    classify_erased, classify_owner, AccessClassification, AccessFailure, Erasure,
 };
 use crate::config_client::authored_document::AuthoredDocumentCreateError;
 use crate::config_client::document_decide::DocumentDecideError;
@@ -129,32 +125,228 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
 
 #[test]
 fn every_store_owner_variant_preserves_the_access_classification() {
-    let cases = gents_lean_vocab::families::access_classification_store_wrapped::cases::<
+    gents_lean_vocab::families::access_classification_store_wrapped::replay::<
         AccessClassification,
         Erasure,
         AccessFailure,
         String,
-    >();
-    let modeled: BTreeSet<String> = cases
-        .iter()
-        .map(|case| case.input.wrapper.clone())
-        .collect();
-    let declared = error_owner_variants_holding(
-        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
-        &["ConfigClientError", "GraphqlResponseError"],
-    );
-    assert_eq!(
-        declared, modeled,
-        "every store owner variant holding an access error is an \
-         `AccessClassification.StoreWrapper`, and no other is"
-    );
-    for case in cases {
-        case.check(wrapped(
-            &case.input.wrapper,
-            case.input.failure,
-            case.input.erasure,
-        ));
+    >(|input| wrapped(&input.wrapper, input.failure, input.erasure));
+}
+
+fn database_failure(retryable: bool) -> gents_protocol::database_error::GraphqlFailure {
+    let code = if retryable {
+        gents_protocol::database_error::TXN_CONFLICT_CODE
+    } else {
+        "INTERNAL"
+    };
+    gents_protocol::database_error::GraphqlFailure::new(
+        "write",
+        serde_json::json!([{"message": "opaque", "extensions": {"code": code}}]),
+    )
+}
+
+fn retryable_as<E>(erasure: Erasure, error: E) -> bool
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    match erasure {
+        Erasure::Typed => gents_protocol::graphql::graphql_error_is_retryable(&error),
+        Erasure::Anyhow => {
+            gents_protocol::graphql::graphql_error_is_retryable(anyhow::Error::new(error).as_ref())
+        }
+        Erasure::Boxed => gents_protocol::graphql::graphql_error_is_retryable(
+            (Box::new(error) as Box<dyn std::error::Error + Send + Sync>).as_ref(),
+        ),
     }
+}
+
+/// `AccessClassification.storeRetryWrapped`: the GraphQL owners' retryability
+/// of a database failure held by each store variant that holds one.
+#[test]
+fn every_store_holder_of_a_graphql_failure_keeps_its_retryability() {
+    use gents_protocol::graphql::GraphqlError;
+    gents_lean_vocab::families::access_classification_store_retry_wrapped::replay::<Erasure, String>(
+        |input| {
+            let failure = || database_failure(input.retryable);
+            match input.wrapper.as_str() {
+                "config_client_error_protocol" => retryable_as(
+                    input.erasure,
+                    crate::config_client::ConfigClientError::Protocol(GraphqlError::Database(
+                        failure(),
+                    )),
+                ),
+                "config_client_error_database" => retryable_as(
+                    input.erasure,
+                    crate::config_client::ConfigClientError::Database(failure()),
+                ),
+                "graphql_response_error_database" => {
+                    retryable_as(input.erasure, GraphqlResponseError::Database(failure()))
+                }
+                "deferred_operation_error_graphql" => retryable_as(
+                    input.erasure,
+                    DeferredOperationError::Graphql(GraphqlError::Database(failure())),
+                ),
+                "enrollment_grant_error_record_unconfirmed" => retryable_as(
+                    input.erasure,
+                    EnrollmentGrantError::RecordUnconfirmed(GraphqlError::Database(failure())),
+                ),
+                other => panic!(
+                    "store variant {other} has no constructor here; add it with its \
+                 `AccessClassification.StoreRetryWrapper` constructor"
+                ),
+            }
+        },
+    );
+}
+
+/// `AccessClassification.OwnerProbe`.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum OwnerProbe {
+    InsecureKey,
+    LockHeld,
+    Incompatible,
+}
+
+/// The first store classifier that answers for `error`.
+fn store_owner_answer(error: &(dyn std::error::Error + 'static)) -> Option<OwnerProbe> {
+    use crate::local::storage_backend::{find_incompatible, find_insecure_key};
+    if find_insecure_key(error).is_some() {
+        Some(OwnerProbe::InsecureKey)
+    } else if crate::local::home::store_lock_held(error).is_some() {
+        Some(OwnerProbe::LockHeld)
+    } else if find_incompatible(error).is_some() {
+        Some(OwnerProbe::Incompatible)
+    } else {
+        None
+    }
+}
+
+fn owner_answer_as<E>(erasure: Erasure, error: E) -> Option<OwnerProbe>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    match erasure {
+        Erasure::Typed => store_owner_answer(&error),
+        Erasure::Anyhow => store_owner_answer(anyhow::Error::new(error).as_ref()),
+        Erasure::Boxed => store_owner_answer(
+            (Box::new(error) as Box<dyn std::error::Error + Send + Sync>).as_ref(),
+        ),
+    }
+}
+
+/// `AccessClassification.storeOwnerFound`: an owner held through a box, or
+/// by `StoreCompatibilityError`, is asked by the classifier that answers for
+/// it.
+#[test]
+fn every_boxed_or_compatibility_holder_reaches_its_store_classifier() {
+    use crate::identity::{IdentityError, InsecureKeyPermissions};
+    use crate::local::home::{HomeError, StoreLockHeld};
+    use crate::local::store_compat::StoreCompatibilityError;
+    use crate::local::store_key::StoreKeyError;
+    use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
+
+    let insecure = || {
+        Box::new(IdentityError::InsecureKey(InsecureKeyPermissions {
+            path: "/home/keys/identity.key".into(),
+            mode: 0o644,
+        }))
+    };
+    let held = || {
+        HomeError::LockHeld(StoreLockHeld {
+            home: "/home".into(),
+            holder_pid: Some(7),
+        })
+    };
+    let label = || "gents.identity".to_string();
+    gents_lean_vocab::families::access_classification_store_owner_found::replay::<
+        Erasure,
+        OwnerProbe,
+        String,
+    >(|input| {
+        let erasure = input.erasure;
+        match input.wrapper.as_str() {
+            "identity_error_load_signing_identity" => owner_answer_as(
+                erasure,
+                IdentityError::LoadSigningIdentity {
+                    did: "did:key:z6Mk".into(),
+                    source: insecure(),
+                },
+            ),
+            "identity_error_store_keychain_identity" => owner_answer_as(
+                erasure,
+                IdentityError::StoreKeychainIdentity {
+                    label: label(),
+                    source: insecure(),
+                },
+            ),
+            "identity_error_secure_enclave_public_key" => owner_answer_as(
+                erasure,
+                IdentityError::SecureEnclavePublicKey {
+                    label: label(),
+                    source: insecure(),
+                },
+            ),
+            "identity_error_secure_enclave_did" => owner_answer_as(
+                erasure,
+                IdentityError::SecureEnclaveDid {
+                    label: label(),
+                    source: insecure(),
+                },
+            ),
+            "store_key_error_keychain_store" => owner_answer_as(
+                erasure,
+                StoreKeyError::KeychainStore {
+                    label: label(),
+                    source: insecure(),
+                },
+            ),
+            "store_key_error_keychain_delete" => owner_answer_as(
+                erasure,
+                StoreKeyError::KeychainDelete {
+                    label: label(),
+                    source: insecure(),
+                },
+            ),
+            "pack_evidence_error_identity" => {
+                owner_answer_as(erasure, PackEvidenceError::Identity(insecure()))
+            }
+            "home_error_archive_rolled_back" => owner_answer_as(
+                erasure,
+                HomeError::ArchiveRolledBack {
+                    source: Box::new(held()),
+                },
+            ),
+            "home_error_archive_unrestored" => owner_answer_as(
+                erasure,
+                HomeError::ArchiveUnrestored {
+                    entries: "data".into(),
+                    source: Box::new(held()),
+                },
+            ),
+            "home_error_delete_stopped" => owner_answer_as(
+                erasure,
+                HomeError::DeleteStopped {
+                    removed: "data".into(),
+                    source: Box::new(held()),
+                },
+            ),
+            "store_compatibility_error_home" => {
+                owner_answer_as(erasure, StoreCompatibilityError::Home(held()))
+            }
+            "store_compatibility_error_key" => owner_answer_as(
+                erasure,
+                StoreCompatibilityError::Key(StoreKeyError::Incompatible(IncompatibleStore {
+                    kind: IncompatibleStoreKind::ForeignVersion,
+                    data_path: "/home/data".into(),
+                })),
+            ),
+            other => panic!(
+                "store variant {other} has no constructor here; add it with its \
+                 `AccessClassification.StoreOwnerWrapper` constructor"
+            ),
+        }
+    });
 }
 
 #[derive(Default)]

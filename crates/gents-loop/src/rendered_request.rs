@@ -29,8 +29,8 @@ pub enum RenderedRequestError {
     EncodeProvenancePayload(#[source] serde_json::Error),
     #[error("encoding canonical JSON")]
     EncodeCanonicalJson(#[source] serde_json::Error),
-    #[error(transparent)]
-    Sink(Box<dyn std::error::Error + Send + Sync>),
+    #[error("{0}")]
+    Sink(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 type Result<T, E = RenderedRequestError> = std::result::Result<T, E>;

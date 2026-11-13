@@ -49,10 +49,10 @@ pub struct HostedPackStage {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HostedPackStageError {
-    #[error(transparent)]
-    Rejected(anyhow::Error),
-    #[error(transparent)]
-    Unconfirmed(anyhow::Error),
+    #[error("{0}")]
+    Rejected(#[source] anyhow::Error),
+    #[error("{0}")]
+    Unconfirmed(#[source] anyhow::Error),
 }
 
 pub async fn stage_hosted_pack(

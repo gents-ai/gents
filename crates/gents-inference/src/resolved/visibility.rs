@@ -10,7 +10,7 @@ pub enum ConfigurationVisibilityError {
     Unavailable,
     #[error("configuration visibility query returned an invalid response")]
     InvalidResponse,
-    #[error(transparent)]
+    #[error("{0}")]
     Access(#[from] ConfigClientError),
 }
 

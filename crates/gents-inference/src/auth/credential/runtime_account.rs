@@ -8,7 +8,7 @@ use gents_store::identity::NodeIdentity;
 pub enum RuntimeAccountMetadataError {
     #[error("account lookup requires the bound runtime and a managed Agent transaction")]
     RuntimeScope,
-    #[error(transparent)]
+    #[error("{0}")]
     Access(#[from] ConfigClientError),
     #[error("decoding runtime-visible account metadata")]
     Decode,

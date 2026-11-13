@@ -32,8 +32,8 @@ pub(super) enum DataPlaneRefusal {
     UnknownTemplate(String),
     #[error("client data-plane pairing row is missing its durable route key")]
     MissingRouteKey,
-    #[error(transparent)]
-    UndirectedRouteKey(anyhow::Error),
+    #[error("{0}")]
+    UndirectedRouteKey(#[source] anyhow::Error),
     #[error(
         "DataPlanePairingDesired for peer {peer_id} uses template {template_id:?} but the signed \
          PeerRegistry has a blank node_did"

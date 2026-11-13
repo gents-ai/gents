@@ -19,7 +19,7 @@ const DEFERRED_COLLECTIONS: [&str; 6] = [
 pub enum DeferredOperationError {
     #[error("{0}")]
     Config(#[from] ConfigClientError),
-    #[error(transparent)]
+    #[error("{0}")]
     Graphql(#[from] gents_protocol::graphql::GraphqlError),
     #[error("authenticated actor cannot update the local Node")]
     NodeUpdateDenied,

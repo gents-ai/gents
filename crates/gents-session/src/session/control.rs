@@ -28,9 +28,9 @@ pub enum SessionControlError {
         #[source]
         source: anyhow::Error,
     },
-    #[error(transparent)]
+    #[error("{0}")]
     Access(#[from] gents_store::config_client::ConfigClientError),
-    #[error(transparent)]
+    #[error("{0}")]
     Failed(#[from] anyhow::Error),
 }
 

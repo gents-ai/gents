@@ -2060,7 +2060,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-session/src/session/output/replay_capture.rs", 1),
     ("crates/gents-session/src/session/output/replay_request.rs", 1),
     ("crates/gents-session/src/session/request_output.rs", 1),
-    ("crates/gents-store/src/local/storage_backend.rs", 9),
+    ("crates/gents-store/src/local/storage_backend.rs", 8),
     ("crates/gents-store/src/local/store_key.rs", 2),
     ("crates/gents-session/src/request/streaming.rs", 1),
     ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
@@ -2094,7 +2094,9 @@ impl<'ast> Visit<'ast> for DowncastVisitor {
     }
 
     fn visit_expr_call(&mut self, call: &'ast ExprCall) {
-        if path_name(call).is_some_and(|name| name.rsplit("::").next() == Some("find_source")) {
+        if path_name(call).is_some_and(|name| {
+            matches!(name.rsplit("::").next(), Some("find_source" | "as_owner"))
+        }) {
             self.sites += 1;
         }
         visit::visit_expr_call(self, call);
@@ -2171,6 +2173,7 @@ fn downcast_fence_counts_type_classification_outside_tests() {
         ("fn f(e: anyhow::Error) { let _ = e.downcast::<E>(); }", 1),
         ("fn f(e: &anyhow::Error) -> bool { e.is::<E>() }", 1),
         ("fn f(e: &dyn Error) { find_source::<E>(e); gents_protocol::error_chain::find_source::<F>(e); }", 2),
+        ("fn f(e: &dyn Error) -> bool { find_map_source(e, |cause| as_owner::<E>(cause)).is_some() }", 1),
         ("fn f(e: &Error) -> bool { e.is_conflict() || e.is(x) }", 0),
         ("fn f(e: &dyn Error) -> bool { find_map_source(e, |cause| cause.downcast_ref::<E>()).is_some() }", 1),
         ("fn f(m: &Map) -> Option<&T> { m.get(&id)?.downcast_ref() }", 0),
@@ -2768,5 +2771,339 @@ fn crate_layer_fence_flags_upward_peer_and_client_references() {
             "[target.'cfg(unix)'.dependencies]\ngents-tools = \"1\"\n"
         ),
         1
+    );
+}
+
+/// Errors a classifier finds on an erased error's `source()` chain: the access
+/// owners, the GraphQL owners asked for retryability, and erased errors, whose
+/// top may be either. A variant that holds one directly is sourced
+/// (`AccessClassification.Chain.exposed`); the owners that answer for the
+/// error they hold by type are exempt for it.
+const SOURCED_HOLDINGS: &[&str] = &[
+    "ConfigClientError",
+    "GraphqlResponseError",
+    "GraphqlError",
+    "GraphqlFailure",
+    "anyhow::Error",
+    "dyn Error",
+];
+
+const OWNERS_ASKED_FOR_WHAT_THEY_HOLD: &[(&str, &str)] = &[
+    ("ConfigClientError", "GraphqlResponseError"),
+    ("GraphqlResponseError", "ConfigClientError"),
+    ("GraphqlError", "GraphqlFailure"),
+];
+
+/// Each crate's `AccessClassification` family enumerating its variants that
+/// hold an access error or the store's `ViewError`.
+const ACCESS_HOLDER_FAMILIES: &[(&str, &str)] = &[
+    ("gents-store", "access_classification_store_wrapped"),
+    ("gents-inference", "access_classification_inference_wrapped"),
+    ("gents-session", "access_classification_session_wrapped"),
+    ("gents-p2p", "access_classification_p2p_wrapped"),
+    ("gents-service", "access_classification_service_wrapped"),
+    ("gents-tools", "access_classification_tools_wrapped"),
+    (
+        "gents-desktop-core",
+        "access_classification_desktop_core_wrapped",
+    ),
+];
+
+/// Each crate's family enumerating its variants, other than the GraphQL
+/// owners', that hold a GraphQL error or failure.
+const RETRY_HOLDER_FAMILIES: &[(&str, &str)] = &[
+    ("gents-store", "access_classification_store_retry_wrapped"),
+    (
+        "gents-protocol",
+        "access_classification_protocol_retry_wrapped",
+    ),
+];
+
+#[derive(Default)]
+struct ErrorHolderVisitor {
+    holders: Vec<ErrorHolder>,
+}
+
+struct ErrorHolder {
+    owner: String,
+    variant: String,
+    held: BTreeSet<&'static str>,
+    transparent: bool,
+}
+
+impl<'ast> Visit<'ast> for ErrorHolderVisitor {
+    fn visit_item_mod(&mut self, item: &'ast ItemMod) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, _: &'ast ItemFn) {}
+
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        if !derives_error(&item.attrs) {
+            return;
+        }
+        for variant in &item.variants {
+            let held = held_errors(&variant.fields);
+            if held.is_empty() {
+                continue;
+            }
+            self.holders.push(ErrorHolder {
+                owner: item.ident.to_string(),
+                variant: variant.ident.to_string(),
+                held,
+                transparent: variant.attrs.iter().any(|attribute| {
+                    attribute.path().is_ident("error")
+                        && attribute
+                            .meta
+                            .require_list()
+                            .is_ok_and(|list| list.tokens.to_string() == "transparent")
+                }),
+            });
+        }
+    }
+}
+
+fn derives_error(attributes: &[syn::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("derive")
+            && attribute
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+                )
+                .is_ok_and(|derived| {
+                    derived.iter().any(|path| {
+                        path.segments
+                            .last()
+                            .is_some_and(|segment| segment.ident == "Error")
+                    })
+                })
+    })
+}
+
+fn held_errors(fields: &syn::Fields) -> BTreeSet<&'static str> {
+    struct Finder(BTreeSet<&'static str>);
+    impl<'ast> Visit<'ast> for Finder {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            let segments = path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>();
+            if let Some(last) = segments.last() {
+                for name in [
+                    "ConfigClientError",
+                    "GraphqlResponseError",
+                    "GraphqlError",
+                    "GraphqlFailure",
+                    "ViewError",
+                ] {
+                    if last == name {
+                        self.0.insert(name);
+                    }
+                }
+            }
+            if segments.ends_with(&["anyhow".to_string(), "Error".to_string()]) {
+                self.0.insert("anyhow::Error");
+            }
+            visit::visit_path(self, path);
+        }
+
+        fn visit_type_trait_object(&mut self, object: &'ast syn::TypeTraitObject) {
+            if object.bounds.iter().any(|bound| {
+                matches!(bound, syn::TypeParamBound::Trait(bound)
+                    if bound.path.segments.last().is_some_and(|segment| segment.ident == "Error"))
+            }) {
+                self.0.insert("dyn Error");
+            }
+            visit::visit_type_trait_object(self, object);
+        }
+    }
+    let mut finder = Finder(BTreeSet::new());
+    for field in fields {
+        finder.visit_type(&field.ty);
+    }
+    finder.0
+}
+
+/// `Conformance.wireName` of `<owner><variant>`.
+fn holder_wire_name(owner: &str, variant: &str) -> String {
+    let characters = owner.chars().chain(variant.chars()).collect::<Vec<_>>();
+    let mut wire = String::new();
+    for (index, character) in characters.iter().enumerate() {
+        let previous = index.checked_sub(1).map(|index| characters[index]);
+        let next = characters.get(index + 1);
+        let starts_word = character.is_ascii_uppercase()
+            && previous.is_some_and(|previous| {
+                previous.is_ascii_lowercase()
+                    || previous.is_ascii_digit()
+                    || (previous.is_ascii_uppercase() && next.is_some_and(char::is_ascii_lowercase))
+            });
+        if starts_word {
+            wire.push('_');
+        }
+        wire.push(character.to_ascii_lowercase());
+    }
+    wire
+}
+
+fn modeled_wrappers(families: &serde_json::Value, key: &str) -> BTreeSet<String> {
+    families["functions"][key]["input"]["fields"]
+        .as_array()
+        .unwrap_or_else(|| panic!("family {key} is generated"))
+        .iter()
+        .find(|field| field[0] == "wrapper")
+        .and_then(|field| field[1]["values"].as_array())
+        .unwrap_or_else(|| panic!("family {key} has a wrapper enum"))
+        .iter()
+        .map(|value| value.as_str().expect("wrapper wire name").to_string())
+        .collect()
+}
+
+#[test]
+fn access_error_holders_are_sourced() {
+    let root = repo_root();
+    let families: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("crates/gents-lean-vocab/families.schema.json"))
+            .expect("family schema"),
+    )
+    .expect("family schema JSON");
+    let mut violations = Vec::new();
+    let mut access = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut retry = BTreeMap::<String, BTreeSet<String>>::new();
+    for (relative, syntax) in parse_production(&root, production_sources(&root)) {
+        let mut visitor = ErrorHolderVisitor::default();
+        visitor.visit_file(&syntax);
+        let package = relative
+            .split('/')
+            .nth(1)
+            .expect("source is in a crate")
+            .to_string();
+        for holder in visitor.holders {
+            let exempt = |held: &str| {
+                holder.owner == held
+                    || OWNERS_ASKED_FOR_WHAT_THEY_HOLD
+                        .iter()
+                        .any(|(owner, asked)| *owner == holder.owner && *asked == held)
+            };
+            let must_source = holder
+                .held
+                .iter()
+                .copied()
+                .filter(|held| SOURCED_HOLDINGS.contains(held) && !exempt(held))
+                .collect::<Vec<_>>();
+            if holder.transparent && !must_source.is_empty() {
+                violations.push(format!(
+                    "{relative}: {}::{} holds {} transparently; hold it as `#[source]` under \
+                     `#[error(\"{{0}}\")]`",
+                    holder.owner,
+                    holder.variant,
+                    must_source.join(", ")
+                ));
+            }
+            let wire = holder_wire_name(&holder.owner, &holder.variant);
+            if ["ConfigClientError", "GraphqlResponseError", "ViewError"]
+                .into_iter()
+                .any(|held| holder.held.contains(&held) && !exempt(held))
+            {
+                access
+                    .entry(package.clone())
+                    .or_default()
+                    .insert(wire.clone());
+            }
+            if ["GraphqlError", "GraphqlFailure"]
+                .into_iter()
+                .any(|held| holder.held.contains(&held) && !exempt(held))
+            {
+                retry.entry(package.clone()).or_default().insert(wire);
+            }
+        }
+    }
+    for (kind, declared, families_by_crate) in [
+        (
+            "an access error or a store view error",
+            &access,
+            ACCESS_HOLDER_FAMILIES,
+        ),
+        ("a GraphQL error or failure", &retry, RETRY_HOLDER_FAMILIES),
+    ] {
+        let packages = declared
+            .keys()
+            .map(String::as_str)
+            .chain(families_by_crate.iter().map(|(package, _)| *package))
+            .collect::<BTreeSet<_>>();
+        for package in packages {
+            let found = declared.get(package).cloned().unwrap_or_default();
+            match families_by_crate
+                .iter()
+                .find(|(owner, _)| *owner == package)
+            {
+                None => violations.push(format!(
+                    "{package}: variants {found:?} hold {kind} and the crate has no \
+                     `AccessClassification` family; model them and replay it in the crate"
+                )),
+                Some((_, key)) => {
+                    let modeled = modeled_wrappers(&families, key);
+                    if found != modeled {
+                        violations.push(format!(
+                            "{package}: variants holding {kind} {found:?} differ from family \
+                             {key} {modeled:?}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "access classification guard failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn error_holder_fence_reads_holdings_and_wire_names() {
+    let syntax = syn::parse_file(concat!(
+        "#[derive(Debug, thiserror::Error)] enum ReadError {",
+        "  #[error(transparent)] Execute(#[from] ConfigClientError),",
+        "  #[error(\"{0}\")] Boxed(#[source] Box<crate::config_client::ConfigClientError>),",
+        "  #[error(transparent)] Erased(Box<dyn std::error::Error + Send + Sync>),",
+        "  #[error(transparent)] Other(#[from] anyhow::Error),",
+        "  #[error(\"plain\")] Plain(String),",
+        "}",
+        "#[derive(Debug)] enum NotAnError { Execute(ConfigClientError) }",
+        "#[cfg(test)] mod tests { #[derive(Debug, Error)] enum E { X(GraphqlFailure) } }",
+    ))
+    .expect("parse snippet");
+    let mut visitor = ErrorHolderVisitor::default();
+    visitor.visit_file(&syntax);
+    let holders = visitor
+        .holders
+        .iter()
+        .map(|holder| {
+            (
+                holder.variant.as_str(),
+                holder.held.iter().copied().collect::<Vec<_>>(),
+                holder.transparent,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        holders,
+        [
+            ("Execute", vec!["ConfigClientError"], true),
+            ("Boxed", vec!["ConfigClientError"], false),
+            ("Erased", vec!["dyn Error"], true),
+            ("Other", vec!["anyhow::Error"], true),
+        ]
+    );
+    assert_eq!(
+        holder_wire_name("AgentSelfConfigPermissionError", "Access"),
+        "agent_self_config_permission_error_access"
+    );
+    assert_eq!(
+        holder_wire_name("MCPHealthError", "Probe"),
+        "mcp_health_error_probe"
     );
 }

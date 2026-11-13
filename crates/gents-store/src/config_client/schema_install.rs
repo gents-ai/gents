@@ -152,9 +152,7 @@ impl Comparison {
 fn install_error_in<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a SchemaInstallError> {
-    gents_protocol::error_chain::find_map_source(error, |cause| {
-        cause.downcast_ref::<SchemaInstallError>()
-    })
+    gents_protocol::error_chain::find_source::<SchemaInstallError>(error)
 }
 
 /// The install mismatch anywhere in an application error's chain, including
@@ -162,10 +160,8 @@ fn install_error_in<'a>(
 pub fn schema_install_mismatch<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a SchemaInstallMismatch> {
-    gents_protocol::error_chain::find_map_source(error, |cause| {
-        cause.downcast_ref::<SchemaInstallMismatch>()
-    })
-    .or_else(|| install_error_in(error)?.mismatch())
+    gents_protocol::error_chain::find_source::<SchemaInstallMismatch>(error)
+        .or_else(|| install_error_in(error)?.mismatch())
 }
 
 /// Which install refusal an application error carries anywhere in its chain.

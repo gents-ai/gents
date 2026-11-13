@@ -219,8 +219,8 @@ pub enum PackOperationError {
     SlotDuplicate(String),
     /// Another owner's failure (the pack engine, the registry, the store),
     /// unchanged.
-    #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn Error + Send + Sync>),
 }
 
 impl PackOperationError {

@@ -29,7 +29,7 @@ pub enum RuntimeNoticeScopeError {
 pub enum RuntimeNoticeError {
     #[error(transparent)]
     Scope(#[from] RuntimeNoticeScopeError),
-    #[error(transparent)]
+    #[error("{0}")]
     Unavailable(#[from] anyhow::Error),
     #[error("runtime notice is deferred until its admitted request provenance is available")]
     MissingClaimProvenance,

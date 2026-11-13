@@ -47,8 +47,8 @@ pub enum AgentPermissionError {
     #[error("Node {0:?} is missing or not visible to this actor")]
     NodeUnavailable(String),
     /// Another owner's failure (the store, ACP), unchanged.
-    #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn Error + Send + Sync>),
 }
 
 impl AgentPermissionError {

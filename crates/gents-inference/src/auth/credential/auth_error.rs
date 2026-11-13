@@ -22,7 +22,7 @@ pub(crate) struct OAuthCredentialAuthError {
 pub(crate) enum OAuthCredentialError {
     #[error(transparent)]
     Auth(#[from] OAuthCredentialAuthError),
-    #[error(transparent)]
+    #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 

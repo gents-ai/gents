@@ -140,6 +140,7 @@ pub use txn::{
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
 pub use relationships::ConfigRelationshipGrant;
+pub(crate) use retry::access_owner;
 pub use retry::TransactionFailure;
 pub use self_config_permission::{AgentSelfConfigPermission, AgentSelfConfigPermissionError};
 pub use write_telemetry::WriteTelemetryError;

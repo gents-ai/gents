@@ -30,9 +30,9 @@ pub enum StoreCompatibilityError {
         #[source]
         source: std::io::Error,
     },
-    #[error(transparent)]
+    #[error("{0}")]
     Home(#[from] HomeError),
-    #[error(transparent)]
+    #[error("{0}")]
     Key(#[from] StoreKeyError),
     #[error("opening a copy of {} to check it", path.display())]
     Open {

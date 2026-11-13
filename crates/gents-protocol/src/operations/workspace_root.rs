@@ -276,8 +276,8 @@ pub enum WorkspaceRootError {
     #[error("the Node actor cannot be a root reader; name the Agent that runs in the root")]
     NodeActor,
     /// Another owner's failure (identity, the store, ACP), unchanged.
-    #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn Error + Send + Sync>),
 }
 
 impl WorkspaceRootError {
@@ -367,8 +367,8 @@ pub enum AgentWorkspaceRootError {
     },
     #[error(transparent)]
     Publication(#[from] WorkspaceRootError),
-    #[error(transparent)]
-    Other(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Other(#[source] Box<dyn Error + Send + Sync>),
 }
 
 #[cfg(test)]

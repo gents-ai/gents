@@ -36,4 +36,6 @@ type Result<T, E = GraphqlError> = std::result::Result<T, E>;
 mod tests;
 
 #[cfg(all(test, feature = "native"))]
+mod retry_classification_tests;
+#[cfg(all(test, feature = "native"))]
 mod tx_tests;

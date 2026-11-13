@@ -155,8 +155,8 @@ pub enum MailboxOperationError {
     #[error(transparent)]
     QuestionReply(#[from] MailboxQuestionReplyError),
     /// The store's failure, unchanged.
-    #[error(transparent)]
-    Passthrough(Box<dyn std::error::Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl MailboxOperationError {

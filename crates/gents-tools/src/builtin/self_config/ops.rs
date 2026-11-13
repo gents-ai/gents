@@ -44,7 +44,7 @@ pub enum ApplyFailure {
         #[source]
         error: Box<InferenceOperationError>,
     },
-    #[error(transparent)]
+    #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 
