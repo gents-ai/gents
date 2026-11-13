@@ -76,21 +76,68 @@ fn take_terminal_failure_for_test(tool_call_doc_id: &str) -> bool {
     }
 }
 
-/// A deferred plugin write was refused or failed inside the terminal's
-/// transaction, which rolled back whole.
+/// Why a terminal's transaction did not commit.
 #[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-struct PluginWritesFailed(String);
+enum TerminalWriteError {
+    /// A deferred plugin write was refused or failed inside the terminal's
+    /// transaction, which rolled back whole.
+    #[error("{refusal}")]
+    PluginWritesFailed {
+        refusal: String,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error(transparent)]
+    Access(#[from] gents_store::config_client::ConfigClientError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl TerminalWriteError {
+    /// Unwrapped rather than boxed, so a caller that asks the erased error for
+    /// the type raised inside the transaction still finds it.
+    fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::PluginWritesFailed { refusal, source } => source.context(refusal),
+            Self::Access(error) => error.into(),
+            Self::Other(error) => error,
+        }
+    }
+}
+
+impl gents_store::config_client::TransactionFailure for TerminalWriteError {
+    fn config_client_error(&self) -> Option<&gents_store::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::PluginWritesFailed { source: error, .. } | Self::Other(error) => {
+                gents_store::config_client::TransactionFailure::config_client_error(error)
+            }
+        }
+    }
+
+    fn rerun_requested(&self) -> Option<&gents_store::config_client::RerunNote> {
+        match self {
+            Self::Access(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+            Self::PluginWritesFailed { source: error, .. } | Self::Other(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+        }
+    }
+}
 
 /// Marks a refusal. A conflict or storage failure passes through unmarked so
 /// the transaction owner replays it and, once exhausted, it stays a transient
 /// error rather than a plugin refusal.
-fn plugin_writes_failed(error: anyhow::Error) -> anyhow::Error {
+fn plugin_writes_failed(error: anyhow::Error) -> TerminalWriteError {
     if gents_store::config_client::is_transaction_step_unavailable(&error) {
-        return error;
+        return TerminalWriteError::Other(error);
     }
-    let text = format!("{error:#}");
-    error.context(PluginWritesFailed(text))
+    TerminalWriteError::PluginWritesFailed {
+        refusal: format!("{error:#}"),
+        source: error,
+    }
 }
 
 pub(super) struct RawPresentation<'a> {
