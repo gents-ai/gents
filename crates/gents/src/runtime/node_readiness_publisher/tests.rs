@@ -327,17 +327,15 @@ async fn semantic_noop_and_stale_commands_do_not_emit_watch_revisions() {
 
 #[test]
 fn generated_storage_failure_cases_bind_readiness_classification() {
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    for case in contract["storage_failure_cases"].as_array().unwrap() {
+    gents_lean_vocab::families::storage_failure_contracts_readiness::replay(|i| {
         let error = anyhow::Error::new(gents_protocol::database_error::GraphqlFailure::new(
             "test",
-            serde_json::json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+            serde_json::json!([{"message": i.message, "extensions": {"code": i.code}}]),
         ));
-        assert_eq!(
-            is_fatal_node_readiness_write(&error),
-            case["fatal_readiness"].as_bool().unwrap()
-        );
-    }
+        gents_lean_vocab::families::storage_failure_contracts_readiness::ReadinessOutput {
+            fatal_readiness: is_fatal_node_readiness_write(&error),
+        }
+    });
 }
 
 #[tokio::test]

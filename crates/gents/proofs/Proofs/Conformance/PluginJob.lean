@@ -657,20 +657,44 @@ theorem key_regressions :
           some { root := "row-1", slot := "4:🙂", attempt := 7 }, false) ] := by
   native_decide
 
-private def renderKey (c : KeyCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("root", toJson c.key.root), ("slot", toJson c.key.slot),
-    ("attempt", toJson c.key.attempt), ("messages", toJson c.messages),
-    ("expected", Json.mkObj [("retry_key", toJson c.key.retryKey),
-      ("session_id", toJson c.key.sessionId),
-      ("message_keys", toJson (c.messages.map fun n =>
-        Json.mkObj [("n", toJson n), ("key", toJson (c.key.messageKey n))])),
-      ("decoded", toJson ((decodeRetryKey? c.key.retryKey).map fun k =>
-        Json.mkObj [("root", toJson k.root), ("slot", toJson k.slot),
-          ("attempt", toJson k.attempt)])),
-      ("message_keys_decode", toJson (c.messages.any fun n =>
-        (decodeRetryKey? (c.key.messageKey n)).isSome))])]
+structure KeyInput where
+  name : String
+  root : String
+  slot : String
+  attempt : Nat
+  messages : List Nat
+  deriving ToJson
 
-def keyCasesJson : String := (toJson (keyCases.map renderKey)).compress
+structure MessageKey where
+  n : Nat
+  key : String
+  deriving ToJson
+
+structure DecodedKey where
+  slot : String
+  attempt : Nat
+  deriving ToJson
+
+structure KeyOutput where
+  retryKey : String
+  sessionId : String
+  messageKeys : List MessageKey
+  decoded : Option DecodedKey
+  messageKeysDecode : Bool
+  deriving ToJson
+
+@[conformance_family]
+def spawnKeys : Conformance.Family KeyInput KeyOutput where
+  inputs := keyCases.map fun c =>
+    { name := c.name, root := c.key.root, slot := c.key.slot, attempt := c.key.attempt
+      messages := c.messages }
+  model := fun i =>
+    let key : SpawnKey := { root := i.root, slot := i.slot, attempt := i.attempt }
+    { retryKey := key.retryKey
+      sessionId := key.sessionId
+      messageKeys := i.messages.map fun n => { n, key := key.messageKey n }
+      decoded := (decodeRetryKey? key.retryKey).map fun k => { slot := k.slot, attempt := k.attempt }
+      messageKeysDecode := i.messages.any fun n => (decodeRetryKey? (key.messageKey n)).isSome }
 
 /-- A child another chain caused; no kill of this row reaches it. -/
 private def foreignChild : Child :=

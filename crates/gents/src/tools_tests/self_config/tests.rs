@@ -96,48 +96,95 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
         &gents_store::identity::provision_agent_identity(foreign.as_ref()).unwrap(),
     )
     .unwrap();
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .identity_agent_block_signing_cases
-            .clone()
-    })
+    let user = tokio::task::spawn_blocking(|| node_identity("ordinary-user"))
+        .await
+        .unwrap();
+    let mut tampered = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    tampered.agent_did = user.did().to_owned();
+    let invalid_binding =
+        gents_store::identity::resolve_agent_identity(runtime.as_ref(), &tampered);
+    assert!(invalid_binding.is_err());
+    let claimed_root =
+        gents_store::identity::RegisteredIdentity::from_registered_did(runtime.did(), None)
+            .unwrap();
+    let spoofed_root = gents_store::identity::resolve_agent_identity(
+        &claimed_root,
+        &gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap(),
+    );
+    assert!(spoofed_root.is_err());
+    let cases = tokio::task::spawn_blocking(
+        gents_lean_vocab::families::agent_block_signing_config_tool::cases::<String>,
+    )
     .await
     .unwrap();
-    let mut checked = 0;
     for case in &cases {
-        let (actor, signer) = match case.name.as_str() {
+        let name = case.input.name.as_str();
+        let (node_did, actor, signer) = match name {
             "managed-agent" => (
+                fixture.node_did().to_owned(),
                 fixture.agent_did().to_owned(),
                 fixture.agent.managed_agent_signer(),
             ),
-            "missing-key" => (fixture.agent_did().to_owned(), None),
+            "missing-key" => (
+                fixture.node_did().to_owned(),
+                fixture.agent_did().to_owned(),
+                None,
+            ),
             "sibling-key" => (
+                fixture.node_did().to_owned(),
                 fixture.agent_did().to_owned(),
                 sibling.managed_agent_signer(),
             ),
+            "invalid-binding" => (
+                fixture.node_did().to_owned(),
+                fixture.agent_did().to_owned(),
+                invalid_binding
+                    .as_ref()
+                    .ok()
+                    .and_then(|identity| identity.managed_agent_signer()),
+            ),
+            "spoofed-root" => (
+                fixture.node_did().to_owned(),
+                fixture.agent_did().to_owned(),
+                spoofed_root
+                    .as_ref()
+                    .ok()
+                    .and_then(|identity| identity.managed_agent_signer()),
+            ),
             "foreign-runtime" => (
+                fixture.node_did().to_owned(),
                 foreign_agent.did().to_owned(),
                 foreign_agent.managed_agent_signer(),
             ),
-            "empty-actor" => (String::new(), fixture.agent.managed_agent_signer()),
-            "ordinary-node" => (fixture.node_did().to_owned(), None),
-            _ => continue,
+            "empty-actor" => (
+                fixture.node_did().to_owned(),
+                String::new(),
+                fixture.agent.managed_agent_signer(),
+            ),
+            "ordinary-node" => (
+                fixture.node_did().to_owned(),
+                fixture.node_did().to_owned(),
+                None,
+            ),
+            "ordinary-default-node" => (fixture.node_did().to_owned(), String::new(), None),
+            "unconfigured-explicit-actor" => (String::new(), fixture.agent_did().to_owned(), None),
+            "ordinary-user-key-is-not-adopted" => (
+                fixture.node_did().to_owned(),
+                user.did().to_owned(),
+                user.managed_agent_signer(),
+            ),
+            other => panic!("the config tool scenario has no fixture for {other}"),
         };
-        let access = SelfConfigCore::new(
-            fixture.db.node.clone(),
-            fixture.node_did().to_owned(),
-            actor,
-        )
-        .and_then(|core| core.with_agent_signer(signer).access());
+        let access = SelfConfigCore::new(fixture.db.node.clone(), node_did, actor)
+            .and_then(|core| core.with_agent_signer(signer).access());
         let route = match &access {
             Ok(access) => {
-                assert!(access.has_managed_agent_signer(), "{}", case.name);
+                assert!(access.has_managed_agent_signer(), "{name}");
                 "agent"
             }
             Err(_) => "refuse",
         };
-        assert_eq!(route, case.config_tool, "{}", case.name);
-        if case.name == "missing-key" {
+        if name == "missing-key" {
             let error = access.err().expect("a missing signer is refused");
             assert!(
                 matches!(
@@ -147,9 +194,8 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
                 "{error:#}"
             );
         }
-        checked += 1;
+        case.check(route.to_owned());
     }
-    assert_eq!(checked, 6);
 }
 
 #[tokio::test]

@@ -34,38 +34,48 @@ fn transaction_id(txn: &ConfigApplyTxn<'_>) -> String {
 
 #[tokio::test]
 async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt() {
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .pack_finality_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    let expected = |events: &[&str]| {
-        let case = cases
-            .iter()
-            .find(|case| case["attempts"] == serde_json::json!(events))
-            .unwrap();
-        case["unconfirmed"].as_bool().unwrap()
-    };
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    let access = ConfigAccess::local(node.clone());
-    let rejected = access
-        .transact_write_with_finality("test.finality.callback", |_txn| {
-            Box::pin(async { Err::<(), anyhow::Error>(anyhow::anyhow!("reject callback")) })
+    let cases =
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::families::contracts_pack_installation_finality_transaction::cases::<
+                String,
+            >()
         })
         .await
-        .unwrap_err();
-    assert_eq!(rejected.unconfirmed, expected(&["no_commit"]));
-    let (lost, fired) = ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
-        Some("test.finality.receipt"),
-        access.transact_write_with_finality("test.finality.receipt", |_txn| {
-            Box::pin(async { Ok::<(), anyhow::Error>(()) })
-        }),
-    )
-    .await;
-    assert!(fired);
-    assert_eq!(lost.unwrap_err().unconfirmed, expected(&["unknown_commit"]));
+        .unwrap();
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let access = ConfigAccess::local(node.clone());
+    for case in cases {
+        let unconfirmed = match case.input.attempts.as_slice() {
+            [attempt] if attempt == "no_commit" => {
+                access
+                    .transact_write_with_finality("test.finality.callback", |_txn| {
+                        Box::pin(async {
+                            Err::<(), anyhow::Error>(anyhow::anyhow!("reject callback"))
+                        })
+                    })
+                    .await
+                    .unwrap_err()
+                    .unconfirmed
+            }
+            [attempt] if attempt == "unknown_commit" => {
+                let (lost, fired) = ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+                    Some("test.finality.receipt"),
+                    access.transact_write_with_finality("test.finality.receipt", |_txn| {
+                        Box::pin(async { Ok::<(), anyhow::Error>(()) })
+                    }),
+                )
+                .await;
+                assert!(fired);
+                lost.unwrap_err().unconfirmed
+            }
+            other => panic!("the finality scenario has no attempt history {other:?}"),
+        };
+        case.check(
+            gents_lean_vocab::families::contracts_pack_installation_finality_transaction::FinalityOutput {
+                unconfirmed,
+            },
+        );
+    }
     node.shutdown().await.expect("node shutdown");
 }
 

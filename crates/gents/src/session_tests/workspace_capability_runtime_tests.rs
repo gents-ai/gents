@@ -491,19 +491,18 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         writer_access.clone(),
         declaration,
     );
-    let args = serde_json::from_value(serde_json::json!({
+    let mut args = Some(serde_json::from_value(serde_json::json!({
         "binding_id":"tool-hidden", "workspace_id":"workspace", "workspace_doc_id":workspace_doc
-    }))?;
-    let allowed = gents_lean_vocab::lean_contract_snapshot()
-        .workspace_datastore_write_cases
-        .iter()
-        .find(|case| case.collection == "WorkspaceBinding")
-        .map(|case| case.allowed)
-        .context("missing modeled workspace write case")?;
-    assert_eq!(
-        gents_loop::tool::Tool::call(&tool, args).await.is_ok(),
-        allowed
-    );
+    }))?);
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::workspace_datastore_write_tool_call::cases()
+    })
+    .await?;
+    for case in cases {
+        assert_eq!(case.input.collection, "WorkspaceBinding");
+        let args = args.take().context("one modeled hidden-binding call")?;
+        case.check(gents_loop::tool::Tool::call(&tool, args).await.is_ok());
+    }
     let response = writer_access
         .write(
             "test.workspace.detached_child",

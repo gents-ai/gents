@@ -123,6 +123,7 @@ import Proofs.Runtime.CanonicalOutput.Execution.AdmissionHandoffCases
 import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
+import Proofs.Conformance.ClientAgentReadiness
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
 import Proofs.Clients.ClientShell.OptimisticSend
@@ -151,6 +152,9 @@ import Proofs.Store.Identity.NodeProvisioningConformance
 import Proofs.Store.Identity.GrantSetsConformance
 import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
+import Proofs.Conformance.Identity.Delegation
+import Proofs.Conformance.Identity.AgentBlockSigning
+import Proofs.Conformance.Identity.WorkspaceDatastoreWrite
 import Proofs.ToolCalls.Identity.ClientAgentJournal
 import Proofs.Conformance.Identity.NodeFileRequests
 import Proofs.Conformance.Identity.RevokeFollowsGrant
@@ -391,15 +395,12 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"storage_failure_cases\":" ++ Conformance.StorageFailureContracts.casesJson ++ ","
     ++ "\"root_admission_cases\":"
       ++ Conformance.RootAdmissionContracts.casesJson ++ ","
     ++ "\"vocabularies\":"
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
-    ++ "\"goal_fresh_session_input_cases\":"
-      ++ Conformance.GoalRequestAssignmentContracts.freshSessionCasesJson ++ ","
     ++ "\"goal_wake_receipt_cases\":"
       ++ Conformance.GoalWakeReceiptContracts.casesJson ++ ","
     ++ "\"client_process_claim_cases\":"
@@ -532,20 +533,15 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.PublicationConformance.casesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
-    ++ "\"identity_delegation_cases\":"
-      ++ Identity.GrantSetsConformance.delegationCasesJson ++ ","
     ++ "\"identity_agent_baseline_cases\":"
       ++ Identity.GrantSetsConformance.baselineCasesJson ++ ","
     ++ "\"identity_agent_creator_cases\":"
       ++ Identity.NodeProvisioningConformance.agentCreatorCasesJson ++ ","
-    ++ "\"identity_agent_block_signing_cases\":"
-      ++ Identity.AgentBlockSigning.casesJson ++ ","
     ++ "\"mailbox_runtime_notice_case\":" ++ Identity.MailboxAccess.runtimeNoticeCasesJson ++ ","
     ++ "\"mailbox_claimed_recipient_cases\":" ++ Identity.MailboxAccess.claimedRecipientCasesJson ++ ","
     ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
-    ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
     ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
@@ -594,7 +590,6 @@ def snapshotClientCasesJson : String :=
     ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
-    ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","
     ++ "\"hosted_plugin_cases\":" ++ PackInstallation.hostedPluginCasesJson ++ ","
     ++ "\"snapshot_demotion_cases\":"
       ++ snapshotDemotionCasesJson ++ ","
@@ -604,8 +599,6 @@ def snapshotClientCasesJson : String :=
       ++ readinessPublicationCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
-    ++ "\"client_agent_readiness_cases\":"
-      ++ jsonArray (clientAgentReadinessCases.map clientAgentReadinessCaseJson) ++ ","
     ++ "\"application_write_cases\":" ++ applicationWriteCasesJson ++ ","
     ++ "\"self_config_field_tables\":"
       ++ selfConfigFieldTablesJson ++ ","
@@ -718,8 +711,6 @@ def snapshotRecoveryCasesJson : String :=
       ++ Conformance.MailboxNotificationContracts.casesJson ++ ","
     ++ "\"mailbox_reply_cases\":"
       ++ Conformance.MailboxReplyContracts.casesJson ++ ","
-    ++ "\"mailbox_question_cases\":"
-      ++ Conformance.MailboxQuestionContracts.casesJson ++ ","
     ++ "\"mailbox_handoff_cases\":"
       ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
     ++ "\"mailbox_sweep_cases\":"
@@ -751,7 +742,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.PluginResources.pluginResourceHostImportCasesJson ++ ","
     ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
     ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
-    ++ "\"plugin_job_key_cases\":" ++ Conformance.PluginJob.keyCasesJson ++ ","
     ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
     ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
     ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","

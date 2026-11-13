@@ -777,10 +777,18 @@ def caseCoverage : List CoverageEntry :=
       "QueuedSteeringTraceCases"
       "Native binding covers only the publication-before-provider-stream-entry script: it reconstructs the generated prepared prompt from its canonical candidate and observes the durable authored header before the provider stream opens. It does not execute generated steering queue ingress, inspect the UI admissionVisible projection or serialized capture body, or prove native lease authorization. Claimed pre-start failure, prepublication send denial, conflicting capture, and exact replay scripts remain model-derived/decoder-checked only.")
       "prompt-assembly" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "pack_finality_cases"
-      "PackFinalityCases"
-      "Binds callback rejection, lost receipt and a later failed retry to the shared transaction owner.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_finality_transaction")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_finality_staged_plugin")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_pack_installation_finality_unreached"
+      "model-production-gap: the shared transaction owner folds one write's attempts into a sticky unconfirmed flag inside its retry loop; no scenario drives several commit attempts of one transaction, or an error with no failed attempt.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -1078,8 +1086,28 @@ def caseCoverage : List CoverageEntry :=
       "Decision cases cover reply matching and terminal-state eligibility. Signed-row loading, atomic request/item claim, and concurrent dismissal require transaction-owner integration tests.")
       "mailbox" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "mailbox_question_cases"
-      "MailboxQuestionCases")
+      "family"
+      "mailbox_question_contracts_questions")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_waits")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_awaiting")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_presentations")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_receipt_versions")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_question_contracts_runtimes")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "mailbox_handoff_cases"
@@ -1240,8 +1268,24 @@ def caseCoverage : List CoverageEntry :=
       "client_session_delivery_direct_read")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "storage_failure_cases"
-      "StorageFailureCases")
+      "family"
+      "storage_failure_contracts_classification")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "storage_failure_contracts_readiness")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "storage_failure_contracts_ambiguous_write")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "storage_failure_contracts_full_transaction")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "storage_failure_contracts_host_error")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_request_closure_cases"
@@ -1268,8 +1312,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientSessionQueueOrderCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
-      "client_agent_readiness_cases"
-      "ClientAgentReadinessCases"
+      "family"
+      "client_agent_readiness_projection"
       "Pending: L2 renames the consumer test and L3 the production projector it drives.")
       "runtime-reconcile" [Surface.operatorUi]
   , tagged (consumerCoverage
@@ -1550,8 +1594,12 @@ def caseCoverage : List CoverageEntry :=
       "native_route_delivery")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_datastore_write_cases"
-      "WorkspaceDatastoreWriteCases")
+      "family"
+      "workspace_datastore_write_validation")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_datastore_write_tool_call")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "workspace_root_access_cases"
@@ -1872,8 +1920,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobControlCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_job_key_cases"
-      "PluginJobKeyCases")
+      "family"
+      "plugin_job_spawn_keys")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "plugin_job_authority_cases"
@@ -2005,8 +2053,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_request_assignment_contracts_input_binding")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "goal_fresh_session_input_cases"
-      "GoalFreshSessionInputCases")
+      "family"
+      "goal_request_assignment_contracts_fresh_session")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
       "family"

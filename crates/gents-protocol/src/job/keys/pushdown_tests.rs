@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use super::{decode_job_retry_key, job_message_key, job_session_id, job_spawn_key};
 
 /// Lean `SpawnKey.retryKey`, `messageKey` and `sessionId`: the protocol
@@ -9,60 +7,30 @@ use super::{decode_job_retry_key, job_message_key, job_session_id, job_spawn_key
 /// retry keys.
 #[test]
 fn generated_plugin_job_key_cases_match_protocol_encoders() {
-    let cases = gents_lean_vocab::lean_plugin_job_key_cases();
-    assert_eq!(
-        cases.len(),
-        5,
-        "Lean pins five key rows in `key_regressions`"
-    );
-    let mut names = BTreeSet::new();
-    for case in cases {
-        assert!(names.insert(case.name.as_str()), "duplicate {}", case.name);
-        let (root, slot, attempt) = (&case.root, &case.slot, case.attempt);
-        let expected = &case.expected;
-        assert_eq!(
-            job_spawn_key(root, slot, attempt),
-            expected.retry_key,
-            "{}: retry key",
-            case.name
-        );
-        assert_eq!(
-            job_session_id(root, slot, attempt),
-            expected.session_id,
-            "{}: session id",
-            case.name
-        );
-        let message_keys: Vec<(u32, String)> = case
+    use gents_lean_vocab::families::plugin_job_spawn_keys::{DecodedKey, KeyOutput, MessageKey};
+    gents_lean_vocab::families::plugin_job_spawn_keys::replay(|case| {
+        let (root, slot) = (&case.root, &case.slot);
+        let attempt = u32::try_from(case.attempt).unwrap();
+        let retry_key = job_spawn_key(root, slot, attempt);
+        let message_keys = case
             .messages
             .iter()
-            .map(|&n| (n, job_message_key(root, slot, attempt, n)))
-            .collect();
-        assert_eq!(
+            .map(|&n| MessageKey {
+                n,
+                key: job_message_key(root, slot, attempt, u32::try_from(n).unwrap()),
+            })
+            .collect::<Vec<_>>();
+        KeyOutput {
+            session_id: job_session_id(root, slot, attempt),
+            decoded: decode_job_retry_key(&retry_key).map(|(slot, attempt)| DecodedKey {
+                slot,
+                attempt: u64::from(attempt),
+            }),
+            message_keys_decode: message_keys
+                .iter()
+                .any(|message| decode_job_retry_key(&message.key).is_some()),
             message_keys,
-            expected
-                .message_keys
-                .iter()
-                .map(|m| (m.n, m.key.clone()))
-                .collect::<Vec<_>>(),
-            "{}: message keys",
-            case.name
-        );
-        assert_eq!(
-            decode_job_retry_key(&expected.retry_key),
-            expected
-                .decoded
-                .as_ref()
-                .map(|d| (d.slot.clone(), d.attempt)),
-            "{}: decoded retry key",
-            case.name
-        );
-        assert_eq!(
-            message_keys
-                .iter()
-                .any(|(_, key)| decode_job_retry_key(key).is_some()),
-            expected.message_keys_decode,
-            "{}: message keys decode",
-            case.name
-        );
-    }
+            retry_key,
+        }
+    });
 }

@@ -412,18 +412,20 @@ mod storage_failure_tests {
 
     #[test]
     fn full_storage_does_not_enter_ambiguous_write_retries() {
-        let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        for case in contract["storage_failure_cases"].as_array().unwrap() {
-            let error = GraphqlResponseError::from(
+        gents_lean_vocab::families::storage_failure_contracts_ambiguous_write::replay(|i| {
+            let error = ConfigClientError::Response(GraphqlResponseError::from(
                 gents_protocol::database_error::GraphqlFailure::new(
                     "write",
-                    serde_json::json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+                    serde_json::json!([
+                        {"message": i.message, "extensions": {"code": i.code}},
+                        {"message": "conflict", "extensions": {"code": gents_protocol::database_error::TXN_CONFLICT_CODE}}
+                    ]),
                 ),
-            );
-            if case["stop_automatic_retry"].as_bool().unwrap() {
-                assert!(!is_retryable_ambiguous_write(&error));
+            ));
+            gents_lean_vocab::families::storage_failure_contracts_ambiguous_write::RetryOutput {
+                stop_automatic_retry: !is_retryable_ambiguous_write(&error),
             }
-        }
+        });
         #[derive(Debug, thiserror::Error)]
         #[error("native transaction")]
         struct NativeTransaction(#[source] storage::corekv::Error);
@@ -487,17 +489,14 @@ mod storage_failure_tests {
     #[tokio::test]
     async fn storage_full_http_transactions_stop_without_replaying_or_discarding_consumed_handles()
     {
-        let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = contract["storage_failure_cases"].as_array().unwrap();
-        let full_cases: Vec<_> = cases.iter().filter(|case| case["full"] == true).collect();
-        assert!(!full_cases.is_empty());
-        for case in full_cases {
-            assert!(case["stop_automatic_retry"].as_bool().unwrap());
+        for case in gents_lean_vocab::families::storage_failure_contracts_full_transaction::cases()
+        {
+            let mut observed = Vec::new();
             for fail_begin in [false, true] {
                 let counts = Arc::new(Counts::default());
                 let failure = Failure {
                     begin: fail_begin,
-                    body: json!({"code": case["code"], "error": case["message"]}),
+                    body: json!({"code": case.input.code, "error": case.input.message}),
                     counts: Arc::clone(&counts),
                 };
                 let app = Router::new()
@@ -530,12 +529,6 @@ mod storage_failure_tests {
                 .await
                 .unwrap()
                 .unwrap_err();
-                assert!(
-                    crate::graphql::is_storage_full(&error),
-                    "{}",
-                    gents_protocol::error_chain::ErrorChain(&error)
-                );
-                assert_eq!(counts.begins.load(Ordering::SeqCst), 1);
                 let entered = usize::from(!fail_begin);
                 assert_eq!(counts.writes.load(Ordering::SeqCst), entered);
                 assert_eq!(counts.commits.load(Ordering::SeqCst), entered);
@@ -544,7 +537,19 @@ mod storage_failure_tests {
                     0,
                     "a returned commit failure consumed its handle"
                 );
+                observed.push((
+                    crate::graphql::is_storage_full(&error),
+                    counts.begins.load(Ordering::SeqCst) == 1,
+                ));
             }
+            assert_eq!(observed[0], observed[1], "{:?}", case.input);
+            let (full, stop_automatic_retry) = observed[0];
+            case.check(
+                gents_lean_vocab::families::storage_failure_contracts_full_transaction::TransactionOutput {
+                    full,
+                    stop_automatic_retry,
+                },
+            );
         }
     }
 }

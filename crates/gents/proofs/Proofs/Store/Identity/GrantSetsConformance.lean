@@ -32,11 +32,6 @@ def delegationCases : List (String × Recipient × Change) :=
    ("agent-refused-held", .agent, grant "read-document"),
    ("agent-refused-revoke", .agent, revoke "read-document")]
 
-def delegationCasesJson : String := (toJson (delegationCases.map fun (name, r, c) =>
-  Json.mkObj [("name", toJson name), ("holder", toJson r.name),
-    ("relation", toJson (relationName c.relation)), ("delete", toJson c.delete),
-    ("expected", toJson (admits (holderOf (receives r)) c))])).compress
-
 inductive Step where
   | publish
   | disable

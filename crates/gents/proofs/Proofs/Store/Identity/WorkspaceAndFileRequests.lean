@@ -185,11 +185,6 @@ def workspaceDatastoreWriteAllowed (collection : String) : Bool :=
 theorem workspace_binding_tool_create_refused :
     workspaceDatastoreWriteAllowed "WorkspaceBinding" = false := by decide
 
-def workspaceDatastoreWriteCasesJson : String :=
-  (Lean.toJson ((workspaceRuntimeOwnedCollections ++ ["Notes"]).map fun collection =>
-    Lean.Json.mkObj [("collection", Lean.toJson collection),
-      ("allowed", Lean.toJson (workspaceDatastoreWriteAllowed collection))])).compress
-
 /-- Workspace publication attaches its physical Agent parent and the selected
 writer and integrator in the same transaction. Every admitted child is linked
 to this workspace; a child outside that publication is not a binding in the

@@ -749,28 +749,23 @@ async fn retirement_acknowledgement_is_flushed_before_the_attachment_closes() {
 }
 #[test]
 fn generated_storage_failures_keep_their_code_in_host_errors() {
-    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["storage_failure_cases"].as_array().unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
+    gents_lean_vocab::families::storage_failure_contracts_host_error::replay(|i| {
         let error = anyhow::Error::new(gents_protocol::database_error::GraphqlFailure::new(
             "host command",
-            json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+            json!([{"message": i.message, "extensions": {"code": i.code}}]),
         ))
         .context("preparing a request");
         let error = super::backend_error(error);
-        assert_eq!(
-            error.code,
-            if case["full"].as_bool().unwrap() {
-                crate::BridgeErrorCode::StorageFull
-            } else {
-                crate::BridgeErrorCode::Backend
-            }
-        );
-        if case["stop_automatic_retry"].as_bool().unwrap() {
+        let full = match error.code {
+            crate::BridgeErrorCode::StorageFull => true,
+            crate::BridgeErrorCode::Backend => false,
+            other => panic!("{i:?} became {other:?}"),
+        };
+        if full {
             assert!(!error.retryable);
         }
-    }
+        gents_lean_vocab::families::storage_failure_contracts_host_error::HostErrorOutput { full }
+    });
 }
 
 #[test]

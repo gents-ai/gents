@@ -119,11 +119,47 @@ def hostedPluginCasesJson : String := jsonArray (
       ",\"plan\":" ++ toString plan ++ ",\"native\":" ++ toString native ++
       ",\"allowed\":" ++ toString (Configuration.hostedPluginInstallAllowed reviewed plan native) ++ "}")
 
-def finalityCasesJson : String := jsonArray (Configuration.packFinalityCases.map fun attempts =>
-  let name := fun event : Configuration.PackAttemptEvidence => match event with
-    | .noCommit => "no_commit" | .unknownCommit => "unknown_commit"
-  "{\"attempts\":" ++ jsonStringArray (attempts.map name) ++
-    ",\"unconfirmed\":" ++ toString (Configuration.packCommitUnconfirmed attempts) ++ "}")
+deriving instance Lean.ToJson for Configuration.PackAttemptEvidence
+
+structure FinalityInput where
+  attempts : List Configuration.PackAttemptEvidence
+  deriving Lean.ToJson
+
+structure FinalityOutput where
+  unconfirmed : Bool
+  deriving Lean.ToJson
+
+def finalityInputs (histories : List (List Configuration.PackAttemptEvidence)) :
+    List FinalityInput :=
+  histories.map fun attempts => { attempts }
+
+/-- A store transaction scenario builds one attempt: a rejected callback (no
+commit) or a commit whose receipt is lost (unknown commit). -/
+@[conformance_family]
+def finalityTransaction : Conformance.Family FinalityInput FinalityOutput where
+  inputs := finalityInputs (Configuration.packFinalityCases.filter
+    (· ∈ [[.noCommit], [.unknownCommit]]))
+  model := fun i => { unconfirmed := Configuration.packCommitUnconfirmed i.attempts }
+
+/-- The staged plugin scenario times out one commit acknowledgement. -/
+@[conformance_family]
+def finalityStagedPlugin : Conformance.Family FinalityInput FinalityOutput where
+  inputs := finalityInputs (Configuration.packFinalityCases.filter (· == [.unknownCommit]))
+  model := fun i => { unconfirmed := Configuration.packCommitUnconfirmed i.attempts }
+
+/-- model-production-gap: the shared transaction owner folds the attempts of
+one write into a sticky unconfirmed flag inside its retry loop, and no
+scenario drives several commit attempts of one transaction or a write with
+no failed attempt to an error, so these histories have no production run. -/
+@[conformance_family]
+def finalityUnreached : Conformance.Family FinalityInput FinalityOutput where
+  inputs := finalityInputs (Configuration.packFinalityCases.filter
+    (· ∉ [[.noCommit], [.unknownCommit]]))
+  model := fun i => { unconfirmed := Configuration.packCommitUnconfirmed i.attempts }
+
+example : Configuration.packCommitUnconfirmed [.noCommit] = false := by decide
+
+example : Configuration.packCommitUnconfirmed [.unknownCommit, .noCommit] = true := by decide
 
 def caseJson (name : String) (references : List (List String))
     (rootShips dependencyShips installed : List String) (isLocal : Bool := true) : String :=
