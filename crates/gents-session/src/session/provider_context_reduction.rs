@@ -1867,15 +1867,16 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        access
-            .add_actor_relationship(
-                "AgentSession",
-                &session,
-                "reader",
-                &node_did.parse().unwrap(),
-            )
-            .await
-            .unwrap();
+        gents_store::test_support::relationships::actor_in_txn(
+            &access,
+            "AgentSession",
+            &session,
+            "reader",
+            &node_did.parse().unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
         let prefix = vec![Message::user("private prefix".repeat(1000))];
         let suffix = vec![Message::user("retained")];
         let associations = ReplayAssociations {
@@ -1926,15 +1927,16 @@ mod tests {
             before["data"]["ProviderContextReduction"][0]["_docID"],
             row.doc_id
         );
-        access
-            .add_actor_relationship(
-                "AgentSession",
-                &session,
-                "reader",
-                &outsider.did().parse().unwrap(),
-            )
-            .await
-            .unwrap();
+        gents_store::test_support::relationships::actor_in_txn(
+            &access,
+            "AgentSession",
+            &session,
+            "reader",
+            &outsider.did().parse().unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
         for collection in ["ProviderContextReduction", "RenderedRequestBlock"] {
             assert!(
                 !outsider_access.execute(query).await.unwrap()["data"][collection]
@@ -1943,15 +1945,16 @@ mod tests {
                     .is_empty()
             );
         }
-        access
-            .delete_actor_relationship(
-                "AgentSession",
-                &session,
-                "reader",
-                &outsider.did().parse().unwrap(),
-            )
-            .await
-            .unwrap();
+        gents_store::test_support::relationships::actor_in_txn(
+            &access,
+            "AgentSession",
+            &session,
+            "reader",
+            &outsider.did().parse().unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
         for collection in ["ProviderContextReduction", "RenderedRequestBlock"] {
             assert!(
                 outsider_access.execute(query).await.unwrap()["data"][collection]
