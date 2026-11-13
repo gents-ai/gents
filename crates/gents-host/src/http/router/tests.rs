@@ -749,54 +749,42 @@ async fn status_lifecycle_is_starting_until_serve_marks_it_ready() {
     assert_eq!(lifecycle(&state).await, json!("ready"));
 }
 
-async fn stalled_activity_state(core_delay: Duration) -> RuntimeHttpState {
-    use axum::{routing::post, Json, Router};
-
+async fn stalled_activity_state(
+    core_delay: Duration,
+) -> (
+    RuntimeHttpState,
+    gents_store::test_support::wire_database::WireDatabase,
+) {
     let claimed_at = chrono::Utc::now() - chrono::Duration::seconds(120);
-    let core = json!({
-        "data": {
+    let database = gents_store::test_support::wire_database::WireDatabase::spawn(
+        json!({
             "NodeRuntime": [serde_json::to_value(runtime()).unwrap()],
             "NodeReadiness": [serde_json::to_value(readiness("default")).unwrap()],
-            "InferenceBackend": [],
             "AgentRequest": [{
                 "_docID": "doc-req-1",
                 "request_id": "req-1",
                 "node_did": "did:key:zAgent",
+                "lifecycle_state": "processing",
                 "claimed_at": claimed_at.to_rfc3339(),
                 "deadline": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
             }],
-            "AgentToolCall": []
-        }
-    });
-    let mock = Router::new().route(
-        "/api/v0/graphql",
-        post(move |Json(body): Json<Value>| {
-            let core = core.clone();
-            async move {
-                let query = body["query"].as_str().unwrap_or_default().to_string();
-                if query.contains("NodeRuntime") {
-                    tokio::time::sleep(core_delay).await;
-                    return Ok(Json(core));
-                }
-                if query.contains("InferenceCall(") {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    return Ok(Json(json!({ "data": {} })));
-                }
-                Err(StatusCode::NOT_FOUND)
-            }
         }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind mock graphql");
-    let addr = listener.local_addr().expect("mock addr");
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, mock).await;
-    });
+        std::sync::Arc::new(move |collection| {
+            Box::pin(async move {
+                match collection.as_str() {
+                    "NodeRuntime" => tokio::time::sleep(core_delay).await,
+                    "InferenceCall" => tokio::time::sleep(Duration::from_secs(30)).await,
+                    _ => {}
+                }
+                Ok(())
+            })
+        }),
+    )
+    .await;
     let mut state = state();
-    state.graphql = GraphqlEndpoint::anonymous(format!("http://{addr}/api/v0/graphql"));
+    state.graphql = database.reader();
     state.p2p_graphql = state.graphql.clone();
-    state
+    (state, database)
 }
 
 async fn health_body(response: Response) -> (StatusCode, Value) {
@@ -815,7 +803,7 @@ fn progress_age_ms(body: &Value) -> i64 {
 
 #[tokio::test]
 async fn stalled_liveness_activity_read_does_not_hold_health() {
-    let state = stalled_activity_state(Duration::ZERO).await;
+    let (state, _database) = stalled_activity_state(Duration::ZERO).await;
 
     let started = std::time::Instant::now();
     let (status, healthz) = health_body(healthz_handler(State(state.clone())).await).await;
@@ -842,7 +830,7 @@ async fn stalled_liveness_activity_read_does_not_hold_health() {
 
 #[tokio::test]
 async fn late_core_read_leaves_status_ok_when_activity_stalls() {
-    let state = stalled_activity_state(Duration::from_millis(1_700)).await;
+    let (state, _database) = stalled_activity_state(Duration::from_millis(1_700)).await;
 
     let started = std::time::Instant::now();
     let (_, status_body) =

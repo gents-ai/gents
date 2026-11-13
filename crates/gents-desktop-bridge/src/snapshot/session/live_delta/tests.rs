@@ -312,18 +312,30 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
             value
         })
         .collect();
-    let mut body = serde_json::json!({"data": {
+    let mut held = serde_json::json!({
         "AgentRequest": rows.requests,
-        "AgentMessage": [],
         "AgentOutputSegment": segments,
-    }});
-    body["data"]["AgentRequest"][0]["_docID"] = serde_json::json!(full.requests[0].doc_id);
+    });
+    held["AgentRequest"][0]["_docID"] = serde_json::json!(full.requests[0].doc_id);
+    fn tip(
+        held: serde_json::Value,
+    ) -> impl Fn(&wiremock::Request) -> wiremock::ResponseTemplate + Send + Sync + 'static {
+        move |request| {
+            let body: serde_json::Value = request.body_json().unwrap();
+            wiremock::ResponseTemplate::new(200).set_body_json(
+                gents_store::test_support::wire_database::answer(
+                    &held,
+                    body["query"].as_str().unwrap_or_default(),
+                ),
+            )
+        }
+    }
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v0/graphql"))
         .and(wiremock::matchers::body_string_contains(
-            "DesktopSessionTip",
+            ": AgentOutputSegment(",
         ))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(&body))
+        .respond_with(tip(held.clone()))
         .expect(1)
         .mount(&server)
         .await;
@@ -415,13 +427,13 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     assert!(!denied.message.contains("private metadata"));
     server.verify().await;
     server.reset().await;
-    body["data"]["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");
+    held["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v0/graphql"))
         .and(wiremock::matchers::body_string_contains(
-            "DesktopSessionTip",
+            ": AgentOutputSegment(",
         ))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+        .respond_with(tip(held))
         .expect(1)
         .mount(&server)
         .await;

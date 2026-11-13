@@ -106,9 +106,9 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 </p>
               ) : report.reason === "unfinishedSetup" ? (
                 <p className="text-sm" data-testid="incompatible-home-unfinished">
-                  This node home was created but never started, so nothing has been
-                  kept in it. Back it up to start again under a new name; everything in
-                  it moves to a dated backup and nothing is deleted.
+                  This node home was created but never started, so nothing has been kept
+                  in it. Back it up to start again under a new name; everything in it
+                  moves to a dated backup and nothing is deleted.
                 </p>
               ) : unsafeKey ? (
                 <p className="text-sm" data-testid="incompatible-home-unsafe-key">
