@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
+use gents_lean_vocab::families::{owner_staged_pairing, owner_staged_relations};
+use gents_protocol::owner_staged::OwnerStagedChange;
+
 use crate::config_client::{
-    ConfigAccess, ConfigApplyTxn, ConfigClientError, GraphqlEndpoint, OwnerStagedChange,
-    PairingObservation, PairingReadReason,
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, GraphqlEndpoint, PairingObservation,
+    PairingReadReason,
 };
 
 const POLICY: &str = "name: OwnerStaged\nresources:\n  - name: rows\n    relations:\n      - name: writer\n      - name: editor\n    permissions:\n      - name: read\n        expr: writer + editor\n      - name: update\n        expr: editor\n      - name: delete\n";
@@ -13,7 +16,7 @@ fn rows(response: &serde_json::Value) -> usize {
         .map_or(0, Vec::len)
 }
 
-/// Lean `Identity.OwnerStaged.casesJson`: a requester's own change to a
+/// Lean `Conformance.OwnerStaged.relations`: a requester's own change to a
 /// relation that only the document's runtime owner manages is refused on the
 /// public route, including for the node's NAC owner; the runtime stages the
 /// same change as the owner for a requester that the modeled authority admits
@@ -22,14 +25,13 @@ fn rows(response: &serde_json::Value) -> usize {
 async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Result<()> {
     use crate::identity::NodeIdentity;
     let directory = tempfile::tempdir()?;
-    let runtime = crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
+    let runtime =
+        crate::identity::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
     // An embedded configuration transaction acts as the runtime or as one of
     // its managed Agents, so every modeled requester is a managed Agent.
     let managed = || -> anyhow::Result<Arc<dyn NodeIdentity>> {
         let binding = crate::identity::provision_agent_identity(&runtime)?;
-        Ok(crate::identity::resolve_agent_identity(
-            &runtime, &binding,
-        )?)
+        Ok(crate::identity::resolve_agent_identity(&runtime, &binding)?)
     };
     let (user, admin, outsider, target) = (managed()?, managed()?, managed()?, managed()?);
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -139,31 +141,23 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
         ConfigApplyTxn::begin_local_with_signer(&node, did, signer)
     };
 
-    let cases = &gents_lean_vocab::lean_contract_snapshot().owner_staged_relation_cases;
-    assert!(!cases.is_empty());
     // The owner and Node-authority decision on a generic runtime-owned row;
     // target kinds, Agent-row derivation and pairing readers are replayed on
     // their real collections over signed HTTP (`owner_staged_route::tests`).
-    for case in cases.iter().filter(|case| {
-        matches!(
-            case["path"].as_str(),
-            Some("event_cursor_rebind" | "declared_placement_readers" | "workspace_selection")
-        ) && matches!(case["requester"].as_str(), Some("user" | "outsider"))
-    }) {
-        let (key, did) = match case["requester"].as_str().unwrap() {
+    for case in owner_staged_relations::cases() {
+        if !matches!(
+            case.input.path.as_str(),
+            "event_cursor_rebind" | "declared_placement_readers" | "workspace_selection"
+        ) {
+            continue;
+        }
+        let (key, did) = match case.input.requester.as_str() {
             "user" => (&user, user_did.clone()),
-            "admin" => (&admin, identity::Did::new(admin.did())?),
             "outsider" => (&outsider, identity::Did::new(outsider.did())?),
-            other => panic!("unknown modeled requester {other}"),
+            _ => continue,
         };
-        assert!(
-            matches!(
-                case["path"].as_str().unwrap(),
-                "event_cursor_rebind" | "declared_placement_readers" | "workspace_selection"
-            ),
-            "unknown modeled path {case}"
-        );
-        assert_eq!(visible().await?, 0, "{case}");
+        let input = &case.input;
+        assert_eq!(visible().await?, 0, "{input:?}");
         let direct = client(key)?
             .transact_write("test.owner_staged.direct", |txn| {
                 let (doc, target_did) = (&doc, &target_did);
@@ -172,19 +166,22 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
                         .await
                 })
             })
-            .await;
-        assert_eq!(
-            direct.is_ok(),
-            case["direct"].as_bool().unwrap(),
-            "{case}: {direct:?}"
-        );
-        assert_eq!(
-            visible().await? == 1,
-            case["direct"].as_bool().unwrap(),
-            "{case}"
-        );
+            .await
+            .is_ok();
+        assert_eq!(visible().await? == 1, direct, "{input:?}");
+        if direct {
+            crate::test_support::relationships::actor_in_txn(
+                &runtime_access,
+                "OwnerStagedRow",
+                &doc,
+                "writer",
+                &target_did,
+                true,
+            )
+            .await?;
+        }
         let txn = staging(key, did).await?;
-        let staged = txn
+        let result = txn
             .change_owner_staged(
                 "OwnerStagedRow",
                 &doc,
@@ -194,27 +191,14 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
                 &super::Authority::Configuration(super::TargetKind::Any),
             )
             .await;
-        let expected = case["staged"].as_bool().unwrap();
-        assert_eq!(staged.is_ok(), expected, "{case}: {staged:?}");
-        assert_eq!(
-            case["outcome"],
-            if expected { "staged" } else { "denied" },
-            "{case}"
-        );
-        if expected {
+        let outcome = decided(&doc, &result);
+        if result.is_ok() {
             txn.commit().await?;
         } else {
-            assert!(
-                matches!(
-                    staged,
-                    Err(ConfigClientError::OwnerStagedRelationshipDenied { .. })
-                ),
-                "{case}: {staged:?}"
-            );
             txn.discard().await?;
         }
-        assert_eq!(visible().await? == 1, expected, "{case}");
-        if expected {
+        let staged = visible().await? == 1;
+        if staged {
             let txn = staging(&user, user_did.clone()).await?;
             txn.change_owner_staged(
                 "OwnerStagedRow",
@@ -227,6 +211,11 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
             .await?;
             txn.commit().await?;
         }
+        case.check(owner_staged_relations::RelationOutput {
+            direct,
+            staged,
+            outcome: outcome.to_owned(),
+        });
     }
     // `unauthorized_refusal_independent_of_document`: an outsider learns
     // nothing from a row that does not exist.
@@ -267,7 +256,7 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
     Ok(())
 }
 
-/// Lean `Identity.OwnerStaged` pairing cases on the real pairing schema and
+/// Lean `Conformance.OwnerStaged.pairing` on the real pairing schema and
 /// `pairing_observations` policy: a requester that may update the runtime's
 /// own Node gets readers staged only on a pairing observation the runtime
 /// owns; every other request is refused before anything is staged.
@@ -275,13 +264,13 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
 async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyhow::Result<()> {
     use crate::identity::NodeIdentity;
     let directory = tempfile::tempdir()?;
-    let runtime = crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
-    let stranger = crate::KeyIdentity::load_or_create(directory.path().join("stranger"), None)?;
+    let runtime =
+        crate::identity::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
+    let stranger =
+        crate::identity::KeyIdentity::load_or_create(directory.path().join("stranger"), None)?;
     let managed = || -> anyhow::Result<Arc<dyn NodeIdentity>> {
         let binding = crate::identity::provision_agent_identity(&runtime)?;
-        Ok(crate::identity::resolve_agent_identity(
-            &runtime, &binding,
-        )?)
+        Ok(crate::identity::resolve_agent_identity(&runtime, &binding)?)
     };
     let (user, admin, outsider, other_admin, target) =
         (managed()?, managed()?, managed()?, managed()?, managed()?);
@@ -423,27 +412,22 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
         ConfigApplyTxn::begin_local_with_signer(&node, did(key.did()).unwrap(), signer)
     };
 
-    let cases: Vec<_> = gents_lean_vocab::lean_contract_snapshot()
-        .owner_staged_relation_cases
-        .iter()
-        .filter(|case| case["path"] == "pairing_reader")
-        .collect();
-    assert_eq!(cases.len(), 12);
-    for case in cases {
-        let key = match case["requester"].as_str().unwrap() {
+    for case in owner_staged_pairing::cases() {
+        let input = &case.input;
+        let key = match input.requester.as_str() {
             "user" => &user,
             "admin" => &admin,
             "outsider" => &outsider,
             "other-admin" => &other_admin,
             other => panic!("unknown modeled requester {other}"),
         };
-        let doc = match case["document"].as_str().unwrap() {
+        let doc = match input.document.as_str() {
             "route" => &route,
             "foreign" => &foreign,
             "missing" => &missing,
             other => panic!("unknown modeled document {other}"),
         };
-        assert!(readable().await?.is_empty(), "{case}");
+        assert!(readable().await?.is_empty(), "{input:?}");
         let direct = client(key)?
             .transact_write("test.owner_staged.pairing_direct", |txn| {
                 let target_did = &target_did;
@@ -457,14 +441,23 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
                     .await
                 })
             })
-            .await;
-        assert_eq!(
-            direct.is_ok(),
-            case["direct"].as_bool().unwrap(),
-            "{case}: {direct:?}"
-        );
+            .await
+            .is_ok();
+        assert_eq!(readable().await? == vec![doc.clone()], direct, "{input:?}");
+        if direct {
+            let txn = staging(&user).await?;
+            txn.set_pairing_reader(
+                PairingObservation::Desired,
+                doc,
+                PairingReadReason::RouteAdmission,
+                &target_did,
+                false,
+            )
+            .await?;
+            txn.commit().await?;
+        }
         let txn = staging(key).await?;
-        let staged = txn
+        let result = txn
             .set_pairing_reader(
                 PairingObservation::Desired,
                 doc,
@@ -473,12 +466,11 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
                 true,
             )
             .await;
-        assert_modeled_outcome(case, "outcome", doc, &staged);
+        let outcome = decided(doc, &result);
         // A refused request staged nothing, even once its transaction commits.
         txn.commit().await?;
-        let expected = case["staged"].as_bool().unwrap();
-        assert_eq!(readable().await? == vec![doc.clone()], expected, "{case}");
-        if expected {
+        let staged = readable().await? == vec![doc.clone()];
+        if staged {
             let txn = staging(&user).await?;
             txn.set_pairing_reader(
                 PairingObservation::Desired,
@@ -503,15 +495,20 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
         let routed = routed_access
             .request_verified_client_owner_staged(&reader(doc), true)
             .await;
-        assert_eq!(case["http"], case["outcome"], "{case}");
-        assert_modeled_outcome(case, "http", doc, &routed);
-        assert_eq!(readable().await? == vec![doc.clone()], expected, "{case}");
-        if expected {
+        let http = decided(doc, &routed);
+        assert_eq!(readable().await? == vec![doc.clone()], staged, "{input:?}");
+        if staged {
             routed_access
                 .request_verified_client_owner_staged(&reader(doc), false)
                 .await?;
-            assert!(readable().await?.is_empty(), "{case}");
+            assert!(readable().await?.is_empty(), "{input:?}");
         }
+        case.check(owner_staged_pairing::PairingOutput {
+            direct,
+            staged,
+            outcome: outcome.to_owned(),
+            http: http.to_owned(),
+        });
     }
     // A route transaction never runs as the runtime itself.
     assert!(matches!(
@@ -532,30 +529,20 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
     Ok(())
 }
 
-fn assert_modeled_outcome(
-    case: &serde_json::Value,
-    field: &str,
-    doc: &str,
-    result: &Result<(), ConfigClientError>,
-) {
-    match case[field].as_str().unwrap() {
-        "staged" => assert!(result.is_ok(), "{case}: {result:?}"),
-        "denied" => assert!(
-            matches!(
-                result,
-                Err(ConfigClientError::OwnerStagedRelationshipDenied { doc_id, .. })
-                    if doc_id == doc
-            ),
-            "{case}: {result:?}"
-        ),
-        "unmanaged" => assert!(
-            matches!(
-                result,
-                Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { doc_id, .. })
-                    if doc_id == doc
-            ),
-            "{case}: {result:?}"
-        ),
-        other => panic!("unexpected modeled outcome {other}"),
+fn decided(doc: &str, result: &Result<(), ConfigClientError>) -> &'static str {
+    match result {
+        Ok(()) => "staged",
+        Err(ConfigClientError::OwnerStagedRelationshipDenied { doc_id, .. }) if doc_id == doc => {
+            "denied"
+        }
+        Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { doc_id, .. })
+            if doc_id == doc =>
+        {
+            "unmanaged"
+        }
+        Err(ConfigClientError::OwnerStagedTargetRefused { doc_id, .. }) if doc_id == doc => {
+            "out_of_kind"
+        }
+        Err(error) => panic!("unexpected owner-staged result for {doc}: {error:#}"),
     }
 }

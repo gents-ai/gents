@@ -1,46 +1,33 @@
 //! Lean `Identity.OwnerStaged.overHttp` and `applyOverHttp` over real signed
-//! HTTP: a trial home serves the owner-staged route on its loopback endpoint,
-//! as the serving runtime and offline commands do, and decides each modeled
+//! HTTP: a node serves the owner-staged route on its loopback endpoint, as the
+//! serving runtime and offline commands do, and decides each modeled
 //! requester's command exactly as that requester's embedded transaction does.
 
 use std::sync::{Arc, Mutex};
 
+use gents_lean_vocab::families::{
+    owner_staged_http_apply, owner_staged_pairing, owner_staged_relations,
+    owner_staged_route_commands,
+};
 use gents_protocol::owner_staged::{
     OwnerStagedChange, OwnerStagedCommand, OWNER_STAGED_COMMAND_VERSION, OWNER_STAGED_PATH,
 };
 use reqwest::StatusCode;
 use serde_json::Value;
 
-use crate::eval::runner::embedded::EmbeddedHome;
 use crate::config_client::{
-    ConfigAccess, ConfigClientError, ConfigRelationshipGrant, GraphqlEndpoint, PairingObservation,
-    PairingReadReason,
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, ConfigRelationshipGrant, GraphqlEndpoint,
+    OwnerStagedRoute, PairingObservation, PairingReadReason,
 };
 use crate::identity::NodeIdentity;
 
-#[derive(serde::Deserialize)]
-struct Generated {
-    pairing: Vec<Value>,
-    commands: Vec<Value>,
-    http_apply: Vec<Value>,
-}
-
-fn generated() -> Generated {
-    let stdout = gents_lean_contract::run_prepared_generator(
-        &gents_lean_contract::proofs_dir().unwrap(),
-        "Proofs.Conformance.OwnerStagedRoute:olean",
-        "Proofs/Conformance/OwnerStagedRoute.lean",
-    )
-    .unwrap();
-    serde_json::from_str(stdout.trim()).unwrap()
-}
-
-/// A runtime home whose Node is owned by `user` and administered by `admin`,
+/// A runtime node whose Node row is owned by `user` and administered by `admin`,
 /// another Node administered by `other_admin`, and three pairing
 /// observations: runtime-owned, foreign-owned and missing. Every requester is
 /// a managed Agent so its embedded request can be signed too.
 struct Fixture {
-    home: EmbeddedHome,
+    node: Arc<defra_node::Node>,
+    runtime: Arc<dyn NodeIdentity>,
     user: Arc<dyn NodeIdentity>,
     admin: Arc<dyn NodeIdentity>,
     outsider: Arc<dyn NodeIdentity>,
@@ -50,7 +37,7 @@ struct Fixture {
     foreign: String,
     missing: String,
     graphql: String,
-    _keys: tempfile::TempDir,
+    keys: tempfile::TempDir,
 }
 
 fn did(value: &str) -> identity::Did {
@@ -74,23 +61,40 @@ fn pairing(author: &str, peer: &str) -> String {
 
 impl Fixture {
     async fn start() -> Self {
-        let home = EmbeddedHome::create_temp("owner-staged-route")
-            .await
-            .unwrap();
         let keys = tempfile::tempdir().unwrap();
-        let runtime = home.identity.clone();
+        let runtime: Arc<dyn NodeIdentity> = Arc::new(
+            crate::identity::KeyIdentity::load_or_create(keys.path().join("runtime.key"), None)
+                .unwrap(),
+        );
         let runtime_did = did(runtime.did());
-        let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let route = OwnerStagedRoute::new();
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .enable_signing()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_owner(runtime.did().to_owned())
+                .with_http(
+                    defra_node::HttpConfig::with_listener(listener)
+                        .unwrap()
+                        .with_extra_routes(route.router()),
+                )
+                .build()
+                .await
+                .unwrap(),
+        );
+        route.serve(&node, runtime.clone());
+        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
         let managed = || -> Arc<dyn NodeIdentity> {
-            let binding =
-                crate::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+            let binding = crate::identity::provision_agent_identity(runtime.as_ref()).unwrap();
             crate::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap()
         };
         let (user, admin, outsider, other_admin, target) =
             (managed(), managed(), managed(), managed(), managed());
         let stranger: Arc<dyn NodeIdentity> = Arc::new(
-            crate::KeyIdentity::load_or_create(keys.path().join("stranger.key"), None).unwrap(),
+            crate::identity::KeyIdentity::load_or_create(keys.path().join("stranger.key"), None)
+                .unwrap(),
         );
         let runtime_access = ConfigAccess::local_as(node.clone(), runtime_did.clone());
         for actor in [&user, &admin, &outsider, &other_admin, &target, &stranger] {
@@ -178,7 +182,8 @@ impl Fixture {
             .unwrap()
             .expect("missing observation ID");
         Self {
-            home,
+            node,
+            runtime,
             user,
             admin,
             outsider,
@@ -188,7 +193,7 @@ impl Fixture {
             foreign,
             missing,
             graphql,
-            _keys: keys,
+            keys,
         }
     }
 
@@ -225,7 +230,7 @@ impl Fixture {
     }
 
     async fn readable(&self) -> Vec<String> {
-        let response = ConfigAccess::local_as(self.home.node.clone(), self.target.clone())
+        let response = ConfigAccess::local_as(self.node.clone(), self.target.clone())
             .execute("{ PeerPairingDesired { _docID } }")
             .await
             .unwrap();
@@ -298,10 +303,147 @@ impl Fixture {
         doc: &str,
         grant: bool,
     ) -> Result<(), ConfigClientError> {
-        ConfigAccess::local_managed_agent(self.home.node.clone(), did(key.did()), key)?
+        ConfigAccess::local_managed_agent(self.node.clone(), did(key.did()), key)?
             .request_owner_staged(&self.change(doc), grant)
             .await
     }
+
+    async fn embedded_outcome(&self, key: &dyn NodeIdentity, doc: &str) -> (&'static str, bool) {
+        let result = self.embedded(key, doc, true).await;
+        let outcome = error_outcome(&result, doc);
+        let staged = self.readable().await == vec![doc.to_owned()];
+        if staged {
+            self.embedded(key, doc, false).await.unwrap();
+        }
+        (outcome, staged)
+    }
+
+    async fn direct(&self, key: &dyn NodeIdentity, change: &OwnerStagedChange) -> bool {
+        let client = self.client(key);
+        let direct = client
+            .transact_write("test.owner_staged_route.direct", |txn| {
+                Box::pin(native_change(txn, change, false))
+            })
+            .await
+            .is_ok();
+        if direct {
+            client
+                .transact_write("test.owner_staged_route.direct_undo", |txn| {
+                    Box::pin(native_change(txn, change, true))
+                })
+                .await
+                .unwrap();
+        }
+        direct
+    }
+
+    async fn reads(&self, subject: &identity::Did, collection: &str, doc: &str) -> bool {
+        let response = ConfigAccess::local_as(self.node.clone(), subject.clone())
+            .execute(&format!("{{ {collection} {{ _docID }} }}"))
+            .await
+            .unwrap();
+        gents_protocol::graphql::graphql_rows_from_response(&response, collection)
+            .iter()
+            .any(|row| row["_docID"].as_str() == Some(doc))
+    }
+}
+
+async fn native_change(
+    txn: &ConfigApplyTxn<'_>,
+    change: &OwnerStagedChange,
+    delete: bool,
+) -> Result<(), ConfigClientError> {
+    let actor = |collection: &'static str, doc: &str, relation: &'static str, target: &str| {
+        let target = did(target);
+        let doc = doc.to_owned();
+        async move {
+            if delete {
+                txn.delete_actor_relationship(collection, &doc, relation, &target)
+                    .await
+            } else {
+                txn.add_actor_relationship(collection, &doc, relation, &target)
+                    .await
+            }
+        }
+    };
+    match change {
+        OwnerStagedChange::EventCursorWriter {
+            cursor_doc_id,
+            agent_did,
+        } => actor("EventSourceCursor", cursor_doc_id, "writer", agent_did).await,
+        OwnerStagedChange::PlacementReader {
+            placement_doc_id,
+            reader_did,
+        } => {
+            actor(
+                "RepositoryPlacement",
+                placement_doc_id,
+                "reader",
+                reader_did,
+            )
+            .await
+        }
+        OwnerStagedChange::PairingReader {
+            observation,
+            doc_id,
+            reason,
+            reader_did,
+        } => {
+            actor(
+                observation.collection(),
+                doc_id,
+                super::super::pairing_reader::reader_relation(*reason),
+                reader_did,
+            )
+            .await
+        }
+        OwnerStagedChange::WorkspaceSelection {
+            agent_doc_id,
+            callback_doc_id,
+        } => {
+            let target = ("configuration", callback_doc_id.as_str(), "reader");
+            if delete {
+                txn.delete_entity_set_relationship(
+                    "Agent",
+                    agent_doc_id,
+                    "workspace_selected_by",
+                    target.0,
+                    target.1,
+                    target.2,
+                )
+                .await
+            } else {
+                txn.add_entity_set_relationship(
+                    "Agent",
+                    agent_doc_id,
+                    "workspace_selected_by",
+                    target.0,
+                    target.1,
+                    target.2,
+                )
+                .await
+            }
+        }
+    }
+}
+
+fn fixture_callback_agents(
+    _node_did: &str,
+    callback: &Value,
+) -> anyhow::Result<std::collections::BTreeSet<String>> {
+    let agents = &callback["handler"]["workspace_agents"];
+    Ok(["writer_agent_did", "integrator_agent_did"]
+        .into_iter()
+        .filter_map(|field| agents[field].as_str())
+        .chain(
+            agents["readers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|reader| reader["agent_did"].as_str()),
+        )
+        .map(str::to_owned)
+        .collect())
 }
 
 fn route_outcome(status: StatusCode, body: &Value) -> &'static str {
@@ -331,38 +473,47 @@ fn error_outcome(result: &Result<(), ConfigClientError>, doc: &str) -> &'static 
     }
 }
 
+/// Lean `Conformance.OwnerStaged.pairing` with `http` answered by a signed
+/// command to the served route, and `Conformance.OwnerStaged.routeCommands`.
 #[tokio::test]
 async fn owner_staged_route_replays_generated_cases_over_signed_http() {
-    let generated = generated();
-    assert_eq!(generated.pairing.len(), 12);
     let f = Fixture::start().await;
     let mut denied_bodies: Vec<(String, StatusCode, Value)> = Vec::new();
-    for case in &generated.pairing {
-        let key = f.requester(case["requester"].as_str().unwrap()).clone();
-        let doc = f.document(case["document"].as_str().unwrap()).to_owned();
-        let staged = case["staged"].as_bool().unwrap();
-        assert!(f.readable().await.is_empty(), "{case}");
+    for case in owner_staged_pairing::cases() {
+        let input = &case.input;
+        let key = f.requester(&input.requester).clone();
+        let doc = f.document(&input.document).to_owned();
+        assert!(f.readable().await.is_empty(), "{input:?}");
+        let direct = f.direct(key.as_ref(), &f.change(&doc)).await;
+        let (outcome, staged) = f.embedded_outcome(key.as_ref(), &doc).await;
         let (status, body) = f
             .post(
                 &f.command(key.as_ref(), &doc, true).await,
                 Some(key.as_ref()),
             )
             .await;
-        assert_eq!(route_outcome(status, &body), case["http"], "{case}: {body}");
-        assert_eq!(f.readable().await == vec![doc.clone()], staged, "{case}");
-        if case["http"] == "denied" {
-            denied_bodies.push((case["requester"].as_str().unwrap().to_owned(), status, body));
+        let http = route_outcome(status, &body);
+        let readable = f.readable().await == vec![doc.clone()];
+        assert_eq!(readable, http == "staged", "{input:?}: {body}");
+        if http == "denied" {
+            denied_bodies.push((input.requester.clone(), status, body));
         }
-        if staged {
+        if readable {
             let (status, body) = f
                 .post(
                     &f.command(key.as_ref(), &doc, false).await,
                     Some(key.as_ref()),
                 )
                 .await;
-            assert_eq!(status, StatusCode::OK, "{case}: {body}");
-            assert!(f.readable().await.is_empty(), "{case}");
+            assert_eq!(status, StatusCode::OK, "{input:?}: {body}");
+            assert!(f.readable().await.is_empty(), "{input:?}");
         }
+        case.check(owner_staged_pairing::PairingOutput {
+            direct,
+            staged,
+            outcome: outcome.to_owned(),
+            http: http.to_owned(),
+        });
     }
     // No existence oracle: a denied requester gets the identical response for
     // the runtime-owned, missing and foreign observations.
@@ -382,34 +533,30 @@ async fn owner_staged_route_replays_generated_cases_over_signed_http() {
     // `decideCommand`: the command must address this endpoint, the bearer
     // must be the signer and the signature valid.
     let user = f.user.clone();
-    for case in &generated.commands {
+    for case in owner_staged_route_commands::cases() {
+        let input = &case.input;
         let mut command = f.command(user.as_ref(), &f.route, true).await;
-        if !case["authorityMatches"].as_bool().unwrap() {
+        if !input.authority_matches {
             command.audience = "attacker.example".into();
         }
-        if !case["signatureValid"].as_bool().unwrap() {
+        if !input.signature_valid {
             command.sig[0] ^= 1;
         } else {
             command.sig = user.sign(&command.signing_payload()).await.unwrap();
         }
-        let bearer = match case["caller"].as_str().unwrap() {
+        let bearer = match input.caller.as_str() {
             "signer" => Some(user.as_ref()),
             "other" => Some(f.admin.as_ref()),
             "anonymous" => None,
             other => panic!("unknown modeled caller {other}"),
         };
         let (status, body) = f.post(&command, bearer).await;
-        assert_eq!(
-            route_outcome(status, &body),
-            case["decision"],
-            "{case}: {body}"
-        );
-        let staged = case["decision"] == "staged";
-        assert_eq!(
-            f.readable().await == vec![f.route.clone()],
-            staged,
-            "{case}"
-        );
+        let decision = route_outcome(status, &body);
+        let staged = f.readable().await == vec![f.route.clone()];
+        assert_eq!(staged, decision == "staged", "{input:?}: {body}");
+        case.check(owner_staged_route_commands::CommandOutput {
+            decision: decision.to_owned(),
+        });
         if staged {
             let (status, _) = f
                 .post(
@@ -449,23 +596,26 @@ async fn owner_staged_route_replays_generated_cases_over_signed_http() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(f.readable().await.is_empty());
-    f.home.node.shutdown().await.unwrap();
+    f.node.shutdown().await.unwrap();
 }
 
-/// `outcome_is_transport_independent`: for every modeled requester and
-/// observation, the client's request over the runtime route and the
+/// Lean `Conformance.OwnerStaged.pairing` with `http` answered through the
+/// client's route request (`outcome_is_transport_independent`): for every
+/// modeled requester and observation, the client's request over the runtime
+/// route and the
 /// requester's embedded transaction return the same error variant and leave
 /// the same reader.
 #[tokio::test]
 async fn owner_staged_outcomes_agree_across_embedded_and_http() {
-    let generated = generated();
     let f = Fixture::start().await;
-    for case in &generated.pairing {
-        let key = f.requester(case["requester"].as_str().unwrap()).clone();
-        let doc = f.document(case["document"].as_str().unwrap()).to_owned();
+    for case in owner_staged_pairing::cases() {
+        let input = &case.input;
+        let key = f.requester(&input.requester).clone();
+        let doc = f.document(&input.document).to_owned();
+        let direct = f.direct(key.as_ref(), &f.change(&doc)).await;
         let mut observed = Vec::new();
         for over_http in [false, true] {
-            assert!(f.readable().await.is_empty(), "{case}");
+            assert!(f.readable().await.is_empty(), "{input:?}");
             let result = f.request(over_http, key.as_ref(), &doc, true).await;
             let outcome = error_outcome(&result, &doc);
             let readable = f.readable().await == vec![doc.clone()];
@@ -476,25 +626,28 @@ async fn owner_staged_outcomes_agree_across_embedded_and_http() {
             }
             observed.push((outcome, readable));
         }
-        assert_eq!(observed[0], observed[1], "{case}");
-        assert_eq!(observed[0].0, case["outcome"], "{case}");
-        assert_eq!(observed[0].1, case["staged"].as_bool().unwrap(), "{case}");
+        assert_eq!(observed[0], observed[1], "{input:?}");
+        case.check(owner_staged_pairing::PairingOutput {
+            direct,
+            staged: observed[0].1,
+            outcome: observed[0].0.to_owned(),
+            http: observed[1].0.to_owned(),
+        });
     }
-    f.home.node.shutdown().await.unwrap();
+    f.node.shutdown().await.unwrap();
 }
 
-/// `applyOverHttp`: in a client's HTTP configuration transaction a refused
-/// revocation aborts the apply before its documents commit, and a refused
-/// grant is the apply's `CommittedRelationshipsIncomplete` error after they
-/// commit, with that grant pending.
+/// Lean `Conformance.OwnerStaged.httpApply`: in a client's HTTP configuration
+/// transaction a refused revocation aborts the apply before its documents
+/// commit, and a refused grant is the apply's `CommittedRelationshipsIncomplete`
+/// error after they commit, with that grant pending.
 #[tokio::test]
 async fn http_apply_orders_revocations_before_and_grants_after_commit() {
-    let generated = generated();
-    assert_eq!(generated.http_apply.len(), 12);
     let f = Fixture::start().await;
-    for case in &generated.http_apply {
-        let key = f.requester(case["requester"].as_str().unwrap()).clone();
-        let direction = case["direction"].as_str().unwrap();
+    for case in owner_staged_http_apply::cases() {
+        let input = &case.input;
+        let key = f.requester(&input.requester).clone();
+        let direction = input.direction.as_str();
         let grant = match direction {
             "grant" => true,
             "revoke" | "replan" => false,
@@ -564,26 +717,25 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
                 pending,
                 source,
             }) => {
-                assert_eq!(creator, key.did(), "{case}");
+                assert_eq!(creator, key.did(), "{input:?}");
                 assert_eq!(
                     pending,
                     &vec![ConfigRelationshipGrant::OwnerStaged {
                         change: f.change(&f.route)
                     }],
-                    "{case}"
+                    "{input:?}"
                 );
                 assert!(
                     matches!(
                         source.as_ref(),
                         ConfigClientError::OwnerStagedRelationshipDenied { .. }
                     ),
-                    "{case}: {source:?}"
+                    "{input:?}: {source:?}"
                 );
                 "committed_incomplete"
             }
-            Err(error) => panic!("{case}: unexpected apply error {error:#}"),
+            Err(error) => panic!("{input:?}: unexpected apply error {error:#}"),
         };
-        assert_eq!(result, case["result"], "{case}");
         // PLAN commits nothing; WRITE runs only after its revocations were
         // sent, so a refused revocation aborts before any write attempt. Each
         // pass writes its own marker row: only the committing pass's row
@@ -592,7 +744,7 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
         assert_eq!(
             passes,
             if grant || result == "aborted" { 1 } else { 2 },
-            "{case}"
+            "{input:?}"
         );
         let mut present = Vec::new();
         for pass in 1..=passes {
@@ -606,14 +758,16 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
                 present.push(pass);
             }
         }
-        let expected = if case["committed"].as_bool().unwrap() {
-            vec![passes]
-        } else {
-            Vec::new()
-        };
-        assert_eq!(present, expected, "{case}");
+        assert!(
+            present.is_empty() || present == vec![passes],
+            "{input:?}: {present:?}"
+        );
         let readable = f.readable().await == vec![f.route.clone()];
-        assert_eq!(readable, case["readable"].as_bool().unwrap(), "{case}");
+        case.check(owner_staged_http_apply::ApplyOutput {
+            result: result.to_owned(),
+            committed: !present.is_empty(),
+            readable,
+        });
         if readable {
             f.client(f.user.as_ref())
                 .request_owner_staged(&f.change(&f.route), false)
@@ -621,15 +775,15 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
                 .unwrap();
         }
     }
-    f.home.node.shutdown().await.unwrap();
+    f.node.shutdown().await.unwrap();
 }
 
 async fn runtime_node_doc(f: &Fixture) -> String {
-    let runtime = ConfigAccess::local_as(f.home.node.clone(), did(f.home.identity.did()));
+    let runtime = ConfigAccess::local_as(f.node.clone(), did(f.runtime.did()));
     let response = runtime
         .execute(&format!(
             r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{_docID}} }}"#,
-            f.home.identity.did()
+            f.runtime.did()
         ))
         .await
         .unwrap();
@@ -680,10 +834,10 @@ async fn staged_grant(
     let result = match transport {
         "http" => f.client(key).request_owner_staged(change, true).await,
         "embedded" | "no_proof" => {
-            let access = ConfigAccess::local_as(f.home.node.clone(), did(key.did()));
+            let access = ConfigAccess::local_as(f.node.clone(), did(key.did()));
             let access = if transport == "embedded" {
                 access.with_runtime_agent_proof(crate::identity::RuntimeAgentProof::new(
-                    f.home.identity.clone(),
+                    f.runtime.clone(),
                 ))
             } else {
                 access
@@ -704,7 +858,7 @@ async fn staged_grant(
 }
 
 async fn genuine_agent(f: &Fixture, runtime_access: &ConfigAccess) -> Arc<dyn NodeIdentity> {
-    let runtime = f.home.identity.clone();
+    let runtime = f.runtime.clone();
     let binding = crate::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     agent_row(
         runtime_access,
@@ -739,7 +893,8 @@ async fn agent_row(
     Ok(gents_protocol::graphql::extract_mutation_doc_id(&created, "Agent").unwrap())
 }
 
-/// Lean `Identity.OwnerStaged.owner_rows_follow_the_derivation_proof`, replayed
+/// Lean `Conformance.OwnerStaged.relations` for the Agent-row paths
+/// (`Identity.OwnerStaged.owner_rows_follow_the_derivation_proof`), replayed
 /// on real Agent rows and placements over signed HTTP and embedded: the
 /// runtime never stages as a DID a forged row names, as a foreign DID under a
 /// genuine nonce, or as any Agent without its derivation proof; a genuine
@@ -748,13 +903,14 @@ async fn agent_row(
 /// replicated merge: here its second local write is refused.
 #[tokio::test]
 async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().owner_staged_relation_cases;
     let f = Fixture::start().await;
-    let runtime = f.home.identity.clone();
-    let runtime_access = ConfigAccess::local_as(f.home.node.clone(), did(runtime.did()));
+    let runtime = f.runtime.clone();
+    let runtime_access = ConfigAccess::local_as(f.node.clone(), did(runtime.did()));
     let node_doc = runtime_node_doc(&f).await;
     let key = |name: &str| -> Arc<dyn NodeIdentity> {
-        Arc::new(crate::KeyIdentity::load_or_create(f._keys.path().join(name), None).unwrap())
+        Arc::new(
+            crate::identity::KeyIdentity::load_or_create(f.keys.path().join(name), None).unwrap(),
+        )
     };
     let (victim, foreign) = (key("victim.key"), key("foreign.key"));
     for actor in [&victim, &foreign] {
@@ -799,30 +955,19 @@ async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
             .is_err(),
         "a second local row for a genuine Agent must be refused by its unique index"
     );
-    let mut replayed = 0;
-    for case in cases.iter().filter(|case| {
-        matches!(
-            case["path"].as_str(),
-            Some(
-                "forged_agent_row"
-                    | "genuine_nonce_foreign_did"
-                    | "no_proof"
-                    | "derived_agent_row"
-                    | "duplicate_agent_row"
-            )
-        )
-    }) {
-        assert_eq!(case["requester"], "admin", "{case}");
-        let owner = match case["path"].as_str().unwrap() {
+    for case in owner_staged_relations::cases() {
+        let input = &case.input;
+        let owner = match input.path.as_str() {
             "forged_agent_row" => &victim,
             "genuine_nonce_foreign_did" => &foreign,
             "no_proof" | "derived_agent_row" => &agent,
-            _ => {
-                assert_eq!(case["outcome"], "unmanaged", "{case}");
-                continue;
-            }
+            _ => continue,
         };
-        let transports: &[&str] = if case["path"] == "no_proof" {
+        let requester = match input.requester.as_str() {
+            "admin" => f.admin.as_ref(),
+            other => panic!("unknown modeled requester {other}"),
+        };
+        let transports: &[&str] = if input.path == "no_proof" {
             &["no_proof"]
         } else {
             &["http", "embedded"]
@@ -832,7 +977,7 @@ async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
                 &f.client(owner.as_ref()),
                 "RepositoryPlacement",
                 serde_json::json!({
-                    "repository_id": format!("{}-{transport}", case["path"].as_str().unwrap()),
+                    "repository_id": format!("{}-{transport}", input.path),
                     "node_did": runtime.did(),
                     "host_path": "/tmp/repository",
                     "enabled": true,
@@ -845,44 +990,40 @@ async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
                 placement_doc_id: placement.clone(),
                 reader_did: f.target.to_string(),
             };
-            let outcome = staged_grant(&f, f.admin.as_ref(), &change, transport).await;
-            assert_eq!(outcome, case["outcome"], "{case} {transport}");
-            let response = ConfigAccess::local_as(f.home.node.clone(), f.target.clone())
-                .execute("{ RepositoryPlacement { _docID } }")
-                .await
-                .unwrap();
-            let reads = gents_protocol::graphql::graphql_rows_from_response(
-                &response,
-                "RepositoryPlacement",
-            )
-            .iter()
-            .any(|row| row["_docID"].as_str() == Some(placement.as_str()));
-            assert_eq!(
-                reads,
-                case["staged"].as_bool().unwrap(),
-                "{case} {transport}"
-            );
-            replayed += 1;
+            let direct = f.direct(requester, &change).await;
+            let outcome = staged_grant(&f, requester, &change, transport).await;
+            let staged = f.reads(&f.target, "RepositoryPlacement", &placement).await;
+            case.check(owner_staged_relations::RelationOutput {
+                direct,
+                staged,
+                outcome: outcome.to_owned(),
+            });
         }
     }
-    assert_eq!(replayed, 7);
-    f.home.node.shutdown().await.unwrap();
+    f.node.shutdown().await.unwrap();
 }
 
-/// Lean `Identity.OwnerStaged.out_of_kind_targets_are_refused` and the
-/// generated target cases, replayed on real runtime-owned documents over
-/// signed HTTP and in the requester's embedded transaction: a cursor writer
-/// must be an Agent the runtime controls, a placement reader must be declared
-/// by the placement, a workspace selection must name a Callback bound to the
-/// Agent (its configuration selects the Agent), and a writer of the cursor (document `update` without Node
+/// Lean `Conformance.OwnerStaged.relations` for the target paths
+/// (`Identity.OwnerStaged.out_of_kind_targets_are_refused`), replayed on real
+/// runtime-owned documents over signed HTTP and in the requester's embedded
+/// transaction: a cursor writer must be an Agent the runtime controls, a
+/// placement reader must be declared by the placement, a workspace selection
+/// must name a Callback bound to the Agent (its configuration selects the
+/// Agent), and a writer of the cursor (document `update` without Node
 /// authority) is denied.
 #[tokio::test]
 async fn owner_staged_targets_follow_their_operation_kind() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().owner_staged_relation_cases;
     let f = Fixture::start().await;
-    let runtime = f.home.identity.clone();
+    crate::node_extension::attach_all(
+        &f.node,
+        &crate::node_extension::Extensions::of(Arc::new(
+            crate::config_client::CallbackAgentSelection(fixture_callback_agents),
+        )),
+    )
+    .unwrap();
+    let runtime = f.runtime.clone();
     let runtime_did = did(runtime.did());
-    let runtime_access = ConfigAccess::local_as(f.home.node.clone(), runtime_did.clone());
+    let runtime_access = ConfigAccess::local_as(f.node.clone(), runtime_did.clone());
     let node_doc = runtime_node_doc(&f).await;
     // The cursor's current writer and the Agent it is rebound to.
     let writer = genuine_agent(&f, &runtime_access).await;
@@ -969,52 +1110,110 @@ async fn owner_staged_targets_follow_their_operation_kind() {
             .await,
         );
     }
-    let mut replayed = 0;
+    for callback in &callbacks {
+        crate::test_support::relationships::actor_in_txn(
+            &runtime_access,
+            "Callback",
+            callback,
+            "reader",
+            &f.target,
+            false,
+        )
+        .await
+        .unwrap();
+    }
+    let outsider = did(f.outsider.did());
+    let sibling_did = did(sibling.did());
     for (transport, cursor) in ["http", "embedded"].into_iter().zip(&documents) {
-        for case in cases.iter() {
-            let path = case["path"].as_str().unwrap();
-            let change = match path {
-                "event_cursor_rebind" => OwnerStagedChange::EventCursorWriter {
-                    cursor_doc_id: cursor.clone(),
-                    agent_did: sibling.did().to_owned(),
-                },
-                "event_cursor_outsider_writer" => OwnerStagedChange::EventCursorWriter {
-                    cursor_doc_id: cursor.clone(),
-                    agent_did: f.outsider.did().to_owned(),
-                },
-                "declared_placement_readers" => OwnerStagedChange::PlacementReader {
-                    placement_doc_id: placement.clone(),
-                    reader_did: f.target.to_string(),
-                },
-                "placement_undeclared_reader" => OwnerStagedChange::PlacementReader {
-                    placement_doc_id: placement.clone(),
-                    reader_did: f.outsider.did().to_owned(),
-                },
-                "workspace_selection" => OwnerStagedChange::WorkspaceSelection {
-                    agent_doc_id: sibling_doc.clone(),
-                    callback_doc_id: callbacks[0].clone(),
-                },
-                "workspace_unbound_callback" => OwnerStagedChange::WorkspaceSelection {
-                    agent_doc_id: sibling_doc.clone(),
-                    callback_doc_id: callbacks[1].clone(),
-                },
-                _ => continue,
+        for case in owner_staged_relations::cases() {
+            let input = &case.input;
+            let (change, subject, collection, doc) = match input.path.as_str() {
+                "event_cursor_rebind" => (
+                    OwnerStagedChange::EventCursorWriter {
+                        cursor_doc_id: cursor.clone(),
+                        agent_did: sibling.did().to_owned(),
+                    },
+                    &sibling_did,
+                    "EventSourceCursor",
+                    cursor,
+                ),
+                "event_cursor_outsider_writer" => (
+                    OwnerStagedChange::EventCursorWriter {
+                        cursor_doc_id: cursor.clone(),
+                        agent_did: f.outsider.did().to_owned(),
+                    },
+                    &outsider,
+                    "EventSourceCursor",
+                    cursor,
+                ),
+                "declared_placement_readers" => (
+                    OwnerStagedChange::PlacementReader {
+                        placement_doc_id: placement.clone(),
+                        reader_did: f.target.to_string(),
+                    },
+                    &f.target,
+                    "RepositoryPlacement",
+                    &placement,
+                ),
+                "placement_undeclared_reader" => (
+                    OwnerStagedChange::PlacementReader {
+                        placement_doc_id: placement.clone(),
+                        reader_did: f.outsider.did().to_owned(),
+                    },
+                    &outsider,
+                    "RepositoryPlacement",
+                    &placement,
+                ),
+                "workspace_selection" => (
+                    OwnerStagedChange::WorkspaceSelection {
+                        agent_doc_id: sibling_doc.clone(),
+                        callback_doc_id: callbacks[0].clone(),
+                    },
+                    &f.target,
+                    "Agent",
+                    &sibling_doc,
+                ),
+                "workspace_unbound_callback" => (
+                    OwnerStagedChange::WorkspaceSelection {
+                        agent_doc_id: sibling_doc.clone(),
+                        callback_doc_id: callbacks[1].clone(),
+                    },
+                    &f.target,
+                    "Agent",
+                    &sibling_doc,
+                ),
+                "forged_agent_row"
+                | "genuine_nonce_foreign_did"
+                | "duplicate_agent_row"
+                | "no_proof"
+                | "derived_agent_row" => continue,
+                other => panic!("unknown modeled path {other}"),
             };
-            let requester: &dyn NodeIdentity = match case["requester"].as_str().unwrap() {
+            let requester: &dyn NodeIdentity = match input.requester.as_str() {
                 "user" => f.user.as_ref(),
                 "outsider" => f.outsider.as_ref(),
                 "agent" => writer.as_ref(),
                 other => panic!("unknown modeled requester {other}"),
             };
+            assert!(
+                !f.reads(subject, collection, doc).await,
+                "{input:?} {transport}"
+            );
+            let direct = f.direct(requester, &change).await;
             let outcome = staged_grant(&f, requester, &change, transport).await;
-            assert_eq!(outcome, case["outcome"], "{case} {transport}");
+            let staged = f.reads(subject, collection, doc).await;
+            case.check(owner_staged_relations::RelationOutput {
+                direct,
+                staged,
+                outcome: outcome.to_owned(),
+            });
             if outcome == "staged" {
                 let revoked = if transport == "http" {
                     f.client(requester)
                         .request_owner_staged(&change, false)
                         .await
                 } else {
-                    ConfigAccess::local_as(f.home.node.clone(), did(requester.did()))
+                    ConfigAccess::local_as(f.node.clone(), did(requester.did()))
                         .with_runtime_agent_proof(crate::identity::RuntimeAgentProof::new(
                             runtime.clone(),
                         ))
@@ -1023,11 +1222,9 @@ async fn owner_staged_targets_follow_their_operation_kind() {
                 };
                 revoked.unwrap();
             }
-            replayed += 1;
         }
     }
-    assert_eq!(replayed, 2 * 10);
-    f.home.node.shutdown().await.unwrap();
+    f.node.shutdown().await.unwrap();
 }
 
 /// `Identity.OwnerStaged.applyOverHttp` with `planDiscarded = false`: when the
@@ -1045,27 +1242,26 @@ async fn unconfirmed_plan_discard_revokes_nothing() {
     let client = f.client(f.admin.as_ref());
     let reached = Arc::new(tokio::sync::Notify::new());
     let cleanup = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let applied =
-        crate::config_client::ConfigApplyTxn::with_rollback_failure_retry_boundary(
-            reached,
-            cleanup,
-            client.transact_write("test.owner_staged_route.unconfirmed", |txn| {
-                let (passes, change) = (&passes, f.change(&f.route));
-                Box::pin(async move {
-                    txn.authorize_planned_replay();
-                    passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    txn.request_owner_staged(&change, false).await
-                })
-            }),
-        )
-        .await;
+    let applied = crate::config_client::ConfigApplyTxn::with_rollback_failure_retry_boundary(
+        reached,
+        cleanup,
+        client.transact_write("test.owner_staged_route.unconfirmed", |txn| {
+            let (passes, change) = (&passes, f.change(&f.route));
+            Box::pin(async move {
+                txn.authorize_planned_replay();
+                passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                txn.request_owner_staged(&change, false).await
+            })
+        }),
+    )
+    .await;
     assert!(
         matches!(applied, Err(ConfigClientError::OwnerStagedPlanUnconfirmed)),
         "{applied:?}"
     );
     assert_eq!(passes.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(f.readable().await, vec![f.route.clone()]);
-    f.home.node.shutdown().await.unwrap();
+    f.node.shutdown().await.unwrap();
 }
 
 /// A PLAN pass that dispatched a client-signed graph reruns only with its
@@ -1105,7 +1301,7 @@ async fn unauthorized_signed_plan_is_not_rerun() {
     );
     assert_eq!(passes.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(f.readable().await, vec![f.route.clone()]);
-    f.home.node.shutdown().await.unwrap();
+    f.node.shutdown().await.unwrap();
 }
 
 /// The route decides the signer's authority before it consumes the command's
@@ -1115,7 +1311,7 @@ async fn unauthorized_signed_plan_is_not_rerun() {
 #[tokio::test]
 async fn unauthorized_signed_command_writes_no_nonce() {
     let f = Fixture::start().await;
-    let runtime = ConfigAccess::local_as(f.home.node.clone(), did(f.home.identity.did()));
+    let runtime = ConfigAccess::local_as(f.node.clone(), did(f.runtime.did()));
     let nonces = || async {
         let response = runtime
             .execute("{ EnrollmentOperatorNonce { _docID } }")
@@ -1137,5 +1333,5 @@ async fn unauthorized_signed_command_writes_no_nonce() {
     assert_eq!(nonces().await, before + 1);
     let (status, body) = f.post(&command, Some(f.admin.as_ref())).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "replayed nonce: {body}");
-    f.home.node.shutdown().await.unwrap();
+    f.node.shutdown().await.unwrap();
 }
