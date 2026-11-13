@@ -311,6 +311,10 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         http_sees
     };
     for receiver_case in &receiver_cases {
+        assert!(
+            receiver_case.input.receiver_hosts_node,
+            "the observed receiver is the receiving node's own key"
+        );
         let observed = match (
             receiver_case.input.sender_granted,
             receiver_case.input.delivered,

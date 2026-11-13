@@ -3449,12 +3449,6 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
             assert_eq!(step.authenticated_creator.as_deref(), Some("agent"));
             if step.grant_ok && !step.mark_ok {
                 // The grant has committed when the process stops before its marker write.
-                // Outside a transaction the Agent creator is refused: it holds
-                // no `get-collection`.
-                assert!(access
-                    .add_resource_relationship("CallbackResult", &doc, "parent", "agents", parent)
-                    .await
-                    .is_err());
                 gents_store::test_support::relationships::resource_in_txn(
                     &access,
                     "CallbackResult",

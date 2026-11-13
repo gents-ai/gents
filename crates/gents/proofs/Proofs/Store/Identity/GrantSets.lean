@@ -349,7 +349,8 @@ Agent that holds none of the baseline, so a never-published or tampered Agent
 is still refused. -/
 def completeBaseline (o : AgentObservation) (installed : List String) : List String :=
   if o.live && installed.any (GrantSet.agentBaseline.permissions.contains ·) then
-    installed ++ GrantSet.agentBaseline.permissions.filter (!installed.contains ·)
+    GrantSet.agentBaseline.permissions ++
+      installed.filter (!GrantSet.agentBaseline.permissions.contains ·)
   else installed
 
 theorem widened_baseline_blocks_actorless_reconcile :
@@ -373,8 +374,8 @@ theorem completion_adds_only_baseline (o : AgentObservation) (installed : List S
   unfold completeBaseline at h
   split at h
   · rcases List.mem_append.mp h with h | h
-    · exact Or.inl h
-    · exact Or.inr (by simpa using (List.mem_filter.mp h).1)
+    · exact Or.inr (by simpa using h)
+    · exact Or.inl (List.mem_filter.mp h).1
   · exact Or.inl h
 
 theorem enrolled_user_publishes_and_disables_agent :
