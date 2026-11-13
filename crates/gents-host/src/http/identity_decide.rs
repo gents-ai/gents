@@ -248,6 +248,20 @@ mod tests {
     async fn build_local_acp_from_lean_case(
         case: &decide::PermissionInput,
     ) -> anyhow::Result<LocalDocumentACP> {
+        assert!(
+            case.permission.ends_with(".read"),
+            "case {:?}: only .read permission fixtures are supported by this ACP witness, got {:?}",
+            case.name,
+            case.permission
+        );
+        assert!(
+            case.permission
+                .starts_with(format!("row:{}:", case.row_owner).as_str()),
+            "case {:?}: permission {:?} must be scoped to row owner {:?}",
+            case.name,
+            case.permission,
+            case.row_owner
+        );
         let store = Arc::new(MemoryAcpStore::new());
         let acp = LocalDocumentACP::new(store.clone());
         let row_owner = did_from_lean_case(&case.row_owner, case, "row_owner");
@@ -263,6 +277,11 @@ mod tests {
         let namespaced_resource =
             format!("{IDENTITY_PERMISSION_POLICY_ID}:{IDENTITY_PERMISSION_RESOURCE_NAME}");
         for grant in &case.grants {
+            assert_eq!(
+                grant.permission, case.permission,
+                "case {:?}: grant {:?} targets a different permission than the row under test",
+                case.name, grant.actor
+            );
             let principal = did_from_lean_case(&grant.actor, case, "grant.actor");
             let tuple = RelationTuple::try_new(
                 principal,

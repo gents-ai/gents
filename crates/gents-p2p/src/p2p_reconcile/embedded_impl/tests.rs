@@ -129,12 +129,11 @@ async fn protocol_allowlist_rejects_local_data_before_transport() {
         );
     }
     for name in gents_protocol::schemas::ALL_COLLECTION_NAMES.iter().copied() {
-        assert_eq!(
-            admitted(name),
-            gents_protocol::schemas::is_replicated_protocol_collection(name),
-            "{name}"
-        );
         if admitted(name) {
+            assert!(
+                cases.iter().any(|case| case.input.collection == name),
+                "{name} is admitted without a modeled protocol collection"
+            );
             continue;
         }
         let result = admin
