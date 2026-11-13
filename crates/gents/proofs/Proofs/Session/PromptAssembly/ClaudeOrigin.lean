@@ -197,4 +197,38 @@ theorem client_chat_is_the_cli_identity (o : Origin) (h : o.cause = .client) :
     identity o = cliIdentity := by
   simp [identity, identityFor, wireMode, Origin.interactive, h]
 
+/-- `x-claude-code-agent-type` of a user-defined agent (an `agent:custom` query
+source). Every Gents agent is operator-defined, so a subagent request always
+carries it. -/
+def customAgentType : String := "custom"
+
+/-- The agent headers a request sends. A subagent sends its own id, its parent's
+when it has one, and its agent type; a main-thread request sends none even when
+its session carries an agent identity. -/
+structure AgentHeaders where
+  agentDid : Bool
+  parentAgentDid : Bool
+  agentType : Option String
+  deriving DecidableEq, Repr
+
+def agentHeaders (o : Origin) (hasParent : Bool) : AgentHeaders :=
+  let subagent := (wireMode o).subagent
+  { agentDid := subagent
+    parentAgentDid := subagent && hasParent
+    agentType := if subagent then some customAgentType else none }
+
+/-- `x-app`. -/
+def app (o : Origin) : String :=
+  if (wireMode o).background then "cli-bg" else "cli"
+
+theorem agent_headers_iff_subagent (o : Origin) (hasParent : Bool) :
+    (agentHeaders o hasParent).agentDid = (wireMode o).subagent := rfl
+
+theorem a_subagent_turn_adds_the_agent_headers :
+    agentHeaders ⟨.agentNew, true, false, .turn, true⟩ true =
+        ⟨true, true, some "custom"⟩ ∧
+      (wireMode ⟨.agentNew, true, false, .turn, true⟩).requestClass = .subagent ∧
+      app ⟨.agentNew, true, false, .turn, true⟩ = "cli" := by
+  native_decide
+
 end PromptAssembly.ClaudeOrigin

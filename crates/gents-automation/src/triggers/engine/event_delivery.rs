@@ -585,6 +585,7 @@ pub(crate) fn is_group_fire_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_lean_vocab::families::event_group_clock_scenario as family;
 
     fn config(owner: &str) -> (CallbackBinding, EventSource) {
         let binding = serde_json::from_value(json!({"node_did":owner,"binding_id":"same-id","agent_did":"did:key:zFixture","callback_id":"callback","event_source_id":"source","input_fields":["value"]})).unwrap();
@@ -695,7 +696,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_clock_survives_restart_and_quiescence_is_owner_scoped() {
+    async fn event_group_clock_matches_the_lean_model() {
+        for case in family::cases::<String, String>() {
+            let observed = shared_clock_observation(&case.input.members).await;
+            case.check(observed);
+        }
+    }
+
+    async fn shared_clock_observation(
+        members: &[i64],
+    ) -> family::ClockObservation<String, String> {
         use gents_store::identity::NodeIdentity as _;
         let home = tempfile::tempdir().unwrap();
         let root =
@@ -765,8 +775,6 @@ mod tests {
         node.add_collection("type GroupMember { batch:String expected:Int value:String }")
             .await
             .unwrap();
-        let response=node.execute("mutation {create_GroupMember(input:{batch:\"one\",expected:2,value:\"first\"}){_docID}}").await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
         let (mut binding, mut source) = config(root.did());
         binding.agent_did = agent.did().to_owned();
         source.group.as_mut().unwrap().timeout_secs = Some(3600);
@@ -774,49 +782,39 @@ mod tests {
             binding: &binding,
             source: &source,
         };
-        let first = load_or_create_group(&access, delivery, "one")
-            .await
-            .unwrap();
-        let restarted = load_or_create_group(&access, delivery, "one")
-            .await
-            .unwrap();
-        assert_eq!(first.doc_id, restarted.doc_id);
-        assert_eq!(first.state.first_seen_at, restarted.state.first_seen_at);
-        assert!(matches!(
-            evaluate_group(
+        let mut restart_same_record = false;
+        let mut outcomes = Vec::new();
+        for (index, expected) in members.iter().enumerate() {
+            let response = node
+                .execute(&format!(
+                    "mutation {{create_GroupMember(input:{{batch:\"one\",expected:{expected},value:\"member-{index}\"}}){{_docID}}}}"
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            if index == 0 {
+                let first = load_or_create_group(&access, delivery, "one")
+                    .await
+                    .unwrap();
+                let restarted = load_or_create_group(&access, delivery, "one")
+                    .await
+                    .unwrap();
+                restart_same_record = first.doc_id == restarted.doc_id
+                    && first.state.first_seen_at == restarted.state.first_seen_at;
+            }
+            let outcome = evaluate_group(
                 &node,
                 &SourceSchemaCache::default(),
                 &access,
                 delivery,
-                "one"
+                "one",
             )
             .await
-            .unwrap(),
-            GroupOutcome::Pending { .. }
-        ));
-        let response=node.execute("mutation {create_GroupMember(input:{batch:\"one\",expected:3,value:\"inconsistent\"}){_docID}}").await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        assert!(matches!(
-            evaluate_group(
-                &node,
-                &SourceSchemaCache::default(),
-                &access,
-                delivery,
-                "one"
-            )
-            .await
-            .unwrap(),
-            GroupOutcome::Quiesced
-        ));
+            .unwrap();
+            outcomes.push(outcome_name(&outcome));
+        }
         let stored = load_or_create_group(&access, delivery, "one")
             .await
             .unwrap();
-        assert!(stored
-            .state
-            .quiesced_reason
-            .as_deref()
-            .unwrap()
-            .contains("disagree"));
         let (mut other, other_source) = config("owner-b");
         other.agent_did = other_agent.did().to_owned();
         let independent = load_or_create_group(
@@ -829,8 +827,40 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_ne!(stored.doc_id, independent.doc_id);
-        assert!(independent.state.quiesced_at.is_none());
         node.shutdown().await.expect("node shutdown");
+        family::ClockObservation {
+            restart_same_record,
+            outcomes,
+            recorded_reason: stored
+                .state
+                .quiesced_reason
+                .as_deref()
+                .map(recorded_reason_name),
+            independent_fresh: independent.doc_id != stored.doc_id
+                && independent.state.quiesced_at.is_none(),
+        }
+    }
+
+    fn outcome_name(outcome: &GroupOutcome) -> String {
+        match outcome {
+            GroupOutcome::Empty => "empty",
+            GroupOutcome::Pending { .. } => "pending",
+            GroupOutcome::Quiesced => "quiesced",
+            GroupOutcome::Ready { .. } => "ready",
+        }
+        .to_owned()
+    }
+
+    fn recorded_reason_name(reason: &str) -> String {
+        let name = if reason.contains("disagree") {
+            "disagree"
+        } else if reason.contains("exceeds") {
+            "exceeded"
+        } else if reason.contains("invalid expected cardinality") {
+            "invalid"
+        } else {
+            "unrecognized"
+        };
+        name.to_owned()
     }
 }

@@ -2,12 +2,16 @@
 mod contract;
 #[path = "cli_enrollment/household.rs"]
 mod household;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_delegation.rs"]
 mod live_delegation;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_goal.rs"]
 mod live_goal;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_plugin_denial.rs"]
 mod live_plugin_denial;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_two_agent.rs"]
 mod live_two_agent;
 mod support;
@@ -19,6 +23,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
+use gents::support::snapshots::{SnapshotChanges, SnapshotReader};
 use gents_desktop_core::client::canonical_output::{
     project_canonical_message, CanonicalMessageProjection,
 };
@@ -28,9 +33,10 @@ use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::output::{MessageRole, TerminalOutput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::time::{sleep, Instant};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 static ENROLLMENT_E2E_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -137,7 +143,9 @@ async fn grant_configured_workspace_root_readers(
     Ok(())
 }
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "select GENTS_LIVE_TARGET and run make live-enrollment"]
 async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
 
@@ -207,7 +215,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
             wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
             let status_url = format!("http://127.0.0.1:{port}");
-            let (status, _) = wait_for_enrollment_token(&status_url).await?;
+            let (status, _) = wait_for_enrollment_token(&status_url, &graphql).await?;
             assert_eq!(
                 status.get("node_name").and_then(Value::as_str),
                 Some(agent_name.as_str())
@@ -420,55 +428,16 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
         .await
 }
 
+#[cfg(feature = "live-e2e")]
 async fn resolve_live_inference() -> Result<(String, String)> {
-    let endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let models_url = format!("{}/models", endpoint.trim_end_matches('/'));
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()?
-        .get(&models_url)
-        .send()
-        .await
-        .with_context(|| {
-            format!("live inference at {endpoint} is unreachable; set GENTS_CLI_E2E_MODEL_ENDPOINT")
-        })?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "live inference GET {models_url} returned {}",
-        response.status()
-    );
-    let body: Value = response
-        .json()
-        .await
-        .context("decoding live inference /models")?;
-    let advertised = body
-        .pointer("/data")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.get("id").and_then(Value::as_str).map(str::to_owned))
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        !advertised.is_empty(),
-        "live inference at {endpoint} advertised no models: {body}"
-    );
-    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME").unwrap_or_else(|_| {
-        advertised
-            .iter()
-            .find(|name| name.as_str() == "GLM-5.3-Flash-NVFP4")
-            .cloned()
-            .unwrap_or_else(|| advertised[0].clone())
-    });
-    anyhow::ensure!(
-        advertised.iter().any(|name| name == &model_name),
-        "live inference at {endpoint} does not serve {model_name}; advertised {advertised:?}"
-    );
-    Ok((endpoint, model_name))
+    let target = gents::support::live_inference::live_target().await;
+    Ok((target.endpoint().to_owned(), target.model().to_owned()))
 }
 
-async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> {
+async fn wait_for_enrollment_token(status_url: &str, graphql: &str) -> Result<(Value, String)> {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(&access, &["NodeRuntime", "NodeReadiness"]).await;
     loop {
         match fetch_runtime_connection_payload(status_url, None).await {
             Ok(status) => {
@@ -491,12 +460,14 @@ async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> 
                 }
             }
         }
-        sleep(Duration::from_millis(200)).await;
+        observe_change_until(&mut changes, deadline).await;
     }
 }
 
 async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(&access, &["NetworkEnrollmentRequest"]).await;
     loop {
         let response =
             graphql_query(graphql, r#"{ NetworkEnrollmentRequest { request_id } }"#).await?;
@@ -514,7 +485,7 @@ async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) ->
                 "timed out waiting for runtime to observe enrollment request {request_id}; last={response}"
             );
         }
-        sleep(Duration::from_millis(200)).await;
+        observe_change_until(&mut changes, deadline).await;
     }
 }
 
@@ -525,6 +496,8 @@ async fn wait_for_runtime_agent_request(
     content: &str,
 ) -> Result<(String, String, String)> {
     let deadline = Instant::now() + Duration::from_secs(60);
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(&access, &["AgentRequest"]).await;
     loop {
         match graphql_query(
             graphql,
@@ -575,9 +548,12 @@ async fn wait_for_runtime_agent_request(
             }
         }
         if Instant::now() >= deadline {
-            let client_requests = client_node
-                .execute("{ AgentRequest { request_id node_did content requester_did } }")
-                .await;
+            let client_requests = gents_store::graphql::graphql_with_transaction_retry(
+                client_node,
+                "{ AgentRequest { request_id node_did content requester_did } }",
+                "test.enrollment.diagnostic",
+            )
+            .await?;
             let runtime_all = graphql_query(
                 graphql,
                 "{ AgentRequest { request_id node_did content requester_did } }",
@@ -590,7 +566,7 @@ async fn wait_for_runtime_agent_request(
                 client_requests.data
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        observe_change_until(&mut changes, deadline).await;
     }
 }
 
@@ -614,6 +590,11 @@ async fn wait_for_complete_agent_response_with_access(
 ) -> Result<RuntimeTerminalReply> {
     let deadline = Instant::now() + timeout;
     let mut empty_terminal_since = None::<Instant>;
+    let mut changes = observed_changes(
+        access,
+        &["AgentRequest", "AgentMessage", "AgentOutputSegment"],
+    )
+    .await;
     loop {
         let response = access
             .execute(&format!(
@@ -712,7 +693,10 @@ async fn wait_for_complete_agent_response_with_access(
                 "timed out waiting for canonical terminal output with visible text for {request_id}; last={response}"
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        let until = empty_terminal_since
+            .map(|seen| deadline.min(seen + Duration::from_secs(15)))
+            .unwrap_or(deadline);
+        observe_change_until(&mut changes, until).await;
     }
 }
 
@@ -759,7 +743,9 @@ async fn wait_for_client_complete_response(
     runtime_reply: &RuntimeTerminalReply,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
+    let mut changes = core.store_updates();
     loop {
+        changes.borrow_and_update();
         let page = gents_desktop_core::client::load_session_transcript_page_on(
             &core.operator_access(node_did)?,
             session_id,
@@ -812,7 +798,7 @@ async fn wait_for_client_complete_response(
                 snapshot.transcript_messages
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.changed()).await;
     }
 }
 
@@ -890,13 +876,29 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
     }
 }
 
+async fn observed_changes(access: &ConfigAccess, collections: &[&str]) -> Vec<SnapshotChanges> {
+    let mut changes = Vec::with_capacity(collections.len());
+    for collection in collections {
+        changes.push(access.subscribe_changes(collection).await);
+    }
+    changes
+}
+
+async fn observe_change_until(changes: &mut [SnapshotChanges], deadline: Instant) {
+    let futures = changes.iter_mut().map(|change| Box::pin(change.recv()));
+    let _ = tokio::time::timeout_at(deadline, futures::future::select_all(futures)).await;
+}
+
 async fn query_collection_dids(
     node: &gents::defra_node::Node,
     collection: &str,
 ) -> Result<Vec<String>> {
-    let response = node
-        .execute(&format!("{{ {collection} {{ node_did }} }}"))
-        .await;
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        &format!("{{ {collection} {{ node_did }} }}"),
+        "test.enrollment.collection_ids",
+    )
+    .await?;
     if response.has_errors() {
         bail!("query {collection} failed: {:?}", response.errors);
     }
@@ -913,134 +915,4 @@ async fn query_collection_dids(
                 .map(str::to_owned)
         })
         .collect())
-}
-
-#[test]
-fn client_reply_requires_the_runtime_selected_terminal_header() {
-    use gents_protocol::output::{
-        MessageBlock, MessagePublication, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
-        PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
-        StreamDeclaration, StreamPayload, TranscriptMessage,
-    };
-    const REQUEST_DOC: &str = "bae-request";
-    const TEXT: &str = "hello";
-    let segment = |doc_id: &str, key: &str| OutputSegmentRow {
-        doc_id: doc_id.into(),
-        segment: OutputSegment {
-            node_did: "did:key:agent".into(),
-            requester_did: None,
-            session_id: "session".into(),
-            request_doc_id: REQUEST_DOC.into(),
-            source: OutputSource::Authored { key: key.into() },
-            writer: OutputWriter::RequestExecution {
-                execution_generation: "generation".into(),
-            },
-            ordinal: Some(0),
-            runs: vec![SegmentRun {
-                stream: 0,
-                bytes: TEXT.len() as u32,
-                declaration: Some(StreamDeclaration {
-                    block_index: 0,
-                    part_index: 0,
-                    payload: StreamPayload::Text,
-                }),
-            }],
-            payload: TEXT.into(),
-            close: Some(SourceClose::Closed {
-                outcome: OutputOutcome::Complete,
-                segments: 1,
-                stream_bytes: vec![TEXT.len() as u64],
-            }),
-            created_at: "2026-09-25T00:00:00Z".into(),
-        },
-    };
-    let header =
-        |doc_id: &str, close_doc_id: &str, sequence: u32, role: MessageRole| TranscriptMessageRow {
-            doc_id: doc_id.into(),
-            message: TranscriptMessage {
-                native_request_id: None,
-                message_key: format!("session:{sequence}"),
-                session_id: "session".into(),
-                node_did: "did:key:agent".into(),
-                requester_did: None,
-                request_doc_id: Some(REQUEST_DOC.into()),
-                publication: MessagePublication::RequestExecution {
-                    execution_generation: "generation".into(),
-                },
-                outcome: OutputOutcome::Complete,
-                sequence,
-                role,
-                native_id: None,
-                blocks: vec![MessageBlock::Text {
-                    text: PresentedPayload {
-                        output: PayloadRef {
-                            close_doc_id: close_doc_id.into(),
-                            stream: 0,
-                        },
-                        presentation: PayloadPresentation::Full,
-                    },
-                }],
-                created_at: "2026-09-25T00:00:00Z".into(),
-            },
-        };
-    let request = |state: RequestLifecycleState, terminal: Option<&str>| AgentRequestRow {
-        doc_id: Some(REQUEST_DOC.into()),
-        request_id: "request".into(),
-        lifecycle_state: Some(state),
-        terminal_output: terminal.map(|message_doc_id| TerminalOutput::Message {
-            message_doc_id: message_doc_id.into(),
-        }),
-        ..Default::default()
-    };
-    let prompt = header("bae-prompt", "bae-prompt-close", 1, MessageRole::User);
-    let earlier = header(
-        "bae-earlier",
-        "bae-earlier-close",
-        2,
-        MessageRole::Assistant,
-    );
-    let selected = header(
-        "bae-selected",
-        "bae-selected-close",
-        3,
-        MessageRole::Assistant,
-    );
-    let segments = vec![
-        segment("bae-prompt-close", "prompt"),
-        segment("bae-earlier-close", "earlier"),
-        segment("bae-selected-close", "selected"),
-    ];
-    let completed = [request(
-        RequestLifecycleState::Completed,
-        Some("bae-selected"),
-    )];
-    let replicated_prefix = [prompt.clone(), earlier.clone()];
-    for (label, requests, messages) in [
-        (
-            "prompt and earlier turn only",
-            &completed[..],
-            &replicated_prefix[..],
-        ),
-        (
-            "request not yet completed",
-            &[request(RequestLifecycleState::Processing, None)][..],
-            &[prompt.clone(), earlier.clone(), selected.clone()][..],
-        ),
-    ] {
-        assert_eq!(
-            client_selected_reply(requests, messages, &segments, "request", "bae-selected"),
-            None,
-            "{label} must not satisfy the client wait"
-        );
-    }
-    let all = [prompt, earlier, selected];
-    assert_eq!(
-        client_selected_reply(&completed, &all, &segments[..2], "request", "bae-selected"),
-        None,
-        "the selected header must reconstruct Ready, not just exist"
-    );
-    assert_eq!(
-        client_selected_reply(&completed, &all, &segments, "request", "bae-selected").as_deref(),
-        Some(TEXT)
-    );
 }

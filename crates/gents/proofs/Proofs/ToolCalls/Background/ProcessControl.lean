@@ -308,6 +308,27 @@ theorem cancelled_requires_confirmed_stop (outcome : ManagedExec.StopOutcome)
     (h : stopSettlement outcome = .cancelled) : outcome = .stopped := by
   cases outcome <;> simp_all [stopSettlement]
 
+/-- The durable state a stop leaves on a row whose durable state is `durable`:
+a cancellation before dispatch and a verified process stop end it `cancelled`,
+and a reported terminal leaves it as it is. -/
+def stopSettledState (durable : ToolExecution.ToolCallState) : ToolExecution.ToolCallState :=
+  match stopAction durable with
+  | .cancelBeforeDispatch => .cancelled
+  | .stopProcess => stopSettlement .stopped
+  | .reportTerminal => durable
+
+/-- Only a stop of a dispatched invocation signals its live execution. -/
+def stopSignalsExecution : StopAction → Bool
+  | .stopProcess => true
+  | .cancelBeforeDispatch | .reportTerminal => false
+
+/-- A caller that observed the row pending while dispatch moved it to running
+stops the running invocation: the stop reads the durable row, signals the
+live execution and leaves the row cancelled. -/
+theorem stop_follows_dispatch_that_wins_the_pending_row :
+    stopAction .running = .stopProcess ∧ stopSettledState .running = .cancelled ∧
+      stopSignalsExecution (stopAction .running) = true := by decide
+
 /-- Host evidence belongs to one physical invocation. A released worker that
 never spawned is stopped; a spawned process requires observed exit. A missing
 record is not evidence that no process was spawned. -/
@@ -432,5 +453,58 @@ theorem wait_boundary_never_cancels
     (state : ToolExecution.ToolCallState) (boundary : WaitBoundary) :
     (observeBoundary state boundary).cancellationRequested = false := by
   rfl
+
+/-- A client stop and the owner's completion race for one running invocation. A
+live worker that released and exited settles as stopped, so the stop reports a
+cancellation with its live execution cancelled. -/
+def raceStop : ManagedExec.StopOutcome := settleLiveCancel true .exited
+
+/-- The row a client stop observes: running when the stop comes first, the
+already committed completion otherwise. -/
+def stopObserves (cancelFirst : Bool) : ToolExecution.ToolCallState :=
+  if cancelFirst then .running else .completed
+
+def raceRow (cancelFirst : Bool) : ToolExecution.ToolCallState :=
+  match stopAction (stopObserves cancelFirst) with
+  | .stopProcess => stopSettlement raceStop
+  | _ => stopObserves cancelFirst
+
+def stopCancelled (cancelFirst : Bool) : Bool :=
+  match stopAction (stopObserves cancelFirst) with
+  | .stopProcess => ManagedExec.cancelReply raceStop == .cancelled
+  | _ => false
+
+def liveExecutionCancelled (cancelFirst : Bool) : Option Bool :=
+  match stopAction (stopObserves cancelFirst) with
+  | .stopProcess => some true
+  | _ => none
+
+def alreadyTerminalState (cancelFirst : Bool) : Option String :=
+  match stopAction (stopObserves cancelFirst) with
+  | .reportTerminal => some (stopObserves cancelFirst).toDefraDB
+  | _ => none
+
+/-- A completion commits only from a running row, as `ToolCallContext.step?`
+`.complete` requires; the late completion observes the row the stop left. -/
+def completionObserves (cancelFirst : Bool) : ToolExecution.ToolCallState :=
+  if cancelFirst then raceRow true else .running
+
+def completionAccepted (observed : ToolExecution.ToolCallState) : Bool :=
+  observed == .running
+
+def refusedAsTerminal : ToolExecution.ToolCallState → Bool
+  | .completed | .failed | .timedOut | .cancelled => true
+  | _ => false
+
+theorem client_cancel_and_completion_preserve_each_winning_terminal :
+    (raceRow true = .cancelled ∧ stopCancelled true = true ∧
+      liveExecutionCancelled true = some true ∧ alreadyTerminalState true = none ∧
+      completionAccepted (completionObserves true) = false ∧
+      refusedAsTerminal (completionObserves true) = true) ∧
+    (raceRow false = .completed ∧ stopCancelled false = false ∧
+      liveExecutionCancelled false = none ∧ alreadyTerminalState false = some "completed" ∧
+      completionAccepted (completionObserves false) = true ∧
+      refusedAsTerminal (completionObserves false) = false) := by
+  decide
 
 end Background.ProcessControl

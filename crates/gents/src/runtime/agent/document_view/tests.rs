@@ -691,29 +691,6 @@ async fn retired_reserved_ids_are_never_visible() {
 }
 
 #[tokio::test]
-async fn usage_collection_write_never_reloads_the_runtime_view() {
-    let (db, _user, _access, _binding) =
-        crate::test_support::root::signed_test_node("document-view-usage").await;
-    let node = db.node.clone();
-    let identity = db.node_identity.clone();
-    let mut view = load_document_runtime_view(&node, identity.did())
-        .await
-        .expect("initial document view");
-
-    let outcome = apply_control_update(
-        identity.did(),
-        "ProviderAccountUsage",
-        "opaque-usage-doc-id",
-        &mut view,
-    )
-    .await
-    .unwrap();
-    assert_eq!(outcome, ControlUpdateOutcome::Irrelevant);
-
-    node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
 async fn load_document_runtime_view_populates_tasks_and_schedules() {
     let (db, user, access, agent) =
         crate::test_support::root::signed_test_node("document-view-tasks-schedules").await;

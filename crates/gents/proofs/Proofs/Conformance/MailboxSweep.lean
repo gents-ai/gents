@@ -10,6 +10,52 @@ end Mailbox.Sweep
 namespace Conformance.MailboxSweepContracts
 open Lean Mailbox.Sweep
 
+structure PoisonRowInput where
+  due : Bool
+  undecodable : Bool
+  hostile : Bool
+  deriving Lean.ToJson
+
+structure PoisonInput where
+  rows : List PoisonRowInput
+  deriving Lean.ToJson
+
+structure PoisonOutput where
+  skippedErrors : Nat
+  expired : Nat
+  openRows : List Bool
+  expiredRows : List Bool
+  deriving Lean.ToJson
+
+def poisonState (rows : List PoisonRowInput) : Mailbox.Sweep.State :=
+  { rows := ((List.range rows.length).zip rows).map fun (index, row) =>
+      (⟨index + 1, "local", true, row.due, row.undecodable || row.hostile⟩ : Mailbox.Sweep.Row),
+    cursor := none }
+
+def poisonOutcome (input : PoisonInput) : PoisonOutput :=
+  let state := poisonState input.rows
+  { skippedErrors := (skipped state "local" 16 16).length
+    expired := (expiredIn state "local" 16 16).length
+    openRows := (advance state "local" 16 16).rows.map Row.isOpen
+    expiredRows := state.rows.map fun row =>
+      (expiredIn state "local" 16 16).any fun expiredRow => expiredRow.docId == row.docId }
+
+@[conformance_family]
+def poisonedRows : Family PoisonInput PoisonOutput where
+  inputs :=
+    [ { rows := [{ due := true, undecodable := false, hostile := false }] },
+      { rows := [{ due := false, undecodable := true, hostile := false }] },
+      { rows := [{ due := false, undecodable := false, hostile := true }] },
+      { rows := [{ due := false, undecodable := false, hostile := true },
+        { due := false, undecodable := true, hostile := false },
+        { due := true, undecodable := false, hostile := false }] },
+      { rows := [{ due := true, undecodable := false, hostile := false },
+        { due := false, undecodable := false, hostile := true },
+        { due := true, undecodable := false, hostile := false }] },
+      { rows := [{ due := false, undecodable := false, hostile := false },
+        { due := true, undecodable := false, hostile := false }] } ]
+  model := poisonOutcome
+
 structure SweepInput where
   name : String
   nodeDid : String
@@ -54,8 +100,8 @@ private def run (state : State) (nodeDid : String) (pageSize budget : Nat) :
 private def progressInputs : List Row :=
   (List.range 35).map (fun index =>
     let docId := index + 1
-    ⟨docId, "local", true, docId % 4 != 0 && docId != 35⟩) ++
-    [⟨36, "foreign", true, true⟩]
+    ⟨docId, "local", true, docId % 4 != 0 && docId != 35, false⟩) ++
+    [⟨36, "foreign", true, true, false⟩]
 
 private def indexBound (rows : List Row) (nodeDid : String) (pageSize budget : Nat) : Nat :=
   let second := advance { rows, cursor := none } nodeDid pageSize budget

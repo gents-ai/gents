@@ -659,4 +659,60 @@ theorem admitted_step_resets_failures {ctx : StepContext} {job job' : Job} {out 
     cases h'
     rfl
 
+/-- The driver re-runs a step whose invocation keeps failing until
+`onInvocationFailure` raises, with at most `fuel` more failures. -/
+def failUntilRaised (obs : SpawnKey → Recovery.KillObservation) : Nat → Job → Job × Option Refusal
+  | 0, job => (job, none)
+  | fuel + 1, job =>
+    match onInvocationFailure job obs with
+    | (next, _, some refusal) => (next, some refusal)
+    | (next, _, none) => failUntilRaised obs fuel next
+
+/-- `JOB_GUEST_STATE_MAX_BYTES`, measured on the state's serialized bytes. -/
+def guestStateMaxBytes : Nat := 65536
+
+/-- A step's guest state is admitted within the cap. An over-cap state is a
+malformed output, decided before the step transaction so that the driver counts
+it as an invocation failure; nothing of that step is stored. -/
+def guestStateAdmitted : Option Nat → Bool
+  | none => true
+  | some bytes => decide (bytes ≤ guestStateMaxBytes)
+
+theorem a_guest_state_over_the_cap_fails_the_step_and_stores_nothing :
+    guestStateAdmitted (some (guestStateMaxBytes + 1)) = false ∧
+      guestStateAdmitted (some guestStateMaxBytes) = true := by
+  decide
+
+/-- How one step attempt of a running row ends. A publication that holds the
+plugin store is the store being replaced, not the guest failing: the attempt
+is deferred and a later attempt runs the step. -/
+inductive Attempt where
+  | settled
+  | publicationBusy
+  | invocationFailed
+  | refusedTerminal
+  deriving DecidableEq, Repr
+
+/-- The row after one attempt: a deferred attempt leaves it and its failure
+count as they were, a failed invocation counts through `onInvocationFailure`,
+and a settled step ends the row `completed` with no failures left. -/
+def afterAttempt (obs : SpawnKey → Recovery.KillObservation) (job : Job) : Attempt → Job
+  | .settled => (terminalizeRow { job with consecutiveFailures := 0 } .completed).1
+  | .publicationBusy | .refusedTerminal => job
+  | .invocationFailed => (onInvocationFailure job obs).1
+
+/-- A result step on `job`: it settles a running row, and a row that already
+ended refuses it as `admitStep` refuses every step of an ended row. -/
+def resultAttempt (job : Job) : Attempt :=
+  if job.state = .running then .settled else .refusedTerminal
+
+theorem staged_plugin_defers_running_job_without_counting_a_failure
+    (obs : SpawnKey → Recovery.KillObservation) (job : Job) :
+    afterAttempt obs job .publicationBusy = job := rfl
+
+theorem plugin_publication_after_step_precheck_is_transient
+    (obs : SpawnKey → Recovery.KillObservation) (job : Job) (h : job.state = .running) :
+    resultAttempt (afterAttempt obs job .publicationBusy) = .settled := by
+  simp [afterAttempt, resultAttempt, h]
+
 end PluginJob.Step
