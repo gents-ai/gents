@@ -1799,7 +1799,7 @@ def caseCoverage : List CoverageEntry :=
       "fold_queue_contracts_input_edit_identical_republish")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "fold_queue_contracts_input_edit_unreached"
-      "model-production-gap: process_command leaves a command unanswered when another physical command shares its ID, but the session command table's unique command_id index refuses the second document, so no fixture can store two physical commands under one ID, before application or after a receipt in another session.")
+      "model-production-gap: process_command leaves a command unanswered when another physical command shares its ID, but no production path stores two: the unique command_id index refuses a second local create, and a replicated twin (which DefraDB would keep, resolving a live unique conflict by smallest docID, defradb.rs crates/defra-core/src/merge.rs:101-104) cannot arrive because AgentSessionInputEdit is a managed collection that application pairing refuses and not a replicated protocol collection.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

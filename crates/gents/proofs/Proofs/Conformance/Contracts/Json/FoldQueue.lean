@@ -794,10 +794,16 @@ def inputEditIdenticalRepublish : Family InputEditCaseWire (Option EndpointObser
   model := endpointObservation
 
 /-- model-production-gap: `process_command` leaves a command unanswered when
-another physical command shares its ID, but the session command table's unique
-`command_id` index refuses the second document, so no fixture can store two
-physical commands under one ID, before application or after a receipt in
-another session. -/
+another physical command shares its ID, but no production path stores two.
+Locally the unique `command_id` index (agent_session_input_edit.graphql:5)
+refuses the second create. A twin could only arrive by replication, where
+DefraDB resolves a live unique-index conflict by keeping the smallest docID
+rather than rejecting it (defradb.rs crates/defra-core/src/merge.rs:101-104),
+but Gents never replicates AgentSessionInputEdit: it is a managed collection
+(gents-protocol peer_schema.rs:12) that application pairing refuses
+(gents-p2p templates.rs:243) and not a replicated protocol collection
+(gents-schemas lib.rs:388). The twin branch therefore guards a replication
+path Gents does not open. -/
 @[conformance_family]
 def inputEditUnreached : Family InputEditCaseWire (Option InputEditObservation) where
   inputs := (SessionQueue.InputEditCases.cases.filter (!atomicOwnerCase ·)).map
