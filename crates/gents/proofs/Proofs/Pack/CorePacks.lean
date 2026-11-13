@@ -67,23 +67,34 @@ structure Wiring where
   consentDynamic : Bool
   /-- The agents it ships read the Engineer's tool root. -/
   rootReaders : Bool
+  /-- The agents it ships are enabled: the runtime reconciles them as
+  runnable, builds their tool surfaces and counts them in the node's
+  readiness. A disabled agent is none of these (`Runtime.StartupDegraded`). -/
+  agentsActive : Bool
   deriving DecidableEq, Repr
 
 /-- What `init` leaves for each core pack, every one of which it installs.
 Dynamic workflows is installed but not enabled (maintainer decision
 2026-11-13): it starts agents from scripts the model writes, so it waits for
 the user to turn it on. Script runs the Engineer's own tools from a script,
-which is what it is for, so it is wired with `toolCalls`. -/
+which is what it is for, so it is wired with `toolCalls`.
+
+Installed but not enabled means the pack's documents are on the node and
+nothing of it runs: its plugins are not selected, its agents hold no reader on
+the Engineer's tool root and are disabled. An enabled agent whose host tools
+read a root it holds no reader on has no tool surface, which is a failed
+admission the node reports as degraded on every reconcile (fresh-node smoke
+of #3670, 2026-11-13); a disabled one is off and lacks nothing. -/
 def initWiring : CorePack → Wiring
-  | .dynamicWorkflows => ⟨false, false, false, false⟩
-  | .script => ⟨true, true, false, true⟩
-  | _ => ⟨true, false, false, true⟩
+  | .dynamicWorkflows => ⟨false, false, false, false, false⟩
+  | .script => ⟨true, true, false, true, true⟩
+  | _ => ⟨true, false, false, true, true⟩
 
 /-- What the user's explicit enable operation leaves: dynamic workflows wired
-with its agents' reader and the dynamic consent; any other core pack as init
-leaves it. -/
+with the dynamic consent, its agents granted their reader and enabled
+together; any other core pack as init leaves it. -/
 def enabledWiring : CorePack → Wiring
-  | .dynamicWorkflows => ⟨true, false, true, true⟩
+  | .dynamicWorkflows => ⟨true, false, true, true, true⟩
   | pack => initWiring pack
 
 theorem init_never_consents_dynamic (pack : CorePack) :
@@ -92,7 +103,22 @@ theorem init_never_consents_dynamic (pack : CorePack) :
 
 theorem dynamic_workflows_present_but_unwired :
     (initWiring .dynamicWorkflows).wired = false ∧
-    (initWiring .dynamicWorkflows).rootReaders = false := ⟨rfl, rfl⟩
+    (initWiring .dynamicWorkflows).rootReaders = false ∧
+    (initWiring .dynamicWorkflows).agentsActive = false := ⟨rfl, rfl, rfl⟩
+
+/-- An agent a core pack leaves enabled holds its reader, at init and after
+enabling: no core pack's agent is ever enabled without the root its host
+tools read. -/
+theorem active_agents_hold_their_root (pack : CorePack) :
+    ((initWiring pack).agentsActive = true → (initWiring pack).rootReaders = true) ∧
+    ((enabledWiring pack).agentsActive = true → (enabledWiring pack).rootReaders = true) := by
+  cases pack <;> simp [initWiring, enabledWiring]
+
+/-- Enabling grants a pack's agents their reader and enables them in the same
+operation: in what it leaves, the two are one. -/
+theorem enabling_grants_and_activates_together (pack : CorePack) :
+    (enabledWiring pack).agentsActive = (enabledWiring pack).rootReaders := by
+  cases pack <;> rfl
 
 theorem every_other_core_pack_is_wired (pack : CorePack) (h : pack ≠ .dynamicWorkflows) :
     (initWiring pack).wired = true := by
@@ -104,6 +130,35 @@ theorem only_script_calls_tools (pack : CorePack) :
 
 theorem enabling_consents_dynamic :
     (enabledWiring .dynamicWorkflows).consentDynamic = true := rfl
+
+/-- Where the enable operation writes, given whether a runtime serves the
+home and whether the home has the pack installed.
+
+A runtime holds the home's store while it serves. Enabling a pack the home
+has is a reader grant, a plugin wiring and an agent edit, each of which a
+client of the running runtime makes through it (the wiring through the
+operator route, `Configuration.operatorWireAvailable`), so a running node is
+enabled in place and picks the change up on its next reconcile. A pack the
+home lacks is first installed as the Engineer, under the Engineer's key, from
+the home's own store; only a stopped node gives that store, so that one
+enable waits for the node to stop and names how to stop each way it runs. -/
+inductive EnableRoute
+  /-- No runtime serves the home: written through its own store. -/
+  | home
+  /-- Written through the runtime serving the home. -/
+  | runtime
+  /-- Refused before anything is written: stop the node, then enable. -/
+  | stopFirst
+  deriving DecidableEq, Repr
+
+def enableRoute (served installed : Bool) : EnableRoute :=
+  if !served then .home else if installed then .runtime else .stopFirst
+
+/-- The enable `init` names for dynamic workflows, which init installed,
+needs no stop. -/
+theorem enabling_an_installed_pack_needs_no_stop (served : Bool) :
+    enableRoute served true ≠ .stopFirst := by
+  cases served <;> simp [enableRoute]
 
 /-- The plugin interface this runtime implements, and the oldest version it
 still loads. Raise `current` when a host import, the call ABI or a manifest
