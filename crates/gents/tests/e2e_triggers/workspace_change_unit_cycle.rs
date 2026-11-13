@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -607,17 +608,51 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
 }
 
 fn ensure_native_fs_runner_for_test() {
-    let current = std::env::current_exe().expect("integration-test binary path");
-    let directory = current.parent().unwrap();
-    let name = if cfg!(windows) {
-        "gents-fs-runner.exe"
-    } else {
-        "gents-fs-runner"
-    };
-    assert!(
-        directory.join(name).is_file() || directory.parent().unwrap().join(name).is_file(),
-        "build the workspace runner first: cargo build -p gents-fs-runner --profile fast-dev"
-    );
+    static BUILT: OnceLock<()> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("gents manifest should be under workspace crates/");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+        let current = std::env::current_exe().expect("integration-test binary path");
+        let parent = current.parent().expect("integration-test binary directory");
+        let profile_dir = parent.parent().expect("Cargo profile directory");
+        let profile = profile_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("Cargo profile directory has a name");
+        let profile = if profile == "debug" { "dev" } else { profile };
+        let status = Command::new(cargo)
+            .args(["build", "-p", "gents-fs-runner"])
+            .args(["--profile", profile])
+            .arg("--target-dir")
+            .arg(profile_dir.parent().expect("Cargo target directory"))
+            .current_dir(repo_root)
+            .status()
+            .expect("building native filesystem runner for workspace cycle test");
+        assert!(
+            status.success(),
+            "gents-fs-runner must build for workspace cycle test"
+        );
+        let runner_name = if cfg!(windows) {
+            "gents-fs-runner.exe"
+        } else {
+            "gents-fs-runner"
+        };
+        assert!(
+            [
+                parent.to_path_buf(),
+                parent
+                    .parent()
+                    .expect("Cargo profile directory")
+                    .to_path_buf()
+            ]
+            .into_iter()
+            .any(|directory| directory.join(runner_name).is_file()),
+            "gents-fs-runner test binary must be adjacent to integration-test binary after build"
+        );
+    });
 }
 
 async fn apply_documents(
