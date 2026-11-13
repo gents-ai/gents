@@ -26,7 +26,7 @@ def artifacts(log, root, target):
         if event.get('reason') != 'compiler-artifact' or not event.get('executable'):
             continue
         source = Path(event['target']['src_path']).resolve()
-        package = next((name for name in ('gents-client-host', 'gents-desktop-bridge', 'gents-cli', 'gents')
+        package = next((name for name in ('gents-client-host', 'gents-desktop-bridge', 'gents-cli', 'gents-session')
                         if source.is_relative_to((root / 'crates' / name).resolve())), None)
         testing = event.get('profile', {}).get('test')
         name = event['target']['name']
@@ -39,7 +39,7 @@ def artifacts(log, root, target):
             role = 'host'
         elif testing and package == 'gents-desktop-bridge' and 'lib' in kind:
             role = 'bridge'
-        elif testing and package == 'gents' and 'lib' in kind:
+        elif testing and package == 'gents-session' and 'lib' in kind:
             role = 'process'
         elif testing and package == 'gents-cli' and name == 'port_allocation' and 'test' in kind:
             role = 'cli'
@@ -75,7 +75,7 @@ def compile_tests(root, manifest, profile='test'):
     targets = [flag for name in ['port_allocation', *transport_targets(root)] for flag in ('--test', name)]
     with log.open('w') as output:
         subprocess.run(['cargo', 'test', '--locked', '-p', 'gents-client-host',
-                        '-p', 'gents-desktop-bridge', '-p', 'gents-cli', '-p', 'gents', '--no-default-features',
+                        '-p', 'gents-desktop-bridge', '-p', 'gents-cli', '-p', 'gents-session', '--no-default-features',
                         '--features', 'gents-client-host/runtime-e2e', '--profile', profile, '--lib', *targets, '--no-run',
                         '--message-format=json-render-diagnostics', '--timings', '--target-dir', str(root / 'target')], cwd=root, stdout=output, check=True)
     manifest.write_text(json.dumps(artifacts(log, root, root / 'target'), indent=2) + '\n')
