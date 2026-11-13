@@ -135,9 +135,9 @@ also requires fresh admission; shrinking the history is not evidence of fit.
 `contract_cases_compaction_projection_join_projection_join` exercises this composition with explicit
 projection/estimation observations. Those observations are controlled inputs at
 the native-owner boundary, not a Lean implementation of provider serialization.
-`compaction_canonical_projection_cases` supplies the actual immutable records
-and selected identities and compares the complete native messages passed to
-initial projection and checkpoint rebuilding. Missing selected identities and
+The leftover family `compaction_canonical_projection_unreached` supplies the
+actual immutable records and selected identities and pins the complete native
+messages passed to initial projection and checkpoint rebuilding. Missing selected identities and
 loading dependencies stop the composition instead of shortening the request.
 The family
 `contract_cases_compaction_canonical_projection_repaired_admission_unreached` exercises fresh admission after a provider

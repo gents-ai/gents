@@ -262,8 +262,8 @@ dispatch requires both threshold admission and positive output capacity. The
 provider serializer and estimator remain explicit native parameters, not a
 second implementation in Lean. `contract_cases_compaction_projection_join_projection_join` supplies
 controlled observations at that boundary; it does not establish that native
-serialization produced them. `compaction_canonical_projection_cases` supplies
-the immutable records and checks full reconstructed native messages;
+serialization produced them. the leftover family `compaction_canonical_projection_unreached` supplies
+the immutable records and pins full reconstructed native messages;
 the family `contract_cases_compaction_canonical_projection_repaired_admission_unreached`
 covers remeasurement of repaired input.
 The actual serialized-request/threshold experiment

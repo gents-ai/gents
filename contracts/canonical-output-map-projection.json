@@ -114,10 +114,10 @@
         { "file": "crates/gents/proofs/Proofs/Session/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.composed_dispatch_is_authorized" }
       ],
       "constructors": [],
-      "generated_groups": ["compaction_canonical_projection_cases"],
+      "generated_groups": ["families"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": ["crates/gents/src/turn/provider_input.rs", "crates/gents-inference/src/compaction.rs", "crates/gents-loop/src/loop_stream/request_assembly.rs"],
-      "consumer_paths": ["crates/gents/src/runtime/agent/loop_stream/tests/budgeting.rs", "crates/gents-lean-vocab/src/compaction_canonical_projection.rs"],
+      "consumer_paths": ["crates/gents/src/runtime/agent/loop_stream/tests/budgeting.rs"],
       "native_status": "pending",
       "required_cases": [
         "Resolve exact selected canonical identities to reconstructed native messages without silently dropping a missing, ambiguous or incomplete publication.",

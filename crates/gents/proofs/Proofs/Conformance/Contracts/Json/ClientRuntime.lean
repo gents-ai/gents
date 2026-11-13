@@ -277,7 +277,7 @@ def presentationJson : CanonicalOutput.Presentation → String
           (",\"start\":" ++ toString start ++ ",\"end\":" ++ toString stop)
       | .literal bytes => tagged "literal" (",\"bytes\":" ++ byteArrayJson bytes)))
 
-private def payloadSpecJson (spec : CanonicalOutput.PayloadSpec) : String :=
+def payloadSpecJson (spec : CanonicalOutput.PayloadSpec) : String :=
   "{\"reference\":" ++ payloadRefJson spec.reference ++
     ",\"presentation\":" ++ presentationJson spec.presentation ++ "}"
 
@@ -850,11 +850,11 @@ theorem prepared_candidates_are_text :
 
 end QueuedSteeringTrace
 
-private def streamsJson (streams : CanonicalOutput.Streams) : String :=
+def streamsJson (streams : CanonicalOutput.Streams) : String :=
   jsonArray (streams.map fun stream => "{\"declaration\":" ++ declarationJson stream.1 ++
     ",\"bytes\":" ++ byteArrayJson stream.2 ++ "}")
 
-private def outputObservationJson (observation : StreamingResponse.Observation) : String :=
+def outputObservationJson (observation : StreamingResponse.Observation) : String :=
   "{\"request\":" ++ toString observation.request ++ ",\"session\":" ++ toString observation.session ++
     ",\"records\":" ++ jsonArray (observation.records.map canonicalSegmentJson) ++
     ",\"messages\":" ++ jsonArray (observation.messages.map canonicalMessageJson) ++
@@ -874,7 +874,7 @@ private def outputObservationJson (observation : StreamingResponse.Observation) 
       | none => "null" | some .noMessage => tagged "no_message" ""
       | some (.message id) => tagged "message" (",\"id\":" ++ toString id)) ++ "}"
 
-private def outputViewJson : StreamingResponse.View → String
+def outputViewJson : StreamingResponse.View → String
   | .absent => tagged "absent" "" | .loading => tagged "loading" ""
   | .denied => tagged "denied" "" | .conflicted => tagged "conflicted" ""
   | .invalid => tagged "invalid" "" | .retracted => tagged "retracted" ""

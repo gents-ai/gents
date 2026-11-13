@@ -353,8 +353,6 @@ set_option maxHeartbeats 2000000 in
 checks grow with the family count past the default heartbeat budget. -/
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"compaction_canonical_projection_cases\":"
-      ++ compactionCanonicalProjectionCasesJson ++ ","
     ++ "\"goal_link_cases\":"
       ++ Identity.SessionChild.goalLinkCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","

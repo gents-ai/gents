@@ -15,7 +15,6 @@ GROUPS = {
     "reasoning_audit_cases": "LeanReasoningAuditCase",
     "reasoning_signature_cases": "LeanReasoningSignatureCase",
     "auxiliary_output_cases": "LeanAuxiliaryOutputCase",
-    "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
 }
 INT_RANGES = {
     "u8": (0, 2**8 - 1), "u16": (0, 2**16 - 1),
