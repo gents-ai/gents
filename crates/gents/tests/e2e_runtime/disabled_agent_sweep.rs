@@ -1,22 +1,10 @@
-//! A disabled Agent stays watched but holds no baseline, so its sweeps cannot
-//! read its own rows; that must not stop the runtime serving the enabled Agent.
-
 use std::time::Duration;
 
-use gents::{DocumentRuntimeOptions, Gents};
-use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_tools::surface::ToolCeiling;
-
-use crate::support::builder_runtime::{builder_actors, submit_request};
-use crate::support::interrupt::{
-    wait_for_request_terminal_state, wait_for_runtime_ready_or_exit, BootedAgent,
+use crate::support::builder_runtime::submit_request;
+use crate::support::live_inference::{
+    bind_target, boot_live_agent, live_target, wait_for_request_terminal,
 };
-use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
 use crate::support::test_db;
-
-const MODEL: &str = "disabled-sibling-model";
-const BACKEND: &str = "disabled-sibling-backend";
-const MARKER: &str = "disabled-sibling-marker";
 
 async fn disable_agent(
     access: &gents_store::config_client::ConfigAccess,
@@ -59,11 +47,9 @@ async fn disable_agent(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_disabled_sibling_agent_does_not_stop_the_runtime() {
-    let backend =
-        MockStreamingBackend::start(MODEL, vec![StreamScript::completes(MARKER, ["done"])])
-            .unwrap();
+    let target = live_target().await;
     let db = test_db("disabled-agent-sweep").await;
-    let actors = builder_actors(&db, BACKEND, backend.endpoint(), MODEL, 1).await;
+    let actors = bind_target(&db, &target).await;
     let (_, sibling) = crate::support::install_managed_agent(
         &db,
         &actors.fixture.access,
@@ -78,39 +64,37 @@ async fn a_disabled_sibling_agent_does_not_stop_the_runtime() {
     )
     .await;
 
-    let runtime = Gents::from_default_agent_documents(
-        db.node.clone(),
-        db.node_identity.clone(),
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: ToolCeiling::meta_only(),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("build the document runtime");
-    let node_did = actors.node_did().to_owned();
-    let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut handle = tokio::spawn(runtime.run(shutdown_rx));
-    wait_for_runtime_ready_or_exit(db.node.as_ref(), &node_did, &mut handle).await;
-
-    let doc_id = submit_request(
+    let runtime = boot_live_agent(&db, db.node_identity.clone())
+        .await
+        .unwrap();
+    submit_request(
         &actors,
         "req-disabled-sibling",
         "session-disabled-sibling",
         "interactive",
-        &format!("please answer {MARKER}"),
+        "Briefly confirm that you can answer this request.",
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(&actors, &doc_id, Duration::from_secs(60)).await,
-        RequestLifecycleState::Completed
+        wait_for_request_terminal(&actors, "req-disabled-sibling", Duration::from_secs(120)).await,
+        "completed"
     );
-    assert!(
-        !handle.is_finished(),
-        "the runtime must keep serving after sweeping a disabled Agent"
+    submit_request(
+        &actors,
+        "req-disabled-sibling-next",
+        "session-disabled-sibling",
+        "interactive",
+        "Briefly confirm that you can answer another request.",
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal(
+            &actors,
+            "req-disabled-sibling-next",
+            Duration::from_secs(120)
+        )
+        .await,
+        "completed"
     );
-    BootedAgent::new(shutdown, handle, node_did)
-        .shutdown()
-        .await;
+    runtime.shutdown().await;
 }

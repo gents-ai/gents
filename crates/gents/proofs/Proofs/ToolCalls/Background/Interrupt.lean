@@ -88,5 +88,30 @@ theorem interrupt_never_backgrounds (c : ToolCallContext) :
     (interruptTool c).awaitMode = c.awaitMode :=
   (interruptTool_preserves_identity c).2.2
 
+/-- A hook interrupts only the calls it holds in flight. Another hook's calls,
+in its own session and request, are not in that set and keep their state. -/
+structure HookCalls where
+  own : List ToolCallContext
+  other : List ToolCallContext
+  deriving DecidableEq, Repr
+
+/-- The interrupted hook's calls after the interrupt, the other hook's calls,
+and how many running calls the interrupt cancelled. -/
+def interruptHook (h : HookCalls) : HookCalls × Nat :=
+  ({ own := h.own.map interruptTool, other := h.other },
+   (h.own.filter fun c => c.state == .running && (interruptTool c).state == .cancelled).length)
+
+theorem interrupting_a_hook_keeps_other_hooks_calls (h : HookCalls) :
+    (interruptHook h).1.other = h.other := rfl
+
+private def liveCall (callId requestId : Nat) : ToolCallContext :=
+  { callId, requestId, state := .running, operation := .nativeCommand, deadline := 100
+  , startedAt := some 1, currentTime := 10, persistence := .committed, awaitMode := .foreground }
+
+theorem cancelling_one_hook_does_not_cancel_unrelated_live_tool_call :
+    let after := interruptHook { own := [liveCall 1 1], other := [liveCall 2 2] }
+    after.2 = 1 ∧ (after.1.own.map (·.state)) = [.cancelled] ∧
+      (after.1.other.map (·.state)) = [.running] := by decide
+
 end Interrupt
 end Background

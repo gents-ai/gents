@@ -553,18 +553,35 @@ pub async fn resolve_request_task_hooks(
     let Some(task_id) = task_id else {
         return Ok((Vec::new(), false));
     };
-    let task = load_task(access, &request.node_did, &task_id)
-        .await?
-        .with_context(|| {
-            format!("Task {task_id} this request was fired from no longer exists; refusing to run it without its hooks")
-        })?;
-    anyhow::ensure!(
-        task.enabled,
-        "Task {task_id} this request was fired from is disabled; refusing to run it"
-    );
+    let task = bound_task(
+        &task_id,
+        load_task(access, &request.node_did, &task_id).await?,
+    )?;
     task.validate()
         .with_context(|| format!("Task {task_id} hooks are not admissible"))?;
     Ok((task.hooks, true))
+}
+
+/// Why a request fired from a Task is refused before any hook or agent step:
+/// it never runs without the hooks of the Task it was fired from.
+#[derive(Debug, thiserror::Error)]
+pub enum TaskBindingRefusal {
+    #[error("Task {task_id} this request was fired from no longer exists; refusing to run it without its hooks")]
+    Missing { task_id: String },
+    #[error("Task {task_id} this request was fired from is disabled; refusing to run it")]
+    Disabled { task_id: String },
+}
+
+pub fn bound_task(task_id: &str, task: Option<Task>) -> Result<Task, TaskBindingRefusal> {
+    let task = task.ok_or_else(|| TaskBindingRefusal::Missing {
+        task_id: task_id.to_owned(),
+    })?;
+    if !task.enabled {
+        return Err(TaskBindingRefusal::Disabled {
+            task_id: task_id.to_owned(),
+        });
+    }
+    Ok(task)
 }
 
 fn nonempty_task_id(task_id: Option<String>) -> Option<String> {

@@ -54,4 +54,36 @@ theorem inactive_is_never_noticed (noticed : Noticed) (o : Observation)
     (h : o.active = false) : (stepNotice noticed o).2 = none := by
   simp [stepNotice, forget, h]
 
+/-- What one observation reports: the notice it raised, naming the generation
+and the lease state, and how many generation states remain remembered. -/
+structure Notice where
+  sequence : Nat
+  state : LeaseState
+  deriving DecidableEq, Repr
+
+structure Observed where
+  notice : Option Notice
+  remembered : Nat
+  deriving DecidableEq, Repr
+
+def observeStep (noticed : Noticed) (o : Observation) : Noticed × Observed :=
+  let r := stepNotice noticed o
+  (r.1, { notice := r.2.map fun state => { sequence := o.sequence, state }
+          remembered := r.1.length })
+
+def observeAll : Noticed → List Observation → List Observed
+  | _, [] => []
+  | noticed, o :: os =>
+    let r := observeStep noticed o
+    r.2 :: observeAll r.1 os
+
+theorem a_generation_is_noticed_once_per_state_and_forgotten_when_superseded :
+    observeAll []
+        [ ⟨true, 1, .current⟩, ⟨true, 1, .renewalDue⟩, ⟨true, 1, .renewalDue⟩
+        , ⟨true, 1, .expired⟩, ⟨true, 1, .expired⟩, ⟨true, 2, .current⟩
+        , ⟨true, 2, .renewalDue⟩ ] =
+      [ ⟨none, 0⟩, ⟨some ⟨1, .renewalDue⟩, 1⟩, ⟨none, 1⟩, ⟨some ⟨1, .expired⟩, 2⟩
+      , ⟨none, 2⟩, ⟨none, 0⟩, ⟨some ⟨2, .renewalDue⟩, 1⟩ ] := by
+  decide
+
 end Enrollment.RenewalNotices

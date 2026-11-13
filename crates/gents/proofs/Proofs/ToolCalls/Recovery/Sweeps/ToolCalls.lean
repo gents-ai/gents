@@ -518,4 +518,46 @@ def terminalParentOwnedToolSweep : RecoverySweep :=
   , h_recover_zero := terminalParentToolRecover_zero
   }
 
+/-- The cause the terminal-parent sweep records for a row: an interrupted
+parent is recorded as cancelled, not failed. -/
+def terminalParentCause (row : TerminalParentToolRow) : ToolRecoveryCause :=
+  if row.parentInterrupted then .parentInterrupted else .parentTerminal
+
+def sweptCause (row : TerminalParentToolRow) : Option ToolRecoveryCause :=
+  if terminalParentToolStale row then some (terminalParentCause row) else none
+
+def sweptToolRow (row : TerminalParentToolRow) : ToolCallContext :=
+  if terminalParentToolStale row then (terminalParentToolRecover row).call else row.call
+
+/-- The deadline action is a compare-and-set on a running row: it terminalizes
+only a row still running, so a row the sweep already ended is adopted and no
+timeout is reported. -/
+def deadlineActionTimesOut (row : TerminalParentToolRow) : Bool :=
+  decide ((sweptToolRow row).state = .running)
+
+def timeoutAfterSweepState (row : TerminalParentToolRow) : ToolCallState :=
+  if deadlineActionTimesOut row then .timedOut else (sweptToolRow row).state
+
+def sweptCancelCause : Option ToolRecoveryCause → Option String
+  | some .parentInterrupted => some "interrupted"
+  | _ => none
+
+def sweptFailureClass : Option ToolRecoveryCause → Option String
+  | some .parentTerminal => some "external"
+  | _ => none
+
+theorem timeout_adopts_terminal_written_by_terminal_parent_sweep
+    (row : TerminalParentToolRow) (h_running : row.call.state = .running)
+    (h_interrupted : row.parentInterrupted = true)
+    (h_foreground : ¬ isBackgroundCall row.call) :
+    deadlineActionTimesOut row = false ∧ timeoutAfterSweepState row = .cancelled := by
+  have h_stale : terminalParentToolStale row :=
+    ⟨h_running, Or.inl h_interrupted, h_foreground⟩
+  have h_swept : sweptToolRow row = { row.call with state := .cancelled } := by
+    simp [sweptToolRow, h_stale, terminalParentToolRecover, h_interrupted,
+      ToolRecoveryCause.terminalState]
+  constructor
+  · simp [deadlineActionTimesOut, h_swept]
+  · simp [timeoutAfterSweepState, deadlineActionTimesOut, h_swept]
+
 end Recovery

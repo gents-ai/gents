@@ -396,36 +396,36 @@ fn optional_operator_ceiling_does_not_require_a_host_config_document() {
 }
 
 #[test]
-fn persisted_cwd_must_stay_under_placement() {
-    let (_guard, operator, placement_path) = temp_tree();
-    let nested = placement_path.join("src");
-    std::fs::create_dir_all(&nested).unwrap();
-    let overlay = bind_workspace_overlay(
-        &ready_workspace(),
-        &placement(&placement_path),
-        WorkspaceBindInput {
-            request_cwd: Some(&nested),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
-        },
-    )
-    .unwrap();
-    assert_eq!(overlay.cwd, std::fs::canonicalize(&nested).unwrap());
-
-    let outside = operator.join("other");
-    std::fs::create_dir_all(&outside).unwrap();
-    let error = bind_workspace_overlay(
-        &ready_workspace(),
-        &placement(&placement_path),
-        WorkspaceBindInput {
-            request_cwd: Some(&outside),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
-        },
-    )
-    .unwrap_err();
-    assert!(
-        error.to_string().contains("not under workspace root"),
-        "{error:#}"
-    );
+fn request_cwd_binding_matches_lean_model() {
+    gents_lean_vocab::families::workspace_overlay_cwd_binding::replay::<String>(|input| {
+        let (_guard, operator, placement_path) = temp_tree();
+        let requested = input
+            .components
+            .iter()
+            .fold(operator.clone(), |path, part| path.join(part));
+        std::fs::create_dir_all(&requested).unwrap();
+        let requested = std::fs::canonicalize(&requested).unwrap();
+        match bind_workspace_overlay(
+            &ready_workspace(),
+            &placement(&placement_path),
+            WorkspaceBindInput {
+                request_cwd: Some(&requested),
+                ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
+            },
+        ) {
+            Ok(overlay) => {
+                assert_eq!(overlay.cwd, requested);
+                "bound".to_owned()
+            }
+            Err(error) => {
+                assert!(
+                    error.to_string().contains("not under workspace root"),
+                    "{error:#}"
+                );
+                "outside_root".to_owned()
+            }
+        }
+    });
 }
 
 #[test]

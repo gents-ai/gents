@@ -203,64 +203,80 @@ async fn create_authored_header(
 }
 
 #[tokio::test]
-async fn reused_scan_observes_payload_segments_replicated_after_their_close() {
+async fn late_delivered_segments_match_the_lean_reads() {
     use gents_protocol::output::rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    let db = gents_inference::test_support::test_db(
-        "reused-scan-payload-segments",
-        crate::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = db.node.clone();
-    let request = "doc-scan-gap";
-    let create_segment = |segment: gents_protocol::output::OutputSegment| {
-        let node = &node;
-        async move {
-            create_doc(
-                node,
-                CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                output_segment_create_variables(&segment).unwrap(),
-                "create_AgentOutputSegment",
-            )
-            .await
+    for case in gents_lean_vocab::families::late_delivery_reads::cases::<String>() {
+        let db = gents_inference::test_support::test_db(
+            "late-delivered-segments-match-the-lean-r",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = db.node.clone();
+        let request = "doc-scan-gap";
+        let mut headers = vec![None; case.input.messages.len()];
+        let mut cache = ReadCache {
+            reuse_node_scans: true,
+            ..ReadCache::default()
+        };
+        let mut reads = Vec::new();
+        for step in &case.input.steps {
+            let index = step.message as usize;
+            let message = &case.input.messages[index];
+            let key = format!("key-{}", message.key);
+            let parts = message.parts.iter().map(String::as_str).collect::<Vec<_>>();
+            match step.kind.as_str() {
+                "deliver" => {
+                    let segment =
+                        authored_segments(request, &key, &parts).swap_remove(step.ordinal as usize);
+                    let doc = create_doc(
+                        &node,
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        output_segment_create_variables(&segment).unwrap(),
+                        "create_AgentOutputSegment",
+                    )
+                    .await;
+                    if step.ordinal as usize + 1 == parts.len() {
+                        headers[index] = Some(
+                            create_authored_header(&node, request, &key, index as u32 + 1, doc)
+                                .await,
+                        );
+                    }
+                }
+                "read" => {
+                    let header = headers[index].as_deref().expect("read before its closure");
+                    let read = reconstruct_scoped_message(
+                        ReadAccess::Node(&node),
+                        header,
+                        "did:test:test",
+                        None,
+                        &mut cache,
+                    )
+                    .await
+                    .ok()
+                    .map(|(_, message)| match message {
+                        gents_protocol::message::Message::User { content } => {
+                            gents_lean_vocab::families::late_delivery_reads::ReadWire {
+                                role: "user".to_owned(),
+                                blocks: content
+                                    .into_iter()
+                                    .map(|item| match item {
+                                        gents_protocol::message::UserContent::Text(text) => {
+                                            text.text
+                                        }
+                                        _ => "non-text".to_owned(),
+                                    })
+                                    .collect(),
+                            }
+                        }
+                        other => panic!("authored user header reconstructed as {other:?}"),
+                    });
+                    reads.push(read);
+                }
+                other => panic!("unmodeled step {other}"),
+            }
         }
-    };
-    let [a] = authored_segments(request, "a", &["first"])
-        .try_into()
-        .unwrap();
-    let a_close = create_segment(a).await;
-    let a_header = create_authored_header(&node, request, "a", 1, a_close).await;
-    let [b_payload, b_close] = authored_segments(request, "b", &["hel", "lo"])
-        .try_into()
-        .unwrap();
-    let b_close = create_segment(b_close).await;
-    let b_header = create_authored_header(&node, request, "b", 2, b_close).await;
-
-    let mut cache = ReadCache {
-        reuse_node_scans: true,
-        ..ReadCache::default()
-    };
-    let a = reconstruct_scoped_message(
-        ReadAccess::Node(&node),
-        &a_header,
-        "did:test:test",
-        None,
-        &mut cache,
-    )
-    .await
-    .unwrap();
-    assert_eq!(a.1, gents_protocol::message::Message::user("first"));
-
-    create_segment(b_payload).await;
-    let b = reconstruct_scoped_message(
-        ReadAccess::Node(&node),
-        &b_header,
-        "did:test:test",
-        None,
-        &mut cache,
-    )
-    .await
-    .unwrap();
-    assert_eq!(b.1, gents_protocol::message::Message::user("hello"));
+        case.check(reads);
+    }
 }

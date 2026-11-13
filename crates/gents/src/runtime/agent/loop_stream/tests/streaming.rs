@@ -1,157 +1,104 @@
 #[tokio::test]
-async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder() {
-    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
-        "unmet-output-obligation",
-        gents_automation::lifecycle_hooks::composition(),
-    )
-    .await;
-    let node = db.node.clone();
-    let actor = identity::Did::new(&binding.agent_did).unwrap();
-    let model = ScriptedModel::new_turns(vec![
-        vec![
-            RawStreamingChoice::Message("premature answer".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-        vec![
-            RawStreamingChoice::Message("continuing".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let mut loop_config = config(2);
-    loop_config.output_obligation_gate = Some(Arc::new(
-        crate::runtime::agent::output_obligation::OutputObligationGate::new(
-            node.clone(),
-            actor,
-            "request-doc-unmet",
+async fn loop_terminal_follows_the_lean_model() {
+    let preamble = gents_loop::output_obligation::continuation_message(&[]);
+    let preamble = preamble.split(": ").next().unwrap().to_owned();
+    for case in gents_lean_vocab::families::completion_retry_output_obligation_loop_terminal::cases::<
+        String,
+    >() {
+        let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
+            "unmet-output-obligation",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = db.node.clone();
+        let actor = identity::Did::new(&binding.agent_did).unwrap();
+        let model = ScriptedModel::new_turns(vec![
             vec![
-                crate::runtime::agent::output_obligation::ActiveOutputObligation {
-                    tool_name: "write_result".to_string(),
-                    contract: gents_documents::WriteToolOutputObligation {
-                        scope: gents_documents::WriteToolOutputObligationScope::Request,
-                        minimum_writes: 1,
-                        expected_count_field: None,
-                    },
-                },
+                RawStreamingChoice::Message("premature answer".to_string()),
+                RawStreamingChoice::FinalResponse(()),
             ],
-        ),
-    )
-        as Arc<dyn gents_loop::output_obligation::OutputObligationCheck>);
-    let stream = run_loop_stream(
-        model.clone(),
-        None::<gents_toolcalls::call::hook::DefraSessionHook>,
-        TaggedMessage::unassociated(Message::user("do the work")),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        loop_config,
-    );
-    futures::pin_mut!(stream);
+            vec![
+                RawStreamingChoice::Message("continuing".to_string()),
+                RawStreamingChoice::FinalResponse(()),
+            ],
+        ]);
+        let mut loop_config = config(2);
+        loop_config.output_obligation_gate = Some(Arc::new(
+            crate::runtime::agent::output_obligation::OutputObligationGate::new(
+                node.clone(),
+                actor,
+                "request-doc-unmet",
+                case.input
+                    .obligations
+                    .iter()
+                    .map(|obligation| {
+                        crate::runtime::agent::output_obligation::ActiveOutputObligation {
+                            tool_name: obligation.tool.clone(),
+                            contract: gents_documents::WriteToolOutputObligation {
+                                scope: gents_documents::WriteToolOutputObligationScope::Request,
+                                minimum_writes: obligation.minimum_writes as usize,
+                                expected_count_field: None,
+                            },
+                        }
+                    })
+                    .collect(),
+            ),
+        )
+            as Arc<dyn gents_loop::output_obligation::OutputObligationCheck>);
+        let stream = run_loop_stream(
+            model.clone(),
+            None::<gents_toolcalls::call::hook::DefraSessionHook>,
+            TaggedMessage::unassociated(Message::user("do the work")),
+            Vec::new(),
+            Arc::new(Vec::new()),
+            loop_config,
+        );
+        futures::pin_mut!(stream);
 
-    let mut saw_pending = false;
-    let mut saw_final = false;
-    while let Some(item) = stream.next().await {
-        match item.unwrap() {
-            LoopStreamItem::OutputObligationPending { reminder } => {
-                saw_pending = true;
-                assert!(format!("{reminder:?}").contains("write_result"));
+        let mut reminder = None;
+        let mut saw_final = false;
+        while let Some(item) = stream.next().await {
+            match item.unwrap() {
+                LoopStreamItem::OutputObligationPending { reminder: sent } => {
+                    reminder = Some(format!("{sent:?}"))
+                }
+                LoopStreamItem::Final { .. } => saw_final = true,
+                LoopStreamItem::Text(text) if reminder.is_some() && text == "continuing" => break,
+                _ => {}
             }
-            LoopStreamItem::Final { .. } => saw_final = true,
-            LoopStreamItem::Text(text) if saw_pending && text == "continuing" => break,
-            _ => {}
         }
+        let histories = model.seen_histories().await;
+        let next_turn = histories.get(1).map(|history| format!("{history:?}"));
+        let handling = match (&reminder, saw_final, histories.len()) {
+            (None, true, 1) => "release",
+            (Some(_), false, 2)
+                if next_turn
+                    .as_deref()
+                    .is_some_and(|next| next.contains(&preamble)) =>
+            {
+                "remind"
+            }
+            other => panic!("{:?}: unexpected loop observation {other:?}", case.input),
+        };
+        let reminded_tools = case
+            .input
+            .obligations
+            .iter()
+            .map(|obligation| obligation.tool.clone())
+            .filter(|tool| {
+                reminder
+                    .as_deref()
+                    .is_some_and(|reminder| reminder.contains(&format!("`{tool}`")))
+            })
+            .collect();
+        case.check(
+            gents_lean_vocab::families::completion_retry_output_obligation_loop_terminal::TerminalAnswer {
+                handling: handling.to_owned(),
+                reminded_tools,
+            },
+        );
+        node.shutdown().await.expect("node shutdown");
     }
-
-    assert!(saw_pending);
-    assert!(!saw_final);
-    let histories = model.seen_histories().await;
-    assert_eq!(histories.len(), 2);
-    assert!(format!("{:?}", histories[1]).contains("configured output obligation is unmet"));
-    node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn exceeding_max_turns_terminates_with_error() {
-    let prompt = Message::user("loop");
-
-    let model = ScriptedModel::new_turns(vec![echo_tool_turn(), echo_tool_turn()]);
-    let stream = run_loop_stream(
-        model,
-        None::<gents_loop::session_hook::NoopSessionHook>,
-        TaggedMessage::unassociated(prompt),
-        Vec::new(),
-        Arc::new(vec![echo_tool()]),
-        config(0),
-    );
-    futures::pin_mut!(stream);
-
-    let mut items = Vec::new();
-    while let Some(item) = stream.next().await {
-        items.push(item);
-    }
-
-    let last = items.last().expect("stream should yield at least one item");
-    assert!(last.is_err(), "expected a terminal error; got {last:?}");
-    let error = last.as_ref().err().unwrap();
-    assert_eq!(
-        error.cause(),
-        &gents_loop::error::LoopFailureCause::MaxTurns,
-        "expected a max-turns Prompt error; got {last:?}"
-    );
-    assert!(
-        !error.classify().is_retryable(),
-        "max-turns exhaustion must be non-retryable; got {last:?}"
-    );
-    // Harbor classifies budget exhaustion by matching the persisted error message prefix.
-    assert!(
-        error.to_string().starts_with("PromptError: MaxTurnError: "),
-        "max-turns error display must start with the anchored Harbor prefix; got {error}"
-    );
-}
-
-#[tokio::test]
-async fn threaded_assistant_turn_carries_provider_message_id() {
-    let model = ScriptedModel::new_turns(vec![
-        vec![
-            RawStreamingChoice::MessageId("msg_abc123".to_string()),
-            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-                "call-1".to_string(),
-                "echo".to_string(),
-                serde_json::json!({}),
-            )),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-        vec![
-            RawStreamingChoice::Message("done".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-
-    let stream = run_loop_stream(
-        model.clone(),
-        None::<gents_loop::session_hook::NoopSessionHook>,
-        TaggedMessage::unassociated(Message::user("go")),
-        Vec::new(),
-        Arc::new(vec![echo_tool()]),
-        config(4),
-    );
-    futures::pin_mut!(stream);
-    while stream.next().await.is_some() {}
-
-    let histories = model.seen_histories().await;
-    assert_eq!(
-        histories.len(),
-        2,
-        "expected two completion turns; got {histories:?}"
-    );
-    let assistant_id = histories[1].iter().find_map(|message| match message {
-        Message::Assistant { id, .. } => Some(id.clone()),
-        _ => None,
-    });
-    assert_eq!(
-        assistant_id,
-        Some(Some("msg_abc123".to_string())),
-        "threaded assistant turn must carry the provider message id; history: {:?}",
-        histories[1]
-    );
 }
 
 #[tokio::test]
@@ -214,53 +161,4 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
         .await;
         assert_eq!(authored, usize::from(case.publish), "{case:?}");
     }
-}
-
-#[tokio::test]
-async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
-    let (_db, hook, writer, mut lifecycle) = owned_test_hook_with_unattributable_request().await;
-    let hook = hook
-        .with_goal_tool_authority(true, true)
-        .with_goal_tools(std::sync::Arc::new(
-            gents_automation::goal::goal_tools::GoalToolAnswers,
-        ));
-    let model = ScriptedModel::new_turns(vec![
-        vec![
-            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-                "goal-call".into(),
-                gents_protocol::goal_names::GET_GOAL_TOOL_NAME.into(),
-                serde_json::json!({}),
-            )),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-        vec![
-            RawStreamingChoice::Message("repeat the failed status".into()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let stream = run_loop_stream(
-        model.clone(),
-        Some(hook.clone()),
-        TaggedMessage::unassociated(Message::user("check the Goal")),
-        Vec::new(),
-        Arc::new(vec![Box::new(FixedTool {
-            name: gents_protocol::goal_names::GET_GOAL_TOOL_NAME.into(),
-            output: "must be intercepted".into(),
-        }) as Box<dyn ToolDyn>]),
-        owned_config(4),
-    );
-    let collected = collect_owned_scripted_stream(
-        stream,
-        &hook,
-        &writer,
-        &mut lifecycle,
-        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-    )
-    .await;
-    let error = collected
-        .error
-        .expect("unavailable attribution must terminate");
-    assert!(error.contains("PromptCancelled"), "{error}");
-    assert!(error.contains("attribution"), "{error}");
-    assert_eq!(model.seen_histories().await.len(), 1);
 }

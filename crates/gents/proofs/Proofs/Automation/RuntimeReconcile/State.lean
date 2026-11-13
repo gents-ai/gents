@@ -204,6 +204,29 @@ theorem visible_foreign_session_is_rejected (requested bound : AgentDid)
     sessionSelection requested (some bound) = .mismatched := by
   simp [sessionSelection, different]
 
+/-- What a request's own Agent can read of its session when the router first
+observes the request: the session's bound Agent if the producer published the
+session with the request, nothing otherwise.
+
+Decision (#3670, scheduled fires never ran): because the router waits on an
+absent session (`missing_session_selection_waits`) instead of binding one, every
+producer of a runtime request (Task fires, manual Task runs) publishes the
+request's session, bound to the request's Agent and owned by it, in the
+request's own transaction. The claim projection then only updates that
+session. A producer that left the session to the claim would leave its request
+pending forever (`unpublished_session_never_routes`). -/
+def materializedSessionVisible (publishedWithRequest : Bool) (requested : AgentDid) :
+    Option AgentDid :=
+  if publishedWithRequest then some requested else none
+
+theorem materialized_request_is_routable (requested : AgentDid) :
+    sessionSelection requested (materializedSessionVisible true requested) = .matched := by
+  simp [materializedSessionVisible, sessionSelection]
+
+theorem unpublished_session_never_routes (requested : AgentDid) :
+    sessionSelection requested (materializedSessionVisible false requested) = .unavailable :=
+  rfl
+
 /-- Before claiming, the router reads the routed generation's selected
 configuration as its Agent (`Identity.Configuration.providerConfigurationVisible`).
 A committed configuration change can revoke that selection before the control
