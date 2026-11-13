@@ -1141,14 +1141,6 @@ pub struct LeanContractSnapshot {
     pub client_publication_protected_collection: String,
     pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
-    pub identity_readiness_preflight_cases: Vec<serde_json::Value>,
-    pub identity_pairing_partition_cases: Vec<LeanIdentityPairingPartitionCase>,
-    pub identity_pairing_reader_cases: Vec<LeanIdentityPairingReaderCase>,
-    pub identity_replica_grant_cases: Vec<LeanIdentityReplicaGrantCase>,
-    pub identity_enrollment_policy_cases: Vec<LeanIdentityEnrollmentPolicyCase>,
-    pub identity_readiness_recovery_cases: Vec<serde_json::Value>,
-    pub identity_readiness_observation_cases: Vec<serde_json::Value>,
-    pub identity_readiness_settled_cases: Vec<LeanIdentityReadinessSettledCase>,
     pub goal_link_cases: Vec<LeanGoalLinkCase>,
     pub cross_actor_authorization_cases: Vec<LeanCrossActorAuthorizationCase>,
     pub client_data_publication_cases: LeanClientDataPublicationCases,
@@ -2294,16 +2286,6 @@ pub struct LeanIdentityDerivationInput {
     pub label: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityEnrollmentPolicyCase {
-    pub actor: String,
-    pub allowed: bool,
-    pub document: String,
-    pub name: String,
-    pub permission: String,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanIdentityHouseholdCase {
@@ -2534,30 +2516,6 @@ pub struct LeanIdentityObject {
     pub owner: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityPairingPartitionCase {
-    pub name: String,
-    pub owner: String,
-    pub peer: String,
-    pub selected: bool,
-    pub source: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityPairingReaderCase {
-    pub before_generation: Option<u64>,
-    pub before_granted: bool,
-    pub committed: bool,
-    pub entitled: bool,
-    pub expected_generation: Option<u64>,
-    pub expected_granted: bool,
-    pub generation: u64,
-    pub name: String,
-    pub owner_authorized: bool,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanIdentityParentPublicationCase {
@@ -2659,18 +2617,6 @@ pub struct LeanIdentityPublicationCaseStepsItemAfter {
     pub reader_granted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityReadinessSettledCase {
-    pub expected: bool,
-    pub idle: bool,
-    pub live_present: bool,
-    pub name: String,
-    pub persisted_settled: bool,
-    pub result_error: bool,
-    pub result_known: bool,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanIdentityRelation {
@@ -2678,19 +2624,6 @@ pub struct LeanIdentityRelation {
     pub id: String,
     pub relation: String,
     pub subject: LeanIdentitySubject,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityReplicaGrantCase {
-    pub agent_read: bool,
-    pub app_read: bool,
-    pub name: String,
-    pub outsider_read: bool,
-    pub pending: bool,
-    pub runtime_read: bool,
-    pub user_read: bool,
-    pub user_write: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

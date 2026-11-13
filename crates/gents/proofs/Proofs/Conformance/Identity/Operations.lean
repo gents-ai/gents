@@ -276,4 +276,398 @@ def deferredUnreached : Family DeferredInput Deferred where
     let after := deferredAfter i
     { parent := after.parent, granted := after.parentGranted, linked := after.parentLinked }
 
+structure SettledInput where
+  name : String
+  livePresent : Bool
+  idle : Bool
+  resultKnown : Bool
+  resultError : Bool
+  persistedSettled : Bool
+  deriving ToJson
+
+def settledStatus (i : SettledInput) : Option LiveReconcileStatus :=
+  if i.livePresent then some ⟨i.idle, i.resultKnown, i.resultError⟩ else none
+
+@[conformance_family]
+def readinessSettled : Family SettledInput Bool where
+  inputs := settledCases.map fun (name, status, persisted) =>
+    { name, livePresent := status.isSome
+      idle := status.any (·.idle)
+      resultKnown := status.any (·.lastResultKnown)
+      resultError := status.any (·.lastResultError)
+      persistedSettled := persisted }
+  model := fun i => goalRuntimeSettled (settledStatus i) i.persistedSettled
+
+deriving instance ToJson for CollectionBinding
+
+structure BindingInput where
+  name : String
+  binding : CollectionBinding
+  deriving ToJson
+
+@[conformance_family]
+def readinessBinding : Family BindingInput Bool where
+  inputs := bindingCases.map fun (name, binding) => { name, binding }
+  model := fun i => readinessPreflight i.binding
+
+structure RecoveryInput where
+  name : String
+  pending : Bool
+  grantedBefore : Bool
+  runtime : String
+  nativeOwner : Option String
+  recordedParent : Option String
+  currentParent : Option String
+  grantSucceeded : Bool
+  markSucceeded : Bool
+  embeddedRuntime : String
+  parentRegistered : Bool
+  deriving ToJson
+
+def recoveryInputs : List RecoveryInput :=
+  recoveryCases.map fun c =>
+    { name := c.name, pending := c.pending, grantedBefore := c.parentGranted, runtime := c.runtime
+      nativeOwner := c.nativeOwner, recordedParent := c.recordedParent
+      currentParent := c.currentParent, grantSucceeded := c.grantSucceeded
+      markSucceeded := c.markSucceeded, embeddedRuntime := c.embeddedRuntime
+      parentRegistered := c.parentRegistered }
+
+def recoveryAfter (c : RecoveryInput) : ParentPublication :=
+  repairReadiness ⟨true, c.grantedBefore, !c.pending⟩ c.runtime c.embeddedRuntime c.parentRegistered
+    c.nativeOwner c.recordedParent c.currentParent c.grantSucceeded c.markSucceeded
+
+structure RecoveryOutput where
+  parentGranted : Bool
+  parentLinked : Bool
+  deriving ToJson
+
+structure ParentLinked where
+  parentLinked : Bool
+  deriving ToJson
+
+/-- The recovery scenario publishes readiness as the embedded runtime over a
+row the runtime owns natively, with the Node parent present, replaced,
+unregistered or absent, or as a foreign runtime; the user reads the row only
+through the parent grant. -/
+@[conformance_family]
+def readinessRecovery : Family RecoveryInput RecoveryOutput where
+  inputs := recoveryInputs.filter (·.name ∈ ["success", "parent-mismatch", "foreign-runtime",
+    "unregistered-parent", "already-complete", "parent-missing", "node-unknown"])
+  model := fun c => { parentGranted := (recoveryAfter c).parentGranted
+                      parentLinked := (recoveryAfter c).parentLinked }
+
+/-- The recovery scenario writes the readiness row with no native owner or as
+the user; the user's read of such a row does not measure the parent grant. -/
+@[conformance_family]
+def readinessRecoveryForeignOwner : Family RecoveryInput ParentLinked where
+  inputs := recoveryInputs.filter (·.name ∈ ["owner-unknown", "owner-mismatch"])
+  model := fun c => { parentLinked := (recoveryAfter c).parentLinked }
+
+/-- model-production-gap: production cannot inject a failed parent grant or a
+failed publication mark, and a readiness row natively owned by an empty runtime
+DID cannot be written. -/
+@[conformance_family]
+def readinessRecoveryUnreached : Family RecoveryInput RecoveryOutput where
+  inputs := recoveryInputs.filter (·.name ∈ ["grant-failed", "mark-failed", "retry-mark",
+    "runtime-missing"])
+  model := fun c => { parentGranted := (recoveryAfter c).parentGranted
+                      parentLinked := (recoveryAfter c).parentLinked }
+
+structure Usable where
+  usable : Bool
+  deriving ToJson
+
+structure ObservationInput where
+  name : String
+  requestedRuntime : String
+  embeddedRuntime : String
+  nodeCount : Nat
+  readinessCount : Nat
+  nodeId : Option String
+  nodeOwner : Option String
+  readinessOwner : Option String
+  recordedParent : Option String
+  parentLinked : Bool
+  parentPresent : Bool
+  deriving ToJson
+
+def observationInputs : List ObservationInput :=
+  observationCases.map fun (name, o) =>
+    { name, requestedRuntime := o.requestedRuntime, embeddedRuntime := o.embeddedRuntime
+      nodeCount := o.nodeCount, readinessCount := o.readinessCount, nodeId := o.nodeId
+      nodeOwner := o.nodeOwner, readinessOwner := o.readinessOwner
+      recordedParent := o.recordedParent, parentLinked := o.parentLinked
+      parentPresent := o.parentPresent }
+
+def observationUsable (i : ObservationInput) : Usable :=
+  { usable := readinessObservationUsable ⟨i.requestedRuntime, i.embeddedRuntime, i.nodeCount,
+      i.readinessCount, i.nodeId, i.nodeOwner, i.readinessOwner, i.recordedParent,
+      i.parentLinked, i.parentPresent⟩ }
+
+/-- The recovery scenario observes, as the embedded runtime, the one Node and
+the one readiness row each of its fixtures leaves behind. -/
+@[conformance_family]
+def readinessObservation : Family ObservationInput Usable where
+  inputs := observationInputs.filter (·.name ∈ ["valid", "readiness-unregistered",
+    "foreign-readiness", "replaced-parent", "node-unregistered", "revoked-after-publication",
+    "pending"])
+  model := observationUsable
+
+/-- model-production-gap: the recovery scenario builds exactly one Node and one
+readiness row with a recorded parent and observes as the embedded runtime, so no
+production path observes a foreign requested runtime, a missing or duplicated
+Node or readiness row, or a row with no recorded parent. -/
+@[conformance_family]
+def readinessObservationUnreached : Family ObservationInput Usable where
+  inputs := observationInputs.filter (·.name ∈ ["foreign-runtime", "no-node", "duplicate-node",
+    "no-readiness", "duplicate-readiness", "missing-parent"])
+  model := observationUsable
+
+structure PartitionInput where
+  name : String
+  source : String
+  peer : String
+  owner : String
+  deriving ToJson
+
+structure Selected where
+  selected : Bool
+  deriving ToJson
+
+/-- The applied-pairing scenario persists the runtime's own pairing, a foreign
+Node's pairing, a forged pairing naming the runtime under a foreign owner and
+the runtime's pairing with another peer, and selects each through the store. -/
+@[conformance_family]
+def pairingPartition : Family PartitionInput Selected where
+  inputs :=
+    [ { name := "local", source := "runtime", owner := "runtime", peer := "peer" }
+    , { name := "foreign", source := "other", owner := "other", peer := "peer" }
+    , { name := "forged", source := "runtime", owner := "other", peer := "peer" }
+    , { name := "other-peer", source := "runtime", owner := "runtime", peer := "other-peer" } ]
+  model := fun i => { selected := pairingInPartition "runtime" i.source i.owner i.peer "peer" }
+
+structure PairingReaderInput where
+  name : String
+  beforeGeneration : Option Nat
+  beforeGranted : Bool
+  entitled : Bool
+  ownerAuthorized : Bool
+  committed : Bool
+  offeredGeneration : Nat
+  deriving ToJson
+
+def pairingReaderInputs : List PairingReaderInput :=
+  pairingReaderCases.map fun c =>
+    { name := c.name, beforeGeneration := c.before.lastGrantedGeneration
+      beforeGranted := c.before.readerGranted, entitled := c.entitled
+      ownerAuthorized := c.ownerAuthorized, committed := c.committed, offeredGeneration := c.generation }
+
+def pairingReaderAfter (i : PairingReaderInput) : PairingReaderPublication :=
+  reconcilePairingReader ⟨i.beforeGeneration, i.beforeGranted⟩ i.entitled i.ownerAuthorized
+    i.committed i.offeredGeneration
+
+structure ReaderGranted where
+  granted : Bool
+  deriving ToJson
+
+/-- The applied-pairing scenario grants the reader Agent its route reader,
+aborts a staged grant and a staged revocation, and revokes the reader. -/
+@[conformance_family]
+def pairingReaderGrant : Family PairingReaderInput ReaderGranted where
+  inputs := pairingReaderInputs.filter (·.name ∈ ["initial-grant", "aborted-grant",
+    "aborted-revoke", "explicit-revocation"])
+  model := fun i => { granted := (pairingReaderAfter i).readerGranted }
+
+structure ReaderPublication where
+  generation : Option Nat
+  granted : Bool
+  deriving ToJson
+
+/-- model-production-gap: production records no owner-authorized reader
+generation, so no production path observes the last granted generation, an
+entitlement withdrawn without a revocation, or a new or unauthorized
+generation. -/
+@[conformance_family]
+def pairingReaderUnreached : Family PairingReaderInput ReaderPublication where
+  inputs := pairingReaderInputs
+  model := fun i =>
+    { generation := (pairingReaderAfter i).lastGrantedGeneration
+      granted := (pairingReaderAfter i).readerGranted }
+
+structure EnrollmentPolicyInput where
+  name : String
+  actor : String
+  document : String
+  permission : String
+  deriving ToJson
+
+def thinEnrollmentState : State :=
+  publishEnrollmentRequest { objects := [], relations := [], enrolled := [] } "client" "admin"
+    "request" none true false true true
+
+def enrollmentPolicyState : String → State
+  | "candidate-request-write" | "admin-request-read" | "admin-request-write"
+  | "user-request-before-parent" => enrollmentRequestFixture
+  | "user-request-after-parent" | "outsider-request" => enrollmentRequestWithParent
+  | "revoked-admin" => apply enrollmentRequestWithParent (.revokeAs "candidate"
+      ⟨"enrollment_records", "request", "reader", .actor "admin"⟩)
+  | "admin-terminal-write" | "candidate-terminal-read" | "candidate-terminal-write"
+  | "user-terminal-read" | "outsider-terminal" => enrollmentTerminalFixture
+  | _ => thinEnrollmentState
+
+def enrollmentPolicyInputs : List EnrollmentPolicyInput :=
+  [ { name := "thin-client-write", actor := "client", document := "request", permission := "update" }
+  , { name := "thin-admin-read", actor := "admin", document := "request", permission := "read" }
+  , { name := "thin-admin-write", actor := "admin", document := "request", permission := "update" }
+  , { name := "thin-user-read", actor := "user", document := "request", permission := "read" }
+  , { name := "thin-agent-read", actor := "agent", document := "request", permission := "read" }
+  , { name := "thin-outsider-read", actor := "outsider", document := "request", permission := "read" }
+  , { name := "candidate-request-write", actor := "candidate", document := "request", permission := "update" }
+  , { name := "admin-request-read", actor := "admin", document := "request", permission := "read" }
+  , { name := "admin-request-write", actor := "admin", document := "request", permission := "update" }
+  , { name := "user-request-before-parent", actor := "user", document := "request", permission := "read" }
+  , { name := "user-request-after-parent", actor := "user", document := "request", permission := "read" }
+  , { name := "outsider-request", actor := "outsider", document := "request", permission := "read" }
+  , { name := "revoked-admin", actor := "admin", document := "request", permission := "read" }
+  , { name := "admin-terminal-write", actor := "admin", document := "terminal", permission := "update" }
+  , { name := "candidate-terminal-read", actor := "candidate", document := "terminal", permission := "read" }
+  , { name := "candidate-terminal-write", actor := "candidate", document := "terminal", permission := "update" }
+  , { name := "user-terminal-read", actor := "user", document := "terminal", permission := "read" }
+  , { name := "outsider-terminal", actor := "outsider", document := "terminal", permission := "read" } ]
+
+def enrollmentPolicyAllowed (i : EnrollmentPolicyInput) : Allowed :=
+  { allowed := allowed 5 (enrollmentPolicyState i.name) i.actor "enrollment_records" i.document
+      i.permission }
+
+/-- The thin-client scenario writes its own enrollment request with no local
+Node and asks native ACP and the authenticated GraphQL server for each actor's
+access to it. -/
+@[conformance_family]
+def enrollmentPolicyThin : Family EnrollmentPolicyInput Allowed where
+  inputs := enrollmentPolicyInputs.filter (·.name.startsWith "thin-")
+  model := enrollmentPolicyAllowed
+
+/-- model-production-gap: the thin-client scenario builds only the request a
+client writes before it has a Node; no production scenario builds the admin's
+received request, its parent, the revoked admin reader or the terminal
+decision. -/
+@[conformance_family]
+def enrollmentPolicyUnreached : Family EnrollmentPolicyInput Allowed where
+  inputs := enrollmentPolicyInputs.filter fun i => !i.name.startsWith "thin-"
+  model := enrollmentPolicyAllowed
+
+structure ReplicaInput where
+  name : String
+  deriving ToJson
+
+def replicaPending : State :=
+  replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime" "local-node" "user"
+    true true true false false
+
+def replicaLinked : State :=
+  replicaLinkPending replicaPending "enrollment_records" "remote" "runtime" "local-node" "user"
+    true true true
+
+def replicaRevoked : State :=
+  apply replicaLinked (.revoke ⟨"enrollment_records", "remote", "parent", .object "nodes" "local-node"⟩)
+
+def replicaState : String → State
+  | "pending" => replicaPending
+  | "linked" => replicaLinked
+  | "revoked" => replicaRevoked
+  | "after-repair" => replicaLinkPending replicaRevoked "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true
+  | _ => privateReplicaFixture
+
+def replicaInputs : List ReplicaInput :=
+  [{ name := "before" }, { name := "pending" }, { name := "linked" }, { name := "revoked" },
+   { name := "after-repair" }]
+
+def replicaRead (i : ReplicaInput) (actor collection document : String) : Bool :=
+  allowed 5 (replicaState i.name) actor collection document "read"
+
+structure ReplicaReads where
+  runtimeRead : Bool
+  userRead : Bool
+  agentRead : Bool
+  outsiderRead : Bool
+  deriving ToJson
+
+def replicaReads (i : ReplicaInput) : ReplicaReads :=
+  { runtimeRead := replicaRead i "runtime" "enrollment_records" "remote"
+    userRead := replicaRead i "user" "enrollment_records" "remote"
+    agentRead := replicaRead i "agent" "enrollment_records" "remote"
+    outsiderRead := replicaRead i "outsider" "enrollment_records" "remote" }
+
+/-- The replicated enrollment scenario reads the received request through the
+receiver's runtime and authenticated GraphQL server once it is pending, once
+the local Node links it and once a revoked parent is repaired. -/
+@[conformance_family]
+def replicaGrantReads : Family ReplicaInput ReplicaReads where
+  inputs := replicaInputs.filter (·.name ∈ ["pending", "linked", "after-repair"])
+  model := replicaReads
+
+structure UserWrite where
+  userWrite : Bool
+  deriving ToJson
+
+/-- The replicated enrollment scenario has the user update the linked
+request. -/
+@[conformance_family]
+def replicaGrantUserWrite : Family ReplicaInput UserWrite where
+  inputs := replicaInputs.filter (·.name = "linked")
+  model := fun i => { userWrite := allowed 5 (replicaState i.name) "user" "enrollment_records" "remote" "update" }
+
+structure AppRead where
+  appRead : Bool
+  deriving ToJson
+
+/-- The replicated enrollment scenario creates a private application session
+only after the revoked parent is repaired. -/
+@[conformance_family]
+def replicaGrantAppRead : Family ReplicaInput AppRead where
+  inputs := replicaInputs.filter (·.name = "after-repair")
+  model := fun i => { appRead := replicaRead i "runtime" "children" "application" }
+
+structure ReplicaPending where
+  pending : Bool
+  deriving ToJson
+
+def replicaPendingRelation (i : ReplicaInput) : ReplicaPending :=
+  { pending := (replicaState i.name).relations.contains
+      ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩ }
+
+/-- The installed runtime projector writes a transport document before the
+local Node exists, links it once the Node is written, and keeps a revoked
+parent revoked when the document is next written. -/
+@[conformance_family]
+def replicaGrantPending : Family ReplicaInput ReplicaPending where
+  inputs := replicaInputs.filter (·.name ∈ ["pending", "linked", "revoked"])
+  model := replicaPendingRelation
+
+structure ReplicaGrant where
+  runtimeRead : Bool
+  userRead : Bool
+  userWrite : Bool
+  agentRead : Bool
+  outsiderRead : Bool
+  appRead : Bool
+  pending : Bool
+  deriving ToJson
+
+/-- model-production-gap: no production scenario observes the received request
+before any grant, or reads it between the parent's revocation and its repair;
+the user's write is attempted only on the linked request, the application
+session exists only after the repair, and the pending relation is observed only
+by the runtime projector, which repairs no revoked parent. -/
+@[conformance_family]
+def replicaGrantUnreached : Family ReplicaInput ReplicaGrant where
+  inputs := replicaInputs
+  model := fun i =>
+    { runtimeRead := (replicaReads i).runtimeRead, userRead := (replicaReads i).userRead
+      userWrite := allowed 5 (replicaState i.name) "user" "enrollment_records" "remote" "update"
+      agentRead := (replicaReads i).agentRead, outsiderRead := (replicaReads i).outsiderRead
+      appRead := replicaRead i "runtime" "children" "application"
+      pending := (replicaPendingRelation i).pending }
+
 end Conformance.IdentityOperations

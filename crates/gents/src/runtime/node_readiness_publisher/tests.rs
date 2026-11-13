@@ -351,133 +351,148 @@ fn generated_storage_failure_cases_bind_readiness_classification() {
     });
 }
 
-#[tokio::test]
-async fn readiness_parent_recovery_matches_native_owner_and_model() {
+async fn verify_native_owner(
+    access: &gents_store::config_client::ConfigAccess,
+    collection: &'static str,
+    id: &str,
+    expected: Option<&str>,
+) {
+    let ids = vec![id.to_owned()];
+    let owners = access
+        .transact_readonly("test.readiness.owner_evidence", |txn| {
+            let ids = &ids;
+            Box::pin(async move { txn.document_owners(collection, ids).await })
+        })
+        .await
+        .unwrap();
+    assert_eq!(owners.len(), 1);
+    assert!(
+        owners[0].visible,
+        "fixture row must exist and be visible in the transaction"
+    );
+    assert_eq!(
+        owners[0].owner.as_ref().map(identity::Did::as_str),
+        expected
+    );
+}
+
+async fn remove_native_owner(node: &defra_node::Node, resource: &str, id: &str) {
+    let acp = node.document_acp();
+    let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+    assert!(acp.is_doc_registered(policy, resource, id).await.unwrap());
+    acp.unregister_doc_object(policy, resource, id)
+        .await
+        .unwrap();
+    assert!(!acp.is_doc_registered(policy, resource, id).await.unwrap());
+}
+
+struct RecoveryFixture {
+    _dir: tempfile::TempDir,
+    node: Arc<defra_node::Node>,
+    runtime: gents_store::identity::KeyIdentity,
+    foreign: gents_store::identity::KeyIdentity,
+    user_access: gents_store::config_client::ConfigAccess,
+    runtime_access: gents_store::config_client::ConfigAccess,
+    doc: String,
+    published: bool,
+    parent_linked: bool,
+}
+
+impl RecoveryFixture {
+    async fn user_reads_readiness(&self) -> bool {
+        let visible = self
+            .user_access
+            .execute(&format!(
+                r#"{{ NodeReadiness(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+                escape_graphql_string(&self.doc)
+            ))
+            .await
+            .unwrap();
+        !visible["data"]["NodeReadiness"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    }
+}
+
+async fn recovery_fixture(name: &str, pending: bool) -> RecoveryFixture {
     use gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION;
     use gents_store::config_client::ConfigAccess;
     use gents_store::identity::NodeIdentity;
 
-    async fn verify_native_owner(
-        access: &ConfigAccess,
-        collection: &'static str,
-        id: &str,
-        expected: Option<&str>,
-    ) {
-        let ids = vec![id.to_owned()];
-        let owners = access
-            .transact_readonly("test.readiness.owner_evidence", |txn| {
-                let ids = &ids;
-                Box::pin(async move { txn.document_owners(collection, ids).await })
-            })
-            .await
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None)
             .unwrap();
-        assert_eq!(owners.len(), 1);
-        assert!(
-            owners[0].visible,
-            "fixture row must exist and be visible in the transaction"
-        );
-        assert_eq!(
-            owners[0].owner.as_ref().map(identity::Did::as_str),
-            expected
-        );
-    }
-
-    async fn remove_native_owner(node: &defra_node::Node, resource: &str, id: &str) {
-        let acp = node.document_acp();
-        let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
-        assert!(acp.is_doc_registered(policy, resource, id).await.unwrap());
-        acp.unregister_doc_object(policy, resource, id)
-            .await
+    let user =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user.key"), None)
             .unwrap();
-        assert!(!acp.is_doc_registered(policy, resource, id).await.unwrap());
-    }
-
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_readiness_recovery_cases;
-    let mut checked = 0;
-    for case in cases.iter().filter(|case| {
-        matches!(
-            case["name"].as_str(),
-            Some(
-                "success"
-                    | "owner-unknown"
-                    | "owner-mismatch"
-                    | "parent-mismatch"
-                    | "foreign-runtime"
-                    | "unregistered-parent"
-                    | "already-complete"
-            )
-        )
-    }) {
-        checked += 1;
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = gents_store::identity::KeyIdentity::load_or_create(
-            dir.path().join("runtime.key"),
-            None,
-        )
-        .unwrap();
-        let user =
-            gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user.key"), None)
-                .unwrap();
-        let foreign = gents_store::identity::KeyIdentity::load_or_create(
-            dir.path().join("foreign.key"),
-            None,
-        )
-        .unwrap();
-        // The User configures the Node through client-signed access; a local
-        // non-node write without a managed signer is refused by design.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .enable_signing()
-                .with_node_identity_did(runtime.did())
-                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-                .build()
-                .await
-                .unwrap(),
-        );
-        node.add_dac_policy_with_counter_as(
-            &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-            0,
-        )
+    let foreign =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None)
+            .unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
+            .build()
+            .await
+            .unwrap(),
+    );
+    node.add_dac_policy_with_counter_as(
+        &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+        0,
+    )
+    .await
+    .unwrap();
+    node.add_collection(gents_protocol::schemas::NODE)
         .await
         .unwrap();
-        node.add_collection(gents_protocol::schemas::NODE)
+    node.add_collection(gents_protocol::schemas::NODE_READINESS)
+        .await
+        .unwrap();
+    node.add_collection(gents_protocol::schemas::NODE_RUNTIME)
+        .await
+        .unwrap();
+    node.add_collection(gents_protocol::schemas::AGENT)
+        .await
+        .unwrap();
+    let user_access = ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
+            .with_client_signing_capability(user.client_signing_capability().unwrap())
+            .unwrap(),
+    );
+    let runtime_access =
+        ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+    let parent_write = format!(
+        r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+        escape_graphql_string(runtime.did())
+    );
+    let parent = match name {
+        "parent-missing" | "node-unknown" => None,
+        "unregistered-parent" => {
+            let parent = ConfigAccess::write_local(
+                &node,
+                "test.readiness.unregistered_parent",
+                &parent_write,
+            )
             .await
             .unwrap();
-        node.add_collection(gents_protocol::schemas::NODE_READINESS)
-            .await
-            .unwrap();
-        node.add_collection(gents_protocol::schemas::NODE_RUNTIME)
-            .await
-            .unwrap();
-        node.add_collection(gents_protocol::schemas::AGENT)
-            .await
-            .unwrap();
-        let user_access = ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
-                .with_client_signing_capability(user.client_signing_capability().unwrap())
-                .unwrap(),
-        );
-        let runtime_access =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-        let parent_write = format!(
-            r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
-            escape_graphql_string(runtime.did())
-        );
-        let parent = if case["name"] == "unregistered-parent" {
-            ConfigAccess::write_local(&node, "test.readiness.unregistered_parent", &parent_write)
-                .await
-                .unwrap()
-        } else {
-            user_access
+            let parent = gents_protocol::graphql::extract_mutation_doc_id(&parent, "Node").unwrap();
+            verify_native_owner(&runtime_access, "Node", &parent, Some(runtime.did())).await;
+            remove_native_owner(&node, "nodes", &parent).await;
+            verify_native_owner(&runtime_access, "Node", &parent, None).await;
+            Some(parent)
+        }
+        _ => {
+            let parent = user_access
                 .write("test.readiness.parent", &parent_write)
                 .await
-                .unwrap()
-        };
-        let parent = gents_protocol::graphql::extract_mutation_doc_id(&parent, "Node").unwrap();
-        if case["name"] != "unregistered-parent" {
+                .unwrap();
+            let parent = gents_protocol::graphql::extract_mutation_doc_id(&parent, "Node").unwrap();
             user_access
                 .add_actor_relationship(
                     "Node",
@@ -487,248 +502,314 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
                 )
                 .await
                 .unwrap();
-        }
-        if case["name"] == "unregistered-parent" {
-            verify_native_owner(&runtime_access, "Node", &parent, Some(runtime.did())).await;
-            remove_native_owner(&node, "nodes", &parent).await;
-            verify_native_owner(&runtime_access, "Node", &parent, None).await;
-        } else {
             verify_native_owner(&runtime_access, "Node", &parent, Some(user.did())).await;
+            Some(parent)
         }
-        let recorded_parent = if case["name"] == "parent-mismatch" {
-            "another-parent"
-        } else {
-            parent.as_str()
-        };
-        let linked = !case["pending"].as_bool().unwrap();
-        let mutation = format!(
-            r#"mutation {{ create_NodeReadiness(input: {{node_did: "{}", node_doc_id: "{}", parent_linked: {linked}, snapshot_json: "{{}}", updated_at: "2026-01-01T00:00:00Z"}}) {{_docID}} }}"#,
-            escape_graphql_string(runtime.did()),
-            escape_graphql_string(recorded_parent)
-        );
-        let created = match case["name"].as_str().unwrap() {
-            "owner-unknown" => {
-                ConfigAccess::write_local(&node, "test.readiness.unregistered", &mutation)
-                    .await
-                    .unwrap()
-            }
-            "owner-mismatch" => user_access
-                .write("test.readiness.wrong_owner", &mutation)
+    };
+    let recorded_parent = match name {
+        "parent-mismatch" => Some("another-parent".to_owned()),
+        "node-unknown" => Some("unknown-node".to_owned()),
+        _ => parent,
+    };
+    let node_doc_id = recorded_parent
+        .map(|parent| format!(r#", node_doc_id: "{}""#, escape_graphql_string(&parent)))
+        .unwrap_or_default();
+    let linked = !pending;
+    let mutation = format!(
+        r#"mutation {{ create_NodeReadiness(input: {{node_did: "{}"{node_doc_id}, parent_linked: {linked}, snapshot_json: "{{}}", updated_at: "2026-01-01T00:00:00Z"}}) {{_docID}} }}"#,
+        escape_graphql_string(runtime.did()),
+    );
+    let created = match name {
+        "owner-unknown" => {
+            ConfigAccess::write_local(&node, "test.readiness.unregistered", &mutation)
                 .await
-                .unwrap(),
-            _ => runtime_access
-                .write("test.readiness.pending", &mutation)
-                .await
-                .unwrap(),
-        };
-        let doc =
-            gents_protocol::graphql::extract_mutation_doc_id(&created, "NodeReadiness").unwrap();
-        if case["name"] == "owner-unknown" {
+                .unwrap()
+        }
+        "owner-mismatch" => user_access
+            .write("test.readiness.wrong_owner", &mutation)
+            .await
+            .unwrap(),
+        _ => runtime_access
+            .write("test.readiness.pending", &mutation)
+            .await
+            .unwrap(),
+    };
+    let doc = gents_protocol::graphql::extract_mutation_doc_id(&created, "NodeReadiness").unwrap();
+    match name {
+        "owner-unknown" => {
             verify_native_owner(&runtime_access, "NodeReadiness", &doc, Some(runtime.did())).await;
             remove_native_owner(&node, "operations", &doc).await;
             verify_native_owner(&runtime_access, "NodeReadiness", &doc, None).await;
-        } else if case["name"] == "owner-mismatch" {
+        }
+        "owner-mismatch" => {
             verify_native_owner(&user_access, "NodeReadiness", &doc, Some(user.did())).await;
-        } else {
+        }
+        _ => {
             verify_native_owner(&runtime_access, "NodeReadiness", &doc, Some(runtime.did())).await;
         }
-        let snapshot = NodeReadinessSnapshot {
-            format_version: NODE_READINESS_FORMAT_VERSION,
-            process_state: NodeReadinessProcessState::Ready,
-            active_generation: 1,
-            router_generation: 1,
-            default_agent_did: "general".to_owned(),
-            agents: vec![gents_protocol::node_readiness::AgentReadinessEntry {
-                agent_did: "general".to_owned(),
-                state: gents_protocol::node_readiness::AgentReadinessState::Ready,
-                reason: None,
-                effective_inference: None,
-            }],
-        };
-        let selected = if case["name"] == "foreign-runtime" {
-            foreign.did()
-        } else {
-            runtime.did()
-        };
-        let result =
-            upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:01Z").await;
-        let expected_ok = matches!(case["name"].as_str(), Some("success" | "already-complete"));
-        assert_eq!(result.is_ok(), expected_ok, "{case}: {result:?}");
-        let observation_access = if case["name"] == "owner-mismatch" {
-            &user_access
-        } else {
-            &runtime_access
-        };
-        let observed = observation_access
-            .execute(&format!(
-                r#"{{ NodeReadiness(filter: {{_docID: {{_eq: "{}"}}}}) {{parent_linked}} }}"#,
-                escape_graphql_string(&doc)
-            ))
-            .await
-            .unwrap();
-        assert_eq!(
-            observed["data"]["NodeReadiness"][0]["parent_linked"], case["expected_parent_linked"],
-            "{case}"
+    }
+    let snapshot = NodeReadinessSnapshot {
+        format_version: NODE_READINESS_FORMAT_VERSION,
+        process_state: NodeReadinessProcessState::Ready,
+        active_generation: 1,
+        router_generation: 1,
+        default_agent_did: "general".to_owned(),
+        agents: vec![gents_protocol::node_readiness::AgentReadinessEntry {
+            agent_did: "general".to_owned(),
+            state: gents_protocol::node_readiness::AgentReadinessState::Ready,
+            reason: None,
+            effective_inference: None,
+        }],
+    };
+    let selected = if name == "foreign-runtime" {
+        foreign.did()
+    } else {
+        runtime.did()
+    };
+    let result = upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:01Z").await;
+    let observation_access = if name == "owner-mismatch" {
+        &user_access
+    } else {
+        &runtime_access
+    };
+    let observed = observation_access
+        .execute(&format!(
+            r#"{{ NodeReadiness(filter: {{_docID: {{_eq: "{}"}}}}) {{parent_linked}} }}"#,
+            escape_graphql_string(&doc)
+        ))
+        .await
+        .unwrap();
+    let parent_linked = observed["data"]["NodeReadiness"][0]["parent_linked"]
+        .as_bool()
+        .unwrap();
+    RecoveryFixture {
+        _dir: dir,
+        node,
+        runtime,
+        foreign,
+        user_access,
+        runtime_access,
+        doc,
+        published: result.is_ok(),
+        parent_linked,
+    }
+}
+
+async fn assert_success_stays_private(fixture: &RecoveryFixture) {
+    use gents_p2p::directory_projection::DirectoryStore;
+    use gents_store::identity::NodeIdentity;
+    let runtime = &fixture.runtime;
+    fixture.runtime_access.write("test.readiness.runtime_status", &format!(
+        r#"mutation {{ create_NodeRuntime(input: {{node_did: "{}", reconcile_phase: "idle", last_reconcile_result: "applied"}}) {{_docID}} }}"#,
+        escape_graphql_string(runtime.did()),
+    )).await.unwrap();
+    fixture.user_access.write("test.readiness.private_agent", &format!(
+        r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "private-agent"}}) {{_docID}} }}"#,
+        escape_graphql_string(runtime.did()),
+    )).await.unwrap();
+    let goal = gents_automation::goal::observe_goal_agent(
+        &fixture.node,
+        runtime.did(),
+        Some("general"),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        goal.observation,
+        gents_automation::goal::GoalAgentObservation::Ready { .. }
+    ));
+    assert!(
+        !goal.settled,
+        "persisted NodeRuntime must not supply live settled state"
+    );
+    assert!(gents_automation::goal::observe_goal_agent(
+        &fixture.node,
+        fixture.foreign.did(),
+        Some("general"),
+        None
+    )
+    .await
+    .is_err());
+    let directory =
+        gents_p2p::directory_projection::GraphqlDirectoryStore::new(fixture.node.clone());
+    let observed = directory.load_source_snapshot().await.unwrap();
+    assert!(
+        observed.runtimes.is_empty(),
+        "readiness must not enter the shared directory"
+    );
+    assert!(
+        observed.nodes.is_empty(),
+        "private Node must not be projected through runtime authority"
+    );
+    assert!(
+        observed.agents.is_empty(),
+        "private Agent must not be projected through runtime authority"
+    );
+}
+
+#[tokio::test]
+async fn readiness_parent_recovery_matches_native_owner_and_model() {
+    for case in gents_lean_vocab::families::identity_operations_readiness_recovery::cases() {
+        let fixture = recovery_fixture(&case.input.name, case.input.pending).await;
+        assert_eq!(fixture.published, fixture.parent_linked, "{:?}", case.input);
+        if case.input.name == "success" {
+            assert_success_stays_private(&fixture).await;
+        }
+        case.check(
+            gents_lean_vocab::families::identity_operations_readiness_recovery::RecoveryOutput {
+                parent_granted: fixture.user_reads_readiness().await,
+                parent_linked: fixture.parent_linked,
+            },
         );
-        let observation_name = match case["name"].as_str().unwrap() {
-            "success" => Some("valid"),
-            "owner-unknown" => Some("readiness-unregistered"),
-            "owner-mismatch" => Some("foreign-readiness"),
-            "parent-mismatch" => Some("replaced-parent"),
-            "unregistered-parent" => Some("node-unregistered"),
-            "already-complete" => Some("revoked-after-publication"),
-            _ => None,
+        fixture.node.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn readiness_recovery_refuses_rows_the_runtime_does_not_own() {
+    for case in
+        gents_lean_vocab::families::identity_operations_readiness_recovery_foreign_owner::cases()
+    {
+        let fixture = recovery_fixture(&case.input.name, case.input.pending).await;
+        assert_eq!(fixture.published, fixture.parent_linked, "{:?}", case.input);
+        case.check(gents_lean_vocab::families::identity_operations_readiness_recovery_foreign_owner::ParentLinked {
+            parent_linked: fixture.parent_linked,
+        });
+        fixture.node.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn published_readiness_observation_matches_model() {
+    use gents_store::config_client::ConfigAccess;
+    use gents_store::identity::NodeIdentity;
+    for case in gents_lean_vocab::families::identity_operations_readiness_observation::cases() {
+        let (fixture_name, pending, mark) = match case.input.name.as_str() {
+            "valid" => ("success", true, false),
+            "readiness-unregistered" => ("owner-unknown", true, true),
+            "foreign-readiness" => ("owner-mismatch", true, true),
+            "replaced-parent" => ("parent-mismatch", true, true),
+            "node-unregistered" => ("unregistered-parent", true, true),
+            "revoked-after-publication" => ("already-complete", false, false),
+            "pending" => ("foreign-runtime", true, false),
+            other => panic!("the recovery scenario has no fixture for {other}"),
         };
-        if let Some(observation_name) = observation_name {
-            if !matches!(case["name"].as_str(), Some("success" | "already-complete")) {
-                let mark = format!(
-                    r#"mutation {{ update_NodeReadiness(docID: "{}", input: {{parent_linked: true}}) {{_docID}} }}"#,
-                    escape_graphql_string(&doc)
-                );
-                match case["name"].as_str().unwrap() {
-                    "owner-unknown" => {
-                        ConfigAccess::write_local(&node, "test.readiness.mark_unregistered", &mark)
-                            .await
-                            .unwrap();
-                    }
-                    "owner-mismatch" => {
-                        user_access
-                            .write("test.readiness.mark_foreign", &mark)
-                            .await
-                            .unwrap();
-                    }
-                    _ => {
-                        runtime_access
-                            .write("test.readiness.mark_mismatch", &mark)
-                            .await
-                            .unwrap();
-                    }
+        let fixture = recovery_fixture(fixture_name, pending).await;
+        if mark {
+            let mark = format!(
+                r#"mutation {{ update_NodeReadiness(docID: "{}", input: {{parent_linked: true}}) {{_docID}} }}"#,
+                escape_graphql_string(&fixture.doc)
+            );
+            match fixture_name {
+                "owner-unknown" => {
+                    ConfigAccess::write_local(
+                        &fixture.node,
+                        "test.readiness.mark_unregistered",
+                        &mark,
+                    )
+                    .await
+                    .unwrap();
+                    verify_native_owner(
+                        &fixture.runtime_access,
+                        "NodeReadiness",
+                        &fixture.doc,
+                        None,
+                    )
+                    .await;
+                }
+                "owner-mismatch" => {
+                    fixture
+                        .user_access
+                        .write("test.readiness.mark_foreign", &mark)
+                        .await
+                        .unwrap();
+                }
+                _ => {
+                    fixture
+                        .runtime_access
+                        .write("test.readiness.mark_mismatch", &mark)
+                        .await
+                        .unwrap();
                 }
             }
-            if case["name"] == "owner-unknown" {
-                verify_native_owner(&runtime_access, "NodeReadiness", &doc, None).await;
-            }
-            let model = gents_lean_vocab::lean_contract_snapshot()
-                .identity_readiness_observation_cases
-                .iter()
-                .find(|model| model["name"] == observation_name)
-                .unwrap();
-            let actor = identity::Did::new(runtime.did()).unwrap();
-            let actual = runtime_access
-                .transact_readonly("test.readiness.observe_owner", |txn| {
-                    let actor = &actor;
-                    Box::pin(async move {
-                        gents_store::config_client::node_readiness::observe_published_readiness(
-                            txn, actor,
-                        )
-                        .await
-                    })
-                })
-                .await
-                .unwrap();
-            assert_eq!(
-                actual.is_some(),
-                model["expected_usable"].as_bool().unwrap(),
-                "{model}"
-            );
         }
-        if case["name"] == "success" {
-            use gents_p2p::directory_projection::DirectoryStore;
-            runtime_access.write("test.readiness.runtime_status", &format!(
-                r#"mutation {{ create_NodeRuntime(input: {{node_did: "{}", reconcile_phase: "idle", last_reconcile_result: "applied"}}) {{_docID}} }}"#,
-                escape_graphql_string(runtime.did()),
-            )).await.unwrap();
-            user_access.write("test.readiness.private_agent", &format!(
-                r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "private-agent"}}) {{_docID}} }}"#,
-                escape_graphql_string(runtime.did()),
-            )).await.unwrap();
-            let goal = gents_automation::goal::observe_goal_agent(
-                &node,
-                runtime.did(),
-                Some("general"),
-                None,
-            )
+        let actor = identity::Did::new(fixture.runtime.did()).unwrap();
+        let observed = fixture
+            .runtime_access
+            .transact_readonly("test.readiness.observe_owner", |txn| {
+                let actor = &actor;
+                Box::pin(async move {
+                    gents_store::config_client::node_readiness::observe_published_readiness(
+                        txn, actor,
+                    )
+                    .await
+                })
+            })
             .await
             .unwrap();
-            assert!(matches!(
-                goal.observation,
-                gents_automation::goal::GoalAgentObservation::Ready { .. }
-            ));
-            assert!(
-                !goal.settled,
-                "persisted NodeRuntime must not supply live settled state"
-            );
-            assert!(gents_automation::goal::observe_goal_agent(
-                &node,
-                foreign.did(),
-                Some("general"),
-                None
-            )
-            .await
-            .is_err());
-            let directory =
-                gents_p2p::directory_projection::GraphqlDirectoryStore::new(node.clone());
-            let observed = directory.load_source_snapshot().await.unwrap();
-            assert!(
-                observed.runtimes.is_empty(),
-                "readiness must not enter the shared directory"
-            );
-            assert!(
-                observed.nodes.is_empty(),
-                "private Node must not be projected through runtime authority"
-            );
-            assert!(
-                observed.agents.is_empty(),
-                "private Agent must not be projected through runtime authority"
-            );
-        }
-        if case["name"] == "success" || case["name"] == "already-complete" {
-            let visible = user_access
-                .execute(&format!(
-                    r#"{{ NodeReadiness(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
-                    escape_graphql_string(&doc)
+        case.check(
+            gents_lean_vocab::families::identity_operations_readiness_observation::Usable {
+                usable: observed.is_some(),
+            },
+        );
+        fixture.node.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn readiness_binding_preflight_matches_model() {
+    let policy_binding = format!(
+        " @policy(id: \"{}\", resource: \"operations\")",
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+    );
+    for case in gents_lean_vocab::families::identity_operations_readiness_binding::cases::<String>()
+    {
+        let node = Arc::new(
+            gents_store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        match case.input.binding.as_str() {
+            "absent" => {}
+            "expected" => gents_store::schema::ensure_runtime_schemas(node.as_ref())
+                .await
+                .unwrap(),
+            "unbound" => node
+                .add_collection(
+                    &gents_protocol::schemas::NODE_READINESS.replace(&policy_binding, ""),
+                )
+                .await
+                .unwrap(),
+            "different" => {
+                node.add_dac_policy_with_counter_as(
+                    &defra_core::RequestContext::default()
+                        .with_identity(node.node_identity_did().map(str::to_owned)),
+                    gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+                    0,
+                )
+                .await
+                .unwrap();
+                node.add_collection(&gents_protocol::schemas::NODE_READINESS.replace(
+                    &policy_binding,
+                    &policy_binding.replace("operations", "configuration"),
                 ))
                 .await
                 .unwrap();
-            assert_eq!(
-                !visible["data"]["NodeReadiness"]
-                    .as_array()
-                    .unwrap()
-                    .is_empty(),
-                case["expected_parent_granted"].as_bool().unwrap(),
-                "{case}"
-            );
+            }
+            other => panic!("no readiness binding fixture for {other}"),
         }
+        let result = gents_store::schema::ensure_runtime_schemas(node.as_ref()).await;
+        if case.input.binding == "unbound" {
+            assert!(node
+                .get_collection("NodeReadiness")
+                .unwrap()
+                .unwrap()
+                .policy
+                .is_none());
+        }
+        case.check(result.is_ok());
         node.shutdown().await.unwrap();
     }
-    assert_eq!(checked, 7);
-
-    let unbound = gents_lean_vocab::lean_contract_snapshot()
-        .identity_readiness_preflight_cases
-        .iter()
-        .find(|case| case["name"] == "unbound")
-        .unwrap();
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    let unbound_sdl = gents_protocol::schemas::NODE_READINESS.replace(
-        &format!(
-            " @policy(id: \"{}\", resource: \"operations\")",
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-        ),
-        "",
-    );
-    node.add_collection(&unbound_sdl).await.unwrap();
-    let result = gents_store::schema::ensure_runtime_schemas(node.as_ref()).await;
-    assert_eq!(result.is_ok(), unbound["expected"].as_bool().unwrap());
-    assert!(node
-        .get_collection("NodeReadiness")
-        .unwrap()
-        .unwrap()
-        .policy
-        .is_none());
-    node.shutdown().await.unwrap();
 }

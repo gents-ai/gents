@@ -946,25 +946,21 @@ async fn goal_settled_uses_live_runtime_status_cases() {
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let status = RuntimeStatusHandle::new(node, node_did);
-    for case in &gents_lean_vocab::lean_contract_snapshot().identity_readiness_settled_cases {
+    for case in gents_lean_vocab::families::identity_operations_readiness_settled::cases() {
         {
             let mut row = status.state.lock().await;
-            row.reconcile_phase = if case.idle { "idle" } else { "applying" }.to_owned();
-            row.last_reconcile_result = if !case.result_known {
+            row.reconcile_phase = if case.input.idle { "idle" } else { "applying" }.to_owned();
+            row.last_reconcile_result = if !case.input.result_known {
                 ""
-            } else if case.result_error {
+            } else if case.input.result_error {
                 "error"
             } else {
                 "applied"
             }
             .to_owned();
         }
-        let actual = if case.live_present {
-            status.goal_reconcile_settled().await
-        } else {
-            false
-        };
-        assert_eq!(actual, case.expected, "{case:?}");
+        let live = case.input.live_present.then_some(&status);
+        case.check(gents_automation::goal::live_goal_reconcile_settled(live).await);
     }
 }
 
