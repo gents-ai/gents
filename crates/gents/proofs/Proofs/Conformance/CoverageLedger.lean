@@ -2469,8 +2469,8 @@ def caseCoverage : List CoverageEntry :=
       "GoalOperatorResumeCases")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "goal_operator_resume_on_cases"
-      "GoalOperatorResumeOnCases")
+      "family"
+      "goal_operator_resume_contracts_resume_on_target")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

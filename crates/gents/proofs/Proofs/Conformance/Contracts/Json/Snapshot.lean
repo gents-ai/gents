@@ -416,8 +416,6 @@ def snapshotGoalMutationCasesJson : String :=
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
     ++ "\"goal_operator_resume_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
-    ++ "\"goal_operator_resume_on_cases\":"
-      ++ Conformance.GoalOperatorResumeContracts.resumeOnCasesJson ++ ","
 
 def snapshotRequestCasesJson : String :=
   ""

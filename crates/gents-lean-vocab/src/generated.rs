@@ -1122,7 +1122,6 @@ pub struct LeanContractSnapshot {
     pub state_machines: Vec<LeanStateMachineContract>,
     pub goal_claimed_publication_cases: Vec<LeanGoalClaimedPublicationCase>,
     pub goal_operator_resume_cases: Vec<LeanGoalOperatorResumeCase>,
-    pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,
     pub trigger_delivery_callback_visibility_cases: serde_json::Value,
     pub trigger_delivery_latest_admission_cases: serde_json::Value,
     pub workspace_path_capability_cases: Vec<LeanWorkspacePathCapabilityCase>,
@@ -2134,80 +2133,6 @@ pub struct LeanGoalOperatorResumeCaseRequest {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanGoalOperatorResumeCaseRequestBinding {
-    pub child: u64,
-    pub correlation: String,
-    pub goal: u64,
-    pub owner: String,
-    pub predecessor: u64,
-    pub predecessor_doc: u64,
-    pub semantic_fingerprint: String,
-    pub sequence: u64,
-    pub session: String,
-    pub source_document: String,
-    pub trigger_context: String,
-    pub workspace_fingerprint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalOperatorResumeOnCase {
-    pub before: LeanGoalOperatorResumeOnCaseBefore,
-    pub expected: LeanGoalOperatorResumeOnCaseExpected,
-    pub name: String,
-    pub outcome: String,
-    pub target_available: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalOperatorResumeOnCaseBefore {
-    pub blocked_audits: u64,
-    pub children: Vec<LeanGoalOperatorResumeOnCaseBeforeChildrenItem>,
-    pub last_continued_from: Option<u64>,
-    pub latest_request: u64,
-    pub sequence: u64,
-    pub status: String,
-    pub token_budget: u64,
-    pub tokens_used: u64,
-    pub wrapup_completed: bool,
-    pub wrapup_requested: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalOperatorResumeOnCaseBeforeChildrenItem {
-    pub child: u64,
-    pub correlation: String,
-    pub goal: u64,
-    pub owner: String,
-    pub predecessor: u64,
-    pub predecessor_doc: u64,
-    pub semantic_fingerprint: String,
-    pub sequence: u64,
-    pub session: String,
-    pub source_document: String,
-    pub trigger_context: String,
-    pub workspace_fingerprint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalOperatorResumeOnCaseExpected {
-    pub blocked_audits: u64,
-    pub children: Vec<LeanGoalOperatorResumeOnCaseExpectedChildrenItem>,
-    pub last_continued_from: Option<u64>,
-    pub latest_request: u64,
-    pub sequence: u64,
-    pub status: String,
-    pub token_budget: u64,
-    pub tokens_used: u64,
-    pub wrapup_completed: bool,
-    pub wrapup_requested: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalOperatorResumeOnCaseExpectedChildrenItem {
     pub child: u64,
     pub correlation: String,
     pub goal: u64,
